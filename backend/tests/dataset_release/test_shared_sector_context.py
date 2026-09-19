@@ -19,6 +19,8 @@ from backend.services.dataset_release.shared_sector_context import (
 from scripts.build_shared_sector_context_component import (
     _build_authority_membership_spans,
     _derive_release_code_map,
+    _overlay_frozen_sector_assignments,
+    _union_universe_spans,
     build_component,
 )
 
@@ -226,6 +228,20 @@ def test_membership_accepts_sparse_ids_and_rejects_overlap() -> None:
         validate_membership_frame(frame, id_to_code={1: "801000.SI", 261: "801130.SI"})
 
 
+def test_pool_union_keeps_index_only_members_without_changing_stock_pool() -> None:
+    stock = [("000001.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 3))]
+    csi300 = [
+        ("000001.SZ", dt.date(2024, 7, 2), dt.date(2024, 7, 4)),
+        ("600000.SH", dt.date(2024, 7, 1), dt.date(2024, 7, 4)),
+    ]
+
+    assert _union_universe_spans([stock, csi300]) == [
+        ("000001.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 4)),
+        ("600000.SH", dt.date(2024, 7, 1), dt.date(2024, 7, 4)),
+    ]
+    assert stock == [("000001.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 3))]
+
+
 def test_membership_resolves_historical_security_code_alias() -> None:
     from backend.services.hmm_risk.security_identity import SecuritySourceIdentityManifest
     from backend.services.hmm_risk.security_identity import SecuritySourceResolution
@@ -236,10 +252,14 @@ def test_membership_resolves_historical_security_code_alias() -> None:
                 (dt.date(2021, 7, 30),) if symbol == "300114.SZ" else (dt.date(2025, 2, 17),)
             )
         ),
-        resolve=lambda symbol, _day: SimpleNamespace(
-            status="resolved",
-            l2_code="801000.SI" if symbol == "300114.SZ" else "801001.SI",
-            reason_code=None,
+        resolve=lambda symbol, day: (
+            SimpleNamespace(status="unavailable", l2_code=None, reason_code="not-found")
+            if symbol == "302132.SZ" and day < dt.date(2025, 2, 17)
+            else SimpleNamespace(
+                status="resolved",
+                l2_code="801000.SI" if symbol == "300114.SZ" else "801001.SI",
+                reason_code=None,
+            )
         ),
     )
     manifest = SecuritySourceIdentityManifest(
@@ -287,6 +307,60 @@ def test_membership_resolves_historical_security_code_alias() -> None:
             "l2_code_id": 3,
         },
     ]
+
+
+def test_frozen_dated_assignments_override_only_after_first_observation() -> None:
+    membership = pd.DataFrame(
+        {
+            "instrument": ["000001.SZ", "000002.SZ"],
+            "start_date": [dt.date(2024, 7, 1), dt.date(2024, 7, 1)],
+            "end_date": [dt.date(2024, 7, 3), dt.date(2024, 7, 3)],
+            "l2_code_id": [1, 5],
+        }
+    )
+    frame = pd.DataFrame(
+        {
+            "datetime": [pd.Timestamp("2024-07-02"), pd.Timestamp("2024-07-03")],
+            "instrument": ["000001.SZ", "000001.SZ"],
+            "l2_code_id": [3, 3],
+        }
+    )
+
+    result, receipt = _overlay_frozen_sector_assignments(
+        membership=membership,
+        frame=frame,
+        universe_spans=[
+            ("000001.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 3)),
+            ("000002.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 3)),
+        ],
+        calendar=[dt.date(2024, 7, 1), dt.date(2024, 7, 2), dt.date(2024, 7, 3)],
+        start=dt.date(2024, 7, 1),
+        end=dt.date(2024, 7, 3),
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "instrument": "000001.SZ",
+            "start_date": dt.date(2024, 7, 1),
+            "end_date": dt.date(2024, 7, 1),
+            "l2_code_id": 1,
+        },
+        {
+            "instrument": "000001.SZ",
+            "start_date": dt.date(2024, 7, 2),
+            "end_date": dt.date(2024, 7, 3),
+            "l2_code_id": 3,
+        },
+        {
+            "instrument": "000002.SZ",
+            "start_date": dt.date(2024, 7, 1),
+            "end_date": dt.date(2024, 7, 3),
+            "l2_code_id": 5,
+        },
+    ]
+    assert receipt["frozen_sector_symbol_count"] == 1
+    assert receipt["c013_fallback_only_symbol_count"] == 1
+    assert receipt["current_snapshot_backfill"] is False
 
 
 def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_path, monkeypatch) -> None:

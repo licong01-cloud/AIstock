@@ -145,6 +145,27 @@ def _parse_universe_spans(path: Path) -> list[tuple[str, dt.date, dt.date]]:
     return spans
 
 
+def _union_universe_spans(
+    span_sets: list[list[tuple[str, dt.date, dt.date]]],
+) -> list[tuple[str, dt.date, dt.date]]:
+    by_symbol: dict[str, list[tuple[dt.date, dt.date]]] = {}
+    for spans in span_sets:
+        for symbol, start, end in spans:
+            by_symbol.setdefault(symbol, []).append((start, end))
+    output: list[tuple[str, dt.date, dt.date]] = []
+    for symbol, intervals in sorted(by_symbol.items()):
+        ordered = sorted(intervals)
+        active_start, active_end = ordered[0]
+        for start, end in ordered[1:]:
+            if start <= active_end + dt.timedelta(days=1):
+                active_end = max(active_end, end)
+            else:
+                output.append((symbol, active_start, active_end))
+                active_start, active_end = start, end
+        output.append((symbol, active_start, active_end))
+    return output
+
+
 def _membership_coverage(
     *,
     membership,
@@ -398,14 +419,18 @@ def _build_authority_membership_spans(
         for left, right in zip(ordered, ordered[1:]):
             first = dates[left]
             last = dates[right - 1]
-            authority_symbol = symbol
-            if security_identity is not None:
+            resolved = adapter.resolve(symbol, first)
+            if (
+                (resolved.status != "resolved" or not resolved.l2_code)
+                and security_identity is not None
+            ):
                 authority_symbol = security_identity.resolve(
                     symbol,
                     first,
                     SECURITY_IDENTITY_SOURCE_DATASET,
                 ).source_ts_code
-            resolved = adapter.resolve(authority_symbol, first)
+                if authority_symbol != symbol:
+                    resolved = adapter.resolve(authority_symbol, first)
             if resolved.status != "resolved" or not resolved.l2_code:
                 raise ValueError(
                     "industry PIT authority cannot resolve an active stock-date: "
@@ -458,6 +483,126 @@ def _validate_h5_membership_alignment(frame, membership, *, start: dt.date, end:
             expected.astype(int).reset_index(drop=True)
         ):
             raise ValueError(f"sector_data membership differs from PIT authority: {symbol}")
+
+
+def _overlay_frozen_sector_assignments(
+    *,
+    membership,
+    frame,
+    universe_spans: list[tuple[str, dt.date, dt.date]],
+    calendar: list[dt.date],
+    start: dt.date,
+    end: dt.date,
+):
+    """Preserve release-frozen per-date assignments and fill only their gaps.
+
+    ``sector_data.h5`` is already a dated release input, not a current
+    classification snapshot.  Once its first dated observation is available
+    for a symbol, its last observed assignment remains authoritative until an
+    observed transition; the C-013 result supplies earlier or wholly absent
+    spans.
+    """
+
+    import pandas as pd
+
+    selected = frame.loc[
+        (frame["datetime"].dt.date >= start) & (frame["datetime"].dt.date <= end),
+        ["datetime", "instrument", "l2_code_id"],
+    ].copy()
+    selected["trade_date"] = selected.pop("datetime").dt.date
+    conflicts = selected.groupby(["instrument", "trade_date"], sort=False)["l2_code_id"].nunique()
+    if bool(conflicts.gt(1).any()):
+        first = conflicts.loc[conflicts.gt(1)].index[0]
+        raise ValueError(f"frozen sector assignment conflicts at {first}")
+    observed_by_symbol = {
+        str(symbol): {
+            row.trade_date: int(row.l2_code_id)
+            for row in group.drop_duplicates(["trade_date"]).sort_values("trade_date").itertuples(index=False)
+        }
+        for symbol, group in selected.groupby("instrument", sort=False)
+    }
+    base_by_symbol = {
+        str(symbol): list(group.sort_values("start_date").itertuples(index=False))
+        for symbol, group in membership.groupby("instrument", sort=False)
+    }
+    target_calendar = [value for value in calendar if start <= value <= end]
+    output: list[dict[str, Any]] = []
+    frozen_symbol_count = 0
+    fallback_only_symbol_count = 0
+    frozen_day_count = 0
+    fallback_day_count = 0
+    for symbol, eligible_start, eligible_end in universe_spans:
+        dates = [
+            value
+            for value in target_calendar
+            if max(start, eligible_start) <= value <= min(end, eligible_end)
+        ]
+        if not dates:
+            continue
+        base_spans = base_by_symbol.get(symbol, ())
+        observed = observed_by_symbol.get(symbol, {})
+        if observed:
+            frozen_symbol_count += 1
+        else:
+            fallback_only_symbol_count += 1
+        active_frozen_id: int | None = None
+        rows: list[tuple[dt.date, int]] = []
+        for day in dates:
+            if day in observed:
+                active_frozen_id = observed[day]
+            if active_frozen_id is None:
+                sector_id = next(
+                    (
+                        int(span.l2_code_id)
+                        for span in base_spans
+                        if span.start_date <= day <= span.end_date
+                    ),
+                    None,
+                )
+                if sector_id is None:
+                    raise ValueError(
+                        f"classification authority leaves an uncovered stock-date: {symbol}/{day}"
+                    )
+                fallback_day_count += 1
+            else:
+                sector_id = active_frozen_id
+                frozen_day_count += 1
+            rows.append((day, sector_id))
+        span_start, active_id = rows[0]
+        previous_day = span_start
+        for day, sector_id in rows[1:]:
+            if sector_id != active_id:
+                output.append(
+                    {
+                        "instrument": symbol,
+                        "start_date": span_start,
+                        "end_date": previous_day,
+                        "l2_code_id": active_id,
+                    }
+                )
+                span_start = day
+                active_id = sector_id
+            previous_day = day
+        output.append(
+            {
+                "instrument": symbol,
+                "start_date": span_start,
+                "end_date": previous_day,
+                "l2_code_id": active_id,
+            }
+        )
+    result = pd.DataFrame(output)
+    result["l2_code_id"] = result["l2_code_id"].astype("int32")
+    return result[["instrument", "start_date", "end_date", "l2_code_id"]], {
+        "policy": "frozen_dated_sector_assignment_then_c013_gap_fill_v1",
+        "frozen_sector_symbol_count": frozen_symbol_count,
+        "c013_fallback_only_symbol_count": fallback_only_symbol_count,
+        "frozen_sector_trading_day_count": frozen_day_count,
+        "c013_fallback_trading_day_count": fallback_day_count,
+        "current_snapshot_backfill": False,
+        "default_industry_assignment": False,
+        "silent_symbol_exclusion": False,
+    }
 
 
 def build_component(
@@ -530,8 +675,13 @@ def build_component(
     if unknown_ids:
         raise ValueError(f"sector_data contains IDs absent from release map: {unknown_ids[:10]}")
     market = _build_market_context(frame)
-    universe_spans = _parse_universe_spans(stock_universe_sidecar)
     calendar = _parse_calendar(calendar_path)
+    coverage_inputs = {"stock_universe": stock_universe_sidecar, **pool_sidecars}
+    coverage_spans = {
+        pool_id: _parse_universe_spans(path)
+        for pool_id, path in sorted(coverage_inputs.items())
+    }
+    universe_spans = _union_universe_spans(list(coverage_spans.values()))
     membership = _build_authority_membership_spans(
         adapter=adapter,
         universe_spans=universe_spans,
@@ -540,6 +690,14 @@ def build_component(
         start=membership_start,
         end=membership_end,
         security_identity=security_identity,
+    )
+    membership, assignment_authority = _overlay_frozen_sector_assignments(
+        membership=membership,
+        frame=frame,
+        universe_spans=universe_spans,
+        calendar=calendar,
+        start=membership_start,
+        end=membership_end,
     )
     _validate_h5_membership_alignment(
         frame,
@@ -558,12 +716,11 @@ def build_component(
         required_start=membership_start,
         required_end=membership_end,
     )
-    coverage_inputs = {"stock_universe": stock_universe_sidecar, **pool_sidecars}
     coverage = {
         pool_id: {
             **_membership_coverage(
                 membership=membership,
-                pool_spans=_parse_universe_spans(path),
+                pool_spans=coverage_spans[pool_id],
                 calendar=calendar,
                 id_to_code=code_map.id_to_code,
                 start=membership_start,
@@ -651,6 +808,7 @@ def build_component(
                     "source_dataset_identity_dimension": SECURITY_IDENTITY_SOURCE_DATASET,
                 }
             ),
+            "assignment_authority": assignment_authority,
             "coverage": coverage,
         },
         "database_read": False,
