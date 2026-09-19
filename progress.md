@@ -447,3 +447,25 @@
   - Side-port API smoke on `8011` using DEV DB -> selected portfolio returned 5/5 named rows for orders, fills, positions, and cash ledger.
   - `PAPER_V2_API_BASE=http://127.0.0.1:8011/api/v1 PAPER_V2_FRONTEND_PORT=3011 PAPER_V2_E2E_SKIP_REALTIME=1 npx playwright test -c playwright.paper-v2.config.ts tests/paper-v2/paper-v2-real-flow.spec.ts` -> 7 passed, 3 skipped.
 - Cleaned up temporary validation servers; ports `8011` and `3011` are free.
+
+---
+
+## Session: 2026-09-19 PT-NEXT-023 R8-only Core/Tactical Timing Research
+- Status: started.
+- Selected lane: `verify-aistock-feature`, tier F1; persistent planning enabled for the long task.
+- Synced `origin/main`; created `F:/Dev/AIstock_worktrees/pt-next-023-r8-core-tactical-20260919` on `feature/pt-next-023-r8-core-tactical-20260919` at `120da3fac01a14ea22eaf3790ecddfe58c41ac47`.
+- No database, runtime, dataset, profile, or service mutation performed.
+- Read PT-NEXT-022 screen/policy/benchmark implementations and direct tests. Confirmed the new task must use an independent contract/artifact namespace rather than mutate v1 evidence.
+- Located three immutable PT-NEXT-022 bundles; the design-authoritative formal bundle is the `52218b...` identity. Initial HDF metadata probe failed only because Bash heredoc syntax is invalid in PowerShell; no files or data were changed.
+- Verified R8 `daily_basic`/`bak_basic` columns and immutable identities; inspected the formal PT-NEXT-022 report, stock/fill schemas, pooled outcomes, and fill-authority counts.
+- Quantified PT-NEXT-022 exposure and fee drag: about 40.5% average exposure, about 42.3% invested sessions, and more than CNY 118k mean timing fees per paired account. This evidence now anchors the new policy structure.
+- Added and validated the F1 design; `aistock_feature_workflow.py validate --tier F1` passes with 9/9 items.
+- Implemented R8 proxy reader/screens and S1/S2 core-tactical state machines with direct tests. Current targeted timing suite is 5 passed; screen tests and combined suite will be rerun after benchmark integration.
+- Implemented the independent prepare/run/inspect/exact-retry benchmark and 3-screen attribution path. First combined direct suite passed 11 tests; compile passed; Ruff found one unused import, now removed.
+## PT-NEXT-023 review checkpoint (2026-09-19)
+
+- F1 design validator: PASS, 9/9, zero warnings.
+- New + direct predecessor tests: 19 passed.
+- `py_compile`, Ruff and `git diff --check`: passed (only line-ending notices on shared planning files).
+- Real R8 enrolled-symbol smoke: passed for `000002.SZ`; no floor violation and no repeated sub-lot sell attempts after the fix.
+- Formal WSL R8 prepare/run/inspect/exact-retry remains pending until the repository commit is immutable and clean.
