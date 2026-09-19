@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -91,12 +92,38 @@ def test_index_evidence_requires_explicit_schema_and_contributes_source_hash(tmp
 def test_exact_source_hash_contract_is_frozen() -> None:
     assert builder.EXPECTED_SOURCE_HASHES == {
         "catalog": "923492f4bcf3c7056904385a0769e4dda561904a29ecd9243f942680cef68c81",
-        "classification_history": "15979d9cf8a3b83ccc8dadc967de52f35e667b4f4da5e4e4e3dd5a8bb1f17402",
+        "classification_history": "1a181c4a7aa1db22ea3c52233221d9d70b731ed6cb0fd7c9bbc80f6b0c066742",
         "latest_snapshot": "b242ab04e0f68357cf90772e3f15367644d3e74c08a767eb9c5edcf21467fcbb",
         "taxonomy_standard": "18fb07fafda072dad39e274371660706e21678045ae8204931958db9906faa1a",
     }
+    assert builder.EXPECTED_CLASSIFICATION_HISTORY_SHAPE == (12_920, 4)
+    assert builder.OFFICIAL_CLASSIFICATION_HISTORY_URL.startswith(
+        "https://www.swsresearch.com/"
+    )
     assert builder.EXPECTED_CONFLICT_SYMBOLS == 23
     assert builder.EXPECTED_CONFLICT_OPPORTUNITIES == 23_326
+
+
+def test_classification_history_is_bounded_by_release_cutoff() -> None:
+    rows = [
+        {"classification_valid_from": "2026-08-31", "stock_code": "000001"},
+        {"classification_valid_from": "2026-09-01", "stock_code": "000002"},
+    ]
+
+    accepted, receipt = builder._filter_classification_history_at_cutoff(
+        rows,
+        cutoff=date(2026, 8, 31),
+    )
+
+    assert accepted == [rows[0]]
+    assert receipt == {
+        "source_row_count": 2,
+        "accepted_row_count": 1,
+        "post_cutoff_row_count": 1,
+        "cutoff_trade_date": "2026-08-31",
+        "source_url": builder.OFFICIAL_CLASSIFICATION_HISTORY_URL,
+        "source_sha256": builder.EXPECTED_SOURCE_HASHES["classification_history"],
+    }
 
 
 def test_approved_historical_conflict_inventory_is_frozen_independently() -> None:

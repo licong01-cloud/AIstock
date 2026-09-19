@@ -1,7 +1,12 @@
 {
   "actual": "R8 sector_membership_spans仅覆盖2678/5108个政策窗口PIT股票，导致P11 qe_sector_blacklist_membership_incomplete。必须从正式PIT行业权威生成完整冻结membership successor candidate，不修改QE/HMM业务语义，不激活profile。",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260919_BUG-1590-qe-active-dataset-pit.json"
+    "tests/aistock_validation/bugs/20260919_BUG-1590-qe-active-dataset-pit.json",
+    "scripts/build_industry_pit_candidates.py",
+    "scripts/build_shared_sector_context_component.py",
+    "backend/tests/scripts/test_build_industry_pit_candidates.py",
+    "backend/tests/dataset_release/test_shared_sector_context.py",
+    "backend/tests/dataset_release/test_release_successor.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1590",
@@ -21,12 +26,21 @@
       "timestamp": "2026-09-19T18:47:52.074617Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "file:///F:/Dev/AIstock_validation_clean/BUG1590_sw_history_source_20260920/StockClassifyUse_stock.xls",
+    "https://www.swsresearch.com/swindex/pdf/SwClass2021/StockClassifyUse_stock.xls"
+  ],
+  "expected": "Sector-context membership must cover every frozen PIT stock-universe trading-day intersection in 2024-07-01..2026-08-31, with zero missing, overlap, conflict, or unknown L2 assignments across all six stock pools.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "scripts/build_industry_pit_candidates.py",
+      "scripts/build_shared_sector_context_component.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "backend/tests/dataset_release/test_shared_sector_context.py",
+      "backend/tests/dataset_release/test_release_successor.py"
+    ],
+    "changed_files_source": "registered_scope_expansion",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +49,21 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "scripts/build_industry_pit_candidates.py",
+      "scripts/build_shared_sector_context_component.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "backend/tests/dataset_release/test_shared_sector_context.py",
+      "backend/tests/dataset_release/test_release_successor.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/build_industry_pit_candidates.py",
+      "scripts/build_shared_sector_context_component.py",
+      "backend/tests/scripts/test_build_industry_pit_candidates.py",
+      "backend/tests/dataset_release/test_shared_sector_context.py",
+      "backend/tests/dataset_release/test_release_successor.py"
+    ]
   },
   "first_seen_at": "2026-09-19T18:47:52.074656Z",
   "fix_branch": null,
@@ -54,7 +80,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run QE P11 with the active R8 profile and sector_blacklist=801011.SI; observe qe_sector_blacklist_membership_incomplete for 000002.SZ because sector_membership_spans contains only 2,678 of 5,108 eligible symbols.",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
@@ -74,7 +100,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "local_data"
   ],

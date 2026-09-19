@@ -56,10 +56,14 @@ from backend.services.industry_pit.resolver import IndustryPitResolver  # noqa: 
 
 EXPECTED_SOURCE_HASHES = {
     "catalog": "923492f4bcf3c7056904385a0769e4dda561904a29ecd9243f942680cef68c81",
-    "classification_history": "15979d9cf8a3b83ccc8dadc967de52f35e667b4f4da5e4e4e3dd5a8bb1f17402",
+    "classification_history": "1a181c4a7aa1db22ea3c52233221d9d70b731ed6cb0fd7c9bbc80f6b0c066742",
     "latest_snapshot": "b242ab04e0f68357cf90772e3f15367644d3e74c08a767eb9c5edcf21467fcbb",
     "taxonomy_standard": "18fb07fafda072dad39e274371660706e21678045ae8204931958db9906faa1a",
 }
+EXPECTED_CLASSIFICATION_HISTORY_SHAPE = (12_920, 4)
+OFFICIAL_CLASSIFICATION_HISTORY_URL = (
+    "https://www.swsresearch.com/swindex/pdf/SwClass2021/StockClassifyUse_stock.xls"
+)
 APPROVED_LEGACY_CONFLICT_BASELINE = (
     ("000016.SZ", 402),
     ("000716.SZ", 887),
@@ -184,7 +188,7 @@ def _excel_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[di
     snapshot_frame = pd.read_excel(args.latest_snapshot, dtype=object)
     if catalog_frame.shape != (511, 4):
         raise IndustryPitContractError(f"catalog shape drifted: {catalog_frame.shape}")
-    if history_frame.shape != (11803, 4):
+    if history_frame.shape != EXPECTED_CLASSIFICATION_HISTORY_SHAPE:
         raise IndustryPitContractError(f"classification history shape drifted: {history_frame.shape}")
     if snapshot_frame.shape[1] != 7:
         raise IndustryPitContractError(f"latest snapshot column count drifted: {snapshot_frame.shape}")
@@ -217,6 +221,35 @@ def _excel_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[di
         for _, row in snapshot_frame.iterrows()
     ]
     return catalog, history, snapshot
+
+
+def _filter_classification_history_at_cutoff(
+    rows: list[dict[str, Any]], *, cutoff: Any
+) -> tuple[list[dict[str, Any]], Mapping[str, Any]]:
+    cutoff_date = pd.Timestamp(cutoff).date()
+    accepted: list[dict[str, Any]] = []
+    post_cutoff = 0
+    for row in rows:
+        try:
+            valid_from = pd.Timestamp(row["classification_valid_from"]).date()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise IndustryPitContractError(
+                "classification history contains an invalid effective date"
+            ) from exc
+        if valid_from <= cutoff_date:
+            accepted.append(row)
+        else:
+            post_cutoff += 1
+    if not accepted:
+        raise IndustryPitContractError("classification history has no rows at the requested cutoff")
+    return accepted, {
+        "source_row_count": len(rows),
+        "accepted_row_count": len(accepted),
+        "post_cutoff_row_count": post_cutoff,
+        "cutoff_trade_date": cutoff_date.isoformat(),
+        "source_url": OFFICIAL_CLASSIFICATION_HISTORY_URL,
+        "source_sha256": EXPECTED_SOURCE_HASHES["classification_history"],
+    }
 
 
 def _validate_snapshot_crosscheck(
@@ -476,6 +509,10 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         window_start=args.window_start,
         window_end=args.window_end,
     )
+    history_rows, classification_source_window = _filter_classification_history_at_cutoff(
+        history_rows,
+        cutoff=denominator.window_end,
+    )
     catalog = build_taxonomy_catalog(catalog_rows, source_sha256=source_hashes["catalog"])
     classification_receipt = AuthorityReceipt(
         authority_type=AuthorityType.CLASSIFICATION,
@@ -488,6 +525,7 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         source_ids=(
             "local:SwClassCode_2021.xls",
             "local:StockClassifyUse_stock.xls",
+            OFFICIAL_CLASSIFICATION_HISTORY_URL,
             "local:latest_stock_sw_classification_through_july.xlsx",
             "local:SwClassStd2021.pdf",
         ),
@@ -532,6 +570,10 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         denominator=denominator,
         classification_source_hash=source_hashes["classification_history"],
     )
+    classification_diagnostics = {
+        **classification_diagnostics,
+        "source_window": classification_source_window,
+    }
     index_membership, index_diagnostics = build_index_membership_intervals(
         index_evidence,
         catalog=catalog,

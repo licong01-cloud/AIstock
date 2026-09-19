@@ -50,6 +50,13 @@ def _authority_inputs(tmp_path, monkeypatch):
     return authority_path, universe_path, calendar_path
 
 
+def _pool_sidecars(universe_path):
+    return {
+        pool_id: universe_path
+        for pool_id in ("csi300", "csi500", "csi1000", "star50", "star100")
+    }
+
+
 def _code_map() -> dict[str, object]:
     authority = {"authority_id": "fixture", "authority_sha256": "a" * 64}
     entries = [{"l2_code_id": index * 2 + 1, "canonical_l2_code": f"801{index:03d}.SI"} for index in range(131)]
@@ -247,6 +254,7 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
         code_map_json=code_map_path,
         industry_pit_authority_envelope=authority_path,
         stock_universe_sidecar=universe_path,
+        pool_sidecars=_pool_sidecars(universe_path),
         calendar_path=calendar_path,
         output_root=output_root,
         source_dataset_manifest_sha256="b" * 64,
@@ -258,6 +266,10 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
     assert result["market_context"]["row_count"] == 2
     assert result["membership"]["span_count"] == 2
     assert result["membership"]["symbol_count"] == 2
+    assert all(
+        stats["trading_day_gap_count"] == 0
+        for stats in result["membership"]["coverage"].values()
+    )
     assert result["sector_code_map"]["path"] == "sector_code_map.json"
     assert result["sector_code_map"]["byte_size"] > 0
     assert result["market_context"]["schema_version"] == "aistock_market_context_v1"
@@ -268,6 +280,7 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
             code_map_json=code_map_path,
             industry_pit_authority_envelope=authority_path,
             stock_universe_sidecar=universe_path,
+            pool_sidecars=_pool_sidecars(universe_path),
             calendar_path=calendar_path,
             output_root=output_root,
             source_dataset_manifest_sha256="b" * 64,
@@ -278,6 +291,11 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
 
 def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypatch) -> None:
     authority_path, universe_path, calendar_path = _authority_inputs(tmp_path, monkeypatch)
+    universe_path.write_text(
+        universe_path.read_text(encoding="utf-8")
+        + "000003.SZ\t2024-07-01\t2024-07-03\n",
+        encoding="utf-8",
+    )
     code_map_path = tmp_path / "sector_code_map.json"
     code_map_path.write_text(json.dumps(_code_map(), sort_keys=True), encoding="utf-8")
     index = pd.MultiIndex.from_tuples(
@@ -300,6 +318,7 @@ def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypat
         code_map_json=code_map_path,
         industry_pit_authority_envelope=authority_path,
         stock_universe_sidecar=universe_path,
+        pool_sidecars=_pool_sidecars(universe_path),
         calendar_path=calendar_path,
         output_root=tmp_path / "component",
         source_dataset_manifest_sha256="b" * 64,
@@ -307,5 +326,8 @@ def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypat
         membership_end=dt.date(2024, 7, 3),
     )
 
-    assert result["membership"]["symbol_count"] == 2
-    assert result["membership"]["span_count"] == 2
+    assert result["membership"]["symbol_count"] == 3
+    assert result["membership"]["span_count"] == 3
+    assert result["membership"]["coverage"]["stock_universe"]["eligible_symbol_count"] == 3
+    assert result["membership"]["coverage"]["stock_universe"]["missing_symbol_count"] == 0
+    assert result["membership"]["coverage"]["stock_universe"]["trading_day_gap_count"] == 0

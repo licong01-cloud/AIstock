@@ -9,7 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -39,6 +39,8 @@ from backend.services.hmm_risk.industry_pit_adapter import (  # noqa: E402
 COMPONENT_RECEIPT_SCHEMA = "aistock_sector_context_receipt_v1"
 DERIVED_MAPPING_AUTHORITY_SCHEMA = "aistock_release_sw_l2_derived_authority_v1"
 PRODUCER_ORDER_ALGORITHM = "sorted_market_sw_index_classify_index_code_zero_based_v1"
+REQUIRED_INDEX_POOL_IDS = ("csi300", "csi500", "csi1000", "star50", "star100")
+MEMBERSHIP_DENOMINATOR = "pit_stock_universe_intersection_policy_window_calendar_v1"
 
 
 def _sha256(path: Path) -> str:
@@ -128,7 +130,85 @@ def _parse_universe_spans(path: Path) -> list[tuple[str, dt.date, dt.date]]:
         spans.append((symbol, start, end))
     if not spans or spans != sorted(set(spans)):
         raise ValueError("stock universe spans are empty, duplicated, or non-canonical")
+    by_symbol: dict[str, list[tuple[dt.date, dt.date]]] = {}
+    for symbol, start, end in spans:
+        by_symbol.setdefault(symbol, []).append((start, end))
+    for symbol, values in by_symbol.items():
+        for left, right in zip(values, values[1:]):
+            if right[0] <= left[1]:
+                raise ValueError(f"stock universe spans overlap: {symbol}")
     return spans
+
+
+def _membership_coverage(
+    *,
+    membership,
+    pool_spans: list[tuple[str, dt.date, dt.date]],
+    calendar: list[dt.date],
+    id_to_code: Mapping[int, str],
+    start: dt.date,
+    end: dt.date,
+) -> dict[str, int]:
+    target_calendar = [value for value in calendar if start <= value <= end]
+    by_symbol = {
+        str(symbol): list(group.itertuples(index=False))
+        for symbol, group in membership.groupby("instrument", sort=False)
+    }
+    expected_symbols: set[str] = set()
+    incomplete_symbols: set[str] = set()
+    expected_trading_days = 0
+    gap_count = 0
+    duplicate_count = 0
+    conflict_count = 0
+    unknown_count = 0
+    for symbol, eligible_start, eligible_end in pool_spans:
+        dates = [
+            value
+            for value in target_calendar
+            if max(start, eligible_start) <= value <= min(end, eligible_end)
+        ]
+        if not dates:
+            continue
+        expected_symbols.add(symbol)
+        expected_trading_days += len(dates)
+        spans = by_symbol.get(symbol, ())
+        for day in dates:
+            matches = [span for span in spans if span.start_date <= day <= span.end_date]
+            if not matches:
+                gap_count += 1
+                incomplete_symbols.add(symbol)
+                continue
+            if len(matches) > 1:
+                duplicate_count += 1
+                incomplete_symbols.add(symbol)
+                if len({int(span.l2_code_id) for span in matches}) > 1:
+                    conflict_count += 1
+                continue
+            if int(matches[0].l2_code_id) not in id_to_code:
+                unknown_count += 1
+                incomplete_symbols.add(symbol)
+    return {
+        "eligible_symbol_count": len(expected_symbols),
+        "covered_symbol_count": len(expected_symbols - incomplete_symbols),
+        "missing_symbol_count": len(incomplete_symbols),
+        "expected_trading_day_count": expected_trading_days,
+        "trading_day_gap_count": gap_count,
+        "duplicate_assignment_count": duplicate_count,
+        "conflicting_assignment_count": conflict_count,
+        "unknown_l2_code_id_count": unknown_count,
+    }
+
+
+def _validate_pool_sidecars(value: Mapping[str, Path]) -> dict[str, Path]:
+    observed = {str(key): Path(path) for key, path in value.items()}
+    if set(observed) != set(REQUIRED_INDEX_POOL_IDS):
+        raise ValueError(
+            "index pool sidecars must be exact: " + ",".join(REQUIRED_INDEX_POOL_IDS)
+        )
+    for pool_id, path in observed.items():
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"index pool sidecar is missing or linked: {pool_id}")
+    return observed
 
 
 def _load_industry_adapter(path: Path) -> tuple[HMMIndustryPitAdapter, dict[str, Any]]:
@@ -323,39 +403,6 @@ def _build_authority_membership_spans(
     return frame[["instrument", "start_date", "end_date", "l2_code_id"]]
 
 
-def _factor_membership_denominator(
-    frame,
-    *,
-    universe_spans: list[tuple[str, dt.date, dt.date]],
-    start: dt.date,
-    end: dt.date,
-) -> list[tuple[str, dt.date, dt.date]]:
-    selected = frame.loc[
-        (frame["datetime"].dt.date >= start) & (frame["datetime"].dt.date <= end),
-        ["datetime", "instrument"],
-    ]
-    if selected.empty:
-        raise ValueError("sector_data has no membership denominator rows")
-    eligible_by_symbol: dict[str, list[tuple[dt.date, dt.date]]] = {}
-    for symbol, eligible_start, eligible_end in universe_spans:
-        eligible_by_symbol.setdefault(symbol, []).append((eligible_start, eligible_end))
-    denominator: list[tuple[str, dt.date, dt.date]] = []
-    for symbol, rows in selected.groupby("instrument", sort=True):
-        observed_dates = rows["datetime"].dt.date
-        eligible = eligible_by_symbol.get(str(symbol), [])
-        covered = observed_dates.map(
-            lambda day: any(eligible_start <= day <= eligible_end for eligible_start, eligible_end in eligible)
-        )
-        if not bool(covered.all()):
-            first = observed_dates.loc[~covered].iloc[0]
-            raise ValueError(f"sector_data row escapes the PIT stock universe: instrument={symbol} trade_date={first}")
-        for eligible_start, eligible_end in eligible:
-            in_interval = observed_dates.loc[observed_dates.map(lambda day: eligible_start <= day <= eligible_end)]
-            if not in_interval.empty:
-                denominator.append((str(symbol), min(in_interval), max(in_interval)))
-    return denominator
-
-
 def _validate_h5_membership_alignment(frame, membership, *, start: dt.date, end: dt.date) -> None:
     selected = frame.loc[
         (frame["datetime"].dt.date >= start) & (frame["datetime"].dt.date <= end),
@@ -390,6 +437,7 @@ def build_component(
     code_map_json: Path | None,
     industry_pit_authority_envelope: Path,
     stock_universe_sidecar: Path,
+    pool_sidecars: Mapping[str, Path],
     calendar_path: Path,
     output_root: Path,
     source_dataset_manifest_sha256: str,
@@ -411,6 +459,7 @@ def build_component(
         field="source_dataset_manifest_sha256",
     )
     frame = _read_sector_frame(sector_data_h5)
+    pool_sidecars = _validate_pool_sidecars(pool_sidecars)
     adapter, authority_envelope = _load_industry_adapter(industry_pit_authority_envelope)
     if code_map_json is None:
         code_map_payload, map_derivation = _derive_release_code_map(
@@ -439,16 +488,11 @@ def build_component(
         raise ValueError(f"sector_data contains IDs absent from release map: {unknown_ids[:10]}")
     market = _build_market_context(frame)
     universe_spans = _parse_universe_spans(stock_universe_sidecar)
-    membership_denominator = _factor_membership_denominator(
-        frame,
-        universe_spans=universe_spans,
-        start=membership_start,
-        end=membership_end,
-    )
+    calendar = _parse_calendar(calendar_path)
     membership = _build_authority_membership_spans(
         adapter=adapter,
-        universe_spans=membership_denominator,
-        calendar=_parse_calendar(calendar_path),
+        universe_spans=universe_spans,
+        calendar=calendar,
         code_to_id=dict(code_map.code_to_id),
         start=membership_start,
         end=membership_end,
@@ -470,6 +514,37 @@ def build_component(
         required_start=membership_start,
         required_end=membership_end,
     )
+    coverage_inputs = {"stock_universe": stock_universe_sidecar, **pool_sidecars}
+    coverage = {
+        pool_id: {
+            **_membership_coverage(
+                membership=membership,
+                pool_spans=_parse_universe_spans(path),
+                calendar=calendar,
+                id_to_code=code_map.id_to_code,
+                start=membership_start,
+                end=membership_end,
+            ),
+            "sidecar_sha256": _sha256(path),
+        }
+        for pool_id, path in sorted(coverage_inputs.items())
+    }
+    incomplete = {
+        pool_id: stats
+        for pool_id, stats in coverage.items()
+        if any(
+            int(stats[field])
+            for field in (
+                "missing_symbol_count",
+                "trading_day_gap_count",
+                "duplicate_assignment_count",
+                "conflicting_assignment_count",
+                "unknown_l2_code_id_count",
+            )
+        )
+    }
+    if incomplete:
+        raise ValueError(f"sector membership coverage is incomplete: {incomplete}")
 
     output_root.mkdir(parents=True, exist_ok=False)
     code_map_target = output_root / "sector_code_map.json"
@@ -518,11 +593,12 @@ def build_component(
             "end": membership_last.isoformat(),
             "span_count": span_rows,
             "symbol_count": symbol_count,
-            "denominator": "sector_data_observed_instrument_ranges_with_pit_universe_validation_v1",
+            "denominator": MEMBERSHIP_DENOMINATOR,
             "industry_pit_authority_envelope_sha256": _sha256(industry_pit_authority_envelope),
             "industry_pit_identity": authority_envelope["identity"],
             "stock_universe_sha256": _sha256(stock_universe_sidecar),
             "calendar_sha256": _sha256(calendar_path),
+            "coverage": coverage,
         },
         "database_read": False,
         "database_write": False,
@@ -543,12 +619,29 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--code-map-json", type=Path)
     parser.add_argument("--industry-pit-authority-envelope", type=Path, required=True)
     parser.add_argument("--stock-universe-sidecar", type=Path, required=True)
+    parser.add_argument(
+        "--pool-sidecar",
+        action="append",
+        default=[],
+        metavar="POOL_ID=PATH",
+        help="repeat for csi300,csi500,csi1000,star50,star100",
+    )
     parser.add_argument("--calendar-path", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source-dataset-manifest-sha256", required=True)
     parser.add_argument("--membership-start", type=dt.date.fromisoformat, required=True)
     parser.add_argument("--membership-end", type=dt.date.fromisoformat, required=True)
     return parser
+
+
+def _parse_pool_sidecar_args(values: list[str]) -> dict[str, Path]:
+    output: dict[str, Path] = {}
+    for value in values:
+        pool_id, separator, raw_path = value.partition("=")
+        if not separator or not pool_id or not raw_path or pool_id in output:
+            raise ValueError(f"invalid --pool-sidecar value: {value}")
+        output[pool_id] = Path(raw_path)
+    return output
 
 
 def main() -> None:
@@ -558,6 +651,7 @@ def main() -> None:
         code_map_json=args.code_map_json,
         industry_pit_authority_envelope=args.industry_pit_authority_envelope,
         stock_universe_sidecar=args.stock_universe_sidecar,
+        pool_sidecars=_parse_pool_sidecar_args(args.pool_sidecar),
         calendar_path=args.calendar_path,
         output_root=args.output_root,
         source_dataset_manifest_sha256=args.source_dataset_manifest_sha256,
