@@ -807,7 +807,14 @@ def load_frozen_coefficient_inputs(
             row.datetime,
         )
         raw_quote_values = [getattr(row, field) for field in quote_columns]
-        if not quote_available:
+        is_burn_in = row.datetime < test_start
+        if is_burn_in:
+            if not all(pd.notna(value) for value in raw_quote_values):
+                raise ValueError(
+                    "frozen sector_data contains incomplete burn-in quote values: "
+                    f"trade_date={row.datetime} sector={row.sector_code}"
+                )
+        elif not quote_available:
             if any(pd.notna(value) for value in raw_quote_values):
                 raise ValueError(
                     "frozen sector_data contains quote values outside availability authority: "
