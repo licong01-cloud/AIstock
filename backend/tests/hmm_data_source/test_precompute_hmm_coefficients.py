@@ -584,6 +584,56 @@ def test_load_frozen_coefficient_inputs_rejects_missing_quote_inside_availabilit
         )
 
 
+def test_load_frozen_coefficient_inputs_accepts_complete_burn_in_before_output_authority(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(
+        tmp_path,
+        quote_spans_by_code={
+            "801783.SI": [{"start_date": "2026-06-02", "end_date": "2026-06-03"}],
+        },
+    )
+
+    result = load_frozen_coefficient_inputs(
+        bundle,
+        history_start=date(2026, 6, 1),
+        test_start=date(2026, 6, 2),
+        backtest_end=date(2026, 6, 3),
+    )
+
+    assert set(result["sector_data"]["801783.SI"]) == {
+        date(2026, 6, 1),
+        date(2026, 6, 2),
+        date(2026, 6, 3),
+    }
+    assert result["quote_available_sector_codes_by_date"] == {
+        "2026-06-02": ["801783.SI"],
+        "2026-06-03": ["801783.SI"],
+    }
+
+
+def test_load_frozen_coefficient_inputs_rejects_incomplete_burn_in_quote(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(
+        tmp_path,
+        quote_spans_by_code={
+            "801783.SI": [{"start_date": "2026-06-02", "end_date": "2026-06-03"}],
+        },
+    )
+    sector_spec = bundle["files"]["sector_data_h5"]
+    sector_path = Path(bundle["dataset_root"]) / sector_spec["relative_path"]
+    sector = pd.read_hdf(sector_path, key="data")
+    burn_in_mask = sector.index.get_level_values("datetime") == pd.Timestamp("2026-06-01")
+    sector.loc[burn_in_mask, "sw2_amount"] = float("nan")
+    sector.to_hdf(sector_path, key="data", format="table", data_columns=True, mode="w")
+    sector_spec["sha256"] = _sha256(sector_path)
+
+    with pytest.raises(ValueError, match="incomplete burn-in quote values"):
+        load_frozen_coefficient_inputs(
+            bundle,
+            history_start=date(2026, 6, 1),
+            test_start=date(2026, 6, 2),
+            backtest_end=date(2026, 6, 3),
+        )
+
+
 def test_main_frozen_mode_never_imports_database_driver(monkeypatch, tmp_path, capsys) -> None:
     import builtins
     import numpy as np
