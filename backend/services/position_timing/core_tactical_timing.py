@@ -33,6 +33,7 @@ CORE_RATIOS = {S1: Decimal("0.80"), S2: Decimal("0.70")}
 STAGE_FRACTION = Decimal("0.15")
 S1_TACTICAL_FRACTION = Decimal("0.20")
 SECOND_STAGE_ATR_MULTIPLE = Decimal("1.0")
+FLOOR_ARITHMETIC_TOLERANCE_UNITS = Decimal("1e-12")
 
 POLICY_CONTRACT = {
     "schema": "position_timing_core_tactical_policy_set_v1",
@@ -51,6 +52,7 @@ POLICY_CONTRACT = {
     "recovery_buy_guard": "NO_OPEN_GAP_POLICY",
     "account": "INDEPENDENT_10M_CASH_NATURAL_REINVESTMENT",
     "ordinary_full_exit": False,
+    "floor_arithmetic_tolerance_units": str(FLOOR_ARITHMETIC_TOLERANCE_UNITS),
 }
 POLICY_CONTRACT_SHA256 = canonical_sha256(POLICY_CONTRACT)
 
@@ -155,16 +157,23 @@ def _event(features: pd.DataFrame, ordinal: int, template: str) -> tuple[bool | 
     return bool(matched), reason
 
 
-def _update_floor_gap(state: CorePolicyState) -> None:
+def _floor_gap(state: CorePolicyState) -> Decimal:
     if state.full_units_anchor <= ZERO:
-        return
+        return ZERO
     gap = state.account.units - state.core_floor_units
-    if gap < ZERO:
+    if gap < -FLOOR_ARITHMETIC_TOLERANCE_UNITS:
         raise ActionValueError(
             "CORE_TACTICAL_FLOOR_VIOLATION",
             units=str(state.account.units),
             floor=str(state.core_floor_units),
         )
+    return max(ZERO, gap)
+
+
+def _update_floor_gap(state: CorePolicyState) -> None:
+    if state.full_units_anchor <= ZERO:
+        return
+    gap = _floor_gap(state)
     state.min_floor_gap = gap if state.min_floor_gap is None else min(state.min_floor_gap, gap)
 
 
@@ -374,7 +383,7 @@ def _replay_one(
                     "trim_stage_after": state.trim_stage,
                     "full_units_anchor": float(state.full_units_anchor),
                     "core_floor_units": float(state.core_floor_units),
-                    "floor_gap_units": float(state.account.units - state.core_floor_units),
+                    "floor_gap_units": float(_floor_gap(state)),
                 })
             fills.append(event)
 
@@ -405,7 +414,7 @@ def _replay_one(
             "stale_mark": stale,
             "valuation_status": "KNOWN" if all(item is not None for item in values.values()) else "UNKNOWN",
             "trim_stage": state.trim_stage,
-            "floor_gap_units": float(state.account.units - state.core_floor_units),
+            "floor_gap_units": float(_floor_gap(state)),
         }
         for role, account in (("timing", state.account), ("hold", state.hold)):
             nav = values[role]

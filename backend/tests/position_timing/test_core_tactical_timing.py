@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from decimal import Decimal
 
 import numpy as np
 import pandas as pd
@@ -146,6 +147,19 @@ def test_unknown_execution_factor_does_not_crash_partial_sell_planning(monkeypat
     _, fills, details = replay_core_tactical_policies("600001.SH", bars, enrollment_ordinal=70)
     assert all(item["floor_violation_count"] == 0 for item in details)
     assert not fills.status.eq("PARTIAL_QUANTITY_UNAVAILABLE").any()
+
+
+def test_floor_invariant_ignores_decimal_noise_but_rejects_real_crossing():
+    state = timing.CorePolicyState(timing.Account(), timing.Account())
+    state.full_units_anchor = Decimal("1000000")
+    state.core_floor_units = Decimal("898210.9406343181978351452537")
+    state.account.units = Decimal("898210.9406343181978351452536")
+    timing._update_floor_gap(state)
+    assert state.min_floor_gap == 0
+
+    state.account.units = state.core_floor_units - Decimal("0.000001")
+    with pytest.raises(timing.ActionValueError, match="CORE_TACTICAL_FLOOR_VIOLATION"):
+        timing._update_floor_gap(state)
 
 
 def test_prepare_freezes_contract_before_outcomes():
