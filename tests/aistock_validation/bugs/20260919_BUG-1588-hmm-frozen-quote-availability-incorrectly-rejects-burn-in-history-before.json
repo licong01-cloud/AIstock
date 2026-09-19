@@ -1,6 +1,8 @@
 {
   "actual": "Formal preset_A coefficient generation for 2024-07-01..2026-08-28 on immutable R8-hotfix1 fails in load_frozen_coefficient_inputs because coefficient-window quote availability (starts 2024-07-01) is incorrectly enforced against the three-year causal burn-in history beginning 2021-06. Real 2021 quote rows are rejected as outside authority. The fix must preserve the full burn-in, enforce finite complete historical observations without fallback, use quote availability only for coefficient-date eligibility, and retain all existing 131/119/113/6, PIT membership, hash, no-fill and fail-closed semantics. No dataset changes, database fallback, model retraining, QE business changes, or service control.",
   "allowed_write_scope": [
+    "scripts/precompute_hmm_coefficients.py",
+    "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
     "tests/aistock_validation/bugs/20260919_BUG-1588-hmm-frozen-quote-availability-incorrectly-rejects-burn-in-history-before.json"
   ],
   "assigned_agent": null,
@@ -35,9 +37,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "scripts/precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+    ]
   },
   "first_seen_at": "2026-09-19T15:40:08.118013Z",
   "fix_branch": null,
@@ -191,5 +199,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }
