@@ -631,6 +631,89 @@ def test_materialize_sector_blacklist_preserves_pit_transitions(tmp_path: Path) 
     assert result.diagnostics["effective"] is True
 
 
+def test_materialize_sector_blacklist_preserves_pre_policy_intervals_without_membership(
+    tmp_path: Path,
+) -> None:
+    pins = _blacklist_frozen_inputs(tmp_path)
+    membership_path = tmp_path / str(pins["membership_file"])
+    membership = pd.read_parquet(membership_path)
+    membership = membership[membership["end_date"] >= "2026-08-05"].copy()
+    membership.loc[membership["start_date"] < "2026-08-05", "start_date"] = "2026-08-05"
+    membership = pd.concat(
+        [
+            membership,
+            pd.DataFrame(
+                [
+                    {
+                        "instrument": "000004.SZ",
+                        "start_date": "2026-08-05",
+                        "end_date": "2026-08-06",
+                        "l2_code_id": 0,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    ).sort_values(["instrument", "start_date"], ignore_index=True)
+    membership.to_parquet(membership_path, index=False)
+    pins["membership_sha256"] = _sha(membership_path)
+    pins["start"] = "2026-08-05"
+
+    result = materialize_sector_blacklist_universe(
+        base_intervals=[
+            ("000001.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+            ("000002.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+            ("000003.SZ", BLACKLIST_CALENDAR[0], dt.date(2026, 8, 4)),
+            ("000004.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+        ],
+        calendar=BLACKLIST_CALENDAR,
+        window_start=BLACKLIST_CALENDAR[0],
+        policy_start=dt.date(2026, 8, 5),
+        window_end=BLACKLIST_CALENDAR[-1],
+        factor_root=tmp_path,
+        pins=pins,
+        blacklist_codes=["801020.SI"],
+    )
+
+    assert result.instruments_content == (
+        "000001.SZ\t2026-08-03\t2026-08-04\n"
+        "000002.SZ\t2026-08-03\t2026-08-04\n"
+        "000003.SZ\t2026-08-03\t2026-08-04\n"
+        "000004.SZ\t2026-08-03\t2026-08-06\n"
+    )
+    assert result.diagnostics["window_start"] == "2026-08-03"
+    assert result.diagnostics["policy_start"] == "2026-08-05"
+    assert result.diagnostics["blacklist_excluded_count"] == 2
+
+
+def test_materialize_sector_blacklist_rejects_empty_policy_universe_despite_training_rows(
+    tmp_path: Path,
+) -> None:
+    pins = _blacklist_frozen_inputs(tmp_path)
+    membership_path = tmp_path / str(pins["membership_file"])
+    membership = pd.read_parquet(membership_path)
+    membership = membership[membership["instrument"] == "000002.SZ"].copy()
+    membership["start_date"] = "2026-08-05"
+    membership.to_parquet(membership_path, index=False)
+    pins["membership_sha256"] = _sha(membership_path)
+    pins["start"] = "2026-08-05"
+
+    with pytest.raises(QESectorBlacklistPolicyError, match="qe_sector_blacklist_universe_empty"):
+        materialize_sector_blacklist_universe(
+            base_intervals=[
+                ("000002.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+                ("000003.SZ", BLACKLIST_CALENDAR[0], dt.date(2026, 8, 4)),
+            ],
+            calendar=BLACKLIST_CALENDAR,
+            window_start=BLACKLIST_CALENDAR[0],
+            policy_start=dt.date(2026, 8, 5),
+            window_end=BLACKLIST_CALENDAR[-1],
+            factor_root=tmp_path,
+            pins=pins,
+            blacklist_codes=["801020.SI"],
+        )
+
+
 def test_materialize_sector_blacklist_accepts_shared_sparse_release_ids(tmp_path: Path) -> None:
     pins = _blacklist_frozen_inputs(tmp_path)
     authority = {"authority_id": "fixture", "authority_sha256": "a" * 64}
