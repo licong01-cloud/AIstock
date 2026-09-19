@@ -183,7 +183,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "python -m pytest -q backend/tests/quantevolver/test_qe_active_dataset_profile.py::test_v3_sector_blacklist_starts_at_test_without_truncating_training_universe -> passed"
+      "python -m pytest -q backend/tests/quantevolver/test_qe_active_dataset_profile.py::test_v3_sector_blacklist_starts_at_test_without_truncating_training_universe -> passed",
+      "python -m pytest -q focused BUG-1589 final nodeids -> 3 passed at HEAD 8318ee2bb49ef0f7c10b362e368c55e3a7117433"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
