@@ -93,10 +93,10 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "offline successor profile validation plus QE P10/P11 resolve_active_qe_dataset smoke against the immutable candidate profile",
-    "database_readback_ref": "noop:no_database_change",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": null,
     "fresh_process_evidence": [],
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and merged commit readback after an operator-controlled restart",
+    "identity_ref": "http://127.0.0.1:8001/openapi.json",
     "inference_basis": "changed_file_catalog",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
