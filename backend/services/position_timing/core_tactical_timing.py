@@ -99,7 +99,12 @@ def _sell_fraction(
 ) -> Decimal | None:
     removable = _removable_units(state)
     desired = min(removable, max(ZERO, desired_units))
-    if desired <= ZERO or state.account.units <= ZERO or execution_factor <= ZERO:
+    if (
+        desired <= ZERO
+        or state.account.units <= ZERO
+        or not execution_factor.is_finite()
+        or execution_factor <= ZERO
+    ):
         return None
     value = desired / state.account.units
     fraction = min(Decimal(1), value)

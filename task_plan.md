@@ -690,6 +690,7 @@ Phase 2: pure implementation and deterministic benchmark.
 | First F1 validator rejected localized headings and `planned` matrix evidence | 1 | Add explicit Background/Non-goals/Implementation Plan/Verification Plan/Production Gates/Rollback headings and concrete final paths without changing business scope |
 | Initial direct suite: S2 recovered before stage 2; risk fixture retriggered after recovery; blocked-fill fixture hit adjusted/raw mismatch | 1 | Correct fixtures to keep R0 active through stage 2, keep risk active after day 20, and inspect the exact execution-day raw/limit basis before changing production code |
 | First Ruff pass found one unused `fee` import | 1 | Remove the unused import; no behavior change |
+| Native-WSL 32-symbol verification hit `decimal.InvalidOperation` when the execution-day factor was NaN | 1 | Treat a non-finite factor as no executable partial-sale quantity and let the shared executor retain `MARKET_DATA_UNKNOWN`; add a direct regression test and regenerate the immutable request after the fix |
 ### PT-NEXT-023 execution log update (2026-09-19)
 
 - [x] Harden zero-enrollment report generation.

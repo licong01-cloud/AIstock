@@ -129,6 +129,25 @@ def test_offline_side_effect_contract_is_false():
     assert len(timing.POLICY_CONTRACT_SHA256) == 64
 
 
+def test_unknown_execution_factor_does_not_crash_partial_sell_planning(monkeypatch):
+    bars = _bars()
+    for field in ("open", "high", "low", "close", "volume", "factor"):
+        bars.iloc[92, bars.columns.get_loc(field)] = np.nan
+    monkeypatch.setattr(
+        timing,
+        "evaluate_exit",
+        lambda context, _policy: SimpleNamespace(should_exit=context.days_since_entry >= 20),
+    )
+    monkeypatch.setattr(
+        timing,
+        "acceleration_volume_exit",
+        lambda _frame, _ordinal, _template: (False, {"available": True}),
+    )
+    _, fills, details = replay_core_tactical_policies("600001.SH", bars, enrollment_ordinal=70)
+    assert all(item["floor_violation_count"] == 0 for item in details)
+    assert not fills.status.eq("PARTIAL_QUANTITY_UNAVAILABLE").any()
+
+
 def test_prepare_freezes_contract_before_outcomes():
     assert benchmark.FAMILY_SIZE == 6
     assert len(benchmark.CONTRACT["hypothesis_family"]) == 6
