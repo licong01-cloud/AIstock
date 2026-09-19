@@ -528,9 +528,9 @@ def _overlay_frozen_sector_assignments(
     target_calendar = [value for value in calendar if start <= value <= end]
     output: list[dict[str, Any]] = []
     frozen_symbol_count = 0
-    fallback_only_symbol_count = 0
+    authority_gap_fill_only_symbol_count = 0
     frozen_day_count = 0
-    fallback_day_count = 0
+    authority_gap_fill_day_count = 0
     for symbol, eligible_start, eligible_end in universe_spans:
         dates = [
             value
@@ -544,7 +544,7 @@ def _overlay_frozen_sector_assignments(
         if observed:
             frozen_symbol_count += 1
         else:
-            fallback_only_symbol_count += 1
+            authority_gap_fill_only_symbol_count += 1
         active_frozen_id: int | None = None
         rows: list[tuple[dt.date, int]] = []
         for day in dates:
@@ -563,7 +563,7 @@ def _overlay_frozen_sector_assignments(
                     raise ValueError(
                         f"classification authority leaves an uncovered stock-date: {symbol}/{day}"
                     )
-                fallback_day_count += 1
+                authority_gap_fill_day_count += 1
             else:
                 sector_id = active_frozen_id
                 frozen_day_count += 1
@@ -596,9 +596,9 @@ def _overlay_frozen_sector_assignments(
     return result[["instrument", "start_date", "end_date", "l2_code_id"]], {
         "policy": "frozen_dated_sector_assignment_then_c013_gap_fill_v1",
         "frozen_sector_symbol_count": frozen_symbol_count,
-        "c013_fallback_only_symbol_count": fallback_only_symbol_count,
+        "c013_authority_gap_fill_only_symbol_count": authority_gap_fill_only_symbol_count,
         "frozen_sector_trading_day_count": frozen_day_count,
-        "c013_fallback_trading_day_count": fallback_day_count,
+        "c013_authority_gap_fill_trading_day_count": authority_gap_fill_day_count,
         "current_snapshot_backfill": False,
         "default_industry_assignment": False,
         "silent_symbol_exclusion": False,

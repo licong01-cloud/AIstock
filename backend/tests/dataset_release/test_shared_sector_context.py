@@ -359,7 +359,7 @@ def test_frozen_dated_assignments_override_only_after_first_observation() -> Non
         },
     ]
     assert receipt["frozen_sector_symbol_count"] == 1
-    assert receipt["c013_fallback_only_symbol_count"] == 1
+    assert receipt["c013_authority_gap_fill_only_symbol_count"] == 1
     assert receipt["current_snapshot_backfill"] is False
 
 
