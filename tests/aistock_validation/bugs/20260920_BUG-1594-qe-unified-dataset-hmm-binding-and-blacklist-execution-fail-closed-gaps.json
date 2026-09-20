@@ -4,7 +4,7 @@
     "backend/routers/quantevolver.py",
     "backend/services/quantevolver/qe_active_dataset_profile.py",
     "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
-    "backend/tests/test_qe_experiment_status_reconciliation.py",
+    "backend/tests/quantevolver/test_qe_experiment_status_reconciliation.py",
     "tests/aistock_validation/bugs/20260920_BUG-1594-qe-unified-dataset-hmm-binding-and-blacklist-execution-fail-closed-gaps.json"
   ],
   "assigned_agent": null,
@@ -31,7 +31,7 @@
   "expected": "QE must reject an HMM coefficient asset whose frozen dataset, PIT membership, or source universe identity differs from the active dataset before submission; a requested P11 blacklist must remain bound to the run-local executable universe; and missing Qlib metrics after a remote completed signal must persist failed rather than completed.",
   "file_scope_contract": {
     "added_files": [
-      "backend/tests/test_qe_experiment_status_reconciliation.py"
+      "backend/tests/quantevolver/test_qe_experiment_status_reconciliation.py"
     ],
     "changed_files": [
       "backend/routers/quantevolver.py",
@@ -52,7 +52,7 @@
       "backend/routers/quantevolver.py",
       "backend/services/quantevolver/qe_active_dataset_profile.py",
       "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
-      "backend/tests/test_qe_experiment_status_reconciliation.py",
+      "backend/tests/quantevolver/test_qe_experiment_status_reconciliation.py",
       "tests/aistock_validation/bugs/20260920_BUG-1594-qe-unified-dataset-hmm-binding-and-blacklist-execution-fail-closed-gaps.json"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
@@ -60,7 +60,7 @@
       "backend/routers/quantevolver.py",
       "backend/services/quantevolver/qe_active_dataset_profile.py",
       "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
-      "backend/tests/test_qe_experiment_status_reconciliation.py",
+      "backend/tests/quantevolver/test_qe_experiment_status_reconciliation.py",
       "tests/aistock_validation/bugs/20260920_BUG-1594-qe-unified-dataset-hmm-binding-and-blacklist-execution-fail-closed-gaps.json"
     ]
   },
