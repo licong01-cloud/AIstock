@@ -87,6 +87,8 @@ PT-NEXT-023 曾观察到 U1/U2 的长期持有合成收益高于 U0，但三个�
 
 三项是唯一正式 family。对共同月份差做12个月 circular block bootstrap，5,000次，seed=`20260921`；同时报告 nominal 95% 和 Bonferroni 双侧 `1−0.05/3` 区间。经济阈值冻结0 bps：family-wise lower>0 为 `SUPPORTED`，upper<0 为 `NEGATIVE`，其余为 `INCONCLUSIVE`；`power_status` 独立记录，未冻结 Oracle 尺度时为 `NOT_COMPUTABLE`。
 
+有效区间至少需要两个完整的冻结 block，即24个共同完整月份。少于24个月时不得缩短 block、切换 IID bootstrap 或输出退化区间，统一报告 `INCONCLUSIVE + UNDERPOWERED / INSUFFICIENT_COMMON_MONTHS_FOR_FROZEN_BLOCK_BOOTSTRAP`。这是推断可计算性约束，不改变股票池、阈值、horizon 或运行资格。
+
 20/60/252日、逐股胜率、MDD、指数、年份和股票池切片全部 `diagnostic_only=true`，不得反向选择 screen、阈值、horizon 或子人口。由于三个 screen 和完整 R8 已被历史研究观察，即使正式端点有正下界，结论仍是 exploratory，不自动进入在线选股或择时。
 
 ## 7. Architecture / Artifacts / Exact Retry（F-007）

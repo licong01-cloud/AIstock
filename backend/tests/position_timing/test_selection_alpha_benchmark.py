@@ -189,6 +189,19 @@ def test_formal_bootstrap_uses_zero_economic_threshold_and_three_way_family():
     assert positive["power_status"] == "NOT_COMPUTABLE"
 
 
+def test_frozen_block_bootstrap_refuses_fewer_than_two_complete_blocks():
+    result = benchmark._bootstrap_monthly(
+        np.full(benchmark.BOOTSTRAP_BLOCK_MONTHS, 0.01)
+    )
+
+    assert result["status"] == "UNAVAILABLE"
+    assert result["evidence_state"] == "INCONCLUSIVE"
+    assert result["power_status"] == "UNDERPOWERED"
+    assert result["observed_months"] == 12
+    assert result["minimum_observed_months"] == 24
+    assert not any("interval" in key for key in result)
+
+
 def test_concat_keeps_canonical_columns_when_one_symbol_has_all_na_values():
     left = pd.DataFrame({"symbol": ["A"], "terminal": [None], "return": [0.1]})
     right = pd.DataFrame({"symbol": ["B"], "terminal": [12], "return": [0.2]})

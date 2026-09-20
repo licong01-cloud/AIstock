@@ -66,6 +66,7 @@ COMPARISONS = (
 FAMILY_SIZE = len(COMPARISONS)
 BOOTSTRAP_REPLICATES = 5_000
 BOOTSTRAP_BLOCK_MONTHS = 12
+MIN_BOOTSTRAP_MONTHS = BOOTSTRAP_BLOCK_MONTHS * 2
 BOOTSTRAP_SEED = 20260921
 WORKER_COUNT = 8
 MAX_IN_FLIGHT = 16
@@ -90,6 +91,7 @@ CONTRACT = {
     "bootstrap": {
         "replicates": BOOTSTRAP_REPLICATES,
         "block_months": BOOTSTRAP_BLOCK_MONTHS,
+        "minimum_observed_months": MIN_BOOTSTRAP_MONTHS,
         "seed": BOOTSTRAP_SEED,
         "family_size": FAMILY_SIZE,
     },
@@ -610,6 +612,17 @@ def _bootstrap_monthly(values: np.ndarray) -> dict[str, Any]:
             "reason": "NO_COMPLETE_COMMON_MONTH",
             "power_status": "NOT_COMPUTABLE",
         }
+    if len(values) < MIN_BOOTSTRAP_MONTHS:
+        return {
+            "status": "UNAVAILABLE",
+            "reason": "INSUFFICIENT_COMMON_MONTHS_FOR_FROZEN_BLOCK_BOOTSTRAP",
+            "observed_months": int(len(values)),
+            "minimum_observed_months": MIN_BOOTSTRAP_MONTHS,
+            "family_size": FAMILY_SIZE,
+            "economic_threshold_bps": 0.0,
+            "evidence_state": "INCONCLUSIVE",
+            "power_status": "UNDERPOWERED",
+        }
     rng = np.random.default_rng(BOOTSTRAP_SEED)
     blocks = int(np.ceil(len(values) / BOOTSTRAP_BLOCK_MONTHS))
     starts = rng.integers(0, len(values), size=(BOOTSTRAP_REPLICATES, blocks))
@@ -770,6 +783,10 @@ def _build_report(
                         float(selected.max_drawdown.mean())
                         if len(selected) and selected.max_drawdown.notna().all()
                         else None
+                    ),
+                    "max_drawdown_valued_count": int(selected.max_drawdown.notna().sum()),
+                    "max_drawdown_complete": bool(
+                        len(selected) and selected.max_drawdown.notna().all()
                     ),
                     "entry_fill_rate": float(selected.entry_filled.mean()) if len(selected) else None,
                     "terminal_sellable_rate": (
