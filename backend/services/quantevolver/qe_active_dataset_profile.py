@@ -49,6 +49,8 @@ UNIVERSE_COVERAGE_SCHEMA = "qe_index_pool_coverage_receipt_v1"
 QE_RUN_STOCK_POOL_CONTENT_PARAM = "_qe_run_stock_pool_content"
 QE_RUN_COVERAGE_RECEIPT_PARAM = "_qe_universe_coverage_receipt"
 QE_ACTIVE_PROFILE_SUMMARY_PARAM = "_qe_active_dataset_summary"
+QE_HMM_DATASET_BINDING_SCHEMA = "hmm_risk_qe_dataset_binding_v1"
+QE_HMM_DATASET_BINDING_FIELD = "dataset_binding"
 QE_INTERNAL_DATASET_PARAMS = frozenset(
     {
         QE_DIRECT_V2_DATASET_BINDING_PARAM,
@@ -85,6 +87,12 @@ _POOL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,31}$")
 _SIDECAR_RE = re.compile(r"^(?:stock_universe|index_pool__[a-z0-9_]+)\.txt$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SYMBOL_RE = re.compile(r"^[0-9]{6}\.(?:SH|SZ|BJ)$")
+_HMM_DATASET_BINDING_FIELDS = {
+    "schema_version",
+    "dataset_manifest_sha256",
+    "sector_membership_sha256",
+    "source_universe_sha256",
+}
 _CONSUMER_REQUIRED_COMPONENTS = {
     "qe": frozenset(
         {
@@ -362,6 +370,81 @@ class ResolvedQEDataset:
             params["sector_blacklist_enabled"] = True
         params["stock_pool"] = self.binding.selection_pins["instrument_name"]
         return params
+
+
+def _require_hmm_asset_dataset_binding(
+    *,
+    custom_params: Mapping[str, Any] | None,
+    profile: QEActiveDatasetProfile,
+    source_universe_sha256: str,
+) -> None:
+    """Fail before submission when a transported HMM asset targets another release.
+
+    The HMM file itself is deployed outside the QE workspace.  Therefore the
+    transport receipt must carry the frozen release identities that produced
+    it; checking only the content-addressed file hash cannot prove that it is
+    compatible with the currently active dataset.
+    """
+
+    params = dict(custom_params or {})
+    if params.get("enable_sector_hmm") is not True:
+        return
+
+    from backend.services.hmm_risk.qe_assistance_transport import BINDING_PARAM
+
+    artifact_binding = params.get(BINDING_PARAM)
+    if artifact_binding is None:
+        # Legacy/dynamic coefficient generation has its own producer-side
+        # validation.  This gate is for immutable transported HMM assets.
+        return
+    if not isinstance(artifact_binding, Mapping):
+        raise _fail(
+            "qe_hmm_asset_dataset_identity_missing",
+            "transported HMM artifact binding must be an object",
+        )
+    dataset_binding = artifact_binding.get(QE_HMM_DATASET_BINDING_FIELD)
+    if not isinstance(dataset_binding, Mapping) or set(dataset_binding) != _HMM_DATASET_BINDING_FIELDS:
+        raise _fail(
+            "qe_hmm_asset_dataset_identity_missing",
+            "transported HMM artifact does not carry the exact frozen dataset binding",
+        )
+    if dataset_binding.get("schema_version") != QE_HMM_DATASET_BINDING_SCHEMA:
+        raise _fail(
+            "qe_hmm_asset_dataset_identity_missing",
+            "transported HMM artifact dataset binding schema differs",
+        )
+
+    components = profile.raw["components"]
+    sector_context = components.get("sector_context_pins")
+    if not isinstance(sector_context, Mapping):
+        raise _fail(
+            "qe_hmm_asset_dataset_identity_missing",
+            "active dataset does not expose shared sector membership identity",
+        )
+    expected = {
+        "dataset_manifest_sha256": str(components["dataset_manifest_sha256"]),
+        "sector_membership_sha256": str(sector_context["membership_sha256"]),
+        "source_universe_sha256": source_universe_sha256,
+    }
+    actual = {field: str(dataset_binding.get(field) or "") for field in expected}
+    invalid = [field for field, value in actual.items() if _SHA256_RE.fullmatch(value) is None]
+    if invalid:
+        raise _fail(
+            "qe_hmm_asset_dataset_identity_missing",
+            "transported HMM artifact dataset binding contains an invalid SHA256",
+            invalid_fields=invalid,
+        )
+    mismatches = {
+        field: {"expected": expected[field], "actual": actual[field]}
+        for field in expected
+        if actual[field] != expected[field]
+    }
+    if mismatches:
+        raise _fail(
+            "qe_hmm_asset_dataset_identity_mismatch",
+            "transported HMM artifact was built for another dataset or source universe",
+            mismatches=mismatches,
+        )
 
 
 def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -> QEActiveDatasetProfile:
@@ -1082,6 +1165,12 @@ def resolve_active_qe_dataset(
             membership_revision = "union:" + ",".join(revisions)
         _parse_intervals(stock_pool_content, source=instruments_file)
         instruments_sha256 = _sha256_bytes(stock_pool_content.encode("utf-8"))
+
+    _require_hmm_asset_dataset_binding(
+        custom_params=custom_params,
+        profile=selected_profile,
+        source_universe_sha256=instruments_sha256,
+    )
 
     calendar = _calendar_dates(selected_profile)
     sector_blacklist_policy: Mapping[str, Any] | None = None

@@ -6409,16 +6409,17 @@ def _load_multi_alpha_status_payload(experiment_id: str, experiment_status: str)
 
 
 def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -> None:
-    """Persist artifact collection failure without downgrading runtime success.
+    """Persist artifact collection failure as an unsuccessful experiment.
 
-    RD-Agent has already reported every group loop as completed before this
-    helper is called.  The authoritative experiment status must therefore stay
-    completed while the artifact lifecycle records the collection failure.
+    A remote process exit is not an experiment success.  QE cannot report a
+    completed experiment until its required Qlib artifacts have been read and
+    validated locally.
     """
     lifecycle = {
         "multi_alpha_lifecycle": {
             "stage": "failed_artifact",
             "runtime_status": "completed",
+            "experiment_status": "failed",
             "collection_status": "failed",
             "artifact_status": "failed",
             "errors": [error_message],
@@ -6428,7 +6429,7 @@ def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE qe_experiments
-                   SET status = 'completed',
+                   SET status = 'failed',
                        result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
                        completed_at = NOW()
                    WHERE experiment_id = %s""",
@@ -6443,6 +6444,7 @@ def _mark_experiment_collection_failure(experiment_id: str, error_message: str) 
         "qe_completion_lifecycle": {
             "stage": "artifact_collection_failed",
             "runtime_status": "completed",
+            "experiment_status": "failed",
             "collection_status": "failed",
             "artifact_status": "failed",
             "errors": [error_message],
@@ -6452,7 +6454,7 @@ def _mark_experiment_collection_failure(experiment_id: str, error_message: str) 
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE qe_experiments
-                   SET status = 'completed',
+                   SET status = 'failed',
                        result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
                        completed_at = NOW()
                    WHERE experiment_id = %s""",
@@ -7696,13 +7698,14 @@ async def reconcile_experiment_run_status(experiment_id: str):
                         error_msg = f"Multi-Alpha result collection failed: {me}"
                         logger.error(f"Multi-Alpha result collection failed: {experiment_id}: {me}", exc_info=True)
                         _mark_multi_alpha_artifact_failure(experiment_id, error_msg)
-                        result["status"] = "completed"
+                        result["status"] = "failed"
                         result["error"] = error_msg
                         result["multi_alpha_stage"] = "failed_artifact"
                         result["artifact_status"] = "failed"
                         if "multi_alpha" in result:
                             result["multi_alpha"]["stage"] = "failed_artifact"
                             result["multi_alpha"]["runtime_status"] = "completed"
+                            result["multi_alpha"]["experiment_status"] = "failed"
                             result["multi_alpha"]["collection_status"] = "failed"
                             result["multi_alpha"]["artifact_status"] = "failed"
                             result["multi_alpha"]["artifact_errors"] = [error_msg]
@@ -7740,7 +7743,7 @@ async def reconcile_experiment_run_status(experiment_id: str):
                             logger.error(f"Auto-sync metrics failed for {experiment_id}: {me}", exc_info=True)
                             error_msg = f"Auto-sync metrics failed: {me}"
                             _mark_experiment_collection_failure(experiment_id, error_msg)
-                            result["status"] = "completed"
+                            result["status"] = "failed"
                             result["artifact_status"] = "failed"
                             result["collection_status"] = "failed"
                             result["error"] = error_msg
