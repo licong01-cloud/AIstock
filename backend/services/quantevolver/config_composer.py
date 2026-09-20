@@ -6663,10 +6663,15 @@ model_cls = {nn_class_name}
                 strict_value is True
                 or (isinstance(strict_value, str) and strict_value.lower() == "true")
             )
+        coefficient_window: dict[str, Any] | None = None
+        active_manifest_bound = False
         if strict_no_leakage:
             allowed_windows = hmm_config_json.get("coefficient_windows") or []
-            strict_window_ok = any(
-                str(window.get("preset")) == str(preset_key)
+            matching_windows = [
+                dict(window)
+                for window in allowed_windows
+                if isinstance(window, dict)
+                and str(window.get("preset")) == str(preset_key)
                 and str(window.get("test_start")) == str(test_start)
                 and str(window.get("backtest_end")) == str(backtest_end)
                 and (
@@ -6676,30 +6681,129 @@ model_cls = {nn_class_name}
                         and window.get("strict_no_leakage").lower() == "true"
                     )
                 )
-                for window in allowed_windows
-                if isinstance(window, dict)
-            )
-            if not strict_window_ok:
+            ]
+            if not matching_windows:
                 raise ValueError(
                     "strict_no_leakage HMM 只能用于已登记的无泄漏系数窗口: "
                     f"preset={preset_key}, test_start={test_start}, backtest_end={backtest_end}"
                 )
+            active_summary = strategy_params.get(QE_ACTIVE_PROFILE_SUMMARY_PARAM)
+            if active_summary is not None:
+                if not isinstance(active_summary, dict):
+                    raise ValueError("HMM active dataset summary must be an object")
+                identity_fields = {
+                    "dataset_generation": "generation",
+                    "release_id": "release_id",
+                    "dataset_manifest_identity": "dataset_manifest_sha256",
+                    "dataset_manifest_file_sha256": "dataset_manifest_file_sha256",
+                    "active_profile_sha256": "profile_sha256",
+                }
+                active_manifest_bound = any(
+                    str(active_summary.get(field) or "").strip()
+                    for field in ("dataset_manifest_sha256", "dataset_manifest_file_sha256")
+                )
+            if active_manifest_bound:
+                missing_summary = sorted(
+                    summary_field
+                    for summary_field in identity_fields.values()
+                    if not str(active_summary.get(summary_field) or "").strip()
+                )
+                if missing_summary:
+                    raise ValueError(
+                        "HMM active dataset summary is missing immutable identity fields: "
+                        f"{missing_summary}"
+                    )
+                matching_windows = [
+                    window
+                    for window in matching_windows
+                    if all(
+                        str(window.get(window_field) or "")
+                        == str(active_summary.get(summary_field) or "")
+                        for window_field, summary_field in identity_fields.items()
+                    )
+                ]
+                if not matching_windows:
+                    raise ValueError(
+                        "HMM coefficient window is not registered for the active dataset identity: "
+                        f"generation={active_summary['generation']} "
+                        f"manifest={active_summary['dataset_manifest_sha256']}"
+                    )
+            if len(matching_windows) != 1:
+                raise ValueError(
+                    "HMM coefficient window registration is ambiguous: "
+                    f"preset={preset_key}, test_start={test_start}, "
+                    f"backtest_end={backtest_end}, matches={len(matching_windows)}"
+                )
+            coefficient_window = matching_windows[0]
+            if active_manifest_bound:
+                missing_binding = sorted(
+                    field
+                    for field in (
+                        "coefficient_filename",
+                        "coefficient_sha256",
+                        "coefficient_bytes",
+                    )
+                    if coefficient_window.get(field) in (None, "")
+                )
+                if missing_binding:
+                    raise ValueError(
+                        "active-dataset HMM coefficient window is missing immutable artifact binding: "
+                        f"{missing_binding}"
+                    )
 
         local_model_path = self._local_hmm_artifact_path(str(model_path))
         local_coeff_text = ""
         if local_model_path is not None:
             try:
+                registered_filename = str(
+                    (coefficient_window or {}).get("coefficient_filename") or coeff_filename
+                ).strip()
+                if Path(registered_filename).name != registered_filename:
+                    raise ValueError("registered HMM coefficient filename must be a basename")
                 coeff_local_path = ensure_aistock_artifact_path(
-                    local_model_path.parent / coeff_filename,
+                    local_model_path.parent / registered_filename,
                     purpose="QE HMM coefficient artifact",
                     extra_roots=[AISTOCK_PROJECT_ROOT / "backend" / "data" / "hmm_models"],
                 )
                 if coeff_local_path.exists() and coeff_local_path.is_file():
+                    if coefficient_window is not None and coefficient_window.get("coefficient_sha256"):
+                        expected_sha = str(coefficient_window["coefficient_sha256"]).strip().lower()
+                        actual_sha = self._file_sha256(coeff_local_path)
+                        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha) or actual_sha != expected_sha:
+                            raise ValueError(
+                                "registered HMM coefficient SHA-256 differs from the immutable artifact: "
+                                f"expected={expected_sha} actual={actual_sha}"
+                            )
+                    if coefficient_window is not None and coefficient_window.get("coefficient_bytes") is not None:
+                        expected_bytes = coefficient_window["coefficient_bytes"]
+                        if (
+                            isinstance(expected_bytes, bool)
+                            or not isinstance(expected_bytes, int)
+                            or expected_bytes <= 0
+                            or coeff_local_path.stat().st_size != expected_bytes
+                        ):
+                            raise ValueError("registered HMM coefficient byte size differs from the immutable artifact")
                     local_coeff_text = coeff_local_path.read_text(encoding="utf-8").strip()
             except Exception as exc:
+                if coefficient_window is not None:
+                    raise
                 logger.debug("HMM local coefficient lookup skipped: %s", exc)
         if local_coeff_text:
             data = json.loads(local_coeff_text)
+            if coefficient_window is not None and active_manifest_bound:
+                expected_identity = {
+                    "generation": active_summary["generation"],
+                    "release_id": active_summary["release_id"],
+                    "dataset_manifest_sha256": active_summary["dataset_manifest_sha256"],
+                    "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+                    "active_profile_sha256": active_summary["profile_sha256"],
+                }
+                actual_identity = data.get("dataset_identity")
+                if not isinstance(actual_identity, dict) or any(
+                    str(actual_identity.get(key) or "") != str(value)
+                    for key, value in expected_identity.items()
+                ):
+                    raise ValueError("HMM coefficient artifact dataset identity differs from the active profile")
             if "daily_coefficients" in data and any(
                 data.get(field)
                 for field in (
@@ -6716,10 +6820,11 @@ model_cls = {nn_class_name}
                 )
                 return local_coeff_text
 
+        searched_filename = str((coefficient_window or {}).get("coefficient_filename") or coeff_filename)
         searched_path = (
-            str(local_model_path.parent / coeff_filename)
+            str(local_model_path.parent / searched_filename)
             if local_model_path is not None
-            else f"{model_path}/{coeff_filename}"
+            else f"{model_path}/{searched_filename}"
         )
         raise RuntimeError(
             "HMM coefficients must be provided as a precomputed AIstock-local artifact "
@@ -7346,4 +7451,3 @@ model_cls = {nn_class_name}
             return (None, None)
         except Exception as e:
             raise RuntimeError(f"[QE] 因子来源检测失败: factor={factor_name}, {e}") from e
-
