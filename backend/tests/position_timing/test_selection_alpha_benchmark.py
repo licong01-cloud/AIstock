@@ -189,6 +189,17 @@ def test_formal_bootstrap_uses_zero_economic_threshold_and_three_way_family():
     assert positive["power_status"] == "NOT_COMPUTABLE"
 
 
+def test_concat_keeps_canonical_columns_when_one_symbol_has_all_na_values():
+    left = pd.DataFrame({"symbol": ["A"], "terminal": [None], "return": [0.1]})
+    right = pd.DataFrame({"symbol": ["B"], "terminal": [12], "return": [0.2]})
+
+    result = benchmark._concat([left, right])
+
+    assert list(result.columns) == ["symbol", "terminal", "return"]
+    assert pd.isna(result.loc[0, "terminal"])
+    assert result.loc[1, "terminal"] == 12
+
+
 def test_contract_remains_offline_exploratory_and_selects_nothing_for_live():
     assert benchmark.CONTRACT["selected_trial_count"] == 0
     assert benchmark.CONTRACT["strict_financial_pit_claimed"] is False

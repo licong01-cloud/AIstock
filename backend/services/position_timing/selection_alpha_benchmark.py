@@ -553,7 +553,15 @@ def _ordered_replays(
 
 def _concat(frames: Iterable[pd.DataFrame]) -> pd.DataFrame:
     nonempty = [frame for frame in frames if not frame.empty]
-    return pd.concat(nonempty, ignore_index=True) if nonempty else pd.DataFrame()
+    if not nonempty:
+        return pd.DataFrame()
+    # Some symbols have only immature horizons, so an otherwise non-empty
+    # frame can contain columns that are entirely NA.  Drop those columns per
+    # input before concatenation and restore the canonical first-seen order;
+    # this makes dtype inference explicit across pandas versions.
+    columns = list(dict.fromkeys(column for frame in nonempty for column in frame.columns))
+    present = [frame.dropna(axis="columns", how="all") for frame in nonempty]
+    return pd.concat(present, ignore_index=True).reindex(columns=columns)
 
 
 def _seal(root: Path, names: list[str], *, request_sha256: str) -> dict[str, Any]:
