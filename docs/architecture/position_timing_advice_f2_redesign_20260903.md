@@ -1,9 +1,9 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.51
+> 版本：v2.52
 > 日期：2026-09-20
 > Feature tier：F2
-> 状态：`HISTORICAL_L1_RUNTIME_VERIFIED_PT_NEXT_024_CAUSAL_REPLAY_VERIFIED_INCONCLUSIVE`
+> 状态：`HISTORICAL_L1_RUNTIME_VERIFIED_PT_NEXT_025_UNIVERSE_TRANSPORT_VERIFIED_INCONCLUSIVE`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > 演进实现：`POSITION_TIMING_ACTION_VALUE_V2`（源码与正式离线研究完成，证据 `INCONCLUSIVE`；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
@@ -20,7 +20,7 @@ active r5 交付完整股票历史的复权因子重述authority后，`PT-NEXT-0
 
 `PT-NEXT-020` 的旧公司行动清算阻断已不再是当前研究前置：BUG-1565 / PR #4891（merge `7e37dc25e5cb22156c1e0e996b43f98696c8350f`，close-sync #4892）已切换为纯 Qlib 复权因子信号研究。之后用户确认每股独立1,000万元、自然复投、T+1收盘成交、逐股路径事后PIT归组及对应指数基准，形成新的 `pattern_close_cash_benchmark_v1`，不是旧pool独立账户/开盘合同的无版本替换。其r5历史实验已运行，原R0尚未证明超额收益，且完整人口覆盖不足；源码 PR #4906 已合入 merge `e3e156496f6cb2878c3268681ddd535cc4c754d2`，但不代表上线。准确结果/身份见§9.23；旧PT-NEXT-020 F1文档降为历史合同。后续[PT-NEXT-021 策略演进与横向验证](position_timing_strategy_evolution_plan_f1_20260918.md)已在r7/WSL原生ext4以确定性8进程完成5,144股全量回放；旧r5任务的1,024股中止检查点未进入结果。9个候选在54项family-wise比较中没有正下界，所有点估计为负，selected=0；该任务完成但未找到可发布alpha。
 
-**版本适用范围**：§6/§9/§10中PT-NEXT-004～019的真实账户公司行动、历史模型/统计门槛和旧单假设顺序均是对应版本的历史合同，不向当前纯Qlib研究继承；其不可变artifact不改写。已完成研究模式/账户/基准见§9.23～9.27；PT-NEXT-024已实现§9.27冻结的U0逐股双目标、受限Oracle、三执行视图和Ridge/GBDT有限研究，结果为`EXPLORATORY_HYPOTHESIS_GENERATED`、正式四项均`INCONCLUSIVE`、`selected_for_live=0`。§7/PT-NEXT-003的单卡执行审计仍保留自己的历史合同；在线L4b-2仍范围外。不改在线L1/L1a、N0或serving。本次未重查生产运行态，本文首发/runtime陈述均有明确历史日期，不代表2026-09-20在线状态验证。
+**版本适用范围**：§6/§9/§10中PT-NEXT-004～019的真实账户公司行动、历史模型/统计门槛和旧单假设顺序均是对应版本的历史合同，不向当前纯Qlib研究继承；其不可变artifact不改写。已完成研究模式/账户/基准见§9.23～9.28；PT-NEXT-024已实现§9.27冻结的U0逐股双目标、受限Oracle、三执行视图和Ridge/GBDT有限研究，结果为`EXPLORATORY_HYPOTHESIS_GENERATED`、正式四项均`INCONCLUSIVE`、`selected_for_live=0`。PT-NEXT-025进一步以原模型hash完成U0、>500亿元、<50亿元和全PIT市场的迁移回放；四个正式端点仍全部`INCONCLUSIVE`，不发布模型，也不据诊断结果回选市值阈值。§7/PT-NEXT-003的单卡执行审计仍保留自己的历史合同；在线L4b-2仍范围外。不改在线L1/L1a、N0或serving。本次未重查生产运行态，本文首发/runtime陈述均有明确历史日期，不代表2026-09-20在线状态验证。
 
 v2.47回填`PT-NEXT-022`的P1正式实现与R8结果：用户确认先不接QE/HMM/荐股，只做基本面筛选后的T1/T2与同股长期持有比较。新增入口完成source preflight、WSL 8进程全量5,144股回放、1-vs-8等价、inspect和exact retry；P1入选4,360股，两个政策相对BH的全市场点估计约-5.23/-5.24 bps每日，family-wise区间跨0、逐股终值中位数约-27个百分点，selected=0。P2/P3严格季度财报PIT快照仍未交付，四格保持typed unavailable，不能把P1完成冒充六格完成。详见[详细设计、实现和正式结果](position_timing_fundamental_screen_research_f1_20260919.md)。
 
@@ -31,6 +31,8 @@ v2.49只更新演进设计：先补逐股收益／回撤与固定股票现金基
 v2.50补充§9.27.6与§10.23的回测因果契约及待实现验收：Oracle未来信息只用于明确隔离的标签／诊断，不能进入当时特征、模型选择、仓位决策或事后择价成交；标签成熟、数据历史可得版本、前向拟合、分钟执行和未来扰动检查分别留证。该约束适用于§9.27所有新候选和旧策略重访，不因研究结果好坏改变；文档通过不表示已经完成反泄漏测试，更不保证实盘盈利。
 
 v2.51回填PT-NEXT-024正式实现与R8结果：六个`causal_timing_*`业务模块和四个行为测试闭合5,144只源人口、3,638只U0入选账户、81个chunk、8进程全量回放、32只1-vs-8精确一致、inspect与exact retry。固定5日无过滤策略明显落后BH；GBDT相对BH的窗口点估计为终值约+52.5 bps且合成MDD改善约1.397个百分点，但八端点Bonferroni区间均跨0，Ridge/GBDT验证误差约90.75/91.07 bps且后者无验证优势，故没有可发布alpha。受限Oracle显示有限动作集合仍有较大事后空间，但`policy_access=false`；分钟15:00与日收盘等价，10:00只形成有限执行敏感性，均不授权运行发布。因果测试是冻结路径的有界直接证据，不写成绝对无泄漏或实盘保证。
+
+v2.52完成PT-NEXT-025冻结模型的股票池迁移实验：不重训、不调阈值、不重复分钟/Oracle，新增一个离线适配器，以PT-NEXT-024 Ridge/GBDT原hash在R8的U0桥接、>500亿元、<50亿元和无市值限制四池做E0回放。正式request/bundle `9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd`覆盖5,144股/81 chunks；U0的14,552个账户核心摘要、405,176条成交和四条组合路径与父产物精确一致。ALL中GBDT相对BH终值约+63.69 bps、MDD改善约1.290个百分点；>500亿元池仅约+8.19 bps/+0.730个百分点，四个正式端点校正区间均跨0。<50亿元诊断约+83.72 bps但各市值池按各自首次满足条件入池、并非互斥分解，且未模拟市场冲击，不能回选小盘阈值。结论仍为`INCONCLUSIVE/selected_for_live=0`；取消市值限制没有解决alpha证据问题，下一优先级回到恢复／继续持有价值的单一因果目标。
 
 2026-09-07 的运行态只读复核仍读到决策日 2026-09-04、目标日 2026-09-07 的两张 `HOLD` 卡；analysis scope 有效标的为 2，显式自选为 0，intent 为 0，产品层级仍是 `RULE_BASED_RISK_MANAGEMENT`，L2 为 `OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL`，HMM 为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`。该次 GET evidence 读到 `CARD_ISSUED=2`、paired matured=0、pending horizons=10、intervention-intent=0，不能据此声称已有超额收益。
 
@@ -1454,6 +1456,27 @@ PT-NEXT-024按三个连续工作块完成，以下保留为实际交付轨迹而
 
 **选择偏差和输出语义。** 同一R8上反复看结果改设计即使没有程序前视，也存在研究选择偏差；所有新模型／策略维持exploratory、保留trial谱系，QE日期对齐不等于未见测试集。缺历史可得版本和代码泄漏分别记录为`PIT_PROVENANCE_UNVERIFIED`、`CAUSALITY_VIOLATION`；前者保留局限，后者使受影响回测的策略有效性结论无效，修复后新建request重放，不覆盖旧失败证据、不静默删样本。最终收据分别报告代码因果测试、数据PIT覆盖、研究选择偏差和执行假设，禁止统一写成“绝对无泄漏”或“保证实盘有效”。
 
+### 9.28 冻结模型的市值分层与全市场迁移（F-060；PT-NEXT-025已完成）
+
+状态为`IMPLEMENTED_RESEARCH_COMPLETE_INCONCLUSIVE`，权威设计和完整结果见[PT-NEXT-025 F1 v1.1](position_timing_universe_transport_research_f1_20260920.md)。本项不改变PT-NEXT-024的策略、模型、日期、每股独立1,000万元账户、成本、T+1收盘执行或交易限制；只加载父`models.json`，不调用训练函数。执行视图仅E0，因为研究变量是股票池，不重复分钟执行、Oracle和标签构造。
+
+四池均用当时PIT、共同技术ready与T−1市值，按各自首次满足条件时入池并持有cohort至终点：U0桥接为50～500亿元，LARGE为>500亿元，SMALL为<50亿元，ALL不要求市值已知。四池是独立适用人口，不是互斥横截面分箱；窗口中跨越市值边界的股票可进入多个池。正式family只包含ALL和LARGE的GBDT−BH终值/MDD四端点；U0、SMALL、Ridge和无过滤策略仅作诊断，不得反向选择股票池。
+
+正式不可变身份为：request/bundle `9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd`，manifest canonical SHA256 `a711da8be0905ef1d799ce1a3678c47e4b693eb5d5ac446b8dd66d146ce8e4fd`，receipt canonical SHA256 `5dda77320c9e6840a8acabd7260f927fe71e5ea117f2862c50e885aeff522aee`。R8源人口5,144股，ALL/LARGE/SMALL/U0分别入池5,076/594/3,135/3,638股；inspect为`VERIFIED`，exact retry为`ALREADY_MATERIALIZED`，8股串并行为`EXACT`。
+
+| 股票池 | BH收益/MDD | GBDT收益/MDD | GBDT−BH终值 | MDD改善 | 正式分类 |
+|---|---:|---:|---:|---:|---|
+| ALL_PIT | 71.3554% / -24.8809% | 71.9923% / -23.5912% | +63.69 bps | +128.96 bps | INCONCLUSIVE |
+| LARGE_GT_500B | 23.9701% / -19.6421% | 24.0520% / -18.9116% | +8.19 bps | +73.04 bps | INCONCLUSIVE |
+| U0桥接（诊断） | 42.3406% / -24.1642% | 42.8656% / -22.7672% | +52.50 bps | +139.70 bps | 父结果精确复现 |
+| SMALL_LT_50B（诊断） | 81.8292% / -27.9971% | 82.6664% / -26.6004% | +83.72 bps | +139.68 bps | diagnostic-only |
+
+ALL正式family-wise区间为终值`[-1046.98,+499.97] bps`、MDD改善`[-13.87,+229.64] bps`；LARGE分别为`[-299.34,+217.11]`和`[-13.48,+163.20] bps`，全部跨0。取消市值限制只小幅提高点估计，没有改变证据分类；大市值池的相对收益几乎消失。SMALL点估计较高，但与U0/LARGE人口重叠、同一R8已多次观察、市场冲击未模拟，不能据此建立小盘选股规则或继续扫描市值阈值。
+
+U0桥接对14,552个四政策账户的终值/MDD/费用/换手/暴露、405,176条成交及四条组合路径均零差异。父产物模型拒绝数从成交表重建而低估，新管线从replay state保留真实诊断计数；该修复不改变父收益。容量只披露父订单名义额，R8本轮没有冻结权威日成交额，故明确`CAPACITY_NOT_EVALUATED_NO_AUTHORITATIVE_TURNOVER_NOTIONAL`、`market_impact_simulated=false`，不以新增流动性过滤美化结果。
+
+本项只新增`position_timing`离线benchmark、直接测试、F1和本蓝图；不改数据库、数据集、active profile、其他模块、N0、timing registry/current、card/event/alert/order、服务进程或运行态，无需后端重启。市值筛选不再作为下一主变量；PT-NEXT-026回到PT-NEXT-024 Oracle暴露的恢复错配，冻结“何时恢复／继续持有价值”的一个单一因果目标。继续使用简单Ridge与浅层GBDT，不增加模型族、分钟方向预测、QE/HMM/Agent融合或市值阈值矩阵。
+
 ## 10. Verification Plan / 验证方案
 
 ### 10.1 文档 gate
@@ -1716,6 +1739,12 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 
 真实小样本前向回放覆盖普通日、标签跨界、停牌／涨跌停和factor变化等已知边界，样本依据输入特征确定而非收益挑选；与合成负对照互补。21项直接测试覆盖训练专属预处理、标签成熟、未来扰动、Oracle列隔离、future-shift拒绝、封存intent、现金/T+1/手数/方向限制、raw/factor单位、不可变身份漂移及串并行确定性；正式receipt绑定特征/标签/模型/执行和trial身份。自动测试不是数据历史真实性的替代物，未来扰动通过也不单独证明全部数据严格PIT或没有研究层回选，故只称“本冻结路径有直接反前视证据”，不称绝对无泄漏。
 
+### 10.24 股票池迁移回放验收（F-060）
+
+PT-NEXT-025只加载PT-NEXT-024冻结的Ridge/GBDT模型，不调用训练函数，不改变策略、标签、阈值、成本、执行时点或日期。一个离线benchmark和一个直接测试闭合request/bundle身份、父模型hash、R8 candidate、PIT股票池、并行chunk、U0精确桥接、统计校正、inspect与exact retry。Windows定向测试8项通过；正式WSL回放覆盖5,144只源股票、81个chunk，U0的14,552个账户核心摘要、405,176条成交和四条组合路径与父产物精确一致。正式ALL和LARGE的终值超额及MDD改善四个Bonferroni校正区间全部跨0，故状态为`PT_NEXT_025_UNIVERSE_TRANSPORT_VERIFIED_INCONCLUSIVE`，`selected_for_live=0`。
+
+市值池按各自首次因果满足条件入池并持续跟踪，U0、LARGE、SMALL不是互斥分解；SMALL正点估计不得解释为小盘因果alpha，也不得用于回选阈值。研究产物只写timing-owned版本化Parquet/JSON artifact，未读取或写入数据库、未访问实时行情、未改active profile或其他模块、未控制服务进程。正式身份、完整横向比较、区间、容量局限和后续方向见§9.28及PT-NEXT-025 F1 §15。
+
 ## 11. Risks / 风险与失败模式
 
 | 风险 | 设计处置 |
@@ -1841,6 +1870,7 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-057 | PT-NEXT-024 | HARD | §9.27.4：冻结时间切分、Ridge/GBDT与成熟日频标签已实现；验证误差高、模型不发布 |
 | F-058 | PT-NEXT-024 | HARD | §9.27.5：历史库存保留、三个工作块、5,144股/81 chunks/8进程及零跨模块写入完成 |
 | F-059 | PT-NEXT-024-CAUSALITY | HARD | §9.27.6／§10.23：Oracle隔离、成熟时钟、训练专属预处理、未来扰动及负对照已有直接测试；有界证据不称绝对无泄漏 |
+| F-060 | PT-NEXT-025 | HARD | §9.28／§10.24：冻结模型在U0、>500亿元、<50亿元与全PIT市场完成迁移回放；U0精确桥接，正式四端点均INCONCLUSIVE，不回选市值阈值或发布模型 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1907,10 +1937,11 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 | F-057 | §9.27.4；`causal_timing_model.py` | `backend/tests/position_timing/test_causal_timing_model.py`；F1 §18.3模型hash和验证指标 | PT_NEXT_024_LIGHTWEIGHT_MODELS_VERIFIED_INCONCLUSIVE | none |
 | F-058 | §9.27.5；六个`causal_timing_*`模块 | `backend/tests/position_timing/test_causal_timing_benchmark.py`及artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_v1/bundles/dfe8a85496a96f35b03d5a380f001645a999878f70461715adc73a9cde9854e6/manifest.json` | PT_NEXT_024_IMPLEMENTATION_VERIFIED_NO_RUNTIME_RELEASE | none |
 | F-059 | §9.27.6／§10.23；contracts/model/benchmark直接测试 | `backend/tests/position_timing/test_causal_timing_model.py`；未来扰动、Oracle注入、future-shift负例及训练专属预处理 | PT_NEXT_024_CAUSAL_PATH_VERIFIED_BOUNDED_EVIDENCE | none |
+| F-060 | §9.28／§10.24；`causal_timing_universe_benchmark.py` | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/manifest.json`；5,144股/81 chunks、U0精确桥接、inspect/exact retry | PT_NEXT_025_UNIVERSE_TRANSPORT_VERIFIED_INCONCLUSIVE | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
-条目1～12为各历史版本交付事实，不代表本次重跑测试／运行态；其中真实账户authority要求仅适用于相应旧版本。条目13为v2.49文档复核，条目14为v2.50因果设计复核，条目15为PT-NEXT-024实际实现和正式R8研究复核。F-054～F-059现已绑定直接代码、测试和不可变artifact；这些状态证明冻结研究闭合，不代表alpha获支持、实盘PIT绝对完备或运行能力发布。
+条目1～12为各历史版本交付事实，不代表本次重跑测试／运行态；其中真实账户authority要求仅适用于相应旧版本。条目13为v2.49文档复核，条目14为v2.50因果设计复核，条目15为PT-NEXT-024实际实现和正式R8研究复核，条目16为PT-NEXT-025冻结模型股票池迁移复核。F-054～F-060现已绑定直接代码、测试和不可变artifact；这些状态证明冻结研究闭合，不代表alpha获支持、实盘PIT绝对完备或运行能力发布。
 
 1. **禁止简化交付**：已完成首发、L2 v1 与 L4b-1 的历史事实/receipt 保留；PT-NEXT-004/005 已交付真实代码、正式训练、公司行动连续策略、个股影子推断、API/UI 与覆盖内 256 条分钟核对；PT-NEXT-006/007/008 已分别完成单一冻结 ATR14、行业、资金流块的 matched-core 正式回放。PT-NEXT-009 没有沿用不可识别的空估计，也没有取交集，而是绑定显式停牌证据后按原规格纠错重放；PT-NEXT-011 先冻结单一筹码字段与完整 source-only coverage，再在同一实施块交付代码和真实历史结果，不以 coverage 冒充收益。PT-NEXT-012 已读取四份真实不可变 OOF 与连续路径生成零 trial 正式 receipt，并把描述性诊断与收益证据分开。PT-NEXT-014～017 均读取真实 immutable 父证据、冻结零重叠股票人口、重训并完成 cross-symbol 历史回放；未把 source-only 清点、测试、状态支持或可学性诊断冒充 held-out 收益。绝不把总体摘要、mock、测试或诊断切片当收益结果。代码交付、研究支持与运行激活分开。
 2. **禁止静默错误**：保留 v1 typed PIT/source/scope/quote/outcome 语义；新设计追加历史可见版本、晚间 cutoff、forward-label 可用时间、no-fill 与 unknown、模型失败 fallback 的明确区分。PT-NEXT-014 将 candidate 缺失但 DB 明确存在的停牌键作为版本化 source correction，将仍缺公司行动证据的股票保留为 coverage 不足；二者均不静默删股。PT-NEXT-015 的首个 request 在计算前因身份比较和 CLI 错误序列化 typed 失败、无 bundle；PT-NEXT-017 的首个 request 同样因延后入场现金不足 fail closed。两者修复均使用新代码身份和新 request，不改写旧 request 或吞掉错误。PT-NEXT-018进一步把配股与factor历史重述拆开：不将factor跳变冒充账户认购或自动送股；r4首个request的JSON身份失败、第二个request的63/64业务覆盖及最终64/64技术重放均以不可变supersession谱系保留；r5首个request的辅助source-reference污染同样在收益前失败、无bundle，以隔离reader和新request纠正，不放宽hash。CPCV 不冒充历史部署收益，未预算的方向不冒充成本后可执行建议。
@@ -1933,4 +1964,6 @@ DESIGN-COMPLIANCE-001 的四项逐条结论见 §15；设计更正全部在本�
 
 15. **PT-NEXT-024实现与研究复核**：第一轮审账户、标签和成交因果，修复公共分钟窗口只要求生命周期相交股票、JSON list/tuple身份漂移、Oracle现金锚点/MDD以及分钟读取性能；第二轮审最终人口、分母、哈希和统计，修复未知池估值分母、标准标签买入沉没成本、未成交参考卖出零动作、全5,144股chunk manifest及批量模型推断。正式运行在读取收益前封存source preflight，32股串并行精确一致，5,144股全量inspect/retry闭合。四项正式比较均INCONCLUSIVE，GBDT正点估计、Oracle事后空间和局部分层均未被包装成alpha；没有改在线策略、其他模块、数据库、active profile、N0、card/event/alert/order、服务进程或运行态。因果测试覆盖冻结路径但不宣称绝对无泄漏；一个pandas未来兼容warning不影响当前固定环境或artifact，后续依赖升级时以新request验证，不为消警改写已绑定源码。
 
-结论：历史首发和模型／形态研究事实保留，仍无可发布的成本后择时alpha支持。PT-NEXT-024已经完成§9.27逐股双目标、被动现金基准、受限Oracle、分钟执行敏感性、轻量模型、连续账户和因果验收；GBDT窗口点估计同时改善收益与回撤，但正式校正区间跨0且验证误差未优于Ridge，不能上线或据此回选参数。Oracle表明冻结有限集合内存在较大事后机会，固定5日动作却弱，下一步应冻结一个以“何时恢复/继续持有”为核心、标签信噪比更高的单一因果目标，而不是扩大模型、扫描恢复天数、回选股票池或引入分钟方向模型。旧策略暂不淘汰，以机制证据决定有限重访。所有新回放继续遵守§9.27.6和§10.23；测试通过仍不等于数据PIT绝对完备或实盘盈利保证。日频训练只读对齐QE冻结时间合同，分钟暂留执行／风险诊断；P2/P3、未来行情和其他模块不阻研发。本轮不改DB、在线运行、重启或激活。
+16. **PT-NEXT-025实现与研究复核**：第一轮审变量隔离与父研究桥接，确认只改变股票池、复用冻结模型且不重训，修复新旧汇总对首次买入前现金基线的暴露分母差异；U0核心账户、成交和组合路径最终与父产物精确一致。第二轮审正式人口、统计和解释边界，确认5,144股/81 chunks、inspect/exact retry闭合，ALL与LARGE四个正式校正区间均跨0；SMALL仅为重叠诊断池，不能解释成小盘因果贡献或用于回选阈值。未评估权威成交额容量和市场冲击，故高名义订单只作局限披露。全部结果与横向分析写入timing-owned不可变artifact及文档；没有写数据库、读取实时行情、修改其他模块／active profile／在线策略、发布模型或控制服务进程。
+
+结论：历史首发和模型／形态研究事实保留，仍无可发布的成本后择时alpha支持。PT-NEXT-024已经完成§9.27逐股双目标、被动现金基准、受限Oracle、分钟执行敏感性、轻量模型、连续账户和因果验收；PT-NEXT-025又在不重训的前提下完成§9.28四类股票池迁移。解除500亿元上限只令GBDT相对BH终值点估计由U0约+52.50 bps变为ALL约+63.69 bps，正式区间仍跨0；>500亿元池仅约+8.19 bps，SMALL约+83.72 bps只是非互斥诊断，均不支持回选市值阈值。Oracle表明冻结有限集合内存在较大事后机会，固定5日动作和当前预测目标却弱；PT-NEXT-026应冻结一个以“何时恢复／继续持有”为核心、标签信噪比更高的单一因果目标，而不是扩大模型、扫描恢复天数／市值阈值、回选股票池或引入分钟方向模型。旧策略暂不淘汰，以机制证据决定有限重访。所有新回放继续遵守§9.27.6、§10.23和§10.24；测试通过仍不等于数据PIT绝对完备或实盘盈利保证。日频训练只读对齐QE冻结时间合同，分钟暂留执行／风险诊断；P2/P3、未来行情和其他模块不阻研发。本轮不改DB、在线运行、重启或激活。
