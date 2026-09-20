@@ -383,7 +383,7 @@ def _symbol_task(
     stock_frames: list[pd.DataFrame] = []
     fill_frames: list[pd.DataFrame] = []
     paths: dict[str, list[float]] = {}
-    start_ordinal = int(bars.index.get_loc(pd.Timestamp(TEST_FIRST_EXECUTION)))
+    start_ordinal = int(bars.index.get_loc(pd.Timestamp(TEST_FIRST_EXECUTION))) - 1
     common_ordinals = np.arange(start_ordinal, terminal_ordinal + 1)
     for pool in POOL_IDS:
         enrollment = enrollments[pool]
@@ -430,7 +430,7 @@ def _symbol_task(
         stocks = _stock_summaries(
             day_frame,
             details,
-            window_start_ordinal=int(bars.index.get_loc(pd.Timestamp(TEST_FIRST_EXECUTION))),
+            window_start_ordinal=int(bars.index.get_loc(pd.Timestamp(TEST_FIRST_EXECUTION))) - 1,
             terminal_ordinal=terminal_ordinal,
         )
         stocks["pool_id"] = pool
@@ -498,10 +498,12 @@ def _bridge(
         & old_stocks.symbol.isin(bridge_symbols)
     ].copy()
     keys = ["symbol", "execution_view", "policy_id"]
-    columns = [
+    bridge_columns = [
         "terminal_nav_cny", "max_drawdown", "fees_cny", "turnover_ratio",
-        "average_exposure", "conditional_exposure", "model_rejected_count", "model_unavailable_count",
+        "average_exposure", "conditional_exposure",
     ]
+    diagnostic_columns = ["model_rejected_count", "model_unavailable_count"]
+    columns = bridge_columns + diagnostic_columns
     left = new_stocks.loc[:, keys + columns].sort_values(keys, kind="stable").reset_index(drop=True)
     right = old_stocks.loc[:, keys + columns].sort_values(keys, kind="stable").reset_index(drop=True)
     stock_keys_equal = left.loc[:, keys].equals(right.loc[:, keys])
@@ -547,7 +549,7 @@ def _bridge(
         if stock_keys_equal
         and pool_keys_equal
         and fills_equal
-        and all(value == 0.0 for value in stock_max_abs.values())
+        and all(stock_max_abs[column] == 0.0 for column in bridge_columns)
         and pool_max_abs_nav == 0.0
         else "DRIFT"
     )
@@ -557,6 +559,10 @@ def _bridge(
         "parent_stock_rows": len(right),
         "stock_keys_equal": stock_keys_equal,
         "stock_max_abs_difference": stock_max_abs,
+        "diagnostic_difference_expected": {
+            "fields": diagnostic_columns,
+            "reason": "PARENT_RECONSTRUCTED_REJECTIONS_FROM_FILL_ROWS_NEW_RUN_USES_REPLAY_STATE",
+        },
         "pool_path_exact_required": full_population,
         "pool_keys_equal": pool_keys_equal,
         "pool_max_abs_nav_difference_cny": pool_max_abs_nav,
@@ -716,7 +722,7 @@ def run(path: Path, *, worker_count: int = WORKER_COUNT, symbol_limit: int | Non
         symbols = candidate.symbols[:symbol_limit] if symbol_limit is not None else candidate.symbols
         benchmark = candidate.bars(BENCHMARK).close
         terminal = int(candidate.calendar.get_loc(pd.Timestamp(TERMINAL_DATE)))
-        start = int(candidate.calendar.get_loc(pd.Timestamp(TEST_FIRST_EXECUTION)))
+        start = int(candidate.calendar.get_loc(pd.Timestamp(TEST_FIRST_EXECUTION))) - 1
         common_ordinals = np.arange(start, terminal + 1)
 
         def inputs() -> Iterator[tuple[Any, ...]]:
