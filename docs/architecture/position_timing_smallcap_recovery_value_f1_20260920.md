@@ -1,6 +1,6 @@
 # PT-NEXT-026：500万元小市值恢复／继续持有价值实验详细设计
 
-> 版本：v1.0；日期：2026-09-20；Feature tier：F1；状态：`APPROVED_FOR_IMPLEMENTATION`。
+> 版本：v1.1；日期：2026-09-20；Feature tier：F1；状态：`IMPLEMENTED_RESEARCH_COMPLETE_INCONCLUSIVE`。
 > 本轮由用户明确要求执行，唯一目标是验证小于50亿元股票中“减仓后何时恢复”能否相对同股长期持有同时改善成本后终值和最大回撤。
 > 主蓝图：`position_timing_advice_f2_redesign_20260903.md`；父研究：PT-NEXT-024/025。唯一开发权威为 `docs/standards/aistock_development_standard_v1.5_20260523.md`。
 
@@ -122,3 +122,24 @@ Production Gates：DDL/DML=`NOT_APPLICABLE`；生产激活=`NOT_REQUESTED`；bac
 2. 因果复核：Oracle不进标签；标签只比较两个事前冻结动作且按成熟时钟进入训练。
 3. 过度工程复核：一个离线研究namespace、无API/UI/runtime；不扫描参数或新增模型族。
 4. 隔离复核：只读R8及父artifact，只写timing-owned不可变研究文件；DB、网络行情、其他模块和进程控制均为false。
+
+## 15. Implementation and Formal Result
+
+实现提交为`e4dfe6cf02efe3365833a45c7ff22e46772bc9b8`，诊断闭合提交为`995e6782ecfbbebb451126c90c7bd3356f8fed94`。首次完整bundle `f9ee535e...e46ab`保留为不可变历史；最终权威request/bundle为`a05ca8c1e1534d10ad90018b8384e7961d1debface7823e55ba3b30df41abe76`，manifest SHA256为`f8167847c8fe920fb03bb622344de36d109e19d5e05d194826716bfba9646433`，receipt SHA256为`71f0c1244440d7ad73d8374c5724f6fe26f3a10edc673faf17a71033b4e013cd`。R8 dataset manifest canonical SHA256为`6bb6096aada59541f58d05e1c44d5dabd8838661936d98539adcb79d7ac39283`；父GBDT SHA256仍为`52b27c56494b4e72add859dbfd1555a72531aa96586ad2a8e5001280a9c2503a`。
+
+WSL以8进程完成5,144只源股票、3,135只小市值入池账户、81个chunk和7,492,842条成熟／边界受控标签；训练3,170,603条、验证1,644,192条，其余2,678,047条因分段外或未在相应截止前成熟而不进入拟合。8股串并行audit SHA256为`0dafbfa4da5fd19d6a3c59774530ccd7bdc30a42ecd68f39957b99306c829fd5`，inspect为`VERIFIED`，exact retry为`ALREADY_MATERIALIZED`。诊断修订前后的`labels/stocks/pool_daily/fills`四个Parquet SHA256全部精确相等，证明补报表未改变策略路径。
+
+| 政策 | 组合收益 | 组合MDD | 相对BH终值 | MDD改善 | 校正区间与分类 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| BH500 | 81.8254% | -27.9964% | 基准 | 基准 | 基准 |
+| PARENT_FIXED5_GBDT_V1 | 83.2787% | -26.5994% | +145.33 bps（诊断） | +139.70 bps（诊断） | 非正式family，不晋级 |
+| RECOVERY_RIDGE_V1 | 82.0680% | -27.2078% | +24.26 bps | +78.86 bps | 终值`[-1255.01,+510.42]`、MDD`[-16.86,+193.58]`，均`INCONCLUSIVE` |
+| RECOVERY_GBDT_V1 | 82.3815% | -27.2147% | +55.61 bps | +78.18 bps | 终值`[-1252.94,+513.55]`、MDD`[-9.89,+193.18]`，均`INCONCLUSIVE` |
+
+Ridge／GBDT验证MAE分别为115.33／116.21 bps，而验证标签均值仅+1.61 bps；浅层GBDT没有优于Ridge。两模型相对BH的终值胜率为51.71%／50.91%，收益与MDD双胜率为45.49%／44.31%，不能用组合正点估计代替跨股稳定性。固定5日诊断的终值、MDD与双胜率分别为58.02%、76.75%和52.89%，但它已被本轮数据观察，不能追认为预注册正式支持。
+
+机制上，两模型都倾向过早恢复：Ridge／GBDT恢复等待中位数均为1日、均值2.24日，完成循环46,190／43,396次，平均每股费用24,445.59／23,489.06元；固定5日中位数5日、均值5.03日、30,255次循环、平均费用18,499.79元。模型平均暴露98.41%／98.47%，高于固定5日的97.75%，所以本轮问题不是长期空仓，而是弱标签下的过早恢复、额外循环和费用侵蚀。13只终点字段无效、9只方向性跌停和4只停牌的清算失败均保留实际状态并按最后已知价估值，没有伪造成交。
+
+结论固定为`INCONCLUSIVE/selected_for_live=0`。当前17项特征和“立即恢复对再等5日”的点式价值目标不值得在已消费测试段继续调阈值、等待天数或扩大模型。固定5日父策略是当前更好的研究候选，但只能保留为诊断，不能发布。下一优先级应改为单一的“小市值专用减仓动作价值”：固定5日恢复不变，只重新训练小市值卖出／继续持有价值，检验通用U0父卖出模型迁移到小市值是否是主要错配；仍只用Ridge与浅层GBDT、同一500万元账户和同股BH。若该单一方向仍无支持，则停止在本技术信息集内堆叠择时模型，后续把主要alpha预算转向独立股票筛选／QE组合，而非继续扫描恢复参数。
+
+本轮`database_read/write`、`market_network_accessed`、`runtime_action_performed`和`service_process_control_performed`均为false；未修改R8、父artifact、在线卡片、registry/current或其他模块，无需后端重启。
