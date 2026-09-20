@@ -1,7 +1,7 @@
 # PT-NEXT-028：独立股票筛选 Alpha 基线实验详细设计
 
 > 版本：v1.0；日期：2026-09-21；Feature tier：F1  
-> 状态：`DESIGN_FROZEN_IMPLEMENTATION_PENDING`  
+> 状态：`IMPLEMENTED_REPLAY_VERIFIED_INCONCLUSIVE`
 > 主蓝图：[择时系统 F2 蓝图](position_timing_advice_f2_redesign_20260903.md)  
 > 唯一开发权威：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
@@ -168,18 +168,36 @@ artifact namespace：
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1；主蓝图§9.30 | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | DESIGN_VERIFIED | none |
-| F-002 | §2；计划 `selection_alpha_benchmark.prepare/load_request` | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | DESIGN_VERIFIED | none |
-| F-003 | §3；`r8_proxy_screen.py` | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | DESIGN_VERIFIED | none |
-| F-004 | §4；计划 cohort event helper | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | DESIGN_VERIFIED | none |
-| F-005 | §5；计划 event/report schema | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | DESIGN_VERIFIED | none |
-| F-006 | §6；计划 report bootstrap | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | DESIGN_VERIFIED | none |
-| F-007 | §7；计划 benchmark/chunk/bundle | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；artifact: `<timing-root>/research/selection_alpha_baseline_v1/` | DESIGN_VERIFIED | none |
-| F-008 | §8；request/receipt side-effect fields | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | DESIGN_VERIFIED | none |
-| F-009 | §9 | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | DESIGN_VERIFIED | none |
-| F-010 | §10 | `python -m pytest backend/tests/position_timing/test_selection_alpha_benchmark.py -q` | DESIGN_VERIFIED | none |
-| F-011 | §11 | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；artifact: `<timing-root>/research/selection_alpha_baseline_v1/receipt.json` | DESIGN_VERIFIED | none |
+| F-001 | §1；主蓝图§9.31 | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
+| F-002 | §2；`selection_alpha_benchmark.prepare/load_request` | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
+| F-003 | §3；`r8_proxy_screen.py` | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
+| F-004 | §4；`selection_alpha_benchmark._replay_symbol_task` | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
+| F-005 | §5；event/report schema | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
+| F-006 | §6；`selection_alpha_benchmark._bootstrap_monthly/_build_report` | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；正式 `report.json` | IMPLEMENTED_VERIFIED | none |
+| F-007 | §7；benchmark/chunk/bundle | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/selection_alpha_baseline_v1/bundles/4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0/manifest.json` | IMPLEMENTED_VERIFIED | none |
+| F-008 | §8；request/receipt side-effect fields | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/selection_alpha_baseline_v1/bundles/4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0/receipt.json` | IMPLEMENTED_VERIFIED | none |
+| F-009 | §9 | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/selection_alpha_baseline_v1/bundles/4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0/manifest.json` | IMPLEMENTED_VERIFIED | none |
+| F-010 | §10 | `python -m pytest backend/tests/position_timing/test_selection_alpha_benchmark.py -q`；31项相关小矩阵通过 | IMPLEMENTED_VERIFIED | none |
+| F-011 | §11 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/selection_alpha_baseline_v1/bundles/4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0/report.json` | IMPLEMENTED_VERIFIED | none |
 
 ## 14. Initial Review
 
 第一轮事实审查确认 R8 的冻结身份是 `qe_dataset_manifest.json`，不是部署状态文件 `direct_monthly_state.json`；WSL manifest SHA 与既有合同一致。第二轮方法审查将“首次入选连续账户”改为共同月度cohort，并把终值卖出与MTM估值分离，避免用不可成交日伪造现金。第三轮范围审查把正式family限制为三个120日screen差，其他horizon、风险和指数只作诊断，不新增模型、平台或跨模块依赖。
+
+## 15. Formal Replay / Review Result
+
+最终源码提交为 `fe3864ae4c342917ae3f01630be61439dedb9338`，正式 request 为 `4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0`，bundle manifest SHA256 为 `6c3baa61d2e5af59ea3d67d65936441881c0af2cc321e97d504369bf6edbc1e4`。WSL 原生 ext4、R8、8进程完成5,144股、97个决策月、41个chunk和776,584条事件；64股串并行逐股结果 `EXACT`，audit SHA256 为 `6b5bcc4505d74d15aa4f53905a3da6abe601f712289fea0fbceca651527b8b38`。独立 inspect 为 `VERIFIED`，exact retry 为 `ALREADY_MATERIALIZED`。
+
+正式120日三项结果均没有支持：
+
+| comparison | 共同完整月 | 点估计 / family-wise区间 | 结论 |
+|---|---:|---:|---|
+| U1−U0 | 13 | 不输出退化区间 | `INCONCLUSIVE / UNDERPOWERED` |
+| U2−U0 | 12 | 描述性点估计约+60.82 bps；不输出退化区间 | `INCONCLUSIVE / UNDERPOWERED` |
+| U2−U1 | 26 | +81.16 bps / [-15.90,+174.58] bps | `INCONCLUSIVE` |
+
+首个完整bundle暴露一个统计实现缺陷：当共同月恰为12、冻结block也为12时，circular block只会循环排列同一组月份，区间错误塌缩为点。该bundle不可作为支持证据；修复不缩短block、不切换IID bootstrap，而是要求至少24个共同完整月，并以新代码、新request和新bundle全量重放。最终 `result_class=EXPLORATORY_SELECTION_ALPHA_NO_SUPPORTED_SCREEN`、`selected_for_live=0`。
+
+覆盖而非买入能力是当前主要瓶颈：120日U0/U1/U2成交率约98.73%/99.14%/99.19%，但U0的97个月中只有13个月完整，78个月因至少一个已入选事件终值不可估而整体typed incomplete；U1/U2完整月为27/48。不得删除退市、停牌或缺终值股票来制造更窄区间。按停止规则，不再扫描现有U0/U1/U2阈值或proxy字段组合；下一优先级先设计不依赖幸存者删除的退市／终止上市终值authority或引入真正独立且严格PIT的信息源，再决定是否开启新的选股假设。`bak_basic`仍只是日快照代理，不能被本次正点估计包装成业绩增长alpha。
+
+request/receipt记录 `database/network/live_market/runtime/process/other_module_write=false`，`outcomes_read`仅发生在完整source preflight之后；没有模型训练、在线发布、服务控制或后端重启。
