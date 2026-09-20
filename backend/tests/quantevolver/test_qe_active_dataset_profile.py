@@ -23,6 +23,7 @@ from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.dataset_release.shared_sector_context import (
     RELEASE_SW_L2_CODE_MAP_SCHEMA,
     RELEASE_SW_L2_MEMBER_BACKED_SCHEMA,
+    SECTOR_QUOTE_AVAILABILITY_SCHEMA,
 )
 from backend.services.quantevolver.experiment_config import ExperimentConfig
 from backend.services.quantevolver.experiment_config_builders import (
@@ -382,6 +383,26 @@ def _fixture_profile(
                 },
             ]
         ).to_parquet(membership_path, index=False)
+        quote_entries = [
+            {
+                "canonical_l2_code": row["canonical_l2_code"],
+                "availability_spans": [
+                    {"start_date": "2018-08-01", "end_date": "2026-08-31"}
+                ],
+            }
+            for row in sorted(code_map["entries"], key=lambda row: row["canonical_l2_code"])
+        ]
+        quote_payload = {
+            "schema_version": SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+            "mapping_authority": authority,
+            "entries": quote_entries,
+            "quote_availability_digest": digest_named_fields(
+                SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+                {"mapping_authority": authority, "entries": quote_entries},
+            ),
+        }
+        quote_path = sector_root / "sector_quote_availability.json"
+        quote_sha = _write(quote_path, _canonical(quote_payload))
         context_receipt_sha = _write(
             sector_root / "component_receipt.json",
             _canonical({"schema_version": "aistock_sector_context_receipt_v1"}),
@@ -401,6 +422,10 @@ def _fixture_profile(
             "membership_sha256": _sha(membership_path.read_bytes()),
             "membership_start": "2018-08-01",
             "membership_end": "2026-08-31",
+            "quote_availability_file": "sector_quote_availability.json",
+            "quote_availability_sha256": quote_sha,
+            "quote_availability_digest": quote_payload["quote_availability_digest"],
+            "quote_availability_schema": SECTOR_QUOTE_AVAILABILITY_SCHEMA,
             "receipt_file": "component_receipt.json",
             "receipt_sha256": context_receipt_sha,
             "sector_data_sha256": sector_data_sha,

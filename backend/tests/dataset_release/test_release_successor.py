@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from backend.services.dataset_release.canonical import canonical_json_bytes
+from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.dataset_release.release_successor import (
     build_profile_v3,
     build_successor,
@@ -66,6 +67,29 @@ def _sector_component(tmp_path: Path, baseline_identity: str, sector_sha: str) -
         authority_sha256=authority["authority_sha256"],
     )
     _write_json(root / "sector_code_map.json", code_map)
+    quote_entries = [
+        {
+            "canonical_l2_code": row["canonical_l2_code"],
+            "availability_spans": [
+                {"start_date": "2024-07-01", "end_date": "2026-08-31"}
+            ],
+        }
+        for row in sorted(code_map["entries"], key=lambda row: row["canonical_l2_code"])
+    ]
+    quote_schema = "aistock_release_sw_l2_quote_availability_v1"
+    quote_digest = digest_named_fields(
+        quote_schema,
+        {"mapping_authority": authority, "entries": quote_entries},
+    )
+    _write_json(
+        root / "sector_quote_availability.json",
+        {
+            "schema_version": quote_schema,
+            "mapping_authority": authority,
+            "entries": quote_entries,
+            "quote_availability_digest": quote_digest,
+        },
+    )
     (root / "market_context.parquet").write_bytes(b"market")
     (root / "sector_membership_spans.parquet").write_bytes(b"membership")
     receipt = {
@@ -99,6 +123,13 @@ def _sector_component(tmp_path: Path, baseline_identity: str, sector_sha: str) -
             "end": "2026-08-31",
             "span_count": 2,
             "symbol_count": 2,
+        },
+        "quote_availability": {
+            "path": "sector_quote_availability.json",
+            "sha256": _sha(root / "sector_quote_availability.json"),
+            "schema_version": quote_schema,
+            "canonical_digest": quote_digest,
+            "catalog_count": 131,
         },
     }
     _write_json(root / "component_receipt.json", receipt)

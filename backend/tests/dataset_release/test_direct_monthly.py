@@ -79,6 +79,40 @@ def test_component_plan_includes_suspend_and_sw_l1_components() -> None:
     )
 
 
+def test_terminal_successor_state_accepts_one_pinned_sector_context_extension(tmp_path) -> None:
+    base = _layout(tmp_path)
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=base.candidate_parent,
+        candidate_root=(
+            base.candidate_parent
+            / "20260831-qe_hmm_full_v2-direct-20260920-r8-unified-candidate"
+        ),
+        baseline_root=base.baseline_root,
+        cutoff=base.cutoff,
+    )
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    state["components"]["sector_context"] = {
+        "action": "ADD_FROZEN_SHARED_SECTOR_CONTEXT",
+        "status": "PASS",
+        "receipt_sha256": "a" * 64,
+    }
+    state["components"]["sector_quote_hotfix"] = {
+        "action": "SELECTIVE_REBUILD",
+        "status": "PASS",
+    }
+
+    write_state(layout, state)
+
+    observed = read_state(layout)
+    assert observed is not None
+    assert observed["components"]["sector_context"]["status"] == "PASS"
+    assert compact_status(observed)["components"]["sector_context"] == "PASS"
+    assert compact_status(observed)["components"]["sector_quote_hotfix"] == "PASS"
+
+
 def test_legacy_four_component_state_resumes_only_new_components(tmp_path) -> None:
     layout = _layout(tmp_path)
     legacy = initial_state(layout)
@@ -820,6 +854,47 @@ def test_sector_projection_uses_classification_without_index_membership(monkeypa
     assert list(result["l2_code_id"]) == [42, 42]
     assert list(result["sw2_pct_change"]) == pytest.approx([1.0, 0.99])
     assert list(result["sw2_mf_net_amt"]) == pytest.approx([2.0, 3.0])
+
+
+def test_sector_projection_accepts_exact_frozen_published_snapshot() -> None:
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0]}, index=index)
+    published = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-08-03"]),
+            "index_l2_code": ["801780.SI"],
+            "open": [100.0],
+            "high": [102.0],
+            "low": [99.0],
+            "close": [101.0],
+            "pct_change": [1.0],
+            "vol": [10.0],
+            "amount": [20.0],
+            "pe": [12.0],
+            "pb": [1.2],
+            "total_mv": [1000.0],
+        }
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        pd.DataFrame(),
+        intervals_by_symbol={
+            "000001.SZ": (
+                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),
+            )
+        },
+        l2_projection={"480000": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+        published_daily=published,
+    )
+
+    assert result.iloc[0]["sw2_pct_change"] == pytest.approx(1.0)
 
 
 def test_l2_projection_freezes_same_snapshot_shared_code_map(monkeypatch) -> None:

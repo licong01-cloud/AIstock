@@ -1,0 +1,382 @@
+{
+  "actual": "Active manifest 93151a5a... has full QE membership but sector_data 39921387... and no quote availability; inactive hotfix manifest c3f5b7a2... has corrected sector_data f57cb375... and quote c8a9e0b1... but incomplete membership.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/shared_sector_context.py",
+    "backend/services/dataset_release/release_successor.py",
+    "scripts/build_shared_sector_context_component.py",
+    "scripts/update_backtest_dataset_monthly.py",
+    "backend/services/dataset_release/direct_monthly.py",
+    "backend/tests/dataset_release/test_shared_sector_context.py",
+    "backend/tests/dataset_release/test_release_successor.py",
+    "backend/tests/dataset_release/test_direct_monthly.py",
+    "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "tests/aistock_validation/bugs/20260920_BUG-1591-active-r8-release-splits-qe-pit-membership-from-hmm-quote-availability-h.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1591",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-20T07:19:08.481794Z",
+  "description": "Active manifest 93151a5a... has full QE membership but sector_data 39921387... and no quote availability; inactive hotfix manifest c3f5b7a2... has corrected sector_data f57cb375... and quote c8a9e0b1... but incomplete membership.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260920-b5ea2a1ae6ac",
+      "timestamp": "2026-09-20T07:19:08.481776Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\RD-Agent-state\\dataset_profiles\\active_dataset_profile.json"
+  ],
+  "expected": "One immutable R8-lineage unified successor must bind corrected sector_data, quote availability, full PIT membership, shared manifest/profile pins, and pass QE P10/P11 plus HMM file-only preflight from the same candidate root. Future monthly successors must fail closed if any approved predecessor component is dropped.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/shared_sector_context.py",
+      "backend/services/dataset_release/release_successor.py",
+      "scripts/build_shared_sector_context_component.py",
+      "scripts/update_backtest_dataset_monthly.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_shared_sector_context.py",
+      "backend/tests/dataset_release/test_release_successor.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/shared_sector_context.py",
+        "backend/services/dataset_release/release_successor.py",
+        "scripts/build_shared_sector_context_component.py",
+        "scripts/update_backtest_dataset_monthly.py",
+        "backend/services/dataset_release/direct_monthly.py",
+        "backend/tests/dataset_release/test_shared_sector_context.py",
+        "backend/tests/dataset_release/test_release_successor.py",
+        "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+        ".codex/skills/update-backtest-dataset/SKILL.md",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "docs.operations"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/shared_sector_context.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/release_successor.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/build_shared_sector_context_component.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/update_backtest_dataset_monthly.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/direct_monthly.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_shared_sector_context.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_release_successor.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_direct_monthly.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": ".codex/skills/update-backtest-dataset/SKILL.md",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/shared_sector_context.py",
+        "backend/services/dataset_release/release_successor.py",
+        "scripts/build_shared_sector_context_component.py",
+        "scripts/update_backtest_dataset_monthly.py",
+        "backend/services/dataset_release/direct_monthly.py",
+        "backend/tests/dataset_release/test_shared_sector_context.py",
+        "backend/tests/dataset_release/test_release_successor.py",
+        "backend/tests/dataset_release/test_direct_monthly.py",
+        ".codex/skills/update-backtest-dataset/SKILL.md",
+        "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/shared_sector_context.py",
+      "backend/services/dataset_release/release_successor.py",
+      "scripts/build_shared_sector_context_component.py",
+      "scripts/update_backtest_dataset_monthly.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_shared_sector_context.py",
+      "backend/tests/dataset_release/test_release_successor.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/shared_sector_context.py",
+      "backend/services/dataset_release/release_successor.py",
+      "scripts/build_shared_sector_context_component.py",
+      "scripts/update_backtest_dataset_monthly.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_shared_sector_context.py",
+      "backend/tests/dataset_release/test_release_successor.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      "docs/operations/qe_backtest_dataset_monthly_update_runbook.md"
+    ]
+  },
+  "first_seen_at": "2026-09-20T07:19:08.481794Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4968,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4968",
+  "last_seen_at": "2026-09-20T07:19:08.481794Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Inspect F:\\Dev\\RD-Agent-state\\dataset_profiles\\active_dataset_profile.json and compare active r8-pit2 sector_context with r8-hotfix1; observe missing sector_quote_availability and divergent sector_data hashes.",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Active R8 release splits QE PIT membership from HMM quote-availability hotfix",
+  "trigger_condition": {
+    "fingerprint": "b5ea2a1ae6aca22e2b88c907",
+    "source_event_id": "FE-20260920-b5ea2a1ae6ac"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

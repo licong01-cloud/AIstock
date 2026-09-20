@@ -20,6 +20,7 @@ from .shared_sector_context import (
     SECTOR_CONTEXT_COMPONENT_ROOT,
     SECTOR_CONTEXT_PINS_SCHEMA,
     load_release_sw_l2_code_map,
+    load_sector_quote_availability,
 )
 
 
@@ -30,6 +31,7 @@ _SECTOR_FILES = {
     "sector_code_map": "sector_code_map.json",
     "market_context": "market_context.parquet",
     "sector_membership_spans": "sector_membership_spans.parquet",
+    "sector_quote_availability": "sector_quote_availability.json",
     "sector_context_receipt": "component_receipt.json",
 }
 _CONSUMER_REQUIREMENTS = {
@@ -153,10 +155,19 @@ def _load_sector_receipt(component_root: Path) -> dict[str, Any]:
             else receipt["market_context"]
             if key == "market_context"
             else receipt["membership"]
+            if key == "sector_membership_spans"
+            else receipt["quote_availability"]
         )
         if section.get("path") != filename or section.get("sha256") != _sha256(path):
             raise ValueError(f"sector context receipt hash differs: {filename}")
-    load_release_sw_l2_code_map(component_root / "sector_code_map.json")
+    code_map = load_release_sw_l2_code_map(component_root / "sector_code_map.json")
+    quote = load_sector_quote_availability(
+        component_root / "sector_quote_availability.json",
+        code_map=code_map,
+        required_end=dt.date.fromisoformat(str(receipt["membership"]["end"])),
+    )
+    if quote.quote_availability_digest != receipt["quote_availability"].get("canonical_digest"):
+        raise ValueError("sector quote availability receipt digest differs")
     receipt["receipt_sha256"] = _sha256(component_root / "component_receipt.json")
     return receipt
 
@@ -191,6 +202,14 @@ def _sector_manifest_components(component_root: Path, receipt: Mapping[str, Any]
             "span_count": receipt["membership"]["span_count"],
             "symbol_count": receipt["membership"]["symbol_count"],
         },
+        "sector_quote_availability": {
+            "path": f"{root}/sector_quote_availability.json",
+            "sha256": _sha256(component_root / "sector_quote_availability.json"),
+            "size": (component_root / "sector_quote_availability.json").stat().st_size,
+            "schema_version": receipt["quote_availability"]["schema_version"],
+            "canonical_digest": receipt["quote_availability"]["canonical_digest"],
+            "catalog_count": receipt["quote_availability"]["catalog_count"],
+        },
         "sector_context_receipt": {
             "path": f"{root}/component_receipt.json",
             "sha256": _sha256(component_root / "component_receipt.json"),
@@ -216,6 +235,10 @@ def _sector_context_pins(receipt: Mapping[str, Any]) -> dict[str, Any]:
         "membership_sha256": receipt["membership"]["sha256"],
         "membership_start": receipt["membership"]["start"],
         "membership_end": receipt["membership"]["end"],
+        "quote_availability_file": "sector_quote_availability.json",
+        "quote_availability_sha256": receipt["quote_availability"]["sha256"],
+        "quote_availability_digest": receipt["quote_availability"]["canonical_digest"],
+        "quote_availability_schema": receipt["quote_availability"]["schema_version"],
         "receipt_file": "component_receipt.json",
         "receipt_sha256": receipt["receipt_sha256"],
         "sector_data_sha256": receipt["sector_data"]["sha256"],
@@ -303,6 +326,11 @@ def build_successor(
     new_state = copy.deepcopy(baseline_state)
     new_state.update(
         {
+            "profile": "qe_hmm_full_v2",
+            "source_freeze": False,
+            "full_history_content_hash": False,
+            "prepublish_source_recheck": False,
+            "resource_admission": False,
             "baseline_root": str(baseline_root),
             "candidate_root": str(successor_root),
             "created_at": timestamp,
