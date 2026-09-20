@@ -1,6 +1,10 @@
 {
-  "actual": "Active v14 unified dataset is healthy, but QE does not reject HMM assets bound to another dataset manifest before submission, P11 sector blacklist metadata is not materialized into the executable universe, and a failed Qlib backtest can be persisted as completed. Fix only QE consumer/runtime contracts; do not modify datasets or HMM assets.",
+  "actual": "Active v14 unified dataset is healthy, but QE does not reject a transported HMM asset bound to another dataset manifest before submission, and a remote completed signal followed by failed Qlib artifact collection is persisted as completed. The reported P11 metadata-only concern must be regression-checked against the existing run-local provider overlay; current source and fresh-process readback already materialize the filtered executable universe.",
   "allowed_write_scope": [
+    "backend/routers/quantevolver.py",
+    "backend/services/quantevolver/qe_active_dataset_profile.py",
+    "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+    "backend/tests/test_qe_experiment_status_reconciliation.py",
     "tests/aistock_validation/bugs/20260920_BUG-1594-qe-unified-dataset-hmm-binding-and-blacklist-execution-fail-closed-gaps.json"
   ],
   "assigned_agent": null,
@@ -21,12 +25,21 @@
       "timestamp": "2026-09-20T18:02:23.287337Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "file:///F:/Dev/RD-Agent-state/dataset_profiles/active_dataset_profile.json"
+  ],
+  "expected": "QE must reject an HMM coefficient asset whose frozen dataset, PIT membership, or source universe identity differs from the active dataset before submission; a requested P11 blacklist must remain bound to the run-local executable universe; and missing Qlib metrics after a remote completed signal must persist failed rather than completed.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "added_files": [
+      "backend/tests/test_qe_experiment_status_reconciliation.py"
+    ],
+    "changed_files": [
+      "backend/routers/quantevolver.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "tests/aistock_validation/bugs/20260920_BUG-1594-qe-unified-dataset-hmm-binding-and-blacklist-execution-fail-closed-gaps.json"
+    ],
+    "changed_files_source": "scoped_triage",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +48,21 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/quantevolver.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/test_qe_experiment_status_reconciliation.py",
+      "tests/aistock_validation/bugs/20260920_BUG-1594-qe-unified-dataset-hmm-binding-and-blacklist-execution-fail-closed-gaps.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/routers/quantevolver.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/test_qe_experiment_status_reconciliation.py",
+      "tests/aistock_validation/bugs/20260920_BUG-1594-qe-unified-dataset-hmm-binding-and-blacklist-execution-fail-closed-gaps.json"
+    ]
   },
   "first_seen_at": "2026-09-20T18:02:23.287381Z",
   "fix_branch": null,
@@ -54,22 +79,36 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Resolve v14 with a transported HMM binding carrying a different dataset_manifest_sha256, then reconcile a remote completed loop whose metrics endpoint fails; before the fix the first is accepted and the second remains completed.",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "v14 active-profile P11 materialization -> filtered run-local pool bound",
+      "cross-manifest HMM asset fresh process -> qe_hmm_asset_dataset_identity_mismatch",
+      "Qlib metrics collection failure unit readback -> experiment status failed",
+      "v14 active-profile P11 run-local pool bound; cross-manifest HMM binding rejected before submission"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
@@ -82,6 +121,14 @@
     "fingerprint": "54c7d9bffc2d1afca8b04f23",
     "source_event_id": "FE-20260920-54c7d9bffc2d"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/test_qe_experiment_status_reconciliation.py -q -> 48 passed",
+    "python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/test_qe_experiment_status_scanner.py -q -> 21 passed",
+    "python -m ruff check changed-files -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s qe_read_backend -> 626 passed, 1 skipped",
+    "v14 active-profile fresh process: filtered run-local pool bound and cross-manifest HMM asset rejected before submission"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

@@ -721,6 +721,94 @@ def test_v3_sector_blacklist_starts_at_test_without_truncating_training_universe
     )
 
 
+def _transported_hmm_binding(profile, **overrides: str) -> dict[str, object]:
+    identity = {
+        "schema_version": "hmm_risk_qe_dataset_binding_v1",
+        "dataset_manifest_sha256": profile.raw["components"]["dataset_manifest_sha256"],
+        "sector_membership_sha256": profile.raw["components"]["sector_context_pins"]["membership_sha256"],
+        "source_universe_sha256": profile.raw["consumers"]["qe"]["universes"]["stock_universe"]["sha256"],
+    }
+    identity.update(overrides)
+    return {"dataset_binding": identity}
+
+
+def test_transported_hmm_asset_must_bind_active_dataset_and_source_universe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _fixture_profile(tmp_path, with_sector_context=True)
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+    profile = load_active_qe_profile()
+    assert profile is not None
+
+    resolved = resolve_active_qe_dataset(
+        node_id="wsl2-5080",
+        custom_params={
+            "enable_sector_hmm": True,
+            "_precomputed_hmm_coefficients_artifact_binding": _transported_hmm_binding(profile),
+        },
+        profile=profile,
+    )
+
+    assert resolved is not None
+    assert resolved.binding.selection_pins["instruments_sha256"] == (
+        profile.raw["consumers"]["qe"]["universes"]["stock_universe"]["sha256"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason_code"),
+    [
+        ({"dataset_manifest_sha256": "f" * 64}, "qe_hmm_asset_dataset_identity_mismatch"),
+        ({"sector_membership_sha256": "e" * 64}, "qe_hmm_asset_dataset_identity_mismatch"),
+        ({"source_universe_sha256": "d" * 64}, "qe_hmm_asset_dataset_identity_mismatch"),
+    ],
+)
+def test_transported_hmm_asset_rejects_cross_release_identity_before_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, str],
+    reason_code: str,
+) -> None:
+    path = _fixture_profile(tmp_path, with_sector_context=True)
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+    profile = load_active_qe_profile()
+    assert profile is not None
+
+    with pytest.raises(QEActiveDatasetProfileError, match=reason_code):
+        resolve_active_qe_dataset(
+            node_id="wsl2-5080",
+            custom_params={
+                "enable_sector_hmm": True,
+                "_precomputed_hmm_coefficients_artifact_binding": _transported_hmm_binding(
+                    profile,
+                    **overrides,
+                ),
+            },
+            profile=profile,
+        )
+
+
+def test_transported_hmm_asset_rejects_missing_dataset_identity_before_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _fixture_profile(tmp_path, with_sector_context=True)
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(path))
+    profile = load_active_qe_profile()
+    assert profile is not None
+
+    with pytest.raises(QEActiveDatasetProfileError, match="qe_hmm_asset_dataset_identity_missing"):
+        resolve_active_qe_dataset(
+            node_id="wsl2-5080",
+            custom_params={
+                "enable_sector_hmm": True,
+                "_precomputed_hmm_coefficients_artifact_binding": {},
+            },
+            profile=profile,
+        )
+
+
 def test_active_profile_derives_shared_node_runtime_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
