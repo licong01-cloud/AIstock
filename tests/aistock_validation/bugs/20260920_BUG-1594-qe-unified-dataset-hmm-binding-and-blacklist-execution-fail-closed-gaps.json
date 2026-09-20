@@ -66,8 +66,8 @@
   },
   "first_seen_at": "2026-09-20T18:02:23.287381Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "39f2089c63ab8daac3524a00342ccae22a514f57",
+  "fixed_at": "2026-09-20T18:45:48Z",
   "github_issue_number": 4973,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4973",
   "last_seen_at": "2026-09-20T18:02:23.287381Z",
@@ -75,6 +75,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4977",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -102,6 +103,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -113,7 +115,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1594",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1245a3a5bdb0a4c0",
+    "recorded_at": "2026-09-20T18:48:56.241871Z",
+    "runtime_contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "91bb07eba4959a62c49b99d27cada7459d2dce06",
+    "source_merge_commit": "39f2089c63ab8daac3524a00342ccae22a514f57",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4977",
+    "validation_evidence": [
+      "PR #4977 CI verdict passed",
+      "backend restart remains user-owned and pending"
+    ],
+    "validation_evidence_digest": "d2ceea346b9ea09764d0a724ea24d096529a4909a19a34a85290c16d7b144667"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -128,7 +152,9 @@
     "python -m ruff check changed-files -> passed",
     "python -m nox -s l0 -> passed",
     "python -m nox -s qe_read_backend -> 626 passed, 1 skipped",
-    "v14 active-profile fresh process: filtered run-local pool bound and cross-manifest HMM asset rejected before submission"
+    "v14 active-profile fresh process: filtered run-local pool bound and cross-manifest HMM asset rejected before submission",
+    "PR #4977 CI verdict passed",
+    "backend restart remains user-owned and pending"
   ],
   "verification_budget": {
     "budget": "standard",
