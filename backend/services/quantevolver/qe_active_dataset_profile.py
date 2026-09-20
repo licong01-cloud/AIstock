@@ -1178,6 +1178,18 @@ def resolve_active_qe_dataset(
         profile_internal_summary={
             **selected_profile.summary(),
             "profile_sha256": selected_profile.profile_sha256,
+            **(
+                {
+                    "dataset_manifest_sha256": str(
+                        selected_profile.raw["components"]["dataset_manifest_sha256"]
+                    ),
+                    "dataset_manifest_file_sha256": str(
+                        selected_profile.raw["components"]["dataset_manifest_file_sha256"]
+                    ),
+                }
+                if selected_profile.raw["schema_version"] == ACTIVE_PROFILE_SCHEMA_V3
+                else {}
+            ),
             "resolved_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         },
         stock_pool_content=stock_pool_content,
