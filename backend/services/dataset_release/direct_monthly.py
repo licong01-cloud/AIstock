@@ -32,6 +32,9 @@ DIRECT_MONTHLY_SCHEMA = "qe_direct_monthly_candidate_v1"
 LEGACY_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v1"
 PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v2"
 DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v3"
+DIRECT_SUCCESSOR_COMPONENTS = frozenset(
+    {"sector_context", "sector_quote_hotfix", "sector_data_completion"}
+)
 DIRECT_COMPONENTS = (
     "daily_bin",
     "minute_bin",
@@ -82,7 +85,9 @@ DIRECT_INDEX_CODES = (
     "399102.SZ",
     "399107.SZ",
 )
-_CANDIDATE_NAME = re.compile(r"[0-9]{8}-qe_hmm_full_v2-direct-[0-9]{8}-candidate\Z")
+_CANDIDATE_NAME = re.compile(
+    r"[0-9]{8}-qe_hmm_full_v2-direct-[0-9]{8}(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?-candidate\Z"
+)
 
 
 class DirectMonthlyError(DatasetReleaseError):
@@ -279,10 +284,24 @@ def _upgrade_legacy_state(value: Any) -> Any:
             "status": "PENDING",
         }
         schema = DIRECT_MONTHLY_STATE_SCHEMA
-    if schema != DIRECT_MONTHLY_STATE_SCHEMA or set(upgraded_components) != set(DIRECT_COMPONENTS):
+    if (
+        schema != DIRECT_MONTHLY_STATE_SCHEMA
+        or not set(DIRECT_COMPONENTS).issubset(upgraded_components)
+        or set(upgraded_components) - set(DIRECT_COMPONENTS) - DIRECT_SUCCESSOR_COMPONENTS
+    ):
         return value
     upgraded["components"] = upgraded_components
     upgraded["schema_version"] = schema
+    if upgraded.get("status") == DIRECT_TERMINAL_STATUS and "sector_context" in upgraded_components:
+        # Release successors created before BUG-1591 carried the component
+        # evidence but omitted the direct runner's constant no-side-effect
+        # fields.  Normalize those constants only in memory so status remains
+        # read-only and immutable candidates are never rewritten.
+        upgraded.setdefault("profile", "qe_hmm_full_v2")
+        upgraded.setdefault("source_freeze", False)
+        upgraded.setdefault("full_history_content_hash", False)
+        upgraded.setdefault("prepublish_source_recheck", False)
+        upgraded.setdefault("resource_admission", False)
     if upgraded.get("status") == DIRECT_TERMINAL_STATUS and any(
         record.get("status") != "PASS" for record in upgraded_components.values()
     ):
@@ -422,7 +441,8 @@ def _validate_state(layout: DirectMonthlyLayout, value: Any) -> None:
         or value.get("candidate_root") != str(layout.candidate_root)
         or value.get("baseline_root") != (str(layout.baseline_root) if layout.baseline_root is not None else None)
         or not isinstance(components, Mapping)
-        or set(components) != set(DIRECT_COMPONENTS)
+        or not set(DIRECT_COMPONENTS).issubset(components)
+        or set(components) - set(DIRECT_COMPONENTS) - DIRECT_SUCCESSOR_COMPONENTS
         or value.get("source_freeze") is not False
         or value.get("full_history_content_hash") is not False
         or value.get("prepublish_source_recheck") is not False
@@ -440,6 +460,10 @@ def _validate_state(layout: DirectMonthlyLayout, value: Any) -> None:
             "FAILED",
         }:
             raise DirectMonthlyError(f"direct monthly component state differs: {component}")
+    for component in DIRECT_SUCCESSOR_COMPONENTS & set(components):
+        record = components[component]
+        if not isinstance(record, Mapping) or record.get("status") != "PASS":
+            raise DirectMonthlyError(f"direct successor component state differs: {component}")
 
 
 def compact_status(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -449,7 +473,10 @@ def compact_status(value: Mapping[str, Any]) -> dict[str, Any]:
         "profile": value["profile"],
         "cutoff": value["cutoff"],
         "candidate_root": value["candidate_root"],
-        "components": {name: value["components"][name]["status"] for name in DIRECT_COMPONENTS},
+        "components": {
+            name: value["components"][name]["status"]
+            for name in (*DIRECT_COMPONENTS, *sorted(DIRECT_SUCCESSOR_COMPONENTS & set(value["components"])))
+        },
         "source_freeze": False,
         "full_history_content_hash": False,
         "production_writes": 0,
@@ -1940,6 +1967,7 @@ def _build_sector_frame_from_classification(
     l2_code_map: Mapping[str, int],
     start: date,
     end: date,
+    published_daily=None,
 ):
     import numpy as np
     import pandas as pd
@@ -1953,11 +1981,34 @@ def _build_sector_frame_from_classification(
     )
     if assignments.empty:
         return pd.DataFrame()
-    published = _load_sw_daily_for_projection(
-        assignments["index_l2_code"].dropna().astype(str).unique().tolist(),
-        start,
-        end,
-    )
+    if published_daily is None:
+        published = _load_sw_daily_for_projection(
+            assignments["index_l2_code"].dropna().astype(str).unique().tolist(),
+            start,
+            end,
+        )
+    else:
+        published = published_daily.copy()
+        required = {
+            "datetime",
+            "index_l2_code",
+            "open",
+            "high",
+            "low",
+            "close",
+            "pct_change",
+            "vol",
+            "amount",
+            "pe",
+            "pb",
+            "total_mv",
+        }
+        if set(published.columns) != required:
+            raise DirectMonthlyError("frozen published SW L2 daily snapshot columns differ")
+        published["datetime"] = pd.to_datetime(published["datetime"]).dt.normalize()
+        published["index_l2_code"] = published["index_l2_code"].map(_canonical_index_code)
+        if published.duplicated(["datetime", "index_l2_code"]).any():
+            raise DirectMonthlyError("frozen published SW L2 daily snapshot contains duplicate keys")
     sw_fields = {
         "open": "sw2_open",
         "high": "sw2_high",

@@ -9,6 +9,29 @@ description: Operate the direct, candidate-only AIstock monthly QE/HMM dataset u
 
 每月把唯一权威 PIT 股票池和所需市场数据更新到“上一个月最后一个已完成交易日”，生成新的独立 candidate，完成一次结构/抽样/QE-HMM smoke 后停止。
 
+同一个 cutoff 只允许交付一个 release identity、一个 candidate root 和一个待激活 profile。QE 与 HMM
+不得各自派生 sector candidate、私有行业编号或独立数据路径；任何消费者新增的数据要求都必须先进入共享
+release component，再由同一 manifest 和 profile 固定。
+
+## 单一 release 闭环（强制）
+
+月更必须按以下顺序在同一个 candidate 内闭环，任一步失败都保持 `NOT_READY`，不得另建 QE/HMM 分支候选：
+
+1. 冻结 calendar、PIT stock universe、申万 L2 code map、PIT membership 和 published quote source identity。
+2. 生成全 PIT membership，覆盖 stock_universe 与五个指数池在政策窗口内的可执行区间。
+3. 用共享 quote-availability authority 区分“正式可发布行情”和“正式停发”；停发不等于 membership 消失。
+4. 对每个 quote-available 的 `(trade_date, l2_code_id)` 验证 sector quote 三字段有限；缺行只能从同 cutoff
+   的冻结权威 source snapshot 补建，禁止补零、前填、插值或运行时数据库 fallback。
+5. 构建一次共享 sector context，manifest、component receipt 和 profile 同时固定 code map、membership、
+   market context、quote availability 与 sector data SHA256。
+6. 使用同一个 candidate root 执行 QE P10/P11 smoke、HMM file-only preflight、六池 membership/gap gate 和
+   dataset-identity；任何一个失败都不得激活。
+7. Windows、WSL、node1 完成字节哈希一致性后，只原子切换一次全局 profile。历史 release 仅用于复现，
+   不再被任何当前模块单独配置为 active。
+
+性能优化采用“复用未变化组件 + 只重建受影响组件”；这不允许产生多个终端候选。临时 staging 不是 release，
+不得写入消费者 profile，也不得作为业务窗口输入。
+
 本 Skill 不再使用或恢复：
 
 - source-freeze；

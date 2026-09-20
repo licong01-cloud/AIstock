@@ -354,7 +354,14 @@ def _direct_status() -> Mapping[str, Any]:
                 cutoff=cutoff,
             )
             state = read_state(layout)
-        except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        except (
+            DatasetReleaseError,
+            KeyError,
+            OSError,
+            UnicodeDecodeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             continue
         if state is not None:
             states.append((cutoff, updated, state))

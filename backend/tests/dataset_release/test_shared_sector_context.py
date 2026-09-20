@@ -11,10 +11,12 @@ from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.dataset_release.shared_sector_context import (
     RELEASE_SW_L2_CODE_MAP_SCHEMA,
     RELEASE_SW_L2_MEMBER_BACKED_SCHEMA,
+    SECTOR_QUOTE_AVAILABILITY_SCHEMA,
     build_release_sw_l2_code_map_payload,
     validate_market_context_frame,
     validate_membership_frame,
     validate_release_sw_l2_code_map,
+    validate_sector_quote_availability,
 )
 from scripts.build_shared_sector_context_component import (
     _build_authority_membership_spans,
@@ -80,6 +82,36 @@ def _code_map() -> dict[str, object]:
     }
 
 
+def _quote_availability(
+    code_map: dict[str, object], *, end: str = "2026-08-31"
+) -> dict[str, object]:
+    entries = [
+        {
+            "canonical_l2_code": row["canonical_l2_code"],
+            "availability_spans": [
+                {"start_date": "2024-07-01", "end_date": end}
+            ],
+        }
+        for row in sorted(code_map["entries"], key=lambda row: row["canonical_l2_code"])
+    ]
+    authority = code_map["mapping_authority"]
+    return {
+        "schema_version": SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+        "mapping_authority": authority,
+        "entries": entries,
+        "quote_availability_digest": digest_named_fields(
+            SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+            {"mapping_authority": authority, "entries": entries},
+        ),
+    }
+
+
+def _write_quote_availability(tmp_path, code_map: dict[str, object], *, end: str):
+    path = tmp_path / "sector_quote_availability.json"
+    path.write_text(json.dumps(_quote_availability(code_map, end=end), sort_keys=True), encoding="utf-8")
+    return path
+
+
 def test_release_code_map_preserves_sparse_shared_ids() -> None:
     result = validate_release_sw_l2_code_map(_code_map())
     assert len(result.member_backed_codes) == 131
@@ -102,6 +134,20 @@ def test_release_code_map_builder_preserves_producer_ids() -> None:
         "canonical_l2_code": "801130.SI",
     }
     assert validate_release_sw_l2_code_map(payload).id_to_code[261] == "801130.SI"
+
+
+def test_quote_availability_requires_same_complete_mapping_authority() -> None:
+    code_map = validate_release_sw_l2_code_map(_code_map())
+    payload = _quote_availability(_code_map())
+    result = validate_sector_quote_availability(
+        payload,
+        code_map=code_map,
+        required_end=dt.date(2026, 8, 31),
+    )
+    assert len(result.entries) == 131
+    payload["mapping_authority"]["authority_sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="mapping authority differs"):
+        validate_sector_quote_availability(payload, code_map=code_map)
 
 
 def test_release_code_map_derivation_closes_unique_sparse_positions() -> None:
@@ -366,7 +412,9 @@ def test_frozen_dated_assignments_override_only_after_first_observation() -> Non
 def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_path, monkeypatch) -> None:
     authority_path, universe_path, calendar_path = _authority_inputs(tmp_path, monkeypatch)
     code_map_path = tmp_path / "sector_code_map.json"
-    code_map_path.write_text(json.dumps(_code_map(), sort_keys=True), encoding="utf-8")
+    code_map_payload = _code_map()
+    code_map_path.write_text(json.dumps(code_map_payload, sort_keys=True), encoding="utf-8")
+    quote_path = _write_quote_availability(tmp_path, code_map_payload, end="2024-07-02")
     index = pd.MultiIndex.from_tuples(
         [
             (pd.Timestamp("2024-07-01"), "000001.SZ"),
@@ -379,7 +427,9 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
     sector = pd.DataFrame(
         {
             "l2_code_id": [1, 3, 1, 3],
+            "sw2_pct_change": [1.0, 2.0, 1.1, 2.1],
             "sw2_vol": [100.0, 200.0, 110.0, 210.0],
+            "sw2_amount": [1000.0, 2000.0, 1100.0, 2100.0],
         },
         index=index,
     )
@@ -398,6 +448,7 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
         source_dataset_manifest_sha256="b" * 64,
         membership_start=dt.date(2024, 7, 1),
         membership_end=dt.date(2024, 7, 2),
+        quote_availability_json=quote_path,
     )
 
     assert result["database_read"] is False
@@ -424,6 +475,7 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
             source_dataset_manifest_sha256="b" * 64,
             membership_start=dt.date(2024, 7, 1),
             membership_end=dt.date(2024, 7, 2),
+            quote_availability_json=quote_path,
         )
 
 
@@ -435,7 +487,20 @@ def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypat
         encoding="utf-8",
     )
     code_map_path = tmp_path / "sector_code_map.json"
-    code_map_path.write_text(json.dumps(_code_map(), sort_keys=True), encoding="utf-8")
+    code_map_payload = _code_map()
+    code_map_path.write_text(json.dumps(code_map_payload, sort_keys=True), encoding="utf-8")
+    quote_payload = _quote_availability(code_map_payload, end="2024-07-03")
+    for entry in quote_payload["entries"]:
+        entry["availability_spans"] = []
+    quote_payload["quote_availability_digest"] = digest_named_fields(
+        SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+        {
+            "mapping_authority": quote_payload["mapping_authority"],
+            "entries": quote_payload["entries"],
+        },
+    )
+    quote_path = tmp_path / "sector_quote_availability.json"
+    quote_path.write_text(json.dumps(quote_payload, sort_keys=True), encoding="utf-8")
     index = pd.MultiIndex.from_tuples(
         [
             (pd.Timestamp("2024-07-01"), "000001.SZ"),
@@ -445,7 +510,12 @@ def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypat
         names=["datetime", "instrument"],
     )
     sector = pd.DataFrame(
-        {"l2_code_id": [1, 3, 1], "sw2_vol": [100.0, 200.0, 110.0]},
+        {
+            "l2_code_id": [1, 3, 1],
+            "sw2_pct_change": [1.0, 2.0, 1.1],
+            "sw2_vol": [100.0, 200.0, 110.0],
+            "sw2_amount": [1000.0, 2000.0, 1100.0],
+        },
         index=index,
     )
     sector_path = tmp_path / "sector_data.h5"
@@ -462,6 +532,7 @@ def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypat
         source_dataset_manifest_sha256="b" * 64,
         membership_start=dt.date(2024, 7, 1),
         membership_end=dt.date(2024, 7, 3),
+        quote_availability_json=quote_path,
     )
 
     assert result["membership"]["symbol_count"] == 3

@@ -21,6 +21,7 @@ SECTOR_CONTEXT_COMPONENT_ROOT = "components/sector_context_candidate_v1"
 MARKET_VOLUME_DEFINITION = "sum_market_sw_daily_vol_all_rows_v1"
 MARKET_CONTEXT_SCHEMA = "aistock_market_context_v1"
 SECTOR_MEMBERSHIP_SPANS_SCHEMA = "aistock_sector_membership_spans_v1"
+SECTOR_QUOTE_AVAILABILITY_SCHEMA = "aistock_release_sw_l2_quote_availability_v1"
 
 _CODE_RE = re.compile(r"^801[0-9]{3}[.]SI$")
 _SYMBOL_RE = re.compile(r"^[0-9]{6}[.](?:SH|SZ|BJ)$")
@@ -37,6 +38,14 @@ _MAP_FIELDS = {
 }
 _AUTHORITY_FIELDS = {"authority_id", "authority_sha256"}
 _ENTRY_FIELDS = {"l2_code_id", "canonical_l2_code"}
+_QUOTE_ROOT_FIELDS = {
+    "schema_version",
+    "mapping_authority",
+    "entries",
+    "quote_availability_digest",
+}
+_QUOTE_ENTRY_FIELDS = {"canonical_l2_code", "availability_spans"}
+_QUOTE_SPAN_FIELDS = {"start_date", "end_date"}
 _PIN_FIELDS = {
     "schema_version",
     "component_root",
@@ -52,6 +61,10 @@ _PIN_FIELDS = {
     "membership_sha256",
     "membership_start",
     "membership_end",
+    "quote_availability_file",
+    "quote_availability_sha256",
+    "quote_availability_digest",
+    "quote_availability_schema",
     "receipt_file",
     "receipt_sha256",
     "sector_data_sha256",
@@ -69,6 +82,13 @@ class ReleaseSWL2CodeMap:
     mapping_authority: Mapping[str, str]
     code_map_digest: str
     member_backed_digest: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SectorQuoteAvailability:
+    entries: Mapping[str, tuple[tuple[dt.date, dt.date], ...]]
+    mapping_authority: Mapping[str, str]
+    quote_availability_digest: str
 
 
 def build_release_sw_l2_code_map_payload(
@@ -242,6 +262,97 @@ def load_release_sw_l2_code_map(path: Path, *, require_member_backed: bool = Tru
     return validate_release_sw_l2_code_map(payload, require_member_backed=require_member_backed)
 
 
+def validate_sector_quote_availability(
+    value: Any,
+    *,
+    code_map: ReleaseSWL2CodeMap,
+    required_end: dt.date | None = None,
+) -> SectorQuoteAvailability:
+    root = _exact_mapping(value, _QUOTE_ROOT_FIELDS, "sector quote availability")
+    if root["schema_version"] != SECTOR_QUOTE_AVAILABILITY_SCHEMA:
+        raise ValueError("sector quote availability schema differs")
+    authority = _exact_mapping(root["mapping_authority"], _AUTHORITY_FIELDS, "mapping_authority")
+    normalized_authority = {
+        "authority_id": str(authority["authority_id"] or "").strip(),
+        "authority_sha256": ensure_sha256(
+            str(authority["authority_sha256"]),
+            field="mapping_authority.authority_sha256",
+        ),
+    }
+    if not normalized_authority["authority_id"]:
+        raise ValueError("mapping_authority.authority_id is empty")
+    if normalized_authority != dict(code_map.mapping_authority):
+        raise ValueError("sector quote availability mapping authority differs")
+    raw_entries = root["entries"]
+    if not isinstance(raw_entries, list) or len(raw_entries) != len(code_map.code_to_id):
+        raise ValueError("sector quote availability must cover the full code map")
+    normalized_entries: list[dict[str, Any]] = []
+    parsed: dict[str, tuple[tuple[dt.date, dt.date], ...]] = {}
+    for raw_entry in raw_entries:
+        entry = _exact_mapping(raw_entry, _QUOTE_ENTRY_FIELDS, "sector quote availability entry")
+        code = str(entry["canonical_l2_code"] or "").strip().upper()
+        if code not in code_map.code_to_id or code in parsed:
+            raise ValueError(f"sector quote availability code differs: {code!r}")
+        raw_spans = entry["availability_spans"]
+        if not isinstance(raw_spans, list):
+            raise ValueError("sector quote availability spans must be a list")
+        normalized_spans: list[dict[str, str]] = []
+        parsed_spans: list[tuple[dt.date, dt.date]] = []
+        prior_end: dt.date | None = None
+        for raw_span in raw_spans:
+            span = _exact_mapping(raw_span, _QUOTE_SPAN_FIELDS, "sector quote availability span")
+            start = _date(span["start_date"], "start_date")
+            end = _date(span["end_date"], "end_date")
+            if end < start or (prior_end is not None and start <= prior_end):
+                raise ValueError(f"sector quote availability spans overlap or invert: {code}")
+            prior_end = end
+            parsed_spans.append((start, end))
+            normalized_spans.append({"start_date": start.isoformat(), "end_date": end.isoformat()})
+        parsed[code] = tuple(parsed_spans)
+        normalized_entries.append(
+            {"canonical_l2_code": code, "availability_spans": normalized_spans}
+        )
+    expected_entries = sorted(normalized_entries, key=lambda row: row["canonical_l2_code"])
+    if normalized_entries != expected_entries or set(parsed) != set(code_map.code_to_id):
+        raise ValueError("sector quote availability entries are not canonical or complete")
+    expected_digest = digest_named_fields(
+        SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+        {"mapping_authority": normalized_authority, "entries": normalized_entries},
+    )
+    actual_digest = ensure_sha256(
+        str(root["quote_availability_digest"]),
+        field="quote_availability_digest",
+    )
+    if actual_digest != expected_digest:
+        raise ValueError("sector quote availability digest differs")
+    if required_end is not None:
+        late = sorted(
+            code
+            for code, spans in parsed.items()
+            if spans and max(end for _, end in spans) > required_end
+        )
+        if late:
+            raise ValueError(f"sector quote availability exceeds release cutoff: {late[:10]}")
+    return SectorQuoteAvailability(
+        entries=parsed,
+        mapping_authority=normalized_authority,
+        quote_availability_digest=expected_digest,
+    )
+
+
+def load_sector_quote_availability(
+    path: Path,
+    *,
+    code_map: ReleaseSWL2CodeMap,
+    required_end: dt.date | None = None,
+) -> SectorQuoteAvailability:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("sector quote availability is not valid UTF-8 JSON") from exc
+    return validate_sector_quote_availability(payload, code_map=code_map, required_end=required_end)
+
+
 def validate_sector_context_pins(value: Any) -> dict[str, str]:
     root = _exact_mapping(value, _PIN_FIELDS, "sector_context_pins")
     pins = {key: str(root[key]) for key in sorted(_PIN_FIELDS)}
@@ -252,6 +363,7 @@ def validate_sector_context_pins(value: Any) -> dict[str, str]:
         "code_map_file": "sector_code_map.json",
         "market_context_file": "market_context.parquet",
         "membership_file": "sector_membership_spans.parquet",
+        "quote_availability_file": "sector_quote_availability.json",
         "receipt_file": "component_receipt.json",
         "market_volume_definition": MARKET_VOLUME_DEFINITION,
     }
@@ -263,6 +375,8 @@ def validate_sector_context_pins(value: Any) -> dict[str, str]:
         "code_map_digest",
         "market_context_sha256",
         "membership_sha256",
+        "quote_availability_sha256",
+        "quote_availability_digest",
         "receipt_sha256",
         "sector_data_sha256",
         "source_dataset_manifest_sha256",
@@ -271,6 +385,8 @@ def validate_sector_context_pins(value: Any) -> dict[str, str]:
         pins[field] = ensure_sha256(pins[field], field=field)
     if not pins["authority_id"].strip():
         raise ValueError("sector context authority_id is empty")
+    if pins["quote_availability_schema"] != SECTOR_QUOTE_AVAILABILITY_SCHEMA:
+        raise ValueError("sector quote availability pin schema differs")
     market_start = _date(pins["market_start"], "market_start")
     market_end = _date(pins["market_end"], "market_end")
     membership_start = _date(pins["membership_start"], "membership_start")
@@ -292,6 +408,10 @@ def require_pinned_sector_context_files(candidate_root: Path, pins: Mapping[str,
             normalized["market_context_sha256"],
         ),
         "membership": (normalized["membership_file"], normalized["membership_sha256"]),
+        "quote_availability": (
+            normalized["quote_availability_file"],
+            normalized["quote_availability_sha256"],
+        ),
         "receipt": (normalized["receipt_file"], normalized["receipt_sha256"]),
     }
     paths: dict[str, Path] = {}
@@ -313,6 +433,13 @@ def require_pinned_sector_context_files(candidate_root: Path, pins: Mapping[str,
         "authority_sha256": normalized["authority_sha256"],
     }:
         raise ValueError("pinned sector mapping authority differs")
+    quote_availability = load_sector_quote_availability(
+        paths["quote_availability"],
+        code_map=code_map,
+        required_end=_date(normalized["membership_end"], "membership_end"),
+    )
+    if quote_availability.quote_availability_digest != normalized["quote_availability_digest"]:
+        raise ValueError("pinned sector quote availability digest differs")
     return paths
 
 
