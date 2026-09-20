@@ -1,7 +1,7 @@
 # PT-NEXT-027：小市值专用 SELL-vs-HOLD 动作价值实验详细设计
 
 **Feature tier**：F1  
-**状态**：DESIGN_VERIFIED / IMPLEMENTATION_PENDING  
+**状态**：IMPLEMENTED_RESEARCH_COMPLETE_INCONCLUSIVE
 **日期**：2026-09-21  
 **模块边界**：`backend/services/position_timing` 离线研究  
 **父证据**：PT-NEXT-024、PT-NEXT-025、PT-NEXT-026  
@@ -139,17 +139,17 @@ request 显式绑定干净仓库提交、R8 candidate manifest、父 bundle/模�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-001 | §1 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-002 | §2 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-003 | §3 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-004 | §4 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-005 | §5 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-006 | §6 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-007 | §7 | artifact: `research/causal_smallcap_sell_value_v1` | DESIGN_VERIFIED | none |
-| F-008 | §8 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-009 | §9 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-010 | §10 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
-| F-011 | §11 | artifact: `research/causal_smallcap_sell_value_v1/receipt.json` | DESIGN_VERIFIED | none |
+| F-001 | `causal_smallcap_sell_benchmark.py`; §1 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-002 | `causal_smallcap_sell_benchmark.py`; §2 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-003 | `causal_smallcap_sell_benchmark.py`; §3 | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-004 | `sell_labels_from_fills`; `_standardized_label` | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-005 | `causal_smallcap_sell_model.py` | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-006 | `_formal_report`; `_research_diagnostics` | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-007 | `prepare`; `run`; `inspect` | artifact: `research/causal_smallcap_sell_value_v1` | DESIGN_VERIFIED | none |
+| F-008 | `load_request`; `causality_receipt.json` | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-009 | two offline service files plus one test file | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-010 | `verify_parallel`; formal WSL run | test: `backend/tests/position_timing/test_causal_smallcap_sell_value.py` | DESIGN_VERIFIED | none |
+| F-011 | receipt isolation fields; `selected_for_live=0` | artifact: `research/causal_smallcap_sell_value_v1/receipt.json` | DESIGN_VERIFIED | none |
 
 ## 14. Initial Review
 
@@ -158,3 +158,22 @@ request 显式绑定干净仓库提交、R8 candidate manifest、父 bundle/模�
 3. **统计复核**：父模型不再仅靠点估计比较，而进入同一预注册8端点 family；功效代价如实接受，不据此增加门禁或减少端点。
 4. **过度工程复核**：仅两个离线文件、一个测试和两份设计文档；不建设服务、注册中心、调度平台或跨模块融合。
 5. **隔离复核**：只读 R8 与父 artifact，只写 timing-owned 内容寻址研究目录；DB、网络行情、运行态、进程控制和其他模块均为 false。
+
+## 15. Implementation and Formal Result
+
+实现位于 `causal_smallcap_sell_model.py` 与 `causal_smallcap_sell_benchmark.py`，直接测试为 `backend/tests/position_timing/test_causal_smallcap_sell_value.py`。模型数值实现复用 PT-NEXT-024 已冻结的 Ridge／浅层 LightGBM，只增加小市值人口与标签身份；账户、候选、费用、涨跌停、停牌和固定5日恢复继续复用 PT-NEXT-026 的纯实现，没有建立第二套执行或成本逻辑。
+
+正式 request/bundle 为 `06fc6ff457309dad216782ae38a9e909bf8222c52cafd20f7db6860a672798ec`，manifest SHA256 为 `b31abd5140b49df1aa185eda08f2ce48e6551f51e18ad31ed361c7a86cf4a93d`，receipt SHA256 为 `5e2018e2ea55f4513adde823f10fa4b63b6e778bee3f8d2a6723f532a263caed`。R8 身份与父 GBDT `52b27c56494b4e72add859dbfd1555a72531aa96586ad2a8e5001280a9c2503a` 保持冻结。WSL 8 进程完成 5,144 只源股票、3,135 个入池账户、81 chunks 和 384,986 条成熟标签；其中训练 161,930 条、验证 82,894 条，其余只作分段外／未成熟留证。8 股串并行结果 `EXACT`，audit SHA256 为 `9a90474e50de21a4995310ce85bb7d8a434e5d2e7500ebcd90dd0c27787aa442`；独立 inspect 为 `VERIFIED`，exact retry 为 `ALREADY_MATERIALIZED`。新旧实验中未改变的 BH 与父 GBDT 两条聚合路径共 1,058 行逐值 `EXACT`，直接证明账户、固定5日恢复和聚合语义没有漂移。
+
+| 路径 | 组合收益 | 最大回撤 | 相对 BH 终值 | 相对 BH MDD 改善 |
+| --- | ---: | ---: | ---: | ---: |
+| BH500 | 81.8254% | -27.9964% | 基准 | 基准 |
+| PARENT_GBDT_FIXED5_V1 | 83.2787% | -26.5994% | +145.33 bps（诊断） | +139.70 bps（诊断） |
+| SMALLCAP_SELL_RIDGE_FIXED5_V1 | 84.0269% | -27.5914% | +220.15 bps | +40.50 bps |
+| SMALLCAP_SELL_GBDT_FIXED5_V1 | 79.8084% | -27.1907% | -201.70 bps | +80.57 bps |
+
+Ridge 对 BH 的 MDD 校正区间 `[+9.56,+179.90] bps` 为 `SUPPORTED`，但终值区间 `[-414.48,+1061.03] bps` 跨零，因此不能称为成本后 alpha 支持。Ridge 对父 GBDT 的终值点估计仅 `+74.82 bps`，MDD反而 `-99.20 bps`，两端点区间均跨零。GBDT 对 BH／父模型的终值分别为 `-201.70/-347.03 bps`，正式区间也都跨零。8 个预注册端点没有任何一个模型同时满足收益与MDD联合支持，正式结论为 `EXPLORATORY_SMALLCAP_SELL_INCONCLUSIVE`；`alpha_supported_exploratory=false`、`domain_mismatch_supported_exploratory=false`、`selected_for_live=0`。
+
+验证集标签均值为 `-5.93 bps`；Ridge/GBDT MAE 为 `111.66/112.83 bps`，GBDT仍无验证误差优势。Ridge 接受率 `16.49%`、GBDT `27.19%`；测试路径平均暴露约 `97.77%/97.61%`，并非低资金利用率造成失败。三个Timing路径的固定恢复中位数均为5日，说明本轮没有偷偷重开恢复时机变量。逐股上 Ridge 相对 BH 的终值胜率为 `63.44%`，但收益与MDD双胜率仅 `51.83%`；相对父模型双胜率只有 `31.39%`，不能用横截面胜率替代正式聚合证据。
+
+本轮只支持一个有限结论：小市值 Ridge 的风险控制端点存在可分辨改善，但现有14项技术信息没有证明收益超额，也没有证明通用父卖出模型是主要域错配。按§11冻结的 stop rule，停止继续扫描本信息集的卖出／恢复模型、阈值或小盘切片；后续 alpha 主方向转向独立股票筛选／选股信息，再另行设计与择时的组合验证。现有 L1/L1a、QE、HMM、其他模块和运行态均未改变，无需后端重启。
