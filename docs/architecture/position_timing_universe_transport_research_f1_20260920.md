@@ -1,7 +1,7 @@
 # PT-NEXT-025：冻结择时模型的市值分层与全市场迁移实验详细设计
 
-> 版本：v1.0；日期：2026-09-20；Feature tier：F1；状态：`APPROVED_FOR_IMPLEMENTATION`。  
-> 本轮由用户明确要求启动。它回答“取消 50～500 亿元市值限制，或改用大于 500 亿元股票后，既有择时结论是否改善”，不重新训练模型、不搜索新阈值。  
+> 版本：v1.1；日期：2026-09-20；Feature tier：F1；状态：`IMPLEMENTED_RESEARCH_COMPLETE_INCONCLUSIVE`。
+> 本轮由用户明确要求启动。它回答“取消 50～500 亿元市值限制，或改用大于 500 亿元股票后，既有择时结论是否改善”，不重新训练模型、不搜索新阈值。
 > 主蓝图：`position_timing_advice_f2_redesign_20260903.md`；父研究：`position_timing_causal_oracle_minute_research_f1_20260919.md`。唯一开发权威为 `docs/standards/aistock_development_standard_v1.5_20260523.md`。
 
 ## 1. Background / 目标与可证伪问题（F-001）
@@ -122,21 +122,21 @@ Production Gates：数据库 DDL/DML=`NOT_APPLICABLE`；生产激活=`NOT_REQUES
 
 ## 13. Design Acceptance Matrix
 
-`DESIGN_VERIFIED` 只表示设计闭合，不表示实现、回放或 alpha 已完成。实现后按实际证据升级状态，不预填成功。
+`IMPLEMENTATION_VERIFIED` 只表示冻结实现、回放和不可变证据闭合，不表示 alpha、未来收益或运行发布获得支持。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-001 | §1、§5 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：目标/父身份测试 | DESIGN_VERIFIED | none |
-| F-002 | §2 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：零副作用边界测试 | DESIGN_VERIFIED | none |
-| F-003 | §3 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：prepare/load_request 漂移测试 | DESIGN_VERIFIED | none |
-| F-004 | §4 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：四人口边界测试 | DESIGN_VERIFIED | none |
-| F-005 | §5 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：父模型与 E0 回放测试 | DESIGN_VERIFIED | none |
-| F-006 | §6 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：四端点校正测试 | DESIGN_VERIFIED | none |
-| F-007 | §7 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：bundle/manifest/report 测试 | DESIGN_VERIFIED | none |
-| F-008 | §8 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：bridge、PIT 与漂移负例 | DESIGN_VERIFIED | none |
-| F-009 | §9 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：最小模块表面测试 | DESIGN_VERIFIED | none |
-| F-010 | §10 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`；F1 validator 命令见§10 | DESIGN_VERIFIED | none |
-| F-011 | §11 | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`：receipt/selected_for_live 测试 | DESIGN_VERIFIED | none |
+| F-001 | §1、§5、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/report.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED_INCONCLUSIVE | none |
+| F-002 | §2、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/receipt.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED | none |
+| F-003 | §3、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/requests/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED | none |
+| F-004 | §4、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/enrollment_audit.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED | none |
+| F-005 | §5、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/report.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED | none |
+| F-006 | §6、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/report.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED_INCONCLUSIVE | none |
+| F-007 | §7、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/manifest.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED | none |
+| F-008 | §8、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/bridge_audit.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED_EXACT | none |
+| F-009 | §9 | `backend/services/position_timing/causal_timing_universe_benchmark.py`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED | none |
+| F-010 | §10、§15 | test: `python -m pytest backend/tests/position_timing/test_causal_timing_universe_benchmark.py -q`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/manifest.json` | IMPLEMENTATION_VERIFIED | none |
+| F-011 | §11、§15 | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/receipt.json`；`backend/tests/position_timing/test_causal_timing_universe_benchmark.py` | IMPLEMENTATION_VERIFIED_NO_RUNTIME_RELEASE | none |
 
 ## 14. 初始设计审核记录
 
@@ -144,3 +144,39 @@ Production Gates：数据库 DDL/DML=`NOT_APPLICABLE`；生产激活=`NOT_REQUES
 2. 过度工程审核：删除重复训练、分钟执行、Oracle、新数据源和平台化组件；只保留一个离线适配器、四个人口和一个正式 family。
 3. 因果与统计审核：ALL 不要求市值已知，三个市值层不填充未知；T−1、首次入池固定；正式四端点校正与诊断结果分离。
 4. 隔离审核：新 artifact namespace、父产物只读、零 DB/在线/进程控制；“数仓”明确为文件化研究归档。
+
+## 15. Implementation and Formal Results / 实现与正式结果
+
+### 15.1 不可变身份与完整性
+
+实现提交为 `ad687ed8d`，只新增 `causal_timing_universe_benchmark.py`、一个定向测试文件和本文档；后续提交仅回填结果与蓝图。正式 request/bundle ID 为 `9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd`，manifest canonical SHA256 为 `a711da8be0905ef1d799ce1a3678c47e4b693eb5d5ac446b8dd66d146ce8e4fd`，receipt canonical SHA256 为 `5dda77320c9e6840a8acabd7260f927fe71e5ea117f2862c50e885aeff522aee`。inspect 返回 `VERIFIED`，相同 request exact retry 返回 `ALREADY_MATERIALIZED` 且 manifest identity 不变。
+
+R8 源人口 5,144 股、81 个 chunk、chunk 人口合计 5,144。ALL 入池 5,076 股、未入池 68；LARGE 入池 594；SMALL 入池 3,135；U0 入池 3,638、`ENROLLMENT_UNKNOWN` 566、未入池 940，与父研究一致。四池独立按各自条件首次入池，股票可在窗口不同时间进入多个诊断池：U0∩LARGE=385、U0∩SMALL=2,006、LARGE∩SMALL=20；因此 SMALL 结果不能当作 ALL 增量的互斥归因。
+
+8 股串并行结果为 `EXACT`。U0 全人口桥接中 14,552 个四政策账户摘要的终值、MDD、费用、换手、暴露与条件暴露全部零差异，405,176 条成交 canonical 相同，四条组合 NAV 路径逐点零差异。父产物曾从成交表重建模型拒绝数，而拒绝动作不会产生成交，故父诊断列低估；新实现从 replay state 记录真实拒绝／不可用数并在 bridge audit 显式列为预期诊断差异，不改变策略、成交或收益。
+
+### 15.2 横向比较
+
+以下均为 2024-06-28 现金基准日至 2026-08-31 统一终点、每股独立 1,000 万元账户的合成路径；“改善”均为 GBDT − BH。SMALL 与 U0 是诊断，正式 family 仅 ALL 和 LARGE。
+
+| 股票池 | 账户 | BH收益 | GBDT收益 | 终值改善 | BH MDD | GBDT MDD | MDD改善 | 逐股双胜率 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ALL_PIT | 5,076 | 71.3554% | 71.9923% | +63.69 bps | -24.8809% | -23.5912% | +1.2896pp | 51.44% |
+| LARGE_GT_500B | 594 | 23.9701% | 24.0520% | +8.19 bps | -19.6421% | -18.9116% | +0.7304pp | 49.66% |
+| U0_BRIDGE_50_500B | 3,638 | 42.3406% | 42.8656% | +52.50 bps | -24.1642% | -22.7672% | +1.3970pp | 54.65% |
+| SMALL_LT_50B | 3,135 | 81.8292% | 82.6664% | +83.72 bps | -27.9971% | -26.6004% | +1.3968pp | 51.87% |
+
+无过滤 CYCLE5 在四池都落后 BH，说明仅加快固定 5 日恢复仍不能解决动作选择。Ridge 相对 BH 的点估计在 ALL/SMALL 为约 +38.26/+54.05 bps，在 LARGE/U0 为约 -50.63/-29.68 bps；不能把 GBDT 的正点估计简化为所有函数族一致。GBDT 平均暴露相对 BH 只降低约 1.58～2.01 个百分点，却显著增加换手和费用；它不是靠长期大幅空仓获得全部 MDD 改善，但仍未建立可分辨 alpha。
+
+### 15.3 正式统计结论与解释
+
+| 正式比较 | 终值点估计 | family-wise终值区间 | MDD点估计 | family-wise MDD区间 | 结论 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| ALL GBDT − BH | +63.69 bps | [-1046.98,+499.97] bps | +128.96 bps | [-13.87,+229.64] bps | INCONCLUSIVE |
+| LARGE GBDT − BH | +8.19 bps | [-299.34,+217.11] bps | +73.04 bps | [-13.48,+163.20] bps | INCONCLUSIVE |
+
+ALL 的名义 MDD 区间下界仅 +0.21 bps，但四端点校正后跨零；终值区间也明显跨零。取消 50～500 亿元限制把收益点估计从约 +52.50 bps 提高至 +63.69 bps，但没有改变证据分类，且 MDD改善点估计略降。大于 500 亿元池的收益优势几乎消失。SMALL 诊断点估计较高，但人口与 U0/LARGE 非互斥、同一 R8 已被反复观察、且没有市场冲击／成交额容量模型，不能据此回选“小盘股阈值”或宣称小盘 alpha。
+
+容量披露记录 1,394,249 个已成交父订单，名义额中位数约 237.37 万元、95 分位约 999.81 万元、最大约 3.045 亿元；R8 没有在本轮冻结权威日成交额，状态为 `CAPACITY_NOT_EVALUATED_NO_AUTHORITATIVE_TURNOVER_NOTIONAL`，`market_impact_simulated=false`。这对 SMALL 结果尤其重要，但不反向修改账户或过滤股票。
+
+最终结论仍为 `EXPLORATORY_UNIVERSE_TRANSPORT/INCONCLUSIVE`，`selected_for_live=0`。市值限制不是当前证据不足的主要工程阻塞；继续扫描市值阈值只会扩大选择偏差。下一优先项恢复为 PT-NEXT-026：围绕“何时恢复／继续持有价值”冻结一个更高信噪比的单一因果目标，沿用 Ridge 校准和浅层 GBDT 参考，不引入新模型族、分钟方向模型或 QE/HMM 融合。SMALL 只保留为未来容量证据具备后的外部有效性诊断，不作为下一轮选股规则。
