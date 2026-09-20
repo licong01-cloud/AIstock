@@ -25,8 +25,10 @@ from backend.services.dataset_release.shared_sector_context import (  # noqa: E4
     MARKET_VOLUME_DEFINITION,
     RELEASE_SW_L2_CODE_MAP_SCHEMA,
     SECTOR_MEMBERSHIP_SPANS_SCHEMA,
+    SECTOR_QUOTE_AVAILABILITY_SCHEMA,
     build_release_sw_l2_code_map_payload,
     load_release_sw_l2_code_map,
+    load_sector_quote_availability,
     validate_market_context_frame,
     validate_membership_frame,
     validate_release_sw_l2_code_map,
@@ -71,19 +73,84 @@ def _read_sector_frame(path: Path):
     import numpy as np
     import pandas as pd
 
-    frame = pd.read_hdf(path, "data", columns=["l2_code_id", "sw2_vol"]).reset_index()
-    required = {"datetime", "instrument", "l2_code_id", "sw2_vol"}
+    frame = pd.read_hdf(
+        path,
+        "data",
+        columns=["l2_code_id", "sw2_pct_change", "sw2_vol", "sw2_amount"],
+    ).reset_index()
+    required = {
+        "datetime",
+        "instrument",
+        "l2_code_id",
+        "sw2_pct_change",
+        "sw2_vol",
+        "sw2_amount",
+    }
     if set(frame.columns) != required or frame.empty:
         raise ValueError("sector_data.h5 schema or rows are invalid")
     frame["datetime"] = pd.to_datetime(frame["datetime"], errors="raise").dt.normalize()
     frame["instrument"] = frame["instrument"].astype(str).str.strip().str.upper()
     frame["l2_code_id"] = pd.to_numeric(frame["l2_code_id"], errors="raise")
-    frame["sw2_vol"] = pd.to_numeric(frame["sw2_vol"], errors="raise")
+    for column in ("sw2_pct_change", "sw2_vol", "sw2_amount"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
     valid_ids = frame.loc[frame["l2_code_id"] >= 0, "l2_code_id"]
     if (~np.isfinite(valid_ids)).any() or (valid_ids % 1 != 0).any() or valid_ids.gt(32767).any():
         raise ValueError("sector_data contains an invalid l2_code_id")
     frame["l2_code_id"] = frame["l2_code_id"].astype("int32")
     return frame.loc[frame["l2_code_id"] >= 0].copy()
+
+
+def _validate_quote_coverage(
+    *,
+    frame,
+    membership,
+    calendar: list[dt.date],
+    code_map,
+    quote_availability,
+    start: dt.date,
+    end: dt.date,
+) -> dict[str, Any]:
+    import numpy as np
+
+    target_dates = [value for value in calendar if start <= value <= end]
+    observed = frame.loc[
+        (frame["datetime"].dt.date >= start) & (frame["datetime"].dt.date <= end),
+        ["datetime", "l2_code_id", "sw2_pct_change", "sw2_vol", "sw2_amount"],
+    ].copy()
+    observed["trade_date"] = observed.pop("datetime").dt.date
+    observed["finite_quote"] = np.isfinite(
+        observed[["sw2_pct_change", "sw2_vol", "sw2_amount"]].to_numpy()
+    ).all(axis=1)
+    finite_keys = set(
+        observed.loc[observed["finite_quote"], ["trade_date", "l2_code_id"]]
+        .drop_duplicates()
+        .itertuples(index=False, name=None)
+    )
+    required_keys: set[tuple[dt.date, int]] = set()
+    for span in membership.itertuples(index=False):
+        code = code_map.id_to_code[int(span.l2_code_id)]
+        availability = quote_availability.entries[code]
+        for day in target_dates:
+            if span.start_date <= day <= span.end_date and any(
+                available_start <= day <= available_end
+                for available_start, available_end in availability
+            ):
+                required_keys.add((day, int(span.l2_code_id)))
+    missing = sorted(required_keys - finite_keys)
+    if missing:
+        sample = [
+            {"trade_date": day.isoformat(), "canonical_l2_code": code_map.id_to_code[sector_id]}
+            for day, sector_id in missing[:20]
+        ]
+        raise ValueError(
+            "quote-available PIT memberships lack finite frozen sector_data rows: "
+            f"missing_count={len(missing)} sample={sample}"
+        )
+    return {
+        "required_sector_date_count": len(required_keys),
+        "missing_sector_date_count": 0,
+        "finite_quote_fields": ["sw2_pct_change", "sw2_vol", "sw2_amount"],
+    }
 
 
 def _build_market_context(frame):
@@ -617,6 +684,7 @@ def build_component(
     source_dataset_manifest_sha256: str,
     membership_start: dt.date,
     membership_end: dt.date,
+    quote_availability_json: Path,
     security_source_identity_manifest: Path | None = None,
     security_source_identity_sha256: str | None = None,
 ) -> dict[str, Any]:
@@ -624,6 +692,7 @@ def build_component(
         raise FileExistsError(f"create-exclusive output already exists: {output_root}")
     inputs = (
         sector_data_h5,
+        quote_availability_json,
         industry_pit_authority_envelope,
         stock_universe_sidecar,
         calendar_path,
@@ -670,6 +739,12 @@ def build_component(
             "source_sha256": code_map_source_sha256,
             "ambiguity_count": 0,
         }
+    quote_availability_payload = json.loads(quote_availability_json.read_text(encoding="utf-8"))
+    quote_availability = load_sector_quote_availability(
+        quote_availability_json,
+        code_map=code_map,
+        required_end=membership_end,
+    )
     used_ids = set(frame["l2_code_id"].astype(int))
     unknown_ids = sorted(used_ids - set(code_map.id_to_code))
     if unknown_ids:
@@ -702,6 +777,15 @@ def build_component(
     _validate_h5_membership_alignment(
         frame,
         membership,
+        start=membership_start,
+        end=membership_end,
+    )
+    quote_coverage = _validate_quote_coverage(
+        frame=frame,
+        membership=membership,
+        calendar=calendar,
+        code_map=code_map,
+        quote_availability=quote_availability,
         start=membership_start,
         end=membership_end,
     )
@@ -750,6 +834,11 @@ def build_component(
     output_root.mkdir(parents=True, exist_ok=False)
     code_map_target = output_root / "sector_code_map.json"
     _write_exclusive(code_map_target, _canonical_file_bytes(code_map_payload))
+    quote_availability_target = output_root / "sector_quote_availability.json"
+    _write_exclusive(
+        quote_availability_target,
+        _canonical_file_bytes(quote_availability_payload),
+    )
     market_path = output_root / "market_context.parquet"
     membership_path = output_root / "sector_membership_spans.parquet"
     market.to_parquet(market_path, index=False)
@@ -785,6 +874,16 @@ def build_component(
             "end": market_end.isoformat(),
             "row_count": market_rows,
         },
+        "quote_availability": {
+            "schema_version": SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+            "path": "sector_quote_availability.json",
+            "sha256": _sha256(quote_availability_target),
+            "byte_size": quote_availability_target.stat().st_size,
+            "source_sha256": _sha256(quote_availability_json),
+            "canonical_digest": quote_availability.quote_availability_digest,
+            "catalog_count": len(quote_availability.entries),
+            "mapping_authority": dict(quote_availability.mapping_authority),
+        },
         "membership": {
             "schema_version": SECTOR_MEMBERSHIP_SPANS_SCHEMA,
             "path": "sector_membership_spans.parquet",
@@ -809,6 +908,7 @@ def build_component(
                 }
             ),
             "assignment_authority": assignment_authority,
+            "quote_coverage": quote_coverage,
             "coverage": coverage,
         },
         "database_read": False,
@@ -840,6 +940,7 @@ def _parser() -> argparse.ArgumentParser:
         help="repeat for csi300,csi500,csi1000,star50,star100",
     )
     parser.add_argument("--calendar-path", type=Path, required=True)
+    parser.add_argument("--quote-availability-json", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source-dataset-manifest-sha256", required=True)
     parser.add_argument("--membership-start", type=dt.date.fromisoformat, required=True)
@@ -868,6 +969,7 @@ def main() -> None:
         stock_universe_sidecar=args.stock_universe_sidecar,
         pool_sidecars=_parse_pool_sidecar_args(args.pool_sidecar),
         calendar_path=args.calendar_path,
+        quote_availability_json=args.quote_availability_json,
         output_root=args.output_root,
         source_dataset_manifest_sha256=args.source_dataset_manifest_sha256,
         membership_start=args.membership_start,
