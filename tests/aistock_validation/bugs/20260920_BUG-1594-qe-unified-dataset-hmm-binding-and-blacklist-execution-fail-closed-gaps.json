@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1594",
-  "closed_at": null,
+  "closed_at": "2026-09-20T19:04:33.774896Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -102,10 +102,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1594/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1594",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "39f2089c63ab8daac3524a00342ccae22a514f57",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-20T18:54:58.743697Z",
+      "mode": "read_only",
+      "observed_identity": "39f2089c63ab8daac3524a00342ccae22a514f57",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4d07a0f892ecee8c2df1a17b2e7880c6698988f073192f9f4aedb143dcb6d197",
+      "receipt_sha256": "7c7cd51bf9a15bedc4e9117bf93b1e6cc44fa5eecf58862c105482a6157e8503",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "eb5b98c97828403fdfda15f01384a9a56cf68f1f50b14c5981d1925269626e58",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -137,7 +159,7 @@
     ],
     "validation_evidence_digest": "d2ceea346b9ea09764d0a724ea24d096529a4909a19a34a85290c16d7b144667"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -154,7 +176,8 @@
     "python -m nox -s qe_read_backend -> 626 passed, 1 skipped",
     "v14 active-profile fresh process: filtered run-local pool bound and cross-manifest HMM asset rejected before submission",
     "PR #4977 CI verdict passed",
-    "backend restart remains user-owned and pending"
+    "backend restart remains user-owned and pending",
+    "post-restart runtime identity and QE dataset-profile business smoke passed"
   ],
   "verification_budget": {
     "budget": "standard",
