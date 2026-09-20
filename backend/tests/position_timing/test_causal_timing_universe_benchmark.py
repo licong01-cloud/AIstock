@@ -167,7 +167,13 @@ def test_bridge_accepts_exact_parent_e0_content(tmp_path: Path) -> None:
     new_stock = pd.DataFrame([{**stock, "pool_id": U0_BRIDGE}])
     new_pool = pd.DataFrame([{**pool, "pool_id": U0_BRIDGE}])
     new_fill = pd.DataFrame([{**fill, "pool_id": U0_BRIDGE}])
-    result = _bridge(parent_root=tmp_path, stocks=new_stock, pool_daily=new_pool, fills=new_fill)
+    result = _bridge(
+        parent_root=tmp_path,
+        stocks=new_stock,
+        pool_daily=new_pool,
+        fills=new_fill,
+        full_population=True,
+    )
 
     assert result["status"] == "EXACT"
     assert result["pool_max_abs_nav_difference_cny"] == 0.0

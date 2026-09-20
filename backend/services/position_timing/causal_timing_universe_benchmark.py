@@ -14,6 +14,7 @@ import math
 import multiprocessing
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -414,7 +415,9 @@ def _symbol_task(
                 fills["pool_id"] = pool
                 local_fills.append(fills)
             raw_details.append(detail)
-        day_frame = pd.concat(day_frames, ignore_index=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            day_frame = pd.concat(day_frames, ignore_index=True)
         fill_frame = pd.concat(local_fills, ignore_index=True) if local_fills else pd.DataFrame()
         details = _details_for_summary(
             symbol=symbol,
@@ -484,10 +487,16 @@ def _ordered(
 
 def _bridge(
     *, parent_root: Path, stocks: pd.DataFrame, pool_daily: pd.DataFrame, fills: pd.DataFrame,
+    full_population: bool,
 ) -> dict[str, Any]:
     new_stocks = stocks.loc[stocks.pool_id.eq(U0_BRIDGE)].copy()
+    bridge_symbols = set(new_stocks.symbol)
     old_stocks = pd.read_parquet(parent_root / "stocks.parquet")
-    old_stocks = old_stocks.loc[old_stocks.execution_view.eq(E0) & old_stocks.policy_id.isin(POLICY_IDS)].copy()
+    old_stocks = old_stocks.loc[
+        old_stocks.execution_view.eq(E0)
+        & old_stocks.policy_id.isin(POLICY_IDS)
+        & old_stocks.symbol.isin(bridge_symbols)
+    ].copy()
     keys = ["symbol", "execution_view", "policy_id"]
     columns = [
         "terminal_nav_cny", "max_drawdown", "fees_cny", "turnover_ratio",
@@ -502,25 +511,32 @@ def _bridge(
         for column in columns
     }
 
-    new_pool = pool_daily.loc[pool_daily.pool_id.eq(U0_BRIDGE)].copy()
-    old_pool = pd.read_parquet(parent_root / "pool_daily.parquet")
-    old_pool = old_pool.loc[
-        old_pool.execution_view.eq(E0)
-        & old_pool.pool_id.eq("stock_universe")
-        & old_pool.policy_id.isin(POLICY_IDS)
-    ].copy()
-    pool_keys = ["execution_view", "policy_id", "ordinal"]
-    left_pool = new_pool.sort_values(pool_keys, kind="stable").reset_index(drop=True)
-    right_pool = old_pool.sort_values(pool_keys, kind="stable").reset_index(drop=True)
-    pool_keys_equal = left_pool.loc[:, pool_keys].equals(right_pool.loc[:, pool_keys])
-    pool_max_abs_nav = (
-        float(np.max(np.abs(left_pool.nav.to_numpy(float) - right_pool.nav.to_numpy(float))))
-        if len(left_pool) == len(right_pool) and len(left_pool) else math.inf
-    )
+    pool_keys_equal = True
+    pool_max_abs_nav = 0.0
+    if full_population:
+        new_pool = pool_daily.loc[pool_daily.pool_id.eq(U0_BRIDGE)].copy()
+        old_pool = pd.read_parquet(parent_root / "pool_daily.parquet")
+        old_pool = old_pool.loc[
+            old_pool.execution_view.eq(E0)
+            & old_pool.pool_id.eq("stock_universe")
+            & old_pool.policy_id.isin(POLICY_IDS)
+        ].copy()
+        pool_keys = ["execution_view", "policy_id", "ordinal"]
+        left_pool = new_pool.sort_values(pool_keys, kind="stable").reset_index(drop=True)
+        right_pool = old_pool.sort_values(pool_keys, kind="stable").reset_index(drop=True)
+        pool_keys_equal = left_pool.loc[:, pool_keys].equals(right_pool.loc[:, pool_keys])
+        pool_max_abs_nav = (
+            float(np.max(np.abs(left_pool.nav.to_numpy(float) - right_pool.nav.to_numpy(float))))
+            if len(left_pool) == len(right_pool) and len(left_pool) else math.inf
+        )
 
     new_fills = fills.loc[fills.pool_id.eq(U0_BRIDGE)].drop(columns="pool_id").copy()
     old_fills = pd.read_parquet(parent_root / "fills.parquet")
-    old_fills = old_fills.loc[old_fills.execution_view.eq(E0) & old_fills.policy_id.isin(POLICY_IDS)].copy()
+    old_fills = old_fills.loc[
+        old_fills.execution_view.eq(E0)
+        & old_fills.policy_id.isin(POLICY_IDS)
+        & old_fills.symbol.isin(bridge_symbols)
+    ].copy()
     common = sorted(set(new_fills) & set(old_fills))
     fill_keys = [name for name in ("symbol", "policy_id", "execution_ordinal", "authority", "side", "status") if name in common]
     left_fills = new_fills.loc[:, common].sort_values(fill_keys, kind="stable").reset_index(drop=True)
@@ -541,6 +557,7 @@ def _bridge(
         "parent_stock_rows": len(right),
         "stock_keys_equal": stock_keys_equal,
         "stock_max_abs_difference": stock_max_abs,
+        "pool_path_exact_required": full_population,
         "pool_keys_equal": pool_keys_equal,
         "pool_max_abs_nav_difference_cny": pool_max_abs_nav,
         "new_fill_rows": len(left_fills),
@@ -783,7 +800,13 @@ def run(path: Path, *, worker_count: int = WORKER_COUNT, symbol_limit: int | Non
                     "unknown_account_count": missing,
                 })
         pool_daily = pd.DataFrame(pool_rows)
-        bridge = _bridge(parent_root=parent_root, stocks=stocks, pool_daily=pool_daily, fills=fills)
+        bridge = _bridge(
+            parent_root=parent_root,
+            stocks=stocks,
+            pool_daily=pool_daily,
+            fills=fills,
+            full_population=symbol_limit is None,
+        )
         if bridge["status"] != "EXACT":
             raise ActionValueError("UNIVERSE_U0_BRIDGE_DRIFT", audit=bridge)
         report = _summary(stocks, pool_daily)
