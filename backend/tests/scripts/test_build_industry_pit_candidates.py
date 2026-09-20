@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,6 +35,10 @@ def test_cli_always_includes_the_four_approved_mandatory_regressions(tmp_path: P
             str(tmp_path / "db.env"),
             "--artifact-root",
             str(tmp_path / "candidate"),
+            "--security-source-identity-manifest",
+            str(tmp_path / "security-identity.json"),
+            "--security-source-identity-sha256",
+            "a" * 64,
         ]
     )
     assert set(builder.MANDATORY_REGRESSION_SYMBOLS).issubset(args.mandatory_symbol)
@@ -88,15 +94,144 @@ def test_index_evidence_requires_explicit_schema_and_contributes_source_hash(tmp
         builder._load_index_evidence(path)
 
 
+def test_predecessor_index_candidate_rows_preserve_regression_boundaries() -> None:
+    old = SimpleNamespace(
+        canonical_symbol="300741.SZ",
+        identity=SimpleNamespace(leaf_code="340404"),
+        valid_from=date(2018, 3, 8),
+        valid_to_exclusive=date(2021, 12, 13),
+        known_from=date(2018, 3, 8),
+        lineage_hashes=("a" * 64,),
+    )
+    new = SimpleNamespace(
+        canonical_symbol="300741.SZ",
+        identity=SimpleNamespace(leaf_code="220315"),
+        valid_from=date(2021, 12, 13),
+        valid_to_exclusive=None,
+        known_from=date(2021, 12, 13),
+        lineage_hashes=("b" * 64,),
+    )
+
+    rows = builder._index_regression_rows_from_candidate((old, new))
+
+    assert rows == [
+        {
+            "canonical_symbol": "300741.SZ",
+            "industry_code": "340404",
+            "membership_enter_date": "2018-03-08",
+            "membership_exit_date_exclusive": "2021-12-13",
+            "known_from": "2018-03-08",
+            "source_sha256": "a" * 64,
+        },
+        {
+            "canonical_symbol": "300741.SZ",
+            "industry_code": "220315",
+            "membership_enter_date": "2021-12-13",
+            "membership_exit_date_exclusive": None,
+            "known_from": "2021-12-13",
+            "source_sha256": "b" * 64,
+        },
+    ]
+
+
 def test_exact_source_hash_contract_is_frozen() -> None:
     assert builder.EXPECTED_SOURCE_HASHES == {
         "catalog": "923492f4bcf3c7056904385a0769e4dda561904a29ecd9243f942680cef68c81",
-        "classification_history": "15979d9cf8a3b83ccc8dadc967de52f35e667b4f4da5e4e4e3dd5a8bb1f17402",
+        "classification_history": "1a181c4a7aa1db22ea3c52233221d9d70b731ed6cb0fd7c9bbc80f6b0c066742",
         "latest_snapshot": "b242ab04e0f68357cf90772e3f15367644d3e74c08a767eb9c5edcf21467fcbb",
         "taxonomy_standard": "18fb07fafda072dad39e274371660706e21678045ae8204931958db9906faa1a",
     }
+    assert builder.EXPECTED_CLASSIFICATION_HISTORY_SHAPE == (12_920, 4)
+    assert builder.OFFICIAL_CLASSIFICATION_HISTORY_URL.startswith(
+        "https://www.swsresearch.com/"
+    )
     assert builder.EXPECTED_CONFLICT_SYMBOLS == 23
     assert builder.EXPECTED_CONFLICT_OPPORTUNITIES == 23_326
+
+
+def test_classification_history_is_bounded_by_release_cutoff() -> None:
+    rows = [
+        {"classification_valid_from": "2026-08-31", "stock_code": "000001"},
+        {"classification_valid_from": "2026-09-01", "stock_code": "000002"},
+    ]
+
+    accepted, receipt = builder._filter_classification_history_at_cutoff(
+        rows,
+        cutoff=date(2026, 8, 31),
+    )
+
+    assert accepted == [rows[0]]
+    assert receipt == {
+        "source_row_count": 2,
+        "accepted_row_count": 1,
+        "post_cutoff_row_count": 1,
+        "cutoff_trade_date": "2026-08-31",
+        "source_url": builder.OFFICIAL_CLASSIFICATION_HISTORY_URL,
+        "source_sha256": builder.EXPECTED_SOURCE_HASHES["classification_history"],
+    }
+
+
+def test_security_identity_projects_source_history_without_current_backfill() -> None:
+    from backend.services.hmm_risk.security_identity import SecuritySourceIdentityManifest
+    from backend.services.hmm_risk.security_identity import SecuritySourceResolution
+
+    row = SecuritySourceResolution(
+        security_identity_id="szse_300114_302132",
+        canonical_ts_code="302132.SZ",
+        source_dataset=builder.SECURITY_IDENTITY_SOURCE_DATASET,
+        source_ts_code="300114.SZ",
+        effective_start=date(2010, 8, 27),
+        effective_end=date(2025, 2, 16),
+        authority_ref="https://example.invalid/official.pdf",
+        authority_hash="a" * 64,
+        row_hash="b" * 64,
+        resolution_kind="explicit_effective_alias",
+    )
+    manifest = SecuritySourceIdentityManifest(
+        manifest_version="security-v1",
+        default_resolution="canonical_same_code",
+        rows=(row,),
+        manifest_sha256="c" * 64,
+        rows_sha256="d" * 64,
+    )
+    history = [
+        {
+            "stock_code": "300114",
+            "classification_valid_from": "2010-08-10",
+            "industry_code": "260301",
+            "source_last_updated_at": "2015-10-27",
+        },
+        {
+            "stock_code": "300114",
+            "classification_valid_from": "2014-02-21",
+            "industry_code": "640301",
+            "source_last_updated_at": "2024-09-27",
+        },
+        {
+            "stock_code": "300114",
+            "classification_valid_from": "2021-07-30",
+            "industry_code": "650501",
+            "source_last_updated_at": "2025-01-24",
+        },
+        {
+            "stock_code": "302132",
+            "classification_valid_from": "2025-02-17",
+            "industry_code": "650501",
+            "source_last_updated_at": "2025-02-17",
+        },
+    ]
+
+    projected, receipt = builder._apply_security_identity_aliases(history, manifest=manifest)
+    canonical = [row for row in projected if str(row["stock_code"]) == "302132"]
+
+    assert [(str(row["classification_valid_from"]), row["industry_code"]) for row in canonical] == [
+        ("2025-02-17", "650501"),
+        ("2010-08-27", "260301"),
+        ("2014-02-21", "640301"),
+        ("2021-07-30", "650501"),
+    ]
+    assert receipt["projected_classification_row_count"] == 3
+    assert receipt["security_identity_ids"] == ["szse_300114_302132"]
 
 
 def test_approved_historical_conflict_inventory_is_frozen_independently() -> None:

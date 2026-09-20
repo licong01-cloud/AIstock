@@ -9,7 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
-from typing import Any
+from typing import Any, Mapping
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -34,11 +34,18 @@ from backend.services.dataset_release.shared_sector_context import (  # noqa: E4
 from backend.services.hmm_risk.industry_pit_adapter import (  # noqa: E402
     HMMIndustryPitAdapter,
 )
+from backend.services.hmm_risk.security_identity import (  # noqa: E402
+    SecuritySourceIdentityManifest,
+    load_security_source_identity_manifest,
+)
 
 
 COMPONENT_RECEIPT_SCHEMA = "aistock_sector_context_receipt_v1"
 DERIVED_MAPPING_AUTHORITY_SCHEMA = "aistock_release_sw_l2_derived_authority_v1"
 PRODUCER_ORDER_ALGORITHM = "sorted_market_sw_index_classify_index_code_zero_based_v1"
+REQUIRED_INDEX_POOL_IDS = ("csi300", "csi500", "csi1000", "star50", "star100")
+MEMBERSHIP_DENOMINATOR = "pit_stock_universe_intersection_policy_window_calendar_v1"
+SECURITY_IDENTITY_SOURCE_DATASET = "market.moneyflow_ts"
 
 
 def _sha256(path: Path) -> str:
@@ -128,7 +135,106 @@ def _parse_universe_spans(path: Path) -> list[tuple[str, dt.date, dt.date]]:
         spans.append((symbol, start, end))
     if not spans or spans != sorted(set(spans)):
         raise ValueError("stock universe spans are empty, duplicated, or non-canonical")
+    by_symbol: dict[str, list[tuple[dt.date, dt.date]]] = {}
+    for symbol, start, end in spans:
+        by_symbol.setdefault(symbol, []).append((start, end))
+    for symbol, values in by_symbol.items():
+        for left, right in zip(values, values[1:]):
+            if right[0] <= left[1]:
+                raise ValueError(f"stock universe spans overlap: {symbol}")
     return spans
+
+
+def _union_universe_spans(
+    span_sets: list[list[tuple[str, dt.date, dt.date]]],
+) -> list[tuple[str, dt.date, dt.date]]:
+    by_symbol: dict[str, list[tuple[dt.date, dt.date]]] = {}
+    for spans in span_sets:
+        for symbol, start, end in spans:
+            by_symbol.setdefault(symbol, []).append((start, end))
+    output: list[tuple[str, dt.date, dt.date]] = []
+    for symbol, intervals in sorted(by_symbol.items()):
+        ordered = sorted(intervals)
+        active_start, active_end = ordered[0]
+        for start, end in ordered[1:]:
+            if start <= active_end + dt.timedelta(days=1):
+                active_end = max(active_end, end)
+            else:
+                output.append((symbol, active_start, active_end))
+                active_start, active_end = start, end
+        output.append((symbol, active_start, active_end))
+    return output
+
+
+def _membership_coverage(
+    *,
+    membership,
+    pool_spans: list[tuple[str, dt.date, dt.date]],
+    calendar: list[dt.date],
+    id_to_code: Mapping[int, str],
+    start: dt.date,
+    end: dt.date,
+) -> dict[str, int]:
+    target_calendar = [value for value in calendar if start <= value <= end]
+    by_symbol = {
+        str(symbol): list(group.itertuples(index=False))
+        for symbol, group in membership.groupby("instrument", sort=False)
+    }
+    expected_symbols: set[str] = set()
+    incomplete_symbols: set[str] = set()
+    expected_trading_days = 0
+    gap_count = 0
+    duplicate_count = 0
+    conflict_count = 0
+    unknown_count = 0
+    for symbol, eligible_start, eligible_end in pool_spans:
+        dates = [
+            value
+            for value in target_calendar
+            if max(start, eligible_start) <= value <= min(end, eligible_end)
+        ]
+        if not dates:
+            continue
+        expected_symbols.add(symbol)
+        expected_trading_days += len(dates)
+        spans = by_symbol.get(symbol, ())
+        for day in dates:
+            matches = [span for span in spans if span.start_date <= day <= span.end_date]
+            if not matches:
+                gap_count += 1
+                incomplete_symbols.add(symbol)
+                continue
+            if len(matches) > 1:
+                duplicate_count += 1
+                incomplete_symbols.add(symbol)
+                if len({int(span.l2_code_id) for span in matches}) > 1:
+                    conflict_count += 1
+                continue
+            if int(matches[0].l2_code_id) not in id_to_code:
+                unknown_count += 1
+                incomplete_symbols.add(symbol)
+    return {
+        "eligible_symbol_count": len(expected_symbols),
+        "covered_symbol_count": len(expected_symbols - incomplete_symbols),
+        "missing_symbol_count": len(incomplete_symbols),
+        "expected_trading_day_count": expected_trading_days,
+        "trading_day_gap_count": gap_count,
+        "duplicate_assignment_count": duplicate_count,
+        "conflicting_assignment_count": conflict_count,
+        "unknown_l2_code_id_count": unknown_count,
+    }
+
+
+def _validate_pool_sidecars(value: Mapping[str, Path]) -> dict[str, Path]:
+    observed = {str(key): Path(path) for key, path in value.items()}
+    if set(observed) != set(REQUIRED_INDEX_POOL_IDS):
+        raise ValueError(
+            "index pool sidecars must be exact: " + ",".join(REQUIRED_INDEX_POOL_IDS)
+        )
+    for pool_id, path in observed.items():
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"index pool sidecar is missing or linked: {pool_id}")
+    return observed
 
 
 def _load_industry_adapter(path: Path) -> tuple[HMMIndustryPitAdapter, dict[str, Any]]:
@@ -276,6 +382,7 @@ def _build_authority_membership_spans(
     code_to_id: dict[str, int],
     start: dt.date,
     end: dt.date,
+    security_identity: SecuritySourceIdentityManifest | None = None,
 ):
     import pandas as pd
 
@@ -288,15 +395,42 @@ def _build_authority_membership_spans(
         if not dates:
             continue
         boundaries = {0, len(dates)}
-        for transition in adapter.classification_resolver.transition_dates(symbol):
-            position = bisect_left(dates, transition)
-            if 0 < position < len(dates):
-                boundaries.add(position)
+        authority_symbols = {symbol}
+        if security_identity is not None:
+            for alias in security_identity.rows:
+                if (
+                    alias.source_dataset == SECURITY_IDENTITY_SOURCE_DATASET
+                    and alias.canonical_ts_code == symbol
+                    and alias.effective_start is not None
+                    and alias.effective_end is not None
+                ):
+                    authority_symbols.add(alias.source_ts_code)
+                    for transition in (alias.effective_start, alias.effective_end + dt.timedelta(days=1)):
+                        position = bisect_left(dates, transition)
+                        if 0 < position < len(dates):
+                            boundaries.add(position)
+        for authority_symbol in authority_symbols:
+            transitions = adapter.classification_resolver.transition_dates(authority_symbol)
+            for transition in transitions:
+                position = bisect_left(dates, transition)
+                if 0 < position < len(dates):
+                    boundaries.add(position)
         ordered = sorted(boundaries)
         for left, right in zip(ordered, ordered[1:]):
             first = dates[left]
             last = dates[right - 1]
             resolved = adapter.resolve(symbol, first)
+            if (
+                (resolved.status != "resolved" or not resolved.l2_code)
+                and security_identity is not None
+            ):
+                authority_symbol = security_identity.resolve(
+                    symbol,
+                    first,
+                    SECURITY_IDENTITY_SOURCE_DATASET,
+                ).source_ts_code
+                if authority_symbol != symbol:
+                    resolved = adapter.resolve(authority_symbol, first)
             if resolved.status != "resolved" or not resolved.l2_code:
                 raise ValueError(
                     "industry PIT authority cannot resolve an active stock-date: "
@@ -321,39 +455,6 @@ def _build_authority_membership_spans(
     frame = pd.DataFrame(output)
     frame["l2_code_id"] = frame["l2_code_id"].astype("int32")
     return frame[["instrument", "start_date", "end_date", "l2_code_id"]]
-
-
-def _factor_membership_denominator(
-    frame,
-    *,
-    universe_spans: list[tuple[str, dt.date, dt.date]],
-    start: dt.date,
-    end: dt.date,
-) -> list[tuple[str, dt.date, dt.date]]:
-    selected = frame.loc[
-        (frame["datetime"].dt.date >= start) & (frame["datetime"].dt.date <= end),
-        ["datetime", "instrument"],
-    ]
-    if selected.empty:
-        raise ValueError("sector_data has no membership denominator rows")
-    eligible_by_symbol: dict[str, list[tuple[dt.date, dt.date]]] = {}
-    for symbol, eligible_start, eligible_end in universe_spans:
-        eligible_by_symbol.setdefault(symbol, []).append((eligible_start, eligible_end))
-    denominator: list[tuple[str, dt.date, dt.date]] = []
-    for symbol, rows in selected.groupby("instrument", sort=True):
-        observed_dates = rows["datetime"].dt.date
-        eligible = eligible_by_symbol.get(str(symbol), [])
-        covered = observed_dates.map(
-            lambda day: any(eligible_start <= day <= eligible_end for eligible_start, eligible_end in eligible)
-        )
-        if not bool(covered.all()):
-            first = observed_dates.loc[~covered].iloc[0]
-            raise ValueError(f"sector_data row escapes the PIT stock universe: instrument={symbol} trade_date={first}")
-        for eligible_start, eligible_end in eligible:
-            in_interval = observed_dates.loc[observed_dates.map(lambda day: eligible_start <= day <= eligible_end)]
-            if not in_interval.empty:
-                denominator.append((str(symbol), min(in_interval), max(in_interval)))
-    return denominator
 
 
 def _validate_h5_membership_alignment(frame, membership, *, start: dt.date, end: dt.date) -> None:
@@ -384,17 +485,140 @@ def _validate_h5_membership_alignment(frame, membership, *, start: dt.date, end:
             raise ValueError(f"sector_data membership differs from PIT authority: {symbol}")
 
 
+def _overlay_frozen_sector_assignments(
+    *,
+    membership,
+    frame,
+    universe_spans: list[tuple[str, dt.date, dt.date]],
+    calendar: list[dt.date],
+    start: dt.date,
+    end: dt.date,
+):
+    """Preserve release-frozen per-date assignments and fill only their gaps.
+
+    ``sector_data.h5`` is already a dated release input, not a current
+    classification snapshot.  Once its first dated observation is available
+    for a symbol, its last observed assignment remains authoritative until an
+    observed transition; the C-013 result supplies earlier or wholly absent
+    spans.
+    """
+
+    import pandas as pd
+
+    selected = frame.loc[
+        (frame["datetime"].dt.date >= start) & (frame["datetime"].dt.date <= end),
+        ["datetime", "instrument", "l2_code_id"],
+    ].copy()
+    selected["trade_date"] = selected.pop("datetime").dt.date
+    conflicts = selected.groupby(["instrument", "trade_date"], sort=False)["l2_code_id"].nunique()
+    if bool(conflicts.gt(1).any()):
+        first = conflicts.loc[conflicts.gt(1)].index[0]
+        raise ValueError(f"frozen sector assignment conflicts at {first}")
+    observed_by_symbol = {
+        str(symbol): {
+            row.trade_date: int(row.l2_code_id)
+            for row in group.drop_duplicates(["trade_date"]).sort_values("trade_date").itertuples(index=False)
+        }
+        for symbol, group in selected.groupby("instrument", sort=False)
+    }
+    base_by_symbol = {
+        str(symbol): list(group.sort_values("start_date").itertuples(index=False))
+        for symbol, group in membership.groupby("instrument", sort=False)
+    }
+    target_calendar = [value for value in calendar if start <= value <= end]
+    output: list[dict[str, Any]] = []
+    frozen_symbol_count = 0
+    authority_gap_fill_only_symbol_count = 0
+    frozen_day_count = 0
+    authority_gap_fill_day_count = 0
+    for symbol, eligible_start, eligible_end in universe_spans:
+        dates = [
+            value
+            for value in target_calendar
+            if max(start, eligible_start) <= value <= min(end, eligible_end)
+        ]
+        if not dates:
+            continue
+        base_spans = base_by_symbol.get(symbol, ())
+        observed = observed_by_symbol.get(symbol, {})
+        if observed:
+            frozen_symbol_count += 1
+        else:
+            authority_gap_fill_only_symbol_count += 1
+        active_frozen_id: int | None = None
+        rows: list[tuple[dt.date, int]] = []
+        for day in dates:
+            if day in observed:
+                active_frozen_id = observed[day]
+            if active_frozen_id is None:
+                sector_id = next(
+                    (
+                        int(span.l2_code_id)
+                        for span in base_spans
+                        if span.start_date <= day <= span.end_date
+                    ),
+                    None,
+                )
+                if sector_id is None:
+                    raise ValueError(
+                        f"classification authority leaves an uncovered stock-date: {symbol}/{day}"
+                    )
+                authority_gap_fill_day_count += 1
+            else:
+                sector_id = active_frozen_id
+                frozen_day_count += 1
+            rows.append((day, sector_id))
+        span_start, active_id = rows[0]
+        previous_day = span_start
+        for day, sector_id in rows[1:]:
+            if sector_id != active_id:
+                output.append(
+                    {
+                        "instrument": symbol,
+                        "start_date": span_start,
+                        "end_date": previous_day,
+                        "l2_code_id": active_id,
+                    }
+                )
+                span_start = day
+                active_id = sector_id
+            previous_day = day
+        output.append(
+            {
+                "instrument": symbol,
+                "start_date": span_start,
+                "end_date": previous_day,
+                "l2_code_id": active_id,
+            }
+        )
+    result = pd.DataFrame(output)
+    result["l2_code_id"] = result["l2_code_id"].astype("int32")
+    return result[["instrument", "start_date", "end_date", "l2_code_id"]], {
+        "policy": "frozen_dated_sector_assignment_then_c013_gap_fill_v1",
+        "frozen_sector_symbol_count": frozen_symbol_count,
+        "c013_authority_gap_fill_only_symbol_count": authority_gap_fill_only_symbol_count,
+        "frozen_sector_trading_day_count": frozen_day_count,
+        "c013_authority_gap_fill_trading_day_count": authority_gap_fill_day_count,
+        "current_snapshot_backfill": False,
+        "default_industry_assignment": False,
+        "silent_symbol_exclusion": False,
+    }
+
+
 def build_component(
     *,
     sector_data_h5: Path,
     code_map_json: Path | None,
     industry_pit_authority_envelope: Path,
     stock_universe_sidecar: Path,
+    pool_sidecars: Mapping[str, Path],
     calendar_path: Path,
     output_root: Path,
     source_dataset_manifest_sha256: str,
     membership_start: dt.date,
     membership_end: dt.date,
+    security_source_identity_manifest: Path | None = None,
+    security_source_identity_sha256: str | None = None,
 ) -> dict[str, Any]:
     if output_root.exists():
         raise FileExistsError(f"create-exclusive output already exists: {output_root}")
@@ -406,11 +630,24 @@ def build_component(
     )
     if any(not path.is_file() for path in inputs) or (code_map_json is not None and not code_map_json.is_file()):
         raise FileNotFoundError("one or more frozen sector-context inputs are absent")
+    if (security_source_identity_manifest is None) != (security_source_identity_sha256 is None):
+        raise ValueError("security identity manifest and canonical SHA256 must be supplied together")
+    security_identity = None
+    security_identity_file_sha256 = None
+    if security_source_identity_manifest is not None:
+        if not security_source_identity_manifest.is_file() or security_source_identity_manifest.is_symlink():
+            raise ValueError("security identity manifest is missing or linked")
+        security_identity = load_security_source_identity_manifest(
+            security_source_identity_manifest,
+            expected_sha256=str(security_source_identity_sha256),
+        )
+        security_identity_file_sha256 = _sha256(security_source_identity_manifest)
     source_dataset_manifest_sha256 = ensure_sha256(
         source_dataset_manifest_sha256,
         field="source_dataset_manifest_sha256",
     )
     frame = _read_sector_frame(sector_data_h5)
+    pool_sidecars = _validate_pool_sidecars(pool_sidecars)
     adapter, authority_envelope = _load_industry_adapter(industry_pit_authority_envelope)
     if code_map_json is None:
         code_map_payload, map_derivation = _derive_release_code_map(
@@ -438,18 +675,27 @@ def build_component(
     if unknown_ids:
         raise ValueError(f"sector_data contains IDs absent from release map: {unknown_ids[:10]}")
     market = _build_market_context(frame)
-    universe_spans = _parse_universe_spans(stock_universe_sidecar)
-    membership_denominator = _factor_membership_denominator(
-        frame,
-        universe_spans=universe_spans,
-        start=membership_start,
-        end=membership_end,
-    )
+    calendar = _parse_calendar(calendar_path)
+    coverage_inputs = {"stock_universe": stock_universe_sidecar, **pool_sidecars}
+    coverage_spans = {
+        pool_id: _parse_universe_spans(path)
+        for pool_id, path in sorted(coverage_inputs.items())
+    }
+    universe_spans = _union_universe_spans(list(coverage_spans.values()))
     membership = _build_authority_membership_spans(
         adapter=adapter,
-        universe_spans=membership_denominator,
-        calendar=_parse_calendar(calendar_path),
+        universe_spans=universe_spans,
+        calendar=calendar,
         code_to_id=dict(code_map.code_to_id),
+        start=membership_start,
+        end=membership_end,
+        security_identity=security_identity,
+    )
+    membership, assignment_authority = _overlay_frozen_sector_assignments(
+        membership=membership,
+        frame=frame,
+        universe_spans=universe_spans,
+        calendar=calendar,
         start=membership_start,
         end=membership_end,
     )
@@ -470,6 +716,36 @@ def build_component(
         required_start=membership_start,
         required_end=membership_end,
     )
+    coverage = {
+        pool_id: {
+            **_membership_coverage(
+                membership=membership,
+                pool_spans=coverage_spans[pool_id],
+                calendar=calendar,
+                id_to_code=code_map.id_to_code,
+                start=membership_start,
+                end=membership_end,
+            ),
+            "sidecar_sha256": _sha256(path),
+        }
+        for pool_id, path in sorted(coverage_inputs.items())
+    }
+    incomplete = {
+        pool_id: stats
+        for pool_id, stats in coverage.items()
+        if any(
+            int(stats[field])
+            for field in (
+                "missing_symbol_count",
+                "trading_day_gap_count",
+                "duplicate_assignment_count",
+                "conflicting_assignment_count",
+                "unknown_l2_code_id_count",
+            )
+        )
+    }
+    if incomplete:
+        raise ValueError(f"sector membership coverage is incomplete: {incomplete}")
 
     output_root.mkdir(parents=True, exist_ok=False)
     code_map_target = output_root / "sector_code_map.json"
@@ -518,11 +794,22 @@ def build_component(
             "end": membership_last.isoformat(),
             "span_count": span_rows,
             "symbol_count": symbol_count,
-            "denominator": "sector_data_observed_instrument_ranges_with_pit_universe_validation_v1",
+            "denominator": MEMBERSHIP_DENOMINATOR,
             "industry_pit_authority_envelope_sha256": _sha256(industry_pit_authority_envelope),
             "industry_pit_identity": authority_envelope["identity"],
             "stock_universe_sha256": _sha256(stock_universe_sidecar),
             "calendar_sha256": _sha256(calendar_path),
+            "security_identity": (
+                None
+                if security_identity is None
+                else {
+                    **security_identity.evidence(),
+                    "file_sha256": security_identity_file_sha256,
+                    "source_dataset_identity_dimension": SECURITY_IDENTITY_SOURCE_DATASET,
+                }
+            ),
+            "assignment_authority": assignment_authority,
+            "coverage": coverage,
         },
         "database_read": False,
         "database_write": False,
@@ -542,7 +829,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--sector-data-h5", type=Path, required=True)
     parser.add_argument("--code-map-json", type=Path)
     parser.add_argument("--industry-pit-authority-envelope", type=Path, required=True)
+    parser.add_argument("--security-source-identity-manifest", type=Path, required=True)
+    parser.add_argument("--security-source-identity-sha256", required=True)
     parser.add_argument("--stock-universe-sidecar", type=Path, required=True)
+    parser.add_argument(
+        "--pool-sidecar",
+        action="append",
+        default=[],
+        metavar="POOL_ID=PATH",
+        help="repeat for csi300,csi500,csi1000,star50,star100",
+    )
     parser.add_argument("--calendar-path", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--source-dataset-manifest-sha256", required=True)
@@ -551,13 +847,26 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_pool_sidecar_args(values: list[str]) -> dict[str, Path]:
+    output: dict[str, Path] = {}
+    for value in values:
+        pool_id, separator, raw_path = value.partition("=")
+        if not separator or not pool_id or not raw_path or pool_id in output:
+            raise ValueError(f"invalid --pool-sidecar value: {value}")
+        output[pool_id] = Path(raw_path)
+    return output
+
+
 def main() -> None:
     args = _parser().parse_args()
     result = build_component(
         sector_data_h5=args.sector_data_h5,
         code_map_json=args.code_map_json,
         industry_pit_authority_envelope=args.industry_pit_authority_envelope,
+        security_source_identity_manifest=args.security_source_identity_manifest,
+        security_source_identity_sha256=args.security_source_identity_sha256,
         stock_universe_sidecar=args.stock_universe_sidecar,
+        pool_sidecars=_parse_pool_sidecar_args(args.pool_sidecar),
         calendar_path=args.calendar_path,
         output_root=args.output_root,
         source_dataset_manifest_sha256=args.source_dataset_manifest_sha256,

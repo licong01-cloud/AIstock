@@ -31,7 +31,10 @@ if str(ROOT) not in sys.path:
 
 from backend.db.pg_pool import get_conn  # noqa: E402
 from backend.services.dataset_release.canonical import digest_named_fields  # noqa: E402
-from backend.services.industry_pit.artifact_store import write_candidate_bundle  # noqa: E402
+from backend.services.industry_pit.artifact_store import (  # noqa: E402
+    read_candidate_bundle,
+    write_candidate_bundle,
+)
 from backend.services.industry_pit.candidate_builder import (  # noqa: E402
     FrozenDenominator,
     UniverseSpan,
@@ -52,14 +55,23 @@ from backend.services.industry_pit.contracts import (  # noqa: E402
     require_symbol,
 )
 from backend.services.industry_pit.resolver import IndustryPitResolver  # noqa: E402
+from backend.services.hmm_risk.security_identity import (  # noqa: E402
+    SecuritySourceIdentityManifest,
+    load_security_source_identity_manifest,
+)
 
 
 EXPECTED_SOURCE_HASHES = {
     "catalog": "923492f4bcf3c7056904385a0769e4dda561904a29ecd9243f942680cef68c81",
-    "classification_history": "15979d9cf8a3b83ccc8dadc967de52f35e667b4f4da5e4e4e3dd5a8bb1f17402",
+    "classification_history": "1a181c4a7aa1db22ea3c52233221d9d70b731ed6cb0fd7c9bbc80f6b0c066742",
     "latest_snapshot": "b242ab04e0f68357cf90772e3f15367644d3e74c08a767eb9c5edcf21467fcbb",
     "taxonomy_standard": "18fb07fafda072dad39e274371660706e21678045ae8204931958db9906faa1a",
 }
+EXPECTED_CLASSIFICATION_HISTORY_SHAPE = (12_920, 4)
+OFFICIAL_CLASSIFICATION_HISTORY_URL = (
+    "https://www.swsresearch.com/swindex/pdf/SwClass2021/StockClassifyUse_stock.xls"
+)
+SECURITY_IDENTITY_SOURCE_DATASET = "market.moneyflow_ts"
 APPROVED_LEGACY_CONFLICT_BASELINE = (
     ("000016.SZ", 402),
     ("000716.SZ", 887),
@@ -178,13 +190,125 @@ def _require_sources(args: argparse.Namespace) -> Mapping[str, str]:
     return observed
 
 
+def _load_security_identity(args: argparse.Namespace) -> tuple[SecuritySourceIdentityManifest, str]:
+    path = args.security_source_identity_manifest
+    if not path.is_file() or path.is_symlink():
+        raise IndustryPitContractError(f"security identity authority is missing or linked: {path}")
+    try:
+        manifest = load_security_source_identity_manifest(
+            path,
+            expected_sha256=args.security_source_identity_sha256,
+        )
+    except Exception as exc:
+        raise IndustryPitContractError(f"security identity authority is invalid: {exc}") from exc
+    return manifest, _sha256(path)
+
+
+def _apply_security_identity_aliases(
+    rows: list[dict[str, Any]],
+    *,
+    manifest: SecuritySourceIdentityManifest,
+) -> tuple[list[dict[str, Any]], Mapping[str, Any]]:
+    """Project source-code history onto canonical security identities.
+
+    The frozen manifest is security-code-change evidence. Its existing source
+    dataset dimension identifies the source code observed before the code
+    change; classification facts still come only from official SW history.
+    """
+
+    output = [dict(row) for row in rows]
+    existing: dict[tuple[str, str], str] = {}
+    for row in output:
+        symbol = str(row.get("stock_code") or "").strip().split(".")[0].zfill(6)
+        effective = pd.Timestamp(row.get("classification_valid_from")).date().isoformat()
+        key = (symbol, effective)
+        industry = str(row.get("industry_code") or "").zfill(6)
+        if key in existing and existing[key] != industry:
+            raise IndustryPitContractError(f"classification history conflicts at {key}")
+        existing[key] = industry
+
+    projected_rows = 0
+    alias_ids: list[str] = []
+    authority_refs: set[str] = set()
+    for alias in manifest.rows:
+        if alias.source_dataset != SECURITY_IDENTITY_SOURCE_DATASET:
+            continue
+        if alias.effective_start is None or alias.effective_end is None:
+            raise IndustryPitContractError("security identity alias interval is incomplete")
+        source_code = alias.source_ts_code.split(".")[0]
+        canonical_code = alias.canonical_ts_code.split(".")[0]
+        source_rows = sorted(
+            (
+                row
+                for row in rows
+                if str(row.get("stock_code") or "").strip().split(".")[0].zfill(6)
+                == source_code
+                and pd.Timestamp(row.get("classification_valid_from")).date()
+                <= alias.effective_end
+            ),
+            key=lambda row: pd.Timestamp(row["classification_valid_from"]),
+        )
+        if not source_rows:
+            raise IndustryPitContractError(
+                f"security identity alias has no classification source history: {alias.security_identity_id}"
+            )
+        active_before = [
+            row
+            for row in source_rows
+            if pd.Timestamp(row["classification_valid_from"]).date() <= alias.effective_start
+        ]
+        selected: list[tuple[dict[str, Any], Any]] = []
+        if active_before:
+            selected.append((active_before[-1], alias.effective_start))
+        selected.extend(
+            (row, pd.Timestamp(row["classification_valid_from"]).date())
+            for row in source_rows
+            if alias.effective_start
+            < pd.Timestamp(row["classification_valid_from"]).date()
+            <= alias.effective_end
+        )
+        if not selected:
+            raise IndustryPitContractError(
+                f"security identity alias cannot establish an initial classification: {alias.security_identity_id}"
+            )
+        for source_row, effective in selected:
+            projected = dict(source_row)
+            projected["stock_code"] = canonical_code
+            projected["classification_valid_from"] = effective.isoformat()
+            key = (canonical_code, effective.isoformat())
+            industry = str(projected.get("industry_code") or "").zfill(6)
+            if key in existing:
+                if existing[key] != industry:
+                    raise IndustryPitContractError(
+                        f"security identity projection conflicts with canonical classification at {key}"
+                    )
+                continue
+            output.append(projected)
+            existing[key] = industry
+            projected_rows += 1
+        alias_ids.append(alias.security_identity_id)
+        authority_refs.add(alias.authority_ref)
+
+    return output, {
+        "schema_version": manifest.evidence()["schema_version"],
+        "manifest_version": manifest.manifest_version,
+        "manifest_sha256": manifest.manifest_sha256,
+        "rows_sha256": manifest.rows_sha256,
+        "source_dataset_identity_dimension": SECURITY_IDENTITY_SOURCE_DATASET,
+        "alias_count": len(alias_ids),
+        "projected_classification_row_count": projected_rows,
+        "security_identity_ids": sorted(alias_ids),
+        "authority_refs": sorted(authority_refs),
+    }
+
+
 def _excel_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     catalog_frame = pd.read_excel(args.catalog, dtype=object)
     history_frame = pd.read_excel(args.classification_history, dtype=object)
     snapshot_frame = pd.read_excel(args.latest_snapshot, dtype=object)
     if catalog_frame.shape != (511, 4):
         raise IndustryPitContractError(f"catalog shape drifted: {catalog_frame.shape}")
-    if history_frame.shape != (11803, 4):
+    if history_frame.shape != EXPECTED_CLASSIFICATION_HISTORY_SHAPE:
         raise IndustryPitContractError(f"classification history shape drifted: {history_frame.shape}")
     if snapshot_frame.shape[1] != 7:
         raise IndustryPitContractError(f"latest snapshot column count drifted: {snapshot_frame.shape}")
@@ -217,6 +341,35 @@ def _excel_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[di
         for _, row in snapshot_frame.iterrows()
     ]
     return catalog, history, snapshot
+
+
+def _filter_classification_history_at_cutoff(
+    rows: list[dict[str, Any]], *, cutoff: Any
+) -> tuple[list[dict[str, Any]], Mapping[str, Any]]:
+    cutoff_date = pd.Timestamp(cutoff).date()
+    accepted: list[dict[str, Any]] = []
+    post_cutoff = 0
+    for row in rows:
+        try:
+            valid_from = pd.Timestamp(row["classification_valid_from"]).date()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise IndustryPitContractError(
+                "classification history contains an invalid effective date"
+            ) from exc
+        if valid_from <= cutoff_date:
+            accepted.append(row)
+        else:
+            post_cutoff += 1
+    if not accepted:
+        raise IndustryPitContractError("classification history has no rows at the requested cutoff")
+    return accepted, {
+        "source_row_count": len(rows),
+        "accepted_row_count": len(accepted),
+        "post_cutoff_row_count": post_cutoff,
+        "cutoff_trade_date": cutoff_date.isoformat(),
+        "source_url": OFFICIAL_CLASSIFICATION_HISTORY_URL,
+        "source_sha256": EXPECTED_SOURCE_HASHES["classification_history"],
+    }
 
 
 def _validate_snapshot_crosscheck(
@@ -349,6 +502,28 @@ def _mandatory_source_regression(
     return output
 
 
+def _index_regression_rows_from_candidate(intervals: tuple[Any, ...]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for interval in intervals:
+        if interval.identity is None:
+            continue
+        rows.append(
+            {
+                "canonical_symbol": interval.canonical_symbol,
+                "industry_code": interval.identity.leaf_code,
+                "membership_enter_date": interval.valid_from.isoformat(),
+                "membership_exit_date_exclusive": (
+                    None
+                    if interval.valid_to_exclusive is None
+                    else interval.valid_to_exclusive.isoformat()
+                ),
+                "known_from": None if interval.known_from is None else interval.known_from.isoformat(),
+                "source_sha256": interval.lineage_hashes[0] if interval.lineage_hashes else "",
+            }
+        )
+    return rows
+
+
 def _read_frozen_inputs(
     *,
     universe_key: str,
@@ -462,19 +637,46 @@ def _read_frozen_inputs(
 def build(args: argparse.Namespace) -> Mapping[str, Any]:
     producer = _git_identity()
     source_hashes = _require_sources(args)
+    security_identity, security_identity_file_sha256 = _load_security_identity(args)
+    source_hashes = {
+        **source_hashes,
+        "security_identity_file": security_identity_file_sha256,
+        "security_identity_canonical": security_identity.manifest_sha256,
+    }
     catalog_rows, history_rows, snapshot_rows = _excel_rows(args)
     snapshot_check = _validate_snapshot_crosscheck(
         history_rows,
         snapshot_rows,
         mandatory_symbols=tuple(args.mandatory_symbol),
     )
-    index_evidence, index_evidence_hashes = _load_index_evidence(args.index_membership_evidence)
+    if args.predecessor_index_authority_root is not None and args.index_membership_evidence is not None:
+        raise IndustryPitContractError(
+            "predecessor index authority and raw index evidence are mutually exclusive"
+        )
+    predecessor_index = None
+    if args.predecessor_index_authority_root is not None:
+        predecessor_index = read_candidate_bundle(
+            artifact_root=args.predecessor_index_authority_root,
+            forbidden_roots=(ROOT,),
+        )
+        index_evidence: list[dict[str, Any]] = []
+        index_evidence_hashes: tuple[str, ...] = ()
+    else:
+        index_evidence, index_evidence_hashes = _load_index_evidence(args.index_membership_evidence)
     load_dotenv(args.db_env_file, override=False)
     denominator, conflict_inventory, state_receipt = _read_frozen_inputs(
         universe_key=args.universe_key,
         rule_version=args.rule_version,
         window_start=args.window_start,
         window_end=args.window_end,
+    )
+    history_rows, classification_source_window = _filter_classification_history_at_cutoff(
+        history_rows,
+        cutoff=denominator.window_end,
+    )
+    history_rows, security_identity_diagnostics = _apply_security_identity_aliases(
+        history_rows,
+        manifest=security_identity,
     )
     catalog = build_taxonomy_catalog(catalog_rows, source_sha256=source_hashes["catalog"])
     classification_receipt = AuthorityReceipt(
@@ -488,40 +690,12 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         source_ids=(
             "local:SwClassCode_2021.xls",
             "local:StockClassifyUse_stock.xls",
+            OFFICIAL_CLASSIFICATION_HISTORY_URL,
             "local:latest_stock_sw_classification_through_july.xlsx",
             "local:SwClassStd2021.pdf",
+            *tuple(row.authority_ref for row in security_identity.rows),
         ),
         source_hashes=tuple(source_hashes.values()),
-        frozen_denominator=denominator.total_opportunities,
-        denominator_digest=denominator.digest,
-    )
-    index_receipt = AuthorityReceipt(
-        authority_type=AuthorityType.INDEX_MEMBERSHIP,
-        authority_schema=INDEX_MEMBERSHIP_CANDIDATE_SCHEMA,
-        authority_version="c013_index_membership_candidate_v1",
-        taxonomy_contract_id=catalog.contract_id,
-        taxonomy_version=catalog.version,
-        knowledge_time_policy=KnowledgeTimePolicy.CAUSAL_DAILY_NEXT_TRADE,
-        research_basis=ResearchBasis.AS_PUBLISHED_PIT,
-        source_ids=tuple(
-            sorted(
-                ({
-                    "local:SwClassCode_2021.xls",
-                    "local:SwClassStd2021.pdf",
-                    *( ["task:index_membership_evidence_v1"] if index_evidence else [] ),
-                    *(str(row.get("source_url") or "") for row in index_evidence),
-                } - {""})
-            )
-        ),
-        source_hashes=tuple(
-            sorted(
-                {
-                    source_hashes["catalog"],
-                    source_hashes["taxonomy_standard"],
-                    *index_evidence_hashes,
-                }
-            )
-        ),
         frozen_denominator=denominator.total_opportunities,
         denominator_digest=denominator.digest,
     )
@@ -532,12 +706,67 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         denominator=denominator,
         classification_source_hash=source_hashes["classification_history"],
     )
-    index_membership, index_diagnostics = build_index_membership_intervals(
-        index_evidence,
-        catalog=catalog,
-        receipt=index_receipt,
-        denominator=denominator,
-    )
+    classification_diagnostics = {
+        **classification_diagnostics,
+        "source_window": classification_source_window,
+    }
+    if predecessor_index is not None:
+        index_receipt = predecessor_index.index_membership_receipt
+        index_membership = predecessor_index.index_membership_intervals
+        if (
+            index_receipt.taxonomy_contract_id != catalog.contract_id
+            or index_receipt.taxonomy_version != catalog.version
+            or index_receipt.frozen_denominator != denominator.total_opportunities
+            or index_receipt.denominator_digest != denominator.digest
+        ):
+            raise IndustryPitContractError("predecessor index authority identity differs")
+        index_evidence = _index_regression_rows_from_candidate(index_membership)
+        index_diagnostics = {
+            "reuse_policy": "immutable_predecessor_index_authority_v1",
+            "predecessor_root": str(predecessor_index.artifact_root),
+            "predecessor_bundle_hash": predecessor_index.manifest["bundle_hash"],
+            "predecessor_index_candidate_hash": predecessor_index.manifest[
+                "index_membership_candidate_hash"
+            ],
+            "candidate_interval_count": len(index_membership),
+        }
+    else:
+        index_receipt = AuthorityReceipt(
+            authority_type=AuthorityType.INDEX_MEMBERSHIP,
+            authority_schema=INDEX_MEMBERSHIP_CANDIDATE_SCHEMA,
+            authority_version="c013_index_membership_candidate_v1",
+            taxonomy_contract_id=catalog.contract_id,
+            taxonomy_version=catalog.version,
+            knowledge_time_policy=KnowledgeTimePolicy.CAUSAL_DAILY_NEXT_TRADE,
+            research_basis=ResearchBasis.AS_PUBLISHED_PIT,
+            source_ids=tuple(
+                sorted(
+                    ({
+                        "local:SwClassCode_2021.xls",
+                        "local:SwClassStd2021.pdf",
+                        *( ["task:index_membership_evidence_v1"] if index_evidence else [] ),
+                        *(str(row.get("source_url") or "") for row in index_evidence),
+                    } - {""})
+                )
+            ),
+            source_hashes=tuple(
+                sorted(
+                    {
+                        source_hashes["catalog"],
+                        source_hashes["taxonomy_standard"],
+                        *index_evidence_hashes,
+                    }
+                )
+            ),
+            frozen_denominator=denominator.total_opportunities,
+            denominator_digest=denominator.digest,
+        )
+        index_membership, index_diagnostics = build_index_membership_intervals(
+            index_evidence,
+            catalog=catalog,
+            receipt=index_receipt,
+            denominator=denominator,
+        )
     mandatory_source_regression = _mandatory_source_regression(
         mandatory_symbols=tuple(args.mandatory_symbol),
         classification_intervals=classification,
@@ -570,6 +799,7 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         "snapshot_crosscheck": dict(snapshot_check),
         "frozen_universe": dict(state_receipt),
         "source_hashes": dict(source_hashes),
+        "security_identity": dict(security_identity_diagnostics),
         "mandatory_source_regression": mandatory_source_regression,
         "production_database_writes": 0,
     }
@@ -630,6 +860,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--latest-snapshot", type=Path)
     parser.add_argument("--taxonomy-standard", type=Path)
     parser.add_argument("--index-membership-evidence", type=Path)
+    parser.add_argument("--predecessor-index-authority-root", type=Path)
+    parser.add_argument("--security-source-identity-manifest", type=Path, required=True)
+    parser.add_argument("--security-source-identity-sha256", required=True)
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--db-env-file", type=Path, default=os.environ.get("AISTOCK_DB_ENV_FILE"))
     parser.add_argument("--universe-key", default=DEFAULT_UNIVERSE_KEY)

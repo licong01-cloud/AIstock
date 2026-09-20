@@ -142,6 +142,32 @@ def test_successor_is_create_exclusive_and_preserves_baseline(tmp_path: Path) ->
         raise AssertionError("successor overwrite was accepted")
 
 
+def test_successor_replaces_existing_sector_context_without_touching_baseline(tmp_path: Path) -> None:
+    baseline, manifest, manifest_file_sha = _baseline(tmp_path)
+    old_component = baseline / "components" / "sector_context_candidate_v1"
+    old_component.mkdir(parents=True)
+    (old_component / "old-only.txt").write_text("predecessor", encoding="utf-8")
+    component = _sector_component(
+        tmp_path,
+        manifest["dataset_manifest_sha256"],
+        _sha(baseline / "components" / "factor_h5_static_candidate_v2" / "sector_data.h5"),
+    )
+
+    successor = tmp_path / "r8-pit1"
+    build_successor(
+        baseline_root=baseline,
+        successor_root=successor,
+        sector_component_root=component,
+        revision="20260920-r8-pit1",
+        expected_baseline_manifest_identity=manifest["dataset_manifest_sha256"],
+        expected_baseline_manifest_file_sha256=manifest_file_sha,
+    )
+
+    assert (baseline / "components" / "sector_context_candidate_v1" / "old-only.txt").is_file()
+    assert not (successor / "components" / "sector_context_candidate_v1" / "old-only.txt").exists()
+    assert (successor / "components" / "sector_context_candidate_v1" / "component_receipt.json").is_file()
+
+
 def test_profile_v3_uses_one_release_root_per_node(tmp_path: Path) -> None:
     baseline, manifest, manifest_file_sha = _baseline(tmp_path)
     component = _sector_component(

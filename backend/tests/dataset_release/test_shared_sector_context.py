@@ -17,7 +17,10 @@ from backend.services.dataset_release.shared_sector_context import (
     validate_release_sw_l2_code_map,
 )
 from scripts.build_shared_sector_context_component import (
+    _build_authority_membership_spans,
     _derive_release_code_map,
+    _overlay_frozen_sector_assignments,
+    _union_universe_spans,
     build_component,
 )
 
@@ -48,6 +51,13 @@ def _authority_inputs(tmp_path, monkeypatch):
         lambda _path: (adapter, {"identity": {"schema_version": "fixture"}}),
     )
     return authority_path, universe_path, calendar_path
+
+
+def _pool_sidecars(universe_path):
+    return {
+        pool_id: universe_path
+        for pool_id in ("csi300", "csi500", "csi1000", "star50", "star100")
+    }
 
 
 def _code_map() -> dict[str, object]:
@@ -218,6 +228,141 @@ def test_membership_accepts_sparse_ids_and_rejects_overlap() -> None:
         validate_membership_frame(frame, id_to_code={1: "801000.SI", 261: "801130.SI"})
 
 
+def test_pool_union_keeps_index_only_members_without_changing_stock_pool() -> None:
+    stock = [("000001.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 3))]
+    csi300 = [
+        ("000001.SZ", dt.date(2024, 7, 2), dt.date(2024, 7, 4)),
+        ("600000.SH", dt.date(2024, 7, 1), dt.date(2024, 7, 4)),
+    ]
+
+    assert _union_universe_spans([stock, csi300]) == [
+        ("000001.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 4)),
+        ("600000.SH", dt.date(2024, 7, 1), dt.date(2024, 7, 4)),
+    ]
+    assert stock == [("000001.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 3))]
+
+
+def test_membership_resolves_historical_security_code_alias() -> None:
+    from backend.services.hmm_risk.security_identity import SecuritySourceIdentityManifest
+    from backend.services.hmm_risk.security_identity import SecuritySourceResolution
+
+    adapter = SimpleNamespace(
+        classification_resolver=SimpleNamespace(
+            transition_dates=lambda symbol: (
+                (dt.date(2021, 7, 30),) if symbol == "300114.SZ" else (dt.date(2025, 2, 17),)
+            )
+        ),
+        resolve=lambda symbol, day: (
+            SimpleNamespace(status="unavailable", l2_code=None, reason_code="not-found")
+            if symbol == "302132.SZ" and day < dt.date(2025, 2, 17)
+            else SimpleNamespace(
+                status="resolved",
+                l2_code="801000.SI" if symbol == "300114.SZ" else "801001.SI",
+                reason_code=None,
+            )
+        ),
+    )
+    manifest = SecuritySourceIdentityManifest(
+        manifest_version="security-v1",
+        default_resolution="canonical_same_code",
+        rows=(
+            SecuritySourceResolution(
+                security_identity_id="szse_300114_302132",
+                canonical_ts_code="302132.SZ",
+                source_dataset="market.moneyflow_ts",
+                source_ts_code="300114.SZ",
+                effective_start=dt.date(2010, 8, 27),
+                effective_end=dt.date(2025, 2, 16),
+                authority_ref="official",
+                authority_hash="a" * 64,
+                row_hash="b" * 64,
+                resolution_kind="explicit_effective_alias",
+            ),
+        ),
+        manifest_sha256="c" * 64,
+        rows_sha256="d" * 64,
+    )
+
+    frame = _build_authority_membership_spans(
+        adapter=adapter,
+        universe_spans=[("302132.SZ", dt.date(2024, 7, 1), dt.date(2025, 2, 18))],
+        calendar=[dt.date(2024, 7, 1), dt.date(2025, 2, 14), dt.date(2025, 2, 17), dt.date(2025, 2, 18)],
+        code_to_id={"801000.SI": 1, "801001.SI": 3},
+        start=dt.date(2024, 7, 1),
+        end=dt.date(2025, 2, 18),
+        security_identity=manifest,
+    )
+
+    assert frame.to_dict("records") == [
+        {
+            "instrument": "302132.SZ",
+            "start_date": dt.date(2024, 7, 1),
+            "end_date": dt.date(2025, 2, 14),
+            "l2_code_id": 1,
+        },
+        {
+            "instrument": "302132.SZ",
+            "start_date": dt.date(2025, 2, 17),
+            "end_date": dt.date(2025, 2, 18),
+            "l2_code_id": 3,
+        },
+    ]
+
+
+def test_frozen_dated_assignments_override_only_after_first_observation() -> None:
+    membership = pd.DataFrame(
+        {
+            "instrument": ["000001.SZ", "000002.SZ"],
+            "start_date": [dt.date(2024, 7, 1), dt.date(2024, 7, 1)],
+            "end_date": [dt.date(2024, 7, 3), dt.date(2024, 7, 3)],
+            "l2_code_id": [1, 5],
+        }
+    )
+    frame = pd.DataFrame(
+        {
+            "datetime": [pd.Timestamp("2024-07-02"), pd.Timestamp("2024-07-03")],
+            "instrument": ["000001.SZ", "000001.SZ"],
+            "l2_code_id": [3, 3],
+        }
+    )
+
+    result, receipt = _overlay_frozen_sector_assignments(
+        membership=membership,
+        frame=frame,
+        universe_spans=[
+            ("000001.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 3)),
+            ("000002.SZ", dt.date(2024, 7, 1), dt.date(2024, 7, 3)),
+        ],
+        calendar=[dt.date(2024, 7, 1), dt.date(2024, 7, 2), dt.date(2024, 7, 3)],
+        start=dt.date(2024, 7, 1),
+        end=dt.date(2024, 7, 3),
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "instrument": "000001.SZ",
+            "start_date": dt.date(2024, 7, 1),
+            "end_date": dt.date(2024, 7, 1),
+            "l2_code_id": 1,
+        },
+        {
+            "instrument": "000001.SZ",
+            "start_date": dt.date(2024, 7, 2),
+            "end_date": dt.date(2024, 7, 3),
+            "l2_code_id": 3,
+        },
+        {
+            "instrument": "000002.SZ",
+            "start_date": dt.date(2024, 7, 1),
+            "end_date": dt.date(2024, 7, 3),
+            "l2_code_id": 5,
+        },
+    ]
+    assert receipt["frozen_sector_symbol_count"] == 1
+    assert receipt["c013_authority_gap_fill_only_symbol_count"] == 1
+    assert receipt["current_snapshot_backfill"] is False
+
+
 def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_path, monkeypatch) -> None:
     authority_path, universe_path, calendar_path = _authority_inputs(tmp_path, monkeypatch)
     code_map_path = tmp_path / "sector_code_map.json"
@@ -247,6 +392,7 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
         code_map_json=code_map_path,
         industry_pit_authority_envelope=authority_path,
         stock_universe_sidecar=universe_path,
+        pool_sidecars=_pool_sidecars(universe_path),
         calendar_path=calendar_path,
         output_root=output_root,
         source_dataset_manifest_sha256="b" * 64,
@@ -258,6 +404,10 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
     assert result["market_context"]["row_count"] == 2
     assert result["membership"]["span_count"] == 2
     assert result["membership"]["symbol_count"] == 2
+    assert all(
+        stats["trading_day_gap_count"] == 0
+        for stats in result["membership"]["coverage"].values()
+    )
     assert result["sector_code_map"]["path"] == "sector_code_map.json"
     assert result["sector_code_map"]["byte_size"] > 0
     assert result["market_context"]["schema_version"] == "aistock_market_context_v1"
@@ -268,6 +418,7 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
             code_map_json=code_map_path,
             industry_pit_authority_envelope=authority_path,
             stock_universe_sidecar=universe_path,
+            pool_sidecars=_pool_sidecars(universe_path),
             calendar_path=calendar_path,
             output_root=output_root,
             source_dataset_manifest_sha256="b" * 64,
@@ -278,6 +429,11 @@ def test_component_builder_is_create_exclusive_and_uses_only_frozen_files(tmp_pa
 
 def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypatch) -> None:
     authority_path, universe_path, calendar_path = _authority_inputs(tmp_path, monkeypatch)
+    universe_path.write_text(
+        universe_path.read_text(encoding="utf-8")
+        + "000003.SZ\t2024-07-01\t2024-07-03\n",
+        encoding="utf-8",
+    )
     code_map_path = tmp_path / "sector_code_map.json"
     code_map_path.write_text(json.dumps(_code_map(), sort_keys=True), encoding="utf-8")
     index = pd.MultiIndex.from_tuples(
@@ -300,6 +456,7 @@ def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypat
         code_map_json=code_map_path,
         industry_pit_authority_envelope=authority_path,
         stock_universe_sidecar=universe_path,
+        pool_sidecars=_pool_sidecars(universe_path),
         calendar_path=calendar_path,
         output_root=tmp_path / "component",
         source_dataset_manifest_sha256="b" * 64,
@@ -307,5 +464,8 @@ def test_component_builder_uses_authority_across_h5_row_gaps(tmp_path, monkeypat
         membership_end=dt.date(2024, 7, 3),
     )
 
-    assert result["membership"]["symbol_count"] == 2
-    assert result["membership"]["span_count"] == 2
+    assert result["membership"]["symbol_count"] == 3
+    assert result["membership"]["span_count"] == 3
+    assert result["membership"]["coverage"]["stock_universe"]["eligible_symbol_count"] == 3
+    assert result["membership"]["coverage"]["stock_universe"]["missing_symbol_count"] == 0
+    assert result["membership"]["coverage"]["stock_universe"]["trading_day_gap_count"] == 0
