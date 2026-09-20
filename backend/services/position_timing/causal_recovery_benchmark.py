@@ -714,6 +714,68 @@ def _stock_summaries(days: pd.DataFrame, details: list[dict[str, Any]]) -> pd.Da
     return pd.DataFrame(rows)
 
 
+def _research_diagnostics(stocks: pd.DataFrame, fills: pd.DataFrame) -> dict[str, Any]:
+    baseline = stocks.loc[stocks.policy_id.eq(BH)].set_index("symbol")
+    paired: list[dict[str, Any]] = []
+    for policy, frame in stocks.groupby("policy_id", sort=False):
+        if policy == BH:
+            continue
+        candidate = frame.set_index("symbol")
+        values = candidate.join(
+            baseline[["terminal_nav_cny", "max_drawdown"]],
+            rsuffix="_bh",
+            how="inner",
+            validate="one_to_one",
+        )
+        terminal_win = values.terminal_nav_cny > values.terminal_nav_cny_bh
+        mdd_win = values.max_drawdown > values.max_drawdown_bh
+        paired.append({
+            "candidate": str(policy), "baseline": BH,
+            "paired_stock_count": len(values),
+            "terminal_win_rate": float(terminal_win.mean()),
+            "mdd_win_rate": float(mdd_win.mean()),
+            "dual_win_rate": float((terminal_win & mdd_win).mean()),
+            "mean_stock_return": float(frame.total_return.mean()),
+            "median_stock_return": float(frame.total_return.median()),
+            "mean_stock_max_drawdown": float(frame.max_drawdown.mean()),
+            "median_stock_max_drawdown": float(frame.max_drawdown.median()),
+            "mean_exposure": float(frame.average_exposure.mean()),
+            "mean_fees_cny": float(frame.fees_cny.mean()),
+            "forced_recovery_count": int(frame.forced_recovery_count.sum()),
+        })
+
+    waits: list[dict[str, Any]] = []
+    filled = fills.loc[fills.status.eq("FILLED")].sort_values(
+        ["policy_id", "symbol", "execution_ordinal"], kind="stable"
+    )
+    for policy in (PARENT, RIDGE, GBDT):
+        policy_waits: list[int] = []
+        unmatched = 0
+        for _, frame in filled.loc[filled.policy_id.eq(policy)].groupby("symbol", sort=False):
+            pending: int | None = None
+            for item in frame.itertuples():
+                if item.side == "SELL" and item.authority != "TERMINAL_LIQUIDATION":
+                    if pending is not None:
+                        unmatched += 1
+                    pending = int(item.execution_ordinal)
+                elif item.side == "BUY" and item.authority in {
+                    "FIXED_5_SESSION_RECOVERY", "MODEL_RECOVERY",
+                } and pending is not None:
+                    policy_waits.append(int(item.execution_ordinal) - pending)
+                    pending = None
+            unmatched += int(pending is not None)
+        values = np.asarray(policy_waits, dtype=float)
+        waits.append({
+            "policy_id": policy, "completed_cycle_count": len(policy_waits),
+            "unmatched_filled_trim_count": unmatched,
+            "mean_sessions": float(np.mean(values)) if len(values) else None,
+            "median_sessions": float(np.median(values)) if len(values) else None,
+            "p90_sessions": float(np.quantile(values, 0.9)) if len(values) else None,
+            "max_sessions": int(np.max(values)) if len(values) else None,
+        })
+    return {"paired_stock": paired, "recovery_wait": waits}
+
+
 def _joint_intervals(candidate_nav: np.ndarray, baseline_nav: np.ndarray, *, alpha: float) -> dict[str, dict[str, float]]:
     if (
         len(candidate_nav) < 3 or len(candidate_nav) != len(baseline_nav)
@@ -937,6 +999,7 @@ def run(path: Path, *, worker_count: int = WORKER_COUNT, symbol_limit: int | Non
             perf = _performance(group.sort_values("ordinal").nav.to_numpy(float))
             summaries[str(policy)] = {**perf, "account_count": enrolled}
         formal = _formal_report(pool_daily)
+        research_diagnostics = _research_diagnostics(stocks, fills)
         diagnostics: list[dict[str, Any]] = []
         parent_path = pool_daily.loc[pool_daily.policy_id.eq(PARENT)].sort_values("ordinal")
         for policy in (RIDGE, GBDT):
@@ -956,6 +1019,7 @@ def run(path: Path, *, worker_count: int = WORKER_COUNT, symbol_limit: int | Non
             "enrolled_count": enrolled, "label_count": len(labels),
             "summaries": summaries, "formal_comparisons": formal,
             "parent_diagnostics": diagnostics,
+            "research_diagnostics": research_diagnostics,
             "models": {
                 key: {"model_sha256": value["model_sha256"], "validation": value["validation"]}
                 for key, value in recovery_models.items()

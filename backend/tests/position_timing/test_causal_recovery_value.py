@@ -15,6 +15,7 @@ from backend.services.position_timing.causal_recovery_benchmark import (
     LABEL_HORIZON_SESSIONS,
     RIDGE,
     _formal_report,
+    _research_diagnostics,
     _small_enrollment,
     recovery_labels_from_fills,
     replay_policy,
@@ -241,3 +242,49 @@ def test_formal_report_normalizes_aggregate_wealth_by_five_million_accounts() ->
     assert len(report) == 2
     assert report[0]["terminal_excess_bps"] == pytest.approx(60.0)
     assert report[1]["terminal_excess_bps"] == pytest.approx(50.0)
+
+
+def test_research_diagnostics_pairs_stocks_and_completed_recovery_cycles() -> None:
+    stocks = pd.DataFrame(
+        [
+            {
+                "symbol": symbol,
+                "policy_id": policy,
+                "terminal_nav_cny": terminal,
+                "total_return": terminal / 5_000_000 - 1,
+                "max_drawdown": drawdown,
+                "average_exposure": exposure,
+                "fees_cny": fees,
+                "forced_recovery_count": forced,
+            }
+            for symbol, policy, terminal, drawdown, exposure, fees, forced in (
+                ("000001.SZ", BH, 6_000_000.0, -0.30, 0.99, 100.0, 0),
+                ("000002.SZ", BH, 4_500_000.0, -0.40, 0.99, 100.0, 0),
+                ("000001.SZ", RIDGE, 6_100_000.0, -0.25, 0.95, 200.0, 1),
+                ("000002.SZ", RIDGE, 4_400_000.0, -0.35, 0.95, 220.0, 0),
+            )
+        ]
+    )
+    fills = pd.DataFrame(
+        [
+            {
+                "symbol": "000001.SZ", "policy_id": RIDGE,
+                "side": "SELL", "status": "FILLED",
+                "authority": "R0_TACTICAL_20_TRIM", "execution_ordinal": 10,
+            },
+            {
+                "symbol": "000001.SZ", "policy_id": RIDGE,
+                "side": "BUY", "status": "FILLED",
+                "authority": "MODEL_RECOVERY", "execution_ordinal": 14,
+            },
+        ]
+    )
+    result = _research_diagnostics(stocks, fills)
+    ridge = result["paired_stock"][0]
+    assert ridge["terminal_win_rate"] == 0.5
+    assert ridge["mdd_win_rate"] == 1.0
+    assert ridge["dual_win_rate"] == 0.5
+    waits = {row["policy_id"]: row for row in result["recovery_wait"]}
+    assert waits[RIDGE]["completed_cycle_count"] == 1
+    assert waits[RIDGE]["median_sessions"] == 4.0
+    assert waits[RIDGE]["unmatched_filled_trim_count"] == 0
