@@ -1,4 +1,5 @@
 
+import hashlib
 import json
 import shlex
 import sys
@@ -373,6 +374,211 @@ def test_hmm_coefficients_validator_accepts_complete_pit_membership() -> None:
             }
         )
     )
+
+
+def test_hmm_coefficients_selects_exact_active_release_artifact(monkeypatch, tmp_path) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    project_root = tmp_path / "project"
+    model_path = project_root / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    active_summary = {
+        "generation": "20260920-v14-unified",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "profile_sha256": "4" * 64,
+        "dataset_manifest_sha256": "3" * 64,
+        "dataset_manifest_file_sha256": "2" * 64,
+    }
+    payload = {
+        "dataset_identity": {
+            "generation": active_summary["generation"],
+            "release_id": active_summary["release_id"],
+            "active_profile_sha256": active_summary["profile_sha256"],
+            "dataset_manifest_sha256": active_summary["dataset_manifest_sha256"],
+            "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+        },
+        "daily_coefficients": {"2024-07-01": {"801010.SI": 1.0}},
+        "stock_sector_membership_spans": {
+            "000001.SZ": [
+                {"start_date": "2024-07-01", "end_date": "2026-08-28", "sector_code": "801010.SI"}
+            ]
+        },
+    }
+    content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    filename = "coefficients_preset_A_2024-07-01_2026-08-28__v14.json"
+    coeff_path = model_path.parent / filename
+    coeff_path.write_text(content, encoding="utf-8")
+    sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": active_summary["generation"],
+                    "release_id": active_summary["release_id"],
+                    "active_profile_sha256": active_summary["profile_sha256"],
+                    "dataset_manifest_identity": active_summary["dataset_manifest_sha256"],
+                    "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+                    "coefficient_filename": filename,
+                    "coefficient_sha256": sha256,
+                    "coefficient_bytes": len(content.encode("utf-8")),
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", project_root)
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        result = ConfigComposer()._precompute_hmm_coefficients(
+            {
+                "sector_hmm_model_path": str(model_path),
+                "hmm_model_version_id": "snap",
+                "hmm_signal_preset": "preset_A",
+                "_qe_active_dataset_summary": active_summary,
+            },
+            {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+        )
+
+    assert json.loads(result)["dataset_identity"]["generation"] == active_summary["generation"]
+
+    coeff_path.write_text(content + "\n", encoding="utf-8")
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="SHA-256 differs"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+    stale_payload = json.loads(content)
+    stale_payload["dataset_identity"]["generation"] = "20260918-v11"
+    stale_content = json.dumps(stale_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    coeff_path.write_text(stale_content, encoding="utf-8")
+    window = svc.get_config.return_value["config_json"]["coefficient_windows"][0]
+    window["coefficient_sha256"] = hashlib.sha256(stale_content.encode("utf-8")).hexdigest()
+    window["coefficient_bytes"] = len(stale_content.encode("utf-8"))
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="dataset identity differs"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+
+def test_hmm_coefficients_rejects_stale_release_registration(monkeypatch, tmp_path) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    model_path = tmp_path / "project" / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": "20260918-v11",
+                    "release_id": "qe_hmm_full_v2_20260831",
+                    "active_profile_sha256": "1" * 64,
+                    "dataset_manifest_identity": "1" * 64,
+                    "dataset_manifest_file_sha256": "1" * 64,
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", tmp_path / "project")
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="not registered for the active dataset identity"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": {
+                        "generation": "20260920-v14-unified",
+                        "release_id": "qe_hmm_full_v2_20260831",
+                        "profile_sha256": "4" * 64,
+                        "dataset_manifest_sha256": "3" * 64,
+                        "dataset_manifest_file_sha256": "2" * 64,
+                    },
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+
+def test_hmm_coefficients_rejects_active_window_without_immutable_file_binding(
+    monkeypatch, tmp_path
+) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    model_path = tmp_path / "project" / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    active_summary = {
+        "generation": "20260920-v14-unified",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "profile_sha256": "4" * 64,
+        "dataset_manifest_sha256": "3" * 64,
+        "dataset_manifest_file_sha256": "2" * 64,
+    }
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": active_summary["generation"],
+                    "release_id": active_summary["release_id"],
+                    "active_profile_sha256": active_summary["profile_sha256"],
+                    "dataset_manifest_identity": active_summary["dataset_manifest_sha256"],
+                    "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", tmp_path / "project")
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="missing immutable artifact binding"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
 
 
 def test_hmm_coefficients_validator_rejects_missing_pit_membership_date() -> None:

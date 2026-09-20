@@ -711,6 +711,14 @@ def test_v3_sector_blacklist_starts_at_test_without_truncating_training_universe
     applied = p11.apply({**hmm_identity, "sector_blacklist": ["801020.SI"]})
     for key, value in hmm_identity.items():
         assert applied[key] == value
+    assert (
+        applied["_qe_active_dataset_summary"]["dataset_manifest_sha256"]
+        == raw["components"]["dataset_manifest_sha256"]
+    )
+    assert (
+        applied["_qe_active_dataset_summary"]["dataset_manifest_file_sha256"]
+        == raw["components"]["dataset_manifest_file_sha256"]
+    )
 
 
 def test_active_profile_derives_shared_node_runtime_binding(
