@@ -1,9 +1,9 @@
 # 持仓与自选池择时建议系统 F2 蓝图
 
-> 版本：v2.54
+> 版本：v2.55
 > 日期：2026-09-21
 > Feature tier：F2
-> 状态：`HISTORICAL_L1_RUNTIME_VERIFIED_PT_NEXT_027_SMALLCAP_SELL_VERIFIED_INCONCLUSIVE`
+> 状态：`HISTORICAL_L1_RUNTIME_VERIFIED_PT_NEXT_028_SELECTION_ALPHA_VERIFIED_INCONCLUSIVE`
 > objective contract：`POSITION_TIMING_ADVICE_V1`
 > 演进实现：`POSITION_TIMING_ACTION_VALUE_V2`（源码与正式离线研究完成，证据 `INCONCLUSIVE`；不修改 v1 历史契约）
 > decision use：`HUMAN_TRADING_ADVICE`
@@ -20,7 +20,7 @@ active r5 交付完整股票历史的复权因子重述authority后，`PT-NEXT-0
 
 `PT-NEXT-020` 的旧公司行动清算阻断已不再是当前研究前置：BUG-1565 / PR #4891（merge `7e37dc25e5cb22156c1e0e996b43f98696c8350f`，close-sync #4892）已切换为纯 Qlib 复权因子信号研究。之后用户确认每股独立1,000万元、自然复投、T+1收盘成交、逐股路径事后PIT归组及对应指数基准，形成新的 `pattern_close_cash_benchmark_v1`，不是旧pool独立账户/开盘合同的无版本替换。其r5历史实验已运行，原R0尚未证明超额收益，且完整人口覆盖不足；源码 PR #4906 已合入 merge `e3e156496f6cb2878c3268681ddd535cc4c754d2`，但不代表上线。准确结果/身份见§9.23；旧PT-NEXT-020 F1文档降为历史合同。后续[PT-NEXT-021 策略演进与横向验证](position_timing_strategy_evolution_plan_f1_20260918.md)已在r7/WSL原生ext4以确定性8进程完成5,144股全量回放；旧r5任务的1,024股中止检查点未进入结果。9个候选在54项family-wise比较中没有正下界，所有点估计为负，selected=0；该任务完成但未找到可发布alpha。
 
-**版本适用范围**：§6/§9/§10中PT-NEXT-004～019的真实账户公司行动、历史模型/统计门槛和旧单假设顺序均是对应版本的历史合同，不向当前纯Qlib研究继承；其不可变artifact不改写。已完成研究模式/账户/基准见§9.23～9.30；PT-NEXT-024已实现§9.27冻结的U0逐股双目标、受限Oracle、三执行视图和Ridge/GBDT有限研究，结果为`EXPLORATORY_HYPOTHESIS_GENERATED`、正式四项均`INCONCLUSIVE`、`selected_for_live=0`。PT-NEXT-025进一步以原模型hash完成U0、>500亿元、<50亿元和全PIT市场的迁移回放；PT-NEXT-026在<50亿元、每股独立500万元账户中专门训练恢复价值模型；PT-NEXT-027固定5日恢复，专门训练小市值SELL-vs-HOLD卖出动作价值。PT-NEXT-026/027均未形成收益与回撤联合支持，不发布模型，不据诊断结果回选市值、恢复或卖出阈值。§7/PT-NEXT-003的单卡执行审计仍保留自己的历史合同；在线L4b-2仍范围外。不改在线L1/L1a、N0或serving。本次未重查生产运行态，本文首发/runtime陈述均有明确历史日期，不代表2026-09-21在线状态验证。
+**版本适用范围**：§6/§9/§10中PT-NEXT-004～019的真实账户公司行动、历史模型/统计门槛和旧单假设顺序均是对应版本的历史合同，不向当前纯Qlib研究继承；其不可变artifact不改写。已完成研究模式/账户/基准见§9.23～9.31；PT-NEXT-024已实现§9.27冻结的U0逐股双目标、受限Oracle、三执行视图和Ridge/GBDT有限研究，结果为`EXPLORATORY_HYPOTHESIS_GENERATED`、正式四项均`INCONCLUSIVE`、`selected_for_live=0`。PT-NEXT-025进一步以原模型hash完成U0、>500亿元、<50亿元和全PIT市场的迁移回放；PT-NEXT-026在<50亿元、每股独立500万元账户中专门训练恢复价值模型；PT-NEXT-027固定5日恢复，专门训练小市值SELL-vs-HOLD卖出动作价值；PT-NEXT-028把U0/U1/U2置于共同月度cohort，只隔离检验股票筛选alpha。PT-NEXT-026～028均未形成可发布收益支持，不发布模型或screen，不据诊断结果回选市值、恢复、卖出或代理字段阈值。§7/PT-NEXT-003的单卡执行审计仍保留自己的历史合同；在线L4b-2仍范围外。不改在线L1/L1a、N0或serving。本次未重查生产运行态，本文首发/runtime陈述均有明确历史日期，不代表2026-09-21在线状态验证。
 
 v2.47回填`PT-NEXT-022`的P1正式实现与R8结果：用户确认先不接QE/HMM/荐股，只做基本面筛选后的T1/T2与同股长期持有比较。新增入口完成source preflight、WSL 8进程全量5,144股回放、1-vs-8等价、inspect和exact retry；P1入选4,360股，两个政策相对BH的全市场点估计约-5.23/-5.24 bps每日，family-wise区间跨0、逐股终值中位数约-27个百分点，selected=0。P2/P3严格季度财报PIT快照仍未交付，四格保持typed unavailable，不能把P1完成冒充六格完成。详见[详细设计、实现和正式结果](position_timing_fundamental_screen_research_f1_20260919.md)。
 
@@ -37,6 +37,8 @@ v2.52完成PT-NEXT-025冻结模型的股票池迁移实验：不重训、不调�
 v2.53完成PT-NEXT-026小市值恢复／继续持有价值实验：每股独立500万元，固定父GBDT卖出侧，只以17项当时可见特征训练Ridge／浅层GBDT选择立即恢复或继续等待。最终request/bundle `a05ca8c1e1534d10ad90018b8384e7961d1debface7823e55ba3b30df41abe76`覆盖R8全5,144股、3,135只入池账户、81 chunks和7,492,842条标签；inspect、exact retry及串并行一致性通过。Ridge／GBDT相对BH终值仅+24.26/+55.61 bps、MDD改善+78.86/+78.18 bps，四个Bonferroni区间全部跨0。模型恢复中位数1日、费用高于固定5日，且固定5日诊断反而约+145.33 bps/+139.70 bps；因此当前恢复模型不发布、不调参，下一单一方向改为固定5日恢复下的小市值专用卖出动作价值，而不是继续扫描恢复阈值。
 
 v2.54完成PT-NEXT-027小市值专用SELL-vs-HOLD动作价值实验：固定R8小于50亿元人口、每股500万元、20%候选减仓和第5日恢复，只将卖出gate替换为以14项因果技术特征训练的Ridge／浅层GBDT；训练标签由不经父模型筛选的规则候选生成。最终request/bundle `06fc6ff457309dad216782ae38a9e909bf8222c52cafd20f7db6860a672798ec`覆盖5,144股、3,135账户、81 chunks和384,986条标签。Ridge相对BH终值+220.15 bps、MDD改善+40.50 bps，但只有MDD端点下界为正，终值仍跨0；相对父GBDT两端点均跨0。GBDT终值落后BH约201.70 bps。故alpha与域错配均未获联合支持，`selected_for_live=0`；按预注册stop rule停止在当前14项技术信息集上继续扫描卖出／恢复模型，后续alpha主方向转向独立股票筛选／选股信息。
+
+v2.55完成PT-NEXT-028独立筛选alpha基线：冻结U0市值、U1估值流动性代理、U2 `bak_basic`日快照代理，在R8每月共同决策日以每股独立500万元、T+1收盘一次买入、固定120日成本后MTM比较三个screen。最终request `4c69de0d...831b0`覆盖5,144股、97个月、41 chunks和776,584条事件；64股串并行EXACT，inspect/retry闭合。U1−U0与U2−U0只有13/12个共同完整月，少于两个12月block，统一`INCONCLUSIVE/UNDERPOWERED`；U2−U1点估计+81.16 bps，但Bonferroni区间[-15.90,+174.58] bps。首个完整bundle暴露12月样本/12月block的退化区间并被新身份纠正，不保留虚假SUPPORTED。最终无screen获支持、selected=0，停止扫描现有proxy阈值；主要缺口是退市／终止上市后的终值authority与严格财务PIT信息，不是继续调PE/PB或增长阈值。
 
 2026-09-07 的运行态只读复核仍读到决策日 2026-09-04、目标日 2026-09-07 的两张 `HOLD` 卡；analysis scope 有效标的为 2，显式自选为 0，intent 为 0，产品层级仍是 `RULE_BASED_RISK_MANAGEMENT`，L2 为 `OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL`，HMM 为 `CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE`。该次 GET evidence 读到 `CARD_ISSUED=2`、paired matured=0、pending horizons=10、intervention-intent=0，不能据此声称已有超额收益。
 
@@ -1521,6 +1523,24 @@ Ridge的family-wise区间为终值`[-1255.01,+510.42] bps`、MDD`[-16.86,+193.58
 
 按预注册stop rule，本技术信息集的卖出／恢复模型研究在此停止：不得在已消费测试段继续扫描模型族、阈值、恢复日数或小盘切片。下一alpha主方向转为独立股票筛选／选股信息，再单独设计与择时组合；这不自动授权修改QE/HMM或其他模块。本项没有改在线L1/L1a、数据库、R8、父artifact、N0、registry/current、card/event/alert/order或服务进程，无需后端重启。
 
+### 9.31 共同月度股票筛选alpha基线（F-063；PT-NEXT-028已完成）
+
+状态为`IMPLEMENTED_REPLAY_VERIFIED_INCONCLUSIVE`，权威合同和完整复核见[PT-NEXT-028 F1](position_timing_selection_alpha_baseline_f1_20260921.md)。本项没有把择时、模型或QE混入筛选检验：沿用U0 `SIZE_50_500B_V1`、U1 `VALUE_LIQUIDITY_PROXY_V1`、U2 `BAK_GROWTH_PROXY_V1`三个已冻结嵌套screen，在每个自然月首个全局交易日T统一观察T−1代理字段，T+1收盘只买一次；每个`(symbol,T)`使用独立500万元现金账户，无杠杆、追加资金或跨股资金。买入受board lot、停牌、方向涨停和组件化费用约束；未成交保持现金且不追单。正式端点为实际执行后120个交易日的成本后MTM，不伪造终值卖出；20/60/252日、MDD和沪深300只作诊断。
+
+最终源码提交`fe3864ae4c342917ae3f01630be61439dedb9338`，request为`4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0`，manifest SHA256为`6c3baa61d2e5af59ea3d67d65936441881c0af2cc321e97d504369bf6edbc1e4`。R8全5,144股、97个决策月、41 chunks和776,584条事件均闭合；64股1-vs-8逐股结果`EXACT`，audit SHA256为`6b5bcc4505d74d15aa4f53905a3da6abe601f712289fea0fbceca651527b8b38`；inspect为`VERIFIED`，exact retry为`ALREADY_MATERIALIZED`。
+
+| 正式比较 | 共同完整月 | 点估计 / family-wise区间 | 结论 |
+|---|---:|---:|---|
+| U1−U0 | 13 | 不输出退化区间 | `INCONCLUSIVE / UNDERPOWERED` |
+| U2−U0 | 12 | 描述性约+60.82 bps；不输出退化区间 | `INCONCLUSIVE / UNDERPOWERED` |
+| U2−U1 | 26 | +81.16 bps / [-15.90,+174.58] bps | `INCONCLUSIVE` |
+
+首个完整bundle曾因“共同月=12、冻结block=12”使circular block bootstrap仅循环排列同一组月份，区间错误塌缩为点并产生虚假`SUPPORTED`。该结论无效且未进入本蓝图；修复没有按结果缩短block、换IID方法、删股或改screen，而是统一要求至少24个共同完整月，并以新代码/request/bundle完整重放。这个计算有效性约束不阻断研究或源码合入，只禁止输出数学上退化的支持结论。
+
+最终`result_class=EXPLORATORY_SELECTION_ALPHA_NO_SUPPORTED_SCREEN`、`selected_for_live=0`。120日成交率U0/U1/U2约为98.73%/99.14%/99.19%，但完整月只有13/27/48；U0另有78个月因至少一个已入选事件终值不可估而typed incomplete。不得通过删除退市／停牌股票或把未知终值填0制造完整cohort。后续优先级调整为：先为纯Qlib研究冻结退市／终止上市后终值估值authority，或引入真正独立且严格PIT的季度财务／事件信息；在此之前不扫描现有U0/U1/U2阈值与proxy字段组合，也不启动“支持screen+择时”组合实验。`bak_basic`始终是日快照代理，不得把描述性正点估计表述为业绩增长alpha。
+
+本项只增加一个`position_timing`离线benchmark、一个直接测试和文档；request/receipt均记录`database/network/live_market/runtime/process/other_module_write=false`，没有模型训练、在线screen、card/alert、registry/current、服务控制或后端重启。
+
 ## 10. Verification Plan / 验证方案
 
 ### 10.1 文档 gate
@@ -1917,6 +1937,7 @@ PT-NEXT-025只加载PT-NEXT-024冻结的Ridge/GBDT模型，不调用训练函数
 | F-060 | PT-NEXT-025 | HARD | §9.28／§10.24：冻结模型在U0、>500亿元、<50亿元与全PIT市场完成迁移回放；U0精确桥接，正式四端点均INCONCLUSIVE，不回选市值阈值或发布模型 |
 | F-061 | PT-NEXT-026 | HARD | §9.29与20260920 F1 v1.1：小于50亿元、每股500万元、父卖出侧冻结；因果恢复标签、Ridge/GBDT、5,144股/81 chunks/8进程回放闭合；四端点均INCONCLUSIVE，不扫描恢复参数或发布模型 |
 | F-062 | PT-NEXT-027 | HARD | §9.30与20260921 F1：固定5日恢复，只训练小市值SELL-vs-HOLD Ridge/GBDT；5,144股/81 chunks/8进程回放闭合；8端点无联合支持，停止当前技术信息集的卖出／恢复模型扫描 |
+| F-063 | PT-NEXT-028 | HARD | §9.31与20260921 F1：共同月度U0/U1/U2筛选alpha基线；5,144股/41 chunks/8进程回放闭合；退化block推断以新身份纠正，三项无支持，停止现有proxy阈值扫描 |
 
 ## 14. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1986,10 +2007,11 @@ PT-NEXT-025只加载PT-NEXT-024冻结的Ridge/GBDT模型，不调用训练函数
 | F-060 | §9.28／§10.24；`causal_timing_universe_benchmark.py` | `backend/tests/position_timing/test_causal_timing_universe_benchmark.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_timing_universe_transport_v1/bundles/9ac167a77f02dad65b216a26178c4ecbf96e0b0f5b5d14f3bc74069ce6efa5dd/manifest.json`；5,144股/81 chunks、U0精确桥接、inspect/exact retry | PT_NEXT_025_UNIVERSE_TRANSPORT_VERIFIED_INCONCLUSIVE | none |
 | F-061 | §9.29；`causal_recovery_model.py`、`causal_recovery_benchmark.py` | `backend/tests/position_timing/test_causal_recovery_value.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_recovery_value_v1/bundles/a05ca8c1e1534d10ad90018b8384e7961d1debface7823e55ba3b30df41abe76/manifest.json`；5,144股/81 chunks、8股1-vs-8 EXACT、inspect/exact retry、核心Parquet跨修订精确一致 | PT_NEXT_026_SMALLCAP_RECOVERY_VERIFIED_INCONCLUSIVE | none |
 | F-062 | §9.30；`causal_smallcap_sell_model.py`、`causal_smallcap_sell_benchmark.py` | `backend/tests/position_timing/test_causal_smallcap_sell_value.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/causal_smallcap_sell_value_v1/bundles/06fc6ff457309dad216782ae38a9e909bf8222c52cafd20f7db6860a672798ec/manifest.json`；5,144股/81 chunks、8股1-vs-8 EXACT、inspect/exact retry | PT_NEXT_027_SMALLCAP_SELL_VERIFIED_INCONCLUSIVE | none |
+| F-063 | §9.31；`selection_alpha_benchmark.py` | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/selection_alpha_baseline_v1/bundles/4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0/manifest.json`；5,144股/41 chunks、64股1-vs-8 EXACT、inspect/exact retry | PT_NEXT_028_SELECTION_ALPHA_VERIFIED_INCONCLUSIVE | none |
 
 ## 15. DESIGN-COMPLIANCE-001 最终复核
 
-条目1～12为各历史版本交付事实，不代表本次重跑测试／运行态；其中真实账户authority要求仅适用于相应旧版本。条目13为v2.49文档复核，条目14为v2.50因果设计复核，条目15为PT-NEXT-024实际实现和正式R8研究复核，条目16为PT-NEXT-025冻结模型股票池迁移复核，条目17为PT-NEXT-026小市值恢复价值研究复核，条目18为PT-NEXT-027小市值专用卖出动作价值研究复核。F-054～F-062现已绑定直接代码、测试和不可变artifact；这些状态证明冻结研究闭合，不代表alpha获支持、实盘PIT绝对完备或运行能力发布。
+条目1～12为各历史版本交付事实，不代表本次重跑测试／运行态；其中真实账户authority要求仅适用于相应旧版本。条目13为v2.49文档复核，条目14为v2.50因果设计复核，条目15为PT-NEXT-024实际实现和正式R8研究复核，条目16为PT-NEXT-025冻结模型股票池迁移复核，条目17为PT-NEXT-026小市值恢复价值研究复核，条目18为PT-NEXT-027小市值专用卖出动作价值研究复核，条目19为PT-NEXT-028独立筛选alpha基线复核。F-054～F-063现已绑定直接代码、测试和不可变artifact；这些状态证明冻结研究闭合，不代表alpha获支持、实盘PIT绝对完备或运行能力发布。
 
 1. **禁止简化交付**：已完成首发、L2 v1 与 L4b-1 的历史事实/receipt 保留；PT-NEXT-004/005 已交付真实代码、正式训练、公司行动连续策略、个股影子推断、API/UI 与覆盖内 256 条分钟核对；PT-NEXT-006/007/008 已分别完成单一冻结 ATR14、行业、资金流块的 matched-core 正式回放。PT-NEXT-009 没有沿用不可识别的空估计，也没有取交集，而是绑定显式停牌证据后按原规格纠错重放；PT-NEXT-011 先冻结单一筹码字段与完整 source-only coverage，再在同一实施块交付代码和真实历史结果，不以 coverage 冒充收益。PT-NEXT-012 已读取四份真实不可变 OOF 与连续路径生成零 trial 正式 receipt，并把描述性诊断与收益证据分开。PT-NEXT-014～017 均读取真实 immutable 父证据、冻结零重叠股票人口、重训并完成 cross-symbol 历史回放；未把 source-only 清点、测试、状态支持或可学性诊断冒充 held-out 收益。绝不把总体摘要、mock、测试或诊断切片当收益结果。代码交付、研究支持与运行激活分开。
 2. **禁止静默错误**：保留 v1 typed PIT/source/scope/quote/outcome 语义；新设计追加历史可见版本、晚间 cutoff、forward-label 可用时间、no-fill 与 unknown、模型失败 fallback 的明确区分。PT-NEXT-014 将 candidate 缺失但 DB 明确存在的停牌键作为版本化 source correction，将仍缺公司行动证据的股票保留为 coverage 不足；二者均不静默删股。PT-NEXT-015 的首个 request 在计算前因身份比较和 CLI 错误序列化 typed 失败、无 bundle；PT-NEXT-017 的首个 request 同样因延后入场现金不足 fail closed。两者修复均使用新代码身份和新 request，不改写旧 request 或吞掉错误。PT-NEXT-018进一步把配股与factor历史重述拆开：不将factor跳变冒充账户认购或自动送股；r4首个request的JSON身份失败、第二个request的63/64业务覆盖及最终64/64技术重放均以不可变supersession谱系保留；r5首个request的辅助source-reference污染同样在收益前失败、无bundle，以隔离reader和新request纠正，不放宽hash。CPCV 不冒充历史部署收益，未预算的方向不冒充成本后可执行建议。
@@ -2018,4 +2040,6 @@ PT-NEXT-025只加载PT-NEXT-024冻结的Ridge/GBDT模型，不调用训练函数
 
 18. **PT-NEXT-027实现与研究复核**：第一轮冻结唯一变量为小市值SELL gate，父模型、规则候选、20%减仓和固定5日恢复均不变；训练标签由不经父模型筛选的规则候选生成，Oracle与测试结果不可访问。第二轮以64股pilot验证LightGBM、500万元账户、四路径和8端点family，8股串并行精确一致；未依据pilot收益改参数。第三轮完成R8全5,144股、3,135账户、81 chunks、384,986标签回放，inspect/exact retry闭合。Ridge相对BH的MDD端点有正下界，但终值区间跨0；相对父模型两端点均跨0，GBDT终值为负，故alpha和域错配均未联合支持。按预注册stop rule停止当前14项技术信息集的卖出／恢复模型扫描；不把单端点、点估计或逐股胜率包装成alpha。全程未读写数据库、实时行情、其他模块或运行态，未发布模型或要求重启。
 
-结论：历史首发和模型／形态研究事实保留，仍无可发布的成本后择时alpha支持。PT-NEXT-024～026已分别完成通用卖出动作价值、股票池迁移和小市值恢复价值；PT-NEXT-027进一步固定5日恢复，训练小市值专用SELL-vs-HOLD模型。Ridge相对BH终值点估计+220.15 bps、MDD改善+40.50 bps，只有MDD单端点获支持，终值区间仍跨0；相对父GBDT没有联合优势。GBDT终值落后BH约201.70 bps。故专用卖出模型没有证明收益alpha，也没有证明通用父模型的市值域错配是主因。按预注册stop rule，当前14项技术信息集的卖出／恢复模型研究停止，不再扫描模型、阈值、恢复天数或小盘切片；后续alpha预算转向独立股票筛选／选股信息，再另行设计与择时组合。旧策略和全部不可变artifact继续保留；新回放遵守§9.27.6、§10.23～§10.24及§9.29～§9.30，测试通过不等于数据PIT绝对完备或实盘盈利保证。分钟暂留执行／风险诊断，本轮不改DB、在线运行、重启或激活。
+19. **PT-NEXT-028实现与研究复核**：第一轮冻结共同月度cohort、三个既有screen、500万元独立账户、T+1收盘一次买入、120日主端点和三项family，没有加入模型、择时或新阈值。第二轮修复合法proxy缺失被错误fail-closed的问题，缺失改为UNKNOWN而文件身份／结构漂移继续fail closed；30项相关回归通过。第三轮首个全量bundle暴露12个共同月与12月block导致bootstrap退化，拒绝虚假SUPPORTED；固定为至少两个完整block且不改block长度，以新提交/request完成全5,144股、41 chunks、776,584事件重放。最终两项因共同月不足为INCONCLUSIVE/UNDERPOWERED，唯一可计算的U2−U1区间跨0，selected=0。完整月不足主要来自终值不可估，未通过删退市股、填0或放宽覆盖修饰结果；停止当前proxy阈值扫描。全程未读写数据库、行情网络、其他模块或运行态，未发布screen/模型或要求重启。
+
+结论：历史首发和模型／形态研究事实保留，仍无可发布的成本后择时或筛选alpha支持。PT-NEXT-024～027已完成通用卖出动作价值、股票池迁移、小市值恢复价值和小市值SELL-vs-HOLD研究；PT-NEXT-028进一步把U0/U1/U2置于共同日期／共同horizon下隔离验证筛选价值。唯一可计算的U2−U1点估计约+81.16 bps，但校正区间跨0；另外两项因共同完整月不足而UNDERPOWERED，不能把曾出现的退化区间或代理字段正点估计包装成alpha。当前14项技术信息集的卖出／恢复模型研究和现有proxy阈值扫描均停止。下一优先级不是继续微调，而是先解决退市／终止上市终值authority，或引入真正独立且严格PIT的季度财务／事件信息；在数据契约闭合前不启动screen+timing组合。旧策略和全部不可变artifact继续保留；新回放遵守§9.27.6、§10.23～§10.24及§9.29～§9.31，测试通过不等于数据PIT绝对完备或实盘盈利保证。分钟暂留执行／风险诊断，本轮不改DB、在线运行、重启或激活。
