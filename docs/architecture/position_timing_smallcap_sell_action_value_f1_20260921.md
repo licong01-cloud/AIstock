@@ -1,10 +1,10 @@
 # PT-NEXT-027：小市值专用 SELL-vs-HOLD 动作价值实验详细设计
 
-**Feature tier**：F1  
+**Feature tier**：F1
 **状态**：IMPLEMENTED_RESEARCH_COMPLETE_INCONCLUSIVE
-**日期**：2026-09-21  
-**模块边界**：`backend/services/position_timing` 离线研究  
-**父证据**：PT-NEXT-024、PT-NEXT-025、PT-NEXT-026  
+**日期**：2026-09-21
+**模块边界**：`backend/services/position_timing` 离线研究
+**父证据**：PT-NEXT-024、PT-NEXT-025、PT-NEXT-026
 **唯一开发权威**：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
 ## 1. Background / Goal / 唯一研究问题（F-001）
