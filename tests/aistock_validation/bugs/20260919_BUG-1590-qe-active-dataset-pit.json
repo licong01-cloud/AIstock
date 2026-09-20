@@ -71,8 +71,8 @@
   },
   "first_seen_at": "2026-09-19T18:47:52.074656Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "739ecf9e085a0b6077c58ff5b5a8e069eda24670",
+  "fixed_at": "2026-09-20T03:10:44Z",
   "github_issue_number": 4963,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4963",
   "last_seen_at": "2026-09-19T18:47:52.074656Z",
@@ -80,6 +80,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4965",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -116,7 +117,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1590",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "62769fdf665dc580",
+    "recorded_at": "2026-09-20T03:25:07.353366Z",
+    "runtime_contract_digest": "d3e2591aa6ac05927adfa826a0d46a6b0df7a8ec4ce32d00c19629605c7493c7",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "30701304e461ee4baae883ed769f10030ee22cb3",
+    "source_merge_commit": "739ecf9e085a0b6077c58ff5b5a8e069eda24670",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4965",
+    "validation_evidence": [
+      "python -m pytest -q backend/tests/dataset_release/test_release_successor.py backend/tests/dataset_release/test_shared_sector_context.py backend/tests/scripts/test_build_industry_pit_candidates.py -> 28 passed",
+      "python -m ruff check changed-files -> passed",
+      "python -m nox -s l0 -- changed-files -> passed"
+    ],
+    "validation_evidence_digest": "9129e3bbc395d6f6660a90a0aa303c36e9c12f5acbb2569bc3fb38b0754ded87"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -125,6 +149,11 @@
     "fingerprint": "29b8625692b6f79ac3c11c95",
     "source_event_id": "FE-20260919-29b8625692b6"
   },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/dataset_release/test_release_successor.py backend/tests/dataset_release/test_shared_sector_context.py backend/tests/scripts/test_build_industry_pit_candidates.py -> 28 passed",
+    "python -m ruff check changed-files -> passed",
+    "python -m nox -s l0 -- changed-files -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
