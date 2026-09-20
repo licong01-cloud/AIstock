@@ -93,7 +93,8 @@
       "v14 active-profile P11 materialization -> filtered run-local pool bound",
       "cross-manifest HMM asset fresh process -> qe_hmm_asset_dataset_identity_mismatch",
       "Qlib metrics collection failure unit readback -> experiment status failed",
-      "v14 active-profile P11 run-local pool bound; cross-manifest HMM binding rejected before submission"
+      "v14 active-profile P11 run-local pool bound; cross-manifest HMM binding rejected before submission",
+      "active v14 P11 materialization produced run-local filtered pool; synthetic cross-manifest transported HMM asset failed closed before submission"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
