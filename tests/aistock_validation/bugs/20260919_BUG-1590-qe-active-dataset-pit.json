@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1590",
-  "closed_at": null,
+  "closed_at": "2026-09-20T03:38:27.995312Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -100,14 +100,36 @@
       "QE P10/P11 resolve_active_qe_dataset candidate profile -> passed",
       "WSL/node1 rdagent-gpu dataset-identity fresh process -> passed"
     ],
-    "identity_ref": "http://127.0.0.1:8001/openapi.json",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "changed_file_catalog",
-    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\RD-Agent-state\\workflow_receipts\\BUG-1590-post-restart-20260920-v2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1590",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+      "expected_identity": "739ecf9e085a0b6077c58ff5b5a8e069eda24670",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-20T03:36:39.198415Z",
+      "mode": "read_only",
+      "observed_identity": "739ecf9e085a0b6077c58ff5b5a8e069eda24670",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6bcf704a0e7f53c8c043d0bfc56fe20885af4917f3f4a9226d9f0414b67e7006",
+      "receipt_sha256": "7dbab22f44f3c77a6e85b81d8943dfbb87a1ff966e41d925c1f7a349812beb66",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b4daaf90f06a89f80bd7235a474d460e4ffef9bd35e2906187ba818fa8f4bd5c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -140,7 +162,7 @@
     ],
     "validation_evidence_digest": "9129e3bbc395d6f6660a90a0aa303c36e9c12f5acbb2569bc3fb38b0754ded87"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
