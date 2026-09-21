@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -422,6 +424,24 @@ def _v3_receipt() -> str:
     )
 
 
+def _v3_stock_universe_receipt() -> str:
+    return json.dumps(
+        {
+            "schema_version": "qe_index_pool_coverage_receipt_v1",
+            "release_id": "qe_hmm_full_v2_20260831",
+            "cutoff": "2026-08-31",
+            "pools": {
+                "stock_universe": {
+                    "available_start": "2018-08-01",
+                    "available_end": "2026-08-31",
+                    "gaps": [],
+                }
+            },
+        },
+        sort_keys=True,
+    )
+
+
 def test_direct_v2_v3_validator_accepts_packaged_index_sidecar(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -438,6 +458,76 @@ def test_direct_v2_v3_validator_accepts_packaged_index_sidecar(
     validated = validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
 
     assert validated["selection_pins"]["mode"] == "single_index"
+
+
+def test_direct_v2_v3_validator_accepts_packaged_filtered_stock_universe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, root = _fixture(tmp_path)
+    sidecar = "000002.SZ\t2018-08-01\t2026-08-31\n"
+    receipt = _v3_stock_universe_receipt()
+    raw = _with_local_paths(_v3_binding(raw, sidecar=sidecar, receipt=receipt), root)
+    raw["selection_pins"].update(
+        {
+            "mode": "stock_universe",
+            "pool_ids": [],
+            "instrument_name": "stock_universe",
+            "instruments_file": "stock_universe.txt",
+            "membership_revision": "stock-universe-pit-v2|sector_blacklist:test",
+        }
+    )
+    _write_json(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE, raw)
+    (tmp_path / "stock_universe.txt").write_bytes(sidecar.encode("utf-8"))
+    (tmp_path / QE_UNIVERSE_COVERAGE_RECEIPT_FILE).write_bytes(receipt.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+
+    validated = validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
+
+    assert validated["selection_pins"]["membership_revision"].endswith("sector_blacklist:test")
+    validator = (
+        Path(__file__).parents[3]
+        / "backend"
+        / "services"
+        / "quantevolver"
+        / "qe_validate_direct_v2_dataset.py"
+    )
+    completed = subprocess.run(
+        [sys.executable, str(validator)],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "QE direct-v2 dataset binding verified" in completed.stdout
+
+
+def test_direct_v2_v3_validator_keeps_unfiltered_stock_universe_at_candidate_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, root = _fixture(tmp_path)
+    candidate_path = root / "components" / "daily_bin_candidate" / "instruments" / "stock_universe.txt"
+    sidecar = candidate_path.read_bytes().decode("utf-8")
+    receipt = _v3_stock_universe_receipt()
+    raw = _with_local_paths(_v3_binding(raw, sidecar=sidecar, receipt=receipt), root)
+    raw["selection_pins"].update(
+        {
+            "mode": "stock_universe",
+            "pool_ids": [],
+            "instrument_name": "stock_universe",
+            "instruments_file": "stock_universe.txt",
+            "membership_revision": "stock-universe-pit-v2",
+        }
+    )
+    _write_json(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE, raw)
+    (tmp_path / QE_UNIVERSE_COVERAGE_RECEIPT_FILE).write_bytes(receipt.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+
+    validated = validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
+
+    assert validated["selection_pins"]["membership_revision"] == "stock-universe-pit-v2"
 
 
 def test_direct_v2_v3_validator_rejects_non_iso_sidecar_dates(
@@ -545,6 +635,9 @@ def test_direct_v2_v3_composer_builds_blacklist_filtered_stock_universe_overlay(
     assert "ln -sfn" in command
     assert "cp -f stock_universe.txt" in command
     assert raw["provider_uri_day"] in command
+    assert "; done; true" not in command
+    assert 'if [ ! -e "$f" ] && [ -e "$_FDD/$f" ]; then ln -sf "$_FDD/$f" .; fi; done' in command
+    assert "python qe_validate_direct_v2_dataset.py && _FDD=" in command
     risk_spec = json.loads(files["qe_frozen_build_spec.json"])
     assert risk_spec["provider_uri_day"].endswith("/qe_provider_day")
     assert risk_spec["pins"]["instruments_file"] == "stock_universe.txt"

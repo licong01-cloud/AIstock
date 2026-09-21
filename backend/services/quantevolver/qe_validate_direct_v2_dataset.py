@@ -175,11 +175,19 @@ def _validate_selection_universe(
             or not str(pins.get("membership_revision") or "").strip()
         ):
             raise _fail("qe_direct_v2_selection_contract_invalid", "instruments filename differs")
-        selected_path = (
-            root / "instruments" / filename
-            if mode == "stock_universe"
-            else Path(filename)
-        )
+        selected_path = Path(filename)
+        if mode == "stock_universe":
+            candidate_path = root / "instruments" / filename
+            # The ordinary stock-universe binding is validated in place under
+            # the immutable candidate root.  A policy-filtered run packages a
+            # same-name, hash-pinned sidecar in the workspace; use it only
+            # when the candidate file does not match the selected-universe
+            # pin.  This keeps the active release identity immutable while
+            # validating the actual universe consumed by the qrun overlay.
+            if candidate_path.is_symlink() or not candidate_path.is_file():
+                _require_file(candidate_path, str(pins["instruments_sha256"]))
+            if _sha256(candidate_path) == str(pins["instruments_sha256"]):
+                selected_path = candidate_path
         _require_file(selected_path, str(pins["instruments_sha256"]))
         receipt_path = Path("qe_universe_coverage_receipt.json")
         _require_file(receipt_path, str(pins["coverage_receipt_sha256"]))

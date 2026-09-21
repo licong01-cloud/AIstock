@@ -6237,7 +6237,7 @@ class ConfigComposer:
         link_data_cmd = (
             '_FDD="${RDAGENT_FACTOR_DATA_WSL:-.}" && '
             'for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do '
-            '[ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .; done; true'
+            'if [ ! -e "$f" ] && [ -e "$_FDD/$f" ]; then ln -sf "$_FDD/$f" .; fi; done'
         )
 
         runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
@@ -6355,7 +6355,9 @@ class ConfigComposer:
 _FDD="${{RDAGENT_FACTOR_DATA_WSL:-}}"
 [ -n "$_FDD" ] || _FDD={manual_factor_data_default}
 for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do
-  [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
+  if [ ! -e "$f" ] && [ -e "$_FDD/$f" ]; then
+    ln -sf "$_FDD/$f" .
+  fi
 done"""
         direct_validation_manual = (
             f"{scrub_credentials}\npython qe_validate_direct_v2_dataset.py"

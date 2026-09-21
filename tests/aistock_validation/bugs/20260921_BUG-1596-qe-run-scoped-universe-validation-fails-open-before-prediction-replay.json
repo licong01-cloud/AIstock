@@ -1,6 +1,9 @@
 {
   "actual": "P01/P11 prediction-replay loops validate the active candidate root stock_universe.txt against the run-scoped filtered universe hash, raising qe_direct_v2_hash_mismatch. The generated shell chain then executes an unconditional true after the link loop, so factor preparation and minute backtest continue despite validator failure. Preserve active-profile identity checks, validate the actual run-scoped universe authority, and make every dataset validation failure stop execution before factors/backtest.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
     "tests/aistock_validation/bugs/20260921_BUG-1596-qe-run-scoped-universe-validation-fails-open-before-prediction-replay.json"
   ],
   "assigned_agent": null,
@@ -19,13 +22,28 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260921-9c9e520f7a16",
       "timestamp": "2026-09-21T16:23:08.246510Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "codex",
+      "note": "Run-scoped v3 stock-universe validation now verifies the packaged hash-pinned sidecar when it differs from the immutable candidate source; auto command composition no longer resumes after validator failure.",
+      "timestamp": "2026-09-21T16:40:00Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "backend/services/quantevolver/qe_validate_direct_v2_dataset.py:_validate_selection_universe",
+    "backend/services/quantevolver/config_composer.py:ConfigComposer._build_auto_wsl_command_parts",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py:test_direct_v2_v3_validator_accepts_packaged_filtered_stock_universe"
+  ],
+  "expected": "The validator must verify the actual run-scoped, hash-pinned selection sidecar and any validator failure must stop execution before factor preparation or qrun; unfiltered P00 and HMM-only P10 semantics remain unchanged.",
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "tests/aistock_validation/bugs/20260921_BUG-1596-qe-run-scoped-universe-validation-fails-open-before-prediction-replay.json"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [],
@@ -35,9 +53,19 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "tests/aistock_validation/bugs/20260921_BUG-1596-qe-run-scoped-universe-validation-fails-open-before-prediction-replay.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_validate_direct_v2_dataset.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "tests/aistock_validation/bugs/20260921_BUG-1596-qe-run-scoped-universe-validation-fails-open-before-prediction-replay.json"
+    ]
   },
   "first_seen_at": "2026-09-21T16:23:08.246531Z",
   "fix_branch": null,
@@ -54,22 +82,34 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py::test_direct_v2_v3_validator_accepts_packaged_filtered_stock_universe backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py::test_direct_v2_v3_composer_builds_blacklist_filtered_stock_universe_overlay -q",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "fresh_process_evidence": [
+      "fresh subprocess execution of qe_validate_direct_v2_dataset.py with packaged filtered stock-universe sidecar -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -82,6 +122,12 @@
     "fingerprint": "9c9e520f7a16aa6d9fd94851",
     "source_event_id": "FE-20260921-9c9e520f7a16"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/quantevolver/test_qe_active_dataset_profile_api.py -q -> 22 passed",
+    "python -m ruff check backend/services/quantevolver/config_composer.py backend/services/quantevolver/qe_validate_direct_v2_dataset.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py -> passed",
+    "fresh subprocess execution of qe_validate_direct_v2_dataset.py with packaged filtered stock-universe sidecar -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
