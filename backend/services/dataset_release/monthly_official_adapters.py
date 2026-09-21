@@ -287,6 +287,26 @@ class MonthlyBuildExecutor(Protocol):
     ) -> BuildExecution: ...
 
 
+def validate_build_execution(
+    result: BuildExecution,
+    *,
+    context: ProducerContext,
+) -> str:
+    """Validate BUILD bytes before an executor makes a candidate visible."""
+
+    manifest = _read_canonical_object(result.manifest_path, label="dataset manifest")
+    identity = _validate_dataset_manifest(
+        result.manifest_path,
+        manifest,
+        context=context,
+        component_artifacts=result.component_artifacts,
+    )
+    output_paths = (result.manifest_path, *result.component_artifacts)
+    if len({path.resolve(strict=True) for path in output_paths}) != len(output_paths):
+        raise OfficialMonthlyAdapterError("build output files are duplicated")
+    return identity
+
+
 @dataclass(frozen=True, slots=True)
 class OfficialBuildAdapter:
     artifact_root: Path
@@ -307,16 +327,8 @@ class OfficialBuildAdapter:
             context,
             component_actions={str(key): str(value) for key, value in actions.items()},
         )
-        manifest = _read_canonical_object(result.manifest_path, label="dataset manifest")
-        identity = _validate_dataset_manifest(
-            result.manifest_path,
-            manifest,
-            context=context,
-            component_artifacts=result.component_artifacts,
-        )
+        identity = validate_build_execution(result, context=context)
         output_paths = (result.manifest_path, *result.component_artifacts)
-        if len({path.resolve(strict=True) for path in output_paths}) != len(output_paths):
-            raise OfficialMonthlyAdapterError("build output files are duplicated")
         inputs = tuple(
             _artifact(_adapter_roots(self), path, label="build input")
             for path in result.input_artifacts
@@ -852,4 +864,5 @@ __all__: Sequence[str] = (
     "OfficialMonthlyAdapterError",
     "StageWorkload",
     "build_official_monthly_registry",
+    "validate_build_execution",
 )
