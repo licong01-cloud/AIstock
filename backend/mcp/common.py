@@ -49,10 +49,7 @@ def sanitize_identifier(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a non-empty string; got {value!r}")
     if not IDENTIFIER_PATTERN.match(value):
-        raise ValueError(
-            f"{name} contains illegal characters: {value!r}; "
-            "only [A-Za-z0-9_.-] allowed"
-        )
+        raise ValueError(f"{name} contains illegal characters: {value!r}; only [A-Za-z0-9_.-] allowed")
     return value
 
 
@@ -166,7 +163,9 @@ class AIstockApiClient:
     ) -> None:
         self.base_url = assert_loopback_url(base_url, env_name=env_name)
         self.env_name = env_name
-        self.timeout = float(timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT))
+        self.timeout = float(
+            timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT)
+        )
         self.unwrap_data = unwrap_data
         self._transport = transport
         self.max_response_bytes = (
@@ -190,6 +189,7 @@ class AIstockApiClient:
         *,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> Any:
         with self._client() as client:
             response = client.request(
@@ -197,37 +197,53 @@ class AIstockApiClient:
                 path,
                 params=_clean_params(params),
                 json=json_body if json_body is not None else None,
+                headers=headers,
             )
         return self._decode(response, method.upper(), path)
 
-    def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        return self.request("GET", path, params=params)
+    def get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        return self.request("GET", path, params=params, headers=headers)
 
     def post(
         self,
         path: str,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
     ) -> Any:
-        return self.request("POST", path, json_body=json_body or {}, params=params)
+        return self.request("POST", path, json_body=json_body or {}, params=params, headers=headers)
 
     def put(
         self,
         path: str,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
     ) -> Any:
-        return self.request("PUT", path, json_body=json_body or {}, params=params)
+        return self.request("PUT", path, json_body=json_body or {}, params=params, headers=headers)
 
-    def delete(self, path: str, json_body: dict[str, Any] | None = None) -> Any:
-        return self.request("DELETE", path, json_body=json_body or {})
+    def delete(
+        self,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
+        return self.request("DELETE", path, json_body=json_body or {}, headers=headers)
 
     def _decode(self, response: httpx.Response, method: str, path: str) -> Any:
         if response.status_code >= 400:
             body = _body_excerpt(response)
             raise RuntimeError(
-                f"{method} {path} failed with HTTP {response.status_code}: "
-                f"response body excerpt={body!r}"
+                f"{method} {path} failed with HTTP {response.status_code}: response body excerpt={body!r}"
             )
         content = response.content
         original_bytes = len(content)

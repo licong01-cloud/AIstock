@@ -1,9 +1,45 @@
 ---
 name: update-backtest-dataset
-description: Operate the direct, candidate-only AIstock monthly QE/HMM dataset update workflow. Use for monthly PIT refresh, database gap completion, Qlib daily/minute and H5/static/index/sector candidate rebuild, status, validation and signoff. Never overwrites or activates production without separate explicit authorization.
+description: Operate the unified AIstock monthly QE/HMM dataset release workflow through the single durable backend API. Use for monthly PIT refresh, source completeness, incremental Qlib/H5/sector builds, three-node validation, status, resume, and separately authorized activation or rollback.
 ---
 
-# AIstock QE/HMM 月度数据集直接更新
+# 共享月更 v2（当前唯一新月份入口）
+
+新月份统一使用 `scripts/monthly_unified_dataset_release.py`，它只调用后端
+`/api/v1/qlib/monthly-releases`，不在 Skill、CLI、MCP 或 UI 中复制编排逻辑。
+旧的 `update_backtest_dataset_monthly.py` 仅用于读取和复现历史 direct-v2
+候选，不得用于创建新的月度权威 release。
+
+开始前必须读取实时 active profile；目标 cutoff 必须是后端解析的上一完整月
+最后交易日。普通数据窗口先提交 `prepare_only`：
+
+```powershell
+$env:DATASET_RELEASE_OPERATOR_TOKEN_FILE = '<runtime-owner配置的绝对plain-file路径>'
+python scripts/monthly_unified_dataset_release.py plan --cutoff YYYY-MM-DD --idempotency-key monthly-YYYYMM-plan
+python scripts/monthly_unified_dataset_release.py run --cutoff YYYY-MM-DD --idempotency-key monthly-YYYYMM-run
+python scripts/monthly_unified_dataset_release.py status --operation-id dmr_<32hex>
+python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_<32hex>
+```
+
+规则：
+
+- 同一 cutoff 只有一个 durable operation、一个 successor、一个 manifest/profile 身份；
+- SOURCE 必须在一个只读一致性 snapshot 中完成九个 gate，并固化本轮实际消费的有界输入；
+- BUILD 只能读取 sealed baseline 和 SOURCE 输入，不得重新查询运行时数据库；
+- 组件动作只能是 `REUSE / INCREMENTAL / SELECTIVE_REBUILD / COMPONENT_REBUILD`；
+- QE、HMM、因子、荐股、择时、统一回测均由同一 consumer registry 验证；
+- 任一未解释缺口、跨 release 混用、哈希漂移或消费者不完整都保持 blocked；
+- 激活与 rollback 需要独立 `dsauth_<32hex>`，不得由 prepare 授权推断；
+- 源码合入、数据库修复、candidate 部署、profile 激活、运行态读回分别报告；
+- 不启动训练、实验或服务，不把 `status=completed` 当作数据验收成功。
+
+详细合同见：
+
+- `docs/architecture/monthly_unified_dataset_release_v2_f2_design_20260921.md`
+- `docs/architecture/monthly_unified_dataset_release_v2_acceptance_20260921.md`
+- `docs/operations/monthly_unified_dataset_release_v2_runbook.md`
+
+# 历史 direct-v2 复现参考（不得用于新月份）
 
 ## 唯一目标
 

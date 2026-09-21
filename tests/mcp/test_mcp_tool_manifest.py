@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 371
+    assert legacy_tool_count() == 379
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 377
-    assert len(TOOL_MANIFEST_BY_NAME) == 377
+    assert len(TOOL_MANIFEST) == 385
+    assert len(TOOL_MANIFEST_BY_NAME) == 385
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name
@@ -60,7 +60,11 @@ def test_high_risk_tools_have_preflight_metadata() -> None:
         "mcp_github_issue_create",
     ]:
         entry = TOOL_MANIFEST_BY_NAME[name]
-        assert entry.requires_confirmation or entry.risk_level in {"long_running", "external_network", "write_confirmed"}
+        assert entry.requires_confirmation or entry.risk_level in {
+            "long_running",
+            "external_network",
+            "write_confirmed",
+        }
         assert entry.assistant_usable == "preflight_required"
 
 
@@ -70,7 +74,11 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         for name, override in TOOL_METADATA_OVERRIDES.items()
         if override.risk_level == "read_only"
         and override.assistant_usable == "direct_or_catalog"
-        and ("plan-only preview" in override.reason or "read-only" in override.reason.lower() or "GET " in override.reason)
+        and (
+            "plan-only preview" in override.reason
+            or "read-only" in override.reason.lower()
+            or "GET " in override.reason
+        )
     }
     assert {
         "factor_library_plan_register",
@@ -83,8 +91,8 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "execution_policy_plan_binding",
         "advisory_list_bindings",
         "advisory_get_active_binding",
-            "simulation_runtime_monitoring_scheduler_status",
-            "simulation_runtime_monitoring_scheduler_verification",
+        "simulation_runtime_monitoring_scheduler_status",
+        "simulation_runtime_monitoring_scheduler_verification",
         "local_data_plan_schedule_reset",
         "local_data_plan_repair",
         "qlib_export_plan_dataset_update",
@@ -163,8 +171,14 @@ def test_manifest_metadata_override_reasons_are_required() -> None:
 
 
 def test_migration_state_is_derived_and_overrideable() -> None:
-    assert _migration_state_for("health", "validation", gateway_modules={"validation"}, script_backed_servers=set()) == "gateway"
-    assert _migration_state_for("health", "validation", gateway_modules=set(), script_backed_servers={"validation"}) == "script_backed"
+    assert (
+        _migration_state_for("health", "validation", gateway_modules={"validation"}, script_backed_servers=set())
+        == "gateway"
+    )
+    assert (
+        _migration_state_for("health", "validation", gateway_modules=set(), script_backed_servers={"validation"})
+        == "script_backed"
+    )
     assert (
         _migration_state_for(
             "health",
@@ -214,4 +228,3 @@ def test_manifest_validation_rejects_invalid_migration_state() -> None:
     health_entry = next(entry for entry in TOOL_MANIFEST if entry.tool_name == "mcp_gateway_health")
     bad_entry = replace(health_entry, migration_state="unknown_state")
     assert validate_manifest([bad_entry]) == ["invalid migration_state for mcp_gateway_health: unknown_state"]
-

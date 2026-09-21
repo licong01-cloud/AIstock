@@ -8,6 +8,10 @@ readers, or file-copy/promotion helpers.
 
 from __future__ import annotations
 
+import os
+import re
+import stat
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -15,6 +19,12 @@ if TYPE_CHECKING:
 
 
 QLIB_EXPORT_RUN_CONFIRM = "RUN_QLIB_EXPORT"
+MONTHLY_RELEASE_RUN_CONFIRM = "RUN_MONTHLY_DATASET_RELEASE"
+MONTHLY_RELEASE_ACTIVATE_CONFIRM = "ACTIVATE_MONTHLY_DATASET_RELEASE"
+MONTHLY_RELEASE_TOKEN_FILE_ENV = "DATASET_RELEASE_OPERATOR_TOKEN_FILE"
+_OPERATION_ID = re.compile(r"^dmr_[0-9a-f]{32}$")
+_AUTHORIZATION_REF = re.compile(r"^dsauth_[0-9a-f]{32}$")
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
 PRODUCTION_TARGET_NAMES = frozenset({"qlib_bin", "qlib_minute_bin", "factor_data"})
 
 H5_FULL_DATASET_ENDPOINTS = {
@@ -63,6 +73,14 @@ TOOL_NAMES = (
     "qlib_export_export_field_map_confirmed",
     "qlib_export_run_bin_unified_v2_confirmed",
     "qlib_export_generate_backtest_candidate_confirmed",
+    "qlib_monthly_release_plan",
+    "qlib_monthly_release_submit_confirmed",
+    "qlib_monthly_release_status",
+    "qlib_monthly_release_receipts",
+    "qlib_monthly_release_resume_confirmed",
+    "qlib_monthly_release_cancel_confirmed",
+    "qlib_monthly_release_activate_confirmed",
+    "qlib_monthly_release_rollback_confirmed",
 )
 TOOL_COUNT = len(TOOL_NAMES)
 
@@ -200,6 +218,96 @@ def _require_date(value: Any, name: str) -> str:
     if len(raw) != 10 or raw[4] != "-" or raw[7] != "-":
         raise ValueError(f"{name} must be YYYY-MM-DD; got {value!r}")
     return raw
+
+
+def _monthly_operation_id(value: str) -> str:
+    normalized = str(value or "").strip()
+    if _OPERATION_ID.fullmatch(normalized) is None:
+        raise ValueError("operation_id must be a canonical monthly release id")
+    return normalized
+
+
+def _monthly_authorization_ref(value: str) -> str:
+    normalized = str(value or "").strip()
+    if _AUTHORIZATION_REF.fullmatch(normalized) is None:
+        raise ValueError("authorization_ref must be a canonical dataset action reference")
+    return normalized
+
+
+def _monthly_operator_headers(*, idempotency_key: str | None = None) -> dict[str, str]:
+    configured = str(os.getenv(MONTHLY_RELEASE_TOKEN_FILE_ENV) or "").strip()
+    path = Path(configured)
+    if not configured or not path.is_absolute():
+        raise RuntimeError("monthly release operator token file is not configured")
+    try:
+        current = path
+        while True:
+            if current.exists() and _is_reparse_or_symlink(current):
+                raise ValueError("linked token path")
+            if current.parent == current:
+                break
+            current = current.parent
+        resolved = path.resolve(strict=True)
+        if not resolved.is_file() or _is_reparse_or_symlink(resolved):
+            raise ValueError("token path is not a plain file")
+        raw = resolved.read_bytes()
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("monthly release operator token file is invalid") from exc
+    if not raw or len(raw) > 4096 or b"\x00" in raw:
+        raise RuntimeError("monthly release operator token is invalid")
+    try:
+        token = raw.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("monthly release operator token is invalid") from exc
+    if len(token) < 32 or len(token) > 4096 or any(ord(char) < 32 for char in token):
+        raise RuntimeError("monthly release operator token is invalid")
+    headers = {"X-Dataset-Release-Operator-Token": token}
+    if idempotency_key is not None:
+        normalized = idempotency_key.strip()
+        if not normalized or len(normalized) > 256 or any(ord(char) < 32 for char in normalized):
+            raise ValueError("idempotency_key is invalid")
+        headers["Idempotency-Key"] = normalized
+    return headers
+
+
+def _is_reparse_or_symlink(path: Path) -> bool:
+    metadata = path.lstat()
+    return stat.S_ISLNK(metadata.st_mode) or bool(int(getattr(metadata, "st_file_attributes", 0)) & _REPARSE_POINT)
+
+
+def _monthly_request(payload: dict[str, Any]) -> dict[str, Any]:
+    body = dict(payload)
+    allowed = {
+        "target_cutoff",
+        "activation_mode",
+        "activation_authorization_ref",
+        "repair_authorization_refs",
+    }
+    unknown = sorted(set(body).difference(allowed))
+    if unknown:
+        raise ValueError(f"monthly release payload fields differ: {unknown}")
+    activation_mode = str(body.get("activation_mode") or "prepare_only")
+    if activation_mode not in {"prepare_only", "activate_when_ready"}:
+        raise ValueError("activation_mode is invalid")
+    activation_ref = body.get("activation_authorization_ref")
+    if activation_ref is not None:
+        activation_ref = _monthly_authorization_ref(str(activation_ref))
+    if (activation_mode == "activate_when_ready") != (activation_ref is not None):
+        raise ValueError("activation authorization must match activation_mode")
+    repair_refs = body.get("repair_authorization_refs") or []
+    if not isinstance(repair_refs, list) or len(repair_refs) > 128:
+        raise ValueError("repair_authorization_refs must be a bounded list")
+    normalized_repairs = [_monthly_authorization_ref(str(value)) for value in repair_refs]
+    if len(set(normalized_repairs)) != len(normalized_repairs):
+        raise ValueError("repair_authorization_refs contains duplicates")
+    return {
+        "schema_version": "aistock_monthly_release_request_v1",
+        "target_cutoff": _require_date(body.get("target_cutoff"), "target_cutoff"),
+        "product_profile": "qe_hmm_full_v2",
+        "activation_mode": activation_mode,
+        "activation_authorization_ref": activation_ref,
+        "repair_authorization_refs": normalized_repairs,
+    }
 
 
 def _plan_dataset_update(registry: "ModuleRegistry", payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -357,7 +465,9 @@ def register(registry: "ModuleRegistry") -> None:
         if limit < 1 or limit > 50:
             raise ValueError(f"limit must be between 1 and 50; got {limit}")
         safe_ts_code = _fragment(registry, ts_code, "ts_code")
-        return _compact(client.get("/data/preview", params={"ts_code": safe_ts_code, "start": start, "end": end, "limit": limit}))
+        return _compact(
+            client.get("/data/preview", params={"ts_code": safe_ts_code, "start": start, "end": end, "limit": limit})
+        )
 
     @registry.mcp.tool(name="qlib_export_plan_dataset_update")
     def qlib_export_plan_dataset_update(payload: dict[str, Any] | None = None) -> Any:
@@ -487,5 +597,109 @@ def register(registry: "ModuleRegistry") -> None:
                 "Do not treat this MCP result as production promotion.",
             ],
         }
+
+    @registry.mcp.tool(name="qlib_monthly_release_plan")
+    def qlib_monthly_release_plan(payload: dict[str, Any], idempotency_key: str) -> Any:
+        """Preview the single shared QE/HMM monthly release without writing state."""
+
+        return client.post(
+            "/monthly-releases/plan",
+            _monthly_request(payload),
+            headers=_monthly_operator_headers(idempotency_key=idempotency_key),
+        )
+
+    @registry.mcp.tool(name="qlib_monthly_release_submit_confirmed")
+    def qlib_monthly_release_submit_confirmed(
+        payload: dict[str, Any],
+        idempotency_key: str,
+        confirm: str | None = None,
+    ) -> Any:
+        """Submit one durable unified release after explicit confirmation."""
+
+        registry.confirm(confirm, MONTHLY_RELEASE_RUN_CONFIRM, "confirm")
+        return client.post(
+            "/monthly-releases",
+            _monthly_request(payload),
+            headers=_monthly_operator_headers(idempotency_key=idempotency_key),
+        )
+
+    @registry.mcp.tool(name="qlib_monthly_release_status")
+    def qlib_monthly_release_status(operation_id: str) -> Any:
+        """Read bounded durable status for one unified monthly release."""
+
+        operation = _monthly_operation_id(operation_id)
+        return client.get(f"/monthly-releases/{operation}", headers=_monthly_operator_headers())
+
+    @registry.mcp.tool(name="qlib_monthly_release_receipts")
+    def qlib_monthly_release_receipts(operation_id: str) -> Any:
+        """Read the bounded receipt index for one unified monthly release."""
+
+        operation = _monthly_operation_id(operation_id)
+        return client.get(
+            f"/monthly-releases/{operation}/receipts",
+            headers=_monthly_operator_headers(),
+        )
+
+    @registry.mcp.tool(name="qlib_monthly_release_resume_confirmed")
+    def qlib_monthly_release_resume_confirmed(operation_id: str, confirm: str | None = None) -> Any:
+        """Resume a blocked or interrupted release without replacing its plan."""
+
+        registry.confirm(confirm, MONTHLY_RELEASE_RUN_CONFIRM, "confirm")
+        operation = _monthly_operation_id(operation_id)
+        return client.post(
+            f"/monthly-releases/{operation}/resume",
+            {},
+            headers=_monthly_operator_headers(),
+        )
+
+    @registry.mcp.tool(name="qlib_monthly_release_cancel_confirmed")
+    def qlib_monthly_release_cancel_confirmed(operation_id: str, confirm: str | None = None) -> Any:
+        """Request cooperative cancellation of one release."""
+
+        registry.confirm(confirm, MONTHLY_RELEASE_RUN_CONFIRM, "confirm")
+        operation = _monthly_operation_id(operation_id)
+        return client.post(
+            f"/monthly-releases/{operation}/cancel",
+            {},
+            headers=_monthly_operator_headers(),
+        )
+
+    @registry.mcp.tool(name="qlib_monthly_release_activate_confirmed")
+    def qlib_monthly_release_activate_confirmed(
+        operation_id: str,
+        authorization_ref: str,
+        confirm: str | None = None,
+    ) -> Any:
+        """Activate a READY release with a separately issued authorization."""
+
+        registry.confirm(confirm, MONTHLY_RELEASE_ACTIVATE_CONFIRM, "confirm")
+        operation = _monthly_operation_id(operation_id)
+        return client.post(
+            f"/monthly-releases/{operation}/activate",
+            {
+                "schema_version": "aistock_monthly_release_action_v1",
+                "authorization_ref": _monthly_authorization_ref(authorization_ref),
+            },
+            headers=_monthly_operator_headers(),
+        )
+
+    @registry.mcp.tool(name="qlib_monthly_release_rollback_confirmed")
+    def qlib_monthly_release_rollback_confirmed(
+        operation_id: str,
+        authorization_ref: str,
+        confirm: str | None = None,
+    ) -> Any:
+        """Rollback an activated release with a separate authorization."""
+
+        registry.confirm(confirm, MONTHLY_RELEASE_ACTIVATE_CONFIRM, "confirm")
+        operation = _monthly_operation_id(operation_id)
+        return client.post(
+            f"/monthly-releases/{operation}/rollback",
+            {
+                "schema_version": "aistock_monthly_release_action_v1",
+                "authorization_ref": _monthly_authorization_ref(authorization_ref),
+            },
+            headers=_monthly_operator_headers(),
+        )
 
     registry.register_tool_count("qlib_export", TOOL_COUNT)
