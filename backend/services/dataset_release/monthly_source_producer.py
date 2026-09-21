@@ -56,6 +56,7 @@ class MonthlySourceReadSet:
     changes: tuple[SourceChange, ...]
     input_artifacts: tuple[SourceArtifact, ...]
     repair_receipts: tuple[Mapping[str, Any], ...] = ()
+    seal_token: object | None = None
 
     def __post_init__(self) -> None:
         if {item.gate for item in self.gates} != set(SOURCE_GATES) or len(self.gates) != len(
@@ -284,6 +285,9 @@ class AuditedMonthlySourceProducer:
         bytes_written = sum(Path(item["path"]).stat().st_size for item in outputs)
         source_rows = sum(item.observed_count for item in read_set.gates)
         elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
+        sealed_hook = getattr(self.adapter, "snapshot_sealed", None)
+        if callable(sealed_hook):
+            sealed_hook(context, read_set.seal_token)
         return {
             "schema_version": PRODUCER_EVIDENCE_SCHEMA,
             "scope": {
