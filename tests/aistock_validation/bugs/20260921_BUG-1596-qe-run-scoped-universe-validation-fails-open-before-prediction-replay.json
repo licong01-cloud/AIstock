@@ -69,8 +69,8 @@
   },
   "first_seen_at": "2026-09-21T16:23:08.246531Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6716fa001dace82f986f153fa7ea4b5efe4981b3",
+  "fixed_at": "2026-09-21T16:46:55Z",
   "github_issue_number": 4993,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4993",
   "last_seen_at": "2026-09-21T16:23:08.246531Z",
@@ -78,6 +78,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4995",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -102,6 +103,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -113,7 +115,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1596",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ca4b03b453c26dc1",
+    "recorded_at": "2026-09-21T16:48:09.717872Z",
+    "runtime_contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8915bc82a773001a66dfd7d0112b8c9563d0321a",
+    "source_merge_commit": "6716fa001dace82f986f153fa7ea4b5efe4981b3",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4995",
+    "validation_evidence": [
+      "validation-receipt: id=9d6172cf26e018d9 commit=8915bc82a773001a66dfd7d0112b8c9563d0321a kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=18eb57f27b9b0d83 commit=8915bc82a773001a66dfd7d0112b8c9563d0321a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/quantevolver/test_qe_active_dataset_profile_api.py -q` result=`22 passed`",
+      "validation-receipt: id=7997a29714b5ea4d commit=8915bc82a773001a66dfd7d0112b8c9563d0321a kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/quantevolver/config_composer.py backend/services/quantevolver/qe_validate_direct_v2_dataset.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "6032c8b501aaf729ee2b14c6d0814fa2ebe19e46768ed62b7b7e6d74b0805510"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -126,7 +151,10 @@
     "python -m nox -s l0 -> passed",
     "python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/quantevolver/test_qe_active_dataset_profile_api.py -q -> 22 passed",
     "python -m ruff check backend/services/quantevolver/config_composer.py backend/services/quantevolver/qe_validate_direct_v2_dataset.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py -> passed",
-    "fresh subprocess execution of qe_validate_direct_v2_dataset.py with packaged filtered stock-universe sidecar -> passed"
+    "fresh subprocess execution of qe_validate_direct_v2_dataset.py with packaged filtered stock-universe sidecar -> passed",
+    "validation-receipt: id=9d6172cf26e018d9 commit=8915bc82a773001a66dfd7d0112b8c9563d0321a kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=18eb57f27b9b0d83 commit=8915bc82a773001a66dfd7d0112b8c9563d0321a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/quantevolver/test_qe_active_dataset_profile_api.py -q` result=`22 passed`",
+    "validation-receipt: id=7997a29714b5ea4d commit=8915bc82a773001a66dfd7d0112b8c9563d0321a kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/quantevolver/config_composer.py backend/services/quantevolver/qe_validate_direct_v2_dataset.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py` result=`passed`"
   ],
   "verification_budget": {
     "budget": "standard",
