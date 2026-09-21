@@ -1396,7 +1396,7 @@ def test_hmm_local_and_cross_contract_changes_use_pr_slice(tmp_path: Path) -> No
         repo_root=Path.cwd(),
     )
     critical = classifier.classify_changed_files(
-        ["backend/services/hmm_risk/state_model_set.py"],
+        ["backend/services/hmm_risk/contracts.py"],
         repo_root=Path.cwd(),
     )
 
