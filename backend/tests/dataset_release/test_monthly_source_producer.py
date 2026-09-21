@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+import hashlib
 from pathlib import Path
+
+import pytest
 
 from backend.services.dataset_release.monthly_snapshot import MonthlySnapshotCoordinator
 from backend.services.dataset_release.monthly_source_audit import SourceGateEvidence
 from backend.services.dataset_release.monthly_source_producer import (
     AuditedMonthlySourceProducer,
+    MonthlySourceProducerError,
     MonthlySourceReadSet,
     SourceArtifact,
 )
@@ -88,7 +92,7 @@ class Adapter:
                     start=date(2026, 9, 1),
                     end=date(2026, 9, 30),
                     kind="TAIL_APPEND",
-                    source_receipt_sha256=SHA,
+                    source_receipt_sha256=hashlib.sha256(self.source.read_bytes()).hexdigest(),
                 ),
             ),
             input_artifacts=tuple(artifacts),
@@ -149,3 +153,58 @@ def test_audited_source_producer_emits_strong_gate_artifacts(tmp_path: Path) -> 
         prior_receipts={},
     )
     assert receipt["scope"]["snapshot_group_id"].startswith("postgres:")
+
+
+def test_audited_source_producer_rejects_unpinned_change_receipt(tmp_path: Path) -> None:
+    source = tmp_path / "inputs" / "source.json"
+    source.parent.mkdir()
+    source.write_text("{}\n", encoding="utf-8")
+
+    @dataclass
+    class DriftAdapter(Adapter):
+        def read(self, connection, identity, context):  # type: ignore[no-untyped-def]
+            original = super().read(connection, identity, context)
+            change = original.changes[0]
+            return MonthlySourceReadSet(
+                gates=original.gates,
+                changes=(
+                    SourceChange(
+                        dataset=change.dataset,
+                        fields=change.fields,
+                        instruments=change.instruments,
+                        start=change.start,
+                        end=change.end,
+                        kind=change.kind,
+                        source_receipt_sha256="f" * 64,
+                    ),
+                ),
+                input_artifacts=original.input_artifacts,
+            )
+
+    producer = AuditedMonthlySourceProducer(
+        producer_id="aistock.monthly.source",
+        producer_version="2",
+        artifact_root=tmp_path,
+        connection_factory=Connection,
+        adapter=DriftAdapter(source, tmp_path),
+        snapshot_factory=lambda factory: MonthlySnapshotCoordinator(
+            factory,
+            repair_watermark_reader=lambda _connection: "repair-1",
+            overlapping_repair_reader=lambda _connection, _watermark: (),
+        ),
+    )
+    with pytest.raises(MonthlySourceProducerError, match="change receipt is not pinned"):
+        producer.produce(
+            ProducerContext(
+                stage="SOURCE",
+                operation_id=f"dmr_{'3' * 32}",
+                attempt=1,
+                request={},
+                plan={
+                    "target_cutoff": "2026-09-30",
+                    "predecessor": {"cutoff": "2026-08-31"},
+                    "repair_authorization_refs": [],
+                },
+                prior_receipts={},
+            )
+        )

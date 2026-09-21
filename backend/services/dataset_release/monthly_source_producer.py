@@ -85,6 +85,70 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validated_source_artifacts(
+    artifacts: Sequence[SourceArtifact],
+) -> tuple[list[dict[str, str]], dict[str, str]]:
+    """Resolve and hash the exact evidence set consumed by SOURCE.
+
+    Gate contracts, readbacks, repair receipts and change receipts are not
+    trusted merely because an adapter names them.  Every provenance digest
+    used to close SOURCE must resolve to one regular, non-link input artifact.
+    """
+
+    if not artifacts:
+        raise MonthlySourceProducerError("source adapter returned no input artifacts")
+    by_id: dict[str, str] = {}
+    by_path: set[Path] = set()
+    result: list[dict[str, str]] = []
+    for artifact in artifacts:
+        if artifact.artifact_id in by_id:
+            raise MonthlySourceProducerError("source input artifact id is duplicated")
+        resolved = artifact.path.resolve(strict=True)
+        if not resolved.is_file() or resolved.is_symlink():
+            raise MonthlySourceProducerError("source input artifact is missing or linked")
+        if resolved in by_path:
+            raise MonthlySourceProducerError("source input artifact path is duplicated")
+        digest = _sha256(resolved)
+        by_id[artifact.artifact_id] = digest
+        by_path.add(resolved)
+        result.append({"id": artifact.artifact_id, "path": str(resolved)})
+    return result, by_id
+
+
+def _require_source_provenance(
+    read_set: MonthlySourceReadSet,
+    *,
+    artifact_hashes: Mapping[str, str],
+) -> None:
+    content_hashes = set(artifact_hashes.values())
+    for gate in read_set.gates:
+        for reference in (gate.expectation_contract_ref, gate.readback_ref):
+            if reference not in artifact_hashes:
+                raise MonthlySourceProducerError(
+                    f"source gate provenance is not pinned: {gate.gate}"
+                )
+        for exception in gate.exception_refs:
+            if exception.authority_sha256 not in content_hashes:
+                raise MonthlySourceProducerError(
+                    f"source exception authority is not pinned: {gate.gate}"
+                )
+    for change in read_set.changes:
+        if change.source_receipt_sha256 not in content_hashes:
+            raise MonthlySourceProducerError(
+                f"source change receipt is not pinned: {change.dataset}"
+            )
+    for repair in read_set.repair_receipts:
+        if not isinstance(repair, Mapping):
+            raise MonthlySourceProducerError("source repair receipt is invalid")
+        for field in ("dev_validation_sha256", "apply_sha256", "readback_sha256"):
+            digest = str(repair.get(field) or "")
+            ensure_sha256(digest, field=f"repair_receipt.{field}")
+            if digest not in content_hashes:
+                raise MonthlySourceProducerError(
+                    f"source repair evidence is not pinned: {field}"
+                )
+
+
 def _write_exclusive(path: Path, value: Mapping[str, Any]) -> dict[str, Any]:
     payload = canonical_json_bytes(value) + b"\n"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,6 +225,10 @@ class AuditedMonthlySourceProducer:
             snapshot.assert_no_overlapping_repairs()
             identity = snapshot.identity
 
+        input_artifacts, artifact_hashes = _validated_source_artifacts(
+            read_set.input_artifacts
+        )
+        _require_source_provenance(read_set, artifact_hashes=artifact_hashes)
         actions = classify_component_actions(read_set.changes)
         outputs: list[dict[str, str]] = []
 
@@ -213,13 +281,6 @@ class AuditedMonthlySourceProducer:
             },
         )
         write("source-audit.json", audit)
-        input_artifacts: list[dict[str, str]] = []
-        for artifact in read_set.input_artifacts:
-            resolved = artifact.path.resolve(strict=True)
-            if not resolved.is_file() or resolved.is_symlink():
-                raise MonthlySourceProducerError("source input artifact is missing or linked")
-            input_artifacts.append({"id": artifact.artifact_id, "path": str(resolved)})
-
         bytes_written = sum(Path(item["path"]).stat().st_size for item in outputs)
         source_rows = sum(item.observed_count for item in read_set.gates)
         elapsed_ms = max(0, int((time.monotonic() - started) * 1000))
