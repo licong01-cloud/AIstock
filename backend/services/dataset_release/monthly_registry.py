@@ -10,11 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from .canonical import canonical_json_bytes
 from .monthly_unified import STAGES
 from .monthly_worker import RegisteredMonthlyPipeline, StageProducer
+
+if TYPE_CHECKING:
+    from .monthly_stage_adapter import MonthlyStageAdapter
 
 
 OFFICIAL_REGISTRY_SCHEMA = "aistock_monthly_release_producer_registry_v1"
@@ -81,6 +84,24 @@ class OfficialMonthlyProducerRegistry:
 
     def pipeline(self, *, artifact_roots: Sequence[Path]) -> RegisteredMonthlyPipeline:
         return RegisteredMonthlyPipeline(self.as_mapping(), artifact_roots=artifact_roots)
+
+    @classmethod
+    def from_adapters(
+        cls, adapters: Sequence["MonthlyStageAdapter"]
+    ) -> "OfficialMonthlyProducerRegistry":
+        """Build the registry from the trusted in-process adapter set."""
+
+        from .monthly_stage_adapter import code_owned_producers
+
+        producers = code_owned_producers(adapters)
+        return cls(
+            source=producers["SOURCE"],
+            build=producers["BUILD"],
+            derive=producers["DERIVE"],
+            local_validate=producers["LOCAL_VALIDATE"],
+            deploy=producers["DEPLOY"],
+            consumer_validate=producers["CONSUMER_VALIDATE"],
+        )
 
 
 __all__ = (
