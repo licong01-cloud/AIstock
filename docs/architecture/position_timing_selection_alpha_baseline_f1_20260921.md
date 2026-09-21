@@ -1,11 +1,13 @@
 # PT-NEXT-028：独立股票筛选 Alpha 基线实验详细设计
 
-> 版本：v1.0；日期：2026-09-21；Feature tier：F1  
-> 状态：`IMPLEMENTED_REPLAY_VERIFIED_INCONCLUSIVE`
+> 版本：v1.1；日期：2026-09-21；Feature tier：F1  
+> 状态：`REPLAY_REPRODUCIBLE_VALUATION_AND_INFERENCE_REVIEW_PENDING`
 > 主蓝图：[择时系统 F2 蓝图](position_timing_advice_f2_redesign_20260903.md)  
 > 唯一开发权威：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
 `DESIGN_VERIFIED` 只表示设计闭合，不表示代码、正式回放或收益结论已经完成。本实验只研究股票筛选本身，不把择时、模型训练或在线建议混入同一试验族。
+
+**v1.1复核范围**：本版仅文档修订，保留v1.0冻结合同、代码和不可变产物。§16记录新发现的停牌估值与不连续月份推断问题，原回放身份验证不代表这些问题已修复。当前研发顺序以主蓝图§0／§9.32为准；外部评审者只需主蓝图即可理解研究上下文。
 
 ## 1. Background / Goal / 研究问题（F-001）
 
@@ -75,7 +77,7 @@ PT-NEXT-023 曾观察到 U1/U2 的长期持有合成收益高于 U0，但三个�
 - 每个事件报告成本后收益、期间最大回撤、费用、持仓天数、执行和终值 typed 状态；
 - 沪深300同期收益只作全市场背景，不进入三项正式选胜 family，不替代同范围比较。
 
-若某月某 screen 的任一已买入账户终值不可估值，该 screen-month-horizon 为 `COHORT_VALUATION_INCOMPLETE`，不进入均值且必须在覆盖报告中计数；T+1合法未成交的现金账户收益0仍进入。这避免只保留成功买入或终值完整的有利样本。
+原v1.0合同：若某月某 screen 的任一已买入账户终值不可估值，该 screen-month-horizon 为 `COHORT_VALUATION_INCOMPLETE`，不进入均值且必须在覆盖报告中计数；T+1合法未成交的现金账户收益0仍进入。这防止在同月静默删除个别未知账户，但**不能证明保留下来的完整月份没有选择偏差**。§16已确认少量停牌缺价导致大量整月排除；新估值及统计合同尚未实现，不用本次文档修订追改旧结果。
 
 ## 6. Comparators / Formal Family / Statistics（F-006）
 
@@ -88,6 +90,8 @@ PT-NEXT-023 曾观察到 U1/U2 的长期持有合成收益高于 U0，但三个�
 三项是唯一正式 family。对共同月份差做12个月 circular block bootstrap，5,000次，seed=`20260921`；同时报告 nominal 95% 和 Bonferroni 双侧 `1−0.05/3` 区间。经济阈值冻结0 bps：family-wise lower>0 为 `SUPPORTED`，upper<0 为 `NEGATIVE`，其余为 `INCONCLUSIVE`；`power_status` 独立记录，未冻结 Oracle 尺度时为 `NOT_COMPUTABLE`。
 
 有效区间至少需要两个完整的冻结 block，即24个共同完整月份。少于24个月时不得缩短 block、切换 IID bootstrap 或输出退化区间，统一报告 `INCONCLUSIVE + UNDERPOWERED / INSUFFICIENT_COMMON_MONTHS_FOR_FROZEN_BLOCK_BOOTSTRAP`。这是推断可计算性约束，不改变股票池、阈值、horizon 或运行资格。
+
+v1.1补充：上段是原已实现合同及其防退化检查，不是统计功效充分条件。代码没有保留共同月日期，实际按12条保留观测抽样；存在日历间隔时不等于12个连续自然月。因此包括26个月比较在内的旧区间都需复核，不以`n>=24`主张统计闭合。下一修订应保留完整月历、处理缺失与120日窗口重叠，先冻结方法再重放，不以结果选择区块长度。
 
 20/60/252日、逐股胜率、MDD、指数、年份和股票池切片全部 `diagnostic_only=true`，不得反向选择 screen、阈值、horizon 或子人口。由于三个 screen 和完整 R8 已被历史研究观察，即使正式端点有正下界，结论仍是 exploratory，不自动进入在线选股或择时。
 
@@ -144,7 +148,7 @@ artifact namespace：
 
 主要风险是：U1/U2已经被观察、proxy并非严格财务PIT、嵌套screen差值不是单因子因果效应、120日cohort重叠、牛市长期持有漂移、最低佣金与不可成交对小账户的影响。通过共同月份、块bootstrap、独立账户、typed覆盖和exploratory限定披露，不通过增加模型或门禁掩盖。
 
-若三项均无正的family-wise下界，停止扫描现有 U0/U1/U2 阈值和代理字段组合；下一步应提出一个真正独立的信息源或等待严格财务PIT，而不是调整PE/PB/增长阈值。若出现支持，也只冻结为 PT-NEXT-029 的“筛选后BH vs 同screen冻结择时”新假设，不追认为在线alpha、不在本轮实现组合。
+停止扫描现有U0/U1/U2阈值和代理字段组合的承诺不变，但不能用尚待修订的推断判定方向无效。下一步先按主蓝图§9.32修订测量并诊断小盘机制；严格财报缺口仅限制其自身分支，不阻塞现有数据下的修复／研发。新的筛选后BH与同screen冻结择时配对仍需明确新假设，不因旧描述性点估计自动启动，不接在线能力。
 
 生产 gate 全部 noop：无 DDL/DML、依赖安装、dataset/profile 激活、在线发布、服务控制或后端重启。本任务只写 timing-owned repo-external immutable artifact；回滚源码不删除历史证据。
 
@@ -166,14 +170,16 @@ artifact namespace：
 
 ## 13. Design Acceptance Matrix
 
+本版验收范围由用户的文档更新／外部评审请求限定。`APPROVED_BY_USER_DOCS_ONLY`只标记文档范围，不豁免实现缺陷；原测试通过仍是历史事实，F-005／F-006的测量问题未修复，不能用本矩阵宣称后续代码完成。
+
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | §1；主蓝图§9.31 | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
 | F-002 | §2；`selection_alpha_benchmark.prepare/load_request` | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
 | F-003 | §3；`r8_proxy_screen.py` | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
 | F-004 | §4；`selection_alpha_benchmark._replay_symbol_task` | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
-| F-005 | §5；event/report schema | `backend/tests/position_timing/test_selection_alpha_benchmark.py` | IMPLEMENTED_VERIFIED | none |
-| F-006 | §6；`selection_alpha_benchmark._bootstrap_monthly/_build_report` | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；正式 `report.json` | IMPLEMENTED_VERIFIED | none |
+| F-005 | §5／§16；event/report schema | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；主蓝图§0.8原artifact只读复核 | VALUATION_REVIEW_PENDING | APPROVED_BY_USER_DOCS_ONLY：停牌估值／MDD缺价仍待业务修复，本轮只回填事实 |
+| F-006 | §6／§16；`selection_alpha_benchmark._bootstrap_monthly/_build_report` | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；原 `report.json`及共同月历复核 | CALENDAR_INFERENCE_REVIEW_PENDING | APPROVED_BY_USER_DOCS_ONLY：不连续月份推断仍待修订，原区间非修复后证据 |
 | F-007 | §7；benchmark/chunk/bundle | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/selection_alpha_baseline_v1/bundles/4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0/manifest.json` | IMPLEMENTED_VERIFIED | none |
 | F-008 | §8；request/receipt side-effect fields | artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/selection_alpha_baseline_v1/bundles/4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0/receipt.json` | IMPLEMENTED_VERIFIED | none |
 | F-009 | §9 | `backend/tests/position_timing/test_selection_alpha_benchmark.py`；artifact: `/home/lc999/data/position_timing_artifacts/position_timing_advice_v1/research/selection_alpha_baseline_v1/bundles/4c69de0dc4b9a6d8973deb4deeab70156bf7e6fcd77668ae8f4d4167aea831b0/manifest.json` | IMPLEMENTED_VERIFIED | none |
@@ -198,6 +204,17 @@ artifact namespace：
 
 首个完整bundle暴露一个统计实现缺陷：当共同月恰为12、冻结block也为12时，circular block只会循环排列同一组月份，区间错误塌缩为点。该bundle不可作为支持证据；修复不缩短block、不切换IID bootstrap，而是要求至少24个共同完整月，并以新代码、新request和新bundle全量重放。最终 `result_class=EXPLORATORY_SELECTION_ALPHA_NO_SUPPORTED_SCREEN`、`selected_for_live=0`。
 
-覆盖而非买入能力是当前主要瓶颈：120日U0/U1/U2成交率约98.73%/99.14%/99.19%，但U0的97个月中只有13个月完整，78个月因至少一个已入选事件终值不可估而整体typed incomplete；U1/U2完整月为27/48。不得删除退市、停牌或缺终值股票来制造更窄区间。按停止规则，不再扫描现有U0/U1/U2阈值或proxy字段组合；下一优先级先设计不依赖幸存者删除的退市／终止上市终值authority或引入真正独立且严格PIT的信息源，再决定是否开启新的选股假设。`bak_basic`仍只是日快照代理，不能被本次正点估计包装成业绩增长alpha。
+覆盖而非买入能力是原报告中的主要限制：120日U0/U1/U2成交率约98.73%/99.14%/99.19%，U0的97个月只有13个月完整、78个月typed incomplete；U1/U2完整月27/48。v1.1撤回将其主要归因为退市／终止上市authority的推断：多数缺失有明确停牌证据，且月份推断另有待修订项，详见§16。不得删除股票、填0或事后缩短窗口制造完整性；`bak_basic`仍只是日快照代理，不是业绩加速alpha。原数值保持历史身份，不视为修订后结果。
 
 request/receipt记录 `database/network/live_market/runtime/process/other_module_write=false`，`outcomes_read`仅发生在完整source preflight之后；没有模型训练、在线发布、服务控制或后端重启。
+
+## 16. Post-replay Read-only Review / 尚未修复的测量问题
+
+2026-09-21对§15同一bundle进行只读复核，没有重放、写库、补源或修改artifact。主蓝图§0.8保存读回文件SHA256，§0.5提供完整方法与限制。
+
+- 120日U0事件194,146条：180,207条`EVALUATED`、192条`TERMINAL_VALUATION_UNKNOWN`、13,747条`HORIZON_NOT_MATURE`。未知占已到期180,399条约0.1064%，涉及172股、78个决策月；不是192只股票。
+- 192条未知中180条精确匹配冻结停牌表`S`，188条后续有有效close。剩余12条未匹配停牌，8条后续有价，4条同属603056.SH且在R8剩余窗口无有效价。尚未证明后4条正式退市，不能由缺价直接归因；后续价只作事后定位，不回填过去。
+- `_terminal_net_mtm`对缺失close／factor返回未知；`_path_max_drawdown`对任一缺失调整价返回未知；`_cohort_monthly`将含一个未知账户的整月排除。应设计仅依赖当时信息的停牌账面估值、保留不可交易状态及陈旧风险；未知原因不能统一前填。
+- `_build_report`给`_bootstrap_monthly`的只有收益数组，丢弃自然月日期。13／12／26个共同完整月分别有9／9／19处相邻月份间隔超过一个月。原12观测区块与声明的12自然月区块不一致；原26月区间也标记待重新评估。
+
+后续工作是择时模块内的BUG登记、最小合同修订、直接反例测试和同输入新版本重放；真正源缺口再交数据窗口。当前没有修复后收益、没有证明全部缺失可恢复，也没有新增统计支持。保留原测试／inspect／retry通过事实，但不能称其覆盖了上述失败模式。修订计划不改变股票池、screen参数、费用或120日目标，不引入新的门禁、模型搜索或跨模块融合。
