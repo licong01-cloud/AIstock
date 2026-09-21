@@ -99,7 +99,10 @@ def _runtime_bindings(path: Path, *, node_id: str | None = None) -> dict[str, An
                 "RDAGENT_FACTOR_DATA_WSL": factor,
             },
         }
-        if profile.raw["schema_version"] == "aistock_active_dataset_profile_v3":
+        if profile.raw["schema_version"] in {
+            "aistock_active_dataset_profile_v3",
+            "aistock_active_dataset_profile_v4",
+        }:
             sector_context = posixpath.join(candidate_root, "components/sector_context_candidate_v1")
             index_context = posixpath.join(candidate_root, "components/index_context/index_daily.h5")
             suspend = posixpath.join(candidate_root, "components/suspend_d_daily_candidate_v2")
@@ -123,6 +126,27 @@ def _runtime_bindings(path: Path, *, node_id: str | None = None) -> dict[str, An
                     "AISTOCK_SECTOR_CONTEXT_DIR": sector_context,
                 }
             )
+            if profile.raw["schema_version"] == "aistock_active_dataset_profile_v4":
+                components = profile.raw["components"]
+                controller_root = Path(
+                    str(profile.raw["controller_paths"]["candidate_root"])
+                ).resolve(strict=True)
+                registry_relative = Path(
+                    str(components["derived_asset_registry_path"])
+                ).resolve(strict=True).relative_to(controller_root).as_posix()
+                closure_relative = Path(
+                    str(components["release_closure_path"])
+                ).resolve(strict=True).relative_to(controller_root).as_posix()
+                node.update(
+                    {
+                        "derived_asset_registry_path": posixpath.join(
+                            candidate_root, registry_relative
+                        ),
+                        "release_closure_path": posixpath.join(
+                            candidate_root, closure_relative
+                        ),
+                    }
+                )
         nodes[selected_id] = node
     return {
         "schema_version": "aistock_qe_runtime_bindings_v1",

@@ -682,6 +682,14 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_direct_monthly.py",
         "backend/tests/dataset_release/test_release_successor.py",
         "backend/tests/dataset_release/test_shared_sector_context.py",
+        "backend/tests/dataset_release/test_monthly_repair_journal.py",
+        "backend/tests/dataset_release/test_monthly_snapshot.py",
+        "backend/tests/dataset_release/test_monthly_source_audit.py",
+        "backend/tests/dataset_release/test_monthly_source_producer.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py",
+        "backend/tests/dataset_release/test_monthly_worker.py",
+        "backend/tests/dataset_release/test_qlib_bounded_update.py",
+        "backend/tests/dataset_release/test_source_pool.py",
         "backend/tests/dataset_release/test_candidate_validator.py",
         "backend/tests/dataset_release/test_artifact_ready_source.py",
         "backend/tests/dataset_release/test_source_authority.py",
@@ -692,6 +700,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
         "backend/tests/scripts/test_build_core_index_membership_authority.py",
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+        "backend/tests/scripts/test_dataset_release_source_stage.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
     ]
     pr_targets = _direct_neighbor_pr_targets(

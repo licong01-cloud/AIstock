@@ -50,6 +50,7 @@ from .source_manifest import (
     PartitionSummary,
     SourceManifest,
 )
+from .monthly_snapshot import SNAPSHOT_ID_RE
 from .source_pool import ReadOnlySourcePool
 from .source_rows_codec import (
     SOURCE_ROWS_CODEC,
@@ -1067,9 +1068,29 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
         policy: ResourcePolicy,
         *,
         connection_factory: Callable[[], Any] = independent_postgres_connection_factory,
+        imported_snapshot_id: str | None = None,
     ) -> None:
         self.policy = policy
-        self._pool = ReadOnlySourcePool(connection_factory, policy)
+        if imported_snapshot_id is not None and SNAPSHOT_ID_RE.fullmatch(imported_snapshot_id) is None:
+            raise ValueError("imported PostgreSQL snapshot identity is invalid")
+
+        def import_snapshot(connection: Any) -> None:
+            if imported_snapshot_id is None:
+                return
+            cursor = connection.cursor()
+            try:
+                # PostgreSQL does not accept bind parameters for this command.
+                # The strict server-identity regex above makes the literal safe.
+                cursor.execute(f"SET TRANSACTION SNAPSHOT '{imported_snapshot_id}'")
+            finally:
+                cursor.close()
+
+        self._pool = ReadOnlySourcePool(
+            connection_factory,
+            policy,
+            transaction_initializer=import_snapshot if imported_snapshot_id is not None else None,
+        )
+        self._imported_snapshot_id = imported_snapshot_id
         self._connection_context: Any = None
         self._connection: Any = None
         self._snapshot_tokens: tuple[str, ...] = ()
@@ -1090,9 +1111,10 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
         if not row or str(row[2]).lower() not in {"on", "true", "1"}:
             raise SourceConfigurationMissing("PostgreSQL source snapshot did not acknowledge read-only mode")
         token = digest_named_fields(
-            "dataset_release_postgres_snapshot_token_v1",
+            "dataset_release_postgres_snapshot_token_v2",
             {
                 "snapshot": str(row[0]),
+                "exported_snapshot_id": self._imported_snapshot_id,
                 "isolation": str(row[1]).lower(),
                 "read_only": str(row[2]).lower(),
             },
@@ -1384,6 +1406,26 @@ def production_source_session_factory(
     policy: ResourcePolicy,
 ) -> PostgresSourceSnapshotSession:
     return PostgresSourceSnapshotSession(policy)
+
+
+def imported_source_session_factory(
+    snapshot_id: str,
+    *,
+    connection_factory: Callable[[], Any] = independent_postgres_connection_factory,
+) -> SourceSessionFactory:
+    """Bind every source-authority session to one exported PG snapshot."""
+
+    if SNAPSHOT_ID_RE.fullmatch(snapshot_id) is None:
+        raise ValueError("imported PostgreSQL snapshot identity is invalid")
+
+    def factory(policy: ResourcePolicy) -> PostgresSourceSnapshotSession:
+        return PostgresSourceSnapshotSession(
+            policy,
+            connection_factory=connection_factory,
+            imported_snapshot_id=snapshot_id,
+        )
+
+    return factory
 
 
 @dataclass(frozen=True, slots=True)

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.shared_sector_context import (
     require_pinned_sector_context_files,
     validate_sector_context_pins,
@@ -42,6 +43,7 @@ ACTIVE_PROFILE_ENV = "AISTOCK_ACTIVE_DATASET_PROFILE_PATH"
 ACTIVE_PROFILE_SCHEMA_V1 = "aistock_active_dataset_profile_v1"
 ACTIVE_PROFILE_SCHEMA_V2 = "aistock_active_dataset_profile_v2"
 ACTIVE_PROFILE_SCHEMA_V3 = "aistock_active_dataset_profile_v3"
+ACTIVE_PROFILE_SCHEMA_V4 = "aistock_active_dataset_profile_v4"
 # Compatibility export for existing profile producers.  New profiles which
 # enable sector-policy materialization must use V2.
 ACTIVE_PROFILE_SCHEMA = ACTIVE_PROFILE_SCHEMA_V1
@@ -111,6 +113,15 @@ _CONSUMER_REQUIRED_COMPONENTS = {
     "hmm": frozenset({"factor", "index", "manifest", "sector_context"}),
     "selection": frozenset({"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}),
     "advisory": frozenset({"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}),
+    "qe_single": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context"}),
+    "qe_custom": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context"}),
+    "qe_multi_alpha": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context"}),
+    "qe_p10": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context", "derived_assets"}),
+    "qe_p11": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context", "derived_assets"}),
+    "hmm_file_only": frozenset({"factor", "index", "manifest", "sector_context"}),
+    "factor_research": frozenset({"day", "factor", "stock_pools", "manifest"}),
+    "position_timing": frozenset({"day", "factor", "stock_pools", "manifest"}),
+    "unified_backtest": frozenset({"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}),
 }
 QE_STAR50_REQUIRED_TOPK = 20
 _STAR50_ALIASES = frozenset(
@@ -175,9 +186,22 @@ def _is_link_or_junction(path: Path) -> bool:
     return path.is_symlink() or bool(is_junction and is_junction())
 
 
+def _require_plain_existing_chain(path: Path, *, field: str) -> None:
+    requested = path.expanduser().absolute()
+    current = Path(requested.anchor)
+    for part in requested.parts[1:]:
+        current = current / part
+        if current.exists() and _is_link_or_junction(current):
+            raise _fail(
+                "qe_active_dataset_profile_invalid",
+                f"{field} traverses a link or junction",
+            )
+
+
 def _require_external_regular_file(path: Path, *, field: str) -> None:
     if not path.is_absolute():
         raise _fail("qe_active_dataset_profile_invalid", f"{field} must be an absolute path")
+    _require_plain_existing_chain(path, field=field)
     project_root = Path(__file__).resolve().parents[3]
     try:
         resolved = path.resolve(strict=True)
@@ -195,6 +219,7 @@ def _require_external_regular_file(path: Path, *, field: str) -> None:
 def _require_external_directory(path: Path, *, field: str) -> None:
     if not path.is_absolute():
         raise _fail("qe_active_dataset_profile_invalid", f"{field} must be an absolute path")
+    _require_plain_existing_chain(path, field=field)
     project_root = Path(__file__).resolve().parents[3]
     try:
         resolved = path.resolve(strict=True)
@@ -454,6 +479,7 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
         ACTIVE_PROFILE_SCHEMA_V1,
         ACTIVE_PROFILE_SCHEMA_V2,
         ACTIVE_PROFILE_SCHEMA_V3,
+        ACTIVE_PROFILE_SCHEMA_V4,
     }:
         raise _fail("qe_active_dataset_profile_invalid", "schema_version differs")
     generation = str(root["generation"] or "")
@@ -487,7 +513,7 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
     }
     if profile_schema == ACTIVE_PROFILE_SCHEMA_V2:
         component_fields.add("sector_policy_pins")
-    elif profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+    elif profile_schema in {ACTIVE_PROFILE_SCHEMA_V3, ACTIVE_PROFILE_SCHEMA_V4}:
         component_fields.update(
             {
                 "sector_context_pins",
@@ -495,14 +521,25 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
                 "dataset_manifest_file_sha256",
             }
         )
+        if profile_schema == ACTIVE_PROFILE_SCHEMA_V4:
+            component_fields.update(
+                {
+                    "derived_asset_registry_path",
+                    "derived_asset_registry_sha256",
+                    "release_closure_path",
+                    "release_closure_sha256",
+                }
+            )
     components = _require_exact_mapping(
         root["components"],
         fields=component_fields,
         field="components",
     )
     sha_fields = ["factor_meta_sha256"]
-    if profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+    if profile_schema in {ACTIVE_PROFILE_SCHEMA_V3, ACTIVE_PROFILE_SCHEMA_V4}:
         sha_fields.extend(["dataset_manifest_sha256", "dataset_manifest_file_sha256"])
+    if profile_schema == ACTIVE_PROFILE_SCHEMA_V4:
+        sha_fields.extend(["derived_asset_registry_sha256", "release_closure_sha256"])
     for field in sha_fields:
         _require_sha256(components[field], field=f"components.{field}")
     _require_sha256(
@@ -520,7 +557,7 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
             or sector_pins["universe_key"] != str(components["factor_meta"].get("universe_key") or "")
         ):
             raise _fail("qe_active_dataset_profile_invalid", "sector policy identity differs from factor metadata")
-    elif profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+    elif profile_schema in {ACTIVE_PROFILE_SCHEMA_V3, ACTIVE_PROFILE_SCHEMA_V4}:
         try:
             sector_context_pins = validate_sector_context_pins(components["sector_context_pins"])
         except ValueError as exc:
@@ -533,6 +570,159 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
                 "qe_active_dataset_profile_invalid",
                 "sector context cutoff differs from profile",
             )
+        if profile_schema == ACTIVE_PROFILE_SCHEMA_V4:
+            closure_path = Path(str(components["release_closure_path"] or ""))
+            _require_external_regular_file(
+                closure_path, field="components.release_closure_path"
+            )
+            if not closure_path.resolve(strict=True).is_relative_to(
+                candidate_root.resolve(strict=True)
+            ):
+                raise _fail(
+                    "qe_active_dataset_profile_invalid",
+                    "release closure is outside the controller candidate root",
+                )
+            closure_payload = closure_path.read_bytes()
+            if _sha256_bytes(closure_payload) != components["release_closure_sha256"]:
+                raise _fail("qe_active_dataset_profile_invalid", "release closure hash differs")
+            try:
+                closure = json.loads(closure_payload.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise _fail("qe_active_dataset_profile_invalid", "release closure is invalid") from exc
+            closure_fields = {
+                "schema_version",
+                "dataset_manifest_ref",
+                "derived_asset_refs",
+                "consumer_contract_refs",
+                "source_readiness_refs",
+                "component_validation_refs",
+                "lineage_ref",
+                "canonical_sha256",
+            }
+            if not isinstance(closure, Mapping) or set(closure) != closure_fields:
+                raise _fail("qe_active_dataset_profile_invalid", "release closure fields differ")
+            if closure.get("schema_version") != "aistock_release_closure_v1":
+                raise _fail("qe_active_dataset_profile_invalid", "release closure schema differs")
+            closure_unsigned = dict(closure)
+            closure_digest = closure_unsigned.pop("canonical_sha256", None)
+            if _sha256_bytes(canonical_json_bytes(closure_unsigned)) != closure_digest:
+                raise _fail("qe_active_dataset_profile_invalid", "release closure digest differs")
+
+            def validate_closure_ref(raw_ref: Any, *, field: str) -> dict[str, Any]:
+                ref = _require_exact_mapping(
+                    raw_ref,
+                    fields={"id", "sha256", "size"},
+                    field=field,
+                )
+                relative = Path(str(ref["id"] or ""))
+                if (
+                    not str(ref["id"] or "")
+                    or relative.is_absolute()
+                    or ".." in relative.parts
+                    or "\\" in str(ref["id"])
+                ):
+                    raise _fail(
+                        "qe_active_dataset_profile_invalid",
+                        f"{field}.id is not a portable candidate-relative path",
+                    )
+                referenced = candidate_root / relative
+                _require_external_regular_file(referenced, field=f"{field}.file")
+                resolved_ref = referenced.resolve(strict=True)
+                if not resolved_ref.is_relative_to(candidate_root.resolve(strict=True)):
+                    raise _fail(
+                        "qe_active_dataset_profile_invalid",
+                        f"{field} escaped the controller candidate root",
+                    )
+                digest = _require_sha256(ref["sha256"], field=f"{field}.sha256")
+                if (
+                    _sha256_bytes(resolved_ref.read_bytes()) != digest
+                    or type(ref["size"]) is not int
+                    or ref["size"] < 0
+                    or resolved_ref.stat().st_size != ref["size"]
+                ):
+                    raise _fail(
+                        "qe_active_dataset_profile_invalid",
+                        f"{field} bytes differ from the release closure",
+                    )
+                return ref
+
+            manifest_ref = validate_closure_ref(
+                closure.get("dataset_manifest_ref"), field="release_closure.dataset_manifest_ref"
+            )
+            if manifest_ref["sha256"] != components["dataset_manifest_file_sha256"]:
+                raise _fail(
+                    "qe_active_dataset_profile_invalid",
+                    "release closure manifest identity differs",
+                )
+            for group in (
+                "derived_asset_refs",
+                "consumer_contract_refs",
+                "source_readiness_refs",
+                "component_validation_refs",
+            ):
+                raw_refs = closure[group]
+                if not isinstance(raw_refs, list) or not raw_refs:
+                    raise _fail(
+                        "qe_active_dataset_profile_invalid",
+                        f"release closure {group} is empty",
+                    )
+                refs = [
+                    validate_closure_ref(item, field=f"release_closure.{group}")
+                    for item in raw_refs
+                ]
+                if len({str(ref["id"]) for ref in refs}) != len(refs):
+                    raise _fail(
+                        "qe_active_dataset_profile_invalid",
+                        f"release closure {group} contains duplicates",
+                    )
+            validate_closure_ref(
+                closure.get("lineage_ref"), field="release_closure.lineage_ref"
+            )
+            registry_path = Path(str(components["derived_asset_registry_path"] or ""))
+            _require_external_regular_file(registry_path, field="components.derived_asset_registry_path")
+            if not registry_path.resolve(strict=True).is_relative_to(
+                candidate_root.resolve(strict=True)
+            ):
+                raise _fail(
+                    "qe_active_dataset_profile_invalid",
+                    "derived asset registry is outside the controller candidate root",
+                )
+            registry_payload = registry_path.read_bytes()
+            if _sha256_bytes(registry_payload) != components["derived_asset_registry_sha256"]:
+                raise _fail("qe_active_dataset_profile_invalid", "derived asset registry hash differs")
+            try:
+                registry = json.loads(registry_payload.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise _fail("qe_active_dataset_profile_invalid", "derived asset registry is invalid") from exc
+            if (
+                not isinstance(registry, Mapping)
+                or set(registry) != {"schema_version", "source_dataset_manifest_sha256", "assets"}
+                or registry.get("schema_version") != "aistock_dataset_derived_asset_registry_v1"
+                or registry.get("source_dataset_manifest_sha256") != components["dataset_manifest_sha256"]
+                or not isinstance(registry.get("assets"), list)
+            ):
+                raise _fail("qe_active_dataset_profile_invalid", "derived asset registry identity differs")
+            seen_assets: set[str] = set()
+            for raw_asset in registry["assets"]:
+                asset = _require_exact_mapping(
+                    raw_asset,
+                    fields={"asset_id", "path", "sha256", "size", "schema_version"},
+                    field="derived_asset_registry.asset",
+                )
+                asset_id = str(asset["asset_id"] or "")
+                if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{1,95}", asset_id) or asset_id in seen_assets:
+                    raise _fail("qe_active_dataset_profile_invalid", "derived asset id is invalid or duplicated")
+                seen_assets.add(asset_id)
+                relative_asset_path = Path(str(asset["path"] or ""))
+                if relative_asset_path.is_absolute() or ".." in relative_asset_path.parts:
+                    raise _fail("qe_active_dataset_profile_invalid", "derived asset path is not portable")
+                asset_path = registry_path.parent / relative_asset_path
+                _require_external_regular_file(asset_path, field=f"derived_asset_registry.{asset_id}.path")
+                asset_sha = _require_sha256(asset["sha256"], field=f"derived_asset_registry.{asset_id}.sha256")
+                if _sha256_bytes(asset_path.read_bytes()) != asset_sha or asset_path.stat().st_size != asset["size"]:
+                    raise _fail("qe_active_dataset_profile_invalid", "derived asset bytes differ from registry")
+                if not str(asset["schema_version"] or "").strip():
+                    raise _fail("qe_active_dataset_profile_invalid", "derived asset schema is empty")
 
     node_bindings = root["node_bindings"]
     if not isinstance(node_bindings, Mapping) or not node_bindings:
@@ -547,7 +737,12 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
         )
         _require_posix_root(node["candidate_root"], field=f"node_bindings.{node_id}.candidate_root")
 
-    consumer_fields = {"qe", "hmm", "selection", "advisory"} if profile_schema == ACTIVE_PROFILE_SCHEMA_V3 else {"qe"}
+    if profile_schema == ACTIVE_PROFILE_SCHEMA_V4:
+        consumer_fields = set(_CONSUMER_REQUIRED_COMPONENTS)
+    elif profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+        consumer_fields = {"qe", "hmm", "selection", "advisory"}
+    else:
+        consumer_fields = {"qe"}
     consumers = _require_exact_mapping(root["consumers"], fields=consumer_fields, field="consumers")
     qe_fields = {
         "defaults",
@@ -555,15 +750,20 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
         "universes",
         "coverage_receipt_sha256",
     }
-    if profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
+    if profile_schema in {ACTIVE_PROFILE_SCHEMA_V3, ACTIVE_PROFILE_SCHEMA_V4}:
         qe_fields.add("required_components")
     qe = _require_exact_mapping(
         consumers["qe"],
         fields=qe_fields,
         field="consumers.qe",
     )
-    if profile_schema == ACTIVE_PROFILE_SCHEMA_V3:
-        for consumer_name, required in _CONSUMER_REQUIRED_COMPONENTS.items():
+    if profile_schema in {ACTIVE_PROFILE_SCHEMA_V3, ACTIVE_PROFILE_SCHEMA_V4}:
+        required_consumers = (
+            _CONSUMER_REQUIRED_COMPONENTS
+            if profile_schema == ACTIVE_PROFILE_SCHEMA_V4
+            else {name: _CONSUMER_REQUIRED_COMPONENTS[name] for name in ("qe", "hmm", "selection", "advisory")}
+        )
+        for consumer_name, required in required_consumers.items():
             consumer = (
                 qe
                 if consumer_name == "qe"
@@ -712,14 +912,12 @@ def _validate_profile(value: Mapping[str, Any], *, path: Path, payload: bytes) -
     )
 
 
-def load_active_qe_profile() -> QEActiveDatasetProfile | None:
-    raw_path = os.getenv(ACTIVE_PROFILE_ENV)
-    if raw_path is None or not raw_path.strip():
-        return None
-    path = Path(raw_path.strip())
+def load_qe_profile(path: Path) -> QEActiveDatasetProfile:
+    """Load and fully validate one explicit canonical profile file."""
+
     if not path.is_absolute():
-        raise _fail("qe_active_dataset_profile_invalid", f"{ACTIVE_PROFILE_ENV} must be an absolute path")
-    _require_external_regular_file(path, field=ACTIVE_PROFILE_ENV)
+        raise _fail("qe_active_dataset_profile_invalid", "profile path must be absolute")
+    _require_external_regular_file(path, field="profile_path")
     payload = path.read_bytes()
     try:
         value = json.loads(payload.decode("utf-8"))
@@ -728,6 +926,16 @@ def load_active_qe_profile() -> QEActiveDatasetProfile | None:
     if not isinstance(value, Mapping) or payload != _canonical_profile_bytes(value):
         raise _fail("qe_active_dataset_profile_invalid", "profile must use canonical JSON plus one newline")
     return _validate_profile(value, path=path, payload=payload)
+
+
+def load_active_qe_profile() -> QEActiveDatasetProfile | None:
+    raw_path = os.getenv(ACTIVE_PROFILE_ENV)
+    if raw_path is None or not raw_path.strip():
+        return None
+    path = Path(raw_path.strip())
+    if not path.is_absolute():
+        raise _fail("qe_active_dataset_profile_invalid", f"{ACTIVE_PROFILE_ENV} must be an absolute path")
+    return load_qe_profile(path)
 
 
 def resolve_active_dataset_node_binding(*, node_id: str) -> dict[str, Any] | None:
@@ -765,9 +973,75 @@ def resolve_active_dataset_node_binding(*, node_id: str) -> dict[str, Any] | Non
         "release_id": profile.release_id,
         "cutoff": profile.cutoff.isoformat(),
     }
-    if profile.raw["schema_version"] == ACTIVE_PROFILE_SCHEMA_V3:
+    if profile.raw["schema_version"] in {ACTIVE_PROFILE_SCHEMA_V3, ACTIVE_PROFILE_SCHEMA_V4}:
         binding["sector_context_dir"] = posixpath.join(candidate_root, "components/sector_context_candidate_v1")
     return binding
+
+
+def resolve_active_dataset_consumer_binding(
+    *,
+    consumer_id: str,
+    node_id: str,
+    profile: QEActiveDatasetProfile | None = None,
+) -> dict[str, Any]:
+    """Resolve one v4 consumer once without any legacy-path fallback."""
+
+    selected = profile or load_active_qe_profile()
+    if selected is None:
+        raise _fail("qe_active_dataset_profile_missing", "active dataset profile is required")
+    if selected.raw.get("schema_version") != ACTIVE_PROFILE_SCHEMA_V4:
+        raise _fail(
+            "qe_active_dataset_profile_invalid",
+            "consumer registry requires active dataset profile v4",
+        )
+    if consumer_id not in _CONSUMER_REQUIRED_COMPONENTS:
+        raise _fail("qe_active_dataset_profile_invalid", f"unknown dataset consumer: {consumer_id}")
+    node = selected.raw["node_bindings"].get(node_id)
+    if not isinstance(node, Mapping):
+        raise _fail("qe_active_dataset_profile_missing", f"node binding is missing: {node_id}")
+    components = selected.raw["components"]
+    registry_path = Path(str(components["derived_asset_registry_path"]))
+    registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    controller_root = Path(str(selected.raw["controller_paths"]["candidate_root"])).resolve(
+        strict=True
+    )
+    registry_relative = registry_path.resolve(strict=True).relative_to(controller_root).as_posix()
+    closure_path = Path(str(components["release_closure_path"]))
+    closure_relative = closure_path.resolve(strict=True).relative_to(controller_root).as_posix()
+    registry_parent = posixpath.dirname(registry_relative)
+    node_assets = [
+        {
+            **dict(asset),
+            "node_path": posixpath.join(
+                str(node["candidate_root"]).rstrip("/"),
+                registry_parent,
+                str(asset["path"]),
+            ),
+        }
+        for asset in registry["assets"]
+    ]
+    return {
+        "schema_version": "aistock_active_dataset_consumer_binding_v1",
+        "consumer_id": consumer_id,
+        "node_id": node_id,
+        "generation": selected.generation,
+        "release_id": selected.release_id,
+        "cutoff": selected.cutoff.isoformat(),
+        "dataset_manifest_sha256": str(components["dataset_manifest_sha256"]),
+        "candidate_root": str(node["candidate_root"]),
+        "required_components": list(selected.raw["consumers"][consumer_id]["required_components"]),
+        "derived_asset_registry_sha256": str(components["derived_asset_registry_sha256"]),
+        "derived_asset_registry_path": posixpath.join(
+            str(node["candidate_root"]).rstrip("/"), registry_relative
+        ),
+        "release_closure_sha256": str(components["release_closure_sha256"]),
+        "release_closure_path": posixpath.join(
+            str(node["candidate_root"]).rstrip("/"), closure_relative
+        ),
+        "derived_assets": node_assets,
+        "resolved_once": True,
+        "legacy_fallback": False,
+    }
 
 
 def get_qe_dataset_profile_summary() -> dict[str, Any]:
@@ -1276,7 +1550,7 @@ def resolve_active_qe_dataset(
                         selected_profile.raw["components"]["dataset_manifest_file_sha256"]
                     ),
                 }
-                if selected_profile.raw["schema_version"] == ACTIVE_PROFILE_SCHEMA_V3
+                if selected_profile.raw["schema_version"] in {ACTIVE_PROFILE_SCHEMA_V3, ACTIVE_PROFILE_SCHEMA_V4}
                 else {}
             ),
             "resolved_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),

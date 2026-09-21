@@ -15,11 +15,17 @@ from backend.services.quantevolver.qe_active_dataset_profile import (
     is_pure_star50_universe,
     load_active_qe_profile,
     reject_client_dataset_internals,
+    resolve_active_dataset_consumer_binding,
     resolve_active_dataset_node_binding,
     resolve_active_qe_dataset,
 )
 from backend.services.quantevolver.qe_dataset_contract import QE_DIRECT_V2_INDEX_CODES
 from backend.services.dataset_release.canonical import digest_named_fields
+from backend.services.dataset_release.release_successor import (
+    build_derived_asset_registry,
+    build_release_closure,
+    upgrade_profile_v4,
+)
 from backend.services.dataset_release.shared_sector_context import (
     RELEASE_SW_L2_CODE_MAP_SCHEMA,
     RELEASE_SW_L2_MEMBER_BACKED_SCHEMA,
@@ -659,6 +665,81 @@ def test_v3_profile_uses_shared_sparse_sector_context(
     assert filtered.stock_pool_content == "000002.SZ\t2024-07-01\t2026-08-31\n"
     assert filtered.sector_blacklist_policy is not None
     assert filtered.sector_blacklist_policy["blacklist_excluded_count"] == 1
+
+
+def test_v4_profile_pins_derived_assets_and_preserves_qe_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    v3 = _fixture_profile(tmp_path, with_sector_context=True)
+    raw = json.loads(v3.read_text(encoding="utf-8"))
+    candidate = Path(raw["controller_paths"]["candidate_root"])
+    derived = candidate / "derived"
+    coefficient = derived / "hmm-coefficients.json"
+    coefficient.parent.mkdir()
+    coefficient.write_bytes(_canonical({"schema_version": "hmm_coefficients_v1"}))
+    registry_path = derived / "derived-assets.json"
+    build_derived_asset_registry(
+        output_path=registry_path,
+        source_dataset_manifest_sha256=raw["components"]["dataset_manifest_sha256"],
+        assets={"hmm.coefficients": (coefficient, "hmm_coefficients_v1")},
+    )
+    evidence = candidate / "provenance"
+    evidence.mkdir()
+    contract = evidence / "consumer-contract.json"
+    source = evidence / "source-ready.json"
+    validation = evidence / "component-validation.json"
+    lineage = evidence / "lineage.json"
+    for path in (contract, source, validation, lineage):
+        path.write_bytes(_canonical({"id": path.stem}))
+    closure_path = candidate / "release_closure_receipt.json"
+    build_release_closure(
+        output_path=closure_path,
+        dataset_manifest_path=candidate / "qe_dataset_manifest.json",
+        derived_asset_paths=(registry_path, coefficient),
+        consumer_contract_paths=(contract,),
+        source_readiness_paths=(source,),
+        component_validation_paths=(validation,),
+        lineage_path=lineage,
+    )
+    v4 = tmp_path / "profile-v4.json"
+    upgrade_profile_v4(
+        validated_v3_profile_path=v3,
+        profile_output_path=v4,
+        derived_asset_registry_path=registry_path,
+        release_closure_path=closure_path,
+    )
+    monkeypatch.setenv(ACTIVE_PROFILE_ENV, str(v4))
+    profile = load_active_qe_profile()
+    assert profile is not None
+    assert profile.raw["schema_version"] == "aistock_active_dataset_profile_v4"
+    assert profile.raw["components"]["derived_asset_registry_sha256"] == _sha(registry_path.read_bytes())
+    assert profile.raw["components"]["release_closure_sha256"] == _sha(closure_path.read_bytes())
+    assert "qe_p10" in profile.raw["consumers"]
+    resolved = resolve_active_qe_dataset(node_id="wsl2-5080", profile=profile)
+    assert resolved is not None
+    assert resolved.binding.release_id == profile.release_id
+    bindings = [
+        resolve_active_dataset_consumer_binding(
+            consumer_id=consumer_id,
+            node_id="wsl2-5080",
+            profile=profile,
+        )
+        for consumer_id in profile.raw["consumers"]
+    ]
+    assert {binding["dataset_manifest_sha256"] for binding in bindings} == {
+        profile.raw["components"]["dataset_manifest_sha256"]
+    }
+    assert all(
+        binding["derived_asset_registry_path"].startswith("/mnt/x/candidate/")
+        and binding["release_closure_path"].startswith("/mnt/x/candidate/")
+        and all(asset["node_path"].startswith("/mnt/x/candidate/") for asset in binding["derived_assets"])
+        for binding in bindings
+    )
+
+    contract.write_bytes(_canonical({"id": "tampered"}))
+    with pytest.raises(QEActiveDatasetProfileError, match="bytes differ from the release closure"):
+        load_active_qe_profile()
 
 
 def test_v3_sector_blacklist_starts_at_test_without_truncating_training_universe(
