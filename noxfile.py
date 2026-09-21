@@ -656,11 +656,7 @@ def _direct_neighbor_pr_targets(
                 return None
             relative = path.removeprefix(source_root)
             relative_path = Path(relative)
-            candidate = (
-                Path(test_root)
-                / relative_path.parent
-                / f"test_{relative_path.stem}.py"
-            ).as_posix()
+            candidate = (Path(test_root) / relative_path.parent / f"test_{relative_path.stem}.py").as_posix()
             if not (ROOT / candidate).is_file():
                 return None
             targets.append(candidate)
@@ -832,9 +828,7 @@ def advisory_phase0b_backend(session: nox.Session) -> None:
     """Run Phase 0B candidate-quality and direct historical-data regressions."""
     pr_targets = _direct_neighbor_pr_targets(
         smoke_tests=("backend/tests/advisory_phase0b/test_contracts.py",),
-        source_test_roots=(
-            ("backend/services/advisory_phase0b/", "backend/tests/advisory_phase0b/"),
-        ),
+        source_test_roots=(("backend/services/advisory_phase0b/", "backend/tests/advisory_phase0b/"),),
         test_globs=("backend/tests/advisory_phase0b/test_*.py",),
         overrides={
             "scripts/advisory_phase0b_candidate_quality_audit.py": "backend/tests/advisory_phase0b/test_cli.py",
@@ -1786,6 +1780,7 @@ def mcp_gateway_manifest_quality(session: nox.Session) -> None:
     _run_pytest(
         session,
         "tests/mcp",
+        "backend/tests/mcp",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -2706,9 +2701,7 @@ def position_timing_backend(session: nox.Session) -> None:
             "backend/tests/position_timing/test_isolation.py",
             "backend/tests/position_timing/test_api.py",
         ),
-        source_test_roots=(
-            ("backend/services/position_timing/", "backend/tests/position_timing/"),
-        ),
+        source_test_roots=(("backend/services/position_timing/", "backend/tests/position_timing/"),),
         test_globs=("backend/tests/position_timing/test_*.py",),
         overrides={
             "backend/routers/position_timing.py": "backend/tests/position_timing/test_api.py",
@@ -2847,12 +2840,22 @@ def factor_research_backend(session: nox.Session) -> None:
         "backend/tests/factor_research/test_repository_dev.py",
     ]
     session.run(
-        "python", "-m", "pytest",
-        *full_targets, "-q",
-        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
+        "python",
+        "-m",
+        "pytest",
+        *full_targets,
+        "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}),
+        external=True,
     )
-    session.run(sys.executable, "-X", "utf8", "backend/tests/factor_research/fresh_process_smoke.py",
-                env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True)
+    session.run(
+        sys.executable,
+        "-X",
+        "utf8",
+        "backend/tests/factor_research/fresh_process_smoke.py",
+        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}),
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")
@@ -2861,8 +2864,13 @@ def factor_research_dev_db(session: nox.Session) -> None:
     if not os.environ.get("FACTOR_RESEARCH_DEV_ENV_FILE"):
         session.error("Explicit FACTOR_RESEARCH_DEV_ENV_FILE required for existing DEV validation")
     session.run(
-        "python", "-m", "pytest", "backend/tests/factor_research/test_repository_dev.py", "-q",
-        env=_env({"AISTOCK_DEV_DB_E2E": "1"}), external=True,
+        "python",
+        "-m",
+        "pytest",
+        "backend/tests/factor_research/test_repository_dev.py",
+        "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}),
+        external=True,
     )
 
 
@@ -3582,8 +3590,7 @@ def _hmm_risk_live_sources_for_test(test_path: str) -> list[str]:
     return [
         source
         for source in dict.fromkeys(candidates)
-        if (ROOT / source).is_file()
-        and HMM_RISK_PR_NEIGHBOR_OVERRIDES.get(source, test_path) == test_path
+        if (ROOT / source).is_file() and HMM_RISK_PR_NEIGHBOR_OVERRIDES.get(source, test_path) == test_path
     ]
 
 

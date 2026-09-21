@@ -28,6 +28,7 @@ class StubFastMCP:
 def _install_stub_fastmcp() -> None:
     try:
         from mcp.server.fastmcp import FastMCP as _FastMCP  # noqa: F401
+
         return
     except ImportError:
         pass
@@ -68,7 +69,12 @@ def _registry_tool_counts(registry: ModuleRegistry) -> dict[str, int]:
 
 def test_research_profile_is_only_current_module() -> None:
     assert resolve_modules(profile="research") == ["research"]
-    assert resolve_modules(profile="research_assistant") == ["catalog", "research_assistant", "stock_analysis", "external_research"]
+    assert resolve_modules(profile="research_assistant") == [
+        "catalog",
+        "research_assistant",
+        "stock_analysis",
+        "external_research",
+    ]
     assert resolve_modules(profile="research_with_assistant") == ["catalog", "research", "research_assistant"]
 
 
@@ -90,10 +96,75 @@ def test_research_profile_is_only_current_module() -> None:
         ("simulation_runtime_monitor", ["simulation_runtime_monitoring", "qmt_broker_monitoring"]),
         ("strategy_package_ops", ["strategy_packages"]),
         ("selection_advisory", ["selection_center", "advisory"]),
-        ("simulation_stable", ["strategy_packages", "selection_center", "advisory", "simulation_runtime_monitoring", "qmt_broker_monitoring"]),
-        ("simulation_ops", ["strategy_packages", "selection_center", "advisory", "simulation_runtime_monitoring", "qmt_broker_monitoring"]),
-        ("research_full", ["catalog", "research", "research_assistant", "local_data", "qlib_export", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "strategy_packages", "execution_policy", "selection_center", "advisory", "simulation_runtime_monitoring", "qmt_broker_monitoring", "external_research", "stock_analysis"]),
-        ("full", ["catalog", "research", "research_assistant", "local_data", "qlib_export", "factor_library", "factor_metrics", "factor_correlation", "model_registry", "strategy_governance", "strategy_packages", "execution_policy", "selection_center", "advisory", "simulation_runtime_monitoring", "qmt_broker_monitoring", "external_research", "stock_analysis", "validation", "qe_experiment", "qe_archive"]),
+        (
+            "simulation_stable",
+            [
+                "strategy_packages",
+                "selection_center",
+                "advisory",
+                "simulation_runtime_monitoring",
+                "qmt_broker_monitoring",
+            ],
+        ),
+        (
+            "simulation_ops",
+            [
+                "strategy_packages",
+                "selection_center",
+                "advisory",
+                "simulation_runtime_monitoring",
+                "qmt_broker_monitoring",
+            ],
+        ),
+        (
+            "research_full",
+            [
+                "catalog",
+                "research",
+                "research_assistant",
+                "local_data",
+                "qlib_export",
+                "factor_library",
+                "factor_metrics",
+                "factor_correlation",
+                "model_registry",
+                "strategy_governance",
+                "strategy_packages",
+                "execution_policy",
+                "selection_center",
+                "advisory",
+                "simulation_runtime_monitoring",
+                "qmt_broker_monitoring",
+                "external_research",
+                "stock_analysis",
+            ],
+        ),
+        (
+            "full",
+            [
+                "catalog",
+                "research",
+                "research_assistant",
+                "local_data",
+                "qlib_export",
+                "factor_library",
+                "factor_metrics",
+                "factor_correlation",
+                "model_registry",
+                "strategy_governance",
+                "strategy_packages",
+                "execution_policy",
+                "selection_center",
+                "advisory",
+                "simulation_runtime_monitoring",
+                "qmt_broker_monitoring",
+                "external_research",
+                "stock_analysis",
+                "validation",
+                "qe_experiment",
+                "qe_archive",
+            ],
+        ),
     ],
 )
 def test_unified_profiles_are_available(profile: str, expected: list[str]) -> None:
@@ -223,8 +294,10 @@ def test_gateway_loads_research_assistant_tools() -> None:
     assert registry.tool_count("research_assistant") == RESEARCH_ASSISTANT_TOOL_COUNT
     assert registry.tool_count("stock_analysis") == stock_analysis.TOOL_COUNT
     assert registry.tool_count("external_research") == external_research.TOOL_COUNT
-    assert registry.total_tool_count() == RESEARCH_ASSISTANT_TOOL_COUNT + stock_analysis.TOOL_COUNT + external_research.TOOL_COUNT + 6
-
+    assert (
+        registry.total_tool_count()
+        == RESEARCH_ASSISTANT_TOOL_COUNT + stock_analysis.TOOL_COUNT + external_research.TOOL_COUNT + 6
+    )
 
 
 def test_gateway_loads_local_data_tools() -> None:
@@ -315,7 +388,7 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("research") == 16
     assert registry.tool_count("research_assistant") == 12
     assert registry.tool_count("local_data") == 47
-    assert registry.tool_count("qlib_export") == 15
+    assert registry.tool_count("qlib_export") == 23
     assert registry.tool_count("factor_library") == 10
     assert registry.tool_count("factor_metrics") == 7
     assert registry.tool_count("factor_correlation") == 8
@@ -329,4 +402,4 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("qmt_broker_monitoring") == 10
     assert registry.tool_count("external_research") == 4
     assert registry.tool_count("stock_analysis") == 7
-    assert registry.total_tool_count() == 265
+    assert registry.total_tool_count() == 273

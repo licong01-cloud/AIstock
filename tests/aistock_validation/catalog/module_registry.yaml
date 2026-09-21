@@ -297,6 +297,7 @@ modules:
     ui_routes: [/qlib]
     test_plans:
       required_on_change: [l0, qlib_data_backend]
+      recommended: [frontend_type_lint]
   - module_id: market_regime
     display_name: Market Regime
     module_type: data_pipeline
@@ -327,7 +328,7 @@ modules:
     ui_routes: [/local-data, /qlib]
     test_plans:
       required_on_change: [l0, data_sync_autonomy_backend]
-      recommended: [data_sync_autonomy_backend]
+      recommended: [data_sync_autonomy_backend, frontend_type_lint]
   - module_id: analysis
     display_name: Stock analysis
     module_type: product_feature
