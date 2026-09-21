@@ -602,9 +602,10 @@ def register(registry: "ModuleRegistry") -> None:
     def qlib_monthly_release_plan(payload: dict[str, Any], idempotency_key: str) -> Any:
         """Preview the single shared QE/HMM monthly release without writing state."""
 
-        return client.post(
+        return client.request_with_headers(
+            "POST",
             "/monthly-releases/plan",
-            _monthly_request(payload),
+            json_body=_monthly_request(payload),
             headers=_monthly_operator_headers(idempotency_key=idempotency_key),
         )
 
@@ -617,9 +618,10 @@ def register(registry: "ModuleRegistry") -> None:
         """Submit one durable unified release after explicit confirmation."""
 
         registry.confirm(confirm, MONTHLY_RELEASE_RUN_CONFIRM, "confirm")
-        return client.post(
+        return client.request_with_headers(
+            "POST",
             "/monthly-releases",
-            _monthly_request(payload),
+            json_body=_monthly_request(payload),
             headers=_monthly_operator_headers(idempotency_key=idempotency_key),
         )
 
@@ -628,14 +630,19 @@ def register(registry: "ModuleRegistry") -> None:
         """Read bounded durable status for one unified monthly release."""
 
         operation = _monthly_operation_id(operation_id)
-        return client.get(f"/monthly-releases/{operation}", headers=_monthly_operator_headers())
+        return client.request_with_headers(
+            "GET",
+            f"/monthly-releases/{operation}",
+            headers=_monthly_operator_headers(),
+        )
 
     @registry.mcp.tool(name="qlib_monthly_release_receipts")
     def qlib_monthly_release_receipts(operation_id: str) -> Any:
         """Read the bounded receipt index for one unified monthly release."""
 
         operation = _monthly_operation_id(operation_id)
-        return client.get(
+        return client.request_with_headers(
+            "GET",
             f"/monthly-releases/{operation}/receipts",
             headers=_monthly_operator_headers(),
         )
@@ -646,9 +653,10 @@ def register(registry: "ModuleRegistry") -> None:
 
         registry.confirm(confirm, MONTHLY_RELEASE_RUN_CONFIRM, "confirm")
         operation = _monthly_operation_id(operation_id)
-        return client.post(
+        return client.request_with_headers(
+            "POST",
             f"/monthly-releases/{operation}/resume",
-            {},
+            json_body={},
             headers=_monthly_operator_headers(),
         )
 
@@ -658,9 +666,10 @@ def register(registry: "ModuleRegistry") -> None:
 
         registry.confirm(confirm, MONTHLY_RELEASE_RUN_CONFIRM, "confirm")
         operation = _monthly_operation_id(operation_id)
-        return client.post(
+        return client.request_with_headers(
+            "POST",
             f"/monthly-releases/{operation}/cancel",
-            {},
+            json_body={},
             headers=_monthly_operator_headers(),
         )
 
@@ -674,9 +683,10 @@ def register(registry: "ModuleRegistry") -> None:
 
         registry.confirm(confirm, MONTHLY_RELEASE_ACTIVATE_CONFIRM, "confirm")
         operation = _monthly_operation_id(operation_id)
-        return client.post(
+        return client.request_with_headers(
+            "POST",
             f"/monthly-releases/{operation}/activate",
-            {
+            json_body={
                 "schema_version": "aistock_monthly_release_action_v1",
                 "authorization_ref": _monthly_authorization_ref(authorization_ref),
             },
@@ -693,9 +703,10 @@ def register(registry: "ModuleRegistry") -> None:
 
         registry.confirm(confirm, MONTHLY_RELEASE_ACTIVATE_CONFIRM, "confirm")
         operation = _monthly_operation_id(operation_id)
-        return client.post(
+        return client.request_with_headers(
+            "POST",
             f"/monthly-releases/{operation}/rollback",
-            {
+            json_body={
                 "schema_version": "aistock_monthly_release_action_v1",
                 "authorization_ref": _monthly_authorization_ref(authorization_ref),
             },

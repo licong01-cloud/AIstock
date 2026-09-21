@@ -189,7 +189,32 @@ class AIstockApiClient:
         *,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None,
+    ) -> Any:
+        return self._request(method, path, json_body=json_body, params=params, headers=None)
+
+    def request_with_headers(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str],
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send one explicitly authenticated gateway request."""
+
+        if not headers:
+            raise ValueError("request_with_headers requires non-empty headers")
+        return self._request(method, path, json_body=json_body, params=params, headers=headers)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None,
+        params: dict[str, Any] | None,
+        headers: dict[str, str] | None,
     ) -> Any:
         with self._client() as client:
             response = client.request(
@@ -201,43 +226,27 @@ class AIstockApiClient:
             )
         return self._decode(response, method.upper(), path)
 
-    def get(
-        self,
-        path: str,
-        params: dict[str, Any] | None = None,
-        *,
-        headers: dict[str, str] | None = None,
-    ) -> Any:
-        return self.request("GET", path, params=params, headers=headers)
+    def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return self.request("GET", path, params=params)
 
     def post(
         self,
         path: str,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
-        *,
-        headers: dict[str, str] | None = None,
     ) -> Any:
-        return self.request("POST", path, json_body=json_body or {}, params=params, headers=headers)
+        return self.request("POST", path, json_body=json_body or {}, params=params)
 
     def put(
         self,
         path: str,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
-        *,
-        headers: dict[str, str] | None = None,
     ) -> Any:
-        return self.request("PUT", path, json_body=json_body or {}, params=params, headers=headers)
+        return self.request("PUT", path, json_body=json_body or {}, params=params)
 
-    def delete(
-        self,
-        path: str,
-        json_body: dict[str, Any] | None = None,
-        *,
-        headers: dict[str, str] | None = None,
-    ) -> Any:
-        return self.request("DELETE", path, json_body=json_body or {}, headers=headers)
+    def delete(self, path: str, json_body: dict[str, Any] | None = None) -> Any:
+        return self.request("DELETE", path, json_body=json_body or {})
 
     def _decode(self, response: httpx.Response, method: str, path: str) -> Any:
         if response.status_code >= 400:
