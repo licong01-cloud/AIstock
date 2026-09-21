@@ -1,6 +1,8 @@
 {
   "actual": "A real P11 custom-evo request persists sector_blacklist at the loop top level, but _prepare_custom_evo_loop_configs calls resolve_and_apply_active_qe_dataset with custom_params before propagating the blacklist. The active resolver therefore materializes the unfiltered stock_universe, omits _qe_sector_blacklist_policy, and the executable prediction universe reports excluded_rows=0. Preserve P10 semantics; fail closed and materialize the requested PIT sector blacklist before task execution; add exact API-path regression coverage.",
   "allowed_write_scope": [
+    "backend/routers/quantevolver_evolution.py",
+    "backend/tests/quantevolver/test_qe_universe_comparison.py",
     "tests/aistock_validation/bugs/20260921_BUG-1595-qe-custom-evo-p11-top-level-sector-blacklist-bypasses-active-dataset-mat.json"
   ],
   "assigned_agent": null,
@@ -21,8 +23,11 @@
       "timestamp": "2026-09-21T05:35:17.029048Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "backend/routers/quantevolver_evolution.py:_prepare_custom_evo_loop_configs",
+    "backend/tests/quantevolver/test_qe_universe_comparison.py:test_custom_evo_routes_top_level_sector_blacklist_to_active_dataset_resolver"
+  ],
+  "expected": "A custom-evo P11 request must project its top-level sector_blacklist into the active dataset resolver before materialization, persist the run-scoped blacklist policy, and leave P10 requests unchanged.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +40,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py"
+    ]
   },
   "first_seen_at": "2026-09-21T05:35:17.029066Z",
   "fix_branch": null,
@@ -54,22 +65,32 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_qe_universe_comparison.py::test_custom_evo_routes_top_level_sector_blacklist_to_active_dataset_resolver -q",
   "required_verification": [
     "l0"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

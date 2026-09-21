@@ -240,6 +240,16 @@ def _model_to_dict(model: BaseModel) -> Dict[str, Any]:
     return model.dict()
 
 
+def _active_dataset_params_from_custom_loop(cfg_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Project top-level loop controls into the active-dataset resolver input."""
+
+    params = dict(cfg_dict.get("custom_params") or {})
+    sector_blacklist = cfg_dict.get("sector_blacklist")
+    if sector_blacklist is not None:
+        params["sector_blacklist"] = list(sector_blacklist)
+    return params
+
+
 def _sync_stock_pool_to_remote(stock_pool_path: str, node: dict):
     """Synchronize one filtered_pool file to a remote node, fail-fast on any problem."""
     from ..services.quantevolver.stock_pool_sync import sync_stock_pool_to_remote_node
@@ -1878,7 +1888,9 @@ async def _prepare_custom_evo_loop_configs(
         )
     if unresolved and active_profile is None:
         semantic_requested = any(
-            cfg.get("universe_selection") is not None for _pos, cfg in unresolved
+            cfg.get("universe_selection") is not None
+            or bool(cfg.get("sector_blacklist"))
+            for _pos, cfg in unresolved
         )
         if semantic_requested or required_profile_identity is not None:
             raise HTTPException(
@@ -1904,8 +1916,9 @@ async def _prepare_custom_evo_loop_configs(
                     ),
                 )
         for pos, cfg_dict in unresolved:
+            active_dataset_params = _active_dataset_params_from_custom_loop(cfg_dict)
             try:
-                reject_client_dataset_internals(cfg_dict.get("custom_params"))
+                reject_client_dataset_internals(active_dataset_params)
             except RuntimeError as exc:
                 raise HTTPException(status_code=400, detail=f"Loop {pos}: {exc}") from exc
             if cfg_dict.get("stock_pool") and cfg_dict.get("universe_selection") is not None:
@@ -1918,7 +1931,7 @@ async def _prepare_custom_evo_loop_configs(
                     node_id=str(cfg_dict["node_id"]),
                     data_split=cfg_dict.get("data_split"),
                     universe_selection=cfg_dict.get("universe_selection"),
-                    custom_params=cfg_dict.get("custom_params"),
+                    custom_params=active_dataset_params,
                     label_horizon=int(cfg_dict.get("label_horizon") or 1),
                     profile=active_profile,
                 )
