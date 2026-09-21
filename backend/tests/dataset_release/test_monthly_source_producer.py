@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from backend.services.dataset_release.monthly_snapshot import MonthlySnapshotCoordinator
+from backend.services.dataset_release.monthly_snapshot import (
+    MonthlySnapshotCoordinator,
+    MonthlySnapshotError,
+)
 from backend.services.dataset_release.monthly_source_audit import SourceGateEvidence
 from backend.services.dataset_release.monthly_source_producer import (
     AuditedMonthlySourceProducer,
@@ -208,3 +211,58 @@ def test_audited_source_producer_rejects_unpinned_change_receipt(tmp_path: Path)
                 prior_receipts={},
             )
         )
+
+
+def test_audited_source_producer_commits_adapter_only_after_overlap_seal(tmp_path: Path) -> None:
+    source = tmp_path / "inputs" / "source.json"
+    source.parent.mkdir()
+    source.write_text("{}\n", encoding="utf-8")
+    seal_marker = object()
+
+    @dataclass
+    class SealedAdapter(Adapter):
+        sealed: list[object] | None = None
+
+        def read(self, connection, identity, context):  # type: ignore[no-untyped-def]
+            value = super().read(connection, identity, context)
+            return MonthlySourceReadSet(
+                gates=value.gates,
+                changes=value.changes,
+                input_artifacts=value.input_artifacts,
+                seal_token=seal_marker,
+            )
+
+        def snapshot_sealed(self, _context, token):  # type: ignore[no-untyped-def]
+            assert self.sealed is not None
+            self.sealed.append(token)
+
+    sealed: list[object] = []
+    adapter = SealedAdapter(source, tmp_path, sealed=sealed)
+    producer = AuditedMonthlySourceProducer(
+        producer_id="aistock.monthly.source",
+        producer_version="2",
+        artifact_root=tmp_path,
+        connection_factory=Connection,
+        adapter=adapter,
+        snapshot_factory=lambda factory: MonthlySnapshotCoordinator(
+            factory,
+            repair_watermark_reader=lambda _connection: "repair-1",
+            overlapping_repair_reader=lambda _connection, _watermark: ("repair-2",),
+        ),
+    )
+    with pytest.raises(MonthlySnapshotError, match="repairs overlapped"):
+        producer.produce(
+            ProducerContext(
+                stage="SOURCE",
+                operation_id=f"dmr_{'4' * 32}",
+                attempt=1,
+                request={},
+                plan={
+                    "target_cutoff": "2026-09-30",
+                    "predecessor": {"cutoff": "2026-08-31"},
+                    "repair_authorization_refs": [],
+                },
+                prior_receipts={},
+            )
+        )
+    assert sealed == []
