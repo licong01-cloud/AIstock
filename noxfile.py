@@ -693,6 +693,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_stage_adapter.py",
         "backend/tests/dataset_release/test_monthly_official_adapters.py",
         "backend/tests/dataset_release/test_qlib_bounded_update.py",
+        "backend/tests/routers/test_monthly_dataset_releases.py",
         "backend/tests/dataset_release/test_source_pool.py",
         "backend/tests/dataset_release/test_candidate_validator.py",
         "backend/tests/dataset_release/test_artifact_ready_source.py",
@@ -706,6 +707,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
         "backend/tests/scripts/test_dataset_release_source_stage.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+        "backend/tests/scripts/test_monthly_unified_dataset_release.py",
     ]
     pr_targets = _direct_neighbor_pr_targets(
         smoke_tests=(
@@ -727,6 +729,8 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/build_dataset_release_successor.py": "backend/tests/dataset_release/test_release_successor.py",
             "scripts/build_shared_sector_context_component.py": "backend/tests/dataset_release/test_shared_sector_context.py",
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+            "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+            "backend/routers/monthly_dataset_releases.py": "backend/tests/routers/test_monthly_dataset_releases.py",
         },
     )
     selected_targets = list(full_targets)

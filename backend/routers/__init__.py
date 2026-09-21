@@ -17,6 +17,7 @@ __all__ = [
     "settings",
     "config_env",
     "dataset_releases",
+    "monthly_dataset_releases",
     "qmt",
     "qe_archive",
     "research_pipeline",
