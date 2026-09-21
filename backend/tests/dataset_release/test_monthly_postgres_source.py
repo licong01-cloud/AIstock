@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
-from backend.services.dataset_release.monthly_postgres_source import _source_diffs
+from backend.services.dataset_release.cas_store import CASRef
+from backend.services.dataset_release.monthly_postgres_source import (
+    FROZEN_SOURCE_BUNDLE_SCHEMA,
+    PostgresMonthlySourceAdapter,
+    _source_diffs,
+)
+from backend.services.dataset_release.monthly_snapshot import MonthlySnapshotIdentity
 
 
 def _partition(
@@ -98,3 +105,45 @@ def test_first_unified_source_forces_complete_evidenced_migration() -> None:
         "stock_universe_pit",
         "industry_classification",
     }.issubset(forced)
+
+
+def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
+    digest = "a" * 64
+    reference = CASRef(digest, 7, f"cas/sha256/aa/{digest}")
+    frozen = SimpleNamespace(
+        artifact_ready_contract_ref=reference,
+        official_cutoff=date(2026, 9, 30),
+        source_content_root=digest,
+        source_provenance_root=digest,
+        stable_source_provenance_root=digest,
+        pit_snapshot_digest=digest,
+        source_manifest_ref=reference,
+        source_reuse_manifest_ref=reference,
+        source_audit_ref=reference,
+        source_provenance_ref=reference,
+        pit_snapshot_ref=reference,
+        artifact_ready_content_root=digest,
+        artifact_ready_provenance_root=digest,
+        provider_receipt_refs=(),
+        derived_source_receipt_refs=(),
+        artifact_ready_derived_source_receipt_refs=(),
+        source_cas_usage={"predicted_remaining_new_bytes": 1},
+    )
+    identity = MonthlySnapshotIdentity(
+        snapshot_id="1-ABC-1",
+        source_as_of="2026-10-01T00:00:00+00:00",
+        initial_repair_watermark="repair-1",
+    )
+    adapter = SimpleNamespace(profile=SimpleNamespace(profile="qe_hmm_full_v2"))
+
+    bundle = PostgresMonthlySourceAdapter._bundle(
+        adapter,
+        frozen,
+        identity=identity,
+        predecessor_cutoff=date(2026, 8, 31),
+        baseline_row=None,
+        source_stage_ref=reference,
+    )
+
+    assert bundle["schema_version"] == FROZEN_SOURCE_BUNDLE_SCHEMA
+    assert bundle["source_stage_receipt_ref"] == reference.as_dict()
