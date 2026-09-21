@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from contextlib import contextmanager
+from datetime import date, datetime, UTC
 from types import SimpleNamespace
 
 import pytest
@@ -57,6 +59,67 @@ def test_source_stage_accepts_only_explicit_repeated_sample_instruments() -> Non
     )
 
     assert arguments.sample_instrument == ["000001.SZ", "600462.SH"]
+
+
+def test_source_stage_freezes_every_partition_in_one_exported_snapshot(monkeypatch) -> None:
+    events = []
+    identity = SimpleNamespace(
+        snapshot_id="00000003-0000001B-1",
+        source_as_of=datetime(2026, 9, 21, tzinfo=UTC).isoformat(),
+    )
+
+    class Coordinator:
+        def __init__(self):
+            self.identity = identity
+
+        def assert_no_overlapping_repairs(self):
+            events.append("seal")
+
+    @contextmanager
+    def coordinator_factory(_connection_factory):
+        events.append("open")
+        yield Coordinator()
+        events.append("close")
+
+    captured = {}
+    factory_snapshot_ids = []
+
+    class Authority:
+        def freeze(self, **kwargs):
+            captured.update(kwargs)
+            events.append("freeze")
+            return "frozen"
+
+    def authority_factory(_profile, _cas, *, session_factory):
+        assert session_factory == "bound-session-factory"
+        return Authority()
+
+    def session_factory(snapshot_id, *, connection_factory):
+        del connection_factory
+        factory_snapshot_ids.append(snapshot_id)
+        return "bound-session-factory"
+
+    monkeypatch.setattr(source_stage, "managed_monthly_snapshot", coordinator_factory)
+    monkeypatch.setattr(source_stage, "build_source_authority", authority_factory)
+    monkeypatch.setattr(source_stage, "imported_source_session_factory", session_factory)
+
+    result = source_stage._freeze_managed_source(
+        profile=object(),
+        cas=object(),
+        cutoff=date(2026, 8, 31),
+        checkpoint=lambda: None,
+        baseline=(),
+        predicted_new_bytes=0,
+        disk_checkpoint=lambda _value: None,
+        pressure_rung=0,
+        sample_instruments=("000001.SZ",),
+    )
+
+    assert result == "frozen"
+    assert events == ["open", "freeze", "seal", "close"]
+    assert factory_snapshot_ids == [identity.snapshot_id]
+    assert captured["cutoff"] == date(2026, 8, 31)
+    assert captured["sample_instruments"] == ("000001.SZ",)
 
 
 def test_source_stage_error_envelope_never_persists_raw_exception_text() -> None:

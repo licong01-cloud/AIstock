@@ -88,6 +88,7 @@ ACTIVE_DATASET_PROFILE_SCHEMA_VERSIONS = frozenset(
         "aistock_active_dataset_profile_v1",
         "aistock_active_dataset_profile_v2",
         "aistock_active_dataset_profile_v3",
+        "aistock_active_dataset_profile_v4",
     }
 )
 DIRECT_V2_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"

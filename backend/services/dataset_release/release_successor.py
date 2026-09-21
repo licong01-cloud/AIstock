@@ -26,6 +26,9 @@ from .shared_sector_context import (
 
 SUCCESSOR_RECEIPT_SCHEMA = "aistock_dataset_release_successor_receipt_v1"
 PROFILE_SCHEMA_V3 = "aistock_active_dataset_profile_v3"
+PROFILE_SCHEMA_V4 = "aistock_active_dataset_profile_v4"
+DERIVED_ASSET_REGISTRY_SCHEMA = "aistock_dataset_derived_asset_registry_v1"
+RELEASE_CLOSURE_SCHEMA = "aistock_release_closure_v1"
 
 _SECTOR_FILES = {
     "sector_code_map": "sector_code_map.json",
@@ -66,6 +69,19 @@ _CONSUMER_REQUIREMENTS = {
         "stock_pools",
         "suspend",
     ],
+}
+
+_V4_CONSUMER_REQUIREMENTS = {
+    **_CONSUMER_REQUIREMENTS,
+    "qe_single": _CONSUMER_REQUIREMENTS["qe"],
+    "qe_custom": _CONSUMER_REQUIREMENTS["qe"],
+    "qe_multi_alpha": _CONSUMER_REQUIREMENTS["qe"],
+    "qe_p10": _CONSUMER_REQUIREMENTS["qe"] + ["derived_assets"],
+    "qe_p11": _CONSUMER_REQUIREMENTS["qe"] + ["derived_assets"],
+    "hmm_file_only": _CONSUMER_REQUIREMENTS["hmm"],
+    "factor_research": ["day", "factor", "manifest", "stock_pools"],
+    "position_timing": ["day", "factor", "manifest", "stock_pools"],
+    "unified_backtest": ["day", "factor", "index", "manifest", "minute", "stock_pools", "suspend"],
 }
 
 
@@ -414,6 +430,159 @@ def build_profile_v3(
         "selection": {"required_components": _CONSUMER_REQUIREMENTS["selection"]},
         "advisory": {"required_components": _CONSUMER_REQUIREMENTS["advisory"]},
     }
+    profile_output_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_exclusive(profile_output_path, profile)
+    return profile
+
+
+def build_derived_asset_registry(
+    *,
+    output_path: Path,
+    source_dataset_manifest_sha256: str,
+    assets: Mapping[str, tuple[Path, str]],
+) -> dict[str, Any]:
+    """Pin post-manifest assets without creating a manifest/profile hash cycle."""
+
+    if output_path.exists():
+        raise FileExistsError(f"derived asset registry already exists: {output_path}")
+    manifest_sha = ensure_sha256(
+        source_dataset_manifest_sha256,
+        field="source_dataset_manifest_sha256",
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_root = output_path.parent.resolve(strict=True)
+    rows: list[dict[str, Any]] = []
+    for asset_id, (path, schema_version) in sorted(assets.items()):
+        resolved = path.resolve(strict=True)
+        if path.is_symlink() or not resolved.is_file():
+            raise ValueError(f"derived asset must be a regular non-link file: {asset_id}")
+        try:
+            relative_path = resolved.relative_to(registry_root).as_posix()
+        except ValueError as exc:
+            raise ValueError(f"derived asset must be inside the release root: {asset_id}") from exc
+        if not str(schema_version).strip():
+            raise ValueError(f"derived asset schema is empty: {asset_id}")
+        rows.append(
+            {
+                "asset_id": str(asset_id),
+                "path": relative_path,
+                "sha256": _sha256(resolved),
+                "size": resolved.stat().st_size,
+                "schema_version": str(schema_version),
+            }
+        )
+    if not rows or len({row["asset_id"] for row in rows}) != len(rows):
+        raise ValueError("derived asset registry is empty or duplicated")
+    value = {
+        "schema_version": DERIVED_ASSET_REGISTRY_SCHEMA,
+        "source_dataset_manifest_sha256": manifest_sha,
+        "assets": rows,
+    }
+    _write_json_exclusive(output_path, value)
+    return {**value, "file_sha256": _sha256(output_path)}
+
+
+def build_release_closure(
+    *,
+    output_path: Path,
+    dataset_manifest_path: Path,
+    derived_asset_paths: tuple[Path, ...],
+    consumer_contract_paths: tuple[Path, ...],
+    source_readiness_paths: tuple[Path, ...],
+    component_validation_paths: tuple[Path, ...],
+    lineage_path: Path,
+) -> dict[str, Any]:
+    """Build the acyclic E receipt from already sealed B/C evidence."""
+
+    if output_path.exists():
+        raise FileExistsError(f"release closure already exists: {output_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    root = output_path.parent.resolve(strict=True)
+
+    def ref(path: Path) -> dict[str, Any]:
+        resolved = path.resolve(strict=True)
+        if path.is_symlink() or not resolved.is_file():
+            raise ValueError("release closure inputs must be regular non-link files")
+        try:
+            relative = resolved.relative_to(root).as_posix()
+        except ValueError as exc:
+            raise ValueError("release closure input escaped the release root") from exc
+        return {"id": relative, "sha256": _sha256(resolved), "size": resolved.stat().st_size}
+
+    def refs(paths: tuple[Path, ...], *, field: str) -> list[dict[str, Any]]:
+        if not paths:
+            raise ValueError(f"release closure {field} must not be empty")
+        values = [ref(path) for path in paths]
+        if len({value["id"] for value in values}) != len(values):
+            raise ValueError(f"release closure {field} contains duplicate files")
+        return values
+
+    value = {
+        "schema_version": RELEASE_CLOSURE_SCHEMA,
+        "dataset_manifest_ref": ref(dataset_manifest_path),
+        "derived_asset_refs": refs(derived_asset_paths, field="derived_asset_refs"),
+        "consumer_contract_refs": refs(
+            consumer_contract_paths, field="consumer_contract_refs"
+        ),
+        "source_readiness_refs": refs(source_readiness_paths, field="source_readiness_refs"),
+        "component_validation_refs": refs(
+            component_validation_paths, field="component_validation_refs"
+        ),
+        "lineage_ref": ref(lineage_path),
+    }
+    value["canonical_sha256"] = hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+    _write_json_exclusive(output_path, value)
+    return {**value, "file_sha256": _sha256(output_path)}
+
+
+def upgrade_profile_v4(
+    *,
+    validated_v3_profile_path: Path,
+    profile_output_path: Path,
+    derived_asset_registry_path: Path,
+    release_closure_path: Path,
+) -> dict[str, Any]:
+    """Upgrade a fully prepared v3 candidate profile after derived assets close."""
+
+    if profile_output_path.exists():
+        raise FileExistsError(f"profile candidate already exists: {profile_output_path}")
+    profile = copy.deepcopy(_read_json(validated_v3_profile_path, field="validated v3 profile"))
+    if profile.get("schema_version") != PROFILE_SCHEMA_V3:
+        raise ValueError("profile v4 upgrade requires a validated v3 profile")
+    registry = _read_json(derived_asset_registry_path, field="derived asset registry")
+    manifest_sha = ensure_sha256(
+        str(profile.get("components", {}).get("dataset_manifest_sha256") or ""),
+        field="profile.dataset_manifest_sha256",
+    )
+    if (
+        registry.get("schema_version") != DERIVED_ASSET_REGISTRY_SCHEMA
+        or registry.get("source_dataset_manifest_sha256") != manifest_sha
+    ):
+        raise ValueError("derived asset registry targets another dataset manifest")
+    profile["schema_version"] = PROFILE_SCHEMA_V4
+    profile["components"]["derived_asset_registry_path"] = str(
+        derived_asset_registry_path.resolve(strict=True)
+    )
+    profile["components"]["derived_asset_registry_sha256"] = _sha256(derived_asset_registry_path)
+    closure = _read_json(release_closure_path, field="release closure")
+    if closure.get("schema_version") != RELEASE_CLOSURE_SCHEMA:
+        raise ValueError("release closure schema differs")
+    if closure.get("dataset_manifest_ref", {}).get("sha256") != profile["components"].get(
+        "dataset_manifest_file_sha256"
+    ):
+        raise ValueError("release closure targets another dataset manifest file")
+    profile["components"]["release_closure_path"] = str(
+        release_closure_path.resolve(strict=True)
+    )
+    profile["components"]["release_closure_sha256"] = _sha256(release_closure_path)
+    qe = copy.deepcopy(profile["consumers"]["qe"])
+    qe["required_components"] = sorted(set(_V4_CONSUMER_REQUIREMENTS["qe"]))
+    consumers: dict[str, Any] = {"qe": qe}
+    for name, requirements in sorted(_V4_CONSUMER_REQUIREMENTS.items()):
+        if name == "qe":
+            continue
+        consumers[name] = {"required_components": sorted(set(requirements))}
+    profile["consumers"] = consumers
     profile_output_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_exclusive(profile_output_path, profile)
     return profile
