@@ -116,6 +116,85 @@ def _read_canonical_object(path: Path, *, label: str) -> Mapping[str, Any]:
     return value
 
 
+def _dataset_manifest_identity(value: Mapping[str, Any]) -> str:
+    unsigned = dict(value)
+    unsigned.pop("dataset_manifest_sha256", None)
+    return hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+
+
+def _validate_dataset_manifest(
+    path: Path,
+    value: Mapping[str, Any],
+    *,
+    context: ProducerContext,
+    component_artifacts: Sequence[Path],
+) -> str:
+    if value.get("schema_version") != "qe_dataset_manifest_v1":
+        raise OfficialMonthlyAdapterError("dataset manifest schema differs")
+    identity = str(value.get("dataset_manifest_sha256") or "")
+    ensure_sha256(identity, field="dataset_manifest_sha256")
+    if _dataset_manifest_identity(value) != identity:
+        raise OfficialMonthlyAdapterError("dataset manifest canonical identity differs")
+    if (
+        value.get("release_id") != context.plan.get("release_id")
+        or value.get("cutoff_trade_date") != context.plan.get("target_cutoff")
+        or value.get("revision") != context.plan.get("revision")
+    ):
+        raise OfficialMonthlyAdapterError("dataset manifest release identity differs")
+    components = value.get("components")
+    if not isinstance(components, Mapping) or not components:
+        raise OfficialMonthlyAdapterError("dataset manifest component inventory is empty")
+    candidate_root = path.parent.resolve(strict=True)
+    declared: dict[Path, tuple[str, int]] = {}
+    for name, raw in components.items():
+        if not isinstance(name, str) or not name or not isinstance(raw, Mapping):
+            raise OfficialMonthlyAdapterError("dataset manifest component entry is invalid")
+        if not {"path", "sha256", "size"}.issubset(raw):
+            raise OfficialMonthlyAdapterError(
+                f"dataset manifest component fields differ: {name}"
+            )
+        relative = Path(str(raw.get("path") or ""))
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise OfficialMonthlyAdapterError(
+                f"dataset manifest component path is invalid: {name}"
+            )
+        component_path = _plain_file(candidate_root / relative, label=f"manifest component {name}")
+        if not component_path.is_relative_to(candidate_root) or component_path in declared:
+            raise OfficialMonthlyAdapterError("dataset manifest component paths are ambiguous")
+        digest = ensure_sha256(str(raw.get("sha256") or ""), field=f"components.{name}.sha256")
+        size = raw.get("size")
+        if type(size) is not int or size < 0:
+            raise OfficialMonthlyAdapterError(f"dataset manifest component size is invalid: {name}")
+        if component_path.stat().st_size != size or _sha256(component_path) != digest:
+            raise OfficialMonthlyAdapterError(f"dataset manifest component bytes differ: {name}")
+        declared[component_path] = (digest, size)
+    returned = tuple(_plain_file(item, label="build component artifact") for item in component_artifacts)
+    if len(set(returned)) != len(returned) or set(returned) != set(declared):
+        raise OfficialMonthlyAdapterError(
+            "build component artifact set differs from dataset manifest"
+        )
+    return identity
+
+
+def _require_manifest_bound_json(
+    path: Path,
+    *,
+    label: str,
+    dataset_manifest_sha256: str,
+    schema_version: str | None = None,
+    require_pass: bool = False,
+) -> Mapping[str, Any]:
+    value = _read_canonical_object(path, label=label)
+    if schema_version is not None and value.get("schema_version") != schema_version:
+        raise OfficialMonthlyAdapterError(f"{label} schema differs")
+    bound = value.get("dataset_manifest_sha256", value.get("source_dataset_manifest_sha256"))
+    if bound != dataset_manifest_sha256:
+        raise OfficialMonthlyAdapterError(f"{label} dataset manifest identity differs")
+    if require_pass and value.get("status") != "PASS":
+        raise OfficialMonthlyAdapterError(f"{label} did not report PASS")
+    return value
+
+
 def _write_canonical_exclusive(path: Path, value: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = canonical_json_bytes(value) + b"\n"
@@ -229,8 +308,12 @@ class OfficialBuildAdapter:
             component_actions={str(key): str(value) for key, value in actions.items()},
         )
         manifest = _read_canonical_object(result.manifest_path, label="dataset manifest")
-        identity = str(manifest.get("dataset_manifest_sha256") or "")
-        ensure_sha256(identity, field="dataset_manifest_sha256")
+        identity = _validate_dataset_manifest(
+            result.manifest_path,
+            manifest,
+            context=context,
+            component_artifacts=result.component_artifacts,
+        )
         output_paths = (result.manifest_path, *result.component_artifacts)
         if len({path.resolve(strict=True) for path in output_paths}) != len(output_paths):
             raise OfficialMonthlyAdapterError("build output files are duplicated")
@@ -305,6 +388,13 @@ class OfficialDeriveAdapter:
             _artifact(_adapter_roots(self), item.path, label="derived asset")
             for item in result.assets
         )
+        for item in result.assets:
+            _require_manifest_bound_json(
+                item.path,
+                label=f"derived asset {item.asset_id}",
+                dataset_manifest_sha256=manifest_sha,
+                schema_version=item.schema_version,
+            )
         root = _stage_root(self.artifact_root, context)
         rows = []
         for item, artifact in zip(result.assets, asset_artifacts, strict=True):
@@ -394,6 +484,25 @@ class OfficialLocalValidateAdapter:
         derived_refs = derive_scope.get("derived_assets")
         if not isinstance(manifest_ref, Mapping) or not isinstance(derived_refs, list) or not derived_refs:
             raise OfficialMonthlyAdapterError("local validation inputs are incomplete")
+
+        for path in result.consumer_contracts:
+            _require_manifest_bound_json(
+                path,
+                label="consumer contract",
+                dataset_manifest_sha256=manifest_sha,
+            )
+        for path in (*result.source_readiness, *result.component_validations):
+            _require_manifest_bound_json(
+                path,
+                label="local validation evidence",
+                dataset_manifest_sha256=manifest_sha,
+                require_pass=True,
+            )
+        _require_manifest_bound_json(
+            result.lineage_path,
+            label="release lineage",
+            dataset_manifest_sha256=manifest_sha,
+        )
 
         def refs(paths: Sequence[Path], label: str) -> list[dict[str, Any]]:
             if not paths:
@@ -497,6 +606,12 @@ class OfficialDeployAdapter:
         registration_paths: list[Path] = []
         for node_id in REQUIRED_NODES:
             item = by_node[node_id]
+            _require_manifest_bound_json(
+                item.deployment_receipt,
+                label=f"{node_id} deployment receipt",
+                dataset_manifest_sha256=manifest_sha,
+                require_pass=True,
+            )
             file_refs = [
                 _content_ref(_adapter_roots(self), path, label=f"{node_id} deployed file")
                 for path in item.relative_files
@@ -602,10 +717,25 @@ class OfficialConsumerValidateAdapter:
         readback_paths: list[Path] = []
         for name in REQUIRED_CONSUMERS:
             item = by_name[name]
-            if not item.node_id.strip() or not item.adapter_version.strip():
+            if item.node_id not in REQUIRED_NODES or not item.adapter_version.strip():
                 raise OfficialMonthlyAdapterError(f"consumer identity is incomplete: {name}")
             if any(type(value) is not int or value < 0 for value in item.coverage_counts.values()):
                 raise OfficialMonthlyAdapterError(f"consumer coverage counts are invalid: {name}")
+            if item.coverage_counts.get("unresolved_count") != 0:
+                raise OfficialMonthlyAdapterError(
+                    f"consumer unresolved coverage is not closed: {name}"
+                )
+            _require_manifest_bound_json(
+                item.binding_path,
+                label=f"{name} binding",
+                dataset_manifest_sha256=manifest_sha,
+            )
+            _require_manifest_bound_json(
+                item.result_path,
+                label=f"{name} result",
+                dataset_manifest_sha256=manifest_sha,
+                require_pass=True,
+            )
             readback = {
                 "schema_version": CONSUMER_READBACK_SCHEMA,
                 "consumer_id": name,

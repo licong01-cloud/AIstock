@@ -38,7 +38,21 @@ from backend.services.dataset_release.monthly_worker import (
 )
 
 
-MANIFEST = "b" * 64
+_COMPONENT_BYTES = canonical_json_bytes({"status": "PASS"}) + b"\n"
+_MANIFEST_UNSIGNED = {
+    "schema_version": "qe_dataset_manifest_v1",
+    "release_id": "qe_hmm_full_v2_20260930",
+    "revision": "20260930-monthly-v2",
+    "cutoff_trade_date": "2026-09-30",
+    "components": {
+        "component": {
+            "path": "component.json",
+            "sha256": hashlib.sha256(_COMPONENT_BYTES).hexdigest(),
+            "size": len(_COMPONENT_BYTES),
+        }
+    },
+}
+MANIFEST = hashlib.sha256(canonical_json_bytes(_MANIFEST_UNSIGNED)).hexdigest()
 PREDECESSOR = "a" * 64
 
 
@@ -77,6 +91,8 @@ def _context(
         request={},
         plan={
             "release_id": "qe_hmm_full_v2_20260930",
+            "target_cutoff": "2026-09-30",
+            "revision": "20260930-monthly-v2",
             "predecessor": {"dataset_manifest_sha256": PREDECESSOR},
         },
         prior_receipts={
@@ -121,16 +137,35 @@ def _run_pipeline(root: Path, adapter, context: ProducerContext):  # type: ignor
 class BuildExecutor:
     root: Path
     noncanonical: bool = False
+    claimed_identity: str | None = None
 
     def execute(self, _context, *, component_actions):  # type: ignore[no-untyped-def]
         assert set(component_actions) == set(COMPONENTS)
         manifest = self.root / "candidate" / "qe_dataset_manifest.json"
+        component = _write(self.root / "candidate" / "component.json", {"status": "PASS"})
         if self.noncanonical:
-            manifest.parent.mkdir(parents=True)
+            manifest.parent.mkdir(parents=True, exist_ok=True)
             manifest.write_text('{"dataset_manifest_sha256": "' + MANIFEST + '"}\n', encoding="utf-8")
         else:
-            _write(manifest, {"dataset_manifest_sha256": MANIFEST})
-        component = _write(self.root / "candidate" / "component.json", {"status": "PASS"})
+            value: dict[str, Any] = {
+                "schema_version": "qe_dataset_manifest_v1",
+                "release_id": "qe_hmm_full_v2_20260930",
+                "revision": "20260930-monthly-v2",
+                "cutoff_trade_date": "2026-09-30",
+                "components": {
+                    "component": {
+                        "path": "component.json",
+                        "sha256": hashlib.sha256(component.read_bytes()).hexdigest(),
+                        "size": component.stat().st_size,
+                    }
+                },
+            }
+            value["dataset_manifest_sha256"] = hashlib.sha256(
+                canonical_json_bytes(value)
+            ).hexdigest()
+            if self.claimed_identity is not None:
+                value["dataset_manifest_sha256"] = self.claimed_identity
+            _write(manifest, value)
         return BuildExecution(manifest_path=manifest, component_artifacts=(component,))
 
 
@@ -186,6 +221,15 @@ def test_build_adapter_supports_separate_evidence_and_candidate_roots(tmp_path: 
 def test_build_adapter_rejects_noncanonical_manifest(tmp_path: Path) -> None:
     adapter = OfficialBuildAdapter(tmp_path, BuildExecutor(tmp_path, noncanonical=True))
     with pytest.raises(OfficialMonthlyAdapterError, match="canonical JSON"):
+        adapter.execute(_context("BUILD", source_scope=_source_scope()))
+
+
+def test_build_adapter_rejects_self_claimed_manifest_identity(tmp_path: Path) -> None:
+    adapter = OfficialBuildAdapter(
+        tmp_path,
+        BuildExecutor(tmp_path, claimed_identity="f" * 64),
+    )
+    with pytest.raises(OfficialMonthlyAdapterError, match="canonical identity differs"):
         adapter.execute(_context("BUILD", source_scope=_source_scope()))
 
 
@@ -249,16 +293,33 @@ class LocalExecutor:
             },
             dataset_identity_complete=True,
             consumer_contracts=(
-                _write(self.root / "evidence" / "consumer-contract.json", {"version": "1"}),
+                _write(
+                    self.root / "evidence" / "consumer-contract.json",
+                    {"version": "1", "dataset_manifest_sha256": MANIFEST},
+                ),
             ),
             source_readiness=(
-                _write(self.root / "evidence" / "source-readiness.json", {"status": "PASS"}),
+                _write(
+                    self.root / "evidence" / "source-readiness.json",
+                    {"status": "PASS", "dataset_manifest_sha256": MANIFEST},
+                ),
             ),
             component_validations=(
-                _write(self.root / "evidence" / "component-validation.json", {"gaps": 0}),
+                _write(
+                    self.root / "evidence" / "component-validation.json",
+                    {
+                        "status": "PASS",
+                        "gaps": 0,
+                        "dataset_manifest_sha256": MANIFEST,
+                    },
+                ),
             ),
             lineage_path=_write(
-                self.root / "evidence" / "lineage.json", {"predecessor": PREDECESSOR}
+                self.root / "evidence" / "lineage.json",
+                {
+                    "predecessor": PREDECESSOR,
+                    "dataset_manifest_sha256": MANIFEST,
+                },
             ),
         )
 
@@ -293,7 +354,11 @@ class DeployExecutor:
         for node in REQUIRED_NODES:
             receipt = _write(
                 self.root / "deploy" / f"{node}.json",
-                {"node": node, "manifest": dataset_manifest_sha256},
+                {
+                    "status": "PASS",
+                    "node": node,
+                    "dataset_manifest_sha256": dataset_manifest_sha256,
+                },
             )
             nodes.append(
                 NodeDeployment(
@@ -339,16 +404,26 @@ def test_deploy_adapter_rejects_manifest_drift(tmp_path: Path) -> None:
 class ConsumerExecutor:
     root: Path
     omit: str | None = None
+    fail: str | None = None
 
     def execute(self, _context, *, dataset_manifest_sha256):  # type: ignore[no-untyped-def]
-        binding = _write(self.root / "consumer" / "binding.json", {"manifest": dataset_manifest_sha256})
+        binding = _write(
+            self.root / "consumer" / "binding.json",
+            {"dataset_manifest_sha256": dataset_manifest_sha256},
+        )
         component = _write(self.root / "candidate" / "component.json", {"x": 1})
         derived = _write(self.root / "candidate" / "derived.json", {"x": 2})
         rows = []
         for name in REQUIRED_CONSUMERS:
             if name == self.omit:
                 continue
-            result = _write(self.root / "consumer" / f"{name}-result.json", {"status": "PASS"})
+            result = _write(
+                self.root / "consumer" / f"{name}-result.json",
+                {
+                    "status": "FAILED" if name == self.fail else "PASS",
+                    "dataset_manifest_sha256": dataset_manifest_sha256,
+                },
+            )
             rows.append(
                 ConsumerReadback(
                     consumer_id=name,
@@ -357,7 +432,7 @@ class ConsumerExecutor:
                     required_window={"start": "2018-08-01", "end": "2026-09-30"},
                     resolved_component_paths=(component,),
                     derived_asset_paths=(derived,),
-                    coverage_counts={"unresolved": 0},
+                    coverage_counts={"unresolved_count": 0},
                     adapter_version="consumer-smoke-v1",
                     result_path=result,
                 )
@@ -395,6 +470,17 @@ def test_consumer_adapter_rejects_partial_registry(tmp_path: Path) -> None:
         tmp_path, ConsumerExecutor(tmp_path, omit="qe_p11")
     )
     with pytest.raises(OfficialMonthlyAdapterError, match="coverage differs"):
+        adapter.execute(
+            _context("CONSUMER_VALIDATE", build_scope={"dataset_manifest_sha256": MANIFEST})
+        )
+
+
+def test_consumer_adapter_rejects_failed_result_file(tmp_path: Path) -> None:
+    adapter = OfficialConsumerValidateAdapter(
+        tmp_path,
+        ConsumerExecutor(tmp_path, fail="qe_p11"),
+    )
+    with pytest.raises(OfficialMonthlyAdapterError, match="did not report PASS"):
         adapter.execute(
             _context("CONSUMER_VALIDATE", build_scope={"dataset_manifest_sha256": MANIFEST})
         )
