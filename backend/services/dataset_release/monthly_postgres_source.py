@@ -39,6 +39,7 @@ from .source_authority import (
     MonthlySourceAuthority,
     SOURCE_REUSE_MANIFEST_SCHEMA,
     imported_source_session_factory,
+    seal_source_stage_receipt,
 )
 
 
@@ -310,6 +311,11 @@ class PostgresMonthlySourceAdapter:
             provider_receipt_refs=ready.provider_receipt_refs,
             artifact_ready_derived_source_receipt_refs=ready.derived_source_receipt_refs,
         )
+        source_stage_ref = seal_source_stage_receipt(
+            self.cas,
+            frozen,
+            profile=self.profile.profile,
+        )
         current_reuse = self.cas.get_json_bounded(
             frozen.source_reuse_manifest_ref,
             max_bytes=64 * 1024 * 1024,
@@ -377,6 +383,7 @@ class PostgresMonthlySourceAdapter:
             identity=identity,
             predecessor_cutoff=predecessor_cutoff,
             baseline_row=baseline_row,
+            source_stage_ref=source_stage_ref,
         )
         _write_canonical_exclusive(bundle_path, bundle)
 
@@ -443,7 +450,7 @@ class PostgresMonthlySourceAdapter:
                 )
             )
 
-        cas_refs = self._all_refs(frozen)
+        cas_refs = self._all_refs(frozen, source_stage_ref)
         artifacts.extend(
             _cas_artifact(self.cas, reference)
             for reference in cas_refs
@@ -462,6 +469,7 @@ class PostgresMonthlySourceAdapter:
         identity: MonthlySnapshotIdentity,
         predecessor_cutoff: date,
         baseline_row: Mapping[str, Any] | None,
+        source_stage_ref: CASRef,
     ) -> dict[str, Any]:
         if frozen.artifact_ready_contract_ref is None:
             raise MonthlyPostgresSourceError("frozen source lacks artifact-ready authority")
@@ -482,6 +490,7 @@ class PostgresMonthlySourceAdapter:
             "source_provenance_ref": frozen.source_provenance_ref.as_dict(),
             "pit_snapshot_ref": frozen.pit_snapshot_ref.as_dict(),
             "artifact_ready_contract_ref": frozen.artifact_ready_contract_ref.as_dict(),
+            "source_stage_receipt_ref": source_stage_ref.as_dict(),
             "artifact_ready_content_root": frozen.artifact_ready_content_root,
             "artifact_ready_provenance_root": frozen.artifact_ready_provenance_root,
             "provider_receipt_refs": [item.as_dict() for item in frozen.provider_receipt_refs],
@@ -520,13 +529,17 @@ class PostgresMonthlySourceAdapter:
         return refs
 
     @staticmethod
-    def _all_refs(frozen: FrozenSourceAuthoritySnapshot) -> tuple[CASRef, ...]:
+    def _all_refs(
+        frozen: FrozenSourceAuthoritySnapshot,
+        source_stage_ref: CASRef,
+    ) -> tuple[CASRef, ...]:
         values = [
             frozen.source_manifest_ref,
             frozen.source_reuse_manifest_ref,
             frozen.source_audit_ref,
             frozen.source_provenance_ref,
             frozen.pit_snapshot_ref,
+            source_stage_ref,
             *frozen.derived_source_receipt_refs,
             *frozen.provider_receipt_refs,
             *frozen.artifact_ready_derived_source_receipt_refs,
