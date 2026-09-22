@@ -103,6 +103,7 @@ def test_first_unified_source_forces_complete_evidenced_migration() -> None:
         "stk_limit",
         "index_daily",
         "stock_universe_pit",
+        "index_membership_pit",
         "industry_classification",
     }.issubset(forced)
 

@@ -19,6 +19,7 @@ from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence
 
+from ..core_index_catalog import POOL_DEFINITIONS, P0_POOL_IDS
 from .canonical import (
     canonical_json_bytes,
     digest_named_fields,
@@ -79,6 +80,7 @@ SOURCE_WRITER_LEDGER_SCHEMA = "dataset_release_source_writer_ledger_v2"
 SOURCE_WRITER_LEDGER_DIGEST_SCHEMA = "dataset_release_source_writer_ledger_digest_v2"
 SOURCE_MVCC_FINGERPRINT_SCHEMA = "dataset_release_partition_mvcc_fingerprint_v1"
 SOURCE_MONTH_CONTENT_LEAF_SCHEMA = "dataset_release_source_month_content_leaf_v1"
+CORE_INDEX_MEMBERSHIP_RECEIPT_SCHEMA = "dataset_release_core_index_membership_source_receipt_v1"
 # Flip only after the exact production PostgreSQL/Timescale permissions and
 # xmin behavior have passed the documented capability test.  Fixture injection
 # can exercise the contract without silently enabling unverified production reuse.
@@ -248,7 +250,7 @@ class SourceQuerySpec:
             raise ValueError("non-null source values must be projected value fields")
         if not set(self.audit_non_null_value_columns).issubset(self.value_columns):
             raise ValueError("audit non-null values must be physical projected fields")
-        if self.start_policy not in {"daily", "minute", "timeless"}:
+        if self.start_policy not in {"daily", "minute", "timeless", "window_overlap"}:
             raise ValueError("source query start policy is invalid")
         if self.start_policy == "timeless" and self.date_expression is not None:
             raise ValueError("timeless query cannot carry a date expression")
@@ -260,6 +262,10 @@ class SourceQuerySpec:
             raise ValueError("timestamp day bounds require a dated minute source")
         if self.start_policy == "timeless" and self.date_range_policy != "inclusive_date":
             raise ValueError("timeless query cannot carry a date-range policy")
+        if self.start_policy == "window_overlap" and (
+            self.date_expression is not None or self.audit_dataset is not None
+        ):
+            raise ValueError("window-overlap query is an undated PIT authority")
         if (self.audit_dataset is None) != (not self.audit_eligible_sources):
             raise ValueError("dated source audit dataset and eligible sources must be specified together")
         if self.date_expression is None and self.audit_dataset is not None:
@@ -367,6 +373,18 @@ class SourceQuerySpec:
                 "WHERE source_row.cal_date >= %(start)s "
                 "AND source_row.cal_date <= %(end)s "
                 "AND source_row.is_trading = TRUE ORDER BY row_key,row_payload"
+            )
+        if self.query_id == "index_membership_pit":
+            return (
+                "SELECT jsonb_build_array(source_row.pool_id,source_row.ts_code,"
+                "source_row.effective_from)::text AS row_key, ("
+                + payload
+                + ")::text AS row_payload FROM market.core_index_membership_pit AS source_row "
+                "WHERE source_row.pool_id = ANY(ARRAY['csi300','csi500','csi1000','star50','star100']) "
+                "AND source_row.effective_from <= %(end)s "
+                "AND (source_row.effective_to_exclusive IS NULL "
+                "OR source_row.effective_to_exclusive > %(start)s) "
+                "ORDER BY row_key,row_payload"
             )
         return self._generic_select_sql() + " " + self.order_sql
 
@@ -738,6 +756,21 @@ _QUERY_SPECS = (
         ("ts_code",),
         values=("list_date", "list_status", "exchange", "market"),
         start_policy="timeless",
+    ),
+    _query(
+        "index_membership_pit",
+        "core_index_membership_pit",
+        tuple(Component),
+        ("pool_id", "ts_code", "effective_from"),
+        values=(
+            "index_code",
+            "effective_to_exclusive",
+            "source_provider",
+            "source_reference",
+            "updated_at",
+        ),
+        non_null_values=("index_code", "source_provider", "source_reference", "updated_at"),
+        start_policy="window_overlap",
     ),
     _query(
         "sw_index_classify",
@@ -1791,6 +1824,8 @@ class MonthlySourceAuthority:
         mvcc_unsupported_partitions = 0
         classify_rows: list[Mapping[str, Any]] = []
         member_rows: list[Mapping[str, Any]] = []
+        core_index_membership_rows: list[Mapping[str, Any]] = []
+        core_index_membership_receipt: Mapping[str, Any] | None = None
         sector_enricher: FrozenSectorEnricher | None = None
         query_order = (
             PRODUCTION_QUERY_SPECS["sw_index_classify"],
@@ -1975,7 +2010,12 @@ class MonthlySourceAuthority:
                                 else (
                                     member_rows.append
                                     if recheck_by_identity is not None and query.query_id == "sw_index_member"
-                                    else None
+                                    else (
+                                        core_index_membership_rows.append
+                                        if recheck_by_identity is not None
+                                        and query.query_id == "index_membership_pit"
+                                        else None
+                                    )
                                 )
                             ),
                             recheck_expectation=(
@@ -2026,7 +2066,11 @@ class MonthlySourceAuthority:
                 )
                 query_rows += partition.summary.row_count
                 sealed.append(partition)
-                if recheck_by_identity is None and query.query_id in {"sw_index_classify", "sw_index_member"}:
+                if recheck_by_identity is None and query.query_id in {
+                    "sw_index_classify",
+                    "sw_index_member",
+                    "index_membership_pit",
+                }:
                     from .sealed_source_reader import CASSealedPartitionReader
 
                     reader = CASSealedPartitionReader(
@@ -2034,7 +2078,15 @@ class MonthlySourceAuthority:
                         [partition.as_build_input()],
                         max_partition_rows=effective_query.max_partition_rows,
                     )
-                    target = classify_rows if query.query_id == "sw_index_classify" else member_rows
+                    target = (
+                        classify_rows
+                        if query.query_id == "sw_index_classify"
+                        else (
+                            member_rows
+                            if query.query_id == "sw_index_member"
+                            else core_index_membership_rows
+                        )
+                    )
                     with reader.iter_rows(
                         query.query_id,
                         partition.spec.partition_key,
@@ -2044,6 +2096,12 @@ class MonthlySourceAuthority:
                 raise SourceRequiredDatasetEmpty(
                     f"required source dataset is empty: {query.query_id}",
                     context={"query_id": query.query_id, "cutoff": cutoff.isoformat()},
+                )
+            if query.query_id == "index_membership_pit":
+                core_index_membership_receipt = _validate_core_index_membership_authority(
+                    core_index_membership_rows,
+                    start=self.profile.start_date,
+                    cutoff=cutoff,
                 )
             with self._session_factory(self.profile.resource_policy) as ledger_session:
                 ledger_tokens = self._session_tokens(ledger_session)
@@ -2121,6 +2179,8 @@ class MonthlySourceAuthority:
         pit_snapshot = before.pit_snapshot
         if sector_enricher is None:
             raise SourceRequiredDatasetEmpty("sector L2 enrichment authority is missing")
+        if core_index_membership_receipt is None:
+            raise SourceRequiredDatasetEmpty("core-index PIT membership authority is missing")
         manifest = SourceManifest(tuple(item.summary for item in sealed))
         if recheck_by_identity is not None:
             _assert_recheck_partition_set(
@@ -2185,7 +2245,26 @@ class MonthlySourceAuthority:
             )
         sector_receipt_ref = self.cas.put_json(sector_receipt_payload)
         self.cas.verify(sector_receipt_ref)
-        derived_source_receipt_refs = (sector_receipt_ref,)
+        core_index_membership_receipt_ref = self.cas.put_json(
+            {
+                **dict(core_index_membership_receipt),
+                "source_partitions": [
+                    {
+                        "identity": item.spec.identity,
+                        "content_digest": item.summary.content_digest,
+                        "row_count": item.summary.row_count,
+                        "rows_ref": item.rows_ref.as_dict(),
+                    }
+                    for item in sorted(sealed, key=lambda value: value.spec.identity)
+                    if item.spec.dataset == "index_membership_pit"
+                ],
+            }
+        )
+        self.cas.verify(core_index_membership_receipt_ref)
+        derived_source_receipt_refs = (
+            sector_receipt_ref,
+            core_index_membership_receipt_ref,
+        )
         manifest_payload = {
             "schema_version": SOURCE_MANIFEST_ARTIFACT_SCHEMA,
             "authority_policy_version": SOURCE_AUTHORITY_POLICY_VERSION,
@@ -2797,6 +2876,12 @@ class MonthlySourceAuthority:
             if query.code_policy == "profile_index_codes":
                 params["index_required_from_json"] = index_required_from_json
             yield "all", params
+            return
+        if query.start_policy == "window_overlap":
+            yield (
+                f"{self.profile.start_date.isoformat()}_{cutoff.isoformat()}",
+                {"start": self.profile.start_date, "end": cutoff},
+            )
             return
         start = self.profile.minute_start_date if query.start_policy == "minute" else self.profile.start_date
         for chunk in build_date_chunks(
@@ -4402,6 +4487,12 @@ _TEXT_PAYLOAD_COLUMNS = frozenset(
         "in_date",
         "l2_code",
         "out_date",
+        "pool_id",
+        "effective_from",
+        "effective_to_exclusive",
+        "source_provider",
+        "source_reference",
+        "updated_at",
     }
 )
 _BOOLEAN_PAYLOAD_COLUMNS = frozenset({"is_trading"})
@@ -4473,6 +4564,144 @@ def _validate_query_row(
     return {
         "row_key": canonical_json_bytes(row_key).decode("utf-8"),
         "row_payload": canonical_json_bytes(payload).decode("utf-8"),
+    }
+
+
+def _validate_core_index_membership_authority(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    start: date,
+    cutoff: date,
+) -> Mapping[str, Any]:
+    """Close the five official pool streams before they become frozen input."""
+
+    if start > cutoff:
+        raise SourceManifestError("core-index membership validation window is invalid")
+    expected_pools = tuple(sorted(P0_POOL_IDS))
+    expected_set = set(expected_pools)
+    normalized: list[dict[str, Any]] = []
+    by_pool: dict[str, list[dict[str, Any]]] = {pool_id: [] for pool_id in expected_pools}
+    identities: set[tuple[str, str, date]] = set()
+    for raw in rows:
+        pool_id = str(raw.get("pool_id") or "").strip().lower()
+        if pool_id not in expected_set:
+            raise SourceManifestError("core-index membership contains an unrequested pool")
+        definition = POOL_DEFINITIONS[pool_id]
+        index_code = str(raw.get("index_code") or "").strip().upper()
+        source_provider = str(raw.get("source_provider") or "").strip().upper()
+        ts_code = str(raw.get("ts_code") or "").strip().upper()
+        source_reference = str(raw.get("source_reference") or "").strip()
+        if (
+            index_code != definition.index_code
+            or source_provider != definition.source_provider
+            or _STOCK_CODE.fullmatch(ts_code) is None
+            or not source_reference
+        ):
+            raise SourceManifestError(
+                f"core-index membership authority identity differs: {pool_id}/{ts_code}"
+            )
+        effective_from = _as_date(raw.get("effective_from"))
+        raw_end = raw.get("effective_to_exclusive")
+        effective_to_exclusive = None if raw_end is None else _as_date(raw_end)
+        if (
+            effective_from > cutoff
+            or (effective_to_exclusive is not None and effective_to_exclusive <= effective_from)
+            or (effective_to_exclusive is not None and effective_to_exclusive <= start)
+        ):
+            raise SourceManifestError(
+                f"core-index membership interval escapes the frozen window: {pool_id}/{ts_code}"
+            )
+        updated_at_text = str(raw.get("updated_at") or "").strip().replace("Z", "+00:00")
+        try:
+            updated_at = datetime.fromisoformat(updated_at_text)
+        except ValueError as exc:
+            raise SourceManifestError("core-index membership updated_at is invalid") from exc
+        if updated_at.tzinfo is None or updated_at.utcoffset() is None:
+            raise SourceManifestError("core-index membership updated_at must be timezone-aware")
+        identity = (pool_id, ts_code, effective_from)
+        if identity in identities:
+            raise SourceManifestError("core-index membership identity is duplicated")
+        identities.add(identity)
+        row = {
+            "pool_id": pool_id,
+            "index_code": index_code,
+            "ts_code": ts_code,
+            "effective_from": effective_from.isoformat(),
+            "effective_to_exclusive": (
+                effective_to_exclusive.isoformat() if effective_to_exclusive is not None else None
+            ),
+            "source_provider": source_provider,
+            "source_reference": source_reference,
+            "updated_at": updated_at.isoformat(),
+        }
+        normalized.append(row)
+        by_pool[pool_id].append(row)
+
+    coverage: dict[str, Mapping[str, Any]] = {}
+    symbol_count: set[str] = set()
+    for pool_id in expected_pools:
+        pool_rows = sorted(
+            by_pool[pool_id],
+            key=lambda item: (item["ts_code"], item["effective_from"]),
+        )
+        if not pool_rows:
+            raise SourceRequiredDatasetEmpty(
+                "core-index membership pool is empty",
+                context={"pool_id": pool_id},
+            )
+        first_effective_from = min(date.fromisoformat(str(item["effective_from"])) for item in pool_rows)
+        required_from = max(start, POOL_DEFINITIONS[pool_id].history_start)
+        if first_effective_from > required_from:
+            raise SourceManifestError(
+                f"core-index membership starts after required history: {pool_id}"
+            )
+        prior_end_by_symbol: dict[str, date | None] = {}
+        for item in pool_rows:
+            symbol = str(item["ts_code"])
+            current_start = date.fromisoformat(str(item["effective_from"]))
+            current_end = (
+                date.fromisoformat(str(item["effective_to_exclusive"]))
+                if item["effective_to_exclusive"] is not None
+                else None
+            )
+            if symbol in prior_end_by_symbol:
+                prior_end = prior_end_by_symbol[symbol]
+                if prior_end is None or current_start < prior_end:
+                    raise SourceManifestError(
+                        f"core-index membership intervals overlap: {pool_id}/{symbol}"
+                    )
+            prior_end_by_symbol[symbol] = current_end
+            symbol_count.add(symbol)
+        coverage[pool_id] = {
+            "index_code": POOL_DEFINITIONS[pool_id].index_code,
+            "source_provider": POOL_DEFINITIONS[pool_id].source_provider,
+            "required_from": required_from.isoformat(),
+            "first_effective_from": first_effective_from.isoformat(),
+            "row_count": len(pool_rows),
+            "symbol_count": len({str(item["ts_code"]) for item in pool_rows}),
+        }
+
+    ordered_rows = sorted(
+        normalized,
+        key=lambda item: (item["pool_id"], item["ts_code"], item["effective_from"]),
+    )
+    authority_digest = digest_named_fields(
+        "dataset_release_core_index_membership_rows_v1",
+        {"rows": ordered_rows},
+    )
+    return {
+        "schema_version": CORE_INDEX_MEMBERSHIP_RECEIPT_SCHEMA,
+        "window": {"start": start.isoformat(), "cutoff": cutoff.isoformat()},
+        "pool_ids": list(expected_pools),
+        "pool_count": len(expected_pools),
+        "row_count": len(ordered_rows),
+        "symbol_count": len(symbol_count),
+        "duplicate_count": 0,
+        "overlap_count": 0,
+        "unknown_pool_count": 0,
+        "coverage": coverage,
+        "authority_digest": authority_digest,
+        "database_write_performed": False,
     }
 
 
