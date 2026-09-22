@@ -220,6 +220,37 @@ def _stage_root(artifact_root: Path, context: ProducerContext) -> Path:
     return root
 
 
+def _candidate_root(context: ProducerContext) -> Path:
+    raw = context.plan.get("candidate_root")
+    path = Path(str(raw or ""))
+    if not path.is_absolute():
+        raise OfficialMonthlyAdapterError("monthly candidate root must be absolute")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise OfficialMonthlyAdapterError("monthly candidate root is unavailable") from exc
+    if _is_link(path) or not resolved.is_dir():
+        raise OfficialMonthlyAdapterError("monthly candidate root must be a plain directory")
+    return resolved
+
+
+def _candidate_file(root: Path, path: Path, *, label: str) -> Path:
+    requested = Path(os.path.abspath(os.fspath(path)))
+    try:
+        relative = requested.relative_to(root)
+    except ValueError as exc:
+        raise OfficialMonthlyAdapterError(f"{label} escapes the monthly candidate") from exc
+    current = root
+    for part in relative.parts:
+        current /= part
+        if _is_link(current):
+            raise OfficialMonthlyAdapterError(f"{label} path chain must not be linked")
+    resolved = _plain_file(requested, label=label)
+    if not resolved.is_relative_to(root):
+        raise OfficialMonthlyAdapterError(f"{label} escapes the monthly candidate")
+    return resolved
+
+
 def _prior_scope(context: ProducerContext, stage: str) -> Mapping[str, Any]:
     receipt = context.prior_receipts.get(stage)
     scope = receipt.get("scope") if isinstance(receipt, Mapping) else None
@@ -400,28 +431,42 @@ class OfficialDeriveAdapter:
             _artifact(_adapter_roots(self), item.path, label="derived asset")
             for item in result.assets
         )
+        candidate_root = _candidate_root(context)
+        derived_root = candidate_root / "derived"
+        if derived_root.exists() and (_is_link(derived_root) or not derived_root.is_dir()):
+            raise OfficialMonthlyAdapterError("candidate derived root is linked or invalid")
+        derived_root.mkdir(parents=False, exist_ok=True)
+        resolved_derived_root = derived_root.resolve(strict=True)
         for item in result.assets:
+            asset_path = _candidate_file(
+                candidate_root,
+                item.path,
+                label=f"derived asset {item.asset_id}",
+            )
+            if not asset_path.is_relative_to(resolved_derived_root):
+                raise OfficialMonthlyAdapterError(
+                    f"derived asset must be candidate-local: {item.asset_id}"
+                )
             _require_manifest_bound_json(
                 item.path,
                 label=f"derived asset {item.asset_id}",
                 dataset_manifest_sha256=manifest_sha,
                 schema_version=item.schema_version,
             )
-        root = _stage_root(self.artifact_root, context)
         rows = []
         for item, artifact in zip(result.assets, asset_artifacts, strict=True):
             ref = _content_ref(_adapter_roots(self), artifact.path, label="derived asset")
             rows.append(
                 {
                     "asset_id": item.asset_id,
-                    "path": ref["id"],
+                    "path": artifact.path.relative_to(resolved_derived_root).as_posix(),
                     "sha256": ref["sha256"],
                     "size": ref["size"],
                     "schema_version": item.schema_version,
                 }
             )
         registry_path = _write_canonical_exclusive(
-            root / "derived-asset-registry.json",
+            derived_root / "derived_asset_registry.json",
             {
                 "schema_version": DERIVED_ASSET_REGISTRY_SCHEMA,
                 "source_dataset_manifest_sha256": manifest_sha,
