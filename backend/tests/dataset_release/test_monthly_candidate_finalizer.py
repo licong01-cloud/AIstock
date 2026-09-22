@@ -46,7 +46,10 @@ def _compiled(tmp_path: Path, ref) -> CompiledMonthlyBuild:  # type: ignore[no-u
         source_bundle_sha256=hashlib.sha256(bundle.read_bytes()).hexdigest(),
         source_stage_receipt_ref=ref,
         monthly_actions={},
-        physical_plan={},
+        physical_plan={
+            "release_digest": "1" * 64,
+            "build_inputs": {"profile": "qe_hmm_full_v2", "scope": "full"},
+        },
     )
 
 
@@ -136,6 +139,8 @@ def _setup(tmp_path: Path):  # type: ignore[no-untyped-def]
     validation = {
         "validation_status": "PASS",
         "required_validation_failures": 0,
+        "artifact_root": "3" * 64,
+        "manifest_root": "4" * 64,
         "validation_ref": cas.put_json({"status": "PASS"}).as_dict(),
         "component_artifact_manifest_ref": cas.put_json({"components": []}).as_dict(),
     }
@@ -162,6 +167,13 @@ def test_finalizer_seals_all_release_files_and_manifest_identity(tmp_path: Path)
     ).hexdigest()
     assert manifest["cutoff_trade_date"] == "2026-09-30"
     assert manifest["st_pit_snapshot_id"] == "pit-20260930"
+    baseline = json.loads(
+        (staging / "reports" / "monthly_incremental_baseline_authority.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert baseline["schema_version"] == "aistock_monthly_incremental_baseline_authority_v1"
+    assert baseline["release_digest"] == "1" * 64
     assert len(manifest["components"]) == len(result.component_artifacts)
     assert all(path.is_file() for path in result.component_artifacts)
     assert result.database_read_performed is False

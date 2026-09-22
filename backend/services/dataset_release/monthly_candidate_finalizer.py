@@ -21,6 +21,10 @@ from .canonical import canonical_json_bytes
 from .cas_store import CASRef
 from .monthly_build_bridge import CompiledMonthlyBuild
 from .monthly_build_executor import PhysicalBuildResult
+from .monthly_incremental_baseline import (
+    MONTHLY_INCREMENTAL_BASELINE_PATH,
+    build_monthly_incremental_baseline,
+)
 from .monthly_official_adapters import StageWorkload
 from .monthly_worker import ProducerContext
 
@@ -263,6 +267,24 @@ class UnifiedMonthlyCandidateFinalizer:
             raise MonthlyCandidateFinalizerError(
                 "monthly source contract must fail closed against fabrication"
             )
+        baseline_authority = build_monthly_incremental_baseline(
+            release_id=str(context.plan.get("release_id") or ""),
+            release_digest=str(compiled.physical_plan.get("release_digest") or ""),
+            profile=str(compiled.physical_plan.get("build_inputs", {}).get("profile") or ""),
+            scope=str(compiled.physical_plan.get("build_inputs", {}).get("scope") or ""),
+            cutoff=str(context.plan.get("target_cutoff") or ""),
+            candidate_root_name=Path(str(context.plan.get("candidate_root") or "")).name,
+            component_artifact_manifest_ref=validation_result.get(
+                "component_artifact_manifest_ref"
+            ),
+            validation_ref=validation_result.get("validation_ref"),
+            source_stage_receipt_ref=compiled.source_stage_receipt_ref.as_dict(),
+            source_bundle_sha256=compiled.source_bundle_sha256,
+        )
+        baseline_path = _write_exclusive(
+            root / MONTHLY_INCREMENTAL_BASELINE_PATH,
+            baseline_authority,
+        )
         evidence_path = _write_exclusive(
             root / "reports" / "monthly_candidate_build_evidence.json",
             {
@@ -281,6 +303,14 @@ class UnifiedMonthlyCandidateFinalizer:
                 "component_artifact_manifest_ref": validation_result.get(
                     "component_artifact_manifest_ref"
                 ),
+                "incremental_baseline_authority": {
+                    "path": baseline_path.relative_to(root).as_posix(),
+                    "sha256": _sha256(baseline_path),
+                    "size": baseline_path.stat().st_size,
+                    "baseline_authority_sha256": baseline_authority[
+                        "baseline_authority_sha256"
+                    ],
+                },
                 "database_read_performed": False,
                 "database_write_performed": False,
                 "runtime_action_performed": False,

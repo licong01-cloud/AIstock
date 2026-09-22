@@ -98,7 +98,8 @@ class MatureMonthlyPhysicalBuildRunner:
         ):
             raise MonthlyMatureBuildError("monthly staging root differs from profile")
         staging_relative_path = staging_root.relative_to(candidate_root).as_posix()
-        release_digest = digest_named_fields(
+        release_digest = str(compiled.physical_plan.get("release_digest") or "")
+        expected_release_digest = digest_named_fields(
             "aistock_monthly_physical_release_v1",
             {
                 "release_id": release_id,
@@ -107,6 +108,8 @@ class MatureMonthlyPhysicalBuildRunner:
                 "action_plan_digest": compiled.physical_plan.get("action_plan_digest"),
             },
         )
+        if release_digest != expected_release_digest:
+            raise MonthlyMatureBuildError("monthly physical release digest differs")
         common = {
             "run_id": context.operation_id,
             "attempt_id": f"{context.operation_id}-attempt-{context.attempt}",
