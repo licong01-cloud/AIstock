@@ -47,12 +47,16 @@ from backend.services.dataset_release.monthly_stage_adapter import CodeOwnedMont
 from backend.services.dataset_release.monthly_source_producer import AuditedMonthlySourceProducer
 from backend.services.dataset_release.monthly_unified import (
     COMPONENTS,
+    CONSUMER_VALIDATION_BINDING_SCHEMA,
     REQUIRED_CONSUMERS,
     REQUIRED_NODES,
 )
 from backend.services.dataset_release.monthly_worker import (
     ProducerContext,
     RegisteredMonthlyPipeline,
+)
+from backend.services.dataset_release.profile_contract import (
+    ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS,
 )
 
 
@@ -989,16 +993,29 @@ class ConsumerExecutor:
     fail: str | None = None
 
     def execute(self, _context, *, dataset_manifest_sha256):  # type: ignore[no-untyped-def]
-        binding = _write(
-            self.root / "consumer" / "binding.json",
-            {"dataset_manifest_sha256": dataset_manifest_sha256},
-        )
         component = _write(self.root / "candidate" / "component.json", {"x": 1})
         derived = _write(self.root / "candidate" / "derived.json", {"x": 2})
         rows = []
         for name in REQUIRED_CONSUMERS:
             if name == self.omit:
                 continue
+            uses_derived = (
+                "derived_assets"
+                in ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS[name]
+            )
+            binding = _write(
+                self.root / "consumer" / f"{name}-binding.json",
+                {
+                    "schema_version": CONSUMER_VALIDATION_BINDING_SCHEMA,
+                    "dataset_manifest_sha256": dataset_manifest_sha256,
+                    "resolved_component_refs": [_ref(self.root, component)],
+                    "derived_asset_refs": (
+                        [_ref(self.root, derived)]
+                        if uses_derived
+                        else []
+                    ),
+                },
+            )
             result = _write(
                 self.root / "consumer" / f"{name}-result.json",
                 {
@@ -1013,7 +1030,11 @@ class ConsumerExecutor:
                     binding_path=binding,
                     required_window={"start": "2018-08-01", "end": "2026-09-30"},
                     resolved_component_paths=(component,),
-                    derived_asset_paths=(derived,),
+                    derived_asset_paths=(
+                        (derived,)
+                        if uses_derived
+                        else ()
+                    ),
                     coverage_counts={"unresolved_count": 0},
                     adapter_version="consumer-smoke-v1",
                     result_path=result,

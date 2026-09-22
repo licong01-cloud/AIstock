@@ -30,7 +30,7 @@
 | F-022 | RD-Agent registry/identity | 已运行API识别新release，无逐月重启 | pending | 尚未开发验收 |
 | F-023 | authorization/CAS/activation | 双切换、崩溃、读回、伪授权拒绝 | pending | 尚未开发验收 |
 | F-024 | rollback与引用清单 | 并发安全回滚和旧任务引用保留 | pending | 尚未开发验收 |
-| F-025 | coverage/consumer验证编排 | 完整scope非抽样假成功，typed例外 | pending | 尚未开发验收 |
+| F-025 | `monthly_local_validation.py`、`monthly_consumer_validation.py`、`monthly_official_adapters.py` | `test_monthly_local_validation.py`、`test_monthly_consumer_validation.py`：完整六池scope、精确11 consumer probe注册、v4 binding/node registration/manifest闭合、side-effect fail-closed | in_progress | 通用文件验证与业务probe编排已实现；各业务正式probe、真实三节点闭月readback尚未全部接入，未达到verified |
 | F-026 | telemetry/分区/传输 | 真实读算写传hash成本，无资源准入 | pending | 尚未开发验收 |
 | F-027 | 产品入口/Skill/runbook | 一次真实run及恢复到ready/切换 | pending | 尚未开发验收 |
 | F-028 | 动态日期/目录/model合同 | 非固定计数的新月份与新行业 | pending | 尚未开发验收 |

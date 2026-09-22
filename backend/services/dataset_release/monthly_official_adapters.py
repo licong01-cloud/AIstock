@@ -24,12 +24,14 @@ from .monthly_stage_adapter import MonthlyStageArtifact, MonthlyStageResult
 from .monthly_unified import (
     COMPONENTS,
     CONSUMER_READBACK_SCHEMA,
+    CONSUMER_VALIDATION_BINDING_SCHEMA,
     NODE_REGISTRATION_SCHEMA,
     RELEASE_CLOSURE_SCHEMA,
     REQUIRED_CONSUMERS,
     REQUIRED_NODES,
     TELEMETRY_COUNT_FIELDS,
 )
+from .profile_contract import ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 from .monthly_worker import ProducerContext
 
 
@@ -862,6 +864,16 @@ class OfficialConsumerValidateAdapter:
         root = _stage_root(self.artifact_root, context)
         readbacks: dict[str, Mapping[str, Any]] = {}
         readback_paths: list[Path] = []
+        ref_cache: dict[Path, dict[str, Any]] = {}
+
+        def cached_ref(path: Path, *, label: str) -> dict[str, Any]:
+            resolved = _plain_file(path, label=label)
+            cached = ref_cache.get(resolved)
+            if cached is None:
+                cached = _content_ref(_adapter_roots(self), resolved, label=label)
+                ref_cache[resolved] = cached
+            return dict(cached)
+
         for name in REQUIRED_CONSUMERS:
             item = by_name[name]
             if item.node_id not in REQUIRED_NODES or not item.adapter_version.strip():
@@ -875,6 +887,26 @@ class OfficialConsumerValidateAdapter:
                 label=f"{name} binding",
                 dataset_manifest_sha256=manifest_sha,
             )
+            binding_value = _read_canonical_object(
+                item.binding_path,
+                label=f"{name} binding",
+            )
+            expected_component_refs = binding_value.get("resolved_component_refs")
+            expected_derived_refs = binding_value.get("derived_asset_refs")
+            if (
+                binding_value.get("schema_version")
+                != CONSUMER_VALIDATION_BINDING_SCHEMA
+                or not isinstance(expected_component_refs, list)
+                or not isinstance(expected_derived_refs, list)
+                or any(
+                    not isinstance(ref, Mapping)
+                    or not {"sha256", "size"}.issubset(ref)
+                    for ref in (*expected_component_refs, *expected_derived_refs)
+                )
+            ):
+                raise OfficialMonthlyAdapterError(
+                    f"consumer binding file pins differ: {name}"
+                )
             _require_manifest_bound_json(
                 item.result_path,
                 label=f"{name} result",
@@ -885,19 +917,19 @@ class OfficialConsumerValidateAdapter:
                 "schema_version": CONSUMER_READBACK_SCHEMA,
                 "consumer_id": name,
                 "node_id": item.node_id,
-                "binding_ref": _content_ref(_adapter_roots(self), item.binding_path, label=f"{name} binding"),
+                "binding_ref": cached_ref(item.binding_path, label=f"{name} binding"),
                 "required_window": dict(item.required_window),
                 "resolved_component_refs": [
-                    _content_ref(_adapter_roots(self), path, label=f"{name} component")
+                    cached_ref(path, label=f"{name} component")
                     for path in item.resolved_component_paths
                 ],
                 "derived_asset_refs": [
-                    _content_ref(_adapter_roots(self), path, label=f"{name} derived asset")
+                    cached_ref(path, label=f"{name} derived asset")
                     for path in item.derived_asset_paths
                 ],
                 "coverage_counts": dict(item.coverage_counts),
                 "command_or_adapter_version": item.adapter_version,
-                "result_ref": _content_ref(_adapter_roots(self), item.result_path, label=f"{name} result"),
+                "result_ref": cached_ref(item.result_path, label=f"{name} result"),
                 "side_effect_flags": {
                     "outcomes_read": False,
                     "training_started": False,
@@ -906,8 +938,26 @@ class OfficialConsumerValidateAdapter:
                 },
                 "dataset_manifest_sha256": manifest_sha,
             }
-            if not readback["resolved_component_refs"] or not readback["derived_asset_refs"]:
+            expects_derived = (
+                "derived_assets"
+                in ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS[name]
+            )
+            if not readback["resolved_component_refs"] or (
+                expects_derived != bool(readback["derived_asset_refs"])
+            ):
                 raise OfficialMonthlyAdapterError(f"consumer resolved file set is empty: {name}")
+            for expected, actual in (
+                (expected_component_refs, readback["resolved_component_refs"]),
+                (expected_derived_refs, readback["derived_asset_refs"]),
+            ):
+                if len(expected) != len(actual) or any(
+                    reference.get("sha256") != observed.get("sha256")
+                    or reference.get("size") != observed.get("size")
+                    for reference, observed in zip(expected, actual, strict=True)
+                ):
+                    raise OfficialMonthlyAdapterError(
+                        f"consumer resolved bytes differ after probe: {name}"
+                    )
             path = _write_canonical_exclusive(root / f"{name}-readback.json", readback)
             readbacks[name] = readback
             readback_paths.append(path)

@@ -26,6 +26,9 @@ from backend.services.dataset_release.monthly_worker import (
     RegisteredMonthlyPipeline,
     SubprocessStageProducer,
 )
+from backend.services.dataset_release.profile_contract import (
+    ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS,
+)
 
 
 SHA = "a" * 64
@@ -251,7 +254,12 @@ class Producer:
                     "binding_ref": ref,
                     "required_window": {"start": "2018-08-01", "end": "2026-09-30"},
                     "resolved_component_refs": [ref],
-                    "derived_asset_refs": [ref],
+                    "derived_asset_refs": (
+                        [ref]
+                        if "derived_assets"
+                        in ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS[name]
+                        else []
+                    ),
                     "coverage_counts": {"unresolved": 0},
                     "command_or_adapter_version": "test-v1",
                     "result_ref": ref,
