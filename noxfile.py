@@ -711,6 +711,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_production.py",
         "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
         "backend/tests/dataset_release/test_active_task_binding.py",
+        "backend/tests/dataset_release/test_managed_consumer_task.py",
         "backend/tests/dataset_release/test_monthly_hmm_consumer_probe.py",
         "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
         "backend/tests/dataset_release/test_monthly_shared_consumer_probe.py",
@@ -728,6 +729,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_official_adapters.py",
         "backend/tests/dataset_release/test_qlib_bounded_update.py",
         "backend/tests/routers/test_monthly_dataset_releases.py",
+        "backend/tests/routers/test_managed_dataset_preparations.py",
         "backend/tests/dataset_release/test_source_pool.py",
         "backend/tests/dataset_release/test_candidate_validator.py",
         "backend/tests/dataset_release/test_artifact_ready_source.py",
@@ -755,6 +757,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         test_globs=(
             "backend/tests/qlib_exporter/test_*.py",
             "backend/tests/dataset_release/test_*.py",
+            "backend/tests/routers/test_managed_dataset_preparations.py",
             "backend/tests/core_index_membership/test_*.py",
             "backend/tests/scripts/test_*qlib*.py",
             "backend/tests/scripts/test_*backtest_dataset*.py",
@@ -766,6 +769,8 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
             "scripts/monthly_unified_dataset_release_worker.py": "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
             "backend/routers/monthly_dataset_releases.py": "backend/tests/routers/test_monthly_dataset_releases.py",
+            "backend/routers/advisory.py": "backend/tests/routers/test_managed_dataset_preparations.py",
+            "backend/routers/position_timing.py": "backend/tests/routers/test_managed_dataset_preparations.py",
         },
     )
     selected_targets = list(full_targets)
