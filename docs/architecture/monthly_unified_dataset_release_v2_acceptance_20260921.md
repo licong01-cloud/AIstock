@@ -23,7 +23,7 @@
 | F-015 | `monthly_build_executor.py`、`monthly_mature_build_runner.py`、`monthly_supervised_scope.py`、`monthly_immutable_deploy.py` | create-exclusive staging、原子发布、attempt独立supervisor、跨卷私有复制、hardlink别名保留、同字节resume与漂移拒绝测试 | in_progress | 私有构建、无重复大文件部署和失败恢复合同已闭合；仍待正式node1 transport及真实闭月三节点回执后转为verified |
 | F-016 | `monthly_official_adapters.py`、`monthly_worker.py`、`monthly_immutable_deploy.py`、`monthly_profile_candidate.py`、`monthly_local_validation.py`、`profile_contract.py` | `test_monthly_local_validation.py`、`test_monthly_profile_candidate.py`及dataset-release全量回归：candidate-local C/E、11 consumer contracts、manifest/derived pins、predecessor lineage、共享consumer requirements | in_progress | B/C/E/P及文件型LOCAL_VALIDATE身份已实现；仍待真实R/C readback和三节点闭月回放后转为verified |
 | F-017 | `monthly_hmm_derive.py`、`monthly_official_adapters.py` | 正式file-only producer适配、冻结model/config/script hash、新B/C绑定、无shell/no-fit/no-DB、完整日期grid及同字节resume测试 | in_progress | 数据侧正式派生和登记合同已实现；仍待正式模型authority配置、真实闭月产物及QE consumer读取后转为verified |
-| F-018 | QE创建与Composer reader | P10/P11真实binding和物化股票池 | pending | 尚未开发验收 |
+| F-018 | `monthly_qe_consumer_probe.py`、QE active-profile resolver、Composer coefficient reader | `test_monthly_qe_consumer_probe.py`：single/custom/multi-alpha实际universe binding、P10三重身份和共享系数读取、P11实际物化过滤股票池、无训练/实验副作用 | in_progress | 五类QE file-only probe已实现；仍待正式probe registry组装、真实闭月candidate及WSL/node1 readback后转为verified |
 | F-019 | 因子正式计算/cache入口 | 新identity隔离与旧任务复现 | pending | 尚未开发验收 |
 | F-020 | Selection/Advisory/择时/统一回测adapter | 各真实新建任务入口读取验证 | pending | 尚未开发验收 |
 | F-021 | dispatch/task冻结binding | 排队跨切换、retry不重新resolve | pending | 尚未开发验收 |
