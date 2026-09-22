@@ -56,7 +56,7 @@ _GATE_DATASETS: Mapping[str, tuple[str, ...]] = {
     "daily_basic_required_fields": ("daily_basic",),
     "financial_moneyflow": ("moneyflow_ts", "bak_basic", "cyq_perf", "margin_detail"),
     "suspend_limit": ("suspend_d", "stk_limit"),
-    "pit_stock_pools": ("stock_universe_pit",),
+    "pit_stock_pools": ("stock_universe_pit", "index_membership_pit"),
     "sector_authority": ("sector_data", "sw_index_classify", "sw_index_member", "sw_daily"),
 }
 
@@ -193,6 +193,7 @@ def _source_diffs(
             "stk_limit",
             "index_daily",
             "stock_universe_pit",
+            "index_membership_pit",
             "industry_classification",
         }
         for dataset in sorted(required):
@@ -396,11 +397,9 @@ class PostgresMonthlySourceAdapter:
         snapshot_group_id = f"postgres:{identity.snapshot_id}"
         for gate in SOURCE_GATES:
             datasets = set(_GATE_DATASETS[gate])
-            matching = (
-                list(frozen.pit_partitions)
-                if gate == "pit_stock_pools"
-                else [item for item in partition_rows if item.spec.dataset in datasets]
-            )
+            matching = [item for item in partition_rows if item.spec.dataset in datasets]
+            if gate == "pit_stock_pools":
+                matching.extend(frozen.pit_partitions)
             observed_count = sum(item.summary.row_count for item in matching)
             if observed_count <= 0:
                 raise MonthlyPostgresSourceError(f"monthly source gate has no evidence: {gate}")
@@ -524,6 +523,8 @@ class PostgresMonthlySourceAdapter:
         refs = [frozen.source_manifest_ref.as_dict(), frozen.source_audit_ref.as_dict()]
         if gate in {"calendar_lifecycle", "pit_stock_pools", "sector_authority"}:
             refs.append(frozen.pit_snapshot_ref.as_dict())
+        if gate == "pit_stock_pools":
+            refs.extend(item.as_dict() for item in frozen.derived_source_receipt_refs)
         if frozen.artifact_ready_contract_ref is not None:
             refs.append(frozen.artifact_ready_contract_ref.as_dict())
         return refs
