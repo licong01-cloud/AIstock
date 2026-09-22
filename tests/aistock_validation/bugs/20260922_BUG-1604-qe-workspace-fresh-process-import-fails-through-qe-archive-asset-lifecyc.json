@@ -28,12 +28,18 @@
   ],
   "expected": "A fresh process can import QEWorkspaceClient and the QE Long Trend Phase 2 nox session completes without changing archive asset publication semantics.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260922_BUG-1604-qe-workspace-fresh-process-import-fails-through-qe-archive-asset-lifecyc.json",
       "backend/services/strategy_package/__init__.py",
       "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260922_BUG-1604-qe-workspace-fresh-process-import-fails-through-qe-archive-asset-lifecyc.json",
+      "backend/services/strategy_package/__init__.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/__init__.py",
@@ -116,11 +122,20 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "fresh_process_evidence": [
+      "fresh Python import QEWorkspaceClient, QEArchiveAssetPublisher, StrategyPackageComponentService and HMMDataRepository -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
