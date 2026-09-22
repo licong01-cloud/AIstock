@@ -2500,16 +2500,13 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         "scripts/research_assistant_phase7_crosscheck.py",
         external=True,
     )
-    if _nightly_session_completed("research_assistant_backend"):
-        session.log("Reusing successful research_assistant_backend coverage within this Nightly run.")
-    else:
-        _run_pytest(
-            session,
-            "backend/tests/research_assistant",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-        )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
     _ensure_frontend_node_modules(session)
     session.chdir("frontend")
     if _nightly_session_completed("mcp_gateway_phase5_assistant"):
@@ -2593,13 +2590,16 @@ def research_assistant_backend(session: nox.Session) -> None:
         "backend/routers/research_assistant.py",
         external=True,
     )
-    _run_pytest(
-        session,
-        "backend/tests/research_assistant",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
+    if _nightly_session_completed("ra_phase7_full_accept"):
+        session.log("Reusing successful ra_phase7_full_accept backend coverage within this Nightly run.")
+    else:
+        _run_pytest(
+            session,
+            "backend/tests/research_assistant",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        )
 
 
 @nox.session(venv_backend="none")
