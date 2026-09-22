@@ -1,12 +1,12 @@
 # QE 实验数仓与资产生命周期闭环 F2 详细设计
 
-> Feature ID：`qe_experiment_asset_warehouse_lifecycle_v1`  
-> Feature tier：F2  
-> 设计版本：v1.0  
-> 日期：2026-09-22  
-> 状态：`DESIGN_VERIFIED_IMPLEMENTATION_PENDING`  
-> 适用范围：QE 正式实验结果、QE Archive、受控二进制资产、StrategyPackage alpha core 引用、QE workspace 生命周期  
-> 上位实验登记设计：`docs/architecture/qe_unified_experiment_registry_selective_warehouse_f2_design_20260907.md`  
+> Feature ID：`qe_experiment_asset_warehouse_lifecycle_v1`
+> Feature tier：F2
+> 设计版本：v1.0
+> 日期：2026-09-22
+> 状态：`DESIGN_VERIFIED_IMPLEMENTATION_PENDING`
+> 适用范围：QE 正式实验结果、QE Archive、受控二进制资产、StrategyPackage alpha core 引用、QE workspace 生命周期
+> 上位实验登记设计：`docs/architecture/qe_unified_experiment_registry_selective_warehouse_f2_design_20260907.md`
 > 既有资产治理设计：`docs/architecture/qe_sota_strategy_package_asset_governance_design_20260508.md`
 
 本文是上述两份设计在“什么进入数仓、哪些二进制资产长期保存、StrategyPackage 如何引用、workspace 何时清理”四个问题上的最新权威补充。冲突时以本文为准；实验登记、执行、模型、因子、分钟执行、SOTA 人工晋级和生产交易边界仍由各自原设计负责。
