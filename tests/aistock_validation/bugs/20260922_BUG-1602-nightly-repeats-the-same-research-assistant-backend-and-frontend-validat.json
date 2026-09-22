@@ -30,14 +30,22 @@
   ],
   "expected": "Nightly keeps independent failure attribution while reusing successful prerequisite coverage within the same run; direct/premerge invocation remains full and fail-closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_nightly_session_runner.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "scripts/nightly_session_runner.py",
+      "tests/aistock_validation/bugs/20260922_BUG-1602-nightly-repeats-the-same-research-assistant-backend-and-frontend-validat.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/nightly_session_runner.py",
-      "noxfile.py",
       "backend/tests/scripts/test_nightly_session_runner.py",
-      "backend/tests/test_noxfile_validation_env.py"
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "scripts/nightly_session_runner.py",
+      "tests/aistock_validation/bugs/20260922_BUG-1602-nightly-repeats-the-same-research-assistant-backend-and-frontend-validat.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/nightly_session_runner.py",
@@ -155,10 +163,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
