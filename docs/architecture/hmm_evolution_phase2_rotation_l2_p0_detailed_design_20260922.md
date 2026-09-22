@@ -1,10 +1,10 @@
 # HMM Evolution Phase 2：L2轮动P0完整详细设计
 
-> 版本：v1.0；日期：2026-09-22；tier：F2；owner：HMM。
+> 版本：v1.1；日期：2026-09-22；tier：F2；owner：HMM。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.59及其后保持本L2方向的版本。
-> 基线：`9640cf67c5c40884e0f99074224cff0f0270e1f6`。本次仅交付设计，未运行数据预检、模型、回放、数据库或服务。
-> 授权：用户已批准P0文档编写、审核修订、提交和合入，以及L2主线和默认前10/后10、总数≤30的展示方向。§10的新增精确模型合同是明确的推荐方案，状态为`PROPOSED_PENDING_USER_APPROVAL`；文档合入不等于数值批准、源码实施或实验授权。
-> 完成定义：P0闭合可审阅设计和执行边界；P1才交付L2计算、历史效果与真实产品。设计通过不得报告L2模型有效、API可用或QE已接入。
+> P0基线：`9640cf67c5c40884e0f99074224cff0f0270e1f6`。用户随后明确要求按本文开始P1完整实现，D1～D6因此作为本版本获准实施的精确合同；生产DDL/DML、runtime activation、服务重启、QE实验及tail读取仍未授权。
+> 当前状态：P1源码、迁移、测试和真实release file-only preflight路径已实现；正式preflight在`2026-01-16/688005.SH`因非全日停牌且Qlib amount缺值、又没有冻结provider-absence authority而正确fail closed。未生成正式input/acceptance/consumer artifact，未运行双process正式回放，L2效果和产品能力均不得提前宣告。
+> 完成定义：源码合入不等于P1业务完成。只有输入权威闭合、双fresh-process历史评价、DEV writer/API/UI无mock验收均完成后，才可分别报告工程表面和研究效果；生产状态继续单独授权。
 
 ## 1. Background、目标与非目标
 
@@ -43,7 +43,7 @@
 
 request至少包含：source commit、model/evaluation contract hash、profile generation与SHA、release_id/cutoff/manifest identity、组件文件SHA、code-map digest、PIT/available-at authority、quote authority、security identity、suspend/provider-absence authority、calendar hash、运行环境和明确输出根。组件同release，code map不得与旧模型key顺序混用。开始前解析一次，运行中不追随active profile变化；已冻结合法request继续使用其原root，不自动替换。
 
-## 3. D1：共享数据、PIT与逐日资格（推荐精确合同，待批准）
+## 3. D1：共享数据、PIT与逐日资格（已批准精确合同）
 
 ### 3.1 来源、范围与读取边界
 
@@ -76,7 +76,7 @@ HDF若按股票重复存储行业行情，先按`date,canonical_l2_code`检查�
 
 每个行业日的期望contributors是有权威归属的PIT成员减去正式停牌成员。停牌同时从分子/分母排除；停牌不得被当作缺数，不影响其他行业。非停牌provider-absence仅在既有authority明确证明时允许作为typed NA：留在期望分母、不进入净流入或成交额求和。未解释缺数/非法数值不能套provider-absence。
 
-推荐每日有效contributors至少1只且`valid/expected≥0.90`，有效成交额sum有限且>0；该规则适用于25个source日中的每一天。不沿用L1固定最少5只：真实L2可能少于5只，改用比例并显著报告最小成员数、最大成员成交额占比，不增加集中度效果门。允许单成员不代表统计可靠，属D1待批准取舍。
+每日有效contributors至少1只且`valid/expected≥0.90`，有效成交额sum有限且>0；该规则适用于25个source日中的每一天。不沿用L1固定最少5只：真实L2可能少于5只，改用比例并显著报告最小成员数、最大成员成交额占比，不增加集中度效果门。允许单成员不代表统计可靠，是D1已批准的显式取舍。
 
 - `expected=0`、全部停牌、当时尚未发布/正式停发或新行业尚无完整25日历史：行业typed unavailable，其他行业继续。
 - 有权威provider-absence导致coverage不足：typed unavailable，计入结构覆盖缺口，不临时改比例。
@@ -88,7 +88,7 @@ P1先完成一次列/日期受限file-only预检并冻结已解释不可用集�
 
 只复用必要IO、security/PIT与moneyflow字段规范化，不调用旧C-010/B3/full-family全量builder来“顺便”生成L2，不引入旧train-only contributor筛选、circ_mv或L1 index close依赖。没有需要的共享字段/合法权威就给出准确缺口；不暗中新增数据准备流程。
 
-## 4. D2：唯一零fit公式与状态（推荐精确合同，待批准）
+## 4. D2：唯一零fit公式与状态（已批准精确合同）
 
 对行业`s`和每个source day `u`，使用当日PIT有效contributors同一集合求和：
 
@@ -116,7 +116,7 @@ contribution只存`moneyflow_intensity_delta_5d_rank=score`，说明算术来源
 
 `model_hash`包含上述完整算法；两次process为`planned_fits=started_fits=completed_fits=failed_fits=0`，不需要seed、504日fit窗口、hmmlearn或LightGBM。seed字段写not_applicable，不伪造训练完成。
 
-## 5. D3：一次历史回放、标签和比较（推荐精确合同，待批准）
+## 5. D3：一次历史回放、标签和比较（已批准精确合同）
 
 ### 5.1 明确窗口与可执行性
 
@@ -154,7 +154,7 @@ score及`E(t)`先封闭；只有`t+10≤2026-03-31`且标签路径合法时才�
 
 已有L1结果只作层级不同的历史参考，不以L1与L2 IC数值差宣称相对改善。旧L2 HMM是场景辅助系数，并非同尺度rotation score；其模型/参数/数据/训练截止/527日资产适用性在P2逐项核对，不把风险系数强行当未来收益标签或逆序排序。旧臂不可执行时如实报告，不换模型、重训、缩窗或要求重建历史证据。本P1不等待旧臂通过，也不跑QE实验。
 
-## 6. D4：效果、coverage、状态与停止（推荐精确合同，待批准）
+## 6. D4：效果、coverage、状态与停止（已批准精确合同）
 
 ### 6.1 指标公式与数值建议
 
@@ -193,7 +193,7 @@ spread为按D2 state分组的真实`y`均值差；任一极端组为空则该日
 
 若整个计划窗口没有任何可用预测，记`NO_USABLE_PREDICTIONS`；可展示真实不可用原因，但不得把全null表/空研究页标为research prediction surface验收通过。身份与执行错误也不能借“允许效果不足展示”绕过writer拒绝。
 
-## 7. D5：真实产品、持久化与展示（方向已批准，精确接口提案）
+## 7. D5：真实产品、持久化与展示（已批准精确合同）
 
 ### 7.1 完整行与最小表
 
@@ -216,6 +216,7 @@ run摘要（指标、日期计数、目录/资格统计、身份、effect与工�
 - malformed参数422、不存在run/date404、身份冲突409、真实存储/校验错误500且typed reason；不得空200冒充完整日期，不吞异常。
 - 新增L2主视图，旧L1视图保留显式版本入口。默认top_count=10、bottom_count=10；整数≥0，`1≤top_count+bottom_count≤30`，越界明确错误，不静默clamp。
 - 前区按score降序、后区按score升序，同分按代码升序稳定显示。先取top_count，再从未显示集合取bottom_count；有重叠只保留一行，数量不足提示实际值。该规则不改变score或state；前后同分需明确提示无严格差异，不能用代码次序伪造预测差。
+- 当前共享release仅冻结正式申万L2文本代码而没有独立名称authority；P1以`sector_display_name_authority=canonical_sw_l2_code_only`明确记录并只显示代码，不从数据库、旧字典或私有映射猜名称。以后补充正式名称必须作为共享authority演进，不能静默改变既有run。
 - 完整分母和unavailable摘要一直可见，目录详情可查询但不把unavailable塞进“最弱”列表；UI只限制主排名≤30，不截断API/消费者。切换日期/配置不重算模型，不写DB。
 - 显著展示历史as-of、L2、模型版本、research-only、IC及区间/不可计算原因、coverage及forward未确认；fading不是risk warning，不加买卖按钮。
 - 真实writer→API→UI闭环采用真实历史payload与无mock浏览器验收；loading/error/empty/not-configured/stale均有终态。只通过单测不算产品验收。
@@ -276,24 +277,24 @@ typed reason采用`hmm_risk_rotation_l2_`前缀加固定后缀；复用已有底
 
 ### 9.2 可合入与可交付不是同一状态
 
-设计PR：F2、diff check、逐条DESIGN-COMPLIANCE及多轮语义审核通过；D1～D6待批准标记不得为了validator改成模型已批准。源码PR：按实际变更运行精确pytest、Ruff、py_compile、HMM slice、registry/L0和必要前端检查，CI无阻断；不得标记未跑项通过。
+设计PR已完成F2、diff check、逐条DESIGN-COMPLIANCE及多轮语义审核；本次用户启动P1使D1～D6进入实施授权，但不得据此改写为效果或产品验收已通过。源码PR按实际变更运行精确pytest、Ruff、py_compile、HMM slice、registry/L0和必要前端检查，CI无阻断；不得标记未跑项通过。
 
 实验验收：request/date/人口闭合、无tail/fit/DB副作用、两process与parent一致、coverage/effect实算、停止条件正确。产品验收：真实DEV writer/readback/API/UI，无mock；生产单独授权及用户重启后readback。服务端源码修改预期runtime_impact=backend/target=backend-main，前端按实际影响分类，禁止套用本P0的none。
 
 不通过时最多按用户既定三轮代码审修，在scope内修复真实BUG；仍有阻断则如实暂停，不能改阈值、成员资格或数据口径来通过。本轮P0文档亦执行多轮自审，审核记录见§13。
 
-## 10. Decision Index：需一次性确认的新增精确合同
+## 10. Decision Index：已批准实施的新增精确合同
 
-下列是推荐值而非已批准实验合同；用户对P0文档提交/合入的授权不替代对这些新数值的确认。无需再次审批已经明确的L2方向、展示上限或既有安全规则。
+用户已明确要求按本详细设计开始P1完整实现，下列D1～D6由此进入`APPROVED_FOR_P1_IMPLEMENTATION`。该授权不扩展到生产DDL/DML、runtime activation、进程控制、QE正式实验、tail或P2风险合同。
 
 | decision | 推荐精确合同与取舍 | 状态 |
 |---|---|---|
-| L2-P0-D1 | §3共享PIT及报价资格；25日逐日contributors≥1、coverage≥90%；小行业不套L1最少5，保留集中度/全股票mapping覆盖；不清空真实moneyflow | PROPOSED_PENDING_USER_APPROVAL |
-| L2-P0-D2 | §4唯一20日比值相隔5日差，L2 average-rank；精确tie；q=min(floor(N/2),ceil(.2N))；无market/fit/seed | PROPOSED_PENDING_USER_APPROVAL |
-| L2-P0-D3 | §5固定10D、2024-09-19..2026-03-31三个报告块、25日warmup；outcome≤3月31日；双process0 fits；无新holdout或旧臂重训 | PROPOSED_PENDING_USER_APPROVAL |
-| L2-P0-D4 | §6 Rank IC≥0.02先验约定，90%coverage与metric规则；HAC lag9按真实日历缺口；无显著性AND门，效果/工程独立，tail禁止 | PROPOSED_PENDING_USER_APPROVAL |
-| L2-P0-D5 | §7独立L2表/run identity与两个明确API，完整目录，原子revision；真实研究页面，旧L1隔离；生产操作另行授权 | PROPOSED_PENDING_USER_APPROVAL |
-| L2-P0-D6 | §8完整P1包、L2全量消费者artifact、旧L2同场景对照边界；QE由QE窗口执行，风险独立不阻塞；不提前批准score→coefficient公式 | PROPOSED_PENDING_USER_APPROVAL |
+| L2-P0-D1 | §3共享PIT及报价资格；25日逐日contributors≥1、coverage≥90%；小行业不套L1最少5，保留集中度/全股票mapping覆盖；不清空真实moneyflow | APPROVED_FOR_P1_IMPLEMENTATION |
+| L2-P0-D2 | §4唯一20日比值相隔5日差，L2 average-rank；精确tie；q=min(floor(N/2),ceil(.2N))；无market/fit/seed | APPROVED_FOR_P1_IMPLEMENTATION |
+| L2-P0-D3 | §5固定10D、2024-09-19..2026-03-31三个报告块、25日warmup；outcome≤3月31日；双process0 fits；无新holdout或旧臂重训 | APPROVED_FOR_P1_IMPLEMENTATION |
+| L2-P0-D4 | §6 Rank IC≥0.02先验约定，90%coverage与metric规则；HAC lag9按真实日历缺口；无显著性AND门，效果/工程独立，tail禁止 | APPROVED_FOR_P1_IMPLEMENTATION |
+| L2-P0-D5 | §7独立L2表/run identity与两个明确API，完整目录，原子revision；真实研究页面，旧L1隔离；生产操作另行授权 | APPROVED_FOR_P1_IMPLEMENTATION |
+| L2-P0-D6 | §8完整P1包、L2全量消费者artifact、旧L2同场景对照边界；QE由QE窗口执行，风险独立不阻塞；不提前批准score→coefficient公式 | APPROVED_FOR_P1_IMPLEMENTATION |
 
 主要取舍：相比原L1保持可解释信号、减少到0 fits；小行业coverage规则改变需批准；一年半开发窗口功效有限且已消费，不保证效果；新增一张L2表是最小隔离成本，不把重构整套L1作为前置。若D1/D3预检不具备输入，停止并交付明确缺口，不以新数据工程自动扩大本任务。
 
@@ -307,33 +308,36 @@ typed reason采用`hmm_risk_rotation_l2_`前缀加固定后缀；复用已有底
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | §3～§6/§10，拟建rotation_l2.py与input/CLI；旧算法参考rotation_l1_gbdt.py | 计划`backend/tests/hmm_risk/test_rotation_l2.py`；本文§9手算、因果、双process测试，尚未运行 | APPROVED_BY_USER_DOCS_ONLY_PENDING_EXACT_CONTRACT_AND_IMPLEMENTATION | 用户授权P0设计合入；D1～D4数值待确认，无L2效果证据，不以F2结构通过替代 |
-| F-012 | §2/§3/§8；正式共享reader和industry_pit_adapter.py，未来消费者artifact | 计划`backend/tests/hmm_risk/test_rotation_l2_input.py`；DB/tail poison、PIT及共享码测试未实施 | APPROVED_BY_USER_DOCS_ONLY_PENDING_EXACT_CONTRACT_AND_IMPLEMENTATION | 用户批准方向，旧运行兼容保留；输入预检/P2精确消费与各owner验证尚缺 |
-| F-013 | §7及拟建L2 repository、hmm_risk router和HMM页面 | 计划`backend/tests/hmm_risk/test_rotation_l2_prediction.py`及真实浏览器测试，尚未执行 | APPROVED_BY_USER_DOCS_ONLY_PENDING_EXACT_CONTRACT_AND_IMPLEMENTATION | 用户批准展示方向和设计合入，不等于源码/DDL/DML/产品已批准或完成；D5～D6仍待确认 |
+| F-011 | `rotation_l2.py`、`rotation_l2_input.py`、`run_rotation_l2.py` | `python -m pytest backend/tests/hmm_risk/test_rotation_l2.py backend/tests/hmm_risk/test_run_rotation_l2_cli.py -q`；真实preflight准确停在`688005.SH/2026-01-16` | approved_by_user_source_implemented_input_blocked | user approved scope：0 fits、未生成正式artifact、无L2效果结论；冻结输入权威闭合前保持fail closed |
+| F-012 | 正式direct-v2 reader、security/provider authority、全量consumer artifact | `python -m pytest backend/tests/hmm_risk/test_rotation_l2_input.py -q`；release/共享code/PIT/quote/suspend/moneyflow/amount身份均有直接测试 | approved_by_user_source_implemented_input_blocked | user approved scope：缺少精确provider authority即batch失败；不修改资格、补零、缩窗或启动P2消费 |
+| F-013 | `rotation_l2_prediction.py`、独立迁移、router、L2 dashboard并保留L1入口 | `python -m pytest backend/tests/hmm_risk/test_rotation_l2_prediction.py backend/tests/hmm_risk/test_rotation_l2_api.py backend/tests/hmm_risk/test_schema.py -q`；`playwright test frontend/tests/hmm-risk/hmm-risk.spec.ts`为4 passed/1 live skipped | approved_by_user_source_implemented_product_validation_pending | user approved scope：DEV库不存在，无mock/live未执行；production DDL/DML、runtime和重启未授权，surface保持NOT_AVAILABLE |
 
 ## 13. DESIGN-COMPLIANCE-001与审核记录
 
 | 检查 | 本设计约束 | 本次边界 |
 |---|---|---|
-| 禁止简化交付 | 完整合格L2计算、完整目录状态、真实产品链；不将UI子集当训练人口 | P0文档交付，不标P1/P2完成 |
+| 禁止简化交付 | 完整合格L2计算、完整目录状态、真实产品链；不将UI子集当训练人口 | 源码完整实现但真实输入/产品验收阻断，不标P1/P2完成 |
 | 禁止静默错误 | PIT/身份/未知缺失fail closed，停发与moneyflow分离，无neutral/1.0替代 | 不放宽旧模型，不要求数据造价/补零 |
-| 禁止业务逻辑迁移 | 用户批准L2方向，L1数据/接口及旧QE契约保留 | 新数值推荐待批准，文档不激活交易行为 |
+| 禁止业务逻辑迁移 | 用户批准L2方向，L1数据/接口及旧QE契约保留 | D1～D6仅用于L2 P1；未激活交易行为或跨模块消费 |
 | 禁止私增门禁审批 | MBE/coverage提案显式列D条款；HAC/集中度诊断不另设AND门 | 不新增学习性/资源/全family合取审批；沿既有模型授权边界 |
 
 已完成三轮文档自审、修订及回读（不是独立第三方审核）：
 
 1. 源码/因果审核：核实旧31行业writer和最少5成员不能机械复用；修订共享span与C-013优先级、resolved冲突与合法unavailable区别、完整股票分母；补充retrospective selection声明，禁止全null页面伪验收和调用旧全family builder。
 2. 数学/产品审核：核对25日的两个20日窗口、官方百分数复利、t+1..t+10与总体末10日成熟度；修复报告块边界重复删标签风险；补齐零分母、完整日期原子revision、surface外部验证与状态分域。合成算术检查：每日net依次1..25、amount=100时当前比值0.155、滞后0.105、delta=0.05；连续10日1%收益为0.1046221254；N=2..131的q均无前后状态重叠。这些是公式检查，不是源码测试或实际数据实验。
-3. 目标/授权复审：删除草案逐行业coverage≥90%的AND门，仅保留总体coverage和逐行业诊断；复核停发与真实缺数边界、全量计算/≤30展示、L1历史保留、QE owner边界及P0仅文档状态。父蓝图链接与本设计相符，未发现剩余文档合入阻断项；新增D1～D6精确合同仍待用户确认，真实数据可执行性和源码验收不得提前报通过。
+3. 目标/授权复审：删除草案逐行业coverage≥90%的AND门，仅保留总体coverage和逐行业诊断；复核停发与真实缺数边界、全量计算/≤30展示、L1历史保留和QE owner边界。用户开始P1实施后，D1～D6更新为已批准；生产与P2权限不随之扩大。
+4. P1源码复审：修复未固定因子清单、物理路径进入canonical hash、amount=0误作缺失、revision直接前序未校验、UI越界静默忽略和旧L1入口丢失；定向backend、TypeScript与Playwright mock均通过。真实preflight保持fail closed，未以代码绕过数据权威缺口。
+5. P1持久化/产品复审：修复模型合同字符串漏写`rank-1`、可用行业不足时前后榜重复，并把既有L1风险明确隔离为“L1历史风险独立能力”而非L2风险；迁移增加事务锁与非空回滚保护，并在Python/DDL同时钉住contribution等于score、zero-fit/no-tail摘要及effect/capability耦合。共享release无正式行业名时显式记录code-only authority，不猜测名称。
 
-F2和`git diff --check`通过；F2只是结构检查，不替代上述语义审核。未运行pytest、正式数据preflight、模型、writer/API/UI或生产操作，未生成模型/预测资产。
+P1最终F2与全量门禁以PR HEAD回执为准。当前已运行定向pytest、TypeScript与mock Playwright；真实file-only preflight失败于精确输入权威缺口。未运行正式双process、writer DML、无mock产品验收或生产操作，未生成正式预测资产。
 
 ## 14. Production gates、参考与变更
 
-本次`production_ddl_gate=noop`、`production_dml_gate=noop`、前后端dependency gates=noop、`runtime_impact=none`、backend_restart_required=false；源码/实验/tail/runtime/database/dataset写入均未执行。任务只改本设计和父蓝图链接/设计进度，不修改标准、memory、workflow或其他模块。
+本次源码实际`runtime_impact=backend+frontend`；source merge后若未来激活须按独立授权处理backend-main与前端发布，当前不产生进程控制权限。`production_ddl_gate=pending_explicit_authorization`、`production_dml_gate=noop`、dependency gates=noop。既有DEV目标`aistock_dev`当前不存在，DDL精确readback保持pending；未创建替代测试库。实验/tail/runtime/生产数据库/dataset写入均未执行。
 
 参考：父蓝图§1/§4/§7；`hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md` §24（旧L1公式与历史结果）；`hmm_phase2_qe_assistance_three_arm_f2_detailed_design_20260916.md`（历史consumer边界与C-013不可用语义）。旧合同只为各自版本负责，不自动授权本L2实验。
 
 | 版本 | 日期 | 变化 |
 |---|---|---|
+| v1.1 | 2026-09-22 | 用户启动P1完整实现；D1～D6更新为实施授权，回填源码/测试/产品链实现与真实preflight的精确数据权威阻断；不把source-ready写成模型或产品完成 |
 | v1.0 | 2026-09-22 | P0一次闭合L2数据/公式/历史评价/真实产品及消费接口；明确D1～D6精确提案和执行边界，不拆微阶段，不继承L1成功 |

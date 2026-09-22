@@ -95,6 +95,10 @@ def test_schema_ddl_contains_all_tables_views_comments_and_no_unsupported_json_f
     assert "jsonb_array_length(feature_contributions)=10" not in rotation_ddl
     assert "create table if not exists hmm_risk.risk_l1_prediction" in ddl
     assert "jsonb_array_length(feature_contributions)=10" in ddl
+    assert "create table if not exists hmm_risk.rotation_l2_prediction" in ddl
+    assert "ck_hmm_risk_rotation_l2_prediction_hashes" in ddl
+    assert "validation_basis='historical_causal_replay_zero_fit'" in ddl
+    assert "explicit run, date and sw l2 sector revision lookup" in ddl
     assert "select *" not in ddl
 
 
@@ -253,6 +257,92 @@ def test_rotation_l1_prediction_schema_verifier_accepts_exact_contract_and_rejec
 
     with pytest.raises(RuntimeError, match="contribution dimensions"):
         schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection(contribution_drift=True))
+
+
+class _RotationL2SchemaCursor:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.step = 0
+        self.drift = drift
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, _statement, _values) -> None:
+        self.step += 1
+
+    def fetchall(self):
+        if self.step == 1:
+            rows = [
+                (
+                    name,
+                    *schema.ROTATION_L2_PREDICTION_COLUMN_CONTRACT[name],
+                    f"rotation_l2_prediction.{name} exact hmm_risk_rotation_l2_prediction_v1 contract",
+                )
+                for name in schema.ROTATION_L2_PREDICTION_COLUMNS
+            ]
+            if self.drift:
+                rows[-1] = (*rows[-1][:-1], "old")
+            return rows
+        if self.step == 2:
+            return [
+                (
+                    name,
+                    " ".join(schema.ROTATION_L2_PREDICTION_CONSTRAINT_TOKENS[name]),
+                    f"{name} enforces hmm_risk_rotation_l2_prediction_v1",
+                )
+                for name in sorted(schema.ROTATION_L2_PREDICTION_CONSTRAINTS)
+            ]
+        raise AssertionError(self.step)
+
+    def fetchone(self):
+        if self.step == 3:
+            return (
+                "Immutable SW L2 zero-fit rotation research predictions; product availability requires an external validation receipt.",
+            )
+        if self.step == 4:
+            return (
+                "CREATE INDEX idx_hmm_risk_rotation_l2_lookup ON hmm_risk.rotation_l2_prediction "
+                "USING btree (run_id, trade_date, sector_code, revision DESC)",
+                "Explicit run, date and SW L2 sector revision lookup.",
+            )
+        raise AssertionError(self.step)
+
+
+class _RotationL2SchemaConnection:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.drift = drift
+
+    def cursor(self):
+        return _RotationL2SchemaCursor(drift=self.drift)
+
+
+def test_rotation_l2_prediction_schema_verifier_accepts_exact_contract_and_rejects_drift() -> None:
+    schema.verify_rotation_l2_prediction_schema(_RotationL2SchemaConnection())
+
+    with pytest.raises(RuntimeError, match="column comments"):
+        schema.verify_rotation_l2_prediction_schema(_RotationL2SchemaConnection(drift=True))
+
+
+def test_rotation_l2_prediction_migration_is_locked_and_rollback_refuses_data_loss() -> None:
+    migration_root = Path(schema.__file__).parent / "migrations"
+    apply_sql = (
+        (migration_root / "create_hmm_risk_rotation_l2_prediction_20260922.sql").read_text(encoding="utf-8").lower()
+    )
+    rollback_sql = (
+        (migration_root / "create_hmm_risk_rotation_l2_prediction_20260922.rollback.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+
+    assert "begin;" in apply_sql and "commit;" in apply_sql
+    assert "pg_advisory_xact_lock" in apply_sql
+    assert "moneyflow_intensity_delta_5d_rank" in apply_sql
+    assert "tail_accessed" in apply_sql and "completed_fits" in apply_sql
+    assert "pg_advisory_xact_lock" in rollback_sql
+    assert "refusing to drop non-empty hmm_risk.rotation_l2_prediction" in rollback_sql
 
 
 class _RiskSchemaCursor:

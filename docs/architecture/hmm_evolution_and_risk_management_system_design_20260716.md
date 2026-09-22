@@ -1,15 +1,15 @@
 # HMM 演进与风险管理系统总体蓝图（唯一产品目标权威）
 
-> **版本**：v2.60
+> **版本**：v2.61
 > **初始日期**：2026-07-16
 > **修订日期**：2026-09-22
 > **维护范围**：HMM Evolution；不接管QE、Selection、Paper、Advisory或数据生产
 > **已记录成果（沿用历史验收，本次不复验运行态）**：Phase 0/1已完成历史验收。G2-A v1.6已经完成正式双fresh-process零fit development、生产OOF authority reclosure、`2026-08-31/as-of 2026-08-28`真实31-sector单日写入、repository/API/UI readback及用户重启后的runtime验证；mean Rank IC=`0.039580909571655214`，当前为`AVAILABLE_EXPERIMENTAL / RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED / INSUFFICIENT / PENDING_INSUFFICIENT_POWER / NOT_AVAILABLE`。G2-B `risk_L1`也已完成源码、正式双fresh-process 12/12 fits、19,220行生产OOF、独立表/API/UI及重启后runtime验证；其research surface为`AVAILABLE_EXPERIMENTAL`，但precision lift=`0.05844358555076558 < 0.10`、recall=`0.34237132352941174 >= 0.25`，因此capability/advisory仍为`NOT_AVAILABLE`。两者tail均未读取，不得冒充forward-confirmed advisory。
 > **当前方向**：用户于2026-09-22明确要求后续所有板块模型演进以申万二级行业L2为基准。A为L2轮动与L2风险，B为L2结果的QE/荐股/模拟盘场景辅助；L1仅保留历史成果、既有运行兼容及可选背景信息，不再新增L1候选或沿L1扩展消费。先完成L2轮动的实现—历史回放—产品展示，再由QE窗口执行场景实验，HMM窗口负责模型与输出合同；风险在同一后续任务包内按独立目标推进。默认展示前10与后10，自定义总数不超过30；模型计算和下游消费覆盖完整合格L2集合。
-> **新增目标状态**：L2模型、效果验收及L2产品链尚未完成。本版批准方向和展示规则，不把既有L1结果改名为L2结果，不自动继承L1阈值、窗口、参数或fit预算；这些新增精确合同在直接详细设计中闭合。§1.1、§3、§11及§14.3保留既有成果、验收与演进历史。
+> **新增目标状态**：L2 P1的D1～D6已获实施授权，零fit计算、正式reader、双process CLI、独立表/repository/API和L2页面源码已经实现并进入验证；真实统一release preflight在`2026-01-16/688005.SH`的非全日停牌amount缺值且无冻结provider-absence authority处正确fail closed。因此正式历史回放、效果结论、DEV/生产产品验收和场景采用尚未完成；既有L1结果不改名为L2结果。
 > **历史生产动作**：G2-A v1.6与G2-B risk_L1的生产DDL/DML、产品receipt绑定和用户重启后runtime验证均已按各自明确授权完成。本次蓝图同步不执行新的DDL/DML、依赖安装、runtime activation或进程控制。
 
-> **P0设计进度**：完整L2直接设计已形成，见`hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md`；覆盖共享数据、唯一零fit候选、历史评价、真实产品及消费者边界。D1～D6新增精确数值明确为推荐待批准，文档合入不等于P1实施、实验或L2能力完成。
+> **P0/P1进度**：完整L2直接设计见`hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md` v1.1；D1～D6已批准实施。P1 source-ready不等于业务完成：输入权威闭合、正式双process回放、DEV writer/API/UI无mock和任何生产动作仍分别待完成。
 
 ## 1. 执行摘要
 
@@ -324,12 +324,12 @@ L2是当前业务目标而非可选的样本扩容手段：它可能减轻L1内�
 | 优先级 | 业务任务与顺序 | 结束条件 |
 |---|---|---|
 | P0：L2共同合同一次收敛 | 以本蓝图为权威，一份直接详细设计闭合首个L2基线公式、行业逐日资格、标签/窗口/fold、主指标/阈值/预算、旧L2对照可用性、展示及版本兼容；列明B和risk所需接口，不为每个小功能另立设计 | 新增精确合同可审核；已批准方向不重复审批，尚未确定数值不冒充获批。L1详细设计和旧三臂仅保留其版本效力；下游独立合同缺口不阻断已具备条件的L2轮动 |
-| P1：L2轮动完整交付 | 复用共享release和产品链，实现L2资金流基线，完成历史因果回放、覆盖/排序/效果分析与真实前10+后10可配展示；代码、测试、多轮审核、必要修复及交付为同一包 | 完整合格L2计算、总展示≤30、无L1冒充；明确工程可用、研究效果和独立确认。无增益也交付真实结果并停止该批，不把结果不足包装为能力，也不承诺必有优胜模型 |
+| P1：L2轮动完整交付 | 已实现L2资金流基线、共享release reader、双process零fit计算、独立持久化/API和前10+后10可配页面；当前先闭合`688005.SH/2026-01-16`冻结输入权威，再执行正式回放及真实产品验收 | source implementation已形成；业务结束条件仍是完整合格L2计算、总展示≤30、效果与工程状态分离。不得为解除输入阻断改资格、补零或缩窗 |
 | P2：业务场景验证与L2风险 | HMM提供冻结L2资产/适配及HMM侧验证；QE窗口执行无辅助/旧L2 HMM/新L2辅助同场景历史回放。L2风险在本包独立确定目标并验证，风险不阻断轮动/QE；荐股和模拟盘owner根据对应效果安排各自验证 | 给出每个场景的成本后增量、风险/换手代价、适用版本及局限；分别记录L2风险和消费者终态。QE、荐股、模拟盘不互相代报通过；真实增益验证后才考虑实时与生产采用 |
 
 P0是同一交付方向的必要合同修订，不另造治理平台。P1优先；P2的接口核对可随P1推进，正式L2消费回放依赖真实可用的L2资产，不依赖risk成功或全部场景同时完成。小批候选的数量、fit预算和运行顺序由直接合同冻结，不私设全项目淘汰次数或审批；计算安排不得干扰其他窗口实验。
 
-P0当前产出为上述完整详细设计，方向与展示规则沿用用户批准；新增模型/数据数值及接口提案见该文§10，待一次性确认后才进入P1。P2的QE消费公式与独立风险目标尚未批准，不阻塞已具备合同的轮动设计，不为小功能另开阶段。
+P0详细设计与D1～D6实施授权已经闭合，P1正在执行；当前数据权威阻断不自动创建新模型方向或恢复历史数据工程。P2的QE消费公式与独立风险目标尚未批准，不阻塞已具备合同的轮动源码，但必须等待真实L2资产后才能正式验证。
 
 保留现有单日推理能力，但不以最新行情或自动调度衡量近期历史任务是否完成。所有已有研发历史和成果继续保留，本次不删除、重算或搬迁旧证据；新任务只交付必要结果和身份。有明确比较问题的回放属于主线。
 
@@ -381,7 +381,7 @@ P0当前产出为上述完整详细设计，方向与展示规则沿用用户批
 
 ## 11. Design Acceptance Matrix
 
-记录v2.60当前方向。F-001～F-010A的11行历史verified逐字保留；F-011～F-013保留既有L1成果并显式增加L2待办，其v2.58原行完整保存在§11.2。P0文档已有产出，但精确合同和实现未获验收，下表pending不变。旧L1能力与L2新目标分开，不把基础验收计数当L2完成度。
+记录v2.61当前方向。F-001～F-010A的11行历史verified逐字保留；F-011～F-013保留既有L1成果并更新L2源码与真实preflight状态，其v2.58原行完整保存在§11.2。旧L1能力与L2新目标分开，不把source-ready或基础验收计数当L2业务完成度。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -396,9 +396,9 @@ P0当前产出为上述完整详细设计，方向与展示规则沿用用户批
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | 历史G2-A v1.6/G2-B v1见§1.1/§11.2；当前§1/§4/§7 L2模型及B效果 | 历史参考`backend/tests/hmm_risk/test_rotation_l1_gbdt.py`及§3 acceptance SHA；L2正式数据/模型/因果回放和QE增量尚未验收 | APPROVED_BY_USER_L2_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 用户批准L2方向，精确L2公式/窗口/阈值/预算待直接设计；历史成果保留，不得复用L1 IC证明L2，L2风险独立验收 |
-| F-012 | 历史isolation见§11.2；当前§2.4/§4.1 L2身份/消费/owner | 历史参考`backend/tests/hmm_risk/test_isolation.py`；新增L2 PIT、quote availability、版本兼容、跨owner合同测试待实施 | APPROVED_BY_USER_L2_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 用户批准L2方向，旧隔离结果保留；HMM不执行QE实验，不修改其他业务模块；UI截断不改变全量消费，生产隔离保持 |
-| F-013 | 历史L1 writer/API/UI见§11.2；当前§2.2/§7 L2产品 | 历史参考`backend/tests/hmm_risk/test_rotation_l1_api.py`及§3 post-restart SHA；L2完整合格结果、前10+后10/总数≤30展示及对应业务回放待实施 | APPROVED_BY_USER_L2_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 用户批准L2方向和展示规则，L1真实产品证据保留；旧L1路由/表不改名冒充L2；不以只完成UI或资产宣告L2有效，实时与自动化后置 |
+| F-011 | 历史G2-A v1.6/G2-B v1见§1.1/§11.2；当前`rotation_l2.py`及v1.1详细设计 | 公式/tie/零fit双process定向测试通过；真实preflight准确停在冻结输入权威缺口，未运行正式回放 | IMPLEMENTED_SOURCE_PENDING_INPUT_AUTHORITY_AND_FORMAL_REPLAY | D1～D6已批准实施；历史L1 IC不证明L2，0 fits与tail=0保持；无L2效果结论 |
+| F-012 | 正式direct-v2 reader、共享code/PIT/quote/security/provider/suspend identity及consumer artifact | reader和CLI定向测试通过；canonical payload排除物理路径并绑定实际amount bin内容集合；file-only preflight fail closed | IMPLEMENTED_SOURCE_INPUT_PREFLIGHT_BLOCKED | HMM不执行QE实验、不改数据生产；必须由正式冻结authority解释或修复精确源缺口，不能补零/缩窗 |
+| F-013 | 独立L2 migration/repository/router/dashboard，旧L1显式入口保留 | schema/repository/API测试、TypeScript及Playwright mock 4 passed；DEV库不存在、无mock/live与生产验证未执行 | IMPLEMENTED_SOURCE_PENDING_DEV_DDL_AND_REAL_PRODUCT_VALIDATION | surface仍NOT_AVAILABLE；生产DDL/DML、发布和重启须独立授权，不能以mock页面宣告产品完成 |
 | F-014 | 本文Phase 3 UI与独立候选方向 | 目标`backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts` | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 独立实现级设计待后置任务；不是G2-A前置 |
 | F-015 | manual-first与未来scheduler边界 | 目标`backend/tests/hmm_training/test_scheduler_contract.py` | APPROVED_BY_USER_MANUAL_FIRST_DIRECTION_AUTOMATION_NOT_APPROVED | 自动调度未批准；G2-A受控单日推理不需要scheduler |
 | F-016 | 全阶段隔离与发布边界 | 目标`tests/aistock_validation/test_hmm_evolution_isolation.py`及各阶段直接无副作用测试 | APPROVED_BY_USER_DESIGN_READY_PENDING_PHASE_IMPLEMENTATION | 对应阶段真实证据待完成；本次文档无运行动作 |
@@ -440,7 +440,7 @@ G2-A rotation与G2-B risk的最小schema、生产OOF写入、产品receipt和当
 ### 14.1 参考文档
 
 - `hmm_evolution_phase1_offline_evaluation_detailed_design_20260717.md`：Phase 1实现及历史验收。
-- `hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md`：P0完整设计已形成，覆盖L2基线、数据资格、历史评价、真实产品及B消费接口。新增D1～D6精确提案待确认，不沿用L1数值授权；B消费公式和risk精确合同在各自开始前闭合，不按adapter/API/UI各立阶段或文档。
+- `hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md`：v1.1记录D1～D6已获P1实施授权、源码范围和真实preflight阻断；B消费公式和risk精确合同仍在各自开始前闭合，不按adapter/API/UI各立阶段或文档。
 - `hmm_phase2_qe_assistance_three_arm_f2_detailed_design_20260916.md`：保留旧L2/新版L1三臂方向、adapter、consumer-effect及阻断记录。后续执行方向由本蓝图L2要求取代，不能沿其L1精确合同启动新主线实验；L2消费需新的匹配模型和窗口合同。
 - `hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md`：保留L1各版本精确合同与真实终态，不再作为新增L2参数、人口、31-sector验收或前后展示合同；P0显式列出复用与改变项。
 
@@ -461,7 +461,7 @@ G2-A rotation与G2-B risk的最小schema、生产OOF写入、产品receipt和当
 
 本次完成三轮文档自审与修订（不是独立第三方审核）：第一轮统一目标、架构、展示和任务队列，消除active章节的“L1固定/L2后置”冲突；第二轮核对历史保持与F2索引，修正未登记的pending状态和不具体的证据引用，明确这些引用仅属历史、不构成L2验收；第三轮复核数据资格、旧合同效力、跨owner边界与完整交付，修正旧任务数量、L1规则适用范围及历史运行态表述，未发现剩余阻断项。与基线逐项比对确认§1.1全部表行、F-001～F-013原验收行（后3行在§11.2）、15条旧版本记录和2个64位证据hash均保留。F2与diff检查通过仅证明文档结构/格式；L2精确合同、源码、实验及产品仍pending。
 
-以上为v2.59原审核记录。v2.60仅链接完整P0设计及其真实设计进度，保留历史验收和本页已有审核结论；本次P0多轮审核/修订见直接设计§13，未重跑历史实验，不将文档审核变成模型效果验收。
+以上为v2.59原审核记录。v2.60链接完整P0设计；v2.61只同步P1实施与真实preflight状态，保留历史验收和本页已有审核结论。本次源码审核见直接设计§13，不将代码通过或数据阻断改写成模型效果验收。
 
 ### 14.3 变更历史
 
@@ -469,6 +469,7 @@ G2-A rotation与G2-B risk的最小schema、生产OOF写入、产品receipt和当
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v2.61 | 2026-09-22 | D1～D6进入P1实施授权；回填L2零fit计算、正式reader、双process CLI、独立持久化/API/UI源码及测试状态；真实统一release preflight在`688005.SH/2026-01-16`冻结权威缺口fail closed，正式回放/产品/生产仍pending |
 | v2.60 | 2026-09-22 | 链接完整L2 P0详细设计并同步设计进度；零fit候选、数据/评价/产品/consumer范围形成明确提案，新增D1～D6仍待批准；P1/P2未实施，全部旧成果与版本历史保留 |
 | v2.59 | 2026-09-22 | 用户批准未来板块模型统一L2；保留全部历史版本/数值/验收及运行兼容；完整合格L2计算和全量消费，默认前10+后10/自定义总数≤30；共享行业码/PIT/逐日quote资格，L1仅历史参考/context；任务收敛P0合同、P1 L2轮动、P2场景验证与L2风险，QE实验由QE窗口执行；L2精确合同和实施保持pending |
 | v2.58 | 2026-09-15 | 全文更新为历史回放优先的A独立预测/B场景辅助有限并行；保留v1.6和旧QE不同基线、显式可选不自动替换；任务收敛为共同设计加两个完整包，实时/L2/通用平台后置；新增B验收范围保持pending，精确合同未提前批准 |
