@@ -430,6 +430,100 @@ def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch:
     assert emitted["close_sync_commit"]["workflow_gate"] == "deferred_runtime_verification"
 
 
+def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = tmp_path / "tests" / "aistock_validation" / "bugs" / "BUG-199.json"
+    issue.parent.mkdir(parents=True)
+    issue.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-199",
+                "status": "fixed",
+                "fix_commit": "a" * 40,
+                "pr_url": "https://github.example/pull/199",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_dirty_files",
+        lambda _root: ["tests/aistock_validation/bugs/BUG-199.json"],
+    )
+
+    recovered = workflow._recoverable_close_sync_dirty_record(
+        tmp_path,
+        "BUG-199",
+        issue,
+        source_pr_url="https://github.example/pull/199",
+        merge_commit="a" * 40,
+    )
+
+    assert recovered is not None
+    assert recovered["path"] == "tests/aistock_validation/bugs/BUG-199.json"
+    assert (
+        workflow._recoverable_close_sync_dirty_record(
+            tmp_path,
+            "BUG-199",
+            issue,
+            source_pr_url="https://github.example/pull/200",
+            merge_commit="a" * 40,
+        )
+        is None
+    )
+    assert (
+        workflow._recoverable_close_sync_dirty_record(
+            tmp_path,
+            "BUG-199",
+            issue,
+            source_pr_url="https://github.example/pull/199",
+            merge_commit="b" * 40,
+        )
+        is None
+    )
+
+
+def test_close_sync_apply_guard_allows_only_the_exact_recoverable_dirty_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dirty_path = "tests/aistock_validation/bugs/BUG-199.json"
+    monkeypatch.setattr(
+        workflow,
+        "_validate_registry_apply_target",
+        lambda _root: {
+            "blocking": ["registry target is dirty (1 file(s)); start from a clean task worktree"],
+            "warnings": [],
+            "git": {"dirty": True, "dirty_count": 1},
+        },
+    )
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
+    recovery = {
+        "bug_id": "BUG-199",
+        "path": dirty_path,
+        "status": "fixed",
+        "fix_commit": "a" * 40,
+        "pr_url": "https://github.example/pull/199",
+    }
+
+    accepted = workflow._validate_close_sync_apply_target(
+        tmp_path,
+        recoverable_dirty_record=recovery,
+    )
+    rejected = workflow._validate_close_sync_apply_target(
+        tmp_path,
+        recoverable_dirty_record={**recovery, "path": "tests/aistock_validation/bugs/BUG-200.json"},
+    )
+
+    assert accepted["blocking"] == []
+    assert accepted["recoverable_dirty_record"] == recovery
+    assert rejected["blocking"] == [
+        "registry target is dirty (1 file(s)); start from a clean task worktree"
+    ]
+
+
 def test_windows_process_scan_builds_full_caller_ancestor_exclusion(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

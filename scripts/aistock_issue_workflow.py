@@ -6434,6 +6434,8 @@ def _refresh_reused_close_sync_worktree(
     label: str,
     recoverable_bug_id: str | None = None,
     recoverable_issue_json: Path | None = None,
+    recoverable_source_pr_url: str | None = None,
+    recoverable_merge_commit: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     git = _git_snapshot(worktree)
     if not git.get("ok"):
@@ -6449,6 +6451,8 @@ def _refresh_reused_close_sync_worktree(
             worktree,
             recoverable_bug_id,
             recoverable_issue_json,
+            source_pr_url=recoverable_source_pr_url,
+            merge_commit=recoverable_merge_commit,
         )
         if not recovery:
             raise WorkflowError(f"target {label} worktree is dirty: {worktree}")
@@ -6477,6 +6481,9 @@ def _recoverable_close_sync_dirty_record(
     worktree: Path,
     bug_id: str | None,
     issue_json: Path | None,
+    *,
+    source_pr_url: str | None = None,
+    merge_commit: str | None = None,
 ) -> dict[str, Any] | None:
     canonical_bug_id = str(bug_id or "").strip().upper()
     dirty = [path.replace("\\", "/") for path in _dirty_files(worktree)]
@@ -6504,14 +6511,20 @@ def _recoverable_close_sync_dirty_record(
     status = str(record.get("status") or "").strip()
     if status not in {"fixed", "verified"}:
         return None
-    if not str(record.get("fix_commit") or "").strip() or not str(record.get("pr_url") or "").strip():
+    record_commit = str(record.get("fix_commit") or "").strip()
+    record_pr_url = str(record.get("pr_url") or "").strip()
+    if not record_commit or not record_pr_url:
+        return None
+    if source_pr_url and record_pr_url != str(source_pr_url).strip():
+        return None
+    if merge_commit and record_commit != str(merge_commit).strip():
         return None
     return {
         "bug_id": canonical_bug_id,
         "path": relative_path,
         "status": status,
-        "fix_commit": str(record.get("fix_commit")),
-        "pr_url": str(record.get("pr_url")),
+        "fix_commit": record_commit,
+        "pr_url": record_pr_url,
     }
 
 
@@ -6521,6 +6534,8 @@ def _maybe_create_close_sync_worktree(
     create: bool,
     dry_run: bool,
     issue_json: Path | None = None,
+    source_pr_url: str | None = None,
+    merge_commit: str | None = None,
 ) -> dict[str, Any]:
     branch, worktree = _close_sync_worktree_names(bug_id=bug_id)
     plan = {
@@ -6540,6 +6555,8 @@ def _maybe_create_close_sync_worktree(
             label="close-sync",
             recoverable_bug_id=bug_id,
             recoverable_issue_json=issue_json,
+            recoverable_source_pr_url=source_pr_url,
+            recoverable_merge_commit=merge_commit,
         )
         if relation == "fast_forwarded":
             plan["fast_forwarded"] = True
@@ -6558,6 +6575,8 @@ def _maybe_create_close_sync_worktree(
             label="close-sync",
             recoverable_bug_id=bug_id,
             recoverable_issue_json=issue_json,
+            recoverable_source_pr_url=source_pr_url,
+            recoverable_merge_commit=merge_commit,
         )
         plan[relation] = True
         plan["reused_branch"] = True
@@ -6682,9 +6701,23 @@ def _validate_registry_apply_target(target_root: Path) -> dict[str, Any]:
     }
 
 
-def _validate_close_sync_apply_target(target_root: Path) -> dict[str, Any]:
+def _validate_close_sync_apply_target(
+    target_root: Path,
+    *,
+    recoverable_dirty_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     guard = _validate_registry_apply_target(target_root)
     blocking = list(guard.get("blocking") or [])
+    if recoverable_dirty_record:
+        expected_path = str(recoverable_dirty_record.get("path") or "").replace("\\", "/")
+        dirty = [path.replace("\\", "/") for path in _dirty_files(target_root)]
+        if expected_path and dirty == [expected_path]:
+            blocking = [item for item in blocking if not item.startswith("registry target is dirty (")]
+            guard.setdefault("warnings", []).append(
+                "resuming one exact close-sync BUG JSON left by an interrupted GitHub state readback"
+            )
+            guard["recoverable_dirty_record"] = recoverable_dirty_record
+    guard["blocking"] = blocking
     if blocking:
         guard["blocking"] = [
             item.replace("write BUG registry files", "close-sync BUG registry files")
@@ -19889,6 +19922,8 @@ def build_close_sync_plan(
         create=create_registry_worktree,
         dry_run=not apply,
         issue_json=source_path,
+        source_pr_url=pr_url,
+        merge_commit=merge_commit,
     )
     close_sync_root = Path(registry_worktree_plan["worktree"]) if create_registry_worktree else REPO_ROOT
     if create_registry_worktree and apply:
@@ -19897,7 +19932,19 @@ def build_close_sync_plan(
             raise WorkflowError(f"BUG JSON does not exist in close-sync worktree: {target_source}")
         record = _load_json(target_source)
         source_path = target_source
-    apply_guard = _validate_close_sync_apply_target(close_sync_root) if apply else None
+    recoverable_dirty_record = (
+        (registry_worktree_plan.get("git") or {}).get("recoverable_dirty_record")
+        if registry_worktree_plan.get("recoverable_dirty_bug_json")
+        else None
+    )
+    apply_guard = (
+        _validate_close_sync_apply_target(
+            close_sync_root,
+            recoverable_dirty_record=recoverable_dirty_record,
+        )
+        if apply
+        else None
+    )
     if apply_guard and apply_guard["blocking"] and not allow_current_worktree:
         raise WorkflowError("; ".join(apply_guard["blocking"]))
     output_dir = close_sync_root / WORKFLOW_ROOT / canonical_bug_id
