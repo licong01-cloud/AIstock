@@ -7,6 +7,7 @@ L2-P0-D2..D4 contract without model fitting, parameter search, or fallback.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections import defaultdict
 from datetime import date
@@ -61,7 +62,7 @@ def model_contract() -> dict[str, Any]:
             "minimum_daily_contributors": 1,
             "minimum_daily_coverage": COVERAGE_THRESHOLD,
         },
-        "score": "average_rank(delta)/(N-1)-0.5",
+        "score": "(average_rank(delta)-1)/(N-1)-0.5",
         "state_fraction": 0.20,
         "state_tie_policy": "boundary_tie_group_is_neutral",
         "fit_count": 0,
@@ -76,8 +77,7 @@ def evaluation_contract() -> dict[str, Any]:
         "development_end": DEVELOPMENT_END.isoformat(),
         "horizon_open_days": HORIZON,
         "report_blocks": [
-            {"name": name, "start": start.isoformat(), "end": end.isoformat()}
-            for name, start, end in REPORT_BLOCKS
+            {"name": name, "start": start.isoformat(), "end": end.isoformat()} for name, start, end in REPORT_BLOCKS
         ],
         "binding_mean_daily_rank_ic": BINDING_MBE_RANK_IC,
         "coverage_threshold": COVERAGE_THRESHOLD,
@@ -144,11 +144,8 @@ def validate_input_bundle(bundle: Mapping[str, Any]) -> dict[str, Any]:
     if DEVELOPMENT_START not in calendar or DEVELOPMENT_END not in calendar:
         raise _fail("history_unavailable", "development boundaries are absent from calendar")
     start_index = calendar.index(DEVELOPMENT_START)
-    end_index = calendar.index(DEVELOPMENT_END)
-    if start_index < FEATURE_DAYS or end_index + HORIZON >= len(calendar):
-        # The latter only proves the release calendar; the implementation still never reads tail outcomes.
-        if start_index < FEATURE_DAYS:
-            raise _fail("history_unavailable", "25 source sessions before development are unavailable")
+    if start_index < FEATURE_DAYS:
+        raise _fail("history_unavailable", "25 source sessions before development are unavailable")
     sha_fields = (
         "source_commit",
         "profile_sha256",
@@ -163,6 +160,45 @@ def validate_input_bundle(bundle: Mapping[str, Any]) -> dict[str, Any]:
             raise _fail("input_identity_invalid", f"identity {field} is not a SHA-256")
     if identity.get("cutoff") != "2026-08-31" or not str(identity.get("release_id") or "").strip():
         raise _fail("input_identity_invalid", "release identity or cutoff differs")
+    source_git_commit = str(identity.get("source_git_commit") or "")
+    if (
+        len(source_git_commit) != 40
+        or any(character not in "0123456789abcdef" for character in source_git_commit)
+        or identity.get("source_commit") != hashlib.sha256(source_git_commit.encode("ascii")).hexdigest()
+    ):
+        raise _fail("input_identity_invalid", "source Git commit identity differs")
+    if identity.get("sector_display_name_authority") != "canonical_sw_l2_code_only":
+        raise _fail("input_identity_invalid", "sector display-name authority differs")
+    source_file_hashes = identity.get("source_file_hashes")
+    if not isinstance(source_file_hashes, Mapping) or not source_file_hashes:
+        raise _fail("input_identity_invalid", "source file hashes are absent")
+    for field, value in source_file_hashes.items():
+        if (
+            not field
+            or not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise _fail("input_identity_invalid", "source file hash is invalid", field=field)
+    catalog_set = set(codes)
+    for section, lower, upper in (
+        (daily, calendar[0], DEVELOPMENT_END),
+        (sector_returns, DEVELOPMENT_START, DEVELOPMENT_END),
+    ):
+        for row in section:
+            if not isinstance(row, Mapping):
+                raise _fail("source_invalid", "input row is not an object")
+            row_day = _parse_day(row.get("trade_date"), "source.trade_date")
+            if not lower <= row_day <= upper or row_day > DEVELOPMENT_END:
+                raise _fail("source_invalid", "source row is outside the development contract")
+            if str(row.get("sector_code") or "") not in catalog_set:
+                raise _fail("source_invalid", "source row references an unknown L2 sector")
+    for row in benchmark:
+        if not isinstance(row, Mapping):
+            raise _fail("source_invalid", "benchmark row is not an object")
+        row_day = _parse_day(row.get("trade_date"), "benchmark.trade_date")
+        if not DEVELOPMENT_START <= row_day <= DEVELOPMENT_END:
+            raise _fail("source_invalid", "benchmark row is outside the development contract")
     body = {key: value for key, value in bundle.items() if key != "input_hash"}
     expected_hash = canonical_sha256(body)
     if bundle.get("input_hash") != expected_hash:
@@ -250,7 +286,14 @@ def build_predictions(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
                     sector_code=code,
                 )
             assert all(value is not None for value in source_rows)
-            reason = next((str(value.get("reason_code")) for value in source_rows if not value.get("eligible")), None)
+            reason = next((value.get("reason_code") for value in source_rows if not value.get("eligible")), None)
+            if reason is not None and (not isinstance(reason, str) or not reason.strip()):
+                raise _fail(
+                    "source_invalid",
+                    "ineligible L2 source row does not contain a typed reason",
+                    trade_date=trade_date.isoformat(),
+                    sector_code=code,
+                )
             if reason:
                 reasons[code] = reason
                 continue
@@ -265,7 +308,9 @@ def build_predictions(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
             diagnostics[code] = {
                 "minimum_expected_contributors": min(int(value["expected_contributors"]) for value in source_rows),
                 "minimum_valid_contributors": min(int(value["valid_contributors"]) for value in source_rows),
-                "maximum_member_amount_share": max(float(value["maximum_member_amount_share"]) for value in source_rows),
+                "maximum_member_amount_share": max(
+                    float(value["maximum_member_amount_share"]) for value in source_rows
+                ),
             }
         try:
             scores, states = _score_and_states(deltas)
@@ -427,8 +472,16 @@ def evaluate_predictions(bundle: Mapping[str, Any], predictions: Sequence[Mappin
             ic = _rank_ic(scores, outcomes)
             if ic is not None:
                 daily_ic[trade_date] = ic
-            trending = [outcomes[row["sector_code"]] for row in eligible if row["forecast_state"] == "trending" and row["sector_code"] in outcomes]
-            fading = [outcomes[row["sector_code"]] for row in eligible if row["forecast_state"] == "fading" and row["sector_code"] in outcomes]
+            trending = [
+                outcomes[row["sector_code"]]
+                for row in eligible
+                if row["forecast_state"] == "trending" and row["sector_code"] in outcomes
+            ]
+            fading = [
+                outcomes[row["sector_code"]]
+                for row in eligible
+                if row["forecast_state"] == "fading" and row["sector_code"] in outcomes
+            ]
             if trending and fading:
                 daily_spread[trade_date] = math.fsum(trending) / len(trending) - math.fsum(fading) / len(fading)
     coverage_by_day: dict[date, float | None] = {}
@@ -463,8 +516,7 @@ def evaluate_predictions(bundle: Mapping[str, Any], predictions: Sequence[Mappin
         overall["coverage_pass_day_share"] is not None
         and overall["coverage_pass_day_share"] >= COVERAGE_THRESHOLD
         and all(
-            block["coverage_pass_day_share"] is not None
-            and block["coverage_pass_day_share"] >= COVERAGE_THRESHOLD
+            block["coverage_pass_day_share"] is not None and block["coverage_pass_day_share"] >= COVERAGE_THRESHOLD
             for block in blocks
         )
     )
@@ -487,9 +539,7 @@ def evaluate_predictions(bundle: Mapping[str, Any], predictions: Sequence[Mappin
             "metric_eligible_day_count": metric_days,
             "valid_ic_day_count": len(daily_ic),
             "valid_ic_day_share": metric_share,
-            "hac": _newey_west(
-                [day for day in calendar if DEVELOPMENT_START <= day <= DEVELOPMENT_END], daily_ic
-            ),
+            "hac": _newey_west([day for day in calendar if DEVELOPMENT_START <= day <= DEVELOPMENT_END], daily_ic),
             "daily_rank_ic": {day.isoformat(): daily_ic[day] for day in sorted(daily_ic)},
             "daily_spread": {day.isoformat(): daily_spread[day] for day in sorted(daily_spread)},
             "outcome_status_counts": dict(sorted(outcome_counts.items())),
