@@ -21,7 +21,7 @@
 | F-013 | factor rolling/aggregate writer | 月界对照与历史修订后效 | pending | 尚未开发验收 |
 | F-014 | `monthly_shared_components.py`、`sw_l2_quote_policy.py` | 共享组件集成测试、quote taxonomy drift fail-closed、`qlib_data_backend` | in_progress | sealed SOURCE 生产器已实现；仍待真实闭月 candidate 回放和三节点 readback 后转为 verified |
 | F-015 | `monthly_build_executor.py`、`monthly_mature_build_runner.py`、`monthly_supervised_scope.py`、`monthly_immutable_deploy.py` | create-exclusive staging、原子发布、attempt独立supervisor、跨卷私有复制、同字节resume与漂移拒绝测试 | in_progress | 私有构建、部署和失败恢复合同已闭合；仍待正式node1 transport及真实闭月三节点回执后转为verified |
-| F-016 | `monthly_official_adapters.py`、`monthly_worker.py`、`monthly_immutable_deploy.py` | candidate-local C registry、B/C路径身份、精确文件集及三节点manifest闭合测试 | in_progress | B/C及部署注册无环身份已实现；仍待profile P生成、真实R/C readback和三节点回放后转为verified |
+| F-016 | `monthly_official_adapters.py`、`monthly_worker.py`、`monthly_immutable_deploy.py`、`monthly_profile_candidate.py`、`profile_contract.py` | `test_monthly_profile_candidate.py`及dataset-release全量回归：candidate-local C/E、manifest pins、predecessor drift、P create-exclusive、共享consumer requirements | in_progress | B/C/E/P及部署注册无环身份已实现；仍待真实R/C readback和三节点闭月回放后转为verified |
 | F-017 | `monthly_hmm_derive.py`、`monthly_official_adapters.py` | 正式file-only producer适配、冻结model/config/script hash、新B/C绑定、无shell/no-fit/no-DB、完整日期grid及同字节resume测试 | in_progress | 数据侧正式派生和登记合同已实现；仍待正式模型authority配置、真实闭月产物及QE consumer读取后转为verified |
 | F-018 | QE创建与Composer reader | P10/P11真实binding和物化股票池 | pending | 尚未开发验收 |
 | F-019 | 因子正式计算/cache入口 | 新identity隔离与旧任务复现 | pending | 尚未开发验收 |

@@ -16,6 +16,10 @@ import shutil
 from typing import Any, Mapping
 
 from .canonical import canonical_json_bytes, ensure_sha256
+from .profile_contract import (
+    ACTIVE_PROFILE_SCHEMA_V4,
+    ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS,
+)
 from .shared_sector_context import (
     SECTOR_CONTEXT_COMPONENT_ROOT,
     SECTOR_CONTEXT_PINS_SCHEMA,
@@ -26,7 +30,7 @@ from .shared_sector_context import (
 
 SUCCESSOR_RECEIPT_SCHEMA = "aistock_dataset_release_successor_receipt_v1"
 PROFILE_SCHEMA_V3 = "aistock_active_dataset_profile_v3"
-PROFILE_SCHEMA_V4 = "aistock_active_dataset_profile_v4"
+PROFILE_SCHEMA_V4 = ACTIVE_PROFILE_SCHEMA_V4
 DERIVED_ASSET_REGISTRY_SCHEMA = "aistock_dataset_derived_asset_registry_v1"
 RELEASE_CLOSURE_SCHEMA = "aistock_release_closure_v1"
 
@@ -71,18 +75,7 @@ _CONSUMER_REQUIREMENTS = {
     ],
 }
 
-_V4_CONSUMER_REQUIREMENTS = {
-    **_CONSUMER_REQUIREMENTS,
-    "qe_single": _CONSUMER_REQUIREMENTS["qe"],
-    "qe_custom": _CONSUMER_REQUIREMENTS["qe"],
-    "qe_multi_alpha": _CONSUMER_REQUIREMENTS["qe"],
-    "qe_p10": _CONSUMER_REQUIREMENTS["qe"] + ["derived_assets"],
-    "qe_p11": _CONSUMER_REQUIREMENTS["qe"] + ["derived_assets"],
-    "hmm_file_only": _CONSUMER_REQUIREMENTS["hmm"],
-    "factor_research": ["day", "factor", "manifest", "stock_pools"],
-    "position_timing": ["day", "factor", "manifest", "stock_pools"],
-    "unified_backtest": ["day", "factor", "index", "manifest", "minute", "stock_pools", "suspend"],
-}
+_V4_CONSUMER_REQUIREMENTS = ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 
 
 def _sha256(path: Path) -> str:
