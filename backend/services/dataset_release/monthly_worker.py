@@ -516,7 +516,7 @@ def _validate_semantics(
         registry_assets = registry.get("assets")
         if not isinstance(registry_assets, list) or not registry_assets:
             raise MonthlyProducerError("derived asset registry is empty")
-        registered_refs: list[dict[str, Any]] = []
+        registered_assets: list[dict[str, Any]] = []
         asset_ids: set[str] = set()
         for asset in registry_assets:
             if not isinstance(asset, Mapping) or set(asset) != {
@@ -531,16 +531,47 @@ def _validate_semantics(
             if not asset_id or asset_id in asset_ids or not str(asset.get("schema_version") or "").strip():
                 raise MonthlyProducerError("derived asset registry identity differs")
             asset_ids.add(asset_id)
-            registered_refs.append(
+            registered_assets.append(
                 {
-                    "id": str(asset.get("path") or ""),
+                    "path": str(asset.get("path") or ""),
                     "sha256": str(asset.get("sha256") or ""),
                     "size": asset.get("size"),
                 }
             )
-        if sorted(registered_refs, key=lambda item: item["id"]) != sorted(
-            (dict(item) for item in derived_assets), key=lambda item: item["id"]
-        ):
+        candidate_root = Path(str(plan.get("candidate_root") or ""))
+        if not candidate_root.is_absolute():
+            raise MonthlyProducerError("derived asset candidate root is invalid")
+        try:
+            resolved_candidate = candidate_root.resolve(strict=True)
+        except OSError as exc:
+            raise MonthlyProducerError("derived asset candidate root is unavailable") from exc
+        registry_path = output_paths.get(str(registry_ref["id"]))
+        if registry_path is None:
+            raise MonthlyProducerError("derived asset registry output path is unavailable")
+        registry_root = registry_path.parent.resolve(strict=True)
+        if not registry_root.is_relative_to(resolved_candidate):
+            raise MonthlyProducerError("derived asset registry escaped the candidate")
+        unmatched = [dict(item) for item in derived_assets]
+        for asset in registered_assets:
+            relative = Path(asset["path"])
+            if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+                raise MonthlyProducerError("derived asset registry path is invalid")
+            matches = [
+                ref
+                for ref in unmatched
+                if ref["sha256"] == asset["sha256"] and ref["size"] == asset["size"]
+            ]
+            if len(matches) != 1:
+                raise MonthlyProducerError(
+                    "derived asset registry files differ from producer outputs"
+                )
+            matched = matches[0]
+            output_path = output_paths.get(str(matched["id"]))
+            expected_path = registry_root / relative
+            if output_path is None or output_path.resolve(strict=True) != expected_path:
+                raise MonthlyProducerError("derived asset registry candidate path differs")
+            unmatched.remove(matched)
+        if unmatched:
             raise MonthlyProducerError("derived asset registry files differ from producer outputs")
     elif stage == "LOCAL_VALIDATE":
         required = {
