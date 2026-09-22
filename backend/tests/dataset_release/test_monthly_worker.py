@@ -231,6 +231,12 @@ class Producer:
                     "candidate_root": f"/releases/{node}",
                     "relative_file_refs": [ref],
                     "deployment_receipt_ref": ref,
+                    "runtime_registration": {
+                        "relative_path": f".aistock-release-registry/{MANIFEST}.json",
+                        "sha256": MANIFEST,
+                        "size": 1,
+                        "registration_sha256": MANIFEST,
+                    },
                 }
                 for node in REQUIRED_NODES
             }

@@ -14,6 +14,11 @@ import tarfile
 from typing import Any, BinaryIO, Mapping, Sequence
 
 from .canonical import canonical_json_bytes
+from .runtime_release_registration import (
+    RuntimeReleaseRegistrationError,
+    ensure_runtime_release_registration,
+    read_runtime_release_registration,
+)
 
 
 REMOTE_DEPLOY_REQUEST_SCHEMA = "aistock_monthly_remote_deploy_request_v1"
@@ -172,6 +177,7 @@ def _result(
     status: str,
     files: Sequence[Mapping[str, Any]],
     bytes_transferred: int,
+    registration: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     return {
         "schema_version": REMOTE_DEPLOY_RESULT_SCHEMA,
@@ -182,15 +188,58 @@ def _result(
         "request_sha256": hashlib.sha256(canonical_json_bytes(request)).hexdigest(),
         "files": list(files),
         "bytes_transferred": bytes_transferred,
+        "registration": dict(registration) if registration is not None else None,
     }
 
 
 def readback(value: Any) -> dict[str, Any]:
-    request, _allowed, target = _validated_request(value)
+    request, allowed, target = _validated_request(value)
     if not target.exists():
-        return _result(request, status="ABSENT", files=(), bytes_transferred=0)
+        return _result(
+            request,
+            status="ABSENT",
+            files=(),
+            bytes_transferred=0,
+            registration=None,
+        )
     rows = _tree_readback(target, request["files"])
-    return _result(request, status="PASS", files=rows, bytes_transferred=0)
+    registration = read_runtime_release_registration(
+        allowed_parent=allowed,
+        candidate_root=target,
+        dataset_manifest_sha256=str(request["dataset_manifest_sha256"]),
+    )
+    return _result(
+        request,
+        status="PASS" if registration is not None else "UNREGISTERED",
+        files=rows,
+        bytes_transferred=0,
+        registration=registration.as_dict() if registration is not None else None,
+    )
+
+
+def register(value: Any) -> dict[str, Any]:
+    request, allowed, target = _validated_request(value)
+    if not target.exists():
+        return _result(
+            request,
+            status="ABSENT",
+            files=(),
+            bytes_transferred=0,
+            registration=None,
+        )
+    rows = _tree_readback(target, request["files"])
+    registration = ensure_runtime_release_registration(
+        allowed_parent=allowed,
+        candidate_root=target,
+        dataset_manifest_sha256=str(request["dataset_manifest_sha256"]),
+    )
+    return _result(
+        request,
+        status="PASS",
+        files=rows,
+        bytes_transferred=0,
+        registration=registration.as_dict(),
+    )
 
 
 def deploy(value: Any, stream: BinaryIO) -> dict[str, Any]:
@@ -260,11 +309,22 @@ def deploy(value: Any, stream: BinaryIO) -> dict[str, Any]:
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
+        registration = ensure_runtime_release_registration(
+            allowed_parent=allowed,
+            candidate_root=target,
+            dataset_manifest_sha256=str(request["dataset_manifest_sha256"]),
+        )
     except BaseException:
         if staging.exists() and staging.parent.resolve(strict=True) == allowed:
             shutil.rmtree(staging)
         raise
-    return _result(request, status="PASS", files=rows, bytes_transferred=transferred)
+    return _result(
+        request,
+        status="PASS",
+        files=rows,
+        bytes_transferred=transferred,
+        registration=registration.as_dict(),
+    )
 
 
 def _read_canonical(stream: BinaryIO) -> Any:
@@ -294,14 +354,23 @@ def _read_frame(stream: BinaryIO) -> Any:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("readback", "deploy"))
+    parser.add_argument("mode", choices=("readback", "deploy", "register"))
     args = parser.parse_args(argv)
     try:
         if args.mode == "readback":
             result = readback(_read_canonical(sys.stdin.buffer))
+        elif args.mode == "register":
+            result = register(_read_canonical(sys.stdin.buffer))
         else:
             result = deploy(_read_frame(sys.stdin.buffer), sys.stdin.buffer)
-    except (OSError, ValueError, json.JSONDecodeError, tarfile.TarError, MonthlyRemoteDeployError) as exc:
+    except (
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        tarfile.TarError,
+        MonthlyRemoteDeployError,
+        RuntimeReleaseRegistrationError,
+    ) as exc:
         print(f"MONTHLY_REMOTE_DEPLOY_ERROR: {exc}", file=sys.stderr)
         return 2
     sys.stdout.buffer.write(canonical_json_bytes(result) + b"\n")
@@ -318,5 +387,6 @@ __all__: Sequence[str] = (
     "REMOTE_DEPLOY_REQUEST_SCHEMA",
     "REMOTE_DEPLOY_RESULT_SCHEMA",
     "deploy",
+    "register",
     "readback",
 )

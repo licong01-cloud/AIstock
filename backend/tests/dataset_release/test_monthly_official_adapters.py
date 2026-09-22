@@ -726,6 +726,15 @@ class DeployExecutor:
                     manifest_sha256=PREDECESSOR if node == self.drift_node else dataset_manifest_sha256,
                     relative_files=(shared,),
                     deployment_receipt=receipt,
+                    runtime_registration={
+                        "relative_path": (
+                            ".aistock-release-registry/"
+                            f"{dataset_manifest_sha256}.json"
+                        ),
+                        "sha256": "8" * 64,
+                        "size": 256,
+                        "registration_sha256": "9" * 64,
+                    },
                 )
             )
         return DeployExecution(nodes=tuple(nodes))
@@ -888,12 +897,22 @@ def test_immutable_deploy_copies_one_exact_inventory_to_all_nodes(
 
     assert {item.node_id for item in result.nodes} == set(REQUIRED_NODES)
     assert result.workload.bytes_transferred > 0
+    assert len(
+        {json.dumps(dict(item.runtime_registration), sort_keys=True) for item in result.nodes}
+    ) == 1
     for node in result.nodes:
         receipt = _read(node.deployment_receipt)
         assert receipt["status"] == "PASS"
         assert receipt["dataset_manifest_sha256"] == manifest_sha
         assert receipt["overwrite_performed"] is False
         assert Path(targets[node.node_id]).joinpath("qe_dataset_manifest.json").is_file()
+        registration = Path(targets[node.node_id]).parent / node.runtime_registration[
+            "relative_path"
+        ]
+        assert registration.is_file()
+        assert hashlib.sha256(registration.read_bytes()).hexdigest() == node.runtime_registration[
+            "sha256"
+        ]
 
 
 def test_immutable_deploy_preserves_hardlink_aliases_without_duplicate_transfer(

@@ -73,6 +73,10 @@ def _is_content_ref(value: Any) -> bool:
     )
 
 
+def _is_sha256_text(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
+
+
 class MonthlyProducerError(MonthlyReleaseError):
     code = "MONTHLY_RELEASE_PRODUCER_INVALID"
 
@@ -725,6 +729,7 @@ def _validate_semantics(
                 "candidate_root",
                 "relative_file_refs",
                 "deployment_receipt_ref",
+                "runtime_registration",
             }
             if not isinstance(registration, Mapping) or registration.get("schema_version") != NODE_REGISTRATION_SCHEMA:
                 raise MonthlyProducerError(f"node release registration schema differs: {node_id}")
@@ -740,6 +745,24 @@ def _validate_semantics(
                 raise MonthlyProducerError(f"node release registration files differ: {node_id}")
             if not str(registration.get("candidate_root") or ""):
                 raise MonthlyProducerError(f"node release registration root is empty: {node_id}")
+            runtime_registration = registration.get("runtime_registration")
+            if (
+                not isinstance(runtime_registration, Mapping)
+                or set(runtime_registration)
+                != {"relative_path", "sha256", "size", "registration_sha256"}
+                or not str(runtime_registration.get("relative_path") or "").startswith(
+                    ".aistock-release-registry/"
+                )
+                or not _is_sha256_text(str(runtime_registration.get("sha256") or ""))
+                or not _is_sha256_text(
+                    str(runtime_registration.get("registration_sha256") or "")
+                )
+                or type(runtime_registration.get("size")) is not int
+                or int(runtime_registration["size"]) <= 0
+            ):
+                raise MonthlyProducerError(
+                    f"node runtime release registration differs: {node_id}"
+                )
         registration_refs = scope.get("node_registration_refs")
         if not isinstance(registration_refs, Mapping) or set(registration_refs) != set(REQUIRED_NODES):
             raise MonthlyProducerError("node release registration references differ")

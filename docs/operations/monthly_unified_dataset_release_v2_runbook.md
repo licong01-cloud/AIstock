@@ -77,6 +77,15 @@ worker 运行前需由运行态所有者配置以下绝对路径或节点身份�
 - `AISTOCK_MONTHLY_NODE1_PROJECT_ROOT`
 - `AISTOCK_MONTHLY_NODE1_PYTHON`
 
+RD-Agent Results API 首次部署动态 release reader 时，WSL 与 node1 各自只需一次性配置固定 registry 根：
+
+- WSL：`QE_DATASET_RELEASE_REGISTRY_ROOTS=<AISTOCK_MONTHLY_WSL_RELEASE_ROOT>/.aistock-release-registry`
+- node1：`QE_DATASET_RELEASE_REGISTRY_ROOTS=<AISTOCK_MONTHLY_NODE1_RELEASE_ROOT>/.aistock-release-registry`
+
+该环境变量指向稳定的 registry 目录，不指向某个月 candidate。部署阶段会按 dataset manifest identity
+create-exclusive 写入登记；运行中的 API 每次请求重新验证登记、candidate 目录名、manifest 字节 SHA 和
+canonical identity，因此后续月份不得再修改该环境变量或为数据切换重启 API。首次代码/环境配置生效仍需由运行态所有者执行一次目标服务重启。
+
 部署代码后先做无任务领取、无数据库连接、无候选写入的只读组合预检：
 
 ```powershell

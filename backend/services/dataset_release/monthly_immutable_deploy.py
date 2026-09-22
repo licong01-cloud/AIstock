@@ -34,6 +34,10 @@ from .monthly_remote_deploy import (
     REMOTE_DEPLOY_REQUEST_SCHEMA,
     REMOTE_DEPLOY_RESULT_SCHEMA,
 )
+from .runtime_release_registration import (
+    ensure_runtime_release_registration,
+    expected_runtime_release_registration,
+)
 
 
 DEPLOYMENT_RECEIPT_SCHEMA = "aistock_monthly_node_deployment_receipt_v1"
@@ -60,6 +64,7 @@ class NodeTransferReadback:
     candidate_root: str
     files: tuple[tuple[str, str, int], ...]
     bytes_transferred: int
+    registration: Mapping[str, Any]
 
 
 class MonthlyNodeReleaseTransport(Protocol):
@@ -364,6 +369,37 @@ def _normalized_readback(
     )
     if value.files != expected_rows:
         raise MonthlyImmutableDeployError(f"node deployment bytes differ: {node_id}")
+    manifest_identity = _release_manifest_identity(expected)
+    manifest = next(
+        item for item in expected if item.relative_path == "qe_dataset_manifest.json"
+    )
+    expected_registration = expected_runtime_release_registration(
+        candidate_root_name=Path(candidate_root).name,
+        manifest_path=manifest.source_path,
+        dataset_manifest_sha256=manifest_identity,
+    )
+    if dict(value.registration) != expected_registration.as_dict():
+        raise MonthlyImmutableDeployError(
+            f"node runtime release registration differs: {node_id}"
+        )
+
+
+def _release_manifest_identity(files: tuple[ReleaseFile, ...]) -> str:
+    manifest = next(
+        (item for item in files if item.relative_path == "qe_dataset_manifest.json"),
+        None,
+    )
+    if manifest is None:
+        raise MonthlyImmutableDeployError("deployment manifest is absent")
+    try:
+        value = json.loads(manifest.source_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MonthlyImmutableDeployError("deployment manifest is unreadable") from exc
+    identity = str(value.get("dataset_manifest_sha256") or "") if isinstance(value, Mapping) else ""
+    try:
+        return ensure_sha256(identity, field="dataset_manifest_sha256")
+    except CanonicalizationError as exc:
+        raise MonthlyImmutableDeployError("deployment manifest identity is invalid") from exc
 
 
 def _tree_readback(
@@ -422,7 +458,18 @@ class ExistingTreeNodeTransport:
             files=files,
             label="controller candidate",
         )
-        return NodeTransferReadback(self.node_id, candidate_root, rows, 0)
+        registration = ensure_runtime_release_registration(
+            allowed_parent=Path(candidate_root).parent,
+            candidate_root=Path(candidate_root),
+            dataset_manifest_sha256=_release_manifest_identity(files),
+        )
+        return NodeTransferReadback(
+            self.node_id,
+            candidate_root,
+            rows,
+            0,
+            registration.as_dict(),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,7 +503,18 @@ class ImmutableFilesystemNodeTransport:
                 files=files,
                 label=f"{self.node_id} resumed deployment",
             )
-            return NodeTransferReadback(self.node_id, candidate_root, rows, 0)
+            registration = ensure_runtime_release_registration(
+                allowed_parent=parent,
+                candidate_root=target,
+                dataset_manifest_sha256=_release_manifest_identity(files),
+            )
+            return NodeTransferReadback(
+                self.node_id,
+                candidate_root,
+                rows,
+                0,
+                registration.as_dict(),
+            )
         staging = parent / (
             f".{target.name}.{context.operation_id}.attempt-{context.attempt}.deploying"
         )
@@ -493,11 +551,17 @@ class ImmutableFilesystemNodeTransport:
         rows = tuple(
             (item.relative_path, item.sha256, item.size) for item in files
         )
+        registration = ensure_runtime_release_registration(
+            allowed_parent=parent,
+            candidate_root=target,
+            dataset_manifest_sha256=_release_manifest_identity(files),
+        )
         return NodeTransferReadback(
             self.node_id,
             candidate_root,
             rows,
             bytes_transferred,
+            registration.as_dict(),
         )
 
 
@@ -657,6 +721,7 @@ class ImmutableStreamingNodeTransport:
             "request_sha256",
             "files",
             "bytes_transferred",
+            "registration",
         }
         if (
             not isinstance(value, Mapping)
@@ -673,6 +738,14 @@ class ImmutableStreamingNodeTransport:
             or type(value.get("bytes_transferred")) is not int
             or value["bytes_transferred"] < 0
             or not isinstance(value.get("files"), list)
+            or (
+                value.get("status") == "PASS"
+                and not isinstance(value.get("registration"), Mapping)
+            )
+            or (
+                value.get("status") in {"ABSENT", "UNREGISTERED"}
+                and value.get("registration") is not None
+            )
         ):
             raise MonthlyImmutableDeployError("streaming deployment result identity differs")
         return value
@@ -691,7 +764,11 @@ class ImmutableStreamingNodeTransport:
             payload=payload,
             timeout_seconds=min(self.timeout_seconds, 30 * 60),
         )
-        observed = self._result(probe, request=request, statuses={"PASS", "ABSENT"})
+        observed = self._result(
+            probe,
+            request=request,
+            statuses={"PASS", "ABSENT", "UNREGISTERED"},
+        )
         if observed["status"] == "ABSENT":
             if observed["files"] or observed["bytes_transferred"] != 0:
                 raise MonthlyImmutableDeployError("absent node readback contains data")
@@ -702,6 +779,17 @@ class ImmutableStreamingNodeTransport:
                 timeout_seconds=self.timeout_seconds,
             )
             observed = self._result(completed, request=request, statuses={"PASS"})
+        elif observed["status"] == "UNREGISTERED":
+            registered = self.command_runner(
+                (*self.command_prefix, "register"),
+                payload=payload,
+                timeout_seconds=min(self.timeout_seconds, 30 * 60),
+            )
+            observed = self._result(
+                registered,
+                request=request,
+                statuses={"PASS"},
+            )
         rows = tuple(
             (str(item.get("path") or ""), str(item.get("sha256") or ""), item.get("size"))
             for item in observed["files"]
@@ -712,6 +800,7 @@ class ImmutableStreamingNodeTransport:
             candidate_root=candidate_root,
             files=rows,  # type: ignore[arg-type]
             bytes_transferred=int(observed["bytes_transferred"]),
+            registration=dict(observed["registration"]),
         )
 
 
@@ -787,6 +876,7 @@ class ImmutableMonthlyDeployExecutor:
                 ],
                 "overwrite_performed": False,
                 "inplace_update_performed": False,
+                "runtime_registration": dict(readback.registration),
             }
             _write_exclusive(receipt, payload)
             nodes.append(
@@ -796,6 +886,7 @@ class ImmutableMonthlyDeployExecutor:
                     manifest_sha256=dataset_manifest_sha256,
                     relative_files=tuple(item.source_path for item in files),
                     deployment_receipt=receipt,
+                    runtime_registration=dict(readback.registration),
                 )
             )
         return DeployExecution(

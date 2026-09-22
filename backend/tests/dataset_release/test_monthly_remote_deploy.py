@@ -24,11 +24,9 @@ from backend.services.dataset_release.monthly_remote_deploy import (
     REMOTE_DEPLOY_RESULT_SCHEMA,
     deploy,
     readback,
+    register,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
-
-
-MANIFEST = "a" * 64
 
 
 def _sha(path: Path) -> str:
@@ -43,9 +41,15 @@ def _files(tmp_path: Path) -> tuple[ReleaseFile, ...]:
     alias = source / "alias.bin"
     os.link(data, alias)
     manifest = source / "qe_dataset_manifest.json"
-    manifest.write_bytes(
-        canonical_json_bytes({"dataset_manifest_sha256": MANIFEST}) + b"\n"
-    )
+    manifest_payload = {
+        "schema_version": "qe_dataset_manifest_v1",
+        "release_id": "qe_hmm_full_v2_20260930",
+        "cutoff_trade_date": "2026-09-30",
+    }
+    manifest_payload["dataset_manifest_sha256"] = hashlib.sha256(
+        canonical_json_bytes(manifest_payload)
+    ).hexdigest()
+    manifest.write_bytes(canonical_json_bytes(manifest_payload) + b"\n")
     return (
         ReleaseFile("data.bin", data, _sha(data), data.stat().st_size),
         ReleaseFile("alias.bin", alias, _sha(alias), alias.stat().st_size, "data.bin"),
@@ -68,7 +72,13 @@ def _request(tmp_path: Path, files: tuple[ReleaseFile, ...]) -> dict[str, Any]:
         "node_id": "rdagent-node1",
         "allowed_parent": str(parent.resolve()),
         "candidate_root": str((parent / "candidate").resolve()),
-        "dataset_manifest_sha256": MANIFEST,
+        "dataset_manifest_sha256": json.loads(
+            next(
+                item.source_path
+                for item in files
+                if item.relative_path == "qe_dataset_manifest.json"
+            ).read_text(encoding="utf-8")
+        )["dataset_manifest_sha256"],
         "files": [
             {
                 "path": item.relative_path,
@@ -107,6 +117,10 @@ def test_remote_endpoint_streams_verifies_and_resumes_exact_tree(tmp_path: Path)
     target = Path(request["candidate_root"])
     assert before["status"] == "ABSENT"
     assert result["status"] == resumed["status"] == "PASS"
+    assert result["registration"] == resumed["registration"]
+    assert result["registration"]["relative_path"].startswith(
+        ".aistock-release-registry/"
+    )
     assert result["bytes_transferred"] == sum(
         item.size for item in files if item.hardlink_source is None
     )
@@ -155,7 +169,24 @@ def test_remote_endpoint_rejects_copied_bytes_in_place_of_required_hardlink(
         readback(request)
 
 
-def _result(request: Mapping[str, Any], *, status: str, files: list[dict[str, Any]], transferred: int):
+def _result(
+    request: Mapping[str, Any],
+    *,
+    status: str,
+    files: list[dict[str, Any]],
+    transferred: int,
+    registration: Mapping[str, Any] | None = None,
+):
+    if status == "PASS" and registration is None:
+        registration = {
+            "relative_path": (
+                ".aistock-release-registry/"
+                f"{request['dataset_manifest_sha256']}.json"
+            ),
+            "sha256": "b" * 64,
+            "size": 128,
+            "registration_sha256": "c" * 64,
+        }
     value = {
         "schema_version": REMOTE_DEPLOY_RESULT_SCHEMA,
         "status": status,
@@ -165,6 +196,7 @@ def _result(request: Mapping[str, Any], *, status: str, files: list[dict[str, An
         "request_sha256": hashlib.sha256(canonical_json_bytes(request)).hexdigest(),
         "files": files,
         "bytes_transferred": transferred,
+        "registration": dict(registration) if registration is not None else None,
     }
     return canonical_json_bytes(value) + b"\n"
 
@@ -238,6 +270,72 @@ def test_streaming_transport_probes_then_deploys_without_shell(tmp_path: Path) -
     )
     assert observed["probe_command"][-1] == "readback"
     assert observed["stream_command"][-1] == "deploy"
+
+
+def test_streaming_transport_repairs_missing_registration_without_recopy(
+    tmp_path: Path,
+) -> None:
+    files = _files(tmp_path)
+    parent = "/home/lc999/data/releases"
+    target = parent + "/candidate"
+    calls: list[str] = []
+
+    def command_runner(command, *, payload, timeout_seconds):  # type: ignore[no-untyped-def]
+        del timeout_seconds
+        request = json.loads(payload.decode("utf-8"))
+        calls.append(command[-1])
+        rows = [
+            {"path": item.relative_path, "sha256": item.sha256, "size": item.size}
+            for item in files
+        ]
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=_result(
+                request,
+                status="UNREGISTERED" if command[-1] == "readback" else "PASS",
+                files=rows,
+                transferred=0,
+            ),
+            stderr=b"",
+        )
+
+    transport = ImmutableStreamingNodeTransport(
+        node_id="rdagent-node1",
+        allowed_parent=parent,
+        command_prefix=("ssh", "node", "python", "-m", "module"),
+        command_runner=command_runner,
+    )
+    context = ProducerContext(
+        stage="DEPLOY",
+        operation_id="dmr_" + "3" * 32,
+        attempt=1,
+        request={},
+        plan={},
+        prior_receipts={},
+    )
+
+    result = transport.deploy(context, candidate_root=target, files=files)
+
+    assert calls == ["readback", "register"]
+    assert result.bytes_transferred == 0
+    assert result.registration["relative_path"].endswith(".json")
+
+
+def test_remote_register_repairs_only_registry_entry(tmp_path: Path) -> None:
+    files = _files(tmp_path)
+    request = _request(tmp_path, files)
+    deployed = deploy(request, _archive(files))
+    entry = Path(request["allowed_parent"]) / deployed["registration"]["relative_path"]
+    entry.unlink()
+
+    before = readback(request)
+    repaired = register(request)
+    after = readback(request)
+
+    assert before["status"] == "UNREGISTERED"
+    assert repaired["status"] == after["status"] == "PASS"
+    assert repaired["bytes_transferred"] == 0
 
 
 @pytest.mark.skipif(os.name == "nt", reason="remote deployment endpoint is POSIX-only")
