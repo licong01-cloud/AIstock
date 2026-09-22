@@ -56,6 +56,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "tushare_forecast_raw",       "mode": "incremental", "frequency": "daily", "at": "20:45"},
     {"dataset": "tushare_express_raw",        "mode": "incremental", "frequency": "daily", "at": "20:50"},
     {"dataset": "tushare_fina_indicator_raw", "mode": "incremental", "frequency": "daily", "at": "21:00"},
+    {"dataset": "etf_share_size",             "mode": "incremental", "frequency": "daily", "at": "20:00"},
+    {"dataset": "etf_basic_snapshots",        "mode": "init",        "frequency": "daily", "at": "20:05"},
 
     # ── Phase 4 — Tushare 中期数据（16:30-17:00 更新 +10min 缓冲） ──
     {"dataset": "sw_sector",             "mode": "incremental", "frequency": "daily", "at": "17:10"},
@@ -76,8 +78,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
-DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v3"
-DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "3d224656ca8fb2ab8971dab4abbc64bbbdbf84bb8b2945c43775a0c30bed8bee"
+DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v4"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "a1d89a26e53c6d18e725baf9b95ada1c818b569d946340032d7afb30ba8d599c"
 _MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 

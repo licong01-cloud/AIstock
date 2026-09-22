@@ -1031,6 +1031,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "scripts/repair_suspend_688766.py",
         "scripts/audit_suspend_d_coverage.py",
         "scripts/ingest_tushare_adj_factor.py",
+        "scripts/validate_etf_share_size_source.py",
         "noxfile.py",
         external=True,
     )
@@ -1038,6 +1039,9 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         session,
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_etf_share_size_source.py",
+        "backend/tests/scripts/test_validate_etf_share_size_source.py",
+        "backend/tests/test_local_data_management_facade.py",
         "backend/tests/test_data_sync_targets.py",
         "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",

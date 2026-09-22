@@ -1192,11 +1192,20 @@ rules:
       - backend/services/tushare_sync_engine.py
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
+      - backend/db/init_tushare_schedules.py
+      - backend/db/migrations/add_etf_share_sources_20260923.sql
+      - backend/db/migrations/add_etf_share_sources_20260923.rollback.sql
+      - backend/services/audit_backed_data_health.py
+      - backend/services/data_completeness.py
+      - backend/routers/ingestion.py
       - scripts/ingest_tushare_adj_factor.py
+      - scripts/validate_etf_share_size_source.py
       - backend/tests/ingestion/test_tdx_scheduler_adj_factor.py
       - backend/tests/services/test_adj_factor_history_reconciler.py
       - backend/tests/test_tushare_sync_engine.py
       - backend/tests/test_local_data_management_facade.py
+      - backend/tests/test_etf_share_size_source.py
+      - backend/tests/scripts/test_validate_etf_share_size_source.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2, selection_center]
     layer: data_pipeline
