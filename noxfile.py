@@ -700,6 +700,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
         "backend/tests/dataset_release/test_monthly_consumer_layout.py",
         "backend/tests/dataset_release/test_monthly_local_validation.py",
+        "backend/tests/dataset_release/test_monthly_consumer_validation.py",
         "backend/tests/dataset_release/test_monthly_profile_candidate.py",
         "backend/tests/dataset_release/test_monthly_shared_components.py",
         "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
