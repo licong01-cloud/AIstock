@@ -643,7 +643,7 @@ def test_nightly_ra_sessions_reuse_only_successful_same_run_prerequisites(
     monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
     monkeypatch.setenv(
         noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV,
-        "research_assistant_backend,ra_phase7_full_accept",
+        "mcp_gateway_phase5_assistant",
     )
     calls: list[tuple[str, ...]] = []
     logs: list[str] = []
@@ -660,18 +660,44 @@ def test_nightly_ra_sessions_reuse_only_successful_same_run_prerequisites(
 
     noxfile.ra_phase7_full_accept(DummySession())  # type: ignore[arg-type]
 
-    assert not any("backend/tests/research_assistant" in command for command in calls)
-    assert ("node", "node_modules/next/dist/bin/next", "lint") in calls
-    assert ("node", "node_modules/next/dist/bin/next", "build") in calls
-    assert any("research_assistant_backend" in message for message in logs)
+    assert any("backend/tests/research_assistant" in command for command in calls)
+    assert ("node", "node_modules/next/dist/bin/next", "lint") not in calls
+    assert ("node", "node_modules/next/dist/bin/next", "build") not in calls
+    assert any("mcp_gateway_phase5_assistant" in message for message in logs)
 
     calls.clear()
     noxfile.mcp_gateway_phase5_assistant(DummySession())  # type: ignore[arg-type]
 
     assert any("tests/mcp" in command for command in calls)
-    assert ("node", "node_modules/next/dist/bin/next", "lint") not in calls
-    assert ("node", "node_modules/next/dist/bin/next", "build") not in calls
+    assert ("node", "node_modules/next/dist/bin/next", "lint") in calls
+    assert ("node", "node_modules/next/dist/bin/next", "build") in calls
+
+    calls.clear()
+    monkeypatch.setenv(
+        noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV,
+        "ra_phase7_full_accept",
+    )
+    noxfile.research_assistant_backend(DummySession())  # type: ignore[arg-type]
+
+    assert any("backend/services/research_assistant" in command for command in calls)
+    assert not any("backend/tests/research_assistant" in command for command in calls)
     assert any("ra_phase7_full_accept" in message for message in logs)
+
+
+def test_research_assistant_backend_runs_full_without_nightly_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, raising=False)
+    monkeypatch.delenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, raising=False)
+    calls: list[tuple[str, ...]] = []
+
+    class DummySession:
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+    noxfile.research_assistant_backend(DummySession())  # type: ignore[arg-type]
+
+    assert any("backend/tests/research_assistant" in command for command in calls)
 
 
 def test_nightly_session_reuse_is_disabled_without_runner_identity(
