@@ -20,7 +20,7 @@
 | F-012 | PIT lifecycle物化 | 新旧证券完整观测历史和选股隔离 | pending | 尚未开发验收 |
 | F-013 | factor rolling/aggregate writer | 月界对照与历史修订后效 | pending | 尚未开发验收 |
 | F-014 | `monthly_shared_components.py`、`sw_l2_quote_policy.py` | 共享组件集成测试、quote taxonomy drift fail-closed、`qlib_data_backend` | in_progress | sealed SOURCE 生产器已实现；仍待真实闭月 candidate 回放和三节点 readback 后转为 verified |
-| F-015 | private write/seal/deploy adapter | hardlink隔离、跨卷、失败恢复 | pending | 尚未开发验收 |
+| F-015 | `monthly_build_executor.py`、`monthly_mature_build_runner.py`、`monthly_supervised_scope.py` | create-exclusive staging、原子发布、每次BUILD attempt独立supervisor与关闭验证 | in_progress | 私有构建与attempt生命周期已闭合；仍待跨卷部署、失败恢复及真实闭月回执后转为verified |
 | F-016 | manifest/E/P/R/C contracts | 无环身份及三端同字节 | pending | 尚未开发验收 |
 | F-017 | HMM-owned producer/登记适配 | 冻结模型、新B/C、无fit、完整日期 | pending | 尚未开发验收 |
 | F-018 | QE创建与Composer reader | P10/P11真实binding和物化股票池 | pending | 尚未开发验收 |

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,8 +14,16 @@ from backend.services.dataset_release.monthly_build_bridge import CompiledMonthl
 from backend.services.dataset_release.monthly_build_executor import PhysicalBuildResult
 from backend.services.dataset_release.monthly_mature_build_runner import (
     MatureMonthlyPhysicalBuildRunner,
+    MonthlyBuildExecutionTools,
     MonthlyConsumerSmokeResult,
     MonthlyMatureBuildError,
+)
+from backend.services.dataset_release.monthly_supervised_build import (
+    SupervisedMonthlyConsumerSmoke,
+    SupervisedMonthlyQlibWriter,
+)
+from backend.services.dataset_release.monthly_supervised_scope import (
+    ResourceSupervisedMonthlyBuildScopeFactory,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
 
@@ -91,6 +100,26 @@ class _Finalizer:
         return PhysicalBuildResult(manifest_path=manifest, component_artifacts=(component,))
 
 
+class _Supervisor:
+    def __init__(self, *, attempt_id: str, fence: int, control_root: Path) -> None:
+        self.attempt_id = attempt_id
+        self.fence = fence
+        self.control_root = control_root
+        self.heartbeat_path = control_root / "heartbeat.json"
+        self.events: list[str] = []
+
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        self.events.append("enter")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):  # type: ignore[no-untyped-def]
+        del exc_type, exc, traceback
+        self.events.append("exit")
+
+    def run_supervised(self, command, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError((command, kwargs))
+
+
 def test_runner_executes_mature_stages_in_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -143,6 +172,124 @@ def test_runner_executes_mature_stages_in_order(
     }
     assert finalizer.refs == stages[2][1] | {"consumer_smoke_resource", "validate"}
     assert result.manifest_path == staging / "qe_dataset_manifest.json"
+
+
+def test_runner_creates_attempt_bound_execution_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def run(invocation):  # type: ignore[no-untyped-def]
+        value = {
+            "schema_version": "dataset_release_build_stage_result_v1",
+            "stage": invocation.stage,
+            "status": "PASS",
+        }
+        if invocation.stage == "prepare":
+            value["qlib_dump_operations"] = [{"operation_id": "daily"}]
+        return value
+
+    monkeypatch.setattr(runner_module, "run_build_stage", run)
+    scoped_writer = _Writer()
+    scoped_smoke = _Smoke()
+    lifecycle: list[tuple[str, int]] = []
+
+    @contextmanager
+    def scope(context):  # type: ignore[no-untyped-def]
+        lifecycle.append(("enter", context.attempt))
+        try:
+            yield MonthlyBuildExecutionTools(scoped_writer, scoped_smoke)
+        finally:
+            lifecycle.append(("exit", context.attempt))
+
+    finalizer = _Finalizer()
+    staging = tmp_path / ".staging" / "candidate.building"
+    staging.parent.mkdir()
+    staging.mkdir()
+    runner = MatureMonthlyPhysicalBuildRunner(
+        profile=SimpleNamespace(
+            stage_timeouts_seconds={"full_build": 3600},
+            candidate_root=tmp_path,
+        ),
+        cas=_cas(tmp_path),
+        project_root=tmp_path,
+        finalizer=finalizer,
+        execution_scope_factory=scope,
+    )
+
+    runner.execute(context=_context(), staging_root=staging, compiled=_compiled())
+
+    assert lifecycle == [("enter", 2), ("exit", 2)]
+    assert scoped_writer.operations == ["daily"]
+
+
+def test_runner_rejects_process_scoped_and_attempt_scoped_tools(tmp_path: Path) -> None:
+    with pytest.raises(MonthlyMatureBuildError, match="exactly one"):
+        MatureMonthlyPhysicalBuildRunner(
+            profile=SimpleNamespace(
+                stage_timeouts_seconds={"full_build": 3600},
+                candidate_root=tmp_path,
+            ),
+            cas=_cas(tmp_path),
+            project_root=tmp_path,
+            qlib_writer=_Writer(),
+            consumer_smoke=_Smoke(),
+            finalizer=_Finalizer(),
+            execution_scope_factory=lambda _context: pytest.fail("not entered"),
+        )
+
+
+def test_supervised_scope_binds_one_supervisor_to_writer_and_smoke(
+    tmp_path: Path,
+) -> None:
+    context = _context()
+    supervisor = _Supervisor(
+        attempt_id=f"{context.operation_id}-build",
+        fence=context.attempt,
+        control_root=tmp_path,
+    )
+    observed: list[ProducerContext] = []
+
+    def create(value: ProducerContext) -> _Supervisor:
+        observed.append(value)
+        return supervisor
+
+    factory = ResourceSupervisedMonthlyBuildScopeFactory(
+        profile=SimpleNamespace(),
+        project_root=tmp_path,
+        toolchain=SimpleNamespace(),
+        supervisor_factory=create,
+    )
+
+    with factory(context) as tools:
+        assert isinstance(tools.qlib_writer, SupervisedMonthlyQlibWriter)
+        assert isinstance(tools.consumer_smoke, SupervisedMonthlyConsumerSmoke)
+        assert tools.qlib_writer.supervisor is supervisor
+        assert tools.consumer_smoke.supervisor is supervisor
+        assert supervisor.events == ["enter"]
+
+    assert observed == [context]
+    assert supervisor.events == ["enter", "exit"]
+
+
+def test_supervised_scope_rejects_stale_attempt(tmp_path: Path) -> None:
+    context = _context()
+    supervisor = _Supervisor(
+        attempt_id=f"{context.operation_id}-build",
+        fence=context.attempt - 1,
+        control_root=tmp_path,
+    )
+    factory = ResourceSupervisedMonthlyBuildScopeFactory(
+        profile=SimpleNamespace(),
+        project_root=tmp_path,
+        toolchain=SimpleNamespace(),
+        supervisor_factory=lambda _context: supervisor,
+    )
+
+    with pytest.raises(ValueError, match="identity differs"):
+        with factory(context):
+            pass
+
+    assert supervisor.events == []
 
 
 def test_runner_rejects_non_pass_stage(
