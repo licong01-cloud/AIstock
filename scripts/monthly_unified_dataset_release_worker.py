@@ -144,17 +144,18 @@ def main(
         )
         return 0
     except (MonthlyReleaseError, OSError, RuntimeError, ValueError) as exc:
-        _emit(
-            {
-                "schema_version": "aistock_monthly_release_worker_error_v1",
-                "status": "FAILED",
-                "reason_code": str(
-                    getattr(exc, "code", "MONTHLY_RELEASE_WORKER_FAILED")
-                ),
-                "message": str(exc),
-            },
-            stream=sys.stderr.buffer,
-        )
+        payload: dict[str, Any] = {
+            "schema_version": "aistock_monthly_release_worker_error_v1",
+            "status": "FAILED",
+            "reason_code": str(
+                getattr(exc, "code", "MONTHLY_RELEASE_WORKER_FAILED")
+            ),
+            "message": str(exc),
+        }
+        context = getattr(exc, "context", None)
+        if isinstance(context, Mapping) and context:
+            payload["context"] = dict(context)
+        _emit(payload, stream=sys.stderr.buffer)
         return 2
 
 

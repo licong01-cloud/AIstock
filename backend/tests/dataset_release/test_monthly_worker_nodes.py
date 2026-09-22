@@ -64,8 +64,10 @@ def test_node_runtime_builds_exact_code_owned_deploy_and_probe_capabilities(tmp_
         "-m",
         "backend.services.dataset_release.monthly_remote_deploy",
     )
-    assert transports["rdagent-node1"].command_prefix[:6] == (
+    assert transports["rdagent-node1"].command_prefix[:8] == (
         "ssh",
+        "-F",
+        "NUL",
         "-o",
         "BatchMode=yes",
         "-o",

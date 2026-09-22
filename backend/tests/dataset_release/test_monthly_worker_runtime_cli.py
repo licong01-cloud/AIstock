@@ -104,6 +104,27 @@ def test_runtime_boot_failure_is_structured_and_nonzero(
     assert "missing frozen authority" in payload["message"]
 
 
+def test_runtime_boot_failure_preserves_typed_context(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from backend.services.dataset_release.monthly_runtime import (
+        MonthlyRuntimeConfigurationError,
+    )
+
+    def fail(**_kwargs):  # type: ignore[no-untyped-def]
+        raise MonthlyRuntimeConfigurationError(
+            "monthly release environment is incomplete",
+            context={"missing": ["AISTOCK_MONTHLY_RELEASE_STATE_ROOT"]},
+        )
+
+    assert cli.main(["--preflight"], runtime_loader=fail) == 2
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["reason_code"] == "MONTHLY_RELEASE_RUNTIME_UNAVAILABLE"
+    assert payload["context"] == {
+        "missing": ["AISTOCK_MONTHLY_RELEASE_STATE_ROOT"]
+    }
+
+
 def test_activation_verifier_is_wired_into_worker(monkeypatch, tmp_path: Path) -> None:
     from backend.services.dataset_release import monthly_worker_runtime as runtime_module
 
