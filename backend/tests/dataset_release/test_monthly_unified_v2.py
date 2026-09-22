@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import hashlib
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -460,6 +461,62 @@ def test_activation_rejects_profile_mutation_after_ready(tmp_path: Path) -> None
         )
 
 
+def test_activation_readback_failure_retries_without_second_profile_switch(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, Pipeline())
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+    plan = service.store.read_plan(operation_id)
+    auth_root = (tmp_path / "authorizations").absolute()
+    auth_root.mkdir()
+    auth_store = ActionAuthorizationStore(auth_root)
+    authorization_id = "dsauth_" + "6" * 32
+    candidate_sha = _sha(Path(plan["profile_candidate"]))
+    _authorization(
+        auth_root / f"{authorization_id}.json",
+        authorization_id=authorization_id,
+        operation_id=operation_id,
+        action="ACTIVATE",
+        principal="operator",
+        cutoff=plan["target_cutoff"],
+        predecessor=plan["predecessor"]["profile_sha256"],
+        target=candidate_sha,
+    )
+
+    failed = service.activate(
+        operation_id,
+        authorization_store=auth_store,
+        authorization_ref=authorization_id,
+        principal="operator",
+        verify_after=lambda _ready: {"status": "FAIL"},
+    )
+    assert failed["status"] == "ACTIVATED_VERIFY_FAILED"
+    assert _sha(service.active_profile) == candidate_sha
+
+    recovered = service.activate(
+        operation_id,
+        authorization_store=auth_store,
+        authorization_ref=authorization_id,
+        principal="operator",
+        verify_after=lambda ready: {
+            "status": "PASS",
+            "dataset_manifest_sha256": ready["dataset_manifest_sha256"],
+        },
+    )
+    activation = json.loads(
+        (
+            service.store.operation_root(operation_id)
+            / "receipts"
+            / "activation.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert recovered["status"] == "ACTIVATED_VERIFIED"
+    assert activation["apply_state"] == "ALREADY_APPLIED"
+    assert activation["readback_state"] == "PASS"
+    assert _sha(service.active_profile) == candidate_sha
+
+
 def test_rollback_readback_failure_is_durable_and_retryable(tmp_path: Path) -> None:
     service = _service(tmp_path, Pipeline())
     operation_id = service.submit(_request())["operation_id"]
@@ -566,6 +623,21 @@ def test_complete_run_has_all_six_durable_stage_receipts(tmp_path: Path) -> None
     operation_id = service.submit(_request())["operation_id"]
     assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
     assert all(service.store.read_checkpoint(operation_id, stage) for stage in STAGES)
+
+    ready = json.loads(
+        (
+            service.store.operation_root(operation_id) / "receipts" / "ready.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert set(ready["telemetry"]) == set(STAGES)
+    assert ready["database_write_performed"] is False
+    assert ready["production_ddl_performed"] is False
+    assert ready["production_dml_performed"] is False
+    assert ready["candidate_write_performed"] is True
+    assert ready["candidate_deployed"] is True
+    assert ready["training_or_experiment"] is False
+    assert ready["runtime_action_performed"] is False
+    assert ready["active_profile_write"] is False
 
 
 def test_checkpoint_binds_explicit_registered_producer_digest(tmp_path: Path) -> None:

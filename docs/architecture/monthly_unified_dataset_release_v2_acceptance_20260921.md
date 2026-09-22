@@ -6,19 +6,19 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | dataset_release计划与封存 | 单一successor和旧文件不变验证 | pending | 尚未开发验收 |
-| F-002 | MonthlyReleaseService与薄入口 | API/CLI/MCP请求返回同operation | pending | 尚未开发验收 |
-| F-003 | release状态store与锁 | 双writer、重复请求、批次取消/恢复 | pending | 尚未开发验收 |
-| F-004 | source影响范围adapter | 历史补录、新尾部、范围不全的组件重建 | pending | 尚未开发验收 |
-| F-005 | snapshot读取adapter | 并发修改和中途崩溃不混版本 | pending | 尚未开发验收 |
-| F-006 | 日历/lifecycle/六池validator | 正常与缺日、退市历史population | pending | 尚未开发验收 |
-| F-007 | 分钟与日线parity validator | 交易会话、停牌和量额单位差异 | pending | 尚未开发验收 |
-| F-008 | daily_basic统一字段检查器 | 两种入口相同字段/分母/分页规则 | pending | 尚未开发验收 |
-| F-009 | adj invalidation adapter | 四类变化及尾部增长无误全重建 | pending | 尚未开发验收 |
-| F-010 | local_data repair协调adapter | DEV、授权、apply、readback独立 | pending | 尚未开发验收 |
+| F-001 | `monthly_unified.py`、`monthly_immutable_deploy.py`、`monthly_profile_candidate.py` | `test_monthly_unified_v2.py`、`test_monthly_official_adapters.py`、`test_monthly_profile_candidate.py`：单一operation/successor、create-exclusive目标、旧profile/CAS身份不变 | in_progress | 计划、封存与不可变发布合同已实现；仍待真实闭月candidate证明基线文件未变后转为verified |
+| F-002 | `control_service.py`、`monthly_dataset_releases.py`、月更CLI/MCP薄入口 | router、CLI、MCP测试：同一idempotency key返回同operation，入口不能传producer命令或跳过consumer | in_progress | API/CLI/MCP已统一到MonthlyReleaseService；仍待真实闭月operation回执后转为verified |
+| F-003 | `monthly_unified.py`、`monthly_worker_runtime.py` | `test_monthly_unified_v2.py`、`test_monthly_worker_runtime_cli.py`：产品锁、幂等冲突、cancel/resume、stage checkpoint、worker恢复 | in_progress | 文件状态store、单writer锁和六阶段恢复已实现；仍待进程级故障演练后转为verified |
+| F-004 | `monthly_postgres_source.py`、`monthly_source_audit.py` | `test_monthly_postgres_source.py`：tail/history/schema/removal/PIT变化分类及首迁完整证据 | in_progress | source影响范围与component action推导已实现；仍待真实闭月源快照差异回执后转为verified |
+| F-005 | `monthly_snapshot.py`、`monthly_source_producer.py` | `test_monthly_snapshot.py`、`test_monthly_source_producer.py`：单一exported snapshot、失败失效、seal后writer overlap拒绝 | in_progress | 一致快照和repair watermark已实现；仍待真实生产只读快照并发演练后转为verified |
+| F-006 | `monthly_source_audit.py`、`monthly_postgres_source.py`、`monthly_shared_components.py` | source audit/shared component测试：交易日历、生命周期、六池、退市历史、未知PIT归属fail-closed | in_progress | typed日历/lifecycle/六池检查已实现；仍待真实全市场闭月readback后转为verified |
+| F-007 | `monthly_source_audit.py` | `test_monthly_source_audit.py::test_minute_contract_uses_240_close_labels_and_cross_checks_daily`及缺口/停牌typed exception测试 | in_progress | 240根会话、日分钟OHLCV/amount交叉校验合同已实现；仍待真实增量月分钟数据回放后转为verified |
+| F-008 | `monthly_source_audit.py`、`monthly_postgres_source.py` | `test_monthly_source_audit.py::test_daily_basic_checks_rows_and_all_required_fields`及分页/source receipt测试 | in_progress | daily_basic行与必需字段统一分母检查已实现；仍待真实月尾source readback后转为verified |
+| F-009 | `monthly_source_audit.py`、`monthly_postgres_source.py`、`monthly_build_bridge.py` | adj tail/rebase/restatement分类及component invalidation测试 | in_progress | adj变化分类和受影响组件action推导已实现；仍待真实历史重述演练证明不会误做尾部增量后转为verified |
+| F-010 | `monthly_repair_journal.py`、`monthly_source_producer.py` | `test_monthly_repair_journal.py`、`test_monthly_source_producer.py`：writer ledger、repair receipt pins、snapshot overlap拒绝 | in_progress | 已能观察正式writer并要求DEV/apply/readback三证据；有界repair执行器及具体生产授权仍为独立缺口，不自动执行DML |
 | F-011 | `monthly_build_bridge.py`、`monthly_incremental_baseline.py`、既有 bounded Qlib writer | 四种 action、predecessor manifest/CAS/Merkle 闭合、首迁单次组件重建及后续增量/选择性计划测试 | in_progress | 增量 baseline 与正式 mixed planner 已接通；仍待真实闭月 candidate 验证 calendar 严格前缀、增量等价和性能后转为 verified |
-| F-012 | PIT lifecycle物化 | 新旧证券完整观测历史和选股隔离 | pending | 尚未开发验收 |
-| F-013 | factor rolling/aggregate writer | 月界对照与历史修订后效 | pending | 尚未开发验收 |
+| F-012 | `monthly_source_audit.py`、`monthly_shared_components.py`、既有PIT producer | source audit/shared component测试：新股、退市股、provider catalog与股票池隔离、PIT交集覆盖 | in_progress | lifecycle/PIT sidecar物化合同已接入共享构建；仍待真实闭月新增/退市证券回放后转为verified |
+| F-013 | `factor_materializer.py`、`monthly_build_bridge.py`、`monthly_mature_build_runner.py` | factor增量、选择性重建、月界burn-in及历史修订失效测试 | in_progress | 既有factor writer已由正式mixed planner受控调用；仍待真实闭月增量与全量对照后转为verified |
 | F-014 | `monthly_shared_components.py`、`monthly_consumer_layout.py`、`sw_l2_quote_policy.py` | `test_monthly_shared_components.py`、`test_monthly_consumer_layout.py`：共享sidecar、QE/HMM发布目录、benchmark/meta/coverage、hardlink零重复数据发布 | in_progress | sealed SOURCE与共享consumer layout生产器已实现；仍待真实闭月 candidate 回放和三节点 readback 后转为 verified |
 | F-015 | `monthly_build_executor.py`、`monthly_mature_build_runner.py`、`monthly_supervised_scope.py`、`monthly_immutable_deploy.py`、`monthly_remote_deploy.py`、`monthly_worker_nodes.py` | `test_monthly_remote_deploy.py`及对应构建测试：create-exclusive staging、原子发布、attempt独立supervisor、流式跨节点复制、hardlink别名保留、同字节resume与漂移拒绝 | in_progress | 私有构建、WSL/node1固定命令流式传输、目标端逐文件SHA及失败恢复合同已闭合；仍待真实闭月三节点传输回执后转为verified |
 | F-016 | `monthly_official_adapters.py`、`monthly_worker.py`、`monthly_immutable_deploy.py`、`monthly_profile_candidate.py`、`monthly_local_validation.py`、`profile_contract.py` | `test_monthly_local_validation.py`、`test_monthly_profile_candidate.py`及dataset-release全量回归：candidate-local C/E、11 consumer contracts、manifest/derived pins、predecessor lineage、共享consumer requirements | in_progress | B/C/E/P及文件型LOCAL_VALIDATE身份已实现；仍待真实R/C readback和三节点闭月回放后转为verified |
@@ -28,14 +28,14 @@
 | F-020 | `monthly_shared_consumer_probe.py`、active profile consumer resolver、`active_task_binding.py` | 共享probe及dispatch测试：Selection/Advisory/择时/统一回测精确组件binding、真实sentinel reader及任务创建时冻结 | in_progress | 共享文件binding probe、Selection与统一回测RD-Agent入口冻结binding已实现；Advisory、择时的业务创建入口和真实节点readback尚未闭合 |
 | F-021 | `active_task_binding.py`、`dispatch_service.py` | `test_active_task_binding.py`、`test_dispatch_service_env.py`：排队跨切换、remote submit失败、retry不重新resolve，profile/manifest/binding SHA fail-closed | in_progress | 受管RD-Agent与官方因子任务在本地持久化前仅解析一次active profile，后续环境仅由任务binding派生；仍待其余受管消费者入口及真实排队跨切换演练后转为verified |
 | F-022 | RD-Agent registry/identity | 已运行API识别新release，无逐月重启 | pending | 尚未开发验收 |
-| F-023 | authorization/CAS/activation | 双切换、崩溃、读回、伪授权拒绝 | pending | 尚未开发验收 |
-| F-024 | rollback与引用清单 | 并发安全回滚和旧任务引用保留 | pending | 尚未开发验收 |
+| F-023 | `monthly_unified.py`、`monthly_dataset_releases.py` | `test_monthly_unified_v2.py`：精确授权、active-profile锁内CAS、profile mutation拒绝、读回失败后ALREADY_APPLIED恢复 | in_progress | 授权解析、切换intent、CAS与独立readback已实现；仍待一次真实授权激活及三节点运行态读回后转为verified |
+| F-024 | `monthly_unified.py`、`retention.py`、冻结task binding | rollback/retention测试：授权回滚、读回失败精确重试、不删除被引用release、unknown引用fail-closed保留 | in_progress | rollback及保守保留策略已实现；跨dispatch/实验/训练的完整引用清单聚合尚未闭合，因此禁止自动删除旧release |
 | F-025 | `monthly_local_validation.py`、`monthly_consumer_validation.py`、`monthly_consumer_registry.py`、`monthly_node_probe.py`、`monthly_node_probe_runner.py`、`monthly_worker_nodes.py`、`monthly_worker_composition.py`、各consumer probes、`monthly_official_adapters.py` | 对应dataset-release测试：完整六池scope、不可变精确11 controller preflight注册、固定WSL/SSH命令、canonical stdin/stdout、六阶段唯一registry、v4 binding/node registration/manifest闭合、side-effect fail-closed | in_progress | 11项code-owned controller preflight、节点证明及六阶段正式组合根已实现，控制器PASS不能替代节点PASS；仍待真实三节点闭月readback，未达到verified |
-| F-026 | telemetry/分区/传输 | 真实读算写传hash成本，无资源准入 | pending | 尚未开发验收 |
+| F-026 | `monthly_official_adapters.py`、`monthly_remote_deploy.py`、`monthly_unified.py` | stage adapter、remote deploy、ready receipt测试：source/computed/files/read/write/transfer/hash/elapsed逐阶段闭合 | in_progress | 六阶段遥测和零字节resume已实现；仍待真实闭月记录性能基线，遥测不得成为业务准入门禁 |
 | F-027 | `monthly_unified_dataset_release.py`、`monthly_unified_dataset_release_worker.py`、API/MCP、`update-backtest-dataset` Skill与runbook | CLI/API/MCP薄入口、worker preflight/once/bounded drain、一次真实run及恢复到ready/切换 | in_progress | 产品提交入口、代码固定worker组合和操作手册已实现；仍待一次真实9月闭月operation及授权切换证据 |
-| F-028 | 动态日期/目录/model合同 | 非固定计数的新月份与新行业 | pending | 尚未开发验收 |
-| F-029 | v4兼容与双仓部署 | 读端先行、legacy显式保留 | pending | 尚未开发验收 |
-| F-030 | release总回执 | 各生产动作和功能状态分别读回 | pending | 尚未开发验收 |
+| F-028 | `monthly_runtime.py`、`sw_l2_quote_policy.py`、HMM authority loader | `test_monthly_runtime.py`跨年cutoff测试、动态taxonomy/availability及model hash drift测试 | in_progress | 月份/路径/行业计数均由合同推导且无2026/131等业务常量；仍待下一真实月份与taxonomy不变/变更两类演练后转为verified |
+| F-029 | active profile v4 resolver、`monthly_remote_deploy.py`、`monthly_node_probe_runner.py` | v3/v4 reader、固定WSL/SSH部署及节点probe测试 | in_progress | AIstock读端先行兼容和双节点部署协议已实现；RD-Agent运行API免重启release登记仍是F-022外部缺口 |
+| F-030 | `monthly_unified.py` ready/activation/rollback receipts | `test_monthly_unified_v2.py::test_complete_run_has_all_six_durable_stage_receipts`：六阶段遥测、DB/DDL/DML/candidate/deploy/training/runtime/active写入分态 | in_progress | canonical ready总回执和生产动作分态已实现；仍待真实闭月R、授权激活与运行态readback证据后转为verified |
 
 ## 后续开发验收命令
 
