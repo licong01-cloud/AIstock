@@ -2492,12 +2492,25 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         "-p",
         "no:cacheprovider",
     )
+    _ensure_frontend_node_modules(session)
     session.chdir("frontend")
-    session.run("npm", "run", "lint", env=frontend_env, external=True)
-    session.run("npm", "run", "build", env=frontend_env, external=True)
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/next/dist/bin/next",
+        "lint",
+        env=frontend_env,
+        external=True,
+    )
+    session.run(
+        "node",
+        "node_modules/next/dist/bin/next",
+        "build",
+        env=frontend_env,
+        external=True,
+    )
+    session.run(
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/phase7-frontend-acceptance.spec.ts",
         "--project",
@@ -2506,8 +2519,8 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         external=True,
     )
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/research-assistant.spec.ts",
         "--project",
