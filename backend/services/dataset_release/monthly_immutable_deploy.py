@@ -18,6 +18,7 @@ import stat
 from typing import Mapping, Protocol, Sequence
 
 from .canonical import canonical_json_bytes, ensure_sha256
+from .errors import CanonicalizationError
 from .monthly_official_adapters import (
     DeployExecution,
     NodeDeployment,
@@ -230,11 +231,96 @@ def _inventory(
             or observed.size != raw.get("size")
         ):
             raise MonthlyImmutableDeployError("derived asset registry bytes differ")
+
+    local_scope = context.prior_receipts.get("LOCAL_VALIDATE", {}).get("scope")
+    if not isinstance(local_scope, Mapping):
+        raise MonthlyImmutableDeployError("LOCAL_VALIDATE scope is unavailable")
+    closure_scope_ref = local_scope.get("release_closure_ref")
+    if not isinstance(closure_scope_ref, Mapping):
+        raise MonthlyImmutableDeployError("release closure reference is missing")
+    closure_item = files.get("release_closure_receipt.json")
+    if (
+        closure_item is None
+        or closure_item.sha256 != closure_scope_ref.get("sha256")
+        or closure_item.size != closure_scope_ref.get("size")
+    ):
+        raise MonthlyImmutableDeployError("candidate-local release closure differs")
+    closure = _read_canonical(closure_item.source_path, label="release closure")
+    unsigned_closure = dict(closure)
+    closure_digest = unsigned_closure.pop("canonical_sha256", None)
+    if (
+        unsigned_closure.get("schema_version") != "aistock_release_closure_v1"
+        or hashlib.sha256(canonical_json_bytes(unsigned_closure)).hexdigest()
+        != closure_digest
+    ):
+        raise MonthlyImmutableDeployError("release closure identity differs")
+
+    closure_paths: set[str] = set()
+
+    def register_closure_ref(raw: object, *, label: str) -> str:
+        if not isinstance(raw, Mapping) or set(raw) != {"id", "sha256", "size"}:
+            raise MonthlyImmutableDeployError(f"release closure {label} reference is invalid")
+        try:
+            digest = ensure_sha256(
+                str(raw.get("sha256") or ""),
+                field=f"release closure {label} sha256",
+            )
+        except CanonicalizationError as exc:
+            raise MonthlyImmutableDeployError(
+                f"release closure {label} hash is invalid"
+            ) from exc
+        size = raw.get("size")
+        if type(size) is not int or size < 0:
+            raise MonthlyImmutableDeployError(
+                f"release closure {label} size is invalid"
+            )
+        relative = Path(str(raw.get("id") or ""))
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise MonthlyImmutableDeployError(f"release closure {label} path is invalid")
+        normalized = relative.as_posix()
+        observed = files.get(normalized)
+        if (
+            observed is None
+            or observed.sha256 != digest
+            or observed.size != size
+        ):
+            raise MonthlyImmutableDeployError(f"release closure {label} bytes differ")
+        if normalized in closure_paths:
+            raise MonthlyImmutableDeployError("release closure contains duplicate paths")
+        closure_paths.add(normalized)
+        return normalized
+
+    closure_manifest = register_closure_ref(
+        closure.get("dataset_manifest_ref"), label="dataset manifest"
+    )
+    if closure_manifest != "qe_dataset_manifest.json":
+        raise MonthlyImmutableDeployError("release closure manifest path differs")
+    closure_derived = closure.get("derived_asset_refs")
+    if not isinstance(closure_derived, list) or not closure_derived:
+        raise MonthlyImmutableDeployError("release closure derived references are empty")
+    observed_derived = {
+        register_closure_ref(raw, label="derived asset") for raw in closure_derived
+    }
+    if observed_derived != {"derived/derived_asset_registry.json", *asset_paths}:
+        raise MonthlyImmutableDeployError("release closure derived file set differs")
+    for field in (
+        "consumer_contract_refs",
+        "source_readiness_refs",
+        "component_validation_refs",
+    ):
+        raw_refs = closure.get(field)
+        if not isinstance(raw_refs, list) or not raw_refs:
+            raise MonthlyImmutableDeployError(f"release closure {field} is empty")
+        for raw in raw_refs:
+            register_closure_ref(raw, label=field)
+    register_closure_ref(closure.get("lineage_ref"), label="lineage")
     expected_paths = {
         "qe_dataset_manifest.json",
         "derived/derived_asset_registry.json",
+        "release_closure_receipt.json",
         *component_paths,
         *asset_paths,
+        *closure_paths,
     }
     if set(files) != expected_paths:
         raise MonthlyImmutableDeployError("candidate contains unregistered release files")
