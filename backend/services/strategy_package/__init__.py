@@ -1,6 +1,5 @@
 """Strategy Package Center v1."""
 
-from .components import StrategyPackageComponentService
 from .manifest import compute_manifest_sha256, freeze_manifest
 from .models import (
     StrategyPackageCanonicalPitBindingV2,
@@ -29,6 +28,15 @@ from .seed_contract import (
     build_master_seed_contract,
 )
 from .validators import StrategyPackageValidator
+
+
+def __getattr__(name: str) -> object:
+    if name == "StrategyPackageComponentService":
+        from .components import StrategyPackageComponentService
+
+        globals()[name] = StrategyPackageComponentService
+        return StrategyPackageComponentService
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "DerivedSeedContract",
