@@ -108,3 +108,17 @@ python scripts/monthly_unified_dataset_release_worker.py --serve --poll-seconds 
 `activate_when_ready` 和精确 `dsauth_*`，worker 才能执行中央 profile CAS；不能从普通
 prepare 授权推导激活权限。首次部署 worker 代码可能需要运行态所有者安排进程更新，之后每月
 release 切换只改变中央 profile，不需要按月修改 QE/HMM/荐股路径或重启节点 API。
+
+## 7. Advisory 与择时离线准备绑定
+
+首次部署本版本并由运行态所有者重启 AIstock 后端后，Advisory 和 position_timing 的新建离线数据准备
+通过以下入口冻结共享 active release。两者复用 `AISTOCK_MONTHLY_RELEASE_STATE_ROOT`，不增加逐月路径配置：
+
+- `POST /api/v1/advisory/dataset-preparations`
+- `POST /api/v1/position-timing/dataset-preparations`
+
+请求头必须提供稳定的 `Idempotency-Key`，请求体仅包含 `start_date`、`end_date`。首次调用在
+`managed-consumer-tasks` 中 create-exclusive 保存 profile、manifest、consumer component binding 和窗口；
+同一业务键重试只读取既有回执，不重新解析 active profile。相同键改变窗口返回冲突，窗口超过冻结 cutoff、
+binding/hash 漂移或缺少 active profile 均 fail closed。切换 active profile 只影响新的业务键，不改写历史请求、
+研究结果或原 Advisory CAS；入口本身不读取收益、不启动训练/实验，也不执行数据库或运行态动作。

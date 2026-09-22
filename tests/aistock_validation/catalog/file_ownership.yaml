@@ -1156,6 +1156,7 @@ rules:
       - backend/tests/dataset_release/**
       - backend/tests/routers/test_dataset_releases.py
       - backend/tests/routers/test_monthly_dataset_releases.py
+      - backend/tests/routers/test_managed_dataset_preparations.py
       - backend/tests/scripts/test_dataset_release_*.py
       - backend/tests/scripts/test_monthly_unified_dataset_release.py
       - backend/tests/scripts/test_update_backtest_dataset_monthly.py

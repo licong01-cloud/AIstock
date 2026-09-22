@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from functools import lru_cache
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.services.dataset_release.managed_consumer_task import (
+    ManagedDatasetTaskError,
+    ManagedDatasetTaskStore,
+)
 from backend.services.advisory_phase0a.historical_research import (
     HistoricalAdvisoryResearchRunner,
     HistoricalResearchBatchRequest,
@@ -167,6 +172,63 @@ class AdvisoryReplayRequest(BaseModel):
 class AdvisoryQualityReportRequest(BaseModel):
     records: list[dict[str, Any]] = Field(default_factory=list)
     min_bucket_size: int = Field(default=30, ge=1)
+
+
+class ManagedDatasetPreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_date: date
+    end_date: date
+
+
+@lru_cache(maxsize=1)
+def get_managed_dataset_task_store() -> ManagedDatasetTaskStore:
+    try:
+        return ManagedDatasetTaskStore.from_env()
+    except ManagedDatasetTaskError as exc:
+        _raise_managed_dataset_task_http(exc)
+
+
+def _raise_managed_dataset_task_http(exc: ManagedDatasetTaskError) -> NoReturn:
+    if exc.code == "MANAGED_DATASET_TASK_IDEMPOTENCY_CONFLICT":
+        status_code = 409
+    elif exc.code in {
+        "MANAGED_DATASET_TASK_ROOT_UNAVAILABLE",
+        "MANAGED_DATASET_TASK_ACTIVE_BINDING_INVALID",
+    }:
+        status_code = 503
+    elif exc.code in {
+        "MANAGED_DATASET_TASK_ARTIFACT_INVALID",
+        "MANAGED_DATASET_TASK_ARTIFACT_WRITE_FAILED",
+        "MANAGED_DATASET_TASK_BINDING_INVALID",
+        "MANAGED_DATASET_TASK_CONTRACT_INVALID",
+        "MANAGED_DATASET_TASK_IDENTITY_INVALID",
+    }:
+        status_code = 500
+    else:
+        status_code = 422
+    raise HTTPException(
+        status_code=status_code,
+        detail={"error_code": exc.code, "message": str(exc)},
+    ) from exc
+
+
+@router.post("/dataset-preparations")
+def create_dataset_preparation(
+    request: ManagedDatasetPreparationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+    store: ManagedDatasetTaskStore = Depends(get_managed_dataset_task_store),
+) -> dict[str, Any]:
+    try:
+        artifact = store.create(
+            consumer_id="advisory",
+            business_task_key=idempotency_key,
+            start_date=request.start_date,
+            end_date=request.end_date,
+        )
+    except ManagedDatasetTaskError as exc:
+        _raise_managed_dataset_task_http(exc)
+    return {"ok": True, "data": artifact.as_dict()}
 
 
 def get_advisory_program_service() -> AdvisoryProgramService:
