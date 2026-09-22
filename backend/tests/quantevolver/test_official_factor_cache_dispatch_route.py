@@ -305,6 +305,11 @@ def test_official_full_compute_custom_dispatch_uses_legacy_wsl_runner(monkeypatc
     svc = dispatch_mod.DispatchService()
     monkeypatch.setattr(dispatch_mod, "ComputeNodeClient", _FakeClient)
     monkeypatch.setattr(dispatch_mod, "get_conn", lambda: _NoopConn())
+    monkeypatch.setattr(
+        dispatch_mod,
+        "_freeze_dispatch_dataset_binding",
+        lambda **_kwargs: None,
+    )
     def _fake_insert_task(data):
         captured["insert_task"] = data
         return {"task_id": "local-1"}
