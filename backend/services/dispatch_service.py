@@ -36,6 +36,7 @@ from .quantevolver.qe_active_dataset_profile import (
     resolve_active_dataset_node_binding,
 )
 from .dataset_release.active_task_binding import (
+    encode_qe_dataset_identity_roots,
     freeze_optional_active_dataset_task_binding,
     frozen_dataset_environment,
 )
@@ -215,7 +216,10 @@ def build_rdagent_env_overrides(
         active_binding = resolve_active_dataset_node_binding(node_id=str(node.get("node_id") or ""))
         active_env = None if active_binding is None else {
             "AISTOCK_DATASET_ROOT": active_binding["candidate_root"],
-            "QE_DATASET_IDENTITY_ROOTS": active_binding["candidate_root"],
+            "QE_DATASET_IDENTITY_ROOTS": encode_qe_dataset_identity_roots(
+                node_id=node.get("node_id"),
+                root=active_binding["candidate_root"],
+            ),
             "QE_QLIB_DATA_PATH": active_binding["qlib_data_path"],
             "QLIB_DAY_DATA": active_binding["qlib_data_path"],
             "QLIB_DATA_PATH_WSL": active_binding["qlib_data_path"],

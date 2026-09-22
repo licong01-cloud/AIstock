@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from typing import Any
 
 import pytest
@@ -58,6 +59,9 @@ def test_freeze_and_environment_bind_profile_manifest_and_paths() -> None:
     assert frozen["profile_sha256"] == PROFILE
     assert frozen["dataset_manifest_sha256"] == MANIFEST
     assert environment["AISTOCK_DATASET_ROOT"] == "/releases/r9"
+    assert json.loads(environment["QE_DATASET_IDENTITY_ROOTS"]) == {
+        "rdagent-node1": ["/releases/r9"]
+    }
     assert environment["AISTOCK_DATASET_BINDING_SHA256"] == frozen["binding_sha256"]
     assert environment["QLIB_DAY_DATA"].endswith("/daily_bin_candidate")
     assert environment["QLIB_MINUTE_DATA"].endswith("/minute_bin_candidate")

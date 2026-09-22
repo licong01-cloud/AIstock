@@ -66,6 +66,14 @@ def _binding_digest(binding: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical_json_bytes(binding)).hexdigest()
 
 
+def encode_qe_dataset_identity_roots(*, node_id: object, root: object) -> str:
+    """Encode the strict node-scoped allowlist consumed by QE snapshot lookup."""
+
+    normalized_node = _text(node_id, field="node_id")
+    normalized_root = _text(root, field="candidate_root")
+    return canonical_json_bytes({normalized_node: [normalized_root]}).decode("utf-8")
+
+
 def freeze_active_dataset_task_binding(
     *,
     consumer_id: str,
@@ -220,7 +228,10 @@ def frozen_dataset_environment(value: Mapping[str, Any]) -> dict[str, str]:
         "AISTOCK_DATASET_RELEASE_ID": str(frozen["release_id"]),
         "AISTOCK_DATASET_CUTOFF": str(frozen["cutoff"]),
         "AISTOCK_DATASET_CONSUMER_ID": consumer_id,
-        "QE_DATASET_IDENTITY_ROOTS": root,
+        "QE_DATASET_IDENTITY_ROOTS": encode_qe_dataset_identity_roots(
+            node_id=node_id,
+            root=root,
+        ),
         "QE_QLIB_DATA_PATH": day,
         "QLIB_DAY_DATA": day,
         "QLIB_DATA_PATH_WSL": day,
@@ -242,6 +253,7 @@ __all__: Sequence[str] = (
     "FROZEN_DATASET_TASK_BINDING_SCHEMA",
     "FrozenDatasetTaskBindingError",
     "dataset_environment_keys",
+    "encode_qe_dataset_identity_roots",
     "freeze_active_dataset_task_binding",
     "freeze_optional_active_dataset_task_binding",
     "frozen_dataset_environment",

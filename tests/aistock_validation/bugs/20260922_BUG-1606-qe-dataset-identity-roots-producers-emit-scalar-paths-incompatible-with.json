@@ -33,17 +33,28 @@
   ],
   "expected": "Every QE runtime binding emits a deterministic node-scoped JSON root map, Long Trend Phase 3 passes under the repository environment, and invalid scalar roots remain rejected.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260922_BUG-1606-qe-dataset-identity-roots-producers-emit-scalar-paths-incompatible-with.json",
       "backend/services/dataset_release/active_task_binding.py",
       "backend/services/dispatch_service.py",
-      "scripts/qe_active_dataset_profile.py",
       "backend/tests/dataset_release/test_active_task_binding.py",
-      "backend/tests/test_dispatch_service_env.py",
       "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
-      "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py"
+      "backend/tests/test_dispatch_service_env.py",
+      "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+      "scripts/qe_active_dataset_profile.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260922_BUG-1606-qe-dataset-identity-roots-producers-emit-scalar-paths-incompatible-with.json",
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/test_dispatch_service_env.py",
+      "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+      "scripts/qe_active_dataset_profile.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/active_task_binding.py",
@@ -213,11 +224,20 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "fresh_process_evidence": [
+      "fresh Python encoded and parsed the strict node-scoped QE_DATASET_IDENTITY_ROOTS contract -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
