@@ -1925,11 +1925,8 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         external=True,
     )
     session.chdir("frontend")
-    if _nightly_session_completed("ra_phase7_full_accept"):
-        session.log("Reusing successful ra_phase7_full_accept frontend lint/build within this Nightly run.")
-    else:
-        session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
-        session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
     session.run(
         "node",
         "node_modules/@playwright/test/cli.js",
@@ -2515,20 +2512,26 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         )
     _ensure_frontend_node_modules(session)
     session.chdir("frontend")
-    session.run(
-        "node",
-        "node_modules/next/dist/bin/next",
-        "lint",
-        env=frontend_env,
-        external=True,
-    )
-    session.run(
-        "node",
-        "node_modules/next/dist/bin/next",
-        "build",
-        env=frontend_env,
-        external=True,
-    )
+    if _nightly_session_completed("mcp_gateway_phase5_assistant"):
+        session.log(
+            "Reusing successful mcp_gateway_phase5_assistant frontend lint/build "
+            "within this Nightly run."
+        )
+    else:
+        session.run(
+            "node",
+            "node_modules/next/dist/bin/next",
+            "lint",
+            env=frontend_env,
+            external=True,
+        )
+        session.run(
+            "node",
+            "node_modules/next/dist/bin/next",
+            "build",
+            env=frontend_env,
+            external=True,
+        )
     session.run(
         "node",
         "node_modules/@playwright/test/cli.js",
