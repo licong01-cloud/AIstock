@@ -718,6 +718,7 @@ class NodeDeployment:
     manifest_sha256: str
     relative_files: tuple[Path, ...]
     deployment_receipt: Path
+    runtime_registration: Mapping[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -787,6 +788,7 @@ class OfficialDeployAdapter:
                 "candidate_root": item.candidate_root,
                 "relative_file_refs": file_refs,
                 "deployment_receipt_ref": receipt_ref,
+                "runtime_registration": dict(item.runtime_registration),
             }
             path = _write_canonical_exclusive(root / f"{node_id}-registration.json", registration)
             registrations[node_id] = registration
