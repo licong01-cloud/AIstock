@@ -37,7 +37,17 @@ class MonthlyConsumerSmoke(Protocol):
         staging_root: Path,
         prepare_result: Mapping[str, Any],
         release_digest: str,
-    ) -> Mapping[str, Any]: ...
+    ) -> "MonthlyConsumerSmokeResult": ...
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlyConsumerSmokeResult:
+    semantic_receipt: Mapping[str, Any]
+    resource_receipt: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        if not self.semantic_receipt or not self.resource_receipt:
+            raise MonthlyMatureBuildError("consumer smoke evidence is incomplete")
 
 
 class MonthlyCandidateFinalizer(Protocol):
@@ -81,10 +91,13 @@ class MatureMonthlyPhysicalBuildRunner:
         release_id = str(context.plan.get("release_id") or "")
         if not release_id:
             raise MonthlyMatureBuildError("monthly release id is missing")
-        if staging_root.parent.resolve(strict=True) != Path(
-            self.profile.candidate_root
-        ).resolve(strict=True):
+        candidate_root = Path(self.profile.candidate_root).resolve(strict=True)
+        if (
+            staging_root.parent.name != ".staging"
+            or staging_root.parent.parent.resolve(strict=True) != candidate_root
+        ):
             raise MonthlyMatureBuildError("monthly staging root differs from profile")
+        staging_relative_path = staging_root.relative_to(candidate_root).as_posix()
         release_digest = digest_named_fields(
             "aistock_monthly_physical_release_v1",
             {
@@ -102,9 +115,9 @@ class MatureMonthlyPhysicalBuildRunner:
             "stage_timeout_seconds": self.profile.stage_timeouts_seconds["full_build"],
             "release_id": release_id,
             "release_digest": release_digest,
-            "staging_relative_path": staging_root.name,
+            "staging_relative_path": staging_relative_path,
             "project_root": self.project_root.resolve(strict=True),
-            "candidate_root": staging_root.parent.resolve(strict=True),
+            "candidate_root": candidate_root,
             "staging_root": staging_root,
             "profile": self.profile,
             "cas": self.cas,
@@ -154,7 +167,10 @@ class MatureMonthlyPhysicalBuildRunner:
             prepare_result=prepare,
             release_digest=release_digest,
         )
-        smoke_ref = self.cas.verify(self.cas.put_json(dict(smoke)))
+        smoke_ref = self.cas.verify(self.cas.put_json(dict(smoke.semantic_receipt)))
+        smoke_resource_ref = self.cas.verify(
+            self.cas.put_json(dict(smoke.resource_receipt))
+        )
         validation_prerequisites = {
             **finalize_prerequisites,
             "finalize_bins": finalized_ref.sha256,
@@ -181,6 +197,7 @@ class MatureMonthlyPhysicalBuildRunner:
                 },
                 "finalize_bins": finalized_ref,
                 "consumer_smoke": smoke_ref,
+                "consumer_smoke_resource": smoke_resource_ref,
                 "validate": validated_ref,
             },
         )
@@ -199,6 +216,7 @@ __all__: Sequence[str] = (
     "MatureMonthlyPhysicalBuildRunner",
     "MonthlyCandidateFinalizer",
     "MonthlyConsumerSmoke",
+    "MonthlyConsumerSmokeResult",
     "MonthlyMatureBuildError",
     "MonthlyQlibWriter",
 )

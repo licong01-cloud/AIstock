@@ -12,6 +12,7 @@ from backend.services.dataset_release.monthly_build_bridge import CompiledMonthl
 from backend.services.dataset_release.monthly_build_executor import PhysicalBuildResult
 from backend.services.dataset_release.monthly_mature_build_runner import (
     MatureMonthlyPhysicalBuildRunner,
+    MonthlyConsumerSmokeResult,
     MonthlyMatureBuildError,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
@@ -56,7 +57,10 @@ class _Writer:
 class _Smoke:
     def execute(self, *, context, staging_root, prepare_result, release_digest):  # type: ignore[no-untyped-def]
         del context, staging_root, prepare_result
-        return {"status": "PASS", "release_digest": release_digest}
+        return MonthlyConsumerSmokeResult(
+            semantic_receipt={"status": "PASS", "release_digest": release_digest},
+            resource_receipt={"schema_version": "supervised"},
+        )
 
 
 class _Finalizer:
@@ -96,7 +100,8 @@ def test_runner_executes_mature_stages_in_order(
     monkeypatch.setattr(runner_module, "run_build_stage", run)
     writer = _Writer()
     finalizer = _Finalizer()
-    staging = tmp_path / "candidate.building"
+    staging = tmp_path / ".staging" / "candidate.building"
+    staging.parent.mkdir()
     staging.mkdir()
     runner = MatureMonthlyPhysicalBuildRunner(
         profile=SimpleNamespace(
@@ -122,7 +127,7 @@ def test_runner_executes_mature_stages_in_order(
         "finalize_bins",
         "consumer_smoke",
     }
-    assert finalizer.refs == stages[2][1] | {"validate"}
+    assert finalizer.refs == stages[2][1] | {"consumer_smoke_resource", "validate"}
     assert result.manifest_path == staging / "qe_dataset_manifest.json"
 
 
@@ -150,10 +155,11 @@ def test_runner_rejects_non_pass_stage(
         consumer_smoke=_Smoke(),
         finalizer=_Finalizer(),
     )
+    (tmp_path / ".staging").mkdir()
 
     with pytest.raises(MonthlyMatureBuildError, match="prepare"):
         runner.execute(
             context=_context(),
-            staging_root=tmp_path / "candidate.building",
+            staging_root=tmp_path / ".staging" / "candidate.building",
             compiled=_compiled(),
         )

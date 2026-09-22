@@ -144,7 +144,13 @@ class SealedMonthlyBuildExecutor:
         _require_plain_chain(target, stop=release_root)
         if target.exists():
             raise MonthlyBuildExecutorError("monthly candidate already exists")
-        staging = release_root / (
+        staging_parent = release_root / ".staging"
+        if staging_parent.exists():
+            if _is_link(staging_parent) or not staging_parent.is_dir():
+                raise MonthlyBuildExecutorError("monthly staging parent is linked or invalid")
+        else:
+            staging_parent.mkdir(parents=False, exist_ok=False)
+        staging = staging_parent / (
             f".{target.name}.{context.operation_id}.attempt-{context.attempt}.building"
         )
         _require_plain_chain(staging, stop=release_root)
