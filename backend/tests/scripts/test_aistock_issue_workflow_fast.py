@@ -12,6 +12,35 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+def test_pre_pr_gate_reuses_exact_ci_classifier_and_blocks_before_push(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_run_ci_changed_file_classifier",
+        lambda _paths, root: {
+            "workflow_gate": "blocked",
+            "classification": "unexecuted_test_blocked",
+            "blocking": ["changed test files are not executed by any selected CI plan: ['backend/tests/new_test.py']"],
+        },
+    )
+
+    gate = workflow._pre_pr_gate(
+        finish={
+            "changed_files": ["backend/tests/new_test.py"],
+            "scope_check": {"status": "passed"},
+            "fast_path": {"ownership": {}},
+            "closure_ready": True,
+        },
+        validation_evidence=["pytest backend/tests/new_test.py -> passed"],
+        root=Path.cwd(),
+        run_lint=False,
+    )
+
+    assert gate["workflow_gate"] == "blocked"
+    assert gate["ci_classifier"]["classification"] == "unexecuted_test_blocked"
+    assert any("local CI classifier" in item for item in gate["blocking"])
+
+
 def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: int = 0) -> dict[str, Any]:
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
 

@@ -15218,6 +15218,13 @@ def _pre_pr_gate(
         blocking.append(f"ownership check failed: ambiguous={ownership.get('ambiguous') or ownership.get('ambiguous_count')}")
     if artifact_rows:
         blocking.append(f"temporary/cache artifacts are present in git status: {[row['path'] for row in artifact_rows]}")
+    ci_classifier = _run_ci_changed_file_classifier(changed_files, root=root)
+    if ci_classifier.get("workflow_gate") == "blocked":
+        classifier_blocking = [str(item) for item in ci_classifier.get("blocking") or []]
+        blocking.extend(f"local CI classifier: {item}" for item in classifier_blocking)
+        next_actions.append(
+            "repair file ownership or selected nox test coverage before push; rerun finish on the same changed files"
+        )
     lint = _run_changed_file_lint(changed_files, root=root) if run_lint else {"status": "skipped", "python_files": []}
     if lint.get("status") == "failed":
         blocking.append("changed-file Ruff lint failed")
@@ -15240,7 +15247,28 @@ def _pre_pr_gate(
         "dirty_task_files": task_dirty_rows,
         "next_actions": next_actions,
         "lint": lint,
+        "ci_classifier": ci_classifier,
         "validation_evidence_present": bool(validation_evidence),
+    }
+
+
+def _run_ci_changed_file_classifier(changed_files: list[str], *, root: Path) -> dict[str, Any]:
+    """Reuse the pull-request classifier before push without duplicating its policy."""
+
+    try:
+        from scripts import ci_change_classifier
+    except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_workflow.py
+        import ci_change_classifier  # type: ignore[no-redef]
+
+    payload = ci_change_classifier.classify_changed_files(changed_files, repo_root=root)
+    return {
+        "schema_version": payload.get("schema_version"),
+        "workflow_gate": payload.get("workflow_gate"),
+        "classification": payload.get("classification"),
+        "blocking": list(payload.get("blocking") or []),
+        "unmapped_code_files": list(payload.get("unmapped_code_files") or []),
+        "unexecuted_test_files": list(payload.get("unexecuted_test_files") or []),
+        "selected_plan_keys": list(payload.get("selected_plan_keys") or []),
     }
 
 
