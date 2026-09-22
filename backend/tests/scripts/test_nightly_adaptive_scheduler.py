@@ -623,8 +623,19 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "nox -s paper_v2_l3" not in workflow
     assert "id: upload_nightly_l3" in workflow
     assert "steps.upload_nightly_l3.outcome == 'failure'" in workflow
-    assert workflow.count("name: nightly-l3-results-${{ github.run_id }}") == 3
+    assert workflow.count("name: nightly-l3-results-${{ github.run_id }}") == 4
     assert "overwrite: true" in workflow
+    assert "id: download_nightly_l3" in workflow
+    assert "steps.download_nightly_l3.outcome == 'failure'" in workflow
+    assert "id: retry_download_nightly_l3" in workflow
+    assert "Materialize exhausted Nightly artifact transport receipt" in workflow
+    assert '"failure_kind": "artifact_transport"' in workflow
+    assert "id: upload_nightly_failure_context" in workflow
+    assert "steps.upload_nightly_failure_context.outcome == 'failure'" in workflow
+    assert "id: upload_nightly_bug_promotion" in workflow
+    assert "steps.upload_nightly_bug_promotion.outcome == 'failure'" in workflow
+    assert "id: upload_nightly_summary" in workflow
+    assert "steps.upload_nightly_summary.outcome == 'failure'" in workflow
 
 
 def test_nightly_workflow_always_materializes_discovery_input_pack_handoff() -> None:
