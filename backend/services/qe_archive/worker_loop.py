@@ -1,4 +1,4 @@
-"""Opt-in FastAPI lifespan worker loop for QE archive outbox consumption."""
+"""FastAPI lifespan worker loop for durable QE archive outbox consumption."""
 
 from __future__ import annotations
 
@@ -20,8 +20,16 @@ def env_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def env_enabled_by_default(value: str | None) -> bool:
+    if value is None or not value.strip():
+        return True
+    return env_truthy(value)
+
+
 def autostart_enabled() -> bool:
-    return env_truthy(os.getenv(QE_ARCHIVE_WORKER_AUTOSTART_ENV)) and env_truthy(os.getenv("QE_ARCHIVE_WORKER_ENABLED"))
+    return env_enabled_by_default(
+        os.getenv(QE_ARCHIVE_WORKER_AUTOSTART_ENV)
+    ) and env_enabled_by_default(os.getenv("QE_ARCHIVE_WORKER_ENABLED"))
 
 
 async def run_archive_worker_loop(stop_event: asyncio.Event) -> None:

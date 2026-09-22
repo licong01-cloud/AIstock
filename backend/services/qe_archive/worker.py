@@ -1,4 +1,4 @@
-"""Disabled-by-default QE archive outbox worker state machine."""
+"""QE archive outbox worker state machine with explicit instance control."""
 
 from __future__ import annotations
 
@@ -104,8 +104,9 @@ def archive_handler_adapter(handler: Any) -> ArchiveEventHandler:
 class QEArchiveWorker:
     """Process archive outbox events only when explicitly enabled.
 
-    This class is not registered with FastAPI startup or any scheduler. It is a
-    reusable state machine for later CLI/API-controlled archive workers.
+    FastAPI lifespan creates an explicitly enabled instance when its autostart
+    contract is active.  API/tests can still pass ``enabled=False`` for a
+    deterministic opt-out without changing the durable state machine.
     """
 
     def __init__(

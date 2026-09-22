@@ -1683,6 +1683,7 @@ def qe_archive_backend(session: nox.Session) -> None:
         "backend/tests/test_qe_archive_schema.py",
         "backend/tests/test_qe_execution_templates_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
+        "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
         "backend/tests/qe_templates/test_template_validator.py",
         "backend/tests/test_aistock_qe_mcp_servers.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
