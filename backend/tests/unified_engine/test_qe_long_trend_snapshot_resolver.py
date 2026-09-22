@@ -167,11 +167,16 @@ def test_resolver_rejects_path_shaped_snapshot_id() -> None:
 
 def test_root_configuration_validation_is_strict() -> None:
     with pytest.raises(QELongTrendSnapshotResolutionError, match="requires node_id"):
-        QELongTrendSnapshotResolver(root_provider=lambda _node: ["/a"]).allowed_roots("")
+        QELongTrendSnapshotResolver(root_provider=lambda _node: ["/a"], roots_env="").allowed_roots("")
     with pytest.raises(QELongTrendSnapshotResolutionError, match="no configured"):
-        QELongTrendSnapshotResolver(root_provider=lambda _node: []).allowed_roots("wsl")
+        QELongTrendSnapshotResolver(root_provider=lambda _node: [], roots_env="").allowed_roots("wsl")
     with pytest.raises(QELongTrendSnapshotResolutionError, match="NUL"):
-        QELongTrendSnapshotResolver(root_provider=lambda _node: ["/a\x00b"]).allowed_roots("wsl")
+        QELongTrendSnapshotResolver(root_provider=lambda _node: ["/a\x00b"], roots_env="").allowed_roots("wsl")
+    with pytest.raises(QELongTrendSnapshotResolutionError, match="must be a JSON object"):
+        QELongTrendSnapshotResolver(
+            root_provider=lambda _node: ["/a"],
+            roots_env="/mnt/x/candidate",
+        ).allowed_roots("wsl")
     with pytest.raises(QELongTrendSnapshotResolutionError, match="must be a JSON object"):
         QELongTrendSnapshotResolver(root_provider=lambda _node: ["/a"], roots_env="[").allowed_roots("wsl")
     with pytest.raises(QELongTrendSnapshotResolutionError, match="must map node ids"):
@@ -194,7 +199,7 @@ def test_identity_errors_are_visible_attempts_and_do_not_expose_root() -> None:
         async def get_dataset_identity(**_kwargs):
             raise QEWorkspaceDatasetIdentityError("identity missing", reason_code="QE_DATASET_IDENTITY_MISSING")
 
-    resolver = QELongTrendSnapshotResolver(root_provider=lambda _node: ["/secret/root"])
+    resolver = QELongTrendSnapshotResolver(root_provider=lambda _node: ["/secret/root"], roots_env="")
     resolved = asyncio.run(
         resolver.resolve_requested_snapshot(
             node_id="wsl",

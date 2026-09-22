@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -122,6 +123,9 @@ def test_build_rdagent_env_overrides_uses_active_release_binding(monkeypatch) ->
     )
 
     assert env["AISTOCK_DATASET_ROOT"] == "/releases/r8"
+    assert json.loads(env["QE_DATASET_IDENTITY_ROOTS"]) == {
+        "rdagent-node1": ["/releases/r8"]
+    }
     assert env["QLIB_DATA_PATH_WSL"].endswith("/daily_bin_candidate")
     assert env["QLIB_MINUTE_PATH_WSL"].endswith("/minute_bin_candidate")
     assert env["RDAGENT_FACTOR_DATA_WSL"].endswith("/factor_h5_static_candidate_v2")
@@ -194,6 +198,9 @@ def test_frozen_dispatch_binding_does_not_reresolve_active_profile(monkeypatch) 
     )
 
     assert env["AISTOCK_DATASET_ROOT"] == "/releases/frozen"
+    assert json.loads(env["QE_DATASET_IDENTITY_ROOTS"]) == {
+        "rdagent-node1": ["/releases/frozen"]
+    }
     assert env["AISTOCK_DATASET_MANIFEST_SHA256"] == "b" * 64
     assert env["AISTOCK_DATASET_PROFILE_SHA256"] == "a" * 64
 

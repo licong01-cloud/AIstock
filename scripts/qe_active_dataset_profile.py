@@ -22,6 +22,9 @@ from backend.services.quantevolver.qe_active_dataset_profile import (  # noqa: E
     load_active_qe_profile,
     validate_controller_snapshot,
 )
+from backend.services.dataset_release.active_task_binding import (  # noqa: E402
+    encode_qe_dataset_identity_roots,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -90,7 +93,10 @@ def _runtime_bindings(path: Path, *, node_id: str | None = None) -> dict[str, An
             "qlib_data_path": day,
             "qlib_minute_path": minute,
             "environment": {
-                "QE_DATASET_IDENTITY_ROOTS": candidate_root,
+                "QE_DATASET_IDENTITY_ROOTS": encode_qe_dataset_identity_roots(
+                    node_id=selected_id,
+                    root=candidate_root,
+                ),
                 "QE_QLIB_DATA_PATH": day,
                 "QLIB_DATA_PATH_WSL": day,
                 "QLIB_DAY_DATA": day,

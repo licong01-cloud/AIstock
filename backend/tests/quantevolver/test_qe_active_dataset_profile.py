@@ -1049,7 +1049,7 @@ def test_profile_cli_derives_node_runtime_bindings_without_cache_paths(tmp_path:
     assert local["qlib_data_path"] == "/mnt/x/candidate/components/daily_bin_candidate"
     assert local["qlib_minute_path"] == "/mnt/x/candidate/components/minute_bin_candidate"
     assert local["environment"] == {
-        "QE_DATASET_IDENTITY_ROOTS": "/mnt/x/candidate",
+        "QE_DATASET_IDENTITY_ROOTS": '{"wsl2-5080":["/mnt/x/candidate"]}',
         "QE_QLIB_DATA_PATH": "/mnt/x/candidate/components/daily_bin_candidate",
         "QLIB_DATA_PATH_WSL": "/mnt/x/candidate/components/daily_bin_candidate",
         "QLIB_DAY_DATA": "/mnt/x/candidate/components/daily_bin_candidate",

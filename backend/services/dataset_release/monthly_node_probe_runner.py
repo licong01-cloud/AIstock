@@ -217,6 +217,8 @@ def build_ssh_node_probe_runner(
         node_id="rdagent-node1",
         command=(
             "ssh",
+            "-F",
+            "NUL",
             "-o",
             "BatchMode=yes",
             "-o",
