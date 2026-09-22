@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-SessionExecutor = Callable[[str, int, list[str] | None], dict[str, Any]]
+SessionExecutor = Callable[[str, int, list[str] | None, list[str]], dict[str, Any]]
 CHANGE_SCOPED_SESSIONS = frozenset({"l0"})
+NIGHTLY_RUNNER_ENV = "AISTOCK_NIGHTLY_SESSION_RUNNER"
+NIGHTLY_COMPLETED_SESSIONS_ENV = "AISTOCK_NIGHTLY_COMPLETED_SESSIONS"
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -61,6 +63,7 @@ def execute_session(
     session: str,
     timeout_seconds: int,
     positional_args: list[str] | None = None,
+    completed_sessions: list[str] | None = None,
 ) -> dict[str, Any]:
     command = [sys.executable, "-m", "nox", "-s", session]
     scope_file: Path | None = None
@@ -80,10 +83,12 @@ def execute_session(
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         popen_kwargs["start_new_session"] = True
+    process_env = os.environ.copy()
+    process_env[NIGHTLY_RUNNER_ENV] = "1"
+    process_env[NIGHTLY_COMPLETED_SESSIONS_ENV] = ",".join(completed_sessions or [])
     if scope_file is not None:
-        process_env = os.environ.copy()
         process_env["AISTOCK_NIGHTLY_SESSION_ARGS_FILE"] = str(scope_file)
-        popen_kwargs["env"] = process_env
+    popen_kwargs["env"] = process_env
     print(
         f"NIGHTLY_SESSION_START session={session} timeout_seconds={timeout_seconds} "
         f"positional_arg_count={len(positional_args or [])}",
@@ -112,6 +117,7 @@ def execute_session(
         "duration_seconds": round(duration, 3),
         "timeout_seconds": timeout_seconds,
         "positional_arg_count": len(positional_args or []),
+        "completed_prerequisites": list(completed_sessions or []),
     }
     print(
         "NIGHTLY_SESSION_END "
@@ -133,6 +139,7 @@ def run_sessions(
     session_args: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    completed_sessions: list[str] = []
     deadline = time.monotonic() + total_timeout_seconds
     for session in sessions:
         remaining = int(deadline - time.monotonic())
@@ -150,8 +157,11 @@ def run_sessions(
                 session,
                 min(session_timeout_seconds, remaining),
                 list((session_args or {}).get(session) or []),
+                list(completed_sessions),
             )
         results.append(row)
+        if row.get("result") == "success":
+            completed_sessions.append(session)
         # Persist after every session so a later timeout/cancellation cannot erase
         # already observed business failures.
         write_receipts(results, output_json=output_json, output_md=output_md)

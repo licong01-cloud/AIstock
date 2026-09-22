@@ -13,8 +13,16 @@ def test_run_sessions_checkpoints_each_result_and_continues_after_failure(tmp_pa
     output_md = tmp_path / "session-results.md"
     calls: list[str] = []
 
-    def fake_executor(session: str, timeout_seconds: int, positional_args: list[str] | None):
+    observed_prerequisites: list[list[str]] = []
+
+    def fake_executor(
+        session: str,
+        timeout_seconds: int,
+        positional_args: list[str] | None,
+        completed_sessions: list[str],
+    ):
         calls.append(session)
+        observed_prerequisites.append(completed_sessions)
         assert positional_args == []
         if session == "second":
             checkpoint = json.loads(output_json.read_text(encoding="utf-8"))
@@ -38,6 +46,7 @@ def test_run_sessions_checkpoints_each_result_and_continues_after_failure(tmp_pa
     )
 
     assert calls == ["first", "second", "third"]
+    assert observed_prerequisites == [[], ["first"], ["first"]]
     assert [row["result"] for row in results] == ["success", "failure", "success"]
     assert json.loads(output_json.read_text(encoding="utf-8")) == results
     assert "`second` | `failure` | `nonzero_exit`" in output_md.read_text(encoding="utf-8")
@@ -80,6 +89,12 @@ def test_execute_session_uses_scope_file_instead_of_long_command_line(monkeypatc
 
     def fake_popen(command, **kwargs):
         captured["command"] = command
+        captured["nightly_runner"] = kwargs["env"][runner.NIGHTLY_RUNNER_ENV]
+        captured["completed_sessions"] = [
+            item
+            for item in kwargs["env"][runner.NIGHTLY_COMPLETED_SESSIONS_ENV].split(",")
+            if item
+        ]
         scope_path = Path(kwargs["env"]["AISTOCK_NIGHTLY_SESSION_ARGS_FILE"])
         captured["scope_path"] = scope_path
         captured["scope"] = json.loads(scope_path.read_text(encoding="utf-8"))
@@ -88,12 +103,15 @@ def test_execute_session_uses_scope_file_instead_of_long_command_line(monkeypatc
     monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
     paths = [f"backend/tests/test_{index}.py" for index in range(1500)]
 
-    result = runner.execute_session("l0", 60, paths)
+    result = runner.execute_session("l0", 60, paths, ["validation_workflow_automation"])
 
     assert captured["command"] == [sys.executable, "-m", "nox", "-s", "l0"]
+    assert captured["nightly_runner"] == "1"
     assert captured["scope"] == paths
+    assert captured["completed_sessions"] == ["validation_workflow_automation"]
     assert not captured["scope_path"].exists()  # type: ignore[union-attr]
     assert result["positional_arg_count"] == 1500
+    assert result["completed_prerequisites"] == ["validation_workflow_automation"]
 
 
 def test_invalid_plan_writes_failure_receipt(tmp_path: Path) -> None:
