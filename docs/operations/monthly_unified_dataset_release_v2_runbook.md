@@ -76,6 +76,9 @@ worker 运行前需由运行态所有者配置以下绝对路径或节点身份�
 - `AISTOCK_MONTHLY_NODE1_SSH_HOST`
 - `AISTOCK_MONTHLY_NODE1_PROJECT_ROOT`
 - `AISTOCK_MONTHLY_NODE1_PYTHON`
+- `AISTOCK_MONTHLY_RELEASE_WORKER_ENABLED=true`
+- `AISTOCK_MONTHLY_RELEASE_WORKER_POLL_SECONDS=5`
+- `AISTOCK_MONTHLY_RELEASE_WORKER_SHUTDOWN_SECONDS=30`
 
 `AISTOCK_MONTHLY_NODE1_SSH_HOST` 必须写直接的 `user@hostname` 或 `user@IP`，不得依赖个人
 SSH config 中的 alias。正式 worker 固定使用 `ssh -F NUL`，仅采用系统默认密钥位置和显式参数，避免
@@ -127,6 +130,12 @@ python scripts/monthly_unified_dataset_release_worker.py --serve --poll-seconds 
 `--drain` 必须有上限；`--serve` 仅消费已经持久化的 operation，并响应 SIGINT/SIGTERM
 协作退出。worker 不接受调用方指定 producer 命令、组件子集或候选路径。WSL 与 node1
 使用固定节点命令进行流式不可变部署和本机 readback；控制器成功不能替代节点成功。
+
+正式 AIstock 后端在 `AISTOCK_MONTHLY_RELEASE_WORKER_ENABLED=true` 时会先执行同一只读
+preflight，再启动固定的 `--serve` 子进程；配置不完整或 authority 漂移会使显式启用的后端
+启动 fail closed。HTTP 请求线程只写持久 operation，不执行数据构建。后端关闭时先有界终止
+子进程；超时才强制结束，未闭合 staging 仍由原 operation/checkpoint 在下次启动后恢复。
+因此首次配置需由后端运行态所有者重启一次，以后每月提交不再手工启动 worker。
 
 `prepare_only` 到 `READY_TO_ACTIVATE` 后停止。只有 operation 自身从提交时就绑定
 `activate_when_ready` 和精确 `dsauth_*`，worker 才能执行中央 profile CAS；不能从普通
