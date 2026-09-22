@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
@@ -50,6 +51,26 @@ class MonthlyConsumerSmokeResult:
             raise MonthlyMatureBuildError("consumer smoke evidence is incomplete")
 
 
+@dataclass(frozen=True, slots=True)
+class MonthlyBuildExecutionTools:
+    """Attempt-bound data-plane capabilities used by one physical BUILD.
+
+    The tools are intentionally created after ``ProducerContext`` exists.  A
+    resource supervisor carries an attempt/fence identity and therefore must
+    never be retained on a process-wide producer registry or reused by a
+    resumed monthly operation.
+    """
+
+    qlib_writer: MonthlyQlibWriter
+    consumer_smoke: MonthlyConsumerSmoke
+
+
+class MonthlyBuildExecutionScopeFactory(Protocol):
+    def __call__(
+        self, context: ProducerContext
+    ) -> AbstractContextManager[MonthlyBuildExecutionTools]: ...
+
+
 class MonthlyCandidateFinalizer(Protocol):
     def execute(
         self,
@@ -69,9 +90,10 @@ class MatureMonthlyPhysicalBuildRunner:
     profile: DatasetProfile
     cas: CASStore
     project_root: Path
-    qlib_writer: MonthlyQlibWriter
-    consumer_smoke: MonthlyConsumerSmoke
     finalizer: MonthlyCandidateFinalizer
+    qlib_writer: MonthlyQlibWriter | None = None
+    consumer_smoke: MonthlyConsumerSmoke | None = None
+    execution_scope_factory: MonthlyBuildExecutionScopeFactory | None = None
 
     def __post_init__(self) -> None:
         project = self.project_root.resolve(strict=True)
@@ -80,6 +102,13 @@ class MatureMonthlyPhysicalBuildRunner:
         configured_root = Path(self.profile.candidate_root).resolve(strict=True)
         if configured_root.is_symlink() or not configured_root.is_dir():
             raise MonthlyMatureBuildError("monthly build candidate root is unavailable")
+        has_legacy_tools = self.qlib_writer is not None and self.consumer_smoke is not None
+        if (self.qlib_writer is None) != (self.consumer_smoke is None):
+            raise MonthlyMatureBuildError("monthly build tools must be supplied as one pair")
+        if (self.execution_scope_factory is None) != has_legacy_tools:
+            raise MonthlyMatureBuildError(
+                "monthly build requires exactly one attempt-scoped or legacy tool source"
+            )
 
     def execute(
         self,
@@ -127,49 +156,65 @@ class MatureMonthlyPhysicalBuildRunner:
             "plan": compiled.physical_plan,
         }
 
-        prepare = run_build_stage(
-            BuildStageInvocation(stage="prepare", prerequisites={}, **common)
-        )
-        prepare_ref = self._seal_stage(prepare, expected="prepare")
-        operations = prepare.get("qlib_dump_operations")
-        if not isinstance(operations, list) or any(
-            not isinstance(item, Mapping) for item in operations
-        ):
-            raise MonthlyMatureBuildError("prepare Qlib operation set is invalid")
-        dump_refs: dict[str, CASRef] = {}
-        for raw in operations:
-            operation = dict(raw)
-            operation_id = str(operation.get("operation_id") or "")
-            if not operation_id or operation_id in dump_refs:
-                raise MonthlyMatureBuildError("Qlib operation identity is empty or duplicated")
-            receipt = self.qlib_writer.execute(
+        if self.execution_scope_factory is not None:
+            scope = self.execution_scope_factory(context)
+        else:
+            if self.qlib_writer is None or self.consumer_smoke is None:  # pragma: no cover
+                raise MonthlyMatureBuildError("monthly build tools are unavailable")
+            scope = nullcontext(
+                MonthlyBuildExecutionTools(
+                    qlib_writer=self.qlib_writer,
+                    consumer_smoke=self.consumer_smoke,
+                )
+            )
+        with scope as tools:
+            prepare = run_build_stage(
+                BuildStageInvocation(stage="prepare", prerequisites={}, **common)
+            )
+            prepare_ref = self._seal_stage(prepare, expected="prepare")
+            operations = prepare.get("qlib_dump_operations")
+            if not isinstance(operations, list) or any(
+                not isinstance(item, Mapping) for item in operations
+            ):
+                raise MonthlyMatureBuildError("prepare Qlib operation set is invalid")
+            dump_refs: dict[str, CASRef] = {}
+            for raw in operations:
+                operation = dict(raw)
+                operation_id = str(operation.get("operation_id") or "")
+                if not operation_id or operation_id in dump_refs:
+                    raise MonthlyMatureBuildError(
+                        "Qlib operation identity is empty or duplicated"
+                    )
+                receipt = tools.qlib_writer.execute(
+                    context=context,
+                    staging_root=staging_root,
+                    operation=operation,
+                )
+                dump_refs[operation_id] = self.cas.verify(
+                    self.cas.put_json(dict(receipt))
+                )
+
+            finalize_prerequisites = {
+                "prepare": prepare_ref.sha256,
+                **{
+                    f"qlib_dump_{name}": reference.sha256
+                    for name, reference in sorted(dump_refs.items())
+                },
+            }
+            finalized = run_build_stage(
+                BuildStageInvocation(
+                    stage="finalize-bins",
+                    prerequisites=finalize_prerequisites,
+                    **common,
+                )
+            )
+            finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
+            smoke = tools.consumer_smoke.execute(
                 context=context,
                 staging_root=staging_root,
-                operation=operation,
+                prepare_result=prepare,
+                release_digest=release_digest,
             )
-            dump_refs[operation_id] = self.cas.verify(self.cas.put_json(dict(receipt)))
-
-        finalize_prerequisites = {
-            "prepare": prepare_ref.sha256,
-            **{
-                f"qlib_dump_{name}": reference.sha256
-                for name, reference in sorted(dump_refs.items())
-            },
-        }
-        finalized = run_build_stage(
-            BuildStageInvocation(
-                stage="finalize-bins",
-                prerequisites=finalize_prerequisites,
-                **common,
-            )
-        )
-        finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
-        smoke = self.consumer_smoke.execute(
-            context=context,
-            staging_root=staging_root,
-            prepare_result=prepare,
-            release_digest=release_digest,
-        )
         smoke_ref = self.cas.verify(self.cas.put_json(dict(smoke.semantic_receipt)))
         smoke_resource_ref = self.cas.verify(
             self.cas.put_json(dict(smoke.resource_receipt))
@@ -216,6 +261,8 @@ class MatureMonthlyPhysicalBuildRunner:
 
 
 __all__: Sequence[str] = (
+    "MonthlyBuildExecutionScopeFactory",
+    "MonthlyBuildExecutionTools",
     "MatureMonthlyPhysicalBuildRunner",
     "MonthlyCandidateFinalizer",
     "MonthlyConsumerSmoke",
