@@ -34,11 +34,24 @@ FRONTEND_DIRECT_ENTRYPOINTS = (
     Path("next/dist/bin/next"),
 )
 NIGHTLY_SESSION_ARGS_FILE_ENV = "AISTOCK_NIGHTLY_SESSION_ARGS_FILE"
+NIGHTLY_SESSION_RUNNER_ENV = "AISTOCK_NIGHTLY_SESSION_RUNNER"
+NIGHTLY_COMPLETED_SESSIONS_ENV = "AISTOCK_NIGHTLY_COMPLETED_SESSIONS"
 
 nox.options.reuse_existing_virtualenvs = True
 nox.options.sessions = ["l0"]
 
 _VALIDATION_ENV_LOADED = False
+
+
+def _nightly_session_completed(session_name: str) -> bool:
+    if os.environ.get(NIGHTLY_SESSION_RUNNER_ENV) != "1":
+        return False
+    completed = {
+        item.strip()
+        for item in os.environ.get(NIGHTLY_COMPLETED_SESSIONS_ENV, "").split(",")
+        if item.strip()
+    }
+    return session_name in completed
 
 
 def _validation_env_candidates() -> list[Path]:
@@ -1911,8 +1924,11 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         external=True,
     )
     session.chdir("frontend")
-    session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
-    session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
+    if _nightly_session_completed("ra_phase7_full_accept"):
+        session.log("Reusing successful ra_phase7_full_accept frontend lint/build within this Nightly run.")
+    else:
+        session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
+        session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
     session.run(
         "node",
         "node_modules/@playwright/test/cli.js",
@@ -2486,13 +2502,16 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         "scripts/research_assistant_phase7_crosscheck.py",
         external=True,
     )
-    _run_pytest(
-        session,
-        "backend/tests/research_assistant",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
+    if _nightly_session_completed("research_assistant_backend"):
+        session.log("Reusing successful research_assistant_backend coverage within this Nightly run.")
+    else:
+        _run_pytest(
+            session,
+            "backend/tests/research_assistant",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        )
     _ensure_frontend_node_modules(session)
     session.chdir("frontend")
     session.run(
