@@ -198,3 +198,106 @@ def test_observed_zero_amount_is_not_misclassified_as_provider_absence(tmp_path,
     assert rows[0]["eligible"] is False
     assert rows[0]["reason_code"] == "hmm_risk_rotation_l2_source_invalid"
     assert amount_set_sha256 == "b" * 64
+
+
+@pytest.mark.parametrize(
+    ("suspend_timing", "expect_pass"),
+    [
+        (None, True),
+        ("", True),
+        (" 09:30-09:30 ", True),
+        ("09:30-10:00", False),
+    ],
+)
+def test_daily_aggregates_applies_existing_full_day_suspension_contract(
+    tmp_path,
+    monkeypatch,
+    suspend_timing,
+    expect_pass,
+) -> None:
+    day = date(2026, 1, 16)
+    instruments = [f"6880{index:02d}.SH" for index in range(10)]
+    membership = pd.DataFrame(
+        [{"instrument": instrument, "start_date": day, "end_date": day, "l2_code_id": 1} for instrument in instruments]
+    )
+    provider_path = tmp_path / "all.txt"
+    provider_path.write_text(
+        "".join(f"{instrument}\t{day.isoformat()}\t{day.isoformat()}\n" for instrument in instruments),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        subject.pd,
+        "read_parquet",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            [
+                {
+                    "trade_date": day,
+                    "ts_code": instruments[0],
+                    "suspend_type": "S",
+                    "suspend_timing": suspend_timing,
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        subject,
+        "_hdf_slice",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "datetime": [day] * 9,
+                "instrument": instruments[1:],
+                "mf_net_amt": [1.0] * 9,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        subject,
+        "_qlib_amount_frame",
+        lambda _root, *, calendar, expected: (
+            pd.DataFrame(
+                {
+                    "trade_date": [day] * 9,
+                    "instrument": instruments[1:],
+                    "amount_cny": [10.0] * 9,
+                }
+            ),
+            "c" * 64,
+        ),
+    )
+    security = SimpleNamespace(resolve=lambda instrument, _day, _dataset: SimpleNamespace(source_ts_code=instrument))
+    absence = SimpleNamespace(by_key={})
+
+    def invoke():
+        return _daily_aggregates(
+            root=tmp_path,
+            manifest={},
+            membership=membership,
+            id_to_code={1: "801011.SI"},
+            quote_entries={"801011.SI": ((day, day),)},
+            catalog=["801011.SI"],
+            source_days=[day],
+            provider_path=provider_path,
+            suspend_path=tmp_path / "suspend.parquet",
+            moneyflow_path=tmp_path / "moneyflow.h5",
+            qlib_root=tmp_path,
+            calendar=[day],
+            security_identity=security,
+            provider_absence=absence,
+        )
+
+    if not expect_pass:
+        with pytest.raises(RotationL2Error, match="expected Qlib amount rows are absent"):
+            invoke()
+        return
+
+    rows, amount_set_sha256 = invoke()
+    assert rows[0]["expected_contributors"] == 9
+    assert rows[0]["valid_contributors"] == 9
+    assert rows[0]["coverage"] == 1.0
+    assert rows[0]["eligible"] is True
+    assert amount_set_sha256 == "c" * 64
+
+
+def test_non_textual_suspend_timing_fails_closed() -> None:
+    with pytest.raises(RotationL2Error, match="suspend_d timing is not textual"):
+        subject._is_full_day_suspend_timing(930)

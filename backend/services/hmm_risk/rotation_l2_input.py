@@ -146,6 +146,16 @@ def _availability(entries: Mapping[str, tuple[tuple[date, date], ...]], code: st
     return any(start <= day <= end for start, end in entries[code])
 
 
+def _is_full_day_suspend_timing(value: Any) -> bool:
+    """Apply the existing HMM suspension timing contract without inference."""
+
+    if value is None or value is pd.NA or (isinstance(value, (float, np.floating)) and math.isnan(float(value))):
+        return True
+    if not isinstance(value, str):
+        raise _fail("source_invalid", "suspend_d timing is not textual")
+    return value.strip() in {"", "09:30-09:30"}
+
+
 def _expand_expected(
     membership: pd.DataFrame,
     *,
@@ -272,7 +282,7 @@ def _daily_aggregates(
     full_suspend = {
         (row.trade_date, row.ts_code)
         for row in suspend.itertuples(index=False)
-        if row.suspend_type == "S" and pd.isna(row.suspend_timing)
+        if row.suspend_type == "S" and _is_full_day_suspend_timing(row.suspend_timing)
     }
     expected, member_counts = _expand_expected(
         membership,
