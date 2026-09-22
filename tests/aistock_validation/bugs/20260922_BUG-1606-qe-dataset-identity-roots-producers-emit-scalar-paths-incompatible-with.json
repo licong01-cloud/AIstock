@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1606",
-  "closed_at": null,
+  "closed_at": "2026-09-22T19:07:07.500600Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -236,10 +236,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1606\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1606",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+      "expected_identity": "c39c126e5964d3f608bd5ff0240af44d56281123",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-22T19:04:02.170480Z",
+      "mode": "read_only",
+      "observed_identity": "4ec2c3b08f4bef229dd3dc6cf40474086155f436",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d20f710b3176acb2054cd1d424965191aaf1aaa77be047987af26cba19cabe7c",
+      "receipt_sha256": "58187829a1ee35a0a36868a3d3c56a35a292577484c14679dfc6529ae8207184",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "89f6218b156ccebf275efb87eeddfff89ab71986027b313299db2b8f451af6b6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -276,7 +298,7 @@
     ],
     "validation_evidence_digest": "a8707df2636ce500a9c202bb7df6ae5abfa90c132cd6d96723d1a369924b3ed1"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.long_trend_evaluation"
   ],
@@ -292,7 +314,8 @@
     "validation-receipt: id=32bc6e15d567bfd0 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=nox plan=qe_long_trend_phase2_backend status=passed command=`rtk nox -s qe_long_trend_phase2_backend` result=`126 passed`",
     "validation-receipt: id=adbd39110963d53a commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/dataset_release/active_task_binding.py backend/services/dispatch_service.py scripts/qe_active_dataset_profile.py backend/tests/dataset_release/test_active_task_binding.py backend/tests/test_dispatch_service_env.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py` result=`passed`",
     "validation-receipt: id=2d0ee6dcb1e12ad6 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/dataset_release/active_task_binding.py backend/services/dispatch_service.py scripts/qe_active_dataset_profile.py backend/tests/dataset_release/test_active_task_binding.py backend/tests/test_dispatch_service_env.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py` result=`passed`",
-    "validation-receipt: id=bd580e0e80773eb1 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=bd580e0e80773eb1 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "post-restart-verify backend-main -> verified"
   ],
   "verification_budget": {
     "budget": "standard",
