@@ -23,6 +23,15 @@ from .models import (
     sha256_text,
 )
 from .archive_service import ArchivePayloadResult, QEArchiveService
+from .asset_lifecycle import (
+    QEAssetLifecycleDecision,
+    QEAssetStatus,
+    QEValueClass,
+    QEWarehouseStatus,
+    QEWorkspaceStatus,
+    classify_qe_result,
+)
+from .asset_publisher import QEArchiveAssetPublisher
 from .backfill_service import QEArchiveBackfillOptions, QEArchiveBackfillService, WRITE_CONFIRM_TEXT
 from .event_capture import QE_ARCHIVE_EVENT_CAPTURE_ENV, QEArchiveEventCapture
 from .payload_extractor import ExtractedArchivePayload, QEArchivePayloadExtractor
@@ -41,10 +50,26 @@ from .worker import (
     QEArchiveWorker,
 )
 from .worker_service import QEArchiveWorkerService, SUPPORTED_WORKER_EVENT_TYPES, WORKER_CONFIRM_TEXT
+from .workspace_lifecycle import (
+    QEWorkspaceCleanupPlan,
+    QEWorkspaceCleanupRequest,
+    QEWorkspaceLifecycleService,
+    QEWorkspaceManifestEntry,
+)
 
 __all__ = [
     "AccountSummaryRecord",
     "ArchivePayloadResult",
+    "QEArchiveAssetPublisher",
+    "QEAssetLifecycleDecision",
+    "QEAssetStatus",
+    "QEValueClass",
+    "QEWarehouseStatus",
+    "QEWorkspaceStatus",
+    "QEWorkspaceCleanupPlan",
+    "QEWorkspaceCleanupRequest",
+    "QEWorkspaceLifecycleService",
+    "QEWorkspaceManifestEntry",
     "CurveRecord",
     "DataContextRecord",
     "ExtractedArchivePayload",
@@ -80,6 +105,7 @@ __all__ = [
     "build_config_sha256",
     "build_factor_set_hash",
     "canonical_json_dumps",
+    "classify_qe_result",
     "normalize_json",
     "sha256_json",
     "sha256_text",

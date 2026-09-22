@@ -7,10 +7,11 @@ mutations and never opens QE/RD-Agent worker workspace files.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from .archive_service import QEArchiveService
+from .asset_lifecycle import classify_qe_result
 from .bootstrap_marker import REBOOTSTRAP_CONFIRM_TEXT, assert_can_broad_backfill, mark_bootstrap
 from .handlers.multi_alpha_combine_archive_handler import MultiAlphaCombineArchiveHandler
 from .ingest_history import record_ingest_history
@@ -697,7 +698,8 @@ class QEArchiveBackfillService:
             payload=payload,
             runtime_config=payload.get("config") if isinstance(payload.get("config"), Mapping) else {},
         )
-        if write and not decision.should_archive:
+        preliminary_lifecycle = classify_qe_result(payload)
+        if write and not decision.should_archive and not preliminary_lifecycle.archive_eligible:
             skip_id = record_policy_skip(
                 decision,
                 event_type=event_type,
@@ -751,6 +753,65 @@ class QEArchiveBackfillService:
             source_sub_id=payload.get("source_sub_id"),
             dry_run=not write,
         )
+        lifecycle = result.stats.get("asset_lifecycle")
+        lifecycle = dict(lifecycle) if isinstance(lifecycle, Mapping) else {}
+        if result.stats.get("not_eligible"):
+            lifecycle_reason = str(lifecycle.get("reason_code") or "qe_lifecycle_not_eligible")
+            skip_id = None
+            if write:
+                lifecycle_decision = replace(
+                    decision,
+                    archive_policy="SKIP",
+                    archive_policy_source="qe_asset_lifecycle",
+                    reason=lifecycle_reason,
+                )
+                skip_id = record_policy_skip(
+                    lifecycle_decision,
+                    event_type=event_type,
+                    trigger_reason="backfill",
+                    repository=self._repository,
+                )
+                record_ingest_history(
+                    source_system=decision.source_system,
+                    source_type=source_type,
+                    source_id=source_id,
+                    source_sub_id=str(source_sub_id) if source_sub_id else None,
+                    trigger_reason="backfill",
+                    archive_policy="SKIP",
+                    ingest_status="skipped",
+                    payload_sha256=decision.payload_sha256,
+                    runtime_config_sha256=decision.runtime_config_sha256,
+                    backfill_run_id=backfill_run_id,
+                    stats={"asset_lifecycle": lifecycle},
+                    repository=self._repository,
+                    created_by="qe_archive_backfill",
+                )
+                if backfill_run_id:
+                    self._repository.upsert_backfill_run_item(
+                        BackfillRunItemRecord(
+                            backfill_run_id=backfill_run_id,
+                            source_system=decision.source_system,
+                            source_type=source_type,
+                            source_id=source_id,
+                            source_sub_id=str(source_sub_id) if source_sub_id else None,
+                            archive_policy="SKIP",
+                            status="skipped",
+                            skip_id=skip_id,
+                            stats={"asset_lifecycle": lifecycle},
+                        )
+                    )
+            return {
+                "run_id": None,
+                "dry_run": not write,
+                "event_type": event_type,
+                "source_system": payload.get("source_system"),
+                "source_id": source_id,
+                "source_sub_id": source_sub_id,
+                "archive_policy": "SKIP",
+                "skipped_reason": lifecycle_reason,
+                "skip_id": skip_id,
+                "stats": result.stats,
+            }
         item = {
             "run_id": result.run_id,
             "dry_run": not write,

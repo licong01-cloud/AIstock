@@ -284,6 +284,28 @@ function ArchiveBadge({ status }: { status?: ArchiveSourceItemStatus | ArchiveTa
   return <span title={title} style={archiveStatusStyle(archiveStatus)}>{archiveStatusLabel(archiveStatus)}</span>;
 }
 
+function LifecycleBadges({ status }: { status?: ArchiveSourceItemStatus | ArchiveTaskStatus }) {
+  if (!status?.value_class) return null;
+  const parts = [
+    `价值 ${status.value_class}`,
+    `数仓 ${status.warehouse_status || "pending"}`,
+    `资产 ${status.asset_status || "pending"}`,
+    `空间 ${status.workspace_status || "active"}`,
+  ];
+  const title = [status.lifecycle_reason_code, status.duplicate_of && `duplicate_of=${status.duplicate_of}`]
+    .filter(Boolean)
+    .join(" | ");
+  return (
+    <span
+      data-testid="qe-asset-lifecycle-status"
+      title={title}
+      style={{ fontSize: 10, color: status.value_class === "X" ? "#b91c1c" : "#334155" }}
+    >
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
 function summarizeBackfillReport(report: BackfillReport): string {
   const rows = report.results || [];
   const candidate = report.candidate_count ?? rows.length;
@@ -1139,6 +1161,7 @@ export default function ExperimentsPage() {
                       {sm.label}
                     </span>
                     {parentTaskArchiveStatus ? <ArchiveBadge status={parentTaskArchiveStatus} /> : <ArchiveBadge status={selfArchiveStatus} />}
+                    <LifecycleBadges status={selfArchiveStatus} />
                     {exp.alpha_mode === "multi" && (
                       <span style={{ fontSize: 10, background: "#8b5cf615", color: "#8b5cf6", padding: "2px 6px", borderRadius: 12, fontWeight: 600 }}>
                         多Alpha
@@ -1516,6 +1539,7 @@ export default function ExperimentsPage() {
                                     {childSm.label}
                                   </span>
                                   <ArchiveBadge status={childArchiveStatus} />
+                                  <LifecycleBadges status={childArchiveStatus} />
                                 </div>
                               </div>
 

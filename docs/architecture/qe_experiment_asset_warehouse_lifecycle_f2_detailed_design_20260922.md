@@ -2,9 +2,9 @@
 
 > Feature ID：`qe_experiment_asset_warehouse_lifecycle_v1`
 > Feature tier：F2
-> 设计版本：v1.0
+> 设计版本：v1.1
 > 日期：2026-09-22
-> 状态：`DESIGN_VERIFIED_IMPLEMENTATION_PENDING`
+> 状态：`SOURCE_VALIDATED_RUNTIME_ACTIVATION_PENDING`
 > 适用范围：QE 正式实验结果、QE Archive、受控二进制资产、StrategyPackage alpha core 引用、QE workspace 生命周期
 > 上位实验登记设计：`docs/architecture/qe_unified_experiment_registry_selective_warehouse_f2_design_20260907.md`
 > 既有资产治理设计：`docs/architecture/qe_sota_strategy_package_asset_governance_design_20260508.md`
@@ -283,6 +283,14 @@ UI 不以 X 为可评价样本，不把 X 纳入收益排行、均值、DSR/PBO 
 
 三批完成状态只表示本功能技术闭环，不是新 Alpha 研究、StrategyPackage 晋级或模拟盘准入门槛。
 
+### 7.1 2026-09-22 源码实施回读
+
+- Batch A/B/C 源码在同一 F2 任务中闭合，未拆出新的服务、数据库或人工审批流程。
+- 新结果仍沿用既有 terminal hook → durable outbox → QE Archive worker；capture 与 lifespan worker 默认开启并支持显式 opt-out，worker 默认间隔保持 60 秒，空轮询不写业务事件。
+- A/B 若缺少生产者提供的精确资产发布 manifest，Archive 结构化事实仍可持久化，但资产状态保持 `pending/qe_asset_publish_manifest_missing`，workspace 禁止清理；程序不会扫描目录或猜测权重文件。
+- cleanup 源码仅提供精确 manifest 的 plan/apply 与分项 receipt；本轮未执行任何生产文件删除或历史补录。
+- `QE_ARCHIVE_VALID_UNIQUE_AUTO_PERSIST_READY` 与 `QE_CAS_PACKAGE_REFERENCE_READY` 已达到 source-validated；`QE_ASSET_LIFECYCLE_RUNTIME_VERIFIED` 必须等用户重启 backend 并完成真实新结果 readback 后才能声明。
+
 ## 8. Verification Plan / 验证方案
 
 ### 8.1 合同测试
@@ -317,30 +325,30 @@ UI 不以 X 为可评价样本，不把 X 纳入收益排行、均值、DSR/PBO 
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | planned Batch A classifier/projector | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` positive/negative auto-persist cases | DESIGN_VERIFIED | - |
-| F-002 | planned Archive retention projection | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` A/B/C depth matrix | DESIGN_VERIFIED | - |
-| F-003 | planned X eligibility rejection | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` four X classes assert zero writes | DESIGN_VERIFIED | - |
-| F-004 | planned child-level finalization | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` partial-parent mixed-child cases | DESIGN_VERIFIED | - |
-| F-005 | planned canonical duplicate digest | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` matched-policy/nondeterminism cases | DESIGN_VERIFIED | - |
-| F-006 | existing factor/QE boundary plus planned assertions | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` combination-to-factor negative cases | DESIGN_VERIFIED | - |
-| F-007 | planned local CAS implementation/config | `backend/tests/strategy_pkg/test_qe_local_cas.py` atomic publish/dedupe/collision cases | DESIGN_VERIFIED | - |
-| F-008 | existing package asset refs plus planned owner semantics | `backend/tests/strategy_pkg/test_qe_local_cas.py` two refs/one blob lifecycle | DESIGN_VERIFIED | - |
-| F-009 | planned package freeze readback | `backend/tests/strategy_pkg/test_qe_local_cas.py` workspace-removed package load smoke | DESIGN_VERIFIED | - |
-| F-010 | existing precise cleanup patterns plus planned lifecycle service | `backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py` protection/path/process/partial-failure cases | DESIGN_VERIFIED | - |
-| F-011 | planned API/UI status projection | `frontend/tests/quantevolver/qe_asset_lifecycle.spec.ts` separated-state readback | DESIGN_VERIFIED | - |
-| F-012 | planned research protocol summary | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` X metrics exclusion/protocol count case | DESIGN_VERIFIED | - |
-| F-013 | local X-disk CAS topology in §4.3/5.6 | `backend/tests/strategy_pkg/test_qe_local_cas.py` unique-SHA physical count audit | DESIGN_VERIFIED | - |
-| F-014 | reuse existing QE Archive/package/cleanup capabilities | validation-receipt: qe-asset-lifecycle-architecture-side-effect-review | DESIGN_VERIFIED | - |
-| F-015 | Production Gates in §12 | validation-receipt: qe-asset-lifecycle-delivery-state-separation | DESIGN_VERIFIED | - |
+| F-001 | `asset_lifecycle.py`; `realtime_ingestion.py`; `archive_service.py`; existing outbox worker | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` positive/negative and five supported source-path auto-persist cases | SOURCE_VERIFIED | - |
+| F-002 | `asset_lifecycle.py` deterministic A/B/C retention projection | `backend/tests/qe_archive/test_qe_asset_lifecycle.py::test_predeclared_value_class_controls_retention_not_archive_admission` | SOURCE_VERIFIED | - |
+| F-003 | classifier rejection before Archive writer; backfill/worker typed skip | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` X-purpose and technical-invalid zero-write cases | SOURCE_VERIFIED | - |
+| F-004 | child-aware classifier and source status projection | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` failed-parent/evaluable-child projection cases | SOURCE_VERIFIED | - |
+| F-005 | full business identity, authoritative result digest and repository survivor lookup | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` exact duplicate, matched-policy and nondeterminism cases | SOURCE_VERIFIED | - |
+| F-006 | QE lifecycle projection does not emit factor official score | `backend/tests/qe_archive/test_qe_asset_lifecycle.py::test_combination_result_is_not_projected_as_an_individual_factor_score` | SOURCE_VERIFIED | - |
+| F-007 | `package_asset_store.py`; `asset_publisher.py` | `backend/tests/strategy_package/test_qe_local_cas.py` atomic publish/dedupe/collision cases | SOURCE_VERIFIED | - |
+| F-008 | Archive artifact ref plus existing `strategy_pkg.package_asset` logical ref | `backend/tests/strategy_package/test_qe_local_cas.py::test_archive_and_strategy_package_share_one_blob_after_workspace_removal` | SOURCE_VERIFIED | - |
+| F-009 | immutable CAS URI decouples package asset from workspace | `backend/tests/strategy_package/test_qe_local_cas.py::test_archive_and_strategy_package_share_one_blob_after_workspace_removal` | SOURCE_VERIFIED | - |
+| F-010 | `workspace_lifecycle.py` exact-manifest plan/apply | `backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py` protection/path/process/identity-drift/partial-failure cases | SOURCE_VERIFIED | - |
+| F-011 | `source_assembler.py`; QE Archive API types; experiment list/detail UI | `frontend/tests/quantevolver/qe_asset_lifecycle.spec.ts` static no-write-on-read contract | SOURCE_VERIFIED | - |
+| F-012 | X is control-plane skip only; candidate pending counts include only eligible results | `backend/tests/qe_archive/test_qe_asset_lifecycle.py` zero-write and source-status projection cases | SOURCE_VERIFIED | - |
+| F-013 | existing local CAS root plus unique SHA blob path | `backend/tests/strategy_package/test_qe_local_cas.py::test_file_publish_is_atomic_verified_and_deduplicated` | SOURCE_VERIFIED | - |
+| F-014 | reuses existing Archive outbox/lifespan worker, package store and precise cleanup; 60-second default worker interval | `backend/tests/test_qe_archive_repository_static.py` default-on/explicit-opt-out worker contract | SOURCE_VERIFIED | - |
+| F-015 | Production Gates in §12 and actual changed-file/runtime classification | `backend/tests/scripts/test_aistock_feature_workflow.py` plus `nox -s guardrail_changed_files -- --changed-only` | SOURCE_VERIFIED | - |
 
-矩阵的 `DESIGN_VERIFIED` 只表示设计要求、实施引用和验收证据闭合，不表示源码、运行态、历史数据修订或清理已经完成。
+矩阵的 `SOURCE_VALIDATED` 表示源码与本地自动化证据已闭合；它不表示 backend 已重启、生产运行态已生效、历史数据已补录或 workspace 已执行清理。
 
 ## 10. Rollout / Rollback / 发布与回滚
 
 ### 10.1 Rollout
 
-1. 本次先合入 docs-only 设计和两份旧设计的权威指针，不产生运行态变化。
-2. Batch A/B/C 分别从实施时最新 `origin/main` 开发、审核、测试和合入；每批按实际 changed files 计算 runtime contract。
+1. docs-only 设计已先行合入；本次源码 PR 一次性实现 Batch A/B/C，并按实际 changed files 重新计算 runtime contract。
+2. 源码合入不等于运行态生效；自动 capture/worker 和新状态投影必须由用户重启 backend 后做 identity 与业务 readback。
 3. 如确需 migration，先在既有 DEV 数据库验证，再单独报告 production target、授权、apply 和 readback；不得由 source merge 自动推导。
 4. Backend 重启始终由用户执行；WSL/node1 API 或资产根激活按各自运行合同单独处理。
 5. 不以全历史补录或清理作为新 QE 实验继续运行的前置条件。
@@ -369,12 +377,12 @@ UI 不以 X 为可评价样本，不把 X 纳入收益排行、均值、DSR/PBO 
 
 | 状态项 | 本设计 PR | 后续实现/运行态 |
 |---|---|---|
-| source merge | 已获本轮文档合入授权 | 各源码批次按用户后续任务授权 |
+| source merge | 文档已合入；本轮源码已获提交与合入授权 | 仅在最终门禁和 CI 全绿后合入 |
 | DEV DDL/DML | noop | 仅实现证明需要时，先 DEV 验证 |
 | production DDL/DML | noop | 必须独立明确授权和 readback |
-| Archive writes/backfill | noop | 新结果由未来 Batch A 自动；历史修订独立授权 |
-| CAS root activation | noop | Batch B 独立配置/readback |
-| cleanup/delete | noop | Batch C 精确 preview、授权和 receipt |
+| Archive writes/backfill | 本地测试 only；生产写入 noop | 重启后新结果自动；历史修订仍需独立授权 |
+| CAS root activation | noop | 继续使用现有 `AISTOCK_PACKAGE_ASSET_STORE_ROOT`；部署值/readback 独立处理 |
+| cleanup/delete | noop | 源码已具备精确 plan/apply；任何生产 apply 仍是独立动作 |
 | dependency install | noop | 不预期新增依赖 |
 | experiment submission | noop | 与本设计合入无关 |
 | Backend restart | false | 始终由用户执行 |
@@ -384,10 +392,10 @@ UI 不以 X 为可评价样本，不把 X 纳入收益排行、均值、DSR/PBO 
 
 | 检查项 | 结论 | 直接证据 |
 |---|---|---|
-| 禁止简化、子集、POC、占位或 mock-only 冒充完成 | PASS（设计） | 覆盖 Archive 准入、X 排除、CAS、StrategyPackage 引用、cleanup、UI 状态和真实双节点验收；明确源码仍 pending |
-| 禁止静默错误或伪成功 | PASS（设计） | hash/identity/引用不确定均 fail closed；五类状态分离；部分失败可读且不伪装完成 |
-| 禁止未经确认改变业务逻辑 | PASS（设计） | 仅落实用户确认的 A/B/C 自动入仓、X 禁止入仓与 workspace 非长期资产；不改模型/因子/执行/晋级语义 |
-| 禁止私增门禁、审批或人工确认 | PASS（设计） | 删除新实验手工入仓前置；仅保留技术一致性和既有 SOTA/StrategyPackage 人工晋级，不设收益/研究准入门槛 |
+| 禁止简化、子集、POC、占位或 mock-only 冒充完成 | PASS（源码） | Archive 准入、X 排除、CAS、双逻辑引用、cleanup 和 UI 状态均有生产实现与聚焦回归；真实运行态验收单独保持 pending |
+| 禁止静默错误或伪成功 | PASS（源码） | hash/identity/引用不确定均 fail closed；五类状态分离；A/B manifest 缺失、资产部分失败与 cleanup 部分失败均显式 reason code |
+| 禁止未经确认改变业务逻辑 | PASS（源码） | 仅落实用户确认的 A/B/C 自动入仓、X 禁止入仓与 workspace 非长期资产；模型/因子/执行/晋级语义未改 |
+| 禁止私增门禁、审批或人工确认 | PASS（源码） | 新结果自动投影；资产完整性是机器一致性，不是研究审批；既有 StrategyPackage 人工晋级未改变 |
 
 ## 14. 多轮审核记录
 
@@ -397,9 +405,13 @@ UI 不以 X 为可评价样本，不把 X 纳入收益排行、均值、DSR/PBO 
 | Review-2 | 数据安全与失败恢复 | 若把 Archive、CAS、cleanup 合成单一 completed，会在部分失败时丢失真实状态 | 拆分五类状态、幂等重试、先资产后清理、X 正常路径无 Archive DELETE | resolved |
 | Review-3 | 过度工程化与硬件现实 | 单 X 盘上部署对象存储或复制两份不能形成容灾 | 采用本地 CAS 单物理 blob、逻辑双引用；对象存储和第二副本延期至第二故障域可用 | resolved |
 | Review-4 | 自动收敛、可实施证据与最终结构 | A/B/C 若仍需人工逐条分类会形成新门禁；初版矩阵证据名称不够具体 | 有效唯一结果默认至少C并自动入仓；资产根单点配置；新设计15/15、上位设计19/19 F2校验通过，diff/scope检查通过 | passed |
+| Review-5 | 源码完整性与失败语义 | 初版任务汇总把 X 误计为待入仓；A/B 缺 manifest 时原因不明确；metrics-only digest 可能误判重复 | pending 只统计 eligible；A/B 显式 `qe_asset_publish_manifest_missing`；重复判定只接受权威 digest | resolved |
+| Review-6 | 回归、运行态边界与过度工程化 | 自动投影需避免新增 daemon/高频心跳，并区分源码就绪与运行态生效 | 复用既有 lifespan worker，默认 60 秒且空轮不写事件；完整回归与静态门禁通过后仍要求用户重启和业务 readback | source-validated |
 
 ## 15. 结论
 
 本设计完成的闭环是：**技术有效且唯一的正式实验事实自动进入数仓；A/B/C 决定深度，不决定准入；X 永不进入数仓；必要大资产进入 X 盘单一 CAS；策略包与数仓独立引用同一 blob；workspace 在持久化与保护引用闭合后精确清理。**
 
 它解决资产丢失、无效实验污染、重复占盘和 workspace 永久膨胀，同时没有引入当前硬件无法兑现的对象存储/双副本承诺，也不把资产治理变成新的研究审批门槛。
+
+截至 v1.1，源码与本地自动化证据已完成；后端运行态激活、真实新结果五态 readback、CAS 部署根 readback、历史补录及任何生产 cleanup 均保持为独立状态，不因 source merge 自动宣称完成。

@@ -25,6 +25,7 @@ from backend.services.trading_core.execution_algo_retirement import (
 )
 
 from .policy import resolve_archive_policy
+from .asset_lifecycle import classify_qe_result, has_lifecycle_evidence
 
 
 ConnectionProvider = Callable[[], Any]
@@ -549,6 +550,7 @@ class QEArchiveSourceAssembler:
         if not experiment_ids:
             return result
         archived: dict[str, list[str]] = {}
+        lifecycle_by_run: dict[str, dict[str, Any]] = {}
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -562,6 +564,10 @@ class QEArchiveSourceAssembler:
                 )
                 for experiment_id, run_ids in cur.fetchall():
                     archived[str(experiment_id)] = [str(item) for item in (run_ids or [])]
+                lifecycle_by_run = self._load_lifecycle_by_run_ids(
+                    cur,
+                    [run_id for run_ids in archived.values() for run_id in run_ids],
+                )
 
                 available = self._available_columns(cur, "qe_experiments")
                 columns = [col for col in EXPERIMENT_COLUMNS if col in available]
@@ -579,7 +585,7 @@ class QEArchiveSourceAssembler:
                     source_row = dict(zip(columns, row))
                     experiment_id = str(source_row.get("experiment_id"))
                     run_ids = archived.get(experiment_id, [])
-                    payload = self.build_experiment_payload(source_row) if not run_ids else {}
+                    payload = self.build_experiment_payload(source_row)
                     result[experiment_id] = _archive_status_from_policy(
                         source_type="experiment",
                         source_id=experiment_id,
@@ -587,10 +593,14 @@ class QEArchiveSourceAssembler:
                         source_status=str(source_row.get("status") or ""),
                         payload=payload,
                         run_ids=run_ids,
+                        persisted_lifecycle=_first_lifecycle(run_ids, lifecycle_by_run),
                     )
         for experiment_id, run_ids in archived.items():
             if run_ids and experiment_id in result and result[experiment_id].get("archive_status") != "archived":
-                result[experiment_id] = _archived_status(run_ids)
+                result[experiment_id] = _archived_status(
+                    run_ids,
+                    _first_lifecycle(run_ids, lifecycle_by_run),
+                )
         return result
 
     def _loop_archive_status(self, loop_ids: Sequence[str]) -> dict[str, Any]:
@@ -608,6 +618,7 @@ class QEArchiveSourceAssembler:
         if not loop_ids:
             return result
         archived: dict[str, list[str]] = {}
+        lifecycle_by_run: dict[str, dict[str, Any]] = {}
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -621,6 +632,10 @@ class QEArchiveSourceAssembler:
                 )
                 for loop_id, run_ids in cur.fetchall():
                     archived[str(loop_id)] = [str(item) for item in (run_ids or [])]
+                lifecycle_by_run = self._load_lifecycle_by_run_ids(
+                    cur,
+                    [run_id for run_ids in archived.values() for run_id in run_ids],
+                )
 
                 loop_available = self._available_columns(cur, "qe_evolution_loops")
                 task_available = self._available_columns(cur, "qe_evolution_tasks")
@@ -646,7 +661,7 @@ class QEArchiveSourceAssembler:
                     task_row = {key.removeprefix("task__"): value for key, value in joined.items() if key.startswith("task__")}
                     loop_id = str(loop_row.get("loop_id"))
                     run_ids = archived.get(loop_id, [])
-                    payload = self.build_loop_payload(loop_row, task_row) if not run_ids else {}
+                    payload = self.build_loop_payload(loop_row, task_row)
                     result[loop_id] = _archive_status_from_policy(
                         source_type="loop",
                         source_id=str(loop_row.get("task_id") or loop_id),
@@ -654,10 +669,14 @@ class QEArchiveSourceAssembler:
                         source_status=str(loop_row.get("status") or ""),
                         payload=payload,
                         run_ids=run_ids,
+                        persisted_lifecycle=_first_lifecycle(run_ids, lifecycle_by_run),
                     )
         for loop_id, run_ids in archived.items():
             if run_ids and loop_id in result and result[loop_id].get("archive_status") != "archived":
-                result[loop_id] = _archived_status(run_ids)
+                result[loop_id] = _archived_status(
+                    run_ids,
+                    _first_lifecycle(run_ids, lifecycle_by_run),
+                )
         return result
 
     def _task_archive_status(self, task_ids: Sequence[str]) -> dict[str, Any]:
@@ -699,6 +718,10 @@ class QEArchiveSourceAssembler:
                     (list(task_ids),),
                 )
                 rows = self._fetch_dicts(cur)
+                lifecycle_by_run = self._load_lifecycle_by_run_ids(
+                    cur,
+                    [str(run_id) for row in rows for run_id in (row.get("run_ids") or [])],
+                )
 
         grouped: dict[str, list[dict[str, Any]]] = {task_id: [] for task_id in task_ids}
         for row in rows:
@@ -718,7 +741,11 @@ class QEArchiveSourceAssembler:
                 run_ids.extend(row_run_ids)
                 if str(row.get("status") or "").lower() == "completed":
                     completed += 1
-                loop_status = _loop_row_archive_status(row, run_ids=row_run_ids)
+                loop_status = _loop_row_archive_status(
+                    row,
+                    run_ids=row_run_ids,
+                    persisted_lifecycle=_first_lifecycle(row_run_ids, lifecycle_by_run),
+                )
                 if loop_status["archive_status"] == "archived":
                     archived += 1
                     continue
@@ -730,8 +757,9 @@ class QEArchiveSourceAssembler:
                     manual_only += 1
                 if loop_status["archive_status"] in {"not_recommended", "skipped"}:
                     not_recommended += 1
-            pending = max(0, completed - archived)
-            if completed and archived >= completed:
+            pending = eligible
+            eligible_total = archived + eligible
+            if archived and pending == 0:
                 status = "fully_archived"
             elif archived:
                 status = "partially_archived"
@@ -747,7 +775,7 @@ class QEArchiveSourceAssembler:
                 "archive_status": status,
                 "loop_count": loop_count,
                 "archived_loop_count": archived,
-                "eligible_loop_count": completed,
+                "eligible_loop_count": eligible_total,
                 "pending_loop_count": pending,
                 "recommended_loop_count": recommended,
                 "manual_only_loop_count": manual_only,
@@ -802,10 +830,19 @@ class QEArchiveSourceAssembler:
                     (task_ids,),
                 )
                 rows = self._fetch_dicts(cur)
+                lifecycle_by_run = self._load_lifecycle_by_run_ids(
+                    cur,
+                    [str(run_id) for row in rows for run_id in (row.get("run_ids") or [])],
+                )
 
         grouped: dict[str, list[dict[str, Any]]] = {task_id: [] for task_id in task_ids}
         for row in rows:
-            status = _loop_row_archive_status(row, run_ids=[str(item) for item in (row.get("run_ids") or [])])
+            row_run_ids = [str(item) for item in (row.get("run_ids") or [])]
+            status = _loop_row_archive_status(
+                row,
+                run_ids=row_run_ids,
+                persisted_lifecycle=_first_lifecycle(row_run_ids, lifecycle_by_run),
+            )
             item = {
                 "task_id": row.get("task_id"),
                 "loop_id": row.get("loop_id"),
@@ -820,6 +857,16 @@ class QEArchiveSourceAssembler:
                 "reason": status["reason"],
                 "run_ids": status["run_ids"],
                 "run_count": status["run_count"],
+                "compute_status": status.get("compute_status"),
+                "warehouse_status": status.get("warehouse_status"),
+                "asset_status": status.get("asset_status"),
+                "workspace_status": status.get("workspace_status"),
+                "value_class": status.get("value_class"),
+                "duplicate_of": status.get("duplicate_of"),
+                "retention_summary": status.get("retention_summary") or {},
+                "protected_owner_count": int(status.get("protected_owner_count") or 0),
+                "lifecycle_reason_code": status.get("lifecycle_reason_code"),
+                "asset_reason_code": status.get("asset_reason_code"),
                 "created_at": _jsonable(row.get("created_at")),
                 "updated_at": _jsonable(row.get("updated_at")),
             }
@@ -896,11 +943,17 @@ class QEArchiveSourceAssembler:
         for row in rows:
             selected = int(row.get("selected_loop_count") or 0)
             archived = int(row.get("archived_loop_count") or 0)
-            pending = max(0, selected - archived)
             loops = task_loops.get(str(row.get("task_id")), [])
+            pending = sum(
+                1
+                for loop in loops
+                if loop.get("eligible") and loop.get("archive_status") != "archived"
+            )
             recommended = sum(1 for loop in loops if loop.get("recommended") and loop.get("archive_status") != "archived")
             manual_only = sum(1 for loop in loops if loop.get("archive_status") == "manual_only")
             not_recommended = sum(1 for loop in loops if loop.get("archive_status") in {"not_recommended", "skipped"})
+            if not include_archived and pending == 0:
+                continue
             result.append(
                 {
                     "candidate_id": f"task:{row.get('task_id')}",
@@ -919,7 +972,7 @@ class QEArchiveSourceAssembler:
                     "recommended_run_count": recommended,
                     "manual_only_run_count": manual_only,
                     "not_recommended_run_count": not_recommended,
-                    "is_fully_archived": pending == 0,
+                    "is_fully_archived": archived > 0 and pending == 0,
                     "loops": loops,
                     "node_id": row.get("node_id"),
                     "model_id": row.get("model_id"),
@@ -950,18 +1003,8 @@ class QEArchiveSourceAssembler:
                 if "experiment_id" not in available:
                     return []
 
-                optional_cols = (
-                    "experiment_name",
-                    "status",
-                    "model_id",
-                    "model_catalog_id",
-                    "strategy_id",
-                    "factor_names",
-                    "alpha_mode",
-                    "created_at",
-                    "started_at",
-                    "completed_at",
-                    "updated_at",
+                optional_cols = tuple(
+                    column for column in EXPERIMENT_COLUMNS if column != "experiment_id"
                 )
                 optional_select = [
                     f"e.{col}" if col in available else f"NULL AS {col}"
@@ -1001,7 +1044,17 @@ class QEArchiveSourceAssembler:
         result: list[dict[str, Any]] = []
         for row in rows:
             archived = 1 if row.get("archived_run_id") else 0
-            pending = 0 if archived else 1
+            archive_status = _archive_status_from_policy(
+                source_type="experiment",
+                source_id=str(row.get("experiment_id") or ""),
+                source_sub_id=None,
+                source_status=str(row.get("status") or ""),
+                payload=self.build_experiment_payload(row),
+                run_ids=[str(row["archived_run_id"])] if archived else [],
+            )
+            pending = int(not archived and bool(archive_status.get("eligible")))
+            if not include_archived and pending == 0:
+                continue
             result.append(
                 {
                     "candidate_id": f"experiment:{row.get('experiment_id')}",
@@ -1017,7 +1070,20 @@ class QEArchiveSourceAssembler:
                     "selected_run_count": 1,
                     "archived_run_count": archived,
                     "pending_run_count": pending,
-                    "is_fully_archived": pending == 0,
+                    "is_fully_archived": archived > 0 and pending == 0,
+                    "archive_status": archive_status.get("archive_status"),
+                    "compute_status": archive_status.get("compute_status"),
+                    "warehouse_status": archive_status.get("warehouse_status"),
+                    "asset_status": archive_status.get("asset_status"),
+                    "workspace_status": archive_status.get("workspace_status"),
+                    "value_class": archive_status.get("value_class"),
+                    "duplicate_of": archive_status.get("duplicate_of"),
+                    "retention_summary": archive_status.get("retention_summary") or {},
+                    "protected_owner_count": int(
+                        archive_status.get("protected_owner_count") or 0
+                    ),
+                    "lifecycle_reason_code": archive_status.get("lifecycle_reason_code"),
+                    "asset_reason_code": archive_status.get("asset_reason_code"),
                     "node_id": None,
                     "model_id": row.get("model_id"),
                     "model_catalog_id": row.get("model_catalog_id"),
@@ -1252,9 +1318,41 @@ class QEArchiveSourceAssembler:
         columns = [desc[0] for desc in cur.description or []]
         return [dict(zip(columns, row)) for row in rows]
 
+    @staticmethod
+    def _load_lifecycle_by_run_ids(
+        cur: Any,
+        run_ids: Sequence[str],
+    ) -> dict[str, dict[str, Any]]:
+        normalized = _dedupe_non_empty(run_ids)
+        if not normalized:
+            return {}
+        cur.execute(
+            """
+            SELECT DISTINCT ON (run_id)
+                run_id,
+                payload_json->'_qe_asset_lifecycle' AS lifecycle
+            FROM qe_archive.raw_payload
+            WHERE run_id = ANY(%s)
+              AND payload_type = 'qe_completion_payload'
+              AND payload_json ? '_qe_asset_lifecycle'
+            ORDER BY run_id, created_at DESC
+            """,
+            (normalized,),
+        )
+        result: dict[str, dict[str, Any]] = {}
+        for run_id, lifecycle in cur.fetchall():
+            mapped = _ensure_mapping(lifecycle)
+            if mapped:
+                result[str(run_id)] = mapped
+        return result
 
-def _archived_status(run_ids: Sequence[str]) -> dict[str, Any]:
+
+def _archived_status(
+    run_ids: Sequence[str],
+    lifecycle: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     ids = [str(item) for item in (run_ids or [])]
+    persisted = dict(lifecycle or {})
     return {
         "archive_status": "archived",
         "run_ids": ids,
@@ -1262,6 +1360,25 @@ def _archived_status(run_ids: Sequence[str]) -> dict[str, Any]:
         "eligible": False,
         "recommended": False,
         "reason": "archived",
+        "compute_status": "completed",
+        "warehouse_status": "persisted",
+        "asset_status": persisted.get("asset_status") or "pending",
+        "workspace_status": persisted.get("workspace_status") or "grace_period",
+        "value_class": persisted.get("value_class") or "classification_pending",
+        "duplicate_of": persisted.get("duplicate_of"),
+        "retention_summary": {
+            "archive_run_count": len(ids),
+            **(
+                {"retention_class": persisted.get("retention_class")}
+                if persisted.get("retention_class")
+                else {}
+            ),
+        },
+        "protected_owner_count": int(persisted.get("protected_owner_count") or 0),
+        "lifecycle_reason_code": persisted.get("reason_code") or "qe_lifecycle_evidence_unavailable",
+        "asset_reason_code": persisted.get("asset_reason_code"),
+        "business_identity_sha256": persisted.get("business_identity_sha256"),
+        "result_digest_sha256": persisted.get("result_digest_sha256"),
     }
 
 
@@ -1273,13 +1390,17 @@ def _archive_status_from_policy(
     source_status: str,
     payload: Mapping[str, Any],
     run_ids: Sequence[str],
+    persisted_lifecycle: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ids = [str(item) for item in (run_ids or [])]
+    lifecycle = classify_qe_result(payload) if has_lifecycle_evidence(payload) else None
     if ids:
-        return _archived_status(ids)
+        return _archived_status(ids, persisted_lifecycle)
 
     normalized_status = str(source_status or "").strip().lower()
-    if normalized_status != "completed":
+    if normalized_status != "completed" and not (
+        lifecycle is not None and lifecycle.archive_eligible
+    ):
         return {
             "archive_status": "not_recommended",
             "run_ids": [],
@@ -1288,6 +1409,42 @@ def _archive_status_from_policy(
             "recommended": False,
             "reason": f"source_status:{normalized_status or 'unknown'}",
             "source_status": normalized_status or None,
+            "compute_status": normalized_status or "unknown",
+            "warehouse_status": "pending",
+            "asset_status": "pending",
+            "workspace_status": "active",
+            "value_class": "classification_pending",
+            "duplicate_of": None,
+            "retention_summary": {},
+            "protected_owner_count": 0,
+        }
+
+    lifecycle_fields = {
+        "compute_status": normalized_status,
+        "warehouse_status": lifecycle.warehouse_status.value if lifecycle else "pending",
+        "asset_status": lifecycle.asset_status.value if lifecycle else "pending",
+        "workspace_status": lifecycle.workspace_status.value if lifecycle else "active",
+        "value_class": lifecycle.value_class.value if lifecycle else "classification_pending",
+        "duplicate_of": lifecycle.duplicate_of if lifecycle else None,
+        "retention_summary": {"retention_class": lifecycle.retention_class} if lifecycle else {},
+        "protected_owner_count": lifecycle.protected_owner_count if lifecycle else 0,
+        "lifecycle_reason_code": lifecycle.reason_code if lifecycle else "qe_lifecycle_evidence_unavailable",
+        "asset_reason_code": lifecycle.asset_reason_code if lifecycle else None,
+        "business_identity_sha256": lifecycle.business_identity_sha256 if lifecycle else None,
+        "result_digest_sha256": lifecycle.result_digest_sha256 if lifecycle else None,
+    }
+    if lifecycle is not None and not lifecycle.archive_eligible:
+        return {
+            "archive_status": (
+                "not_eligible" if lifecycle.value_class.value == "X" else "classification_pending"
+            ),
+            "run_ids": [],
+            "run_count": 0,
+            "eligible": False,
+            "recommended": False,
+            "reason": lifecycle.reason_code,
+            "source_status": normalized_status,
+            **lifecycle_fields,
         }
 
     decision = resolve_archive_policy(
@@ -1320,10 +1477,16 @@ def _archive_status_from_policy(
         "archive_policy": decision.archive_policy,
         "archive_policy_source": decision.archive_policy_source,
         "source_status": normalized_status,
+        **lifecycle_fields,
     }
 
 
-def _loop_row_archive_status(row: Mapping[str, Any], *, run_ids: Sequence[str]) -> dict[str, Any]:
+def _loop_row_archive_status(
+    row: Mapping[str, Any],
+    *,
+    run_ids: Sequence[str],
+    persisted_lifecycle: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     task_id = str(row.get("task_id") or "")
     loop_id = str(row.get("loop_id") or "")
     config = _ensure_mapping(row.get("config_json"))
@@ -1337,6 +1500,7 @@ def _loop_row_archive_status(row: Mapping[str, Any], *, run_ids: Sequence[str]) 
         "status": row.get("status"),
         "config": config,
         "raw_config": {"loop_config_json": config},
+        "metrics": _ensure_mapping(row.get("metrics_json")),
     }
     return _archive_status_from_policy(
         source_type="loop",
@@ -1345,7 +1509,19 @@ def _loop_row_archive_status(row: Mapping[str, Any], *, run_ids: Sequence[str]) 
         source_status=str(row.get("status") or ""),
         payload=payload,
         run_ids=run_ids,
+        persisted_lifecycle=persisted_lifecycle,
     )
+
+
+def _first_lifecycle(
+    run_ids: Sequence[str],
+    lifecycle_by_run: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any] | None:
+    for run_id in run_ids:
+        lifecycle = lifecycle_by_run.get(str(run_id))
+        if lifecycle:
+            return dict(lifecycle)
+    return None
 
 
 def _ensure_mapping(value: Any) -> dict[str, Any]:

@@ -2,9 +2,9 @@
 
 > Feature ID：`qe_unified_experiment_registry_selective_warehouse_v1`
 > Feature tier：F2
-> 设计版本：v1.4（保留3个交付批次；同步实验数仓与资产生命周期闭环）
+> 设计版本：v1.5（保留3个交付批次；资产生命周期源码完成）
 > 日期：2026-09-22
-> 状态：`V1_4_ASSET_LIFECYCLE_DESIGN_SYNCED_IMPLEMENTATION_PENDING`；既有Batch A/B事实见14/15节，不代表v1.4源码或运行态已完成。
+> 状态：`V1_5_ASSET_LIFECYCLE_SOURCE_VALIDATED_RUNTIME_PENDING`；既有Batch A/B事实见14/15节，运行态仍等待用户重启和真实业务 readback。
 > 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.16；实验执行方案v2.0与本设计共同约束下游实验。
 > 既有入仓设计：`docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md`
 > 最新资产生命周期权威补充：`docs/architecture/qe_experiment_asset_warehouse_lifecycle_f2_detailed_design_20260922.md`。该文取代本文中与 A/B/C 自动入仓、X 禁止入仓、CAS 保留及 workspace cleanup 相冲突的旧条款。
@@ -543,6 +543,7 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 | R36 X边界与删除安全 | v1.3要求X清理覆盖“目标数仓记录”，会暗示X先入仓再删除 | X从入口即零Archive写入；正常cleanup只处理控制面/精确制品；历史误入仓X单列legacy anomaly并独立授权 |
 | R37 资产与硬件现实 | 只写artifact retention仍可能依赖workspace；单X盘没有部署对象存储或双副本的容灾价值 | 引用2026-09-22权威设计：X盘本地CAS、Archive/StrategyPackage逻辑双引用、物理单blob、workspace短期精确清理 |
 | R38 最终结构与证据可实施性 | 新旧F2矩阵必须同时覆盖最新语义，且不能用泛化“未来测试”伪装证据 | 绑定明确未来测试路径；新资产设计15/15、本文19/19 F2校验通过，diff/scope检查通过 |
+| R39 源码实施回读 | 初版任务汇总把X误计为待入仓，metrics-only digest可能误判重复，A/B缺资产manifest时原因不明确 | lifecycle/source/CAS/cleanup/UI源码闭合；pending只统计eligible；重复仅接受权威digest；A/B缺manifest显式pending且禁止cleanup |
 
 上述是设计同步，不重复引用旧版本源码测试为v1.4实现证据。本轮不执行历史写仓、删除、DDL/DML、实验或进程控制。
 
@@ -551,7 +552,7 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 - 当前源码状态：`BATCH_A_REGISTERED_RUNTIME_READY`。
 - 已完成：统一预登记、事务内回读、任务/loop 与 Multi-Alpha parent/group 计划、durable readback、MCP/UI/source/purpose 摘要、只读历史/详情投影、GET 去远端写回、最小 UI 进度与隐藏页零轮询。
 - 合入与运行态证据：PR #4382 以 merge commit `c97f4ed471704bd2763af2350b27a8e3de380c87` 合入；用户重启后 backend identity `5bf975e98b7afeaebb27cce73ec250fd268d5090` 包含该提交。health/runtime-identity、实验 summary 列表、双节点 online readback 和前端 Batch A bundle 标识均通过。
-- 尚未由 Batch A 推导：Batch B 完整筛选/详情、A/B/C自动入仓、X零入仓、CAS引用与精确清理，Batch C 双节点正式实验和真实 Archive 写入；历史修订、DDL/DML、依赖安装和进程控制仍未执行。
+- 尚未由 Batch A 单独推导的资产生命周期能力已由 v1.5 源码增量实现并通过本地回归；Batch C 双节点正式结果、用户重启后的真实 Archive 写入与 CAS/readback 仍未执行。历史修订、DDL/DML、依赖安装和进程控制仍未执行。
 
 该记录只证明 Batch A source 与最小运行态能力，不表示整个 Feature 已完成。Batch B/C 仍须按同一 19 项验收矩阵继续。
 
@@ -559,6 +560,7 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 
 - v1.1 源码状态：已通过 PR #4397 合入，merge commit `7ccf06a9e`；本设计未重新核验其当前运行态身份，因此只确认 source merged，不推导 runtime ready。
 - v1.2 增量状态：`VALUE_RETENTION_DELTA_DESIGN_READY`；失败/精确重复 X 清理、A/B/C 分类、trajectory 实际股票池与四类收益字段尚未实现，不能把 v1.1 的“全部正式终态保留”能力宣称为满足最新要求。
+- v1.5 资产生命周期增量状态：`SOURCE_VALIDATED_RUNTIME_PENDING`；A/B/C自动Level-0、X零Archive、权威digest去重、本地CAS、精确cleanup和五态UI已完成源码与本地回归，等待本轮source merge、用户重启和真实新结果readback。
 - 已实现：日期、来源、实验类型、Alpha 模式、用途、canonical 状态、节点、模型、因子、数据 release、股票池、分钟执行算法、Archive 状态和业务文本的服务端筛选；父级稳定分页；UI 不再默认全量拉取；MCP 暴露相同的人类可读筛选。
 - 已实现：列表与详情展示登记、节点、release/cutoff、股票池、seed、label、分钟执行、时间线、失败原因、artifact retention 和 Archive 推荐/状态；日志只在显式点击后读取。
 - v1.1 已实现：正式登记 experiment/task/loop 的 workspace 清理保留控制记录和指标，并写入 `_qe_artifact_retention.status=cleaned`；未登记 legacy 行继续保持既有删除兼容性。该行为在 v1.2 中仍适用于 A/B/C，但不能用于 X 的一致删除。
@@ -569,10 +571,10 @@ Broad UI/API/business-flow 可委托 Validation Center；最终 receipt 必须�
 ## 16. v1.4 增量实施顺序
 
 1. 先修准确投影和科创50Top20消费合同：收益/风险/IR/费用/实际政策与训练/选股池同源回读，GET只读；不让不准确摘要参与自动排名。必要predicate和UI列组复用现有代码，不扩平台。
-2. 落实所有准确A/B/C正负样本自动Level-0入仓、组合证据与单因子边界，并按权威资产生命周期设计发布必要CAS资产；有界历史只读盘点和父预测复用清单可并行，不先等清理。
-3. X在Archive入口即拒绝；精确cleanup preview/apply按4.8的部分失败与保护引用处理。生产DB修改先既有DEV验证再明确授权，无需预设新增schema。
+2. 准确A/B/C正负样本自动Level-0、组合/单因子边界、X入口拒绝和必要CAS发布已完成源码；下一状态是用户重启后的真实新结果五态readback，不以历史补录作为前置。
+3. 精确cleanup preview/apply已完成源码与部分失败回执；任何生产apply、历史修订或CAS部署根切换仍需独立处理，且本实现不需要新增schema。
 4. 本Feature仍3批次：A既有登记/状态，B本版最小增量，C真实验收；多轮代码审核/合同测试与最终CI按实际changed files，source merge、用户重启、运行态、Archive写入及删除分开。
-5. 本版文档未执行源码修复、Archive/清理、CAS激活、实验或进程控制。旧14/15节只保留各批次历史证据，不证明v1.4已经完成。
+5. 本版已执行资产生命周期源码实现与本地验证；未执行生产Archive写入/清理、CAS根激活、实验或进程控制。旧14/15节只保留各批次历史证据，不证明运行态已经完成。
 
 ### v1.4 新增验收反例
 
