@@ -87,7 +87,7 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/latest",
     "fresh_process_evidence": [
-      "AIstock-CI fresh process imported backend.routers.hmm_risk, backend.routers.health, and backend.services.hmm_risk.rotation_l2_input -> passed"
+      "python -c import backend.routers.hmm_risk; import backend.routers.health; import backend.services.hmm_risk.rotation_l2_input -> passed in AIstock-CI fresh process"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
@@ -98,6 +98,7 @@
     ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
