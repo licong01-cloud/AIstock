@@ -16,7 +16,7 @@
 | F-008 | daily_basic统一字段检查器 | 两种入口相同字段/分母/分页规则 | pending | 尚未开发验收 |
 | F-009 | adj invalidation adapter | 四类变化及尾部增长无误全重建 | pending | 尚未开发验收 |
 | F-010 | local_data repair协调adapter | DEV、授权、apply、readback独立 | pending | 尚未开发验收 |
-| F-011 | direct增量planner/Qlib writer | 四种action、calendar header及恢复 | pending | 尚未开发验收 |
+| F-011 | `monthly_build_bridge.py`、`monthly_incremental_baseline.py`、既有 bounded Qlib writer | 四种 action、predecessor manifest/CAS/Merkle 闭合、首迁单次组件重建及后续增量/选择性计划测试 | in_progress | 增量 baseline 与正式 mixed planner 已接通；仍待真实闭月 candidate 验证 calendar 严格前缀、增量等价和性能后转为 verified |
 | F-012 | PIT lifecycle物化 | 新旧证券完整观测历史和选股隔离 | pending | 尚未开发验收 |
 | F-013 | factor rolling/aggregate writer | 月界对照与历史修订后效 | pending | 尚未开发验收 |
 | F-014 | `monthly_shared_components.py`、`sw_l2_quote_policy.py` | 共享组件集成测试、quote taxonomy drift fail-closed、`qlib_data_backend` | in_progress | sealed SOURCE 生产器已实现；仍待真实闭月 candidate 回放和三节点 readback 后转为 verified |

@@ -7,6 +7,7 @@ import pytest
 
 import backend.services.dataset_release.monthly_mature_build_runner as runner_module
 from backend.services.dataset_release.cas_store import CASStore
+from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.monthly_build_bridge import CompiledMonthlyBuild
 from backend.services.dataset_release.monthly_build_executor import PhysicalBuildResult
@@ -30,12 +31,25 @@ def _context() -> ProducerContext:
 
 
 def _compiled() -> CompiledMonthlyBuild:
+    release_digest = digest_named_fields(
+        "aistock_monthly_physical_release_v1",
+        {
+            "release_id": "qe_hmm_full_v2_20260930",
+            "target_cutoff": "2026-09-30",
+            "source_bundle_sha256": "a" * 64,
+            "action_plan_digest": "b" * 64,
+        },
+    )
     return CompiledMonthlyBuild(
         source_bundle_path=Path("bundle.json"),
         source_bundle_sha256="a" * 64,
         source_stage_receipt_ref=SimpleNamespace(),
         monthly_actions={},
-        physical_plan={"action_plan_digest": "b" * 64, "build_inputs": {}},
+        physical_plan={
+            "action_plan_digest": "b" * 64,
+            "release_digest": release_digest,
+            "build_inputs": {},
+        },
     )
 
 
@@ -163,3 +177,30 @@ def test_runner_rejects_non_pass_stage(
             staging_root=tmp_path / ".staging" / "candidate.building",
             compiled=_compiled(),
         )
+
+
+def test_runner_rejects_bridge_release_digest_drift(tmp_path: Path) -> None:
+    runner = MatureMonthlyPhysicalBuildRunner(
+        profile=SimpleNamespace(
+            stage_timeouts_seconds={"full_build": 3600},
+            candidate_root=tmp_path,
+        ),
+        cas=_cas(tmp_path),
+        project_root=tmp_path,
+        qlib_writer=_Writer(),
+        consumer_smoke=_Smoke(),
+        finalizer=_Finalizer(),
+    )
+    staging = tmp_path / ".staging" / "candidate.building"
+    staging.parent.mkdir()
+    compiled = _compiled()
+    drifted = CompiledMonthlyBuild(
+        source_bundle_path=compiled.source_bundle_path,
+        source_bundle_sha256=compiled.source_bundle_sha256,
+        source_stage_receipt_ref=compiled.source_stage_receipt_ref,
+        monthly_actions=compiled.monthly_actions,
+        physical_plan={**compiled.physical_plan, "release_digest": "f" * 64},
+    )
+
+    with pytest.raises(MonthlyMatureBuildError, match="release digest differs"):
+        runner.execute(context=_context(), staging_root=staging, compiled=drifted)

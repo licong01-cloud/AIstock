@@ -19,11 +19,27 @@ from typing import Any, Mapping, Sequence
 from .artifact_ready_source import load_artifact_ready_contract
 from .canonical import canonical_json_bytes, digest_named_fields, ensure_sha256
 from .cas_store import CASRef, CASStore
+from .component_artifact_manifest import (
+    ComponentArtifactManifest,
+    ComponentArtifactManifestError,
+    load_component_artifact_manifest,
+)
 from .contracts import Component, ComponentAction as PhysicalAction
 from .decision import ActionPlan, ComponentPlan
 from .errors import CanonicalizationError
 from .monthly_postgres_source import FROZEN_SOURCE_BUNDLE_SCHEMA
+from .monthly_incremental_baseline import (
+    MONTHLY_INCREMENTAL_BASELINE_PATH,
+    MonthlyIncrementalBaselineError,
+    load_monthly_incremental_baseline,
+)
 from .monthly_unified import COMPONENTS, ComponentAction as MonthlyAction
+from .mixed_planner import (
+    MixedPlannerContext,
+    build_mixed_action_plan,
+    load_artifact_ready_planning_authority,
+    pit_span_digest_by_code,
+)
 from .profile import DatasetProfile
 from .resolution import BUILD_INPUTS_SCHEMA_VERSION
 from .resolution_processor import (
@@ -69,6 +85,13 @@ class CompiledMonthlyBuild:
     source_stage_receipt_ref: CASRef
     monthly_actions: Mapping[str, str]
     physical_plan: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _MonthlyBaseline:
+    authority: Mapping[str, Any]
+    manifest: ComponentArtifactManifest
+    root_relative_path: str
 
 
 def _sha256(path: Path) -> str:
@@ -172,6 +195,201 @@ def _source_bundle(
     return path, value, str(matches[0]["sha256"])
 
 
+def _manifest_identity(value: Mapping[str, Any]) -> str:
+    unsigned = dict(value)
+    unsigned.pop("dataset_manifest_sha256", None)
+    return hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+
+
+def _predecessor_baseline(
+    *,
+    context_plan: Mapping[str, Any],
+    profile: DatasetProfile,
+    cas: CASStore,
+) -> _MonthlyBaseline | None:
+    predecessor = context_plan.get("predecessor")
+    manifest_ref = context_plan.get("predecessor_manifest_ref")
+    if not isinstance(predecessor, Mapping) or not isinstance(manifest_ref, Mapping):
+        raise MonthlyBuildBridgeError("monthly predecessor authority is incomplete")
+    candidate_raw = predecessor.get("candidate_root")
+    if not isinstance(candidate_raw, str) or not candidate_raw.strip():
+        raise MonthlyBuildBridgeError("monthly predecessor candidate root is missing")
+    catalog = Path(profile.candidate_root).expanduser().absolute()
+    candidate = Path(candidate_raw).expanduser().absolute()
+    try:
+        catalog_resolved = catalog.resolve(strict=True)
+        relative = candidate.relative_to(catalog)
+    except (OSError, ValueError) as exc:
+        raise MonthlyBuildBridgeError("monthly predecessor escaped the candidate catalog") from exc
+    if len(relative.parts) != 1 or _contains_link(catalog, relative):
+        raise MonthlyBuildBridgeError("monthly predecessor must be one plain catalog child")
+    try:
+        candidate_resolved = candidate.resolve(strict=True)
+    except OSError as exc:
+        raise MonthlyBuildBridgeError("monthly predecessor candidate is unavailable") from exc
+    if (
+        candidate_resolved.parent != catalog_resolved
+        or _is_link(candidate)
+        or not candidate_resolved.is_dir()
+    ):
+        raise MonthlyBuildBridgeError("monthly predecessor candidate is invalid")
+    manifest_path = candidate_resolved / "qe_dataset_manifest.json"
+    if _contains_link(candidate_resolved, Path("qe_dataset_manifest.json")):
+        raise MonthlyBuildBridgeError("monthly predecessor manifest path is linked")
+    try:
+        manifest_raw = manifest_path.read_bytes()
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MonthlyBuildBridgeError("monthly predecessor manifest is unreadable") from exc
+    if (
+        not isinstance(manifest, Mapping)
+        or manifest_raw != canonical_json_bytes(manifest) + b"\n"
+        or _sha256(manifest_path) != manifest_ref.get("sha256")
+        or manifest_path.stat().st_size != manifest_ref.get("size")
+        or manifest.get("dataset_manifest_sha256")
+        != predecessor.get("dataset_manifest_sha256")
+        or _manifest_identity(manifest) != predecessor.get("dataset_manifest_sha256")
+        or manifest.get("release_id") != predecessor.get("release_id")
+        or manifest.get("cutoff_trade_date") != predecessor.get("cutoff")
+    ):
+        raise MonthlyBuildBridgeError("monthly predecessor manifest identity differs")
+    components = manifest.get("components")
+    if not isinstance(components, Mapping):
+        raise MonthlyBuildBridgeError("monthly predecessor component inventory is invalid")
+    baseline_relative = MONTHLY_INCREMENTAL_BASELINE_PATH.as_posix()
+    pins = [
+        value
+        for value in components.values()
+        if isinstance(value, Mapping) and value.get("path") == baseline_relative
+    ]
+    if not pins:
+        # A predecessor produced before this authority existed is an explicit
+        # first-migration boundary.  Its bytes are never silently adopted.
+        return None
+    if len(pins) != 1:
+        raise MonthlyBuildBridgeError("monthly predecessor baseline pin is ambiguous")
+    baseline_path = candidate_resolved / MONTHLY_INCREMENTAL_BASELINE_PATH
+    if _contains_link(candidate_resolved, MONTHLY_INCREMENTAL_BASELINE_PATH):
+        raise MonthlyBuildBridgeError("monthly predecessor baseline path is linked")
+    pin = pins[0]
+    if (
+        not baseline_path.is_file()
+        or baseline_path.stat().st_size != pin.get("size")
+        or _sha256(baseline_path) != pin.get("sha256")
+    ):
+        raise MonthlyBuildBridgeError("monthly predecessor baseline bytes differ")
+    try:
+        authority = load_monthly_incremental_baseline(baseline_path)
+    except MonthlyIncrementalBaselineError as exc:
+        raise MonthlyBuildBridgeError("monthly predecessor baseline is invalid") from exc
+    expected = {
+        "release_id": predecessor.get("release_id"),
+        "cutoff": predecessor.get("cutoff"),
+        "profile": profile.profile,
+        "scope": "full",
+        "candidate_root_name": candidate_resolved.name,
+    }
+    if any(authority.get(key) != value for key, value in expected.items()):
+        raise MonthlyBuildBridgeError("monthly predecessor baseline binding differs")
+    try:
+        component_manifest = load_component_artifact_manifest(
+            cas, authority["component_artifact_manifest_ref"]
+        )
+    except (ComponentArtifactManifestError, KeyError, TypeError, ValueError) as exc:
+        raise MonthlyBuildBridgeError(
+            "monthly predecessor component authority is unavailable"
+        ) from exc
+    if (
+        component_manifest.profile != profile.profile
+        or component_manifest.scope != "full"
+        or component_manifest.cutoff.isoformat() != predecessor.get("cutoff")
+    ):
+        raise MonthlyBuildBridgeError("monthly predecessor component authority differs")
+    return _MonthlyBaseline(
+        authority=authority,
+        manifest=component_manifest,
+        root_relative_path=relative.as_posix(),
+    )
+
+
+def _monthly_baseline_build_inputs(
+    baseline: _MonthlyBaseline,
+    *,
+    action_plan: ActionPlan,
+    profile: DatasetProfile,
+) -> dict[str, Any]:
+    manifest = baseline.manifest
+    authority = baseline.authority
+    return {
+        "authority_schema_version": authority["schema_version"],
+        "baseline_authority_sha256": authority["baseline_authority_sha256"],
+        "release_id": authority["release_id"],
+        "release_digest": authority["release_digest"],
+        "candidate_registration_id": None,
+        "candidate_identity": manifest.candidate_identity,
+        "artifact_root": manifest.artifact_root,
+        "profile": manifest.profile,
+        "scope": manifest.scope,
+        "cutoff": manifest.cutoff.isoformat(),
+        "semantic_profile_digest": manifest.semantic_profile_digest,
+        "producer_fingerprint": manifest.producer_fingerprint,
+        "artifact_fingerprint": manifest.artifact_fingerprint,
+        "validation_fingerprint": manifest.validation_fingerprint,
+        "source_content_root": manifest.source_content_root,
+        "artifact_ready_content_root": manifest.artifact_ready_content_root,
+        "pit_snapshot_digest": manifest.pit_snapshot_digest,
+        "allowlisted_root_id": profile.candidate_root_id,
+        "volume_serial": None,
+        "root_relative_path": baseline.root_relative_path,
+        "source_manifest_ref": None,
+        "component_artifact_manifest_ref": authority[
+            "component_artifact_manifest_ref"
+        ],
+        # The monthly authority digest is a validation-bound immutable key;
+        # it is not a catalog attestation and never crosses this bridge as one.
+        "attestation_key": authority["baseline_authority_sha256"],
+        "reuse_evidence": [
+            item.as_dict() for item in action_plan.actions if item.frozen_reuse is not None
+        ],
+    }
+
+
+def _reconcile_action_plan(
+    monthly_actions: Mapping[str, Any],
+    exact: ActionPlan,
+) -> ActionPlan:
+    """Reconcile coarse SOURCE intent with exact component lineage evidence."""
+
+    by_component = {item.component: item for item in exact.actions}
+    reconciled: list[ComponentPlan] = []
+    for monthly_name, component in _PHYSICAL_COMPONENTS.items():
+        declared = MonthlyAction(str(monthly_actions[monthly_name]))
+        planned = by_component[component]
+        if declared is MonthlyAction.REUSE and planned.action not in {
+            PhysicalAction.REUSE,
+            PhysicalAction.FULL_REBUILD,
+        }:
+            raise MonthlyBuildBridgeError(
+                f"monthly SOURCE under-declared physical mutation: {monthly_name}"
+            )
+        if declared is not MonthlyAction.REUSE and planned.action is PhysicalAction.REUSE:
+            raise MonthlyBuildBridgeError(
+                f"monthly SOURCE declared a mutation absent from physical authority: {monthly_name}"
+            )
+        if declared is MonthlyAction.COMPONENT_REBUILD:
+            planned = ComponentPlan(
+                component=component,
+                partition_key="full",
+                action=PhysicalAction.FULL_REBUILD,
+                reason=f"monthly_v2:{monthly_name}:COMPONENT_REBUILD",
+                changed_fingerprints=("source_input_digest",),
+                invalidation_edges=(),
+                estimated_work=planned.estimated_work,
+            )
+        reconciled.append(planned)
+    return ActionPlan(tuple(reconciled))
+
+
 def _physical_action_plan(
     actions: Mapping[str, Any],
     *,
@@ -219,12 +437,13 @@ def compile_initial_monthly_build(
     cas: CASStore,
     artifact_roots: Sequence[Path],
 ) -> CompiledMonthlyBuild:
-    """Compile the first unified-v2 physical build from sealed SOURCE evidence.
+    """Compile a unified-v2 physical build from sealed SOURCE evidence.
 
-    Initial migration deliberately promotes physical REUSE/incremental actions
-    to full rebuilds: an active pre-v2 candidate has no compatible
-    component-artifact authority.  Later successor reuse must supply that exact
-    baseline authority rather than silently adopting the predecessor tree.
+    A pre-v2 predecessor without the candidate-local monthly baseline envelope
+    remains an explicit initial migration and rebuilds physical components.  A
+    successor produced by this workflow may use the exact mixed-component
+    planner after its active-profile, consumer-manifest, CAS and Merkle
+    identities close.
     """
 
     try:
@@ -251,8 +470,6 @@ def compile_initial_monthly_build(
     monthly_actions = source_scope.get("component_actions")
     if not isinstance(monthly_actions, Mapping):
         raise MonthlyBuildBridgeError("SOURCE component actions are missing")
-    action_plan = _physical_action_plan(monthly_actions, force_full_rebuild=True)
-
     bundle_path, bundle, bundle_sha = _source_bundle(
         source_receipt,
         artifact_roots=artifact_roots,
@@ -287,6 +504,50 @@ def compile_initial_monthly_build(
         expected_source_content_root=frozen.source_content_root,
         expected_pit_snapshot_digest=frozen.pit_snapshot_digest,
     )
+    baseline = _predecessor_baseline(
+        context_plan=context_plan,
+        profile=profile,
+        cas=cas,
+    )
+    if baseline is None:
+        action_plan = _physical_action_plan(
+            monthly_actions, force_full_rebuild=True
+        )
+    else:
+        planning = load_artifact_ready_planning_authority(cas, profile, frozen)
+        fingerprints = monthly_build_fingerprints(profile)
+        compatible = (
+            baseline.manifest.semantic_profile_digest
+            == profile.semantic_profile_digest
+            and baseline.manifest.producer_fingerprint
+            == fingerprints["producer_fingerprint"]
+            and baseline.manifest.artifact_fingerprint
+            == fingerprints["artifact_fingerprint"]
+            and baseline.manifest.validation_fingerprint
+            == fingerprints["validation_fingerprint"]
+        )
+        exact = build_mixed_action_plan(
+            baseline=baseline.manifest,
+            current=planning.components,
+            context=MixedPlannerContext(
+                source_release_id=str(baseline.authority["release_id"]),
+                source_release_digest=str(baseline.authority["release_digest"]),
+                source_attestation_key=str(
+                    baseline.authority["baseline_authority_sha256"]
+                ),
+                dataset_start=profile.start_date,
+                cutoff=target_cutoff,
+                current_pit_snapshot_digest=frozen.pit_snapshot_digest,
+                current_pit_instruments=tuple(
+                    sorted({span.ts_code for span in frozen.pit_snapshot.spans})
+                ),
+                current_pit_span_digest_by_code=pit_span_digest_by_code(
+                    frozen.pit_snapshot
+                ),
+            ),
+            compatible=compatible,
+        )
+        action_plan = _reconcile_action_plan(monthly_actions, exact)
     effective_partitions: dict[str, list[dict[str, Any]]] = {}
     for component in Component:
         manifest = cas.get_json_bounded(
@@ -355,7 +616,15 @@ def compile_initial_monthly_build(
             for item in sorted(frozen.partitions, key=lambda value: value.spec.identity)
         ],
         "artifact_ready_effective_partitions": effective_partitions,
-        "baseline": None,
+        "baseline": (
+            _monthly_baseline_build_inputs(
+                baseline,
+                action_plan=action_plan,
+                profile=profile,
+            )
+            if baseline is not None
+            else None
+        ),
         "fingerprints": {
             **fingerprints,
             "sample_policy": SAMPLE_POLICY,
@@ -370,8 +639,21 @@ def compile_initial_monthly_build(
             key=lambda value: (value.component.value, value.partition_key),
         )
     ]
+    release_id = str(context_plan.get("release_id") or "")
+    if not release_id:
+        raise MonthlyBuildBridgeError("monthly release id is missing")
+    release_digest = digest_named_fields(
+        "aistock_monthly_physical_release_v1",
+        {
+            "release_id": release_id,
+            "target_cutoff": context_plan.get("target_cutoff"),
+            "source_bundle_sha256": bundle_sha,
+            "action_plan_digest": action_plan.digest,
+        },
+    )
     physical_plan = {
         "schema_version": MONTHLY_BUILD_BRIDGE_SCHEMA,
+        "release_digest": release_digest,
         "actions": action_rows,
         "action_plan_digest": action_plan.digest,
         "build_inputs": build_inputs,
@@ -380,6 +662,11 @@ def compile_initial_monthly_build(
         },
         "source_bundle_sha256": bundle_sha,
         "source_stage_receipt_ref": source_stage_ref.as_dict(),
+        "predecessor_baseline_authority_sha256": (
+            baseline.authority["baseline_authority_sha256"]
+            if baseline is not None
+            else None
+        ),
         "database_read_performed": False,
         "database_write_performed": False,
     }
