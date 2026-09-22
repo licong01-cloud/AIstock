@@ -30,6 +30,7 @@ python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_<3
 - QE、HMM、因子、荐股、择时、统一回测均由同一 consumer registry 验证；
 - 任一未解释缺口、跨 release 混用、哈希漂移或消费者不完整都保持 blocked；
 - 激活与 rollback 需要独立 `dsauth_<32hex>`，不得由 prepare 授权推断；
+- RD-Agent 节点必须一次性配置稳定的 `QE_DATASET_RELEASE_REGISTRY_ROOTS=<release-parent>/.aistock-release-registry`；每月 DEPLOY 只新增 create-exclusive manifest 登记，不修改 API 环境变量、不重启节点；
 - 源码合入、数据库修复、candidate 部署、profile 激活、运行态读回分别报告；
 - 不启动训练、实验或服务，不把 `status=completed` 当作数据验收成功。
 

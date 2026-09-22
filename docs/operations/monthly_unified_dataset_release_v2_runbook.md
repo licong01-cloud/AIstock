@@ -55,3 +55,56 @@ python scripts/monthly_unified_dataset_release.py rollback --operation-id dmr_<3
 最终报告必须分别列出：源码/CI、数据库 DDL/DML、source snapshot、candidate 构建、
 三节点部署、consumer validation、profile activation、运行态读回、训练/实验、进程控制。
 只有 release closure、consumer readback 和激活后 identity 均一致，才能报告本月发布完成。
+
+## 6. Durable worker
+
+API、CLI、MCP 只提交和查询 operation；实际六阶段工作只由代码固定的 worker registry 执行。
+worker 运行前需由运行态所有者配置以下绝对路径或节点身份，配置文件只保存位置，不保存凭据：
+
+- `AISTOCK_MONTHLY_RELEASE_STATE_ROOT`
+- `AISTOCK_ACTIVE_DATASET_PROFILE_PATH`
+- `AISTOCK_MONTHLY_CONTROLLER_RELEASE_ROOT`
+- `AISTOCK_MONTHLY_PROFILE_CANDIDATE_ROOT`
+- `AISTOCK_MONTHLY_RELEASE_ARTIFACT_ROOT`
+- `AISTOCK_MONTHLY_WSL_RELEASE_ROOT`
+- `AISTOCK_MONTHLY_NODE1_RELEASE_ROOT`
+- `AISTOCK_DATASET_ACTION_AUTHORIZATION_ROOT`
+- `AISTOCK_MONTHLY_HMM_AUTHORITY_PATH`
+- `AISTOCK_MONTHLY_WSL_DISTRO`
+- `AISTOCK_MONTHLY_WSL_PROJECT_ROOT`
+- `AISTOCK_MONTHLY_WSL_PYTHON`
+- `AISTOCK_MONTHLY_NODE1_SSH_HOST`
+- `AISTOCK_MONTHLY_NODE1_PROJECT_ROOT`
+- `AISTOCK_MONTHLY_NODE1_PYTHON`
+
+RD-Agent Results API 首次部署动态 release reader 时，WSL 与 node1 各自只需一次性配置固定 registry 根：
+
+- WSL：`QE_DATASET_RELEASE_REGISTRY_ROOTS=<AISTOCK_MONTHLY_WSL_RELEASE_ROOT>/.aistock-release-registry`
+- node1：`QE_DATASET_RELEASE_REGISTRY_ROOTS=<AISTOCK_MONTHLY_NODE1_RELEASE_ROOT>/.aistock-release-registry`
+
+该环境变量指向稳定的 registry 目录，不指向某个月 candidate。部署阶段会按 dataset manifest identity
+create-exclusive 写入登记；运行中的 API 每次请求重新验证登记、candidate 目录名、manifest 字节 SHA 和
+canonical identity，因此后续月份不得再修改该环境变量或为数据切换重启 API。首次代码/环境配置生效仍需由运行态所有者执行一次目标服务重启。
+
+部署代码后先做无任务领取、无数据库连接、无候选写入的只读组合预检：
+
+```powershell
+python scripts/monthly_unified_dataset_release_worker.py --preflight
+```
+
+受控运行方式为：
+
+```powershell
+python scripts/monthly_unified_dataset_release_worker.py --once
+python scripts/monthly_unified_dataset_release_worker.py --drain --max-operations 10
+python scripts/monthly_unified_dataset_release_worker.py --serve --poll-seconds 5
+```
+
+`--drain` 必须有上限；`--serve` 仅消费已经持久化的 operation，并响应 SIGINT/SIGTERM
+协作退出。worker 不接受调用方指定 producer 命令、组件子集或候选路径。WSL 与 node1
+使用固定节点命令进行流式不可变部署和本机 readback；控制器成功不能替代节点成功。
+
+`prepare_only` 到 `READY_TO_ACTIVATE` 后停止。只有 operation 自身从提交时就绑定
+`activate_when_ready` 和精确 `dsauth_*`，worker 才能执行中央 profile CAS；不能从普通
+prepare 授权推导激活权限。首次部署 worker 代码可能需要运行态所有者安排进程更新，之后每月
+release 切换只改变中央 profile，不需要按月修改 QE/HMM/荐股路径或重启节点 API。

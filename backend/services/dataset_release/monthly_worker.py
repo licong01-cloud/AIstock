@@ -30,6 +30,7 @@ from .monthly_unified import (
     classify_component_actions,
 )
 from .canonical import canonical_json_bytes
+from .profile_contract import ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 
 
 PRODUCER_EVIDENCE_SCHEMA = "aistock_monthly_release_producer_evidence_v1"
@@ -70,6 +71,10 @@ def _is_content_ref(value: Any) -> bool:
         and type(value.get("size")) is int
         and value["size"] >= 0
     )
+
+
+def _is_sha256_text(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
 class MonthlyProducerError(MonthlyReleaseError):
@@ -724,6 +729,7 @@ def _validate_semantics(
                 "candidate_root",
                 "relative_file_refs",
                 "deployment_receipt_ref",
+                "runtime_registration",
             }
             if not isinstance(registration, Mapping) or registration.get("schema_version") != NODE_REGISTRATION_SCHEMA:
                 raise MonthlyProducerError(f"node release registration schema differs: {node_id}")
@@ -739,6 +745,24 @@ def _validate_semantics(
                 raise MonthlyProducerError(f"node release registration files differ: {node_id}")
             if not str(registration.get("candidate_root") or ""):
                 raise MonthlyProducerError(f"node release registration root is empty: {node_id}")
+            runtime_registration = registration.get("runtime_registration")
+            if (
+                not isinstance(runtime_registration, Mapping)
+                or set(runtime_registration)
+                != {"relative_path", "sha256", "size", "registration_sha256"}
+                or not str(runtime_registration.get("relative_path") or "").startswith(
+                    ".aistock-release-registry/"
+                )
+                or not _is_sha256_text(str(runtime_registration.get("sha256") or ""))
+                or not _is_sha256_text(
+                    str(runtime_registration.get("registration_sha256") or "")
+                )
+                or type(runtime_registration.get("size")) is not int
+                or int(runtime_registration["size"]) <= 0
+            ):
+                raise MonthlyProducerError(
+                    f"node runtime release registration differs: {node_id}"
+                )
         registration_refs = scope.get("node_registration_refs")
         if not isinstance(registration_refs, Mapping) or set(registration_refs) != set(REQUIRED_NODES):
             raise MonthlyProducerError("node release registration references differ")
@@ -782,8 +806,16 @@ def _validate_semantics(
                 raise MonthlyProducerError(f"consumer binding readback differs: {name}")
             for field in ("resolved_component_refs", "derived_asset_refs"):
                 refs = readback.get(field)
-                if not isinstance(refs, list) or not refs or any(not _is_content_ref(item) for item in refs):
+                if not isinstance(refs, list) or any(
+                    not _is_content_ref(item) for item in refs
+                ):
                     raise MonthlyProducerError(f"consumer {field} differs: {name}")
+            required = ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS[name]
+            if not readback["resolved_component_refs"] or (
+                ("derived_assets" in required)
+                != bool(readback["derived_asset_refs"])
+            ):
+                raise MonthlyProducerError(f"consumer resolved file set differs: {name}")
             if not isinstance(readback.get("required_window"), Mapping) or not isinstance(
                 readback.get("coverage_counts"), Mapping
             ):

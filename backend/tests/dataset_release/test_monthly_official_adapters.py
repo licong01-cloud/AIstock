@@ -47,12 +47,16 @@ from backend.services.dataset_release.monthly_stage_adapter import CodeOwnedMont
 from backend.services.dataset_release.monthly_source_producer import AuditedMonthlySourceProducer
 from backend.services.dataset_release.monthly_unified import (
     COMPONENTS,
+    CONSUMER_VALIDATION_BINDING_SCHEMA,
     REQUIRED_CONSUMERS,
     REQUIRED_NODES,
 )
 from backend.services.dataset_release.monthly_worker import (
     ProducerContext,
     RegisteredMonthlyPipeline,
+)
+from backend.services.dataset_release.profile_contract import (
+    ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS,
 )
 
 
@@ -722,6 +726,15 @@ class DeployExecutor:
                     manifest_sha256=PREDECESSOR if node == self.drift_node else dataset_manifest_sha256,
                     relative_files=(shared,),
                     deployment_receipt=receipt,
+                    runtime_registration={
+                        "relative_path": (
+                            ".aistock-release-registry/"
+                            f"{dataset_manifest_sha256}.json"
+                        ),
+                        "sha256": "8" * 64,
+                        "size": 256,
+                        "registration_sha256": "9" * 64,
+                    },
                 )
             )
         return DeployExecution(nodes=tuple(nodes))
@@ -884,12 +897,22 @@ def test_immutable_deploy_copies_one_exact_inventory_to_all_nodes(
 
     assert {item.node_id for item in result.nodes} == set(REQUIRED_NODES)
     assert result.workload.bytes_transferred > 0
+    assert len(
+        {json.dumps(dict(item.runtime_registration), sort_keys=True) for item in result.nodes}
+    ) == 1
     for node in result.nodes:
         receipt = _read(node.deployment_receipt)
         assert receipt["status"] == "PASS"
         assert receipt["dataset_manifest_sha256"] == manifest_sha
         assert receipt["overwrite_performed"] is False
         assert Path(targets[node.node_id]).joinpath("qe_dataset_manifest.json").is_file()
+        registration = Path(targets[node.node_id]).parent / node.runtime_registration[
+            "relative_path"
+        ]
+        assert registration.is_file()
+        assert hashlib.sha256(registration.read_bytes()).hexdigest() == node.runtime_registration[
+            "sha256"
+        ]
 
 
 def test_immutable_deploy_preserves_hardlink_aliases_without_duplicate_transfer(
@@ -989,16 +1012,29 @@ class ConsumerExecutor:
     fail: str | None = None
 
     def execute(self, _context, *, dataset_manifest_sha256):  # type: ignore[no-untyped-def]
-        binding = _write(
-            self.root / "consumer" / "binding.json",
-            {"dataset_manifest_sha256": dataset_manifest_sha256},
-        )
         component = _write(self.root / "candidate" / "component.json", {"x": 1})
         derived = _write(self.root / "candidate" / "derived.json", {"x": 2})
         rows = []
         for name in REQUIRED_CONSUMERS:
             if name == self.omit:
                 continue
+            uses_derived = (
+                "derived_assets"
+                in ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS[name]
+            )
+            binding = _write(
+                self.root / "consumer" / f"{name}-binding.json",
+                {
+                    "schema_version": CONSUMER_VALIDATION_BINDING_SCHEMA,
+                    "dataset_manifest_sha256": dataset_manifest_sha256,
+                    "resolved_component_refs": [_ref(self.root, component)],
+                    "derived_asset_refs": (
+                        [_ref(self.root, derived)]
+                        if uses_derived
+                        else []
+                    ),
+                },
+            )
             result = _write(
                 self.root / "consumer" / f"{name}-result.json",
                 {
@@ -1013,7 +1049,11 @@ class ConsumerExecutor:
                     binding_path=binding,
                     required_window={"start": "2018-08-01", "end": "2026-09-30"},
                     resolved_component_paths=(component,),
-                    derived_asset_paths=(derived,),
+                    derived_asset_paths=(
+                        (derived,)
+                        if uses_derived
+                        else ()
+                    ),
                     coverage_counts={"unresolved_count": 0},
                     adapter_version="consumer-smoke-v1",
                     result_path=result,

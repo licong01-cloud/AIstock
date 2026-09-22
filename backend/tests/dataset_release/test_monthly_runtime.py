@@ -10,6 +10,7 @@ from backend.services.dataset_release.monthly_runtime import (
     MonthlyRuntimeSettings,
     SubmissionOnlyPipeline,
 )
+from backend.services.dataset_release.monthly_unified import MonthlyReleaseRequest
 
 
 def _environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
@@ -88,3 +89,32 @@ def test_runtime_rejects_overlapping_artifact_and_release_roots(
     monkeypatch.setenv("AISTOCK_MONTHLY_RELEASE_ARTIFACT_ROOT", str(nested))
     with pytest.raises(MonthlyRuntimeConfigurationError, match="must not overlap"):
         MonthlyRuntimeSettings.from_env()
+
+
+def test_runtime_derives_next_year_release_identity_without_month_constants(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _environment(monkeypatch, tmp_path)
+    settings = MonthlyRuntimeSettings.from_env()
+    request = MonthlyReleaseRequest(
+        target_cutoff=date(2027, 1, 29),
+        product_profile="qe_hmm_full_v2",
+        idempotency_key="monthly-202701",
+    )
+
+    assert settings.candidate_name(request) == (
+        "20270129-qe_hmm_full_v2-direct-monthly-v2-unified-candidate"
+    )
+    assert settings.generation(request) == "20270129-monthly-v2-unified"
+    assert settings.revision(request) == "20270129-monthly-v2"
+    service = settings.service(cutoff_resolver=lambda: request.target_cutoff)
+    assert service.node_root_factory(request) == {
+        "wsl2-5080": (
+            "/mnt/wsl/releases/"
+            "20270129-qe_hmm_full_v2-direct-monthly-v2-unified-candidate"
+        ),
+        "rdagent-node1": (
+            "/home/data/releases/"
+            "20270129-qe_hmm_full_v2-direct-monthly-v2-unified-candidate"
+        ),
+    }

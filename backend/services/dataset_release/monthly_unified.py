@@ -30,8 +30,11 @@ STATE_SCHEMA = "aistock_monthly_release_state_v1"
 CHECKPOINT_SCHEMA = "aistock_monthly_checkpoint_v2"
 STAGE_RECEIPT_SCHEMA = "aistock_monthly_release_stage_receipt_v1"
 RELEASE_CLOSURE_SCHEMA = "aistock_release_closure_v1"
-NODE_REGISTRATION_SCHEMA = "aistock_node_release_registration_v1"
+NODE_REGISTRATION_SCHEMA = "aistock_node_release_registration_v2"
 CONSUMER_READBACK_SCHEMA = "aistock_monthly_consumer_readback_v2"
+CONSUMER_VALIDATION_BINDING_SCHEMA = (
+    "aistock_monthly_consumer_validation_binding_v1"
+)
 READY_SCHEMA = "aistock_monthly_ready_v2"
 ACTIVATION_SCHEMA = "aistock_monthly_activation_v2"
 AUTHORIZATION_SCHEMA = "aistock_dataset_action_authorization_v1"
@@ -1812,6 +1815,7 @@ __all__: Sequence[str] = (
     "ActiveProfileSnapshot",
     "COMPONENTS",
     "CONSUMER_READBACK_SCHEMA",
+    "CONSUMER_VALIDATION_BINDING_SCHEMA",
     "ComponentAction",
     "MonthlyOperationStore",
     "MonthlyPipeline",

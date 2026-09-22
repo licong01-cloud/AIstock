@@ -1,9 +1,15 @@
+import asyncio
+
 import pytest
 
 from backend.services import dispatch_service
 from backend.services.dispatch_service import (
+    DispatchService,
     _normalize_running_task_ids,
     build_rdagent_env_overrides,
+)
+from backend.services.dataset_release.active_task_binding import (
+    freeze_active_dataset_task_binding,
 )
 
 
@@ -146,3 +152,151 @@ def test_build_rdagent_env_overrides_rejects_active_release_override(
             },
             config={},
         )
+
+
+def test_frozen_dispatch_binding_does_not_reresolve_active_profile(monkeypatch) -> None:
+    frozen = freeze_active_dataset_task_binding(
+        consumer_id="factor_research",
+        node_id="rdagent-node1",
+        resolver=lambda **kwargs: {
+            "schema_version": "aistock_active_dataset_consumer_binding_v1",
+            "consumer_id": kwargs["consumer_id"],
+            "node_id": kwargs["node_id"],
+            "generation": "20260930-monthly-v2-unified",
+            "release_id": "qe_hmm_full_v2_20260930",
+            "cutoff": "2026-09-30",
+            "dataset_manifest_sha256": "b" * 64,
+            "profile_sha256": "a" * 64,
+            "candidate_root": "/releases/frozen",
+            "required_components": ["day", "factor", "manifest", "stock_pools"],
+            "derived_asset_registry_sha256": "c" * 64,
+            "derived_asset_registry_path": "/releases/frozen/derived/registry.json",
+            "release_closure_sha256": "d" * 64,
+            "release_closure_path": "/releases/frozen/release_closure_receipt.json",
+            "derived_assets": [],
+            "resolved_once": True,
+            "legacy_fallback": False,
+        },
+    )
+
+    def forbidden(**_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("retry path must not resolve the current active profile")
+
+    monkeypatch.setattr(dispatch_service, "resolve_active_dataset_node_binding", forbidden)
+    env = build_rdagent_env_overrides(
+        data={},
+        node={
+            "node_id": "rdagent-node1",
+            "qlib_rdagent_root": "/home/lc999/projects/RD-Agent-main",
+        },
+        config={},
+        frozen_dataset_binding=frozen,
+    )
+
+    assert env["AISTOCK_DATASET_ROOT"] == "/releases/frozen"
+    assert env["AISTOCK_DATASET_MANIFEST_SHA256"] == "b" * 64
+    assert env["AISTOCK_DATASET_PROFILE_SHA256"] == "a" * 64
+
+
+def _frozen_factor_binding() -> dict:
+    return freeze_active_dataset_task_binding(
+        consumer_id="factor_research",
+        node_id="rdagent-node1",
+        resolver=lambda **kwargs: {
+            "schema_version": "aistock_active_dataset_consumer_binding_v1",
+            "consumer_id": kwargs["consumer_id"],
+            "node_id": kwargs["node_id"],
+            "generation": "20260930-monthly-v2-unified",
+            "release_id": "qe_hmm_full_v2_20260930",
+            "cutoff": "2026-09-30",
+            "dataset_manifest_sha256": "b" * 64,
+            "profile_sha256": "a" * 64,
+            "candidate_root": "/releases/frozen",
+            "required_components": ["day", "factor", "manifest", "stock_pools"],
+            "derived_asset_registry_sha256": "c" * 64,
+            "derived_asset_registry_path": "/releases/frozen/derived/registry.json",
+            "release_closure_sha256": "d" * 64,
+            "release_closure_path": "/releases/frozen/release_closure_receipt.json",
+            "derived_assets": [],
+            "resolved_once": True,
+            "legacy_fallback": False,
+        },
+    )
+
+
+class _FailingComputeNodeClient:
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+
+    async def create_task(self, _payload):  # type: ignore[no-untyped-def]
+        raise RuntimeError("submission stopped after local persistence")
+
+
+def _capture_local_task(monkeypatch: pytest.MonkeyPatch) -> tuple[DispatchService, list[dict]]:
+    captured: list[dict] = []
+    service = DispatchService()
+
+    def insert_task(data):  # type: ignore[no-untyped-def]
+        captured.append(data)
+        return {**data, "task_id": "local-task", "status": "pending"}
+
+    monkeypatch.setattr(service, "_insert_task", insert_task)
+    monkeypatch.setattr(service, "_add_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "_append_local_log_line", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "_update_task_fields", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(dispatch_service, "ComputeNodeClient", _FailingComputeNodeClient)
+    frozen = _frozen_factor_binding()
+    monkeypatch.setattr(
+        dispatch_service,
+        "_freeze_dispatch_dataset_binding",
+        lambda **_kwargs: frozen,
+    )
+    return service, captured
+
+
+def test_rdagent_task_persists_frozen_binding_before_remote_submission(monkeypatch) -> None:
+    service, captured = _capture_local_task(monkeypatch)
+
+    result = asyncio.run(
+        service._create_rdagent_task(
+            {
+                "task_name": "factor task",
+                "task_type": "fin_factor",
+                "evolving_n": 1,
+            },
+            {
+                "node_id": "rdagent-node1",
+                "api_base_url": "http://node.invalid",
+                "qlib_rdagent_root": "/home/lc999/projects/RD-Agent-main",
+            },
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert len(captured) == 1
+    assert captured[0]["config"]["dataset_binding"]["profile_sha256"] == "a" * 64
+    assert captured[0]["env_overrides"]["AISTOCK_DATASET_ROOT"] == "/releases/frozen"
+    assert captured[0]["env_overrides"]["AISTOCK_DATASET_MANIFEST_SHA256"] == "b" * 64
+
+
+def test_custom_task_persists_same_frozen_binding_and_environment(monkeypatch) -> None:
+    service, captured = _capture_local_task(monkeypatch)
+
+    result = asyncio.run(
+        service._create_custom_task(
+            {
+                "task_name": "official factor task",
+                "task_type": "official_evaluation",
+                "payload": {"factor_name": "example"},
+            },
+            {
+                "node_id": "rdagent-node1",
+                "api_base_url": "http://node.invalid",
+            },
+        )
+    )
+
+    assert result["status"] == "failed"
+    assert len(captured) == 1
+    assert captured[0]["config"]["dataset_binding"]["binding_sha256"]
+    assert captured[0]["env_overrides"]["AISTOCK_DATASET_ROOT"] == "/releases/frozen"

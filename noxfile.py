@@ -699,6 +699,21 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_supervised_build.py",
         "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
         "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+        "backend/tests/dataset_release/test_monthly_local_validation.py",
+        "backend/tests/dataset_release/test_monthly_consumer_validation.py",
+        "backend/tests/dataset_release/test_monthly_consumer_registry.py",
+        "backend/tests/dataset_release/test_monthly_node_probe.py",
+        "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
+        "backend/tests/dataset_release/test_monthly_remote_deploy.py",
+        "backend/tests/dataset_release/test_runtime_release_registration.py",
+        "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+        "backend/tests/dataset_release/test_monthly_worker_composition.py",
+        "backend/tests/dataset_release/test_monthly_production.py",
+        "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+        "backend/tests/dataset_release/test_active_task_binding.py",
+        "backend/tests/dataset_release/test_monthly_hmm_consumer_probe.py",
+        "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
+        "backend/tests/dataset_release/test_monthly_shared_consumer_probe.py",
         "backend/tests/dataset_release/test_monthly_profile_candidate.py",
         "backend/tests/dataset_release/test_monthly_shared_components.py",
         "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
@@ -749,6 +764,7 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/build_shared_sector_context_component.py": "backend/tests/dataset_release/test_shared_sector_context.py",
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
             "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+            "scripts/monthly_unified_dataset_release_worker.py": "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
             "backend/routers/monthly_dataset_releases.py": "backend/tests/routers/test_monthly_dataset_releases.py",
         },
     )
@@ -1924,11 +1940,8 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         external=True,
     )
     session.chdir("frontend")
-    if _nightly_session_completed("ra_phase7_full_accept"):
-        session.log("Reusing successful ra_phase7_full_accept frontend lint/build within this Nightly run.")
-    else:
-        session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
-        session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
     session.run(
         "node",
         "node_modules/@playwright/test/cli.js",
@@ -2502,32 +2515,35 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         "scripts/research_assistant_phase7_crosscheck.py",
         external=True,
     )
-    if _nightly_session_completed("research_assistant_backend"):
-        session.log("Reusing successful research_assistant_backend coverage within this Nightly run.")
-    else:
-        _run_pytest(
-            session,
-            "backend/tests/research_assistant",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-        )
+    _run_pytest(
+        session,
+        "backend/tests/research_assistant",
+        "-q",
+        "-p",
+        "no:cacheprovider",
+    )
     _ensure_frontend_node_modules(session)
     session.chdir("frontend")
-    session.run(
-        "node",
-        "node_modules/next/dist/bin/next",
-        "lint",
-        env=frontend_env,
-        external=True,
-    )
-    session.run(
-        "node",
-        "node_modules/next/dist/bin/next",
-        "build",
-        env=frontend_env,
-        external=True,
-    )
+    if _nightly_session_completed("mcp_gateway_phase5_assistant"):
+        session.log(
+            "Reusing successful mcp_gateway_phase5_assistant frontend lint/build "
+            "within this Nightly run."
+        )
+    else:
+        session.run(
+            "node",
+            "node_modules/next/dist/bin/next",
+            "lint",
+            env=frontend_env,
+            external=True,
+        )
+        session.run(
+            "node",
+            "node_modules/next/dist/bin/next",
+            "build",
+            env=frontend_env,
+            external=True,
+        )
     session.run(
         "node",
         "node_modules/@playwright/test/cli.js",
@@ -2589,13 +2605,16 @@ def research_assistant_backend(session: nox.Session) -> None:
         "backend/routers/research_assistant.py",
         external=True,
     )
-    _run_pytest(
-        session,
-        "backend/tests/research_assistant",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
+    if _nightly_session_completed("ra_phase7_full_accept"):
+        session.log("Reusing successful ra_phase7_full_accept backend coverage within this Nightly run.")
+    else:
+        _run_pytest(
+            session,
+            "backend/tests/research_assistant",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        )
 
 
 @nox.session(venv_backend="none")
