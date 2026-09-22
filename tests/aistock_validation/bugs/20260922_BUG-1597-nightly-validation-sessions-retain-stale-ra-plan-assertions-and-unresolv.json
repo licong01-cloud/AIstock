@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1597",
-  "closed_at": null,
+  "closed_at": "2026-09-22T07:36:02Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -123,8 +123,8 @@
   },
   "first_seen_at": "2026-09-22T07:13:13.135845Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3a2c442504d73ab7ba92363276154e5f8e37df57",
+  "fixed_at": "2026-09-22T07:36:02Z",
   "github_issue_number": 5017,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5017",
   "last_seen_at": "2026-09-22T07:13:13.135845Z",
@@ -132,6 +132,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5019",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -151,6 +152,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -160,7 +162,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1597",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7d4e92d64dc0692c",
+    "recorded_at": "2026-09-22T07:37:29.963197Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "43248478914c2e189a5ed58b32f350ddfaa8ceb6",
+    "source_merge_commit": "3a2c442504d73ab7ba92363276154e5f8e37df57",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5019",
+    "validation_evidence": [
+      "CI verdict -> passed for 43248478914c2e189a5ed58b32f350ddfaa8ceb6"
+    ],
+    "validation_evidence_digest": "b19494e9d92ae1809f607446980ba9bde2b5848c265197a5c76be0a7fb9a3a51"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -169,6 +192,9 @@
     "fingerprint": "9648743553ac927a0d3c8229",
     "source_event_id": "FE-20260922-9648743553ac"
   },
+  "validation_evidence": [
+    "CI verdict -> passed for 43248478914c2e189a5ed58b32f350ddfaa8ceb6"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
