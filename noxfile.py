@@ -1823,6 +1823,7 @@ def mcp_gateway_phase6_resource_monitor(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
     """Run full Phase 5 RA manifest catalog, audit, and UI acceptance gates."""
+    _ensure_frontend_node_modules(session)
     phase5_paths = [
         "backend/mcp/tool_manifest.py",
         "backend/routers/research_assistant.py",
@@ -1907,11 +1908,11 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         external=True,
     )
     session.chdir("frontend")
-    session.run("npm", "run", "lint", env=frontend_env, external=True)
-    session.run("npm", "run", "build", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/phase5-mcp-gateway-ui.spec.ts",
         "--project",

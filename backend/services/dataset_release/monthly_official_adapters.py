@@ -68,9 +68,7 @@ def _plain_file(path: Path, *, label: str) -> Path:
     return resolved
 
 
-def _artifact(
-    roots: Path | Sequence[Path], path: Path, *, label: str
-) -> MonthlyStageArtifact:
+def _artifact(roots: Path | Sequence[Path], path: Path, *, label: str) -> MonthlyStageArtifact:
     registered = (roots,) if isinstance(roots, Path) else tuple(roots)
     resolved_roots = tuple(root.resolve(strict=True) for root in registered)
     if not resolved_roots or len(set(resolved_roots)) != len(resolved_roots):
@@ -78,9 +76,7 @@ def _artifact(
     resolved = _plain_file(path, label=label)
     matches = [root for root in resolved_roots if resolved.is_relative_to(root)]
     if len(matches) != 1:
-        raise OfficialMonthlyAdapterError(
-            f"{label} must resolve under exactly one registered artifact root"
-        )
+        raise OfficialMonthlyAdapterError(f"{label} must resolve under exactly one registered artifact root")
     relative = resolved.relative_to(matches[0]).as_posix()
     return MonthlyStageArtifact(relative, resolved)
 
@@ -93,9 +89,7 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _content_ref(
-    roots: Path | Sequence[Path], path: Path, *, label: str
-) -> dict[str, Any]:
+def _content_ref(roots: Path | Sequence[Path], path: Path, *, label: str) -> dict[str, Any]:
     item = _artifact(roots, path, label=label)
     return {
         "id": item.artifact_id,
@@ -150,14 +144,10 @@ def _validate_dataset_manifest(
         if not isinstance(name, str) or not name or not isinstance(raw, Mapping):
             raise OfficialMonthlyAdapterError("dataset manifest component entry is invalid")
         if not {"path", "sha256", "size"}.issubset(raw):
-            raise OfficialMonthlyAdapterError(
-                f"dataset manifest component fields differ: {name}"
-            )
+            raise OfficialMonthlyAdapterError(f"dataset manifest component fields differ: {name}")
         relative = Path(str(raw.get("path") or ""))
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
-            raise OfficialMonthlyAdapterError(
-                f"dataset manifest component path is invalid: {name}"
-            )
+            raise OfficialMonthlyAdapterError(f"dataset manifest component path is invalid: {name}")
         component_path = _plain_file(candidate_root / relative, label=f"manifest component {name}")
         if not component_path.is_relative_to(candidate_root) or component_path in declared:
             raise OfficialMonthlyAdapterError("dataset manifest component paths are ambiguous")
@@ -170,9 +160,7 @@ def _validate_dataset_manifest(
         declared[component_path] = (digest, size)
     returned = tuple(_plain_file(item, label="build component artifact") for item in component_artifacts)
     if len(set(returned)) != len(returned) or set(returned) != set(declared):
-        raise OfficialMonthlyAdapterError(
-            "build component artifact set differs from dataset manifest"
-        )
+        raise OfficialMonthlyAdapterError("build component artifact set differs from dataset manifest")
     return identity
 
 
@@ -195,7 +183,12 @@ def _require_manifest_bound_json(
     return value
 
 
-def _write_canonical_exclusive(path: Path, value: Mapping[str, Any]) -> Path:
+def _write_canonical_exclusive(
+    path: Path,
+    value: Mapping[str, Any],
+    *,
+    accept_identical: bool = False,
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = canonical_json_bytes(value) + b"\n"
     try:
@@ -204,18 +197,18 @@ def _write_canonical_exclusive(path: Path, value: Mapping[str, Any]) -> Path:
             handle.flush()
             os.fsync(handle.fileno())
     except FileExistsError as exc:
+        if accept_identical:
+            try:
+                if path.read_bytes() == payload:
+                    return path
+            except OSError:
+                pass
         raise OfficialMonthlyAdapterError("official stage evidence already exists") from exc
     return path
 
 
 def _stage_root(artifact_root: Path, context: ProducerContext) -> Path:
-    root = (
-        artifact_root
-        / "monthly"
-        / context.operation_id
-        / context.stage.lower()
-        / f"attempt-{context.attempt}"
-    )
+    root = artifact_root / "monthly" / context.operation_id / context.stage.lower() / f"attempt-{context.attempt}"
     root.mkdir(parents=True, exist_ok=False)
     return root
 
@@ -313,9 +306,7 @@ class BuildExecution:
 
 
 class MonthlyBuildExecutor(Protocol):
-    def execute(
-        self, context: ProducerContext, *, component_actions: Mapping[str, str]
-    ) -> BuildExecution: ...
+    def execute(self, context: ProducerContext, *, component_actions: Mapping[str, str]) -> BuildExecution: ...
 
 
 def validate_build_execution(
@@ -360,13 +351,8 @@ class OfficialBuildAdapter:
         )
         identity = validate_build_execution(result, context=context)
         output_paths = (result.manifest_path, *result.component_artifacts)
-        inputs = tuple(
-            _artifact(_adapter_roots(self), path, label="build input")
-            for path in result.input_artifacts
-        )
-        outputs = tuple(
-            _artifact(_adapter_roots(self), path, label="build output") for path in output_paths
-        )
+        inputs = tuple(_artifact(_adapter_roots(self), path, label="build input") for path in result.input_artifacts)
+        outputs = tuple(_artifact(_adapter_roots(self), path, label="build output") for path in output_paths)
         predecessor = context.plan.get("predecessor")
         if not isinstance(predecessor, Mapping):
             raise OfficialMonthlyAdapterError("build predecessor is unavailable")
@@ -417,19 +403,34 @@ class OfficialDeriveAdapter:
     adapter_version: str = OFFICIAL_ADAPTER_VERSION
     contract_sha256: str = _contract_digest("DERIVE")
 
+    def __post_init__(self) -> None:
+        identity_reader = getattr(self.executor, "contract_identity", None)
+        if callable(identity_reader):
+            identity = identity_reader()
+            if not isinstance(identity, Mapping):
+                raise ValueError("DERIVE executor contract identity must be an object")
+            object.__setattr__(
+                self,
+                "contract_sha256",
+                hashlib.sha256(
+                    canonical_json_bytes(
+                        {
+                            "adapter_contract_sha256": _contract_digest("DERIVE"),
+                            "executor": dict(identity),
+                        }
+                    )
+                ).hexdigest(),
+            )
+
     def execute(self, context: ProducerContext) -> MonthlyStageResult:
         started = time.monotonic()
         manifest_sha = _manifest_identity(context)
         result = self.executor.execute(context, dataset_manifest_sha256=manifest_sha)
         if not result.assets or len({item.asset_id for item in result.assets}) != len(result.assets):
             raise OfficialMonthlyAdapterError("derived assets must be non-empty and uniquely named")
-        inputs = tuple(
-            _artifact(_adapter_roots(self), path, label="derive input")
-            for path in result.input_artifacts
-        )
+        inputs = tuple(_artifact(_adapter_roots(self), path, label="derive input") for path in result.input_artifacts)
         asset_artifacts = tuple(
-            _artifact(_adapter_roots(self), item.path, label="derived asset")
-            for item in result.assets
+            _artifact(_adapter_roots(self), item.path, label="derived asset") for item in result.assets
         )
         candidate_root = _candidate_root(context)
         derived_root = candidate_root / "derived"
@@ -444,9 +445,7 @@ class OfficialDeriveAdapter:
                 label=f"derived asset {item.asset_id}",
             )
             if not asset_path.is_relative_to(resolved_derived_root):
-                raise OfficialMonthlyAdapterError(
-                    f"derived asset must be candidate-local: {item.asset_id}"
-                )
+                raise OfficialMonthlyAdapterError(f"derived asset must be candidate-local: {item.asset_id}")
             _require_manifest_bound_json(
                 item.path,
                 label=f"derived asset {item.asset_id}",
@@ -472,13 +471,11 @@ class OfficialDeriveAdapter:
                 "source_dataset_manifest_sha256": manifest_sha,
                 "assets": rows,
             },
+            accept_identical=True,
         )
         registry_artifact = _artifact(_adapter_roots(self), registry_path, label="derived registry")
         outputs = (*asset_artifacts, registry_artifact)
-        asset_refs = [
-            _content_ref(_adapter_roots(self), item.path, label="derived asset")
-            for item in result.assets
-        ]
+        asset_refs = [_content_ref(_adapter_roots(self), item.path, label="derived asset") for item in result.assets]
         registry_ref = _content_ref(_adapter_roots(self), registry_path, label="derived registry")
         return MonthlyStageResult(
             scope={
@@ -509,9 +506,7 @@ class LocalValidationExecution:
 
 
 class MonthlyLocalValidationExecutor(Protocol):
-    def execute(
-        self, context: ProducerContext, *, dataset_manifest_sha256: str
-    ) -> LocalValidationExecution: ...
+    def execute(self, context: ProducerContext, *, dataset_manifest_sha256: str) -> LocalValidationExecution: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -537,9 +532,9 @@ class OfficialLocalValidateAdapter:
             raise OfficialMonthlyAdapterError("local dataset identity is incomplete")
         build_scope = _prior_scope(context, "BUILD")
         derive_scope = _prior_scope(context, "DERIVE")
-        manifest_ref = build_scope.get("dataset_manifest_ref")
-        derived_refs = derive_scope.get("derived_assets")
-        if not isinstance(manifest_ref, Mapping) or not isinstance(derived_refs, list) or not derived_refs:
+        if not isinstance(build_scope.get("dataset_manifest_ref"), Mapping) or not isinstance(
+            derive_scope.get("derived_assets"), list
+        ):
             raise OfficialMonthlyAdapterError("local validation inputs are incomplete")
 
         for path in result.consumer_contracts:
@@ -561,30 +556,108 @@ class OfficialLocalValidateAdapter:
             dataset_manifest_sha256=manifest_sha,
         )
 
+        candidate_root = _candidate_root(context)
+        provenance_root = candidate_root / "provenance"
+        if _is_link(provenance_root) or not provenance_root.is_dir():
+            raise OfficialMonthlyAdapterError("candidate provenance root is unavailable")
+
+        def candidate_ref(
+            path: Path,
+            *,
+            label: str,
+            require_provenance: bool = False,
+        ) -> dict[str, Any]:
+            resolved = _candidate_file(candidate_root, path, label=label)
+            if require_provenance and not resolved.is_relative_to(provenance_root):
+                raise OfficialMonthlyAdapterError(f"{label} must be candidate-local provenance")
+            return {
+                "id": resolved.relative_to(candidate_root).as_posix(),
+                "sha256": _sha256(resolved),
+                "size": resolved.stat().st_size,
+            }
+
         def refs(paths: Sequence[Path], label: str) -> list[dict[str, Any]]:
             if not paths:
                 raise OfficialMonthlyAdapterError(f"{label} evidence is empty")
-            return [_content_ref(_adapter_roots(self), path, label=label) for path in paths]
+            return [
+                candidate_ref(path, label=label, require_provenance=True)
+                for path in paths
+            ]
+
+        manifest_path = candidate_root / "qe_dataset_manifest.json"
+        manifest_ref = candidate_ref(manifest_path, label="dataset manifest")
+        build_manifest_ref = _prior_scope(context, "BUILD").get("dataset_manifest_ref")
+        if not isinstance(build_manifest_ref, Mapping) or any(
+            manifest_ref[field] != build_manifest_ref.get(field)
+            for field in ("sha256", "size")
+        ):
+            raise OfficialMonthlyAdapterError("release closure manifest bytes differ from BUILD")
+        derive_scope = _prior_scope(context, "DERIVE")
+        registry_scope_ref = derive_scope.get("derived_asset_registry_ref")
+        derived_scope_refs = derive_scope.get("derived_assets")
+        if not isinstance(registry_scope_ref, Mapping) or not isinstance(
+            derived_scope_refs, list
+        ):
+            raise OfficialMonthlyAdapterError("release closure derived identity is incomplete")
+        registry_path = candidate_root / "derived" / "derived_asset_registry.json"
+        registry_ref = candidate_ref(registry_path, label="derived asset registry")
+        if any(
+            registry_ref[field] != registry_scope_ref.get(field)
+            for field in ("sha256", "size")
+        ):
+            raise OfficialMonthlyAdapterError("release closure derived registry differs")
+        registry = _read_canonical_object(registry_path, label="derived asset registry")
+        registry_assets = registry.get("assets")
+        if not isinstance(registry_assets, list) or len(registry_assets) != len(
+            derived_scope_refs
+        ):
+            raise OfficialMonthlyAdapterError("release closure derived assets differ")
+        derived_refs: list[dict[str, Any]] = [registry_ref]
+        unmatched = [dict(item) for item in derived_scope_refs if isinstance(item, Mapping)]
+        for raw in registry_assets:
+            if not isinstance(raw, Mapping):
+                raise OfficialMonthlyAdapterError("release closure derived asset is invalid")
+            relative = Path(str(raw.get("path") or ""))
+            if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+                raise OfficialMonthlyAdapterError("release closure derived path is invalid")
+            asset_ref = candidate_ref(
+                registry_path.parent / relative,
+                label="derived asset",
+            )
+            matches = [
+                item
+                for item in unmatched
+                if item.get("sha256") == asset_ref["sha256"]
+                and item.get("size") == asset_ref["size"]
+            ]
+            if len(matches) != 1:
+                raise OfficialMonthlyAdapterError("release closure derived asset bytes differ")
+            unmatched.remove(matches[0])
+            derived_refs.append(asset_ref)
+        if unmatched:
+            raise OfficialMonthlyAdapterError("release closure derived outputs are incomplete")
 
         closure: dict[str, Any] = {
             "schema_version": RELEASE_CLOSURE_SCHEMA,
-            "dataset_manifest_ref": dict(manifest_ref),
-            "derived_asset_refs": [dict(item) for item in derived_refs],
+            "dataset_manifest_ref": manifest_ref,
+            "derived_asset_refs": derived_refs,
             "consumer_contract_refs": refs(result.consumer_contracts, "consumer contract"),
             "source_readiness_refs": refs(result.source_readiness, "source readiness"),
-            "component_validation_refs": refs(
-                result.component_validations, "component validation"
-            ),
-            "lineage_ref": _content_ref(
-                _adapter_roots(self), result.lineage_path, label="release lineage"
+            "component_validation_refs": refs(result.component_validations, "component validation"),
+            "lineage_ref": candidate_ref(
+                result.lineage_path,
+                label="release lineage",
+                require_provenance=True,
             ),
         }
         closure["canonical_sha256"] = hashlib.sha256(canonical_json_bytes(closure)).hexdigest()
-        root = _stage_root(self.artifact_root, context)
-        closure_path = _write_canonical_exclusive(root / "release-closure.json", closure)
+        closure_path = _write_canonical_exclusive(
+            candidate_root / "release_closure_receipt.json",
+            closure,
+            accept_identical=True,
+        )
         inputs = tuple(
-            _artifact(_adapter_roots(self), path, label="local validation input")
-            for path in result.input_artifacts
+            _artifact(_adapter_roots(self), path, label="local validation input") for path in result.input_artifacts
         )
         output_paths = (
             *result.consumer_contracts,
@@ -593,10 +666,7 @@ class OfficialLocalValidateAdapter:
             result.lineage_path,
             closure_path,
         )
-        outputs = tuple(
-            _artifact(_adapter_roots(self), path, label="local validation output")
-            for path in output_paths
-        )
+        outputs = tuple(_artifact(_adapter_roots(self), path, label="local validation output") for path in output_paths)
         closure_ref = _content_ref(_adapter_roots(self), closure_path, label="release closure")
         return MonthlyStageResult(
             scope={
@@ -694,17 +764,13 @@ class OfficialDeployAdapter:
             registrations[node_id] = registration
             registration_paths.append(path)
         inputs = tuple(
-            _artifact(_adapter_roots(self), path, label="deployment input")
-            for path in result.input_artifacts
+            _artifact(_adapter_roots(self), path, label="deployment input") for path in result.input_artifacts
         )
         output_paths = (
             *(item.deployment_receipt for item in result.nodes),
             *registration_paths,
         )
-        outputs = tuple(
-            _artifact(_adapter_roots(self), path, label="deployment output")
-            for path in output_paths
-        )
+        outputs = tuple(_artifact(_adapter_roots(self), path, label="deployment output") for path in output_paths)
         return MonthlyStageResult(
             scope={
                 "dataset_manifest_sha256": manifest_sha,
@@ -747,9 +813,7 @@ class ConsumerValidationExecution:
 
 
 class MonthlyConsumerValidationExecutor(Protocol):
-    def execute(
-        self, context: ProducerContext, *, dataset_manifest_sha256: str
-    ) -> ConsumerValidationExecution: ...
+    def execute(self, context: ProducerContext, *, dataset_manifest_sha256: str) -> ConsumerValidationExecution: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -779,9 +843,7 @@ class OfficialConsumerValidateAdapter:
             if any(type(value) is not int or value < 0 for value in item.coverage_counts.values()):
                 raise OfficialMonthlyAdapterError(f"consumer coverage counts are invalid: {name}")
             if item.coverage_counts.get("unresolved_count") != 0:
-                raise OfficialMonthlyAdapterError(
-                    f"consumer unresolved coverage is not closed: {name}"
-                )
+                raise OfficialMonthlyAdapterError(f"consumer unresolved coverage is not closed: {name}")
             _require_manifest_bound_json(
                 item.binding_path,
                 label=f"{name} binding",
@@ -797,9 +859,7 @@ class OfficialConsumerValidateAdapter:
                 "schema_version": CONSUMER_READBACK_SCHEMA,
                 "consumer_id": name,
                 "node_id": item.node_id,
-                "binding_ref": _content_ref(
-                    _adapter_roots(self), item.binding_path, label=f"{name} binding"
-                ),
+                "binding_ref": _content_ref(_adapter_roots(self), item.binding_path, label=f"{name} binding"),
                 "required_window": dict(item.required_window),
                 "resolved_component_refs": [
                     _content_ref(_adapter_roots(self), path, label=f"{name} component")
@@ -811,9 +871,7 @@ class OfficialConsumerValidateAdapter:
                 ],
                 "coverage_counts": dict(item.coverage_counts),
                 "command_or_adapter_version": item.adapter_version,
-                "result_ref": _content_ref(
-                    _adapter_roots(self), item.result_path, label=f"{name} result"
-                ),
+                "result_ref": _content_ref(_adapter_roots(self), item.result_path, label=f"{name} result"),
                 "side_effect_flags": {
                     "outcomes_read": False,
                     "training_started": False,
@@ -828,13 +886,9 @@ class OfficialConsumerValidateAdapter:
             readbacks[name] = readback
             readback_paths.append(path)
         inputs = tuple(
-            _artifact(_adapter_roots(self), path, label="consumer validation input")
-            for path in result.input_artifacts
+            _artifact(_adapter_roots(self), path, label="consumer validation input") for path in result.input_artifacts
         )
-        outputs = tuple(
-            _artifact(_adapter_roots(self), path, label="consumer readback")
-            for path in readback_paths
-        )
+        outputs = tuple(_artifact(_adapter_roots(self), path, label="consumer readback") for path in readback_paths)
         return MonthlyStageResult(
             scope={
                 "dataset_manifest_sha256": manifest_sha,
@@ -873,9 +927,7 @@ def build_official_monthly_registry(
     from .monthly_stage_adapter import CodeOwnedMonthlyStageProducer
 
     if not isinstance(source, AuditedMonthlySourceProducer):
-        raise OfficialMonthlyAdapterError(
-            "official SOURCE must use the audited snapshot producer"
-        )
+        raise OfficialMonthlyAdapterError("official SOURCE must use the audited snapshot producer")
 
     return OfficialMonthlyProducerRegistry(
         source=source,
