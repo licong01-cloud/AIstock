@@ -112,6 +112,7 @@ def _context(
     }
     if candidate_root is not None:
         plan["candidate_root"] = str(candidate_root)
+        plan["profile_candidate"] = str(candidate_root.parent / "profile-v4.json")
     if target_roots is not None:
         plan["target_roots"] = dict(target_roots)
     return ProducerContext(
@@ -567,6 +568,35 @@ class LocalExecutor:
         )
 
 
+class ProfileBuilder:
+    def execute(
+        self,
+        context,
+        *,
+        release_closure_path,
+        derived_asset_registry_path,
+    ):  # type: ignore[no-untyped-def]
+        output = Path(str(context.plan["profile_candidate"]))
+        return _write(
+            output,
+            {
+                "schema_version": "aistock_active_dataset_profile_v4",
+                "generation": context.plan["generation"],
+                "release_id": context.plan["release_id"],
+                "cutoff": context.plan["target_cutoff"],
+                "components": {
+                    "dataset_manifest_sha256": MANIFEST,
+                    "derived_asset_registry_sha256": hashlib.sha256(
+                        Path(derived_asset_registry_path).read_bytes()
+                    ).hexdigest(),
+                    "release_closure_sha256": hashlib.sha256(
+                        Path(release_closure_path).read_bytes()
+                    ).hexdigest(),
+                },
+            },
+        )
+
+
 def test_local_validate_adapter_constructs_release_closure(tmp_path: Path) -> None:
     candidate = tmp_path / "candidate"
     manifest = _write(candidate / "qe_dataset_manifest.json", {"x": 1})
@@ -587,7 +617,11 @@ def test_local_validate_adapter_constructs_release_closure(tmp_path: Path) -> No
             ],
         },
     )
-    adapter = OfficialLocalValidateAdapter(tmp_path, LocalExecutor(candidate))
+    adapter = OfficialLocalValidateAdapter(
+        tmp_path,
+        LocalExecutor(candidate),
+        ProfileBuilder(),
+    )
     result = adapter.execute(
         _context(
             "LOCAL_VALIDATE",
@@ -643,6 +677,7 @@ def test_local_validate_adapter_rejects_evidence_outside_candidate(
     adapter = OfficialLocalValidateAdapter(
         tmp_path,
         LocalExecutor(tmp_path / "external"),
+        ProfileBuilder(),
     )
 
     with pytest.raises(OfficialMonthlyAdapterError, match="provenance root is unavailable"):
@@ -1023,7 +1058,11 @@ def test_registry_composition_is_code_owned_and_exact(tmp_path: Path) -> None:
         source=source,
         build=OfficialBuildAdapter(tmp_path, BuildExecutor(tmp_path)),
         derive=OfficialDeriveAdapter(tmp_path, DeriveExecutor(tmp_path)),
-        local_validate=OfficialLocalValidateAdapter(tmp_path, LocalExecutor(tmp_path)),
+        local_validate=OfficialLocalValidateAdapter(
+            tmp_path,
+            LocalExecutor(tmp_path),
+            ProfileBuilder(),
+        ),
         deploy=OfficialDeployAdapter(tmp_path, DeployExecutor(tmp_path)),
         consumer_validate=OfficialConsumerValidateAdapter(tmp_path, ConsumerExecutor(tmp_path)),
     )
@@ -1048,7 +1087,11 @@ def test_registry_rejects_non_audited_source(tmp_path: Path) -> None:
             source=SourceProducer(),  # type: ignore[arg-type]
             build=OfficialBuildAdapter(tmp_path, BuildExecutor(tmp_path)),
             derive=OfficialDeriveAdapter(tmp_path, DeriveExecutor(tmp_path)),
-            local_validate=OfficialLocalValidateAdapter(tmp_path, LocalExecutor(tmp_path)),
+            local_validate=OfficialLocalValidateAdapter(
+                tmp_path,
+                LocalExecutor(tmp_path),
+                ProfileBuilder(),
+            ),
             deploy=OfficialDeployAdapter(tmp_path, DeployExecutor(tmp_path)),
             consumer_validate=OfficialConsumerValidateAdapter(tmp_path, ConsumerExecutor(tmp_path)),
         )
