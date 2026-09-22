@@ -23,7 +23,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import aiofiles
 import httpx
@@ -34,6 +34,10 @@ from ..db.pg_pool import get_conn
 from ..infra.compute_node_client import ComputeNodeClient
 from .quantevolver.qe_active_dataset_profile import (
     resolve_active_dataset_node_binding,
+)
+from .dataset_release.active_task_binding import (
+    freeze_optional_active_dataset_task_binding,
+    frozen_dataset_environment,
 )
 
 logger = logging.getLogger("aistock.dispatch_service")
@@ -51,6 +55,15 @@ _TASK_TYPE_COMMANDS = {
 }
 
 _CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation", "official_factor_full_compute"}
+_TASK_TYPE_DATASET_CONSUMER = {
+    "fin_factor": "factor_research",
+    "fin_factor_report": "factor_research",
+    "fin_model": "selection",
+    "fin_quant": "unified_backtest",
+    "correlation_compute": "factor_research",
+    "official_evaluation": "factor_research",
+    "official_factor_full_compute": "factor_research",
+}
 _REMOTE_CONDA_ENV = "rdagent-gpu"
 _SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
@@ -186,6 +199,7 @@ def build_rdagent_env_overrides(
     data: Dict[str, Any],
     node: Dict[str, Any],
     config: Dict[str, Any],
+    frozen_dataset_binding: Mapping[str, Any] | None = None,
 ) -> Dict[str, str]:
     """Build the actual env passed to the remote RD-Agent scheduler.
 
@@ -193,10 +207,13 @@ def build_rdagent_env_overrides(
     only consumes them through environment variables.
     """
     env = _normalize_env_overrides(data.get("custom_env"))
+    active_binding: Mapping[str, Any] | None = None
 
-    active_binding = resolve_active_dataset_node_binding(node_id=str(node.get("node_id") or ""))
-    if active_binding is not None:
-        active_env = {
+    if frozen_dataset_binding is not None:
+        active_env = frozen_dataset_environment(frozen_dataset_binding)
+    else:
+        active_binding = resolve_active_dataset_node_binding(node_id=str(node.get("node_id") or ""))
+        active_env = None if active_binding is None else {
             "AISTOCK_DATASET_ROOT": active_binding["candidate_root"],
             "QE_DATASET_IDENTITY_ROOTS": active_binding["candidate_root"],
             "QE_QLIB_DATA_PATH": active_binding["qlib_data_path"],
@@ -206,24 +223,9 @@ def build_rdagent_env_overrides(
             "QLIB_MINUTE_PATH_WSL": active_binding["qlib_minute_path"],
             "RDAGENT_FACTOR_DATA_WSL": active_binding["factor_data_dir"],
         }
-        if active_binding.get("sector_context_dir"):
+        if active_binding is not None and active_binding.get("sector_context_dir"):
             active_env["AISTOCK_SECTOR_CONTEXT_DIR"] = active_binding["sector_context_dir"]
-        conflicts = {
-            key: {"requested": env[key], "active": value}
-            for key, value in active_env.items()
-            if key in env and env[key] != value
-        }
-        if conflicts:
-            raise ValueError(
-                "custom_env dataset paths differ from the active dataset profile: "
-                + json.dumps(
-                    conflicts,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-            )
-        env.update(active_env)
+    _merge_dataset_environment(env, active_env)
 
     app_tpl = config.get("app_tpl")
     if app_tpl:
@@ -240,10 +242,10 @@ def build_rdagent_env_overrides(
         env.setdefault("FACTOR_CoSTEER_MAX_LOOP", max_loop_s)
         env.setdefault("MODEL_CoSTEER_MAX_LOOP", max_loop_s)
 
-    if active_binding is None and node.get("qlib_data_path"):
+    if active_env is None and node.get("qlib_data_path"):
         env.setdefault("QLIB_DAY_DATA", _stringify_env_value(node["qlib_data_path"]))
         env.setdefault("QLIB_DATA_PATH_WSL", _stringify_env_value(node["qlib_data_path"]))
-    if active_binding is None and node.get("qlib_minute_path"):
+    if active_env is None and node.get("qlib_minute_path"):
         env.setdefault("QLIB_MINUTE_DATA", _stringify_env_value(node["qlib_minute_path"]))
         env.setdefault("QLIB_MINUTE_PATH_WSL", _stringify_env_value(node["qlib_minute_path"]))
     if node.get("qlib_rdagent_root"):
@@ -259,6 +261,44 @@ def build_rdagent_env_overrides(
     env.setdefault("QLIB_SCRIPTS_SUBDIR", "scripts")
 
     return env
+
+
+def _merge_dataset_environment(
+    env: Dict[str, str],
+    active_env: Mapping[str, str] | None,
+) -> None:
+    if active_env is None:
+        return
+    conflicts = {
+        key: {"requested": env[key], "active": value}
+        for key, value in active_env.items()
+        if key in env and env[key] != value
+    }
+    if conflicts:
+        raise ValueError(
+            "custom_env dataset paths differ from the active dataset profile: "
+            + json.dumps(
+                conflicts,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    env.update(active_env)
+
+
+def _freeze_dispatch_dataset_binding(
+    *,
+    task_type: str,
+    node_id: str,
+) -> dict[str, Any] | None:
+    consumer_id = _TASK_TYPE_DATASET_CONSUMER.get(task_type)
+    if consumer_id is None:
+        raise ValueError(f"task type has no registered dataset consumer: {task_type}")
+    return freeze_optional_active_dataset_task_binding(
+        consumer_id=consumer_id,
+        node_id=node_id,
+    )
 
 
 class DispatchService:
@@ -958,7 +998,18 @@ class DispatchService:
             "multi_proc_n": data.get("multi_proc_n", 1),
             "app_tpl": data.get("app_tpl", "../app_tpl/all/v4/rdagent"),
         }
-        env_overrides = build_rdagent_env_overrides(data=data, node=node, config=config)
+        frozen_dataset_binding = _freeze_dispatch_dataset_binding(
+            task_type=task_type,
+            node_id=str(node["node_id"]),
+        )
+        if frozen_dataset_binding is not None:
+            config["dataset_binding"] = frozen_dataset_binding
+        env_overrides = build_rdagent_env_overrides(
+            data=data,
+            node=node,
+            config=config,
+            frozen_dataset_binding=frozen_dataset_binding,
+        )
 
         # 写入 DB
         task = self._insert_task(
@@ -1057,17 +1108,29 @@ class DispatchService:
         if not isinstance(payload, dict):
             raise ValueError("custom task payload 必须为对象")
 
+        frozen_dataset_binding = _freeze_dispatch_dataset_binding(
+            task_type=task_type,
+            node_id=str(node["node_id"]),
+        )
         config = {
             "task_type": task_type,
             "payload": payload,
         }
+        if frozen_dataset_binding is not None:
+            config["dataset_binding"] = frozen_dataset_binding
+        env_overrides = _normalize_env_overrides(data.get("custom_env"))
+        if frozen_dataset_binding is not None:
+            _merge_dataset_environment(
+                env_overrides,
+                frozen_dataset_environment(frozen_dataset_binding),
+            )
         task = self._insert_task(
             {
                 "task_name": data["task_name"],
                 "task_type": task_type,
                 "node_id": node["node_id"],
                 "config": config,
-                "env_overrides": data.get("custom_env", {}),
+                "env_overrides": env_overrides,
                 "total_loops": 1,
                 "time_limit": data.get("all_duration"),
             }
@@ -1094,7 +1157,7 @@ class DispatchService:
             "payload": scheduler_payload_payload,
             "loop_n": 1,
             "all_duration": data.get("all_duration") or "24:00:00",
-            "env_overrides": data.get("custom_env", {}),
+            "env_overrides": env_overrides,
         }
 
         try:

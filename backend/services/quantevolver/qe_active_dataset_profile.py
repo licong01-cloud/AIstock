@@ -1004,6 +1004,7 @@ def resolve_active_dataset_consumer_binding(
         "release_id": selected.release_id,
         "cutoff": selected.cutoff.isoformat(),
         "dataset_manifest_sha256": str(components["dataset_manifest_sha256"]),
+        "profile_sha256": selected.profile_sha256,
         "candidate_root": str(node["candidate_root"]),
         "required_components": list(selected.raw["consumers"][consumer_id]["required_components"]),
         "derived_asset_registry_sha256": str(components["derived_asset_registry_sha256"]),
