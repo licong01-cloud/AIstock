@@ -20,6 +20,7 @@ from .canonical import canonical_json_bytes, digest_named_fields
 from .cas_store import CASStore
 from .monthly_build_bridge import CompiledMonthlyBuild
 from .monthly_candidate_finalizer import SharedReleaseComponents
+from .monthly_consumer_layout import publish_consumer_layout
 from .monthly_worker import ProducerContext
 from .pit import FrozenPitSnapshot
 from .profile import DatasetProfile
@@ -910,9 +911,18 @@ class FrozenMonthlySharedComponentBuilder:
             },
         }
         st_pit_path = _write_json(pool_root / "st_pit_manifest.json", st_pit)
+        consumer_layout = publish_consumer_layout(
+            root=root,
+            profile=self.profile,
+            cutoff=cutoff,
+            release_id=str(context.plan.get("release_id") or ""),
+            st_pit_manifest=st_pit,
+            validation_authority={
+                "validation_ref": dict(validation_ref),
+                "component_artifact_manifest_ref": dict(component_manifest_ref),
+            },
+        )
         required = (
-            calendar_path,
-            instruments_path,
             *tuple(pool_paths.values()),
             benchmark_path,
             suspend_parquet,
@@ -925,6 +935,7 @@ class FrozenMonthlySharedComponentBuilder:
             membership_path,
             receipt_path,
             st_pit_path,
+            *consumer_layout.required_files,
         )
         source_rows_read = (
             len(membership_source)
@@ -934,8 +945,8 @@ class FrozenMonthlySharedComponentBuilder:
         )
         return SharedReleaseComponents(
             required_files=tuple(required),
-            qlib_calendar_path=calendar_path,
-            qlib_instruments_path=instruments_path,
+            qlib_calendar_path=consumer_layout.day_calendar_path,
+            qlib_instruments_path=consumer_layout.day_instruments_path,
             st_pit_manifest=st_pit,
             source_contract={
                 "schema_version": "aistock_monthly_sealed_source_contract_v1",

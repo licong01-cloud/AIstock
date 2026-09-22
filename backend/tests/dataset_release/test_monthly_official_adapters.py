@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Mapping
@@ -750,20 +751,30 @@ def test_deploy_adapter_rejects_manifest_drift(tmp_path: Path) -> None:
         adapter.execute(_context("DEPLOY", build_scope=build_scope, local_scope=local_scope))
 
 
-def _sealed_candidate(root: Path) -> tuple[str, Path, Path]:
+def _sealed_candidate(root: Path, *, with_hardlink: bool = False) -> tuple[str, Path, Path]:
     component = _write(root / "component.json", {"status": "PASS"})
+    components = {
+        "component": {
+            "path": "component.json",
+            "sha256": hashlib.sha256(component.read_bytes()).hexdigest(),
+            "size": component.stat().st_size,
+        }
+    }
+    if with_hardlink:
+        alias = root / "components" / "component-alias.json"
+        alias.parent.mkdir(parents=True)
+        os.link(component, alias)
+        components["component_alias"] = {
+            "path": "components/component-alias.json",
+            "sha256": hashlib.sha256(alias.read_bytes()).hexdigest(),
+            "size": alias.stat().st_size,
+        }
     unsigned: dict[str, Any] = {
         "schema_version": "qe_dataset_manifest_v1",
         "release_id": "qe_hmm_full_v2_20260930",
         "revision": "20260930-monthly-v2",
         "cutoff_trade_date": "2026-09-30",
-        "components": {
-            "component": {
-                "path": "component.json",
-                "sha256": hashlib.sha256(component.read_bytes()).hexdigest(),
-                "size": component.stat().st_size,
-            }
-        },
+        "components": components,
     }
     manifest_sha = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
     manifest = dict(unsigned)
@@ -821,14 +832,18 @@ def _sealed_candidate(root: Path) -> tuple[str, Path, Path]:
     return manifest_sha, registry, closure_path
 
 
-def _immutable_deploy_fixture(tmp_path: Path, *, attempt: int = 1):
+def _immutable_deploy_fixture(
+    tmp_path: Path, *, attempt: int = 1, with_hardlink: bool = False
+):
     controller = tmp_path / "controller" / "candidate"
     wsl_parent = tmp_path / "wsl"
     node_parent = tmp_path / "node1"
     artifacts = tmp_path / "artifacts"
     for path in (wsl_parent, node_parent, artifacts):
         path.mkdir(parents=True)
-    manifest_sha, registry, closure = _sealed_candidate(controller)
+    manifest_sha, registry, closure = _sealed_candidate(
+        controller, with_hardlink=with_hardlink
+    )
     targets = {
         "controller": str(controller.resolve()),
         "wsl2-5080": str(wsl_parent / "candidate"),
@@ -875,6 +890,23 @@ def test_immutable_deploy_copies_one_exact_inventory_to_all_nodes(
         assert receipt["dataset_manifest_sha256"] == manifest_sha
         assert receipt["overwrite_performed"] is False
         assert Path(targets[node.node_id]).joinpath("qe_dataset_manifest.json").is_file()
+
+
+def test_immutable_deploy_preserves_hardlink_aliases_without_duplicate_transfer(
+    tmp_path: Path,
+) -> None:
+    executor, context, manifest_sha, targets = _immutable_deploy_fixture(
+        tmp_path, with_hardlink=True
+    )
+    controller = Path(targets["controller"])
+    logical_bytes = sum(path.stat().st_size for path in controller.rglob("*") if path.is_file())
+
+    result = executor.execute(context, dataset_manifest_sha256=manifest_sha)
+
+    assert result.workload.bytes_transferred < logical_bytes * 2
+    for node_id in ("wsl2-5080", "rdagent-node1"):
+        root = Path(targets[node_id])
+        assert os.path.samefile(root / "component.json", root / "components/component-alias.json")
 
 
 def test_immutable_deploy_rejects_invalid_closure_reference_hash(

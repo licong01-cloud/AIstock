@@ -25,6 +25,7 @@ from .monthly_incremental_baseline import (
     MONTHLY_INCREMENTAL_BASELINE_PATH,
     build_monthly_incremental_baseline,
 )
+from .factor_materializer import FACTOR_H5_DATASETS
 from .monthly_official_adapters import StageWorkload
 from .monthly_worker import ProducerContext
 
@@ -187,6 +188,68 @@ def _st_pit_files(root: Path, value: Mapping[str, Any]) -> tuple[Path, ...]:
     return paths
 
 
+def _validate_consumer_layout(root: Path, required_files: Sequence[Path]) -> None:
+    required = set(required_files)
+    pairs = [
+        (
+            "daily_bin/qlib/calendars/day.txt",
+            "components/daily_bin_candidate/calendars/day.txt",
+        ),
+        (
+            "daily_bin/qlib/instruments/all.txt",
+            "components/daily_bin_candidate/instruments/all.txt",
+        ),
+        (
+            "minute_bin/qlib/calendars/1min.txt",
+            "components/minute_bin_candidate/calendars/1min.txt",
+        ),
+        (
+            "minute_bin/qlib/instruments/all.txt",
+            "components/minute_bin_candidate/instruments/all.txt",
+        ),
+        (
+            "index_context/index_daily.h5",
+            "components/index_context/index_daily.h5",
+        ),
+        *[
+            (
+                f"factor_bundle/{dataset}.h5",
+                f"components/factor_h5_static_candidate_v2/{dataset}.h5",
+            )
+            for dataset in FACTOR_H5_DATASETS
+        ],
+        (
+            "factor_bundle/static_factors.parquet",
+            "components/factor_h5_static_candidate_v2/static_factors.parquet",
+        ),
+    ]
+    expected = {
+        "components/daily_bin_candidate/instruments/stock_universe.txt",
+        "components/daily_bin_candidate/instruments/benchmark.txt",
+        "components/daily_bin_candidate/meta_export.json",
+        "components/minute_bin_candidate/meta_export.json",
+        "components/factor_h5_static_candidate_v2/meta.json",
+        "components/index_context/meta.json",
+        "reports/qe_index_pool_coverage_receipt.json",
+        "reports/monthly_consumer_layout_receipt.json",
+        *(target for _source, target in pairs),
+    }
+    resolved = {
+        relative: _plain_file(root, root / relative, label="consumer release file")
+        for relative in sorted(expected)
+    }
+    if not set(resolved.values()).issubset(required):
+        raise MonthlyCandidateFinalizerError(
+            "consumer release layout is absent from shared file inventory"
+        )
+    for source, target in pairs:
+        source_path = _plain_file(root, root / source, label="internal release file")
+        if not os.path.samefile(source_path, resolved[target]):
+            raise MonthlyCandidateFinalizerError(
+                "consumer release data is not a hardlink to the validated build"
+            )
+
+
 @dataclass(frozen=True, slots=True)
 class UnifiedMonthlyCandidateFinalizer:
     shared_components: MonthlySharedComponentBuilder
@@ -214,6 +277,11 @@ class UnifiedMonthlyCandidateFinalizer:
             raise MonthlyCandidateFinalizerError(
                 "candidate staging root is linked or invalid"
             )
+        manifest_path = root / "qe_dataset_manifest.json"
+        if manifest_path.exists():
+            raise MonthlyCandidateFinalizerError(
+                "candidate manifest already exists before finalization"
+            )
         if (
             validation_result.get("validation_status") != "PASS"
             or validation_result.get("required_validation_failures") != 0
@@ -240,6 +308,7 @@ class UnifiedMonthlyCandidateFinalizer:
             _plain_file(root, path, label="shared component")
             for path in sidecars.required_files
         )
+        _validate_consumer_layout(root, required_files)
         calendar = _plain_file(
             root, sidecars.qlib_calendar_path, label="Qlib day calendar"
         )
@@ -317,11 +386,6 @@ class UnifiedMonthlyCandidateFinalizer:
             },
         )
 
-        manifest_path = root / "qe_dataset_manifest.json"
-        if manifest_path.exists():
-            raise MonthlyCandidateFinalizerError(
-                "candidate manifest already exists before finalization"
-            )
         all_files = self._snapshot_release_files(root)
         if evidence_path.resolve(strict=True) not in all_files:
             raise MonthlyCandidateFinalizerError(

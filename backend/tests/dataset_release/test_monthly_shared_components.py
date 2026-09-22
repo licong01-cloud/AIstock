@@ -20,6 +20,8 @@ from backend.services.dataset_release.monthly_shared_components import (
     _pit_intervals,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
+from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
+from backend.services.dataset_release.index_contract import DOMESTIC_INDEX_DEFINITIONS
 from backend.services.dataset_release.pit import freeze_pit_snapshot
 from backend.services.dataset_release.sector_enrichment import FrozenSectorEnricher
 from backend.services.dataset_release.shared_sector_context import (
@@ -169,6 +171,31 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
     instruments_path.write_text(
         "SZ000001\t2024-07-01\t2024-07-05\n", encoding="utf-8"
     )
+    (calendar_path.parent.parent / "features" / "sz000001").mkdir(parents=True)
+    (calendar_path.parent.parent / "features" / "sz000001" / "close.day.bin").write_bytes(
+        b"daily"
+    )
+    (instruments_path.parent / "index.txt").write_text(
+        "".join(
+            f"{item.daily_code}\t{item.required_from.isoformat()}\t{cutoff.isoformat()}\n"
+            for item in DOMESTIC_INDEX_DEFINITIONS
+        ),
+        encoding="utf-8",
+    )
+    minute_root = staging / "minute_bin/qlib"
+    (minute_root / "calendars").mkdir(parents=True)
+    (minute_root / "instruments").mkdir()
+    (minute_root / "features" / "sz000001").mkdir(parents=True)
+    (minute_root / "calendars" / "1min.txt").write_text(
+        "2024-07-01\n2024-07-02\n2024-07-03\n2024-07-04\n2024-07-05\n",
+        encoding="utf-8",
+    )
+    (minute_root / "instruments" / "all.txt").write_text(
+        "SZ000001\t2024-07-01\t2024-07-05\n", encoding="utf-8"
+    )
+    (minute_root / "features" / "sz000001" / "close.1min.bin").write_bytes(
+        b"minute"
+    )
     factor_root = staging / "factor_bundle"
     factor_root.mkdir(parents=True)
     index = pd.MultiIndex.from_product(
@@ -184,6 +211,14 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         },
         index=index,
     ).to_hdf(factor_root / "sector_data.h5", key="data", format="table")
+    for dataset in FACTOR_H5_DATASETS:
+        path = factor_root / f"{dataset}.h5"
+        if not path.exists():
+            path.write_bytes(dataset.encode("ascii"))
+    (factor_root / "static_factors.parquet").write_bytes(b"static")
+    index_root = staging / "index_context"
+    index_root.mkdir()
+    (index_root / "index_daily.h5").write_bytes(b"index")
 
     snapshot = _snapshot()
     frozen = SimpleNamespace(
@@ -281,7 +316,10 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         operation_id="dmr_" + "1" * 32,
         attempt=1,
         request={},
-        plan={"target_cutoff": cutoff.isoformat()},
+        plan={
+            "target_cutoff": cutoff.isoformat(),
+            "release_id": "qe_hmm_full_v2_20240705",
+        },
         prior_receipts={},
     )
     profile = SimpleNamespace(
