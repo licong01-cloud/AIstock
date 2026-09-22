@@ -537,19 +537,19 @@ class LocalExecutor:
             dataset_identity_complete=True,
             consumer_contracts=(
                 _write(
-                    self.root / "evidence" / "consumer-contract.json",
+                    self.root / "provenance" / "consumer-contract.json",
                     {"version": "1", "dataset_manifest_sha256": MANIFEST},
                 ),
             ),
             source_readiness=(
                 _write(
-                    self.root / "evidence" / "source-readiness.json",
+                    self.root / "provenance" / "source-readiness.json",
                     {"status": "PASS", "dataset_manifest_sha256": MANIFEST},
                 ),
             ),
             component_validations=(
                 _write(
-                    self.root / "evidence" / "component-validation.json",
+                    self.root / "provenance" / "component-validation.json",
                     {
                         "status": "PASS",
                         "gaps": 0,
@@ -558,7 +558,7 @@ class LocalExecutor:
                 ),
             ),
             lineage_path=_write(
-                self.root / "evidence" / "lineage.json",
+                self.root / "provenance" / "lineage.json",
                 {
                     "predecessor": PREDECESSOR,
                     "dataset_manifest_sha256": MANIFEST,
@@ -568,9 +568,26 @@ class LocalExecutor:
 
 
 def test_local_validate_adapter_constructs_release_closure(tmp_path: Path) -> None:
-    manifest = _write(tmp_path / "candidate" / "qe_dataset_manifest.json", {"x": 1})
-    asset = _write(tmp_path / "candidate" / "derived" / "coefficients.json", {"x": 2})
-    adapter = OfficialLocalValidateAdapter(tmp_path, LocalExecutor(tmp_path))
+    candidate = tmp_path / "candidate"
+    manifest = _write(candidate / "qe_dataset_manifest.json", {"x": 1})
+    asset = _write(candidate / "derived" / "coefficients.json", {"x": 2})
+    registry = _write(
+        candidate / "derived" / "derived_asset_registry.json",
+        {
+            "schema_version": "aistock_dataset_derived_asset_registry_v1",
+            "source_dataset_manifest_sha256": MANIFEST,
+            "assets": [
+                {
+                    "asset_id": "hmm",
+                    "path": "coefficients.json",
+                    "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+                    "size": asset.stat().st_size,
+                    "schema_version": "hmm-test-v1",
+                }
+            ],
+        },
+    )
+    adapter = OfficialLocalValidateAdapter(tmp_path, LocalExecutor(candidate))
     result = adapter.execute(
         _context(
             "LOCAL_VALIDATE",
@@ -578,12 +595,71 @@ def test_local_validate_adapter_constructs_release_closure(tmp_path: Path) -> No
                 "dataset_manifest_sha256": MANIFEST,
                 "dataset_manifest_ref": _ref(tmp_path, manifest),
             },
-            derive_scope={"derived_assets": [_ref(tmp_path, asset)]},
+            derive_scope={
+                "derived_assets": [_ref(tmp_path, asset)],
+                "derived_asset_registry_ref": _ref(tmp_path, registry),
+            },
+            candidate_root=candidate,
         )
     )
     assert result.scope["dataset_identity_complete"] is True
     assert set(result.scope["pool_gap_counts"].values()) == {0}
     assert result.scope["release_closure"]["canonical_sha256"]
+    assert (candidate / "release_closure_receipt.json").is_file()
+    assert all(
+        not Path(ref["id"]).is_absolute()
+        for field in (
+            "derived_asset_refs",
+            "consumer_contract_refs",
+            "source_readiness_refs",
+            "component_validation_refs",
+        )
+        for ref in result.scope["release_closure"][field]
+    )
+
+
+def test_local_validate_adapter_rejects_evidence_outside_candidate(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "candidate"
+    manifest = _write(candidate / "qe_dataset_manifest.json", {"x": 1})
+    asset = _write(candidate / "derived" / "coefficients.json", {"x": 2})
+    registry = _write(
+        candidate / "derived" / "derived_asset_registry.json",
+        {
+            "schema_version": "aistock_dataset_derived_asset_registry_v1",
+            "source_dataset_manifest_sha256": MANIFEST,
+            "assets": [
+                {
+                    "asset_id": "hmm",
+                    "path": "coefficients.json",
+                    "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+                    "size": asset.stat().st_size,
+                    "schema_version": "hmm-test-v1",
+                }
+            ],
+        },
+    )
+    adapter = OfficialLocalValidateAdapter(
+        tmp_path,
+        LocalExecutor(tmp_path / "external"),
+    )
+
+    with pytest.raises(OfficialMonthlyAdapterError, match="provenance root is unavailable"):
+        adapter.execute(
+            _context(
+                "LOCAL_VALIDATE",
+                build_scope={
+                    "dataset_manifest_sha256": MANIFEST,
+                    "dataset_manifest_ref": _ref(tmp_path, manifest),
+                },
+                derive_scope={
+                    "derived_assets": [_ref(tmp_path, asset)],
+                    "derived_asset_registry_ref": _ref(tmp_path, registry),
+                },
+                candidate_root=candidate,
+            )
+        )
 
 
 @dataclass
@@ -639,7 +715,7 @@ def test_deploy_adapter_rejects_manifest_drift(tmp_path: Path) -> None:
         adapter.execute(_context("DEPLOY", build_scope=build_scope, local_scope=local_scope))
 
 
-def _sealed_candidate(root: Path) -> tuple[str, Path]:
+def _sealed_candidate(root: Path) -> tuple[str, Path, Path]:
     component = _write(root / "component.json", {"status": "PASS"})
     unsigned: dict[str, Any] = {
         "schema_version": "qe_dataset_manifest_v1",
@@ -657,7 +733,7 @@ def _sealed_candidate(root: Path) -> tuple[str, Path]:
     manifest_sha = hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
     manifest = dict(unsigned)
     manifest["dataset_manifest_sha256"] = manifest_sha
-    _write(root / "qe_dataset_manifest.json", manifest)
+    manifest_path = _write(root / "qe_dataset_manifest.json", manifest)
     asset = _write(
         root / "derived" / "coefficients.json",
         {
@@ -681,7 +757,33 @@ def _sealed_candidate(root: Path) -> tuple[str, Path]:
             ],
         },
     )
-    return manifest_sha, registry
+    provenance = root / "provenance"
+    contract = _write(provenance / "consumer-contract.json", {"status": "PASS"})
+    source = _write(provenance / "source-readiness.json", {"status": "PASS"})
+    validation = _write(provenance / "component-validation.json", {"status": "PASS"})
+    lineage = _write(provenance / "lineage.json", {"status": "PASS"})
+
+    def closure_ref(path: Path) -> dict[str, Any]:
+        return {
+            "id": path.relative_to(root).as_posix(),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "size": path.stat().st_size,
+        }
+
+    closure: dict[str, Any] = {
+        "schema_version": "aistock_release_closure_v1",
+        "dataset_manifest_ref": closure_ref(manifest_path),
+        "derived_asset_refs": [closure_ref(registry), closure_ref(asset)],
+        "consumer_contract_refs": [closure_ref(contract)],
+        "source_readiness_refs": [closure_ref(source)],
+        "component_validation_refs": [closure_ref(validation)],
+        "lineage_ref": closure_ref(lineage),
+    }
+    closure["canonical_sha256"] = hashlib.sha256(
+        canonical_json_bytes(closure)
+    ).hexdigest()
+    closure_path = _write(root / "release_closure_receipt.json", closure)
+    return manifest_sha, registry, closure_path
 
 
 def _immutable_deploy_fixture(tmp_path: Path, *, attempt: int = 1):
@@ -691,7 +793,7 @@ def _immutable_deploy_fixture(tmp_path: Path, *, attempt: int = 1):
     artifacts = tmp_path / "artifacts"
     for path in (wsl_parent, node_parent, artifacts):
         path.mkdir(parents=True)
-    manifest_sha, registry = _sealed_candidate(controller)
+    manifest_sha, registry, closure = _sealed_candidate(controller)
     targets = {
         "controller": str(controller.resolve()),
         "wsl2-5080": str(wsl_parent / "candidate"),
@@ -702,6 +804,7 @@ def _immutable_deploy_fixture(tmp_path: Path, *, attempt: int = 1):
         candidate_root=controller,
         target_roots=targets,
         derive_scope={"derived_asset_registry_ref": _ref(tmp_path, registry)},
+        local_scope={"release_closure_ref": _ref(tmp_path, closure)},
     )
     context = ProducerContext(
         stage=context.stage,
@@ -737,6 +840,41 @@ def test_immutable_deploy_copies_one_exact_inventory_to_all_nodes(
         assert receipt["dataset_manifest_sha256"] == manifest_sha
         assert receipt["overwrite_performed"] is False
         assert Path(targets[node.node_id]).joinpath("qe_dataset_manifest.json").is_file()
+
+
+def test_immutable_deploy_rejects_invalid_closure_reference_hash(
+    tmp_path: Path,
+) -> None:
+    executor, context, manifest_sha, _targets = _immutable_deploy_fixture(tmp_path)
+    candidate = Path(str(context.plan["candidate_root"]))
+    closure_path = candidate / "release_closure_receipt.json"
+    closure = dict(_read(closure_path))
+    manifest_ref = dict(closure["dataset_manifest_ref"])
+    manifest_ref["sha256"] = "invalid"
+    closure["dataset_manifest_ref"] = manifest_ref
+    unsigned = dict(closure)
+    unsigned.pop("canonical_sha256")
+    closure["canonical_sha256"] = hashlib.sha256(
+        canonical_json_bytes(unsigned)
+    ).hexdigest()
+    closure_path.unlink()
+    _write(closure_path, closure)
+    local_scope = dict(context.prior_receipts["LOCAL_VALIDATE"]["scope"])
+    local_scope["release_closure_ref"] = _ref(tmp_path, closure_path)
+    context = ProducerContext(
+        stage=context.stage,
+        operation_id=context.operation_id,
+        attempt=context.attempt,
+        request=context.request,
+        plan=context.plan,
+        prior_receipts={
+            **context.prior_receipts,
+            "LOCAL_VALIDATE": {"scope": local_scope},
+        },
+    )
+
+    with pytest.raises(MonthlyImmutableDeployError, match="hash is invalid"):
+        executor.execute(context, dataset_manifest_sha256=manifest_sha)
 
 
 def test_immutable_deploy_resume_accepts_only_identical_existing_targets(
