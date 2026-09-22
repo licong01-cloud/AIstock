@@ -35,6 +35,7 @@ from backend.services.qe_archive.realtime_ingestion import QEArchiveRealtimeInge
 from backend.services.qe_archive.repository import QEArchiveRepository
 from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
 from backend.services.qe_archive.worker import ArchiveWorkerEventResult, QEArchiveWorker
+from backend.services.qe_archive import worker_loop as worker_loop_module
 from backend.services.qe_archive.worker_service import (
     QEArchiveWorkerService,
     WORKER_CONFIRM_TEXT,
@@ -1365,6 +1366,20 @@ def test_realtime_ingestion_is_disabled_by_default_and_does_not_archive() -> Non
 
     assert result == {"archived": False, "skipped_reason": "disabled"}
     assert service.calls == 0
+
+
+def test_realtime_capture_and_lifespan_worker_default_on_with_explicit_opt_out(monkeypatch) -> None:
+    monkeypatch.delenv("QE_ARCHIVE_REALTIME_ENABLED", raising=False)
+    monkeypatch.delenv("QE_ARCHIVE_WORKER_AUTOSTART", raising=False)
+    monkeypatch.delenv("QE_ARCHIVE_WORKER_ENABLED", raising=False)
+
+    assert QEArchiveRealtimeIngestion().enabled is True
+    assert worker_loop_module.autostart_enabled() is True
+
+    monkeypatch.setenv("QE_ARCHIVE_REALTIME_ENABLED", "false")
+    monkeypatch.setenv("QE_ARCHIVE_WORKER_AUTOSTART", "false")
+    assert QEArchiveRealtimeIngestion().enabled is False
+    assert worker_loop_module.autostart_enabled() is False
 
 
 def test_realtime_ingestion_enabled_queues_outbox_by_default() -> None:

@@ -86,6 +86,12 @@ def _archive_report_to_worker_result(report: Mapping[str, Any]) -> ArchiveWorker
             stats={"archive_report": dict(report)},
         )
     first = results[0] if isinstance(results[0], Mapping) else {}
+    if first.get("skipped_reason"):
+        return ArchiveWorkerEventResult(
+            success=True,
+            skipped_reason=str(first.get("skipped_reason")),
+            stats={"archive_report": dict(report)},
+        )
     quality = first.get("quality") if isinstance(first, Mapping) else None
     if isinstance(quality, Mapping) and quality.get("passed") is False:
         return ArchiveWorkerEventResult(

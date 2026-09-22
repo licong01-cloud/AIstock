@@ -565,6 +565,71 @@ def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
     assert all(command[0] != "npm" for command in calls)
 
 
+def test_mcp_gateway_phase5_invokes_prebuilt_frontend_entrypoints_directly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    for relative in noxfile.FRONTEND_DIRECT_ENTRYPOINTS:
+        entrypoint = frontend / "node_modules" / relative
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text("// pinned CLI\n", encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    class DummySession:
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+        def chdir(self, path: str) -> None:
+            calls.append(("chdir", path))
+
+    noxfile.mcp_gateway_phase5_assistant(DummySession())  # type: ignore[arg-type]
+
+    assert ("node", "node_modules/next/dist/bin/next", "lint") in calls
+    assert ("node", "node_modules/next/dist/bin/next", "build") in calls
+    assert (
+        "node",
+        "node_modules/@playwright/test/cli.js",
+        "test",
+        "tests/research-assistant/phase5-mcp-gateway-ui.spec.ts",
+        "--project",
+        "chromium",
+    ) in calls
+    assert not any(command[:2] in {("npm", "run"), ("npx", "playwright")} for command in calls)
+
+
+def test_ra_phase7_invokes_prebuilt_frontend_entrypoints_directly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    for relative in noxfile.FRONTEND_DIRECT_ENTRYPOINTS:
+        entrypoint = frontend / "node_modules" / relative
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text("// pinned CLI\n", encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    class DummySession:
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+        def chdir(self, path: str) -> None:
+            calls.append(("chdir", path))
+
+    noxfile.ra_phase7_full_accept(DummySession())  # type: ignore[arg-type]
+
+    assert ("node", "node_modules/next/dist/bin/next", "lint") in calls
+    assert ("node", "node_modules/next/dist/bin/next", "build") in calls
+    assert sum(
+        command[:3]
+        == ("node", "node_modules/@playwright/test/cli.js", "test")
+        for command in calls
+    ) == 2
+    assert not any(command[:2] in {("npm", "run"), ("npx", "playwright")} for command in calls)
+
+
 def test_terminate_process_tree_uses_taskkill_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, ...]] = []
 

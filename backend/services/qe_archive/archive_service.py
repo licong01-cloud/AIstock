@@ -1,7 +1,7 @@
-"""Manual QE archive payload processing service.
+"""QE archive payload classification, persistence and asset publication.
 
-This service is intentionally not wired into QE webhooks or FastAPI startup.
-Callers must pass payloads that have already been collected from DB/API paths.
+Realtime terminal hooks reach this service through the durable outbox worker;
+manual/backfill callers use the same classifier and idempotent writer.
 """
 
 from __future__ import annotations
@@ -15,6 +15,17 @@ from backend.services.model_store.service import ModelStoreService
 
 from .payload_extractor import ExtractedArchivePayload, QEArchivePayloadExtractor
 from .repository import QEArchiveRepository
+from .asset_lifecycle import (
+    QEAssetStatus,
+    QEWarehouseStatus,
+    attach_lifecycle,
+    classify_qe_result,
+)
+from .asset_publisher import (
+    QEArchiveAssetPublishError,
+    QEArchiveAssetPublisher,
+    asset_publish_manifest,
+)
 from backend.services.quantevolver.qe_resource_phase_service import (
     RESOURCE_SCHEMA_REASON,
     QEResourcePhaseError,
@@ -43,10 +54,12 @@ class QEArchiveService:
         extractor: QEArchivePayloadExtractor | None = None,
         model_store_service: ModelStoreService | None = None,
         resource_phase_service: QEResourcePhaseService | None = None,
+        asset_publisher: QEArchiveAssetPublisher | None = None,
     ) -> None:
         self._repository = repository or QEArchiveRepository()
         self._extractor = extractor or QEArchivePayloadExtractor()
         self._model_store_service = model_store_service or ModelStoreService()
+        self._asset_publisher = asset_publisher
         self._resource_phase_service = resource_phase_service
         if resource_phase_service is None and (
             repository is None or isinstance(repository, QEArchiveRepository)
@@ -70,6 +83,36 @@ class QEArchiveService:
         """
 
         prepared_payload, artifact_resolution = self._attach_prediction_store_manifest(payload)
+        lifecycle = classify_qe_result(prepared_payload)
+        preliminary_extracted = self._extractor.extract(
+            attach_lifecycle(prepared_payload, lifecycle),
+            event_type=event_type,
+            source_system=source_system,
+            source_id=source_id,
+            source_sub_id=source_sub_id,
+        )
+        if (
+            not dry_run
+            and lifecycle.archive_eligible
+            and lifecycle.business_identity_sha256
+            and lifecycle.result_digest_sha256
+            and lifecycle.result_digest_authoritative
+        ):
+            find_survivor = getattr(self._repository, "find_lifecycle_survivor", None)
+            if callable(find_survivor):
+                survivor = find_survivor(
+                    business_identity_sha256=lifecycle.business_identity_sha256,
+                    result_digest_sha256=lifecycle.result_digest_sha256,
+                    exclude_run_id=preliminary_extracted.run.run_id,
+                )
+                if survivor:
+                    lifecycle = classify_qe_result(
+                        prepared_payload,
+                        duplicate_of=str(survivor),
+                    )
+        if not dry_run and lifecycle.archive_eligible:
+            lifecycle = lifecycle.with_persistence(warehouse_status=QEWarehouseStatus.PERSISTED)
+        prepared_payload = attach_lifecycle(prepared_payload, lifecycle)
         extracted = self._extractor.extract(
             prepared_payload,
             event_type=event_type,
@@ -89,10 +132,21 @@ class QEArchiveService:
                 "execution_event_count": len(extracted.execution_events),
                 "raw_payload_count": len(extracted.raw_payloads),
                 "prediction_store_link": _compact_artifact_resolution(artifact_resolution),
+                "asset_lifecycle": lifecycle.as_dict(),
+                "not_eligible": not lifecycle.archive_eligible,
             }
         )
 
         if not dry_run:
+            if not lifecycle.archive_eligible:
+                stats["written"] = False
+                stats["not_eligible"] = True
+                return ArchivePayloadResult(
+                    run_id=extracted.run.run_id,
+                    dry_run=False,
+                    stats=stats,
+                    extracted=extracted,
+                )
             extracted = replace(
                 extracted,
                 run=replace(
@@ -101,6 +155,82 @@ class QEArchiveService:
                 ),
             )
             self._write(extracted)
+            publish_manifest = asset_publish_manifest(prepared_payload)
+            if publish_manifest:
+                try:
+                    published = (self._asset_publisher or QEArchiveAssetPublisher()).publish(
+                        run_id=extracted.run.run_id,
+                        value_class=lifecycle.value_class.value,
+                        retention_class=lifecycle.retention_class,
+                        manifest=publish_manifest,
+                    )
+                except QEArchiveAssetPublishError as exc:
+                    lifecycle = lifecycle.with_persistence(
+                        warehouse_status=QEWarehouseStatus.PERSISTED,
+                        asset_status=(
+                            QEAssetStatus.PARTIAL
+                            if exc.published_artifacts
+                            else QEAssetStatus.FAILED
+                        ),
+                        protected_owner_count=(1 if exc.published_artifacts else 0),
+                        asset_reason_code=exc.reason_code,
+                    )
+                    prepared_payload = attach_lifecycle(prepared_payload, lifecycle)
+                    extracted = self._extractor.extract(
+                        prepared_payload,
+                        event_type=event_type,
+                        source_system=source_system,
+                        source_id=source_id,
+                        source_sub_id=source_sub_id,
+                    )
+                    extracted = replace(
+                        extracted,
+                        run=replace(
+                            extracted.run,
+                            archived_at=extracted.run.archived_at or datetime.now(timezone.utc),
+                        ),
+                    )
+                    self._write(extracted)
+                    if exc.published_artifacts:
+                        self._repository.upsert_artifact_manifest(
+                            extracted.run.run_id,
+                            list(exc.published_artifacts),
+                            replace_existing=True,
+                        )
+                    raise
+                lifecycle = lifecycle.with_persistence(
+                    warehouse_status=QEWarehouseStatus.PERSISTED,
+                    asset_status=QEAssetStatus.PUBLISHED,
+                    protected_owner_count=1,
+                    asset_reason_code="qe_asset_publish_complete",
+                )
+                prepared_payload = attach_lifecycle(prepared_payload, lifecycle)
+                extracted = self._extractor.extract(
+                    prepared_payload,
+                    event_type=event_type,
+                    source_system=source_system,
+                    source_id=source_id,
+                    source_sub_id=source_sub_id,
+                )
+                extracted = replace(
+                    extracted,
+                    run=replace(
+                        extracted.run,
+                        archived_at=extracted.run.archived_at or datetime.now(timezone.utc),
+                    ),
+                )
+                self._write(extracted)
+                self._repository.upsert_artifact_manifest(
+                    extracted.run.run_id,
+                    list(published.artifacts),
+                    replace_existing=True,
+                )
+                stats["asset_publish"] = {
+                    "status": published.status,
+                    "published_count": published.published_count,
+                    "reused_count": published.reused_count,
+                }
+                stats["asset_lifecycle"] = lifecycle.as_dict()
             stats["written"] = True
         else:
             stats["written"] = False

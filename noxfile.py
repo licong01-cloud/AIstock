@@ -685,6 +685,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
         "backend/tests/dataset_release/test_monthly_supervised_build.py",
         "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+        "backend/tests/dataset_release/test_monthly_profile_candidate.py",
         "backend/tests/dataset_release/test_monthly_shared_components.py",
         "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
         "backend/tests/dataset_release/test_monthly_source_audit.py",
@@ -1682,6 +1683,7 @@ def qe_archive_backend(session: nox.Session) -> None:
         "backend/tests/test_qe_archive_schema.py",
         "backend/tests/test_qe_execution_templates_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
+        "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
         "backend/tests/qe_templates/test_template_validator.py",
         "backend/tests/test_aistock_qe_mcp_servers.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
@@ -1823,6 +1825,7 @@ def mcp_gateway_phase6_resource_monitor(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
     """Run full Phase 5 RA manifest catalog, audit, and UI acceptance gates."""
+    _ensure_frontend_node_modules(session)
     phase5_paths = [
         "backend/mcp/tool_manifest.py",
         "backend/routers/research_assistant.py",
@@ -1907,11 +1910,11 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         external=True,
     )
     session.chdir("frontend")
-    session.run("npm", "run", "lint", env=frontend_env, external=True)
-    session.run("npm", "run", "build", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/phase5-mcp-gateway-ui.spec.ts",
         "--project",
@@ -2489,12 +2492,25 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         "-p",
         "no:cacheprovider",
     )
+    _ensure_frontend_node_modules(session)
     session.chdir("frontend")
-    session.run("npm", "run", "lint", env=frontend_env, external=True)
-    session.run("npm", "run", "build", env=frontend_env, external=True)
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/next/dist/bin/next",
+        "lint",
+        env=frontend_env,
+        external=True,
+    )
+    session.run(
+        "node",
+        "node_modules/next/dist/bin/next",
+        "build",
+        env=frontend_env,
+        external=True,
+    )
+    session.run(
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/phase7-frontend-acceptance.spec.ts",
         "--project",
@@ -2503,8 +2519,8 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         external=True,
     )
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/research-assistant.spec.ts",
         "--project",

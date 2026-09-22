@@ -627,6 +627,83 @@ def _validate_semantics(
             field="release_closure_ref",
             expected=closure,
         )
+        candidate_root = Path(str(plan.get("candidate_root") or ""))
+        if not candidate_root.is_absolute():
+            raise MonthlyProducerError("release closure candidate root is invalid")
+        try:
+            resolved_candidate = candidate_root.resolve(strict=True)
+        except OSError as exc:
+            raise MonthlyProducerError("release closure candidate root is unavailable") from exc
+        closure_path = output_paths.get(str(closure_ref["id"]))
+        expected_closure = resolved_candidate / "release_closure_receipt.json"
+        if closure_path is None or closure_path.resolve(strict=True) != expected_closure:
+            raise MonthlyProducerError("release closure is not candidate-local")
+
+        def validate_candidate_ref(
+            raw: Any,
+            *,
+            field: str,
+            require_provenance: bool = False,
+        ) -> str:
+            if not _is_content_ref(raw):
+                raise MonthlyProducerError(f"release closure {field} reference is invalid")
+            relative = Path(str(raw["id"]))
+            if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+                raise MonthlyProducerError(f"release closure {field} path is invalid")
+            target = resolved_candidate / relative
+            _require_plain_path_under(resolved_candidate, target, label=f"release closure {field}")
+            resolved = target.resolve(strict=True)
+            if require_provenance and not resolved.is_relative_to(
+                resolved_candidate / "provenance"
+            ):
+                raise MonthlyProducerError(
+                    f"release closure {field} must be candidate-local provenance"
+                )
+            if _file_sha256(resolved) != raw["sha256"] or resolved.stat().st_size != raw["size"]:
+                raise MonthlyProducerError(f"release closure {field} bytes differ")
+            return relative.as_posix()
+
+        if validate_candidate_ref(
+            closure["dataset_manifest_ref"], field="dataset manifest"
+        ) != "qe_dataset_manifest.json":
+            raise MonthlyProducerError("release closure manifest path differs")
+        for raw in closure["derived_asset_refs"]:
+            validate_candidate_ref(raw, field="derived asset")
+        for field in (
+            "consumer_contract_refs",
+            "source_readiness_refs",
+            "component_validation_refs",
+        ):
+            for raw in closure[field]:
+                validate_candidate_ref(raw, field=field, require_provenance=True)
+        validate_candidate_ref(
+            closure["lineage_ref"], field="lineage", require_provenance=True
+        )
+        profile_ref = require_json(
+            scope.get("profile_candidate_ref"),
+            field="profile_candidate_ref",
+        )
+        profile_path = output_paths.get(str(scope["profile_candidate_ref"]["id"]))
+        planned_profile = Path(str(plan.get("profile_candidate") or ""))
+        if (
+            not planned_profile.is_absolute()
+            or profile_path is None
+            or profile_path.resolve(strict=True) != planned_profile.resolve(strict=True)
+            or profile_ref.get("schema_version") != "aistock_active_dataset_profile_v4"
+            or profile_ref.get("generation") != plan.get("generation")
+            or profile_ref.get("release_id") != plan.get("release_id")
+            or profile_ref.get("cutoff") != plan.get("target_cutoff")
+        ):
+            raise MonthlyProducerError("profile candidate identity differs from release plan")
+        profile_components = profile_ref.get("components")
+        if (
+            not isinstance(profile_components, Mapping)
+            or profile_components.get("dataset_manifest_sha256")
+            != scope.get("dataset_manifest_sha256")
+            or profile_components.get("release_closure_sha256")
+            != closure_ref["sha256"]
+        ):
+            raise MonthlyProducerError("profile candidate release identity differs")
     elif stage == "DEPLOY":
         nodes = scope.get("nodes")
         node_hashes = scope.get("node_manifest_sha256")
