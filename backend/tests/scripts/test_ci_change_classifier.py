@@ -782,6 +782,22 @@ def test_unified_monthly_release_surfaces_select_qlib_data_backend(tmp_path: Pat
     assert payload["unmapped_code_files"] == []
 
 
+def test_unified_monthly_worker_selects_its_direct_qlib_data_test(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/monthly_unified_dataset_release_worker.py",
+            "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_sessions"] == ["qlib_data_backend"]
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == []
+
+
 def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_sessions(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
