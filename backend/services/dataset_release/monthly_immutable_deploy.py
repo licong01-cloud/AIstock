@@ -43,6 +43,7 @@ class ReleaseFile:
     source_path: Path
     sha256: str
     size: int
+    hardlink_source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +140,7 @@ def _inventory(
         raise MonthlyImmutableDeployError("dataset manifest component inventory is empty")
 
     files: dict[str, ReleaseFile] = {}
+    hardlink_sources: dict[tuple[int, int], str] = {}
     for base, directories, names in os.walk(root):
         base_path = Path(base)
         if _is_link(base_path):
@@ -153,11 +155,19 @@ def _inventory(
             if _is_link(path) or not path.is_file():
                 raise MonthlyImmutableDeployError("candidate inventory contains a non-regular file")
             relative = path.relative_to(root).as_posix()
+            metadata = path.stat()
+            hardlink_key = (int(metadata.st_dev), int(metadata.st_ino))
+            hardlink_source = None
+            if metadata.st_nlink > 1 and metadata.st_ino:
+                hardlink_source = hardlink_sources.setdefault(hardlink_key, relative)
+                if hardlink_source == relative:
+                    hardlink_source = None
             files[relative] = ReleaseFile(
                 relative_path=relative,
                 source_path=path.resolve(strict=True),
                 sha256=_sha256(path),
-                size=path.stat().st_size,
+                size=metadata.st_size,
+                hardlink_source=hardlink_source,
             )
     if "qe_dataset_manifest.json" not in files:
         raise MonthlyImmutableDeployError("candidate manifest is absent from release inventory")
@@ -445,11 +455,21 @@ class ImmutableFilesystemNodeTransport:
         if staging.exists() or _is_link(staging):
             raise MonthlyImmutableDeployError(f"deployment staging already exists: {self.node_id}")
         staging.mkdir(parents=False, exist_ok=False)
+        bytes_transferred = 0
         try:
             for item in files:
                 destination = staging / Path(item.relative_path)
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(item.source_path, destination)
+                if item.hardlink_source is None:
+                    shutil.copyfile(item.source_path, destination)
+                    bytes_transferred += item.size
+                else:
+                    linked_source = staging / Path(item.hardlink_source)
+                    if not linked_source.is_file() or _is_link(linked_source):
+                        raise MonthlyImmutableDeployError(
+                            f"deployment hardlink source differs: {self.node_id}"
+                        )
+                    os.link(linked_source, destination)
                 with destination.open("rb+") as handle:
                     handle.flush()
                     os.fsync(handle.fileno())
@@ -469,7 +489,7 @@ class ImmutableFilesystemNodeTransport:
             self.node_id,
             candidate_root,
             rows,
-            sum(item.size for item in files),
+            bytes_transferred,
         )
 
 
