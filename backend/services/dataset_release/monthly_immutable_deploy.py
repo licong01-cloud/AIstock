@@ -15,7 +15,10 @@ import os
 from pathlib import Path
 import shutil
 import stat
-from typing import Mapping, Protocol, Sequence
+import subprocess
+import tarfile
+import tempfile
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .canonical import canonical_json_bytes, ensure_sha256
 from .errors import CanonicalizationError
@@ -26,6 +29,11 @@ from .monthly_official_adapters import (
 )
 from .monthly_unified import REQUIRED_NODES
 from .monthly_worker import ProducerContext
+from .monthly_remote_deploy import (
+    FRAME_MAGIC,
+    REMOTE_DEPLOY_REQUEST_SCHEMA,
+    REMOTE_DEPLOY_RESULT_SCHEMA,
+)
 
 
 DEPLOYMENT_RECEIPT_SCHEMA = "aistock_monthly_node_deployment_receipt_v1"
@@ -493,6 +501,220 @@ class ImmutableFilesystemNodeTransport:
         )
 
 
+def _run_command(
+    command: Sequence[str],
+    *,
+    payload: bytes,
+    timeout_seconds: int,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        list(command),
+        input=payload,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout_seconds,
+        check=False,
+        shell=False,
+    )
+
+
+def _stream_command(
+    command: Sequence[str],
+    *,
+    request: bytes,
+    files: tuple[ReleaseFile, ...],
+    timeout_seconds: int,
+) -> subprocess.CompletedProcess[bytes]:
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        process = subprocess.Popen(
+            list(command),
+            stdin=subprocess.PIPE,
+            stdout=stdout,
+            stderr=stderr,
+            shell=False,
+        )
+        try:
+            if process.stdin is None:  # pragma: no cover - subprocess contract
+                raise MonthlyImmutableDeployError("remote deployment stdin is unavailable")
+            process.stdin.write(FRAME_MAGIC)
+            process.stdin.write(f"{len(request):x}\n".encode("ascii"))
+            process.stdin.write(request)
+            with tarfile.open(fileobj=process.stdin, mode="w|") as archive:
+                for item in files:
+                    if item.hardlink_source is not None:
+                        continue
+                    info = tarfile.TarInfo(item.relative_path)
+                    info.size = item.size
+                    info.mode = 0o440
+                    info.mtime = 0
+                    with item.source_path.open("rb") as handle:
+                        archive.addfile(info, handle)
+            process.stdin.close()
+            returncode = process.wait(timeout=timeout_seconds)
+        except BaseException:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
+        stdout.seek(0)
+        stderr.seek(0)
+        return subprocess.CompletedProcess(
+            list(command),
+            returncode,
+            stdout=stdout.read(),
+            stderr=stderr.read(),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ImmutableStreamingNodeTransport:
+    """Stream one release to a POSIX node and atomically publish after SHA readback."""
+
+    node_id: str
+    allowed_parent: str
+    command_prefix: tuple[str, ...]
+    timeout_seconds: int = 6 * 60 * 60
+    command_runner: Callable[..., subprocess.CompletedProcess[bytes]] = _run_command
+    stream_runner: Callable[..., subprocess.CompletedProcess[bytes]] = _stream_command
+
+    def __post_init__(self) -> None:
+        if self.node_id not in {"wsl2-5080", "rdagent-node1"}:
+            raise ValueError("streaming deployment node is invalid")
+        if (
+            not self.allowed_parent.startswith("/")
+            or "\x00" in self.allowed_parent
+            or ".." in Path(self.allowed_parent).parts
+            or not self.command_prefix
+            or any(not isinstance(value, str) or not value or "\x00" in value for value in self.command_prefix)
+            or type(self.timeout_seconds) is not int
+            or self.timeout_seconds < 60
+        ):
+            raise ValueError("streaming deployment configuration is invalid")
+
+    def _request(
+        self,
+        context: ProducerContext,
+        *,
+        candidate_root: str,
+        files: tuple[ReleaseFile, ...],
+    ) -> dict[str, Any]:
+        manifest = next(
+            (item for item in files if item.relative_path == "qe_dataset_manifest.json"),
+            None,
+        )
+        if manifest is None:
+            raise MonthlyImmutableDeployError("streaming deployment manifest is absent")
+        return {
+            "schema_version": REMOTE_DEPLOY_REQUEST_SCHEMA,
+            "operation_id": context.operation_id,
+            "attempt": context.attempt,
+            "node_id": self.node_id,
+            "allowed_parent": self.allowed_parent,
+            "candidate_root": candidate_root,
+            "dataset_manifest_sha256": str(
+                json.loads(manifest.source_path.read_text(encoding="utf-8")).get(
+                    "dataset_manifest_sha256"
+                )
+                or ""
+            ),
+            "files": [
+                {
+                    "path": item.relative_path,
+                    "sha256": item.sha256,
+                    "size": item.size,
+                    "hardlink_source": item.hardlink_source,
+                }
+                for item in files
+            ],
+        }
+
+    def _result(
+        self,
+        completed: subprocess.CompletedProcess[bytes],
+        *,
+        request: Mapping[str, Any],
+        statuses: set[str],
+    ) -> Mapping[str, Any]:
+        if completed.returncode != 0:
+            error = completed.stderr.decode("utf-8", errors="replace")[-4_000:]
+            raise MonthlyImmutableDeployError(
+                f"streaming deployment command failed: {self.node_id}: {error}"
+            )
+        try:
+            value = json.loads(completed.stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise MonthlyImmutableDeployError(
+                "streaming deployment result is invalid JSON"
+            ) from exc
+        expected = {
+            "schema_version",
+            "status",
+            "node_id",
+            "candidate_root",
+            "dataset_manifest_sha256",
+            "request_sha256",
+            "files",
+            "bytes_transferred",
+        }
+        if (
+            not isinstance(value, Mapping)
+            or completed.stdout != canonical_json_bytes(value) + b"\n"
+            or set(value) != expected
+            or value.get("schema_version") != REMOTE_DEPLOY_RESULT_SCHEMA
+            or value.get("status") not in statuses
+            or value.get("node_id") != self.node_id
+            or value.get("candidate_root") != request["candidate_root"]
+            or value.get("dataset_manifest_sha256")
+            != request["dataset_manifest_sha256"]
+            or value.get("request_sha256")
+            != hashlib.sha256(canonical_json_bytes(request)).hexdigest()
+            or type(value.get("bytes_transferred")) is not int
+            or value["bytes_transferred"] < 0
+            or not isinstance(value.get("files"), list)
+        ):
+            raise MonthlyImmutableDeployError("streaming deployment result identity differs")
+        return value
+
+    def deploy(
+        self,
+        context: ProducerContext,
+        *,
+        candidate_root: str,
+        files: tuple[ReleaseFile, ...],
+    ) -> NodeTransferReadback:
+        request = self._request(context, candidate_root=candidate_root, files=files)
+        payload = canonical_json_bytes(request) + b"\n"
+        probe = self.command_runner(
+            (*self.command_prefix, "readback"),
+            payload=payload,
+            timeout_seconds=min(self.timeout_seconds, 30 * 60),
+        )
+        observed = self._result(probe, request=request, statuses={"PASS", "ABSENT"})
+        if observed["status"] == "ABSENT":
+            if observed["files"] or observed["bytes_transferred"] != 0:
+                raise MonthlyImmutableDeployError("absent node readback contains data")
+            completed = self.stream_runner(
+                (*self.command_prefix, "deploy"),
+                request=canonical_json_bytes(request),
+                files=files,
+                timeout_seconds=self.timeout_seconds,
+            )
+            observed = self._result(completed, request=request, statuses={"PASS"})
+        rows = tuple(
+            (str(item.get("path") or ""), str(item.get("sha256") or ""), item.get("size"))
+            for item in observed["files"]
+            if isinstance(item, Mapping)
+        )
+        return NodeTransferReadback(
+            node_id=self.node_id,
+            candidate_root=candidate_root,
+            files=rows,  # type: ignore[arg-type]
+            bytes_transferred=int(observed["bytes_transferred"]),
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ImmutableMonthlyDeployExecutor:
     artifact_root: Path
@@ -592,6 +814,7 @@ __all__: Sequence[str] = (
     "DEPLOYMENT_RECEIPT_SCHEMA",
     "ExistingTreeNodeTransport",
     "ImmutableFilesystemNodeTransport",
+    "ImmutableStreamingNodeTransport",
     "ImmutableMonthlyDeployExecutor",
     "MonthlyImmutableDeployError",
     "MonthlyNodeReleaseTransport",
