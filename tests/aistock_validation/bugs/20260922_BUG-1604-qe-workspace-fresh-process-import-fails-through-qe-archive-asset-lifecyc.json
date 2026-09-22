@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1604",
-  "closed_at": null,
+  "closed_at": "2026-09-22T19:04:07.362893Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -134,10 +134,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1604\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1604",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+      "expected_identity": "14c37c771c268825a02b492d7dd7f6482374b8e0",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-22T19:04:02.170301Z",
+      "mode": "read_only",
+      "observed_identity": "4ec2c3b08f4bef229dd3dc6cf40474086155f436",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d20f710b3176acb2054cd1d424965191aaf1aaa77be047987af26cba19cabe7c",
+      "receipt_sha256": "84bfe73333d90dac66f441b80f36b15f7e9c4375858472a146114d46b3fb0b4c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "05321ce4515b0a816085213c35d3e77e99f0492520af6f6afb9d964c1db505b9",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -173,7 +195,7 @@
     ],
     "validation_evidence_digest": "e151daf637c4660253a83113f310d8a02d4de785dcbcbdabf3d273170d22f6f4"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.long_trend_evaluation"
   ],
@@ -188,7 +210,9 @@
     "validation-receipt: id=cf68b3af557effb0 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/strategy_package/test_qe_local_cas.py -q -p no:cacheprovider` result=`3 passed, 1 skipped`",
     "validation-receipt: id=f3d98a53c358190a commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/strategy_package/__init__.py backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py` result=`passed`",
     "validation-receipt: id=0ec8a6ecdde2e3af commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/strategy_package/__init__.py backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py` result=`passed`",
-    "validation-receipt: id=5177abdc7824ff46 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=5177abdc7824ff46 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python -m nox -s hmm_data_source_backend -> 124 passed, 1 skipped, 5 deselected, coverage 76.40 percent",
+    "fresh Python import QEWorkspaceClient, QEArchiveAssetPublisher, StrategyPackageComponentService and HMMDataRepository -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
