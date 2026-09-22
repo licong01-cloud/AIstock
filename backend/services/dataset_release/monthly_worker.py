@@ -679,6 +679,31 @@ def _validate_semantics(
         validate_candidate_ref(
             closure["lineage_ref"], field="lineage", require_provenance=True
         )
+        profile_ref = require_json(
+            scope.get("profile_candidate_ref"),
+            field="profile_candidate_ref",
+        )
+        profile_path = output_paths.get(str(scope["profile_candidate_ref"]["id"]))
+        planned_profile = Path(str(plan.get("profile_candidate") or ""))
+        if (
+            not planned_profile.is_absolute()
+            or profile_path is None
+            or profile_path.resolve(strict=True) != planned_profile.resolve(strict=True)
+            or profile_ref.get("schema_version") != "aistock_active_dataset_profile_v4"
+            or profile_ref.get("generation") != plan.get("generation")
+            or profile_ref.get("release_id") != plan.get("release_id")
+            or profile_ref.get("cutoff") != plan.get("target_cutoff")
+        ):
+            raise MonthlyProducerError("profile candidate identity differs from release plan")
+        profile_components = profile_ref.get("components")
+        if (
+            not isinstance(profile_components, Mapping)
+            or profile_components.get("dataset_manifest_sha256")
+            != scope.get("dataset_manifest_sha256")
+            or profile_components.get("release_closure_sha256")
+            != closure_ref["sha256"]
+        ):
+            raise MonthlyProducerError("profile candidate release identity differs")
     elif stage == "DEPLOY":
         nodes = scope.get("nodes")
         node_hashes = scope.get("node_manifest_sha256")

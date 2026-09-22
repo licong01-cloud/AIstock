@@ -509,10 +509,21 @@ class MonthlyLocalValidationExecutor(Protocol):
     def execute(self, context: ProducerContext, *, dataset_manifest_sha256: str) -> LocalValidationExecution: ...
 
 
+class MonthlyProfileCandidateBuilder(Protocol):
+    def execute(
+        self,
+        context: ProducerContext,
+        *,
+        release_closure_path: Path,
+        derived_asset_registry_path: Path,
+    ) -> Path: ...
+
+
 @dataclass(frozen=True, slots=True)
 class OfficialLocalValidateAdapter:
     artifact_root: Path
     executor: MonthlyLocalValidationExecutor
+    profile_builder: MonthlyProfileCandidateBuilder
     additional_artifact_roots: tuple[Path, ...] = ()
     stage: str = "LOCAL_VALIDATE"
     adapter_id: str = "aistock.monthly.local_validate.official"
@@ -656,6 +667,18 @@ class OfficialLocalValidateAdapter:
             closure,
             accept_identical=True,
         )
+        profile_path = self.profile_builder.execute(
+            context,
+            release_closure_path=closure_path,
+            derived_asset_registry_path=registry_path,
+        )
+        planned_profile_path = Path(str(context.plan.get("profile_candidate") or ""))
+        if (
+            not planned_profile_path.is_absolute()
+            or _plain_file(profile_path, label="profile candidate")
+            != planned_profile_path.resolve(strict=True)
+        ):
+            raise OfficialMonthlyAdapterError("profile candidate path differs from release plan")
         inputs = tuple(
             _artifact(_adapter_roots(self), path, label="local validation input") for path in result.input_artifacts
         )
@@ -665,9 +688,11 @@ class OfficialLocalValidateAdapter:
             *result.component_validations,
             result.lineage_path,
             closure_path,
+            profile_path,
         )
         outputs = tuple(_artifact(_adapter_roots(self), path, label="local validation output") for path in output_paths)
         closure_ref = _content_ref(_adapter_roots(self), closure_path, label="release closure")
+        profile_ref = _content_ref(_adapter_roots(self), profile_path, label="profile candidate")
         return MonthlyStageResult(
             scope={
                 "dataset_manifest_sha256": manifest_sha,
@@ -676,6 +701,7 @@ class OfficialLocalValidateAdapter:
                 "release_closure": closure,
                 "release_closure_ref": closure_ref,
                 "release_closure_file_sha256": closure_ref["sha256"],
+                "profile_candidate_ref": profile_ref,
             },
             input_artifacts=inputs,
             output_artifacts=outputs,
@@ -952,6 +978,7 @@ __all__: Sequence[str] = (
     "MonthlyDeployExecutor",
     "MonthlyDeriveExecutor",
     "MonthlyLocalValidationExecutor",
+    "MonthlyProfileCandidateBuilder",
     "NodeDeployment",
     "OfficialBuildAdapter",
     "OfficialConsumerValidateAdapter",

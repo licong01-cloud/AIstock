@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from backend.services.dataset_release.canonical import canonical_json_bytes
+from backend.services.dataset_release.profile_contract import (
+    ACTIVE_PROFILE_SCHEMA_V4,
+    ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS,
+)
 from backend.services.dataset_release.shared_sector_context import (
     require_pinned_sector_context_files,
     validate_sector_context_pins,
@@ -43,7 +47,6 @@ ACTIVE_PROFILE_ENV = "AISTOCK_ACTIVE_DATASET_PROFILE_PATH"
 ACTIVE_PROFILE_SCHEMA_V1 = "aistock_active_dataset_profile_v1"
 ACTIVE_PROFILE_SCHEMA_V2 = "aistock_active_dataset_profile_v2"
 ACTIVE_PROFILE_SCHEMA_V3 = "aistock_active_dataset_profile_v3"
-ACTIVE_PROFILE_SCHEMA_V4 = "aistock_active_dataset_profile_v4"
 # Compatibility export for existing profile producers.  New profiles which
 # enable sector-policy materialization must use V2.
 ACTIVE_PROFILE_SCHEMA = ACTIVE_PROFILE_SCHEMA_V1
@@ -95,34 +98,7 @@ _HMM_DATASET_BINDING_FIELDS = {
     "sector_membership_sha256",
     "source_universe_sha256",
 }
-_CONSUMER_REQUIRED_COMPONENTS = {
-    "qe": frozenset(
-        {
-            "day",
-            "minute",
-            "factor",
-            "index",
-            "suspend",
-            "benchmark",
-            "stock_pools",
-            "coverage",
-            "manifest",
-            "sector_context",
-        }
-    ),
-    "hmm": frozenset({"factor", "index", "manifest", "sector_context"}),
-    "selection": frozenset({"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}),
-    "advisory": frozenset({"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}),
-    "qe_single": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context"}),
-    "qe_custom": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context"}),
-    "qe_multi_alpha": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context"}),
-    "qe_p10": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context", "derived_assets"}),
-    "qe_p11": frozenset({"day", "minute", "factor", "index", "suspend", "benchmark", "stock_pools", "coverage", "manifest", "sector_context", "derived_assets"}),
-    "hmm_file_only": frozenset({"factor", "index", "manifest", "sector_context"}),
-    "factor_research": frozenset({"day", "factor", "stock_pools", "manifest"}),
-    "position_timing": frozenset({"day", "factor", "stock_pools", "manifest"}),
-    "unified_backtest": frozenset({"day", "minute", "factor", "index", "suspend", "stock_pools", "manifest"}),
-}
+_CONSUMER_REQUIRED_COMPONENTS = ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 QE_STAR50_REQUIRED_TOPK = 20
 _STAR50_ALIASES = frozenset(
     {
