@@ -221,8 +221,10 @@ def test_code_owned_wsl_and_ssh_commands_are_fixed() -> None:
         "-m",
         "backend.services.dataset_release.monthly_node_probe",
     )
-    assert ssh.command[:7] == (
+    assert ssh.command[:9] == (
         "ssh",
+        "-F",
+        "NUL",
         "-o",
         "BatchMode=yes",
         "-o",
