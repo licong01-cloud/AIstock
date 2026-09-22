@@ -130,6 +130,8 @@ class MonthlyNodeRuntimeSettings:
                     allowed_parent=runtime.node1_release_root,
                     command_prefix=(
                         "ssh",
+                        "-F",
+                        "NUL",
                         "-o",
                         "BatchMode=yes",
                         "-o",

@@ -709,6 +709,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_worker_nodes.py",
         "backend/tests/dataset_release/test_monthly_worker_composition.py",
         "backend/tests/dataset_release/test_monthly_production.py",
+        "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
         "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
         "backend/tests/dataset_release/test_active_task_binding.py",
         "backend/tests/dataset_release/test_managed_consumer_task.py",
@@ -742,6 +743,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_build_core_index_membership_authority.py",
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
         "backend/tests/scripts/test_dataset_release_source_stage.py",
+        "backend/tests/scripts/test_dataset_release_hmm_authority.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
         "backend/tests/scripts/test_monthly_unified_dataset_release.py",
     ]
@@ -768,6 +770,7 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
             "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
             "scripts/monthly_unified_dataset_release_worker.py": "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+            "scripts/dataset_release_hmm_authority.py": "backend/tests/scripts/test_dataset_release_hmm_authority.py",
             "backend/routers/monthly_dataset_releases.py": "backend/tests/routers/test_monthly_dataset_releases.py",
             "backend/routers/advisory.py": "backend/tests/routers/test_managed_dataset_preparations.py",
             "backend/routers/position_timing.py": "backend/tests/routers/test_managed_dataset_preparations.py",

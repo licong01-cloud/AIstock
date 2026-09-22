@@ -77,6 +77,10 @@ worker 运行前需由运行态所有者配置以下绝对路径或节点身份�
 - `AISTOCK_MONTHLY_NODE1_PROJECT_ROOT`
 - `AISTOCK_MONTHLY_NODE1_PYTHON`
 
+`AISTOCK_MONTHLY_NODE1_SSH_HOST` 必须写直接的 `user@hostname` 或 `user@IP`，不得依赖个人
+SSH config 中的 alias。正式 worker 固定使用 `ssh -F NUL`，仅采用系统默认密钥位置和显式参数，避免
+`C:\Users\<user>\.ssh\config` 的权限、所有者或个人别名漂移影响月更发布。
+
 RD-Agent Results API 首次部署动态 release reader 时，WSL 与 node1 各自只需一次性配置固定 registry 根：
 
 - WSL：`QE_DATASET_RELEASE_REGISTRY_ROOTS=<AISTOCK_MONTHLY_WSL_RELEASE_ROOT>/.aistock-release-registry`
@@ -91,6 +95,26 @@ canonical identity，因此后续月份不得再修改该环境变量或为数�
 ```powershell
 python scripts/monthly_unified_dataset_release_worker.py --preflight
 ```
+
+首次配置或正式 HMM 模型/预设发生变更时，必须先把已经批准且已绑定当前 active manifest 的完整窗口系数产物
+封存为 repo-external authority；不得由 worker 查询模型数据库、猜测 preset 或采用旧 release 产物。静态 state-label
+模型可由工具确定性生成空 config；动态模型必须显式提供已冻结 config：
+
+```powershell
+python scripts/dataset_release_hmm_authority.py `
+  --source-coefficients <approved-full-window-coefficients.json> `
+  --model-path <approved-models.json> `
+  --producer-script <repo>\scripts\precompute_hmm_coefficients.py `
+  --output-root <repo-external-create-exclusive-root> `
+  --authority-id <approved-authority-id> `
+  --asset-id qe-hmm-preset-a-full-window `
+  --expected-dataset-manifest-sha256 <active-manifest-identity> `
+  --backtest-lag-trade-days 1
+```
+
+生成目录同时保存模型、原正式系数产物、config、authority 与 bootstrap receipt 的真实字节和哈希；源 manifest、
+模型 SHA、日期网格、state labels 或动态 config 任一不闭合即失败。后续月更只读取
+`AISTOCK_MONTHLY_HMM_AUTHORITY_PATH` 指向的 authority；固定模型未变时无需逐月重建 authority。
 
 受控运行方式为：
 

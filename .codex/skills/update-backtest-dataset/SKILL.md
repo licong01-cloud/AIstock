@@ -33,6 +33,9 @@ python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_<3
 - RD-Agent 节点必须一次性配置稳定的 `QE_DATASET_RELEASE_REGISTRY_ROOTS=<release-parent>/.aistock-release-registry`；每月 DEPLOY 只新增 create-exclusive manifest 登记，不修改 API 环境变量、不重启节点；
 - 源码合入、数据库修复、candidate 部署、profile 激活、运行态读回分别报告；
 - 不启动训练、实验或服务，不把 `status=completed` 当作数据验收成功。
+- worker 的 HMM 派生 authority 只能由 `scripts/dataset_release_hmm_authority.py` 从已批准、已绑定精确
+  dataset manifest 的完整窗口系数产物 create-exclusive 封存；不得从数据库运行态选择模型或手填 preset。
+  固定模型未变时复用同一 authority，模型或 preset 变更时重新封存并更新一次稳定环境路径。
 - Advisory 与 position_timing 的新建离线准备必须使用各自的
   `/dataset-preparations` 入口和稳定 `Idempotency-Key` 冻结 active binding；重试不得重新解析 active，
   profile 切换只影响新的业务键，且不得改写既有 CAS/request。
@@ -97,6 +100,9 @@ release component，再由同一 manifest 和 profile 固定。
 按月尾部追加，不得为增量复用重新引入冻结、哈希或复杂 lineage。
 
 ## 每月固定顺序
+
+远端节点地址必须使用直接的 `user@hostname` 或 `user@IP`；正式 worker 通过 `ssh -F NUL` 隔离个人 SSH
+config，不得把个人 alias 当作可复现的发布依赖。
 
 1. `status`：确认没有活动的旧构建；只读查看当前候选状态。
 2. PIT：更新/readback `aistock_equity_pit_canonical_v2` 到目标 cutoff。
