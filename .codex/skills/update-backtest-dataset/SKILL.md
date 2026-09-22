@@ -104,6 +104,10 @@ release component，再由同一 manifest 和 profile 固定。
 远端节点地址必须使用直接的 `user@hostname` 或 `user@IP`；正式 worker 通过 `ssh -F NUL` 隔离个人 SSH
 config，不得把个人 alias 当作可复现的发布依赖。
 
+正式月更环境完成一次性路径和 authority 配置后，AIstock 后端通过
+`AISTOCK_MONTHLY_RELEASE_WORKER_ENABLED=true` 自动监督 code-owned worker；后续月份不得要求业务窗口
+手工启动 worker 或分别切换 QE/HMM/荐股路径。显式启用但 preflight 失败时保持 fail closed。
+
 1. `status`：确认没有活动的旧构建；只读查看当前候选状态。
 2. PIT：更新/readback `aistock_equity_pit_canonical_v2` 到目标 cutoff。
 3. 数据：确认数据库补数和目标月数据已可用；分钟缺口优先 TDX，其次 Tushare。
