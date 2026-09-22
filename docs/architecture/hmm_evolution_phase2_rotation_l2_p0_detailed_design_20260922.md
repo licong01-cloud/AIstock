@@ -327,7 +327,7 @@ typed reason采用`hmm_risk_rotation_l2_`前缀加固定后缀；复用已有底
 2. 数学/产品审核：核对25日的两个20日窗口、官方百分数复利、t+1..t+10与总体末10日成熟度；修复报告块边界重复删标签风险；补齐零分母、完整日期原子revision、surface外部验证与状态分域。合成算术检查：每日net依次1..25、amount=100时当前比值0.155、滞后0.105、delta=0.05；连续10日1%收益为0.1046221254；N=2..131的q均无前后状态重叠。这些是公式检查，不是源码测试或实际数据实验。
 3. 目标/授权复审：删除草案逐行业coverage≥90%的AND门，仅保留总体coverage和逐行业诊断；复核停发与真实缺数边界、全量计算/≤30展示、L1历史保留和QE owner边界。用户开始P1实施后，D1～D6更新为已批准；生产与P2权限不随之扩大。
 4. P1源码复审：修复未固定因子清单、物理路径进入canonical hash、amount=0误作缺失、revision直接前序未校验、UI越界静默忽略和旧L1入口丢失；定向backend、TypeScript与Playwright mock均通过。真实preflight保持fail closed，未以代码绕过数据权威缺口。
-5. P1持久化/产品复审：修复模型合同字符串漏写`rank-1`、L2页面误嵌L1风险、可用行业不足时前后榜重复；迁移增加事务锁与非空回滚保护，并在Python/DDL同时钉住contribution等于score、zero-fit/no-tail摘要及effect/capability耦合。共享release无正式行业名时显式记录code-only authority，不猜测名称。
+5. P1持久化/产品复审：修复模型合同字符串漏写`rank-1`、可用行业不足时前后榜重复，并把既有L1风险明确隔离为“L1历史风险独立能力”而非L2风险；迁移增加事务锁与非空回滚保护，并在Python/DDL同时钉住contribution等于score、zero-fit/no-tail摘要及effect/capability耦合。共享release无正式行业名时显式记录code-only authority，不猜测名称。
 
 P1最终F2与全量门禁以PR HEAD回执为准。当前已运行定向pytest、TypeScript与mock Playwright；真实file-only preflight失败于精确输入权威缺口。未运行正式双process、writer DML、无mock产品验收或生产操作，未生成正式预测资产。
 

@@ -10,6 +10,7 @@ import {
   type RotationL2Row,
 } from "@/lib/hmm-risk/api";
 import styles from "./rotation-l1.module.css";
+import RiskL1Panel from "./RiskL1Panel";
 
 const CONFIGURED_RUN_ID = process.env.NEXT_PUBLIC_HMM_ROTATION_L2_RUN_ID?.trim() || "";
 
@@ -195,6 +196,10 @@ export default function RotationL2Dashboard() {
           </footer>
         </>
       )}
+      <section aria-label="L1 历史风险独立能力">
+        <p className={styles.subtitle}>以下为既有 L1 风险能力，不属于 L2 轮动分数，也不构成 L2 风险占位。</p>
+        <RiskL1Panel />
+      </section>
     </main>
   );
 }

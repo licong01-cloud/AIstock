@@ -85,7 +85,7 @@ test("renders configurable L2 top and bottom ranks from a complete 131-sector AP
   await mockRotationApi(page);
 
   await assertRotationSurface(page);
-  await expect(page.getByRole("heading", { name: "L1 风险预警" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "L1 历史风险独立能力" })).toBeVisible();
   await page.getByLabel("前列数量").fill("15");
   await expect(page.getByText("合计 25 / 30", { exact: false })).toBeVisible();
   await page.getByLabel("后列数量").fill("16");
