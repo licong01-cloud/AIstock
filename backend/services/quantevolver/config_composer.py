@@ -663,6 +663,9 @@ DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
 RISK_POLICY_FILE = "qe_event_risk_policy.json"
 FROZEN_BUILD_SPEC_FILE = "qe_frozen_build_spec.json"
+EXECUTION_DATA_EXCLUSIONS_PARAM = "execution_data_exclusions"
+EXECUTION_DATA_EXCLUSION_SCHEMA = "qe_execution_data_exclusion_v1"
+EXECUTION_DATA_EXCLUSION_REASON = "minute_source_gap_confirmed_unfillable"
 SECTOR_RISK_OVERLAY_MANIFEST_FILE = "qe_sector_risk_overlay_manifest.json"
 SECTOR_RISK_OVERLAY_DATA_FILE = "qe_sector_risk_overlay.parquet"
 SECTOR_RISK_OVERLAY_ACTION_LOG = "qe_sector_risk_overlay_actions.jsonl"
@@ -1236,7 +1239,80 @@ class ConfigComposer:
             params.get("filter_suspended_on_signal")
             or params.get("exclude_suspended")
             or params.get("filter_suspend_d")
+            or params.get(EXECUTION_DATA_EXCLUSIONS_PARAM)
         )
+
+    @staticmethod
+    def _normalize_execution_data_exclusions(
+        custom_params: Optional[Dict[str, Any]],
+        *,
+        backtest_start,
+        backtest_end,
+    ) -> list[dict[str, str]]:
+        """Validate explicit run-scoped exclusions without weakening coverage checks."""
+
+        raw = (custom_params or {}).get(EXECUTION_DATA_EXCLUSIONS_PARAM)
+        if raw in (None, []):
+            return []
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"{EXECUTION_DATA_EXCLUSIONS_PARAM} must be a list of explicit contracts"
+            )
+        normalized: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for index, item in enumerate(raw):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}] must be an object"
+                )
+            instrument = str(item.get("instrument") or "").strip().upper()
+            start_date = str(item.get("start_date") or "")
+            end_date = str(item.get("end_date") or "")
+            evidence_sha256 = str(item.get("evidence_sha256") or "").strip().lower()
+            if item.get("schema_version") != EXECUTION_DATA_EXCLUSION_SCHEMA:
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].schema_version must be "
+                    f"{EXECUTION_DATA_EXCLUSION_SCHEMA}"
+                )
+            if not re.fullmatch(r"[0-9]{6}\.(SH|SZ)", instrument):
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].instrument is invalid"
+                )
+            if item.get("scope") != "full_backtest_window":
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].scope must be full_backtest_window"
+                )
+            if start_date != backtest_start.isoformat() or end_date != backtest_end.isoformat():
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}] must cover the exact backtest "
+                    f"window {backtest_start.isoformat()}..{backtest_end.isoformat()}"
+                )
+            if item.get("reason_code") != EXECUTION_DATA_EXCLUSION_REASON:
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].reason_code must be "
+                    f"{EXECUTION_DATA_EXCLUSION_REASON}"
+                )
+            if not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256):
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].evidence_sha256 must be sha256"
+                )
+            if instrument in seen:
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM} contains duplicate instrument {instrument}"
+                )
+            seen.add(instrument)
+            normalized.append(
+                {
+                    "schema_version": EXECUTION_DATA_EXCLUSION_SCHEMA,
+                    "instrument": instrument,
+                    "scope": "full_backtest_window",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "reason_code": EXECUTION_DATA_EXCLUSION_REASON,
+                    "evidence_sha256": evidence_sha256,
+                }
+            )
+        return sorted(normalized, key=lambda value: value["instrument"])
 
     @staticmethod
     def _parse_date(value: str):
@@ -1518,6 +1594,11 @@ class ConfigComposer:
         backtest_end = self._parse_date(data_split["backtest_end"])
         if backtest_end < backtest_start:
             raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
+        execution_data_exclusions = self._normalize_execution_data_exclusions(
+            custom_params,
+            backtest_start=backtest_start,
+            backtest_end=backtest_end,
+        )
         formal_request = _formal_dataset_request(custom_params)
         formal_binding = formal_request.binding() if formal_request is not None else None
         direct_binding = _direct_v2_dataset_binding(custom_params)
@@ -1664,6 +1745,10 @@ class ConfigComposer:
             # any pin/identity/coverage mismatch fails closed on the compute
             # node and there is no database fallback.
             "suspend": suspend_identity,
+            # A run may explicitly exclude a symbol only when an immutable,
+            # full-window evidence contract is supplied.  This never mutates
+            # the canonical PIT universe or the frozen dataset.
+            EXECUTION_DATA_EXCLUSIONS_PARAM: execution_data_exclusions,
         }
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
 
@@ -4153,6 +4238,7 @@ class ConfigComposer:
             "filter_suspend_d",
             "suspend_filter_file",
             "suspend_filter_strict",
+            EXECUTION_DATA_EXCLUSIONS_PARAM,
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
             "_precomputed_hmm_coefficients_artifact_binding",
         } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS | _REMOVED_GATS_RESOURCE_OPTIONS

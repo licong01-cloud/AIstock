@@ -1,7 +1,16 @@
 {
   "actual": "Minute TWAP replay fails entire CSI300/CSI1000 tasks because qrun coverage requires whole-span containment in minute instruments. Four constituents are fully explained by authoritative suspend_d; 601989.SH has an unfillable 22-trading-day minute-source gap before index exit/delisting. Implement suspend-aware day closure plus one immutable run-scoped full-window execution-data exclusion without modifying canonical PIT membership, fabricating quotes, shortening windows, or weakening unexplained-gap fail-closed behavior.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260924_BUG-1609-qe-minute-coverage-rejects-suspended-constituents-and-lacks-explicit-exe.json"
+    "tests/aistock_validation/bugs/20260924_BUG-1609-qe-minute-coverage-rejects-suspended-constituents-and-lacks-explicit-exe.json",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/payload_summary.py",
+    "scripts/qe_build_frozen_suspend_filter.py",
+    "scripts/qe_suspend_filter.py",
+    "scripts/qrun_limit_minute.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+    "backend/tests/quantevolver/test_payload_summary.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1609",
@@ -19,10 +28,22 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260924-674fd6ba96fd",
       "timestamp": "2026-09-24T07:58:57.882351Z"
+    },
+    {
+      "action": "implementation_reviewed",
+      "actor": "codex",
+      "note": "Added frozen suspend-aware day closure and an immutable full-window execution-data exclusion contract; no dataset, PIT membership, model, factor, seed, window, cost, or execution-policy mutation.",
+      "timestamp": "2026-09-24T08:17:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "Related matrix 224 passed/38 skipped; qe_read_backend 633 passed/1 skipped; Ruff, py_compile, diff-check and ownership registry passed. Unknown gaps and tampered exclusion contracts remain fail-closed.",
+      "timestamp": "2026-09-24T08:18:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Minute replay accepts only gaps explained day-by-day by the pinned suspend_d artifact or by a hashed, typed, full-window run exclusion; the excluded symbol is removed before TopK with normal tail fill, while unknown gaps remain fail-closed and canonical PIT membership is unchanged.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -48,7 +69,8 @@
   "last_seen_at": "2026-09-24T07:58:57.882369Z",
   "module": "quantevolver",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not alter the active dataset, synthesize minute bars, delete constituents, shorten the evaluation window, or change canonical PIT membership."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -56,20 +78,33 @@
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "qe_read_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu fresh Python import of ConfigComposer, QESuspendFilter and qrun_limit_minute coverage validator -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending",
     "provisional": true,
-    "runtime_impact": "none",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -180,5 +215,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }

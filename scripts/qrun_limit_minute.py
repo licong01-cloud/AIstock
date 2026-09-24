@@ -1763,6 +1763,116 @@ def _resolve_minute_instrument_path(
     return minute_all_path
 
 
+def _coverage_symbol_aliases(symbol: str) -> set[str]:
+    raw = str(symbol).strip().upper()
+    aliases = {raw}
+    if "." in raw:
+        code, exchange = raw.split(".", 1)
+        exchange = {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(exchange, exchange)
+        aliases.update({f"{code}.{exchange}", f"{exchange}{code}"})
+    elif len(raw) >= 8 and raw[:2] in {"SH", "SZ", "BJ"} and raw[2:].isdigit():
+        aliases.add(f"{raw[2:]}.{raw[:2]}")
+    return aliases
+
+
+def _load_minute_coverage_explanations(cwd: Path) -> tuple[dict[str, set[str]], list[dict]]:
+    artifact_path = cwd / "qe_suspend_filter.json"
+    if not artifact_path.is_file():
+        return {}, []
+    try:
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: path={artifact_path}"
+        ) from exc
+    by_date = payload.get("suspended_by_date")
+    exclusions = payload.get("execution_data_exclusions", [])
+    if not isinstance(by_date, dict) or not isinstance(exclusions, list):
+        raise RuntimeError(f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: path={artifact_path}")
+    suspended: dict[str, set[str]] = {}
+    for day, symbols in by_date.items():
+        if not isinstance(symbols, list):
+            raise RuntimeError(f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: path={artifact_path}")
+        expanded: set[str] = set()
+        for symbol in symbols:
+            expanded.update(_coverage_symbol_aliases(symbol))
+        suspended[str(day)] = expanded
+    normalized_exclusions: list[dict] = []
+    if exclusions:
+        expected_contract_sha256 = str(
+            payload.get("execution_data_exclusion_contract_sha256") or ""
+        ).lower()
+        actual_contract_sha256 = hashlib.sha256(
+            json.dumps(
+                exclusions,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if expected_contract_sha256 != actual_contract_sha256:
+            raise RuntimeError(
+                "QE_MINUTE_COVERAGE_ARTIFACT_INVALID: "
+                f"execution_data_exclusion contract hash mismatch path={artifact_path}"
+            )
+    for index, item in enumerate(exclusions):
+        if not isinstance(item, dict):
+            raise RuntimeError(
+                f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: exclusion_index={index} path={artifact_path}"
+            )
+        instrument = str(item.get("instrument") or "").strip().upper()
+        start_date = str(item.get("start_date") or "")
+        end_date = str(item.get("end_date") or "")
+        evidence_sha256 = str(item.get("evidence_sha256") or "").strip().lower()
+        if (
+            item.get("schema_version") != "qe_execution_data_exclusion_v1"
+            or item.get("scope") != "full_backtest_window"
+            or item.get("reason_code") != "minute_source_gap_confirmed_unfillable"
+            or not re.fullmatch(r"[0-9]{6}\.(SH|SZ)", instrument)
+            or not start_date
+            or not end_date
+            or end_date < start_date
+            or not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256)
+        ):
+            raise RuntimeError(
+                f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: exclusion_index={index} path={artifact_path}"
+            )
+        normalized_exclusions.append(
+            {
+                "aliases": _coverage_symbol_aliases(instrument),
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+        )
+    return suspended, normalized_exclusions
+
+
+def _read_minute_coverage_calendar(day_root: Path, start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]:
+    calendar_path = day_root / "calendars" / "day.txt"
+    if not calendar_path.is_file():
+        raise RuntimeError(f"QE_MINUTE_CALENDAR_FILE_MISSING: {calendar_path}")
+    days: list[pd.Timestamp] = []
+    for line_number, raw_line in enumerate(
+        calendar_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        value = raw_line.strip()
+        if not value:
+            continue
+        try:
+            day = pd.Timestamp(value).normalize()
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError(
+                f"QE_MINUTE_CALENDAR_FILE_INVALID: path={calendar_path} line={line_number}"
+            ) from exc
+        if start <= day <= end:
+            days.append(day)
+    if not days:
+        raise RuntimeError(
+            f"QE_MINUTE_CALENDAR_WINDOW_EMPTY: path={calendar_path} window={start.date()}..{end.date()}"
+        )
+    return sorted(set(days))
+
+
 def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | None = None) -> None:
     """Require the minute quote universe to cover the day universe for the replay window."""
 
@@ -1826,7 +1936,11 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
     required_window_start = window_start.normalize()
     required_window_end = window_end.normalize()
 
+    suspended_by_date, execution_exclusions = _load_minute_coverage_explanations(workspace_root)
+    calendar_days: list[pd.Timestamp] | None = None
     expected = 0
+    suspension_explained = 0
+    exclusion_explained = 0
     uncovered: list[str] = []
     for symbol, spans in day_spans.items():
         for day_start, day_end in spans:
@@ -1835,14 +1949,46 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
             if required_end < required_start:
                 continue
             expected += 1
-            if not any(
+            if any(
                 minute_start.normalize() <= required_start
                 and minute_end.normalize() >= required_end
                 for minute_start, minute_end in minute_spans.get(symbol, [])
             ):
-                uncovered.append(
-                    f"{symbol}:{required_start.isoformat()}..{required_end.isoformat()}"
+                continue
+            if not suspended_by_date and not execution_exclusions:
+                uncovered.append(f"{symbol}:{required_start.isoformat()}..{required_end.isoformat()}")
+                continue
+            if calendar_days is None:
+                calendar_days = _read_minute_coverage_calendar(
+                    day_root,
+                    required_window_start,
+                    required_window_end,
                 )
+            symbol_aliases = _coverage_symbol_aliases(symbol)
+            required_days = [day for day in calendar_days if required_start <= day <= required_end]
+            if not required_days:
+                uncovered.append(
+                    f"{symbol}:{required_start.isoformat()}..{required_end.isoformat()}:calendar_empty"
+                )
+                continue
+            for day in required_days:
+                if any(
+                    minute_start.normalize() <= day <= minute_end.normalize()
+                    for minute_start, minute_end in minute_spans.get(symbol, [])
+                ):
+                    continue
+                day_key = day.date().isoformat()
+                if symbol_aliases & suspended_by_date.get(day_key, set()):
+                    suspension_explained += 1
+                    continue
+                if any(
+                    symbol_aliases & item["aliases"]
+                    and item["start_date"] <= day_key <= item["end_date"]
+                    for item in execution_exclusions
+                ):
+                    exclusion_explained += 1
+                    continue
+                uncovered.append(f"{symbol}:{day_key}")
     if expected <= 0:
         raise RuntimeError(
             "QE_MINUTE_DAY_UNIVERSE_EMPTY: "
@@ -1853,6 +1999,14 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
             "QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH: "
             f"market={selection_market} expected={expected} uncovered={len(uncovered)} examples={uncovered[:5]}"
         )
+    config["qe_minute_coverage_summary"] = {
+        "schema_version": "qe_minute_coverage_summary_v1",
+        "selection_market": selection_market,
+        "expected_spans": expected,
+        "suspension_explained_days": suspension_explained,
+        "execution_exclusion_explained_days": exclusion_explained,
+        "execution_data_exclusion_count": len(execution_exclusions),
+    }
 
     workspace_pool = workspace_root / f"{selection_market}.txt"
     if workspace_pool.is_file():
@@ -2021,7 +2175,6 @@ def _run_main(args):
     rendered = render_yaml_template(args.yaml_path)
     yaml = YAML(typ="safe", pure=True)
     config = yaml.load(rendered)
-    _validate_minute_instrument_coverage_contract(config, cwd=Path.cwd())
 
     # BUG-989 zero-DB data plane: rebuild qe_event_risk_policy.json from the
     # frozen qlib bin dataset (pinned by qe_frozen_build_spec.json) before
@@ -2059,6 +2212,12 @@ def _run_main(args):
                     "qe_frozen_build_spec.json declares a suspend section but "
                     "qe_build_frozen_suspend_filter.py helper is missing from the workspace"
                 )
+
+    # Coverage validation consumes the just-built frozen suspend artifact so
+    # fully suspended constituent days can be distinguished from real quote
+    # gaps.  Unknown gaps still fail closed; explicit execution-data
+    # exclusions are accepted only through the immutable run-scoped artifact.
+    _validate_minute_instrument_coverage_contract(config, cwd=Path.cwd())
 
     patch_backtest_config(config)
     apply_qe_fixed_seed(config)

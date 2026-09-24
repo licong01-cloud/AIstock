@@ -8,6 +8,7 @@ aliases.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from typing import Any, Mapping
@@ -705,6 +706,40 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
             "mode": selection.get("mode") or "stock_universe",
             "pool_ids": list(selection.get("pool_ids") or []),
             "label": selection.get("instrument_name") or selection.get("stock_pool"),
+        }
+    execution_data_exclusions = next(
+        (
+            candidate
+            for source in (cfg, model_params, custom_params, strategy_params)
+            if isinstance((candidate := source.get("execution_data_exclusions")), list)
+            and candidate
+        ),
+        [],
+    )
+    if execution_data_exclusions:
+        canonical = json.dumps(
+            execution_data_exclusions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        summary["execution_data_exclusions"] = {
+            "count": len(execution_data_exclusions),
+            "instruments": sorted(
+                {
+                    str(item.get("instrument"))
+                    for item in execution_data_exclusions
+                    if isinstance(item, Mapping) and item.get("instrument")
+                }
+            ),
+            "reason_codes": sorted(
+                {
+                    str(item.get("reason_code"))
+                    for item in execution_data_exclusions
+                    if isinstance(item, Mapping) and item.get("reason_code")
+                }
+            ),
+            "contract_sha256": hashlib.sha256(canonical).hexdigest(),
         }
     strategy_topk = first_number(strategy_summary.get("topk"))
     if is_pure_star50_universe(
