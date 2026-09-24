@@ -185,6 +185,7 @@ rules:
       - backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py
       - scripts/build_qe_sector_risk_overlay.py
       - scripts/qe_sector_risk_overlay*.py
+      - scripts/qe_suspend_filter.py
       - scripts/qrun_limit.py
       - scripts/qrun_limit_minute.py
       - scripts/score_weighted_strategy_v2.py
