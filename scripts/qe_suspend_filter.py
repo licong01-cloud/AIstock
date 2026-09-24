@@ -5,8 +5,10 @@ selection never queries PostgreSQL during Qlib backtests.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -25,6 +27,7 @@ class QESuspendFilter:
         self.logger = logger_obj or logger
         self._loaded = False
         self._by_date = {}
+        self._execution_exclusions = []
         self._metadata = {}
 
     def _load(self):
@@ -49,6 +52,57 @@ class QESuspendFilter:
             str(k): self._expand_symbol_set(v or [])
             for k, v in by_date.items()
         }
+        exclusions = payload.get("execution_data_exclusions", [])
+        if not isinstance(exclusions, list):
+            raise RuntimeError(f"suspend_filter_file has invalid execution_data_exclusions: {path}")
+        normalized_exclusions = []
+        for index, item in enumerate(exclusions):
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    f"suspend_filter_file execution_data_exclusions[{index}] is invalid: {path}"
+                )
+            instrument = str(item.get("instrument") or "").strip().upper()
+            start_date = str(item.get("start_date") or "")
+            end_date = str(item.get("end_date") or "")
+            evidence_sha256 = str(item.get("evidence_sha256") or "").strip().lower()
+            if (
+                item.get("schema_version") != "qe_execution_data_exclusion_v1"
+                or item.get("scope") != "full_backtest_window"
+                or item.get("reason_code") != "minute_source_gap_confirmed_unfillable"
+                or not re.fullmatch(r"[0-9]{6}\.(SH|SZ)", instrument)
+                or not start_date
+                or not end_date
+                or end_date < start_date
+                or not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256)
+            ):
+                raise RuntimeError(
+                    f"suspend_filter_file execution_data_exclusions[{index}] is invalid: {path}"
+                )
+            normalized_exclusions.append(
+                {
+                    "aliases": self._expand_symbol_set([instrument]),
+                    "start_date": start_date,
+                    "end_date": end_date,
+                }
+            )
+        if exclusions:
+            expected_contract_sha256 = str(
+                payload.get("execution_data_exclusion_contract_sha256") or ""
+            ).lower()
+            actual_contract_sha256 = hashlib.sha256(
+                json.dumps(
+                    exclusions,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if expected_contract_sha256 != actual_contract_sha256:
+                raise RuntimeError(
+                    "suspend_filter_file execution_data_exclusion contract hash mismatch: "
+                    f"{path}"
+                )
+        self._execution_exclusions = normalized_exclusions
         self._metadata = payload
         self._loaded = True
 
@@ -93,13 +147,26 @@ class QESuspendFilter:
         return set(self._by_date.get(key) or set())
 
     def is_suspended(self, symbol, trade_date) -> bool:
-        """Return whether one symbol is suspended on the given PIT trade date."""
+        """Return whether one symbol is blocked by suspend or run exclusion."""
         if not self.enabled:
             return False
-        suspended = self.suspended_symbols(trade_date)
-        if not suspended:
+        blocked = self.suspended_symbols(trade_date) | self.execution_excluded_symbols(trade_date)
+        if not blocked:
             return False
-        return bool(self._symbol_aliases(symbol) & suspended)
+        return bool(self._symbol_aliases(symbol) & blocked)
+
+    def execution_excluded_symbols(self, trade_date) -> set[str]:
+        """Return explicit run-scoped execution exclusions active on one date."""
+
+        self._load()
+        if not self.enabled:
+            return set()
+        key = self._date_key(trade_date)
+        excluded: set[str] = set()
+        for item in self._execution_exclusions:
+            if item["start_date"] <= key <= item["end_date"]:
+                excluded.update(item["aliases"])
+        return excluded
 
     def filter_scores(self, scores, trade_date):
         """Return scores with suspended instruments removed.
@@ -120,17 +187,22 @@ class QESuspendFilter:
         if not isinstance(base, pd.Series):
             raise RuntimeError(f"suspend filter expected pandas Series, got {type(base).__name__}")
         suspended = self.suspended_symbols(trade_date)
-        if not suspended or base.empty:
+        execution_excluded = self.execution_excluded_symbols(trade_date)
+        blocked = suspended | execution_excluded
+        if not blocked or base.empty:
             return base
         mask = pd.Series(
-            [not (self._symbol_aliases(idx) & suspended) for idx in base.index],
+            [not (self._symbol_aliases(idx) & blocked) for idx in base.index],
             index=base.index,
         )
         excluded = int((~mask).sum())
         if excluded:
             self.logger.info(
-                "[QESuspendFilter] trade_date=%s excluded=%d suspended_by_suspend_d",
-                self._date_key(trade_date), excluded,
+                "[QESuspendFilter] trade_date=%s excluded=%d suspended=%d execution_data=%d",
+                self._date_key(trade_date),
+                excluded,
+                len(suspended),
+                len(execution_excluded),
             )
         return base.loc[mask]
 
