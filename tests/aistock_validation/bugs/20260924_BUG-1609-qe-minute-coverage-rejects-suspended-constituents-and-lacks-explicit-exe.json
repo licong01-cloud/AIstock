@@ -11,7 +11,8 @@
     "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py",
     "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
     "backend/tests/quantevolver/test_payload_summary.py",
-    "tests/aistock_validation/catalog/file_ownership.yaml"
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1609",
@@ -47,6 +48,12 @@
       "actor": "codex",
       "note": "PR CI identified scripts/qe_suspend_filter.py as unmapped executable code. Added only that exact file to the existing qe.sector_risk_overlay ownership rule; no wildcard or CI policy relaxation.",
       "timestamp": "2026-09-24T08:31:00Z"
+    },
+    {
+      "action": "ci_test_collection_corrected",
+      "actor": "codex",
+      "note": "PR business suites passed but changed-test coverage found test_qe_frozen_suspend_filter.py was not collected. Added that exact test file to the existing qe_sector_risk_overlay_backend nox session.",
+      "timestamp": "2026-09-24T08:38:00Z"
     }
   ],
   "evidence_uris": [],
