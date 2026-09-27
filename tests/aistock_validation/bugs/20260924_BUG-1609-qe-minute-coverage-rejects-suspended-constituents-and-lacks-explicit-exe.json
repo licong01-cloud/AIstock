@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1609",
-  "closed_at": null,
+  "closed_at": "2026-09-27T16:36:11.911001Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -76,8 +76,8 @@
   },
   "first_seen_at": "2026-09-24T07:58:57.882369Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "507632e38becefd00df9dcc22248f52682cc7ef6",
+  "fixed_at": "2026-09-24T09:02:08Z",
   "github_issue_number": 5070,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5070",
   "last_seen_at": "2026-09-24T07:58:57.882369Z",
@@ -86,6 +86,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval.",
     "Do not alter the active dataset, synthesize minute bars, delete constituents, shorten the evaluation window, or change canonical PIT membership."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5071",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -110,9 +111,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1609\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1609",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+      "expected_identity": "507632e38becefd00df9dcc22248f52682cc7ef6",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-27T16:00:48.241399Z",
+      "mode": "read_only",
+      "observed_identity": "507632e38becefd00df9dcc22248f52682cc7ef6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b95a2d16fa3f4a239431607735b10f39591a770f2dd4ed9911c40259ac8b5f06",
+      "receipt_sha256": "0d2b6acb736a750a7f325f8464365f6e4a78014dce11cf6a01bf3dee4597a63b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7f2c057fea57d13d6636a7cc1a806f6921a922b50177dbac00923cd00463b901",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": true,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -122,7 +146,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1609",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "74e459968646c357",
+    "recorded_at": "2026-09-24T09:03:31.448317Z",
+    "runtime_contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3c354e910d35d2dfdf3d75d23ad3ec979157b05f",
+    "source_merge_commit": "507632e38becefd00df9dcc22248f52682cc7ef6",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5071",
+    "validation_evidence": [
+      "PR #5071 CI verdict -> passed"
+    ],
+    "validation_evidence_digest": "8a43f8d759b1e70e92dbb585aa2459a47724ae6babb4a39bd8bcc4a8036a455e"
+  },
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -131,6 +176,9 @@
     "fingerprint": "674fd6ba96fd518f624609a2",
     "source_event_id": "FE-20260924-674fd6ba96fd"
   },
+  "validation_evidence": [
+    "PR #5071 CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
