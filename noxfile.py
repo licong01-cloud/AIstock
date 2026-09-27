@@ -747,6 +747,8 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_dataset_release_hmm_authority.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
         "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+        "backend/tests/data_service/test_security_source_identity.py",
+        "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
     ]
     pr_targets = _direct_neighbor_pr_targets(
         smoke_tests=(
@@ -764,12 +766,15 @@ def qlib_data_backend(session: nox.Session) -> None:
             "backend/tests/core_index_membership/test_*.py",
             "backend/tests/scripts/test_*qlib*.py",
             "backend/tests/scripts/test_*backtest_dataset*.py",
+            "backend/tests/data_service/test_security_source_identity.py",
+            "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
         ),
         overrides={
             "scripts/build_dataset_release_successor.py": "backend/tests/dataset_release/test_release_successor.py",
             "scripts/build_shared_sector_context_component.py": "backend/tests/dataset_release/test_shared_sector_context.py",
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
             "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+            "scripts/audit_qe_moneyflow_alias_coverage.py": "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
             "scripts/monthly_unified_dataset_release_worker.py": "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
             "scripts/dataset_release_hmm_authority.py": "backend/tests/scripts/test_dataset_release_hmm_authority.py",
             "backend/routers/monthly_dataset_releases.py": "backend/tests/routers/test_monthly_dataset_releases.py",

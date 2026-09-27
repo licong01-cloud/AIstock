@@ -7,6 +7,9 @@
     "backend/data_service/manifests/security_source_identity_v1.json",
     "backend/tests/data_service/test_security_source_identity.py",
     "scripts/audit_qe_moneyflow_alias_coverage.py",
+    "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260927_BUG-1611-shared-moneyflow-export-omits-source-specific-historical-security-codes.json"
   ],
   "assigned_agent": null,
@@ -32,17 +35,38 @@
   ],
   "expected": "A versioned successor exports every canonical/date/source_dataset key from its effective source code, or records formal provider absence, with 302132.SZ resolving all 120 rows and no unrelated component drift.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/data_service/qe_data_service.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/data_service/security_source_identity.py",
+      "backend/data_service/manifests/security_source_identity_v1.json",
+      "backend/tests/data_service/test_security_source_identity.py",
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/bugs/20260927_BUG-1611-shared-moneyflow-export-omits-source-specific-historical-security-codes.json"
+    ],
     "added_files": [
       "backend/data_service/security_source_identity.py",
       "backend/data_service/manifests/security_source_identity_v1.json",
       "backend/tests/data_service/test_security_source_identity.py",
-      "scripts/audit_qe_moneyflow_alias_coverage.py"
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py"
     ],
     "changed_files": [
       "backend/data_service/qe_data_service.py",
-      "backend/services/dataset_release/direct_monthly.py"
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/data_service/security_source_identity.py",
+      "backend/data_service/manifests/security_source_identity_v1.json",
+      "backend/tests/data_service/test_security_source_identity.py",
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/bugs/20260927_BUG-1611-shared-moneyflow-export-omits-source-specific-historical-security-codes.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/data_service/qe_data_service.py",
@@ -145,7 +169,10 @@
       "backend/data_service/security_source_identity.py",
       "backend/data_service/manifests/security_source_identity_v1.json",
       "backend/tests/data_service/test_security_source_identity.py",
-      "scripts/audit_qe_moneyflow_alias_coverage.py"
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -154,7 +181,10 @@
       "backend/data_service/security_source_identity.py",
       "backend/data_service/manifests/security_source_identity_v1.json",
       "backend/tests/data_service/test_security_source_identity.py",
-      "scripts/audit_qe_moneyflow_alias_coverage.py"
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-09-27T18:17:59.518615Z",
@@ -181,11 +211,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process loaded the immutable successor through the HMM L2 file-only consumer and returned status=PASS with input_hash=e0de47f2e0a992a1250da566bf09944166798304a94cf65be89dddc81dfc77a2",
+      "python backend/services/hmm_risk/rotation_l2_input_bundle.py -> status=PASS input_hash=e0de47f2e0a992a1250da566bf09944166798304a94cf65be89dddc81dfc77a2"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
