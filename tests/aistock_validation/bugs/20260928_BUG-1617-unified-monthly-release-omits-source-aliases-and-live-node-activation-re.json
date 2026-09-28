@@ -13,8 +13,10 @@
     "backend/tests/dataset_release/test_artifact_ready_build_source.py",
     "backend/tests/dataset_release/test_candidate_validator.py",
     "backend/tests/dataset_release/test_factor_materializer.py",
+    "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
     "backend/tests/dataset_release/test_monthly_consumer_layout.py",
     "backend/tests/dataset_release/test_monthly_local_validation.py",
+    "backend/tests/dataset_release/test_monthly_shared_components.py",
     "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
     "docs/standards/aistock_runtime_targets_v1.yaml",
     "noxfile.py"
