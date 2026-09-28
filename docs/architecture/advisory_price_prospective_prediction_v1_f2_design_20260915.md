@@ -1,9 +1,9 @@
-# AdvisoryPriceProspectivePredictionV1 F2 详细设计 v1.2
+# AdvisoryPriceProspectivePredictionV1 F2 详细设计 v1.3
 
-> 日期：2026-09-15
+> 日期：2026-09-28
 > Feature tier：F2
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.62
-> 当前阶段：`FORMAL_PROSPECTIVE_CAPTURE_PUBLISHED_AWAITING_MATURITY`
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.66
+> 当前阶段：`LEGACY_FIRST_CAPTURE_AND_SETTLEMENT_VERIFIED_AUTOMATION_PENDING`
 > 业务归属：Selection Center / Advisory
 > 运行边界：日频自然前向预测收集；不绑定生产 descriptor，不读取目标日结果，不研发分钟执行
 
@@ -17,9 +17,9 @@
 
 正式 prediction bundle `631d5011858684403d84d1d0975ec0e0642c1d8f52ebd62048829187a1e5435c` 于 `2026-09-15 03:27:30.861704 Asia/Shanghai` 发布，20/20 候选可用、耗时 `19.671s`；prediction/manifest/receipt SHA-256 分别为 `6d6b4ece56835472b6c1cebb7fed8ed6194a0e96bafe65876a356f2aaeff83af`、`3e49b4aa6e78d9699670f7dd9ede1bfd59bd0bfb136e43c6dc57fd51aaced6d6`、`06e133a9355f3499eec05336ecc0de0b127d089bf801f7f9b8fafe3949513293`。第二次 capture 返回 `ALREADY_MATERIALIZED` 且 hashes 完全一致。receipt 严格声明零目标结果访问、零 binding 激活、零数据库写入、零 sealed holdout 消费。
 
-上述正式 artifact 只证明真实 Program 输入、103 特征、冻结 bundle、盘前时钟与不可变发布通道可以闭环；T 日结果尚未在本切片读取，不能据此报告 coverage、收益、命中率或激活建议。
+上述正式 artifact 只证明真实 Program 输入、103 特征、冻结 bundle、盘前时钟与不可变发布通道可以闭环；预测阶段未读取T日结果；后续独立结算已完成，20行coverage=0.70，仅一日不足以确认模型，更不能解释为收益胜率。
 
-本切片已填补独立于生产 binding 的预测收集通道缺口：模型冻结后，每个真实未来交易日只根据 D 时点可见的已发布荐股输入生成 T 日价格信封，写入不可变 artifact；在预测阶段不得读取 T 日行情、标签、收益、coverage 或任何 outcome evaluation。当前剩余的是自然样本积累和独立成熟评价，不是继续改动冻结模型。
+本切片已填补独立于生产 binding 的预测收集通道缺口：模型冻结后，每个真实未来交易日只根据 D 时点可见的已发布荐股输入生成 T 日价格信封，写入不可变 artifact；在预测阶段不得读取 T 日行情、标签、收益、coverage 或任何 outcome evaluation。该CLI尚未接入自动每日运行，不得把可手动调用写成持续积累。后续按[独立角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[历史确认](advisory_entry_price_confirmation_f2_design_20260928.md)和[每日交付](advisory_entry_price_delivery_f2_design_20260928.md)补齐；不修改本切片已发布预测或冻结模型。
 
 ## 2. Scope / 目标
 
