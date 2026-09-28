@@ -1,5 +1,6 @@
 """Compact contracts for request, CLI, candidate identity and safe defaults."""
 
+import json
 import os
 import subprocess
 import sys
@@ -14,6 +15,7 @@ from backend.services.factor_research.runner import CANONICAL_UNIVERSE, evaluati
 from scripts.factor_research import configure
 
 ROOT = Path(__file__).resolve().parents[3]
+LAUNCHER = ROOT / "backend" / "services" / "factor_research" / "candidate_subprocess.py"
 
 
 def spec(tmp_path):
@@ -82,3 +84,56 @@ def test_evaluation_slice_reuses_engine_labels_without_recomputation():
     }
     view = evaluation_context(ctx, {"signal_start": "2026-01-02", "signal_end": "2026-01-03"})
     assert view["fwd_ret_mats"]["1d"].equals(labels.loc[dates[1:3]]) and len(ctx["dates"]) == 5
+
+
+def test_candidate_subprocess_restores_large_instrument_cli_contract(tmp_path):
+    (tmp_path / "candidate_helper.py").write_text(
+        "def preserve(values):\n    return values\n",
+        encoding="utf-8",
+    )
+    candidate = tmp_path / "candidate.py"
+    candidate.write_text(
+        """import argparse, json
+from pathlib import Path
+from candidate_helper import preserve
+p = argparse.ArgumentParser()
+p.add_argument('--data-dir', required=True)
+p.add_argument('--output', required=True)
+p.add_argument('--start-date', required=True)
+p.add_argument('--end-date', required=True)
+p.add_argument('--instruments', required=True)
+a = p.parse_args()
+Path(a.output).write_text(json.dumps(preserve(json.loads(a.instruments))), encoding='utf-8')
+""",
+        encoding="utf-8",
+    )
+    instruments = [f"{number:06d}.SZ" for number in range(1, 5342)]
+    instruments_path = tmp_path / "scope_instruments.json"
+    instruments_path.write_text(json.dumps(instruments), encoding="utf-8")
+    output = tmp_path / "received.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(LAUNCHER),
+            "--script",
+            str(candidate),
+            "--data-dir",
+            str(tmp_path),
+            "--output",
+            str(output),
+            "--start-date",
+            "2018-08-01",
+            "--end-date",
+            "2026-08-31",
+            "--instruments-file",
+            str(instruments_path),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(output.read_text(encoding="utf-8")) == instruments
