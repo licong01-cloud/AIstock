@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1615",
-  "closed_at": null,
+  "closed_at": "2026-09-28T17:28:52Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -163,8 +163,8 @@
   },
   "first_seen_at": "2026-09-28T17:09:31.691137Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d5af482ccaaf3590302b1d9bc24284a8603b0dd1",
+  "fixed_at": "2026-09-28T17:28:52Z",
   "github_issue_number": 5073,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5073",
   "last_seen_at": "2026-09-28T17:09:31.691137Z",
@@ -172,6 +172,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5086",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -189,6 +190,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -198,7 +200,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1615",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4d4163a76f422833",
+    "recorded_at": "2026-09-28T17:30:06.426584Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1492db42503e3c7699bf8d0bc6021366543dbd48",
+    "source_merge_commit": "d5af482ccaaf3590302b1d9bc24284a8603b0dd1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5086",
+    "validation_evidence": [
+      "validation-receipt: id=1f7d6174c583e68f commit=1492db42503e3c7699bf8d0bc6021366543dbd48 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_nightly_adaptive_scheduler.py backend/tests/scripts/test_nightly_session_runner.py backend/tests/scripts/test_ci_failure_issue_summary.py` result=`84 passed`",
+      "validation-receipt: id=067937dc41b02582 commit=1492db42503e3c7699bf8d0bc6021366543dbd48 kind=nox plan=validation_workflow_automation status=passed command=`python -m nox -s validation_workflow_automation` result=`186 passed plus nightly-intake-smoke PASS`",
+      "validation-receipt: id=fba147553f939f6a commit=1492db42503e3c7699bf8d0bc6021366543dbd48 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- <7 changed files>` result=`PASS, blocking=0`"
+    ],
+    "validation_evidence_digest": "0f9d88f0931eb586d80d3da742293e36fb0a872834835510f7ef2b49eeb575cc"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -207,6 +232,11 @@
     "fingerprint": "17d6610567edfdfc25d46fe0",
     "source_event_id": "FE-20260928-17d6610567ed"
   },
+  "validation_evidence": [
+    "validation-receipt: id=1f7d6174c583e68f commit=1492db42503e3c7699bf8d0bc6021366543dbd48 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/scripts/test_nightly_adaptive_scheduler.py backend/tests/scripts/test_nightly_session_runner.py backend/tests/scripts/test_ci_failure_issue_summary.py` result=`84 passed`",
+    "validation-receipt: id=067937dc41b02582 commit=1492db42503e3c7699bf8d0bc6021366543dbd48 kind=nox plan=validation_workflow_automation status=passed command=`python -m nox -s validation_workflow_automation` result=`186 passed plus nightly-intake-smoke PASS`",
+    "validation-receipt: id=fba147553f939f6a commit=1492db42503e3c7699bf8d0bc6021366543dbd48 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- <7 changed files>` result=`PASS, blocking=0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
