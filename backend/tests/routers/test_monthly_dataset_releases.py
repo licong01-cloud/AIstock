@@ -90,6 +90,113 @@ def _body() -> dict[str, object]:
     }
 
 
+def _adoption_body(settings: MonthlyRuntimeSettings) -> dict[str, object]:
+    candidate = settings.controller_release_root / "v15-candidate"
+    reports = candidate / "reports"
+    reports.mkdir(parents=True)
+    manifest_identity = "b" * 64
+    manifest = candidate / "qe_dataset_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "dataset_manifest_sha256": manifest_identity,
+                "cutoff_trade_date": "2026-08-31",
+                "release_id": "qe_hmm_full_v2_20260831",
+                "revision": "20260928-r8-unified-moneyflow1",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    evidence_values = (
+        (
+            "moneyflow.json",
+            {
+                "schema_version": "qe_moneyflow_alias_coverage_receipt_v1",
+                "status": "PASS",
+                "expected": 120,
+                "resolved": 120,
+                "provider_absence": 0,
+                "unknown": 0,
+                "nonfinite": 0,
+                "mismatched": 0,
+                "database_write": False,
+            },
+        ),
+        (
+            "hmm.json",
+            {
+                "schema_version": "hmm_risk_rotation_l2_input_bundle_v1",
+                "status": "PASS",
+                "identity": {"manifest_sha256": manifest_identity},
+            },
+        ),
+    )
+    evidence_refs = []
+    for name, value in evidence_values:
+        path = reports / name
+        path.write_text(
+            json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        evidence_refs.append(
+            {
+                "relative_path": f"reports/{name}",
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "schema_version": value["schema_version"],
+            }
+        )
+    profile = settings.profile_candidate_root / "profile-v15.json"
+    manifest_file_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    profile.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_active_dataset_profile_v3",
+                "generation": "20260928-v15-unified-moneyflow1",
+                "release_id": "qe_hmm_full_v2_20260831",
+                "cutoff": "2026-08-31",
+                "controller_paths": {"candidate_root": str(candidate.absolute())},
+                "node_bindings": {
+                    "wsl2-5080": {
+                        "candidate_root": f"{settings.wsl_release_root}/{candidate.name}"
+                    },
+                    "rdagent-node1": {
+                        "candidate_root": f"{settings.node1_release_root}/{candidate.name}"
+                    },
+                },
+                "components": {
+                    "dataset_manifest_sha256": manifest_identity,
+                    "dataset_manifest_file_sha256": manifest_file_sha256,
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "schema_version": "aistock_monthly_existing_successor_adoption_v1",
+        "target_cutoff": "2026-08-31",
+        "product_profile": "qe_hmm_full_v2",
+        "candidate_root": str(candidate.absolute()),
+        "profile_candidate": str(profile.absolute()),
+        "predecessor_profile_sha256": hashlib.sha256(
+            settings.active_profile.read_bytes()
+        ).hexdigest(),
+        "target_profile_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
+        "dataset_manifest_sha256": manifest_identity,
+        "dataset_manifest_file_sha256": manifest_file_sha256,
+        "node_manifest_file_sha256": {
+            node: manifest_file_sha256
+            for node in ("controller", "wsl2-5080", "rdagent-node1")
+        },
+        "evidence_refs": evidence_refs,
+    }
+
+
 def test_all_routes_require_dataset_release_operator(tmp_path: Path) -> None:
     _, _, app = _client(tmp_path)
     routes = [
@@ -97,10 +204,40 @@ def test_all_routes_require_dataset_release_operator(tmp_path: Path) -> None:
         for route in app.routes
         if isinstance(route, APIRoute) and route.path.startswith("/api/v1/qlib/monthly-releases")
     ]
-    assert len(routes) == 8
+    assert len(routes) == 10
     for route in routes:
         dependencies = {dependency.call for dependency in route.dependant.dependencies}
         assert require_dataset_release_operator in dependencies, route.path
+
+
+def test_adopt_and_authorize_existing_successor_are_durable_and_separate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client, settings, _ = _client(tmp_path)
+    monkeypatch.setattr(api, "load_qe_profile", lambda _path: object())
+    monkeypatch.setattr(api, "validate_controller_snapshot", lambda _profile: None)
+    active_before = hashlib.sha256(settings.active_profile.read_bytes()).hexdigest()
+    adopted = client.post(
+        "/api/v1/qlib/monthly-releases/adopt",
+        json=_adoption_body(settings),
+        headers={"Idempotency-Key": "adopt-v15"},
+    )
+    assert adopted.status_code == 201
+    operation_id = adopted.json()["data"]["operation_id"]
+    assert adopted.json()["data"]["status"] == "READY_TO_ACTIVATE"
+    assert hashlib.sha256(settings.active_profile.read_bytes()).hexdigest() == active_before
+
+    authorization = client.post(
+        f"/api/v1/qlib/monthly-releases/{operation_id}/authorizations",
+        json={
+            "schema_version": "aistock_monthly_authorization_issue_request_v1",
+            "action": "ACTIVATE",
+        },
+    )
+    assert authorization.status_code == 201
+    assert authorization.json()["data"]["authorization_id"].startswith("dsauth_")
+    assert list(settings.authorization_root.glob("dsauth_*.json"))
 
 
 def test_plan_is_read_only_and_submit_is_durable_and_idempotent(tmp_path: Path) -> None:
