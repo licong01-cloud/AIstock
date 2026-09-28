@@ -23,6 +23,11 @@ from backend.data_service.moneyflow_contract import (
     MONEYFLOW_FACTOR_COLUMNS,
     MONEYFLOW_UNIT_CONTRACT_VERSION,
 )
+from backend.data_service.security_source_identity import (
+    MONEYFLOW_DATASET,
+    SecuritySourceIdentityManifest,
+    load_security_source_identity_manifest,
+)
 
 from .canonical import (
     digest_named_fields,
@@ -1844,6 +1849,7 @@ def _match_index_file_receipt(
 
 
 def _validate_moneyflow_static_partitions(root: Path, *, receipt: Mapping[str, Any], max_rows: int) -> dict[str, Any]:
+    identity = load_security_source_identity_manifest(root / "security_source_identity.json")
     chunks = receipt.get("chunks") or []
     moneyflow = {
         item["partition_key"]: root.parent / item["candidate_relative_path"]
@@ -1859,7 +1865,12 @@ def _validate_moneyflow_static_partitions(root: Path, *, receipt: Mapping[str, A
         raise CandidateValidationError("moneyflow/static partition keys differ")
     checked = 0
     for key in sorted(moneyflow):
-        checked += _stream_partition_parity(moneyflow[key], static[key], max_rows=max_rows)
+        checked += _stream_partition_parity(
+            moneyflow[key],
+            static[key],
+            max_rows=max_rows,
+            identity=identity,
+        )
     if checked <= 0:
         raise CandidateValidationError("moneyflow/static parity checked no rows")
     return {
@@ -1871,11 +1882,18 @@ def _validate_moneyflow_static_partitions(root: Path, *, receipt: Mapping[str, A
     }
 
 
-def _stream_partition_parity(moneyflow_path: Path, static_path: Path, *, max_rows: int) -> int:
+def _stream_partition_parity(
+    moneyflow_path: Path,
+    static_path: Path,
+    *,
+    max_rows: int,
+    identity: SecuritySourceIdentityManifest,
+) -> int:
     static_iterator = iter(iter_parquet_frames([static_path], max_rows=max_rows))
     static_frame = next(static_iterator, None)
     checked = 0
     for moneyflow in iter_parquet_frames([moneyflow_path], max_rows=max_rows):
+        moneyflow = _canonical_moneyflow_frame(moneyflow, identity=identity)
         missing = sorted(set(MONEYFLOW_FACTOR_COLUMNS).difference(moneyflow.columns))
         if missing:
             raise CandidateValidationError(f"moneyflow fields missing: {missing}")
@@ -1922,6 +1940,7 @@ def _validate_moneyflow_derived_formula_parity(
     moneyflow_path = root / "moneyflow.h5"
     daily_path = root / "daily_pv.h5"
     static_path = root / "static_factors.parquet"
+    identity = load_security_source_identity_manifest(root / "security_source_identity.json")
     daily_cursor = _OrderedArtifactCursor(
         iter_hdf_frames(daily_path, chunksize=max_rows),
         label="daily_pv H5",
@@ -1940,6 +1959,7 @@ def _validate_moneyflow_derived_formula_parity(
     for moneyflow in iter_hdf_frames(moneyflow_path, chunksize=max_rows):
         if moneyflow.empty:
             continue
+        moneyflow = _canonical_moneyflow_frame(moneyflow, identity=identity)
         if len(moneyflow) > max_rows:
             raise CandidateValidationError("moneyflow H5 exceeded validation bound")
         daily = daily_cursor.take(
@@ -2012,6 +2032,35 @@ def _validate_moneyflow_derived_formula_parity(
             "whole_market_frames_retained": 0,
         },
     }
+
+
+def _canonical_moneyflow_frame(
+    frame: pd.DataFrame,
+    *,
+    identity: SecuritySourceIdentityManifest,
+) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    source = frame.reset_index().rename(
+        columns={"datetime": "trade_date", "instrument": "ts_code"}
+    )
+    source_codes = {str(value).upper() for value in source["ts_code"]}
+    canonical_codes = set(source_codes)
+    for row in identity.rows:
+        if row.source_dataset == MONEYFLOW_DATASET and row.source_ts_code in source_codes:
+            canonical_codes.discard(row.source_ts_code)
+            canonical_codes.add(row.canonical_ts_code)
+    mapped = identity.remap_source_rows(
+        source,
+        canonical_codes=canonical_codes,
+        source_dataset=MONEYFLOW_DATASET,
+    )
+    mapped["datetime"] = pd.to_datetime(mapped.pop("trade_date"), errors="raise")
+    mapped["instrument"] = mapped.pop("ts_code")
+    output = mapped.set_index(["datetime", "instrument"])[list(frame.columns)].sort_index()
+    if output.index.has_duplicates or len(output) != len(frame):
+        raise CandidateValidationError("moneyflow source identity cannot be canonicalized uniquely")
+    return output
 
 
 def _derive_moneyflow_chunk(

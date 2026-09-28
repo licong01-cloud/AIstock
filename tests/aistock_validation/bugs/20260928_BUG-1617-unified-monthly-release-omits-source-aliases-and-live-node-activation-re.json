@@ -1,7 +1,23 @@
 {
   "actual": "The official monthly v2 path does not carry source-specific historical security identity through sealed factor materialization or require a frozen moneyflow alias coverage receipt, and its activation verifier only checks the controller profile without proving WSL/node1 running dataset-identity resolves the new manifest. A future monthly release can therefore recreate BUG-1611 or report ACTIVATED_VERIFIED while node APIs remain bound to the predecessor.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20260928_BUG-1617-unified-monthly-release-omits-source-aliases-and-live-node-activation-re.json"
+    "tests/aistock_validation/bugs/20260928_BUG-1617-unified-monthly-release-omits-source-aliases-and-live-node-activation-re.json",
+    "backend/services/dataset_release/artifact_ready_build_source.py",
+    "backend/services/dataset_release/build_stage.py",
+    "backend/services/dataset_release/candidate_validator.py",
+    "backend/services/dataset_release/factor_materializer.py",
+    "backend/services/dataset_release/monthly_consumer_layout.py",
+    "backend/services/dataset_release/monthly_local_validation.py",
+    "backend/services/dataset_release/monthly_worker_nodes.py",
+    "backend/services/dataset_release/monthly_worker_runtime.py",
+    "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+    "backend/tests/dataset_release/test_candidate_validator.py",
+    "backend/tests/dataset_release/test_factor_materializer.py",
+    "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+    "backend/tests/dataset_release/test_monthly_local_validation.py",
+    "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "noxfile.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1617",
@@ -22,7 +38,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Every unified monthly release resolves frozen source-specific historical security codes, pins and verifies alias coverage, and reports activation verified only after both running QE nodes return the successor manifest identity.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -62,15 +78,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_artifact_ready_build_source.py backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_factor_partition_producer.py backend/tests/dataset_release/test_candidate_validator.py backend/tests/dataset_release/test_build_stage.py backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_local_validation.py backend/tests/dataset_release/test_monthly_worker_nodes.py backend/tests/dataset_release/test_monthly_worker_runtime_cli.py backend/tests/dataset_release/test_monthly_worker_composition.py backend/tests/dataset_release/test_monthly_official_adapters.py backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/dataset_release/test_runtime_release_registration.py -q -x -> 105 passed, 3 skipped",
+      "dataset_release targeted matrix fresh process -> 105 passed, 3 skipped"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

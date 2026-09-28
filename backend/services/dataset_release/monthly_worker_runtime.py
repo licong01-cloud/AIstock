@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import httpx
+
 from backend.services.quantevolver.qe_active_dataset_profile import (
     load_qe_profile,
     validate_controller_snapshot,
@@ -54,17 +56,55 @@ class MonthlyWorkerRuntime:
 
 def _activation_verifier(
     active_profile: Path,
+    nodes: MonthlyNodeRuntimeSettings,
 ):
     def verify(ready: Mapping[str, Any]) -> dict[str, Any]:
         profile = load_qe_profile(active_profile)
         validate_controller_snapshot(profile)
+        expected_manifest = str(ready["dataset_manifest_sha256"])
+        actual_manifest = str(profile.raw["components"]["dataset_manifest_sha256"])
+        if actual_manifest != expected_manifest:
+            raise RuntimeError("active controller manifest differs from activated successor")
+        bindings = profile.raw.get("node_bindings")
+        if not isinstance(bindings, Mapping):
+            raise RuntimeError("active profile node bindings are unavailable")
+        readbacks: dict[str, Any] = {}
+        with httpx.Client(
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=10.0),
+            trust_env=False,
+        ) as client:
+            for node_id, url in nodes.dataset_identity_urls().items():
+                binding = bindings.get(node_id)
+                root = binding.get("candidate_root") if isinstance(binding, Mapping) else None
+                if not isinstance(root, str) or not root.strip():
+                    raise RuntimeError(f"active profile node binding is incomplete: {node_id}")
+                response = client.get(
+                    url,
+                    params={"node_id": node_id, "data_root_uri": root},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                dataset = payload.get("dataset") if isinstance(payload, Mapping) else None
+                if (
+                    not isinstance(payload, Mapping)
+                    or payload.get("complete") is not True
+                    or not isinstance(dataset, Mapping)
+                    or dataset.get("dataset_manifest_sha256") != expected_manifest
+                    or dataset.get("resolved_node_id") != node_id
+                    or dataset.get("resolved_data_root_uri") != root
+                ):
+                    raise RuntimeError(f"running node dataset identity differs: {node_id}")
+                readbacks[node_id] = {
+                    "complete": True,
+                    "dataset_manifest_sha256": dataset["dataset_manifest_sha256"],
+                    "resolved_data_root_uri": dataset["resolved_data_root_uri"],
+                }
         return {
             "status": "PASS",
-            "dataset_manifest_sha256": str(
-                profile.raw["components"]["dataset_manifest_sha256"]
-            ),
+            "dataset_manifest_sha256": actual_manifest,
             "profile_sha256": profile.profile_sha256,
-            "expected_manifest_sha256": str(ready["dataset_manifest_sha256"]),
+            "expected_manifest_sha256": expected_manifest,
+            "node_dataset_identity_readbacks": readbacks,
         }
 
     return verify
@@ -85,7 +125,7 @@ def build_monthly_worker_runtime(*, project_root: Path) -> MonthlyWorkerRuntime:
     worker = MonthlyReleaseWorker(
         service,
         authorization_store=ActionAuthorizationStore(settings.authorization_root),
-        activation_verifier=_activation_verifier(settings.active_profile),
+        activation_verifier=_activation_verifier(settings.active_profile, nodes),
     )
     return MonthlyWorkerRuntime(
         settings=settings,
