@@ -17,6 +17,8 @@ from backend.deps import DatasetReleasePrincipal, require_dataset_release_operat
 from backend.services.dataset_release.api_models import (
     EmptyCommandRequest,
     UnifiedMonthlyActionRequest,
+    UnifiedMonthlyAdoptRequest,
+    UnifiedMonthlyAuthorizationIssueRequest,
     UnifiedMonthlyReleaseRequest,
 )
 from backend.services.dataset_release.monthly_runtime import (
@@ -34,6 +36,7 @@ from backend.services.dataset_release.monthly_unified import (
     MonthlyReleaseService,
 )
 from backend.services.quantevolver.qe_active_dataset_profile import (
+    QEActiveDatasetProfileError,
     load_qe_profile,
     validate_controller_snapshot,
 )
@@ -176,6 +179,58 @@ def submit_monthly_release(
     }
 
 
+@router.post("/adopt", status_code=201)
+def adopt_existing_monthly_successor(
+    request: UnifiedMonthlyAdoptRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    idempotency_key: Annotated[str, Depends(_idempotency)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+    settings: Annotated[MonthlyRuntimeSettings, Depends(get_monthly_release_settings)],
+) -> dict[str, Any]:
+    candidate_name = Path(request.candidate_root).name
+
+    def adopt() -> dict[str, Any]:
+        try:
+            target_profile = load_qe_profile(Path(request.profile_candidate))
+            validate_controller_snapshot(target_profile)
+        except QEActiveDatasetProfileError as exc:
+            raise MonthlyReleaseConflict(
+                "adopted profile failed the existing controller validator"
+            ) from exc
+        return service.adopt_existing_successor(
+            idempotency_key=idempotency_key,
+            product_profile=request.product_profile,
+            target_cutoff=request.target_cutoff,
+            candidate_root=Path(request.candidate_root),
+            profile_candidate=Path(request.profile_candidate),
+            predecessor_profile_sha256=request.predecessor_profile_sha256,
+            target_profile_sha256=request.target_profile_sha256,
+            dataset_manifest_sha256=request.dataset_manifest_sha256,
+            dataset_manifest_file_sha256=request.dataset_manifest_file_sha256,
+            node_manifest_file_sha256=request.node_manifest_file_sha256,
+            evidence_refs=[item.model_dump() for item in request.evidence_refs],
+            controller_release_root=settings.controller_release_root,
+            profile_candidate_root=settings.profile_candidate_root,
+            expected_node_roots={
+                "wsl2-5080": f"{settings.wsl_release_root}/{candidate_name}",
+                "rdagent-node1": f"{settings.node1_release_root}/{candidate_name}",
+            },
+            principal=principal.principal_id,
+        )
+
+    data = _call(
+        adopt
+    )
+    operation_id = str(data["operation_id"])
+    return {
+        "schema_version": "aistock_monthly_release_submission_v1",
+        "data": {
+            **data,
+            "status_url": f"/api/v1/qlib/monthly-releases/{operation_id}",
+        },
+    }
+
+
 @router.get("/{operation_id}")
 def get_monthly_release(
     operation_id: str,
@@ -284,6 +339,27 @@ def activate_monthly_release(
                 authorization_ref=request.authorization_ref,
                 principal=principal.principal_id,
                 verify_after=verify,
+            )
+        ),
+    }
+
+
+@router.post("/{operation_id}/authorizations", status_code=201)
+def issue_monthly_release_authorization(
+    operation_id: str,
+    request: UnifiedMonthlyAuthorizationIssueRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+    settings: Annotated[MonthlyRuntimeSettings, Depends(get_monthly_release_settings)],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_monthly_authorization_issue_response_v1",
+        "data": _call(
+            lambda: service.issue_action_authorization(
+                operation_id,
+                authorization_store=ActionAuthorizationStore(settings.authorization_root),
+                action=request.action,
+                principal=principal.principal_id,
             )
         ),
     }

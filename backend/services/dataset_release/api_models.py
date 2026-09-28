@@ -64,10 +64,58 @@ class UnifiedMonthlyActionRequest(DatasetReleaseApiModel):
     authorization_ref: str = Field(pattern=r"^dsauth_[0-9a-f]{32}$")
 
 
+class ExistingSuccessorEvidenceRef(DatasetReleaseApiModel):
+    relative_path: str = Field(min_length=1, max_length=512)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    schema_version: str = Field(min_length=1, max_length=128)
+
+
+class UnifiedMonthlyAdoptRequest(DatasetReleaseApiModel):
+    schema_version: Literal["aistock_monthly_existing_successor_adoption_v1"] = (
+        "aistock_monthly_existing_successor_adoption_v1"
+    )
+    target_cutoff: date
+    product_profile: Literal["qe_hmm_full_v2"] = "qe_hmm_full_v2"
+    candidate_root: str = Field(min_length=3, max_length=1024)
+    profile_candidate: str = Field(min_length=3, max_length=1024)
+    predecessor_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_manifest_file_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    node_manifest_file_sha256: dict[
+        Literal["controller", "wsl2-5080", "rdagent-node1"], str
+    ]
+    evidence_refs: tuple[ExistingSuccessorEvidenceRef, ...] = Field(min_length=2, max_length=32)
+
+    @model_validator(mode="after")
+    def validate_adoption_shape(self) -> "UnifiedMonthlyAdoptRequest":
+        if set(self.node_manifest_file_sha256) != {
+            "controller",
+            "wsl2-5080",
+            "rdagent-node1",
+        }:
+            raise ValueError("node manifest attestations must cover all release nodes")
+        if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in self.node_manifest_file_sha256.values()):
+            raise ValueError("node manifest attestation hash is invalid")
+        if len({item.relative_path for item in self.evidence_refs}) != len(self.evidence_refs):
+            raise ValueError("adoption evidence paths are duplicated")
+        return self
+
+
+class UnifiedMonthlyAuthorizationIssueRequest(DatasetReleaseApiModel):
+    schema_version: Literal["aistock_monthly_authorization_issue_request_v1"] = (
+        "aistock_monthly_authorization_issue_request_v1"
+    )
+    action: Literal["ACTIVATE"] = "ACTIVATE"
+
+
 __all__ = (
     "DatasetReleaseApiModel",
     "EmptyCommandRequest",
+    "ExistingSuccessorEvidenceRef",
     "MonthlyReleaseRequest",
     "UnifiedMonthlyActionRequest",
+    "UnifiedMonthlyAdoptRequest",
+    "UnifiedMonthlyAuthorizationIssueRequest",
     "UnifiedMonthlyReleaseRequest",
 )
