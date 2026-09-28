@@ -78,6 +78,19 @@ class EntryPriceConfirmationCriteria(_Contract):
     nominal_coverage: Literal[0.8] = 0.8
 
 
+class EntryCoordinateReview(_Contract):
+    """Consumed validation-only numerical parity; never fit a transform on confirmation data."""
+    schema_version: Literal["advisory_entry_coordinate_review_v1"]
+    status: Literal["PASS"]
+    validation_labels_sha256: Sha256
+    scope_sha256: Sha256
+    projection_producer_version: Literal["advisory_entry_price_core_v1"]
+    checked_validation_rows: int = Field(gt=0)
+    unavailable_rows: Literal[0]
+    tolerance_abs_gap: Literal[0.000001]
+    maximum_abs_gap_difference: float = Field(ge=0, le=0.000001, allow_inf_nan=False)
+
+
 class EntryPriceControl(_Contract):
     validation_labels: EvidenceReferenceV1
     validation_dates: tuple[date, ...] = Field(min_length=1)

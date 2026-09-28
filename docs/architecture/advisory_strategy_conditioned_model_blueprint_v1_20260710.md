@@ -3,7 +3,7 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-09-28
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`ENTRY_PRICE_SOURCE_LOCAL_VERIFIED_CI_CONFIRMATION_BINDING_PENDING`（2026-09-29）；原v3/v4模型与历史结果保留，P0/N3研究负结果不改判。独立entry、历史四阶段及每日接入源码已实现，136项定向回归通过；尚未合入、运行正式确认、发布binding或操作后端。
+> 当前状态：`ENTRY_PRICE_SOURCE_LOCAL_VERIFIED_COORDINATE_INPUT_BLOCKED`（2026-09-29）；原v3/v4模型与历史结果保留，P0/N3研究负结果不改判。独立entry、历史四阶段及每日接入源码已实现，136项定向回归及后续输入校验、1项浏览器用例通过；PR #5088尚未合入。真实validation发现公司行动坐标不一致，未运行正式确认、发布binding或操作用户后端。
 > 当前价格/执行边界：Advisory只研发和发布基于日频PIT信息的次交易日价格区间，不研发分钟线择时、最佳分钟买卖点、拆单或成交执行策略。未来QE、Paper或Execution模块可通过版本化只读合同独立消费价格区间，但消费、回测、执行和激活均不属于本蓝图范围。
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 均有真实实现与独立验证，但尚无当前同时提供四类输出的组合bundle。`AdvisoryDailyPriceEnvelopeV1`源码、v3三头真实训练 artifact `30e8a75b...` 和 v4 validation-only 校准 artifact `508fedfe...` 均已完成；validation/test 覆盖率分别为 `0.811702/0.733125`，校准扩张量为 0。PR #4732 / merge `3be76e742...` 已交付独立自然前向收集通道；首次正式 request `advprpros_405d704a7dbe866eb0b6ae0e` 和 prediction bundle `631d5011858684403d84d1d0975ec0e0642c1d8f52ebd62048829187a1e5435c` 在 T=`2026-09-15` 开盘前完成，20/20候选可用并通过exact retry，且零目标结果访问、零binding、零数据库写入、零sealed holdout消费。T日18:00后自然settlement `advprsett_14c46af1fa2bdb92088b425c` 已发布：20/20市场及模型可用，业务coverage `0.70`、lower/upper miss `0.25/0.05`、平均/中位宽度 `288.615/249.832 bps`、平均/中位mid误差 `116.422/63.188 bps`；单日只进入`ACCUMULATING`，不能选择或激活模型。PR #4785 / merge `8021790ab...` 又交付固定rolling-20D matured CQR历史导航审计；正式 request `advpradapt_8c81ea2bd2f70d75e1683fe9` 在已消费80日回放上selected=0，故保持静态v4、零新binding和零运行时激活，P0-D exact descriptor仍只绑定meta-label shadow，M3/M4 child typed unavailable。
 > 2026-09-28接入核查：上述v4与历史结果不变，权威本地price prospective目录仍仅1日20行；自然CLI未自动接入scheduler。当前P0-D分支及V1 M3依赖阻断独立entry输出。新详细设计已补齐独立角色、新窗口确认、Program级binding和每日接入方案，源码及确认均待执行。
@@ -199,7 +199,7 @@ H0 的权威详细设计为
 | 模型质量升级 | `0 ACTIVATED SELECTOR CHALLENGERS` | M5A/M5B/M5C及P0-D至P0-L均未证明可以替换Selection；P0-D只作为experimental shadow，M4继续提供价格范围而非选股alpha |
 | 长期趋势模型 | `NOT_STARTED` | 长期趋势原生多 Alpha 父包尚未形成可训练输入 |
 | 旧研究族状态 | `P0-D..P0-L FROZEN` | 研究事实完整但无可激活winner；不以同族新变体继续消耗相同开发证据 |
-| 新路线实现状态 | `ENTRY_PRICE_SOURCE_LOCAL_VERIFIED_CI_PENDING` | 原N3/Admission及价格adaptive负结果保留；独立entry、历史确认CLI和每日接入源码已实现并通过定向回归。新窗口资格/QE独占未确认、生产binding未发布；现有自然样本没有增加，不能宣称生产已自动收集。 |
+| 新路线实现状态 | `ENTRY_PRICE_SOURCE_LOCAL_VERIFIED_COORDINATE_INPUT_BLOCKED` | 原N3/Admission及价格adaptive负结果保留；独立entry、历史确认CLI和每日接入源码已实现并通过定向回归。v4已消费validation的3/1000行公司行动坐标不一致；新窗口资格/QE独占未确认、生产binding未发布，现有自然样本没有增加。 |
 | Admission v2上游依赖 | `BASELINE_STAGE_DECOUPLED / OPTIONAL_SECTOR_SOURCE_NOT_READY` | G2-A v1.2 17/39结构停止，没有完整accepted OOF；仅R2 sector阶段受阻，R0/R1使用真实基础source不需等待 |
 | 系统级上游Alpha | `QE_ROLLING_LSTM_CANDIDATE_ONLY` | rolling LSTM seed123完成四vintage并显示相对rolling LGBM改善，但仍待两seed、LOO和2026H1 Top50负收益解释；尚无新StrategyPackage或Advisory binding |
 | QE因子分析运行态 | `DIRECT_V2_SOURCE_MERGED_BACKEND_RESTART_PENDING` | PR #4352源码和DEV/WSL验证已完成；生产API/后台任务是否加载新源须用户重启后另行readback。该状态不计为模型效果，也不阻断离线主线 |
@@ -1905,8 +1905,8 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | 顺序 / 编号 | 任务、依赖与精确交付 | 当前状态及完成条件 |
 |---|---|---|
 | EP0 / 设计 | [独立价格角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[一次性历史确认](advisory_entry_price_confirmation_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md) | PR #5079设计已合入；本次v1.1同步源码验收和剩余运行条件，不把F2结构通过当效果通过 |
-| EP1 / 独立entry | 解开P0-D短路、M3依赖和V1全字段耦合；显式entry-v2及V1默认兼容；单日/批量共用价格内核 | 源码/定向回归通过，前端类型检查0诊断；浏览器交互待CI。保留训练来源身份，无排名/交易语义变更 |
-| EP2 / 新窗口输入与历史推理 | 核验候选/父Alpha特征、时间切分、消费记录、vintage及当前数据身份；新入口直接运行冻结v4 | 四阶段CLI已实现，旧回放合同不变；新窗口资格及真实开发数据坐标审计仍待完成，不保证日期后移自动未消费，不调用QE训练或重建候选 |
+| EP1 / 独立entry | 解开P0-D短路、M3依赖和V1全字段耦合；显式entry-v2及V1默认兼容；单日/批量共用价格内核 | 源码/定向回归通过，前端类型检查0诊断、隔离浏览器1项通过；CI及合入待完成。保留训练来源身份，无排名/交易语义变更 |
+| EP2 / 新窗口输入与历史推理 | 先处理validation公司行动坐标不一致，再核验候选/父Alpha、训练切分、消费记录与vintage | 四阶段CLI已实现；坐标审计1000行无缺失、3行超数值容差，最大约9.61 bps，当前v4不能正式确认。不得用T日factor、删股或改旧标签消除差异；需数值变更时先形成新版本设计，不绕过新窗口资格 |
 | EP3 / 一次性确认 | 先冻结整个窗口预测，再揭示历史open/停牌；按confirmation设计的支持、coverage、宽度及control对照判定 | 输入不齐、结果未确认、欠功效分别报告；只有CONFIRMED_PRICE_DISTRIBUTION允许同scope shadow绑定；不等待未来20个交易日才能开发和验证 |
 | EP4 / binding与每日源码 | 最小Program级ENTRY_PRICE CAS指针、API/UI读回、现有Advisory周期有界capture/settle；可在确认期间完成源码和旧窗口回归 | 源码及fake-clock回归已完成；未合入/部署，binding发布依赖EP3。价格角色独立，不覆盖Ranking；历史禁用角色可结算，capture缺日不回填 |
 | EP5 / 生产接入 | 代码多轮审核、CI及合入；用户重启；精确角色发布、API/UI及实际prediction/settlement读回 | 合入、重启、binding、预测和成熟结算分报；完成仅指entry价格参考，不声明买入收益增量 |
@@ -1916,6 +1916,8 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 当前v3/v4、80日历史回放和rolling-20D导航审计均已完成，后者selected=0；独立entry方案不得重选该arm、修改旧窗口结果。新历史确认未执行。若窗口不合格，源码开发和已消费窗口功能验证继续，生产角色仍明确未确认；不通过改证据名称绕过限制。
 
 本地136项定向回归通过，覆盖同核投影、PIT/缺失保留、四阶段恢复、完整scope读回、角色CAS、盘前时钟及预算公平性。正式历史执行需QE窗口确认的具体独占时段；当前只读任务快照返回WAITING_RESOURCE，不提交实验。新CLI的prepare只核验元数据，predict/settle/evaluate每个阶段及日期块检查时段与QE任务状态。没有新增自然或正式OOS样本。
+
+下一业务阻断不是等待新的20个交易日，而是开发期坐标一致性：原validation的Qlib复权标签与公告公司行动换算在3行不一致，600016.SH的D=2025-09-15基准价理论值4.194与标签约4.19不同；其余997行仅浮点误差。先在已消费数据解释精度/公司行动规则并设计可PIT的新身份，不盲改冻结v4；确认入口已要求绑定原validation hash、完整人口和固定1e-6 gap数值容差的审计。该审计不是新增收益实验，不改变旧coverage结果，也不授权回选已失败模型。
 
 新模型推理仍需exact包候选及实际103特征。遇上游缺失只报告最小依赖给所属窗口；不修改QE/Selection公共代码。ENTRY_PRICE未确认为任何新包/新股票池可用前，其状态保持typed unavailable。
 

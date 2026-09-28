@@ -94,7 +94,7 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 
 ## 9. Design Acceptance Matrix
 
-本矩阵保持稳定验收ID；SOURCE_VERIFIED只表示源码合同和本地定向回归通过，不等于模型确认或生产完成。UI的SOURCE_READY表示实现及TypeScript检查通过，真实浏览器测试必须由CI在合入前完成。窗口资格、真实开发数据坐标审计、模型确认、生产binding与运行读回仍单独未完成；已批准源码/历史回归先行，不豁免这些生产条件。
+本矩阵保持稳定验收ID；SOURCE_VERIFIED只表示源码合同和定向回归通过，不等于模型确认或生产完成。UI类型检查与隔离浏览器用例均通过，CI仍需最终通过。真实开发数据坐标审计已执行但发现公司行动不一致，模型确认被阻断；窗口资格、生产binding与运行读回仍未完成。已批准源码/历史回归先行，不豁免这些生产条件。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -103,7 +103,7 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 | F-512 | §4；entry_price_service.py/既有bundle loader | backend/tests/advisory_model_first/test_entry_price_service.py | SOURCE_VERIFIED | none |
 | F-513 | §5.3；price_range_inference.py | backend/tests/advisory_model_first/test_entry_price_service.py；test_daily_price_envelope_pit.py | SOURCE_VERIFIED | none |
 | F-514 | §5.2～§5.3 | backend/tests/advisory_model_first/test_entry_price_service.py | SOURCE_VERIFIED | none |
-| F-515 | §5.1；advisory/page.tsx | frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts；合入前CI浏览器验证 | SOURCE_READY | none |
+| F-515 | §5.1；advisory/page.tsx | frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts：independent entry用例，隔离端口3312/无后端，1 passed | SOURCE_VERIFIED | none |
 | F-516 | §10～§12；配套delivery设计 | backend/tests/advisory_model_first/test_entry_price_role_binding.py | SOURCE_VERIFIED | none |
 
 ## 10. Rollout / Rollback
@@ -120,6 +120,8 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 
 ## 13. 2026-09-29 实施审核
 
-合同/PIT与集成/恢复多轮审核后修复：零候选不调用特征/模型；自然capture只选PUBLISHED荐股单；GET不刷新日历文件；原子发布时复查角色CAS/开盘边界；历史结果逐项核对完整scope。136项定向回归通过，三份前端改动TypeScript诊断为0；浏览器测试尚待CI，不能标为已通过。
+合同/PIT与集成/恢复多轮审核后修复：零候选不调用特征/模型；自然capture只选PUBLISHED荐股单；GET不刷新日历文件；原子发布时复查角色CAS/开盘边界；历史结果逐项核对完整scope。136项定向回归通过，后续追加输入来源/坐标前置检查定向回归通过；三份前端改动TypeScript诊断为0。CI未映射Advisory浏览器用例，因此使用现有lockfile匹配依赖和Playwright自有临时前端单独验证对应一条用例：1 passed，未启动/连接用户后端。
 
-训练标签代码使用Qlib复权open/close比，运行时使用raw close及D可见除权multiplier；无公司行动和现金/送股的同核公式测试通过。该测试不证明真实历史数据的factor/公告一致性，真实开发数据parity审计仍在正式确认前完成，不能借模型输出或holdout结果调整坐标。
+训练标签代码使用Qlib复权open/close比，运行时使用raw close及D可见除权multiplier；同核公式测试通过，但真实数据不完全满足该假设。只读检查原v3已消费validation的1,000行，行情/因子/公告缺失0；997行无公司行动，最大浮点差约1.14e-7 gap；3行有公司行动，差分别约9.61/0.565/0.0854 bps。最大项为600016.SH，D=2025-09-15：raw close=4.33，公告税前股息=0.136，运行时理论基准4.194；原标签复权比对应基准约4.19。此为坐标不一致证据，不是模型预测或收益测试，也未消费新holdout。
+
+当前v4不得进入新正式确认/发布。下一项模型工作先审计公司行动与复权坐标的可PIT映射，若需改数值语义，形成新的模型/投影身份及设计，不修改旧v4和既有历史结果，不使用T日未来factor修正D预测。确认mini-contract已补入validation坐标审计前置条件，详见配套设计。

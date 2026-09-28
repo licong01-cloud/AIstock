@@ -115,7 +115,7 @@ T日18:00且该日kline/suspend双审计ready后结算已存在的prediction。�
 
 ## 10. Design Acceptance Matrix
 
-本矩阵验收源码及定向回归；SOURCE_VERIFIED不表示生产交付。确认窗口、模型效果、用户重启、精确binding发布和真实prediction/settlement仍未完成，按已批准方案分阶段报告，不降低§8最终验收条件。UI浏览器路径仍须在合入前由CI完成。
+本矩阵验收源码及定向回归；SOURCE_VERIFIED不表示生产交付。确认窗口、模型效果、用户重启、精确binding发布和真实prediction/settlement仍未完成，按已批准方案分阶段报告，不降低§8最终验收条件。UI独立entry浏览器用例已由隔离临时前端验证通过，CI仍待最终通过。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -153,4 +153,4 @@ T日18:00且该日kline/suspend双审计ready后结算已存在的prediction。�
 
 多轮审核修复包括：预算传播至连接/SQL/权威PIT校验/HMM循环；最旧未尝试工作项优先，耗尽预算的capture不饿死待settlement；逐Program错误隔离；禁用/历史binding预测可继续结算；历史list读回不错误重绑；原子发布用非阻塞角色锁，忙时DEFERRED；artifact完整scope与连续/tick价格重新核验。
 
-136项定向回归通过，前端类型检查0诊断；CI浏览器路径未运行。未发布真实角色，未生成新自然样本或历史确认结果；测试fake clock不作为PROSPECTIVE_OOS证据。原有生产目录中的旧样本数量没有因本次测试增加。尚未合入或重启，不能报告生产调度已经自动收集。
+136项定向回归通过，后续输入校验定向回归通过；前端类型检查0诊断、独立entry浏览器用例1 passed（现有依赖、独立3312临时端口、无后端/DB）。未发布真实角色，未生成新自然样本或历史确认结果；测试fake clock不作为PROSPECTIVE_OOS证据。原有生产目录中的旧样本数量没有因本次测试增加。尚未合入或重启，不能报告生产调度已经自动收集。当前v4真实validation坐标不一致，confirmation失败关闭，不能执行binding apply。

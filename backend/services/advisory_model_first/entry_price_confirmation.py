@@ -286,7 +286,7 @@ def verify_confirmation_inputs(request, *, model_root):
                 or identity.latest_calibration_date < actual_validation_target
                 or identity.latest_transform_fit_date < date.fromisoformat(parent.manifest["continuation_cutoff"])):
             _invalid("declared fit boundaries precede actual validation/HMM training evidence")
-        _verify_qualification_review(request)
+        _verify_qualification_review(request, validation_rows=len(usable))
     from .entry_price_service import _frame_sha256
     reader = _cached_day_service()
     for day in request.days:
@@ -301,7 +301,8 @@ def verify_confirmation_inputs(request, *, model_root):
             _invalid("prepared candidate provenance differs from frozen source metadata")
 
 
-def _verify_qualification_review(request):
+def _verify_qualification_review(request, *, validation_rows=None):
+    from .entry_price_confirmation_contracts import EntryCoordinateReview
     identity = request.data_identity
     vintage = _read_json(Path(identity.vintage_evidence.artifact_uri))
     expected = identity.model_dump(mode="json", include={
@@ -311,6 +312,15 @@ def _verify_qualification_review(request):
     expected.update(scope_sha256=canonical_json_sha256(request.scope.model_dump(mode="json")), pit_visibility_verified=True)
     if any(vintage.get(key) != value for key, value in expected.items()):
         _invalid("vintage audit does not attest the exact input identities and fit clocks")
+    try:
+        coordinate = EntryCoordinateReview.model_validate(vintage.get("entry_coordinate_review"))
+    except ValueError:
+        _invalid("validation entry coordinate parity is missing or failed")
+    if (coordinate.validation_labels_sha256 != request.control.validation_labels.sha256
+            or coordinate.scope_sha256 != canonical_json_sha256(request.scope.model_dump(mode="json"))
+            or coordinate.projection_producer_version != request.projection_producer_version
+            or (validation_rows is not None and coordinate.checked_validation_rows != validation_rows)):
+        _invalid("validation entry coordinate review differs from the frozen source or scope")
     provenance = _read_json(Path(identity.candidate_provenance.artifact_uri))
     if (provenance.get("days_sha256") != canonical_json_sha256([day.model_dump(mode="json") for day in request.days])
             or provenance.get("pit_candidate_generation_verified") is not True):

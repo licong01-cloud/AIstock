@@ -86,7 +86,7 @@ def test_prepare_rejects_leakage_or_changed_contract(tmp_path, violation):
         build_entry_price_confirmation_request(**values)
 
 
-@pytest.mark.parametrize("violation", [None, "vintage", "candidate", "lineage", "consumed", "incomplete"])
+@pytest.mark.parametrize("violation", [None, "vintage", "candidate", "lineage", "consumed", "incomplete", "coordinate", "coordinate_rows"])
 def test_formal_qualification_requires_matching_review_contents(tmp_path, violation):
     from backend.services.advisory_model_first.entry_price_confirmation import _verify_qualification_review
     from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
@@ -101,6 +101,12 @@ def test_formal_qualification_requires_matching_review_contents(tmp_path, violat
         "latest_model_training_date", "latest_transform_fit_date", "latest_calibration_date", "latest_upstream_training_date",
     })
     vintage.update(scope_sha256=canonical_json_sha256(request.scope.model_dump(mode="json")), pit_visibility_verified=violation != "vintage")
+    vintage["entry_coordinate_review"] = dict(schema_version="advisory_entry_coordinate_review_v1", status="PASS",
+        validation_labels_sha256=request.control.validation_labels.sha256,
+        scope_sha256=canonical_json_sha256(request.scope.model_dump(mode="json")),
+        projection_producer_version=request.projection_producer_version,
+        checked_validation_rows=999 if violation == "coordinate_rows" else 1000, unavailable_rows=0,
+        tolerance_abs_gap=0.000001, maximum_abs_gap_difference=0.000961 if violation == "coordinate" else 0.0000001)
     candidate = dict(days_sha256=canonical_json_sha256([day.model_dump(mode="json") for day in request.days]),
                      pit_candidate_generation_verified=violation != "candidate")
     consumption = dict(complete=violation != "incomplete", reviewed_lineage=list(request.parent_lineage),
@@ -113,6 +119,6 @@ def test_formal_qualification_requires_matching_review_contents(tmp_path, violat
         (tmp_path / f"{field}.json").write_text(json.dumps(payload), encoding="utf-8")
     if violation:
         with pytest.raises(AdvisoryModelFirstError):
-            _verify_qualification_review(request)
+            _verify_qualification_review(request, validation_rows=1000)
     else:
-        _verify_qualification_review(request)
+        _verify_qualification_review(request, validation_rows=1000)
