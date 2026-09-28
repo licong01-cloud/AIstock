@@ -141,6 +141,10 @@ def run_sessions(
     results: list[dict[str, Any]] = []
     completed_sessions: list[str] = []
     deadline = time.monotonic() + total_timeout_seconds
+    # A valid no-op plan is still a durable Nightly result.  Persist the empty
+    # receipt before iterating so the next scheduled run can advance from this
+    # watermark instead of falling back to an older failed receipt.
+    write_receipts(results, output_json=output_json, output_md=output_md)
     for session in sessions:
         remaining = int(deadline - time.monotonic())
         if remaining <= 0:

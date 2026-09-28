@@ -52,6 +52,23 @@ def test_run_sessions_checkpoints_each_result_and_continues_after_failure(tmp_pa
     assert "`second` | `failure` | `nonzero_exit`" in output_md.read_text(encoding="utf-8")
 
 
+def test_run_sessions_persists_empty_noop_receipt(tmp_path: Path) -> None:
+    output_json = tmp_path / "session-results.json"
+    output_md = tmp_path / "session-results.md"
+
+    results = runner.run_sessions(
+        [],
+        output_json=output_json,
+        output_md=output_md,
+        session_timeout_seconds=60,
+        total_timeout_seconds=180,
+    )
+
+    assert results == []
+    assert json.loads(output_json.read_text(encoding="utf-8")) == []
+    assert "Nightly selected session results" in output_md.read_text(encoding="utf-8")
+
+
 def test_execute_session_returns_explicit_timeout(monkeypatch) -> None:
     monkeypatch.setattr(
         runner,
