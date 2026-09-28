@@ -1,7 +1,7 @@
-# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.0
+# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.1
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Advisory。
-> 状态：DESIGN_ONLY_WINDOW_ELIGIBILITY_PENDING。当前没有已确认合格的新窗口，也没有本设计的运行结果。
+> 状态：SOURCE_IMPLEMENTED_LOCAL_VERIFIED_WINDOW_ELIGIBILITY_PENDING（2026-09-29）。四阶段源码/定向回归已完成，尚未合入；没有已确认合格的新窗口、QE已确认独占时段或正式运行结果。
 > 配套：[独立价格角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)。
 
 ## 1. Background / 为什么需要新入口
@@ -46,11 +46,15 @@
 
 拟新增 `AdvisoryEntryPriceConfirmationRequestV1`：request hash、study_type=CONFIRMATION（复用Advisory的ResearchStudyType.CONFIRMATION，不修改QE registry）、objective_contract、decision_use、证据分类、研究族lineage、窗口资格依据、日期计划、候选引用/hash、model/package/manifest/style/policy/universe/schema、active profile及data release/node root、训练截止、transform/calibration identity、版本化算法及评价spec。
 
-`decision_use=ACTIVATION_EVIDENCE` 只允许合格OOT类型，且仅指ENTRY_PRICE shadow，不允许发布收益策略。协议身份包含下面的统计标准；无法填完整即不能开始目标结果读取。路径从显式请求/profile解析；需要RD-Agent数据身份时显式传入节点data_root_uri并验证complete=true。long-trend snapshot不属于本任务。
+登记映射遵循现有Advisory控制面：合格OOT确认使用`study_type=CONFIRMATION / decision_use=DIRECTION_GATE`；开发回归使用`EXPLORATORY_SCREEN / NAVIGATION_ONLY`。确认通过的artifact可被后续`ACTIVATION / ACTIVATION_EVIDENCE`记录引用，但确认记录本身不得冒用该组合。激活仅指ENTRY_PRICE shadow，不允许发布收益策略。协议身份包含下面的统计标准；无法填完整即不能开始目标结果读取。路径从显式请求/profile解析；需要RD-Agent数据身份时显式传入节点data_root_uri并验证complete=true。long-trend snapshot不属于本任务。
 
 ### 5.1 prepare
 
 枚举目标日期、合法候选及来源，验证候选生成在当时可见，不读取目标开盘结果。已有候选如不是精确Top20或策略模式不同，按其真实scope登记，禁止截断、补第21名或调用Selection重建来凑数。当前首个v4确认范围固定为原exact包Top20；指数/新包另做范围确认。
+
+资格字段不得只由调用者填写一个“合格”字符串。复用请求中的三个只读证据引用：vintage元数据须匹配scope hash、profile/release/node root/dataset及四项fit截止，并明确PIT可见性已核查；candidate provenance须匹配完整days计划的hash；consumption review须覆盖请求的全部parent lineage，携带已消费日期区间并与目标窗口无交集。缺少完整性声明、内容不匹配或来源不可证明时只能降级开发回归。此最小JSON协议仅表达本次输入审计，不新建审批或归档平台。
+
+control必须从`model_root/price_range_runs/<v4原训练request_id>/daily_price_envelope_labels.parquet`的原validation分区读取；日期集合与bundle内split精确匹配，不读取test分区、不任选子集。校准与early-stopping使用validation标签的实际T时钟，不仅比较D日期。未来结果不能因调用者自报更早的fit日期而通过验证。
 
 ### 5.2 predict
 
@@ -85,9 +89,11 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 现有可复用：`load_frozen_price_range_bundle`、`build_advisory_feature_matrix`、旧回放的数据/投影内核、prospective严格读回和原子发布模式。旧CLI和旧aggregate固定activation=false，不修改其证据语义。
 
-拟新增（尚不存在）：`backend/services/advisory_model_first/entry_price_confirmation_contracts.py`、`entry_price_confirmation.py`、`entry_price_confirmation_cli.py`。必要数据adapter限制在新confirmation文件内，通过已有公开只读来源消费，不改外部模块。
+已实现：`backend/services/advisory_model_first/entry_price_confirmation_contracts.py`、`entry_price_confirmation.py`、`entry_price_confirmation_cli.py`。必要数据adapter限制在新confirmation文件内，通过已有公开只读来源消费，不改外部模块。
 
-拟新增CLI `python -m backend.services.advisory_model_first.entry_price_confirmation_cli`，子命令prepare/predict/settle/evaluate/inspect。prepare显式接收 `--spec --model-root --output-root --env-file`；其余接受`--request --model-root --output-root`，仅需要DB的阶段额外`--env-file`。全部写入仅artifact；返回0表示阶段成功（经济结果仍必须读status），2表示合同/输入错误，3表示未成熟/资源依赖waiting；禁止把0自动解读为模型确认。
+已实现CLI `python -m backend.services.advisory_model_first.entry_price_confirmation_cli`，子命令prepare/predict/settle/evaluate/inspect。prepare显式接收 `--spec --model-root --output-root --env-file`；其余接受`--request --model-root --output-root`，仅需要DB的阶段额外`--env-file`。全部写入仅artifact；返回0表示阶段成功（经济结果仍必须读status），2表示合同/输入错误，3表示未成熟/资源依赖waiting；禁止把0自动解读为模型确认。
+
+资源执行合同细化：predict/settle/evaluate额外显式传`--qe-exclusive-slot`，消费由QE窗口已确认的只读JSON授权说明（authorization_ref、request_sha256、starts_at、expires_at，时间含时区），缺失/过期/其他请求不执行。消费者不能自行生成独占授权；此文件记录外部协调事实，不是QE原子锁或新审批平台。每个日块前后复查时窗和QE公开只读完整任务快照；非终态/未知立即WAITING，保留已消费事实，只能同request恢复。续约可以换slot，但不改变研究假设/窗口/预测；prepare/inspect仅元数据读回不要求占用时段。
 
 实施顺序：用旧已消费样本完成合同与同核parity → 窗口资格spike → 冻结spec/control → 一次完整推理 → 目标结果揭示与评价 → 向delivery交付结论。实现无可用新窗口时继续完成源码与历史功能验证，报告确认阻塞；不通过改名伪造sealed，不默认依赖QE新训练。
 
@@ -112,18 +118,18 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 ## 10. Design Acceptance Matrix
 
-本矩阵仅验收详细设计：DESIGN_READY表示条款、实施位置和计划测试已定义，gap=none仅指没有设计范围豁免。所有新增源码和测试仍为PLANNED、尚未执行；窗口资格、模型确认、binding和运行接入均未完成，具体缺口见文首及Implementation Plan，不属于本次文档交付的完成声明。
+本矩阵验收四阶段源码及定向测试，不验收模型效果。SOURCE_VERIFIED不等于合格窗口存在、实际推理已运行或价格确认通过；这些仍待真实输入审核及外部QE独占时段，生产binding保持未发布。源码先行遵循已批准方案，不降低§4与§6条件。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-520 | §4；拟新增confirmation contracts | 拟新增backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py | DESIGN_READY | none |
-| F-521 | §5.2、§7；拟新增confirmation pipeline | 拟新增backend/tests/advisory_model_first/test_entry_price_confirmation.py | DESIGN_READY | none |
-| F-522 | §5.2～§5.3 | 拟新增backend/tests/advisory_model_first/test_entry_price_confirmation.py | DESIGN_READY | none |
-| F-523 | §5.3、§6 | 拟新增backend/tests/advisory_model_first/test_entry_price_confirmation.py | DESIGN_READY | none |
-| F-524 | §6 | 拟新增backend/tests/advisory_model_first/test_entry_price_confirmation.py | DESIGN_READY | none |
-| F-525 | §4.2、§5.4 | 拟新增backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py | DESIGN_READY | none |
-| F-526 | §5.4、§7 | 拟新增backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py | DESIGN_READY | none |
-| F-527 | §3、§7 | 拟新增backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py | DESIGN_READY | none |
+| F-520 | §4；entry_price_confirmation_contracts.py/verify_confirmation_inputs | backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py | SOURCE_VERIFIED | none |
+| F-521 | §5.2、§7；entry_price_confirmation.py | backend/tests/advisory_model_first/test_entry_price_confirmation.py | SOURCE_VERIFIED | none |
+| F-522 | §5.2～§5.3 | backend/tests/advisory_model_first/test_entry_price_confirmation.py | SOURCE_VERIFIED | none |
+| F-523 | §5.3、§6 | backend/tests/advisory_model_first/test_entry_price_confirmation.py | SOURCE_VERIFIED | none |
+| F-524 | §6 | backend/tests/advisory_model_first/test_entry_price_confirmation.py | SOURCE_VERIFIED | none |
+| F-525 | §4.2、§5.4 | backend/tests/advisory_model_first/test_entry_price_confirmation.py | SOURCE_VERIFIED | none |
+| F-526 | §5.4、§7 | backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py | SOURCE_VERIFIED | none |
+| F-527 | §3、§7 | backend/tests/advisory_model_first/test_entry_price_confirmation.py；test_entry_price_confirmation_cli.py | SOURCE_VERIFIED | none |
 
 ## 11. Rollout / Rollback
 
@@ -135,4 +141,10 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 ## 13. Production Gates / 设计符合性
 
-文档/离线确认：DDL/DML、binding、后端重启、训练均noop；模型/输入为只读。用户拥有后端重启权。DESIGN-COMPLIANCE-001：完整四阶段/结论；错误不写成无推荐；不改旧研究协议；本设计所需控制仅服务一次确认且无新审批平台。设计结构检查通过不表示窗口、模型或生产通过。
+源码交付：DDL/DML、binding、后端重启、训练均noop；模型/输入为只读。用户拥有后端重启权。DESIGN-COMPLIANCE-001：四阶段及分类完整；错误不写成无推荐；不改旧研究协议；本设计所需控制仅服务一次确认且无新审批平台。本地测试与结构检查通过不表示窗口、模型或生产通过。
+
+## 14. 实施审核状态
+
+已修复/复审：control仅从原v3训练run的validation标签读取，检查实际T标签成熟时钟；预测冻结先于结果查询；每行重新核对校准量和tick/法规投影；crossing统计覆盖全部已输出预测，不能被后续停牌掩盖；重试绑定原消费收据；QE外部时段续约不改已有评价artifact。测试使用合成/已消费数据，不产生正式效果证据。
+
+当前只读资源前检返回WAITING_RESOURCE，完整资格材料尚未获得，因此没有prepare正式请求或提交实验。现有DB特征adapter保持D晚于父bundle continuation_cutoff的边界，不能借新入口绕回旧训练期。新日期还须满足本设计全部vintage/消费条件，不把日期后移当成自动OOS。

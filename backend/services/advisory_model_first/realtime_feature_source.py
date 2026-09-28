@@ -137,6 +137,7 @@ class PostgresRealtimeFeatureSource:
         *,
         connection_context_factory: ConnectionContextFactory | None = None,
         statement_timeout_ms: int = 300_000,
+        deadline_check: Callable[[], None] | None = None,
     ) -> None:
         if statement_timeout_ms <= 0:
             raise ValueError("statement_timeout_ms must be positive")
@@ -144,6 +145,7 @@ class PostgresRealtimeFeatureSource:
             lambda: get_conn(autocommit=False, manage_transaction=False)
         )
         self._statement_timeout_ms = int(statement_timeout_ms)
+        self._deadline_check = deadline_check
 
     def load(
         self,
@@ -155,6 +157,8 @@ class PostgresRealtimeFeatureSource:
         hmm_models: dict[str, Any],
         pit_universe_key: str | None = None,
     ) -> RealtimeFeatureInputs:
+        if self._deadline_check is not None:
+            self._deadline_check()
         normalized_symbols = tuple(sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()}))
         if not normalized_symbols:
             raise AdvisoryModelFirstError(
@@ -275,6 +279,7 @@ class PostgresRealtimeFeatureSource:
                     continuation_cutoff=continuation_cutoff.isoformat(),
                     required_l2_code_ids=candidate_l2_codes,
                     precomputed_observations=hmm_observations,
+                    deadline_check=self._deadline_check,
                 )
                 try:
                     price_range_contexts, price_range_unavailable = self._price_range_contexts(
@@ -323,6 +328,8 @@ class PostgresRealtimeFeatureSource:
             finally:
                 cursor.close()
 
+        if self._deadline_check is not None:
+            self._deadline_check()
         return RealtimeFeatureInputs(
             candidate_daily=candidate_daily,
             candidate_static=candidate_static,

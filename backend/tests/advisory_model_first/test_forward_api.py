@@ -6,6 +6,38 @@ from backend.main import app
 from backend.routers import advisory as advisory_router
 
 
+def test_entry_v2_is_opt_in_and_available_even_when_ranking_is_unavailable():
+    from backend.tests.advisory_model_first.test_entry_price_service import integrated_service
+    core, _, args = integrated_service()
+    entry = core.evaluate(**args).as_payload()
+    calls = []
+    class Legacy:
+        def model_shadow(self, **kwargs):
+            return {"status": "MODEL_UNAVAILABLE", "program_id": kwargs["program_id"], "price_range": None}
+    class Entry:
+        def read_price(self, **kwargs):
+            calls.append(kwargs)
+            return entry
+        def status(self, **kwargs):
+            return {"configured": True, "program_id": kwargs["program_id"]}
+    app.dependency_overrides[advisory_router.get_advisory_model_shadow_service] = lambda: Legacy()
+    app.dependency_overrides[advisory_router.get_advisory_entry_price_service] = lambda: Entry()
+    try:
+        client = TestClient(app)
+        path = f"/api/v1/advisory/programs/{args['program_id']}/model-shadow"
+        legacy = client.get(path, params={"target_trade_date": args["target_trade_date"].isoformat()})
+        assert legacy.status_code == 200 and "entry_price" not in legacy.json() and calls == []
+        response = client.get(path, params={"target_trade_date": args["target_trade_date"].isoformat(), "price_contract": "entry-v2"})
+        assert response.status_code == 200
+        assert response.json()["status"] == "MODEL_UNAVAILABLE"
+        assert response.json()["entry_price"] == entry and len(calls) == 1
+        assert client.get(f"/api/v1/advisory/programs/{args['program_id']}/entry-price/status").json()["configured"]
+        assert client.get(path, params={"target_trade_date": "2026-07-21", "price_contract": "invalid"}).status_code == 422
+    finally:
+        app.dependency_overrides.pop(advisory_router.get_advisory_model_shadow_service, None)
+        app.dependency_overrides.pop(advisory_router.get_advisory_entry_price_service, None)
+
+
 class _ForwardService:
     def status(self):
         return {"schema_version": "advisory_forward_status_v1", "run_count": 1}

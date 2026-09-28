@@ -1,7 +1,7 @@
-# Advisory ENTRY_PRICE 独立价格角色 F2 详细设计 v1.0
+# Advisory ENTRY_PRICE 独立价格角色 F2 详细设计 v1.1
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Selection Center / Advisory。
-> 状态：DESIGN_ONLY_IMPLEMENTATION_PENDING。本文交付设计，不宣称源码、模型有效性或生产激活完成。
+> 状态：SOURCE_IMPLEMENTED_LOCAL_VERIFIED_CI_PENDING（2026-09-29）。源码及定向回归已完成；尚未合入、确认模型或激活生产角色。文中的生产验收条件继续有效。
 > 父级：[策略条件化模型蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) §5.3.1、§5.6、§16。
 > 配套：[一次性历史确认](advisory_entry_price_confirmation_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)。
 
@@ -31,7 +31,7 @@
 
 Ranking与M3按原路径运行，结果与entry按symbol关联；其模型失败不短路entry。候选来源或必需特征本身缺失仍阻断entry，因为独立角色不创造候选或替代父包输入。父Alpha score等103特征中的实际依赖保留，冻结模型的parent/outcome ID仍作为训练来源身份校验；独立运行不要求执行M1排序或M3推理。
 
-拆出 `score_entry_price_bundle`（拟新增）作为无M3依赖的接口：输入 LoadedAdvisoryPriceRangeBundle、feature matrix、D/T、逐股PIT context，返回与输入候选同数、同序的entry结果。原 `score_price_range_bundle` 复用此计算后继续原M3投影，保持V1成功/失败语义。`_entry_band`和法规投影复用并通过公开包装统一调用，历史与每日不复制公式。
+已拆出 `score_entry_price_bundle` 作为无M3依赖的接口：输入 LoadedAdvisoryPriceRangeBundle、feature matrix、D/T、逐股PIT context，返回与输入候选同数、同序的entry结果。它与原 `score_price_range_bundle` 共用 `predict_entry_quantiles`、`project_entry_price`，旧路径继续原M3投影并保持V1成功/失败语义。`_entry_band`和法规投影复用，历史与每日不复制公式。
 
 `load_frozen_price_range_bundle(...)` 已有显式加载入口，继续校验 v4 package、manifest、style、parent/outcome来源ID及所有member hash。来源ID不取自当前Ranking descriptor；不得把P0-D bundle ID冒充v4训练父模型。旧 `load_exact_price_range_bundle` 与 `publish_price_range_binding` 是包级V1路径，不能用于Program级新角色的发布。
 
@@ -39,9 +39,9 @@ Ranking与M3按原路径运行，结果与entry按symbol关联；其模型失败
 
 ### 5.1 API及版本
 
-保留 `GET /api/v1/advisory/programs/{program_id}/model-shadow?target_trade_date=...` 默认V1行为；拟增显式查询参数 `price_contract=entry-v2`，未指定时仍按legacy-v1。新版UI显式请求entry-v2，消费者可继续使用原接口。新分支使用 `advisory_entry_price_envelope_v2`，不在V1字段上静默放宽必填项。未知版本返回422。
+保留 `GET /api/v1/advisory/programs/{program_id}/model-shadow?target_trade_date=...` 默认V1行为；已实现显式查询参数 `price_contract=entry-v2`，未指定时仍按legacy-v1。新版UI显式请求entry-v2并传入 `entry_list_version_id`，消费者可继续使用原接口。新分支以附加 `entry_price` 字段返回 `advisory_entry_price_envelope_v2`，旧 `price_range` 不变。未知版本返回422。
 
-顶层Ranking `status=MODEL_UNAVAILABLE` 不代表新价格子信封不可用，UI按子信封自身状态展示。GET仅读取/计算，不发布预测、binding或数据库记录；每日持久化由配套delivery通道负责。
+顶层Ranking `status=MODEL_UNAVAILABLE` 不代表新价格子信封不可用，UI按子信封自身状态展示。新entry GET只读已发布prediction，不即时计算或发布预测、binding、数据库记录；每日持久化由配套delivery通道负责。显式历史list只读原binding下唯一匹配的冻结结果，不把当前模型套到旧荐股单。旧Ranking GET计算语义不变。
 
 ### 5.2 V2信封
 
@@ -53,7 +53,7 @@ Ranking与M3按原路径运行，结果与entry按symbol关联；其模型失败
 
 另外三个角色固定为独立子对象：`take_profit`、`protective`、`stop_loss`，各自包含status、payload、source identity、reason。仅当既有完整投影成功并且M3来源/候选/政策完全匹配时映射；没有匹配来源则UNAVAILABLE/OUTCOME_ROLE_UNAVAILABLE，不能拿规则百分比填充。ENTRY_PRICE顶层availability仅统计entry，另设`auxiliary_availability`描述辅助角色，不能把entry可用误展示为全部能力可用。
 
-身份字段的必填规则按availability分支：AVAILABLE/PARTIAL必须完整；UNAVAILABLE且未解析到binding/model时允许对应identity为null并给出精确reason，不得编造ID，candidates为空且计数为0。合法roster已确定时保留逐股失败行及已知身份。所有嵌套合同extra=forbid。新状态和参数目前均为设计，源码实现前不得调用或声称已有。
+身份字段的必填规则按availability分支：AVAILABLE/PARTIAL必须完整；UNAVAILABLE且未解析到binding/model时允许对应identity为null并给出精确reason，不得编造ID，candidates为空且计数为0。合法roster已确定时保留逐股失败行及已知身份。所有嵌套合同extra=forbid。接口源码已实现，但未合入/重启，不能声称运行中后端已具备新参数。
 
 ### 5.3 PIT、正常缺失与金额
 
@@ -94,17 +94,17 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 
 ## 9. Design Acceptance Matrix
 
-本矩阵仅验收详细设计：DESIGN_READY表示条款、实施位置和计划测试已定义，gap=none仅指没有设计范围豁免。所有新增源码和测试仍为PLANNED、尚未执行；窗口资格、模型确认、binding和运行接入均未完成，具体缺口见文首及Implementation Plan，不属于本次文档交付的完成声明。
+本矩阵保持稳定验收ID；SOURCE_VERIFIED只表示源码合同和本地定向回归通过，不等于模型确认或生产完成。UI的SOURCE_READY表示实现及TypeScript检查通过，真实浏览器测试必须由CI在合入前完成。窗口资格、真实开发数据坐标审计、模型确认、生产binding与运行读回仍单独未完成；已批准源码/历史回归先行，不豁免这些生产条件。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-510 | §4；拟新增entry_price_service.py | 拟新增backend/tests/advisory_model_first/test_entry_price_service.py | DESIGN_READY | none |
-| F-511 | §5；entry_price_contracts.py/API/UI | 拟新增backend/tests/advisory_model_first/test_entry_price_contracts.py | DESIGN_READY | none |
-| F-512 | §4；price_range_runtime_bundle.py | backend/tests/advisory_model_first/test_price_range_runtime_bundle.py，实施时扩充来源身份场景 | DESIGN_READY | none |
-| F-513 | §5.3；price_range_inference.py | backend/tests/advisory_model_first/test_daily_price_envelope_pit.py，实施时补双路径parity | DESIGN_READY | none |
-| F-514 | §5.2～§5.3 | 拟新增backend/tests/advisory_model_first/test_entry_price_service.py | DESIGN_READY | none |
-| F-515 | §5.1；advisory/page.tsx | frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts，实施时补V2展示 | DESIGN_READY | none |
-| F-516 | §10～§12；配套delivery设计 | 拟新增backend/tests/advisory_model_first/test_entry_price_service.py | DESIGN_READY | none |
+| F-510 | §4；entry_price_service.py | backend/tests/advisory_model_first/test_entry_price_service.py | SOURCE_VERIFIED | none |
+| F-511 | §5；entry_price_contracts.py/API | backend/tests/advisory_model_first/test_entry_price_contracts.py；test_forward_api.py | SOURCE_VERIFIED | none |
+| F-512 | §4；entry_price_service.py/既有bundle loader | backend/tests/advisory_model_first/test_entry_price_service.py | SOURCE_VERIFIED | none |
+| F-513 | §5.3；price_range_inference.py | backend/tests/advisory_model_first/test_entry_price_service.py；test_daily_price_envelope_pit.py | SOURCE_VERIFIED | none |
+| F-514 | §5.2～§5.3 | backend/tests/advisory_model_first/test_entry_price_service.py | SOURCE_VERIFIED | none |
+| F-515 | §5.1；advisory/page.tsx | frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts；合入前CI浏览器验证 | SOURCE_READY | none |
+| F-516 | §10～§12；配套delivery设计 | backend/tests/advisory_model_first/test_entry_price_role_binding.py | SOURCE_VERIFIED | none |
 
 ## 10. Rollout / Rollback
 
@@ -116,4 +116,10 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 
 ## 12. Production Gates / 完成状态
 
-本文文档交付的DB、训练、binding、重启均为noop。后续实现限Advisory，DDL/DML预期noop，后端重启由用户执行。DESIGN-COMPLIANCE-001逐项核对：完整交付本次entry角色；不吞错；不改原候选/排名/规则基线；不新增审批平台。数值确认标准只在配套confirmation合同定义一处。
+本次源码的DB、训练、binding、重启均为noop。实现限Advisory，后端重启由用户执行。DESIGN-COMPLIANCE-001逐项核对：本次角色源码不冒充生产完整交付；不吞错；不改原候选/排名/规则基线；不新增审批平台。数值确认标准只在配套confirmation合同定义一处。
+
+## 13. 2026-09-29 实施审核
+
+合同/PIT与集成/恢复多轮审核后修复：零候选不调用特征/模型；自然capture只选PUBLISHED荐股单；GET不刷新日历文件；原子发布时复查角色CAS/开盘边界；历史结果逐项核对完整scope。136项定向回归通过，三份前端改动TypeScript诊断为0；浏览器测试尚待CI，不能标为已通过。
+
+训练标签代码使用Qlib复权open/close比，运行时使用raw close及D可见除权multiplier；无公司行动和现金/送股的同核公式测试通过。该测试不证明真实历史数据的factor/公告一致性，真实开发数据parity审计仍在正式确认前完成，不能借模型输出或holdout结果调整坐标。

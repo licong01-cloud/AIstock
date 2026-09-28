@@ -1503,7 +1503,7 @@ test("Advisory calibrated daily entry interval keeps the raw interval visible", 
 });
 
 
-test("Advisory model unavailability remains isolated from the persisted rule list", async ({ page }) => {
+test("Advisory model unavailability preserves independent entry prices and the persisted rule list", async ({ page }) => {
   const badResponses: string[] = [];
   page.on("response", (response) => {
     if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
@@ -1525,6 +1525,17 @@ test("Advisory model unavailability remains isolated from the persisted rule lis
         hmm_unavailable: [],
         reason_code: "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
         message: "model root is not configured",
+        entry_price: {
+          schema_version: "advisory_entry_price_envelope_v2", role: "ENTRY_PRICE",
+          objective_contract: "RISK_MANAGED_ADVISORY", evidence_state: "CONFIRMED_PRICE_DISTRIBUTION",
+          availability_status: "AVAILABLE", auxiliary_availability: "UNAVAILABLE",
+          target_trade_date: "2026-06-05", candidate_count: 1, available_count: 1, unavailable_count: 0,
+          candidates: [{
+            symbol: "000001.SZ", decision_reference_price: 10, decision_price_trade_date: "2026-06-04",
+            entry_price: { status: "AVAILABLE", calibrated_range: { low: 9.8, mid: 10, high: 10.2 }, reason_code: null },
+            take_profit: { status: "UNAVAILABLE", payload: null }, stop_loss: { status: "UNAVAILABLE", payload: null },
+          }],
+        },
       },
     },
   });
@@ -1536,6 +1547,9 @@ test("Advisory model unavailability remains isolated from the persisted rule lis
   );
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("000001.SZ");
   await expect(page.getByTestId("advisory-model-shadow-table")).toHaveCount(0);
+  await expect(page.getByTestId("advisory-entry-price-row")).toContainText("9.80 - 10.20 / 10.00");
+  await expect(page.getByTestId("advisory-entry-evidence")).toContainText("不代表收益验证通过");
+  await expect(page.getByTestId("advisory-entry-price-row")).toContainText("止盈未验证");
   expect(badResponses).toEqual([]);
 });
 

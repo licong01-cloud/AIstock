@@ -249,70 +249,10 @@ class AdvisoryModelShadowService:
                 "no exact model descriptor is configured for this Advisory Program binding",
                 reason_code="ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
             )
-        list_version, list_items = self._selection_list_context(
-            program_id=program_id,
-            target_trade_date=target_trade_date,
-            list_version_id=(frozen_input_ids or {}).get("list_version_id"),
+        list_version, list_items, selection_run = self.entry_candidate_context(
+            program_id=program_id, target_trade_date=target_trade_date,
+            binding=binding, package_ids=package_ids, frozen_input_ids=frozen_input_ids,
         )
-        if list_version.get("binding_version_id") != binding["binding_version_id"]:
-            raise AdvisoryModelFirstError(
-                "recommendation list binding differs from the active model binding",
-                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
-            )
-        review_run_id = str(list_version.get("review_run_id") or "").strip()
-        if not review_run_id:
-            raise AdvisoryModelFirstError(
-                "recommendation list does not identify its persisted Advisory review run",
-                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
-            )
-        expected_review_run_id = str(
-            (frozen_input_ids or {}).get("review_run_id") or ""
-        ).strip()
-        if expected_review_run_id and review_run_id != expected_review_run_id:
-            raise AdvisoryModelFirstError(
-                "forward recommendation list differs from the frozen review run",
-                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
-            )
-        review_run = self._review_source.get(review_run_id)
-        review_selection_run_ids = tuple(
-            str(value).strip()
-            for value in review_run.selection_run_ids
-            if str(value).strip()
-        )
-        if (
-            review_run.program_id != program_id
-            or review_run.binding_version_id != binding["binding_version_id"]
-            or review_run.trade_date != target_trade_date
-        ):
-            raise AdvisoryModelFirstError(
-                "persisted Advisory review run identity differs from the recommendation list",
-                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
-            )
-        selection_run_id = str(review_run.selection_run_id or "").strip()
-        expected_selection_run_id = str(
-            (frozen_input_ids or {}).get("selection_run_id") or ""
-        ).strip()
-        if expected_selection_run_id and selection_run_id != expected_selection_run_id:
-            raise AdvisoryModelFirstError(
-                "forward review differs from the frozen Selection run",
-                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
-            )
-        if not selection_run_id or review_selection_run_ids != (selection_run_id,):
-            raise AdvisoryModelFirstError(
-                "persisted Advisory review does not identify exactly one Selection run",
-                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
-                context={"selection_run_count": len(review_selection_run_ids)},
-            )
-        selection_run = self._selection_service.get_run(selection_run_id)
-        if (
-            selection_run.status != SelectionRunStatus.SUCCEEDED
-            or selection_run.trade_date != target_trade_date
-            or tuple(selection_run.package_ids) != package_ids
-        ):
-            raise AdvisoryModelFirstError(
-                "persisted Selection run identity differs from the model target",
-                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
-            )
         resolution = self._binding_resolver.resolve(
             model_root=model_root,
             program=program,
@@ -518,6 +458,82 @@ class AdvisoryModelShadowService:
             "reason_code": None,
             "message": None,
         }
+
+    def entry_candidate_context(
+        self, *, program_id: str, target_trade_date: date,
+        binding: Mapping[str, Any], package_ids: tuple[str, ...],
+        frozen_input_ids: Mapping[str, str] | None = None,
+        allow_empty: bool = False,
+        published_only: bool = False,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], Any]:
+        """Read and validate persisted candidate lineage; never consult a model descriptor."""
+        list_version, list_items = self._selection_list_context(
+            program_id=program_id,
+            target_trade_date=target_trade_date,
+            list_version_id=(frozen_input_ids or {}).get("list_version_id"),
+            allow_empty=allow_empty,
+            published_only=published_only,
+        )
+        if list_version.get("binding_version_id") != binding["binding_version_id"]:
+            raise AdvisoryModelFirstError(
+                "recommendation list binding differs from the active model binding",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            )
+        review_run_id = str(list_version.get("review_run_id") or "").strip()
+        if not review_run_id:
+            raise AdvisoryModelFirstError(
+                "recommendation list does not identify its persisted Advisory review run",
+                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+            )
+        expected_review_run_id = str(
+            (frozen_input_ids or {}).get("review_run_id") or ""
+        ).strip()
+        if expected_review_run_id and review_run_id != expected_review_run_id:
+            raise AdvisoryModelFirstError(
+                "forward recommendation list differs from the frozen review run",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            )
+        review_run = self._review_source.get(review_run_id)
+        review_selection_run_ids = tuple(
+            str(value).strip()
+            for value in review_run.selection_run_ids
+            if str(value).strip()
+        )
+        if (
+            review_run.program_id != program_id
+            or review_run.binding_version_id != binding["binding_version_id"]
+            or review_run.trade_date != target_trade_date
+        ):
+            raise AdvisoryModelFirstError(
+                "persisted Advisory review run identity differs from the recommendation list",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            )
+        selection_run_id = str(review_run.selection_run_id or "").strip()
+        expected_selection_run_id = str(
+            (frozen_input_ids or {}).get("selection_run_id") or ""
+        ).strip()
+        if expected_selection_run_id and selection_run_id != expected_selection_run_id:
+            raise AdvisoryModelFirstError(
+                "forward review differs from the frozen Selection run",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            )
+        if not selection_run_id or review_selection_run_ids != (selection_run_id,):
+            raise AdvisoryModelFirstError(
+                "persisted Advisory review does not identify exactly one Selection run",
+                reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
+                context={"selection_run_count": len(review_selection_run_ids)},
+            )
+        selection_run = self._selection_service.get_run(selection_run_id)
+        if (
+            selection_run.status != SelectionRunStatus.SUCCEEDED
+            or selection_run.trade_date != target_trade_date
+            or tuple(selection_run.package_ids) != package_ids
+        ):
+            raise AdvisoryModelFirstError(
+                "persisted Selection run identity differs from the model target",
+                reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            )
+        return list_version, list_items, selection_run
 
     def _price_range_shadow(
         self,
@@ -748,6 +764,8 @@ class AdvisoryModelShadowService:
         program_id: str,
         target_trade_date: date,
         list_version_id: str | None = None,
+        allow_empty: bool = False,
+        published_only: bool = False,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if list_version_id:
             detail = self._program_service.recommendation_list_version_detail(
@@ -765,7 +783,7 @@ class AdvisoryModelShadowService:
                     reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
                 )
             items = list(detail.get("items") or [])
-            if not items:
+            if not items and not allow_empty:
                 raise AdvisoryModelFirstError(
                     "target recommendation list has no persisted candidates",
                     reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
@@ -781,6 +799,7 @@ class AdvisoryModelShadowService:
                 str(version.get("target_trade_date") or version["trade_date"])[:10]
             )
             == target_trade_date
+            and (not published_only or version.get("version_status") == "PUBLISHED")
         ]
         if not matching:
             raise AdvisoryModelFirstError(
@@ -791,7 +810,7 @@ class AdvisoryModelShadowService:
             matching[0]["list_version_id"]
         )
         items = list(detail.get("items") or [])
-        if not items:
+        if not items and not allow_empty:
             raise AdvisoryModelFirstError(
                 "target recommendation list has no persisted candidates",
                 reason_code="ADVISORY_MODEL_SELECTION_INPUT_UNAVAILABLE",
