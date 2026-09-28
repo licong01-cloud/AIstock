@@ -1117,6 +1117,19 @@ rules:
     layer: model_runtime
     risk_level: high
     ownership_reason: HMM snapshots and coefficients affect model scoring and runtime decisions.
+  - rule_id: qlib_moneyflow_source_identity
+    priority: 111
+    include:
+      - backend/data_service/security_source_identity.py
+      - backend/data_service/manifests/security_source_identity_v1.json
+      - backend/tests/data_service/test_security_source_identity.py
+      - backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py
+      - scripts/audit_qe_moneyflow_alias_coverage.py
+    primary_module: qlib_data
+    impact_modules: [local_data, qe.core, hmm]
+    layer: data_pipeline
+    risk_level: critical
+    ownership_reason: Shared historical security-code identity and its frozen moneyflow audit are part of the unified Qlib release boundary.
   - rule_id: qlib_data_pipeline
     priority: 75
     include:

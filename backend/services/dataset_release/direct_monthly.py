@@ -1351,6 +1351,7 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
     import pyarrow.parquet as pq
 
     from backend.data_service import qe_data_service as qe_data
+    from backend.data_service.security_source_identity import load_default_security_source_identity_manifest
     from backend.qlib_exporter.authoritative_bin_exporter import resolve_stock_universe_from_pit_spans
     from backend.services.dataset_release.static_schema import STATIC_ORDERED_COLUMNS
     from backend.services.industry_code_map import UNKNOWN_L2_CODE_ID
@@ -1368,6 +1369,9 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
     if output.exists() and any(output.iterdir()):
         raise DirectMonthlyError("partial factor_h5_static output requires explicit inspection")
     output.mkdir(parents=True, exist_ok=True)
+    security_identity = load_default_security_source_identity_manifest()
+    security_identity_path = output / "security_source_identity.json"
+    shutil.copyfile(security_identity.source_path, security_identity_path)
     codes = resolve_stock_universe_from_pit_spans(
         start=DIRECT_START_DATE,
         end=layout.cutoff,
@@ -1396,7 +1400,18 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
             lookback_start = max(DIRECT_START_DATE, chunk_start - pd.Timedelta(days=45).to_pytimedelta())
             daily = qe_data.load_daily_pv(codes, lookback_start, chunk_end)
             daily_basic = qe_data.load_daily_basic(codes, lookback_start, chunk_end)
-            moneyflow = qe_data.load_moneyflow(codes, lookback_start, chunk_end)
+            moneyflow_source = qe_data.load_moneyflow(
+                codes,
+                lookback_start,
+                chunk_end,
+                security_identity=security_identity,
+                preserve_source_codes=True,
+            )
+            moneyflow = qe_data.canonicalize_moneyflow_source_frame(
+                moneyflow_source,
+                codes,
+                security_identity=security_identity,
+            )
             bak_basic = qe_data.load_bak_basic(codes, lookback_start, chunk_end)
             cyq_perf = qe_data.load_cyq_perf(codes, lookback_start, chunk_end)
             margin = qe_data.load_margin_detail(codes, lookback_start, chunk_end)
@@ -1412,7 +1427,7 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
             raw_frames = {
                 "daily_pv.h5": daily,
                 "daily_basic.h5": daily_basic,
-                "moneyflow.h5": moneyflow,
+                "moneyflow.h5": moneyflow_source,
                 "bak_basic.h5": bak_basic,
                 "cyq_perf.h5": cyq_perf,
                 "sector_data.h5": sector_chunk,
@@ -1458,7 +1473,18 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
             if static.empty:
                 raise DirectMonthlyError(f"PIT factor denominator is empty for {chunk_start}~{chunk_end}")
             for name, frame in raw_frames.items():
-                bounded = _filter_frame_to_pit(frame, spans, chunk_start, chunk_end)
+                bounded = (
+                    _filter_moneyflow_source_to_pit(
+                        frame,
+                        spans=spans,
+                        start=chunk_start,
+                        end=chunk_end,
+                        security_identity=security_identity,
+                        canonical_codes=codes,
+                    )
+                    if name == "moneyflow.h5"
+                    else _filter_frame_to_pit(frame, spans, chunk_start, chunk_end)
+                )
                 if bounded.empty and name in {"daily_pv.h5", "daily_basic.h5", "moneyflow.h5"}:
                     raise DirectMonthlyError(f"required factor file is empty for {name}:{chunk_start}~{chunk_end}")
                 if not bounded.empty:
@@ -1527,6 +1553,10 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
                 "schema_version": l2_code_map_payload["schema_version"],
                 "code_map_digest": l2_code_map_payload["code_map_digest"],
                 "member_backed_digest": l2_code_map_payload["member_backed_digest"],
+            },
+            "security_source_identity": {
+                "path": "security_source_identity.json",
+                **security_identity.evidence(),
             },
             "source_freeze": False,
             "full_history_content_hash": False,
@@ -1740,6 +1770,41 @@ def _filter_frame_to_pit(frame, spans, start: date, end: date):
     if merged.duplicated(["datetime", "instrument"]).any():
         raise DirectMonthlyError("PIT join produced duplicate factor keys")
     return merged.set_index(["datetime", "instrument"])[columns].sort_index()
+
+
+def _filter_moneyflow_source_to_pit(
+    frame,
+    *,
+    spans,
+    start: date,
+    end: date,
+    security_identity,
+    canonical_codes: Sequence[str],
+):
+    """Apply canonical PIT spans while retaining source-specific HDF identities."""
+
+    import pandas as pd
+
+    if frame is None or frame.empty:
+        return frame
+    columns = list(frame.columns)
+    source = frame.reset_index().rename(columns={"datetime": "trade_date", "instrument": "ts_code"})
+    annotated = security_identity.annotate_source_rows(
+        source,
+        canonical_codes=canonical_codes,
+        source_dataset="market.moneyflow_ts",
+    )
+    annotated["_source_ts_code"] = annotated.pop("ts_code")
+    annotated["datetime"] = pd.to_datetime(annotated["trade_date"])
+    annotated["instrument"] = annotated["_canonical_ts_code"]
+    canonical = annotated.set_index(["datetime", "instrument"])
+    bounded = _filter_frame_to_pit(canonical, spans, start, end).reset_index()
+    if bounded.empty:
+        return frame.iloc[0:0].copy()
+    bounded["datetime"] = pd.to_datetime(bounded.pop("trade_date"))
+    bounded["instrument"] = bounded.pop("_source_ts_code")
+    bounded = bounded.drop(columns=["_canonical_ts_code"])
+    return bounded.set_index(["datetime", "instrument"]).sort_index()[columns]
 
 
 def _slice_frame(frame, start: date, end: date):
