@@ -609,6 +609,53 @@ def test_nightly_single_group_uses_module_identity_and_preserves_one_time_legacy
     )
 
 
+def test_nightly_validation_runner_incident_dedupes_with_or_without_session_receipt() -> None:
+    invalid_plan_summary = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9012",
+            "nightly_session_results": [
+                {
+                    "session": "nightly_execution_plan",
+                    "result": "failure",
+                    "failure_kind": "invalid_plan",
+                    "error": "Nightly execution plan selected change-scoped sessions without changed_files: l0",
+                }
+            ],
+        }
+    )
+    missing_receipt_summary = summary.summarize_nightly_status(
+        {"statuses": {"nightlyL3": "failure"}, "run_id": "9013"}
+    )
+
+    invalid_plan_payload = summary.build_github_issue_payloads(invalid_plan_summary)[0]
+    missing_receipt_payload = summary.build_github_issue_payloads(missing_receipt_summary)[0]
+
+    assert invalid_plan_summary["nightly_failure_groups"][0]["failure_kinds"] == ["invalid_plan"]
+    assert missing_receipt_summary["nightly_failure_groups"][0]["failure_kinds"] == [
+        "missing_session_receipt"
+    ]
+    assert invalid_plan_payload["dedupe"]["nightly_marker"] == missing_receipt_payload["dedupe"]["nightly_marker"]
+    assert "change-scoped sessions without changed_files" in invalid_plan_payload["body"]
+    assert "missing_session_receipt" in missing_receipt_payload["title"]
+
+
+def test_nightly_missing_session_receipt_does_not_hide_other_failed_stages() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure", "drValidate": "failure"},
+            "run_id": "9014",
+        }
+    )
+
+    assert payload["nightly_failed_stages"] == ["dr_validate", "nightly_l3"]
+    assert payload["nightly_failure_groups"] == []
+    issue_payload = summary.build_github_issue_payloads(payload)[0]
+    assert "dr=failure/failure" not in issue_payload["title"]
+    assert "dr=unknown/failure" in issue_payload["title"]
+    assert "missing_session_receipt" not in issue_payload["body"]
+
+
 def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:
     sessions = [
         "factor_research_backend",
@@ -1345,7 +1392,8 @@ def test_nightly_status_cli_keeps_generic_stage_local_until_run_completes(
     assert payload["failed_jobs"][0]["error_signature"] == "Nightly failed: nightly_l3=failure"
     assert payload["failed_jobs"][0]["failed_tests"] == []
     assert payload["reproduce_command"] == "gh run view 28973219723 --repo licong01-cloud/AIstock"
-    assert "Nightly failed: nightly_l3=failure" in body
+    assert "Nightly L3 failed without a durable session result" in body
+    assert "[P1][validation.runner] Nightly failed: missing_session_receipt" == issue_payload["title"]
     assert "LIVE_INFERENCE_PREFLIGHT_FAILED" not in body
 
 
