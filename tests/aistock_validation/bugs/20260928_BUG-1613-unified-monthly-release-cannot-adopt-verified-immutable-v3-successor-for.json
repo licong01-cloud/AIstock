@@ -175,8 +175,8 @@
   },
   "first_seen_at": "2026-09-28T14:08:17.297816Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4ffe5eb1db46a7343c8f377a02f3c0edfc0bd51a",
+  "fixed_at": "2026-09-28T15:08:46Z",
   "github_issue_number": 5078,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5078",
   "last_seen_at": "2026-09-28T14:08:17.297816Z",
@@ -184,6 +184,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5080",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -211,7 +212,9 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -221,7 +224,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -230,6 +233,10 @@
     "fingerprint": "7f7dc6593b398ff7b2431156",
     "source_event_id": "FE-20260928-7f7dc6593b39"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6962a8400765cac9 commit=daa04796dc1ff6c269a80c4663b79fcfa720e91e kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/routers/test_monthly_dataset_releases.py backend/tests/scripts/test_monthly_unified_dataset_release.py -q` result=`43 passed, 1 skipped`",
+    "validation-receipt: id=2bc8a87fd1f5d7b5 commit=daa04796dc1ff6c269a80c4663b79fcfa720e91e kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
