@@ -66,8 +66,8 @@
   },
   "first_seen_at": "2026-09-28T14:53:56.561963Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c50474a7321e6a2fad0a6c5eeca9f638a70dd750",
+  "fixed_at": "2026-09-28T16:09:17Z",
   "github_issue_number": 5081,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5081",
   "last_seen_at": "2026-09-28T14:53:56.561963Z",
@@ -75,6 +75,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5083",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -101,6 +102,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -112,7 +114,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1614",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bfd55a49a5c893ff",
+    "recorded_at": "2026-09-28T16:15:02.981106Z",
+    "runtime_contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "53a260c56db26a1c7d5f2c123f5d3eaaf567e804",
+    "source_merge_commit": "c50474a7321e6a2fad0a6c5eeca9f638a70dd750",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5083",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s factor_research_backend -> passed"
+    ],
+    "validation_evidence_digest": "1de695a2615e81a147b8d97076fb0e3af7ed2bc9fbf7dce1cfcc7c56dc2df011"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "factor_library.research"
   ],
@@ -128,7 +152,9 @@
     "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership 14/14 mapped",
     "python -m nox -s l0 -> 0 blocking findings",
     "Ruff, py_compile and git diff --check -> passed",
-    "R8 full-PIT real attempt df784930-c2c6-4f27-9884-778680d41b5f -> computed; 5,341 requested instruments; two candidates evaluated across 1d/5d/10d/20d"
+    "R8 full-PIT real attempt df784930-c2c6-4f27-9884-778680d41b5f -> computed; 5,341 requested instruments; two candidates evaluated across 1d/5d/10d/20d",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s factor_research_backend -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
