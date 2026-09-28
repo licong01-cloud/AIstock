@@ -152,3 +152,5 @@ vintage审核文件必须包含 `entry_coordinate_review`：schema=`advisory_ent
 当前只读资源前检返回WAITING_RESOURCE，完整资格材料尚未获得，因此没有prepare正式请求或提交实验。现有DB特征adapter保持D晚于父bundle continuation_cutoff的边界，不能借新入口绕回旧训练期。新日期还须满足本设计全部vintage/消费条件，不把日期后移当成自动OOS。
 
 已消费validation的1,000行坐标审计发现3行公司行动不一致，最大差约9.61 bps；模型未执行，DB未写，新窗口未消费。当前v4的coordinate前置项不能签PASS。下一步先解决输入/标签定义，若改变冻结模型或投影身份须新版本协议；本源码交付不能解除该阻断，亦不能通过删除这3只股票解决。
+
+同轮只读候选元数据spike：匹配冻结包的ENABLED Top20 Program=`advp_3126dd77f9774d94850f37ad012f640f`，当前binding=`advb_f860140caa314665ad60ac089ed84b3f`，全市场池；已有30个PUBLISHED目标日（2026-08-14至2026-09-29），另有1个2026-07-16 REPLAY。只读取日期/数量/身份，未读取目标收益或运行模型。30条不等于30个成熟/未消费/可确认日期，尤其9月29日目标未成熟；此结果证明有既存输入可继续审核，不需默认等待未来20个交易日。
