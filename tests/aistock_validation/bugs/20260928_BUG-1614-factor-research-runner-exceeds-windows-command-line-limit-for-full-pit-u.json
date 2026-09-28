@@ -1,6 +1,9 @@
 {
-  "actual": "The research runner serializes every instrument into one --instruments command-line argument. A 5,341-symbol canonical PIT universe exceeds the Windows CreateProcess command-line limit, raises FileNotFoundError before the candidate starts, and leaves zero-byte stdout/stderr. Preserve the candidate CLI contract by passing the universe through a short launcher plus an immutable per-attempt JSON file, with exact identity/readback and small-list compatibility tests.",
+  "actual": "The runner placed all 5,341 symbols in one Windows command-line argument, so CreateProcess raised FileNotFoundError before candidate startup and produced zero-byte logs. The fix writes one immutable per-attempt scope file and uses a short child launcher to reconstruct the unchanged candidate --instruments contract in process.",
   "allowed_write_scope": [
+    "backend/services/factor_research/candidate_subprocess.py",
+    "backend/services/factor_research/runner.py",
+    "backend/tests/factor_research/test_contracts.py",
     "tests/aistock_validation/bugs/20260928_BUG-1614-factor-research-runner-exceeds-windows-command-line-limit-for-full-pit-u.json"
   ],
   "assigned_agent": null,
@@ -21,12 +24,26 @@
       "timestamp": "2026-09-28T14:53:56.561938Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "file:///X:/AIstock_factor_research/r8-margin-causal-replacement-20260928/attempts/57207adb-3d3b-4b51-a9dd-5c8e696b4f41/d3cefa69-cb48-4cf2-830b-5c3242778ed5/failure.json",
+    "file:///X:/AIstock_factor_research/r8-margin-causal-replacement-20260928/attempts/57207adb-3d3b-4b51-a9dd-5c8e696b4f41/df784930-c2c6-4f27-9884-778680d41b5f/result.json"
+  ],
+  "expected": "A full canonical PIT universe must reach reviewed candidate scripts without depending on OS command-line length, while preserving the existing --instruments JSON contract, fresh-process isolation, timeout and logs.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "actual_changed_files": [
+      "backend/services/factor_research/candidate_subprocess.py",
+      "backend/services/factor_research/runner.py",
+      "backend/tests/factor_research/test_contracts.py",
+      "tests/aistock_validation/bugs/20260928_BUG-1614-factor-research-runner-exceeds-windows-command-line-limit-for-full-pit-u.json"
+    ],
+    "added_files": [
+      "backend/services/factor_research/candidate_subprocess.py"
+    ],
+    "changed_files": [
+      "backend/services/factor_research/runner.py",
+      "backend/tests/factor_research/test_contracts.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,9 +52,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/factor_research/candidate_subprocess.py",
+      "backend/services/factor_research/runner.py",
+      "backend/tests/factor_research/test_contracts.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/factor_research/candidate_subprocess.py",
+      "backend/services/factor_research/runner.py",
+      "backend/tests/factor_research/test_contracts.py"
+    ]
   },
   "first_seen_at": "2026-09-28T14:53:56.561963Z",
   "fix_branch": null,
@@ -54,7 +79,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run factor_research.py run on Windows with the 5,341-symbol canonical PIT universe; before the fix the child process fails before startup with FileNotFoundError and empty logs.",
   "required_verification": [
     "l0",
     "factor_research_backend"
@@ -62,15 +87,28 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python backend/tests/factor_research/fresh_process_smoke.py -> 2 passed",
+      "R8 5,341-symbol attempt df784930-c2c6-4f27-9884-778680d41b5f -> computed and attached at DEV revision 5",
+      "python backend/tests/factor_research/fresh_process_smoke.py -> 2 passed; R8 5,341-symbol attempt computed and attached"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -83,6 +121,15 @@
     "fingerprint": "0a5b6f9050bc24500b9ff2c8",
     "source_event_id": "FE-20260928-0a5b6f9050bc"
   },
+  "validation_evidence": [
+    "backend/tests/factor_research/test_contracts.py -> 6 passed",
+    "python backend/tests/factor_research/fresh_process_smoke.py -> 2 passed",
+    "python -m nox -s factor_research_backend -> 53 passed, 8 skipped, fresh-process 2 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed and ownership 14/14 mapped",
+    "python -m nox -s l0 -> 0 blocking findings",
+    "Ruff, py_compile and git diff --check -> passed",
+    "R8 full-PIT real attempt df784930-c2c6-4f27-9884-778680d41b5f -> computed; 5,341 requested instruments; two candidates evaluated across 1d/5d/10d/20d"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -191,5 +238,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }
