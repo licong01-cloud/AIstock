@@ -23,7 +23,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1623",
-  "closed_at": null,
+  "closed_at": "2026-09-29T20:09:12.552260Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -272,13 +272,39 @@
     "backend_restart_owner": "user",
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/entry-price/status",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Windows fresh Python process from canonical main f6c00eba7c533fbd42adaccde07bf21277d5528c imported advisory Entry Price realtime_feature_source, historical_price_replay, and entry_price_role_binding after the user-owned backend-main restart."
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1623/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1623",
+      "business_smoke_semantic": {
+        "contract_id": "advisory_entry_price_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "3973a330bce9906bf4edde3744ef812ca7462b035601fae31d6784df1ad86533",
+      "expected_identity": "ad6d73e591a1666490cffae84f6518d8c2694efd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-29T20:04:39.679106Z",
+      "mode": "read_only",
+      "observed_identity": "f6c00eba7c533fbd42adaccde07bf21277d5528c",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "57c47fd469666ae1a7c5fbe10bb90cd0fcd5bd5e4663837560b86ef4acf86c4d",
+      "receipt_sha256": "f2bd02ec895a3aa86216c656388670192634ecb8678c654e3798e15761a79150",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a673b7d81f663f6bfcf8fbef83882f786d56c56630a17c8bb57e9dcfef96c136",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": true,
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -289,27 +315,27 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "schema_version": "aistock_source_merge_receipt_v1",
-    "receipt_id": "84174949aeae0655",
     "bug_id": "BUG-1623",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5099",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "84174949aeae0655",
+    "recorded_at": "2026-09-29T07:03:23.715596Z",
+    "runtime_contract_digest": "53782ee66f4457c1301b26c10ed9816dce172ec5e87db17adb6e876059732073",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
     "source_head_oid": "4794b4a0df9c781992db0d716cae4bf44fb144d5",
     "source_merge_commit": "ad6d73e591a1666490cffae84f6518d8c2694efd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5099",
     "validation_evidence": [
       "nox -s advisory_modeling_backend -> 1029 passed, 6 skipped"
     ],
-    "validation_evidence_digest": "a9c33e3cafc8fee1452daed8f708fedc7f46e1e990e287b409f270a03dffc668",
-    "runtime_contract_digest": "53782ee66f4457c1301b26c10ed9816dce172ec5e87db17adb6e876059732073",
-    "runtime_verification": "pending_user_restart",
-    "runtime_identity_match": "pending",
-    "production_gates": {
-      "production_ddl_gate": "noop",
-      "production_frontend_dependency_gate": "noop",
-      "production_backend_dependency_gate": "noop"
-    },
-    "recorded_at": "2026-09-29T07:03:23.715596Z"
+    "validation_evidence_digest": "a9c33e3cafc8fee1452daed8f708fedc7f46e1e990e287b409f270a03dffc668"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory.model_first"
   ],
@@ -318,6 +344,31 @@
     "fingerprint": "28512ad53f47116f5d43c9d9",
     "source_event_id": "FE-20260929-28512ad53f47"
   },
+  "validation_evidence": [
+    "nox -s advisory_modeling_backend -> 1029 passed, 6 skipped",
+    "PR #5099 CI verdict -> passed"
+  ],
+  "validation_receipts": [
+    {
+      "changed_files_digest": "c54dae3f7a47864b28924fb1d054b9d4ea123624eac3e1df73003bdcc19328e1",
+      "command": "nox -s advisory_modeling_backend",
+      "commit": "e1b74afd8e666b4f56bad04d687ae7d837bdc239",
+      "environment_identity": {
+        "executable": "python.exe",
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.12.12"
+      },
+      "evidence_kind": "nox",
+      "plan": "advisory_modeling_backend",
+      "receipt_id": "85482e0d49f15927",
+      "recorded_at": "2026-09-29T06:28:44.514119Z",
+      "result": "1029 passed, 6 skipped",
+      "reuse_key": "85482e0d49f159278be324e3f9b45bcaabf4bf698eb5af71f5e02666698fc09e",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -366,31 +417,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "nox -s advisory_modeling_backend -> 1029 passed, 6 skipped",
-    "PR #5099 CI verdict -> passed"
-  ],
-  "validation_receipts": [
-    {
-      "schema_version": "aistock_validation_receipt_v1",
-      "receipt_id": "85482e0d49f15927",
-      "reuse_key": "85482e0d49f159278be324e3f9b45bcaabf4bf698eb5af71f5e02666698fc09e",
-      "commit": "e1b74afd8e666b4f56bad04d687ae7d837bdc239",
-      "changed_files_digest": "c54dae3f7a47864b28924fb1d054b9d4ea123624eac3e1df73003bdcc19328e1",
-      "environment_identity": {
-        "os": "nt",
-        "platform": "windows",
-        "python": "3.12.12",
-        "executable": "python.exe"
-      },
-      "command": "nox -s advisory_modeling_backend",
-      "result": "1029 passed, 6 skipped",
-      "status": "passed",
-      "evidence_kind": "nox",
-      "plan": "advisory_modeling_backend",
-      "recorded_at": "2026-09-29T06:28:44.514119Z"
-    }
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
