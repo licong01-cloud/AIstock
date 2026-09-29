@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH
 from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
 from backend.services.dataset_release.index_contract import DOMESTIC_INDEX_DEFINITIONS
 from backend.services.dataset_release.monthly_consumer_layout import (
@@ -50,6 +51,11 @@ def _fixture(tmp_path: Path):  # type: ignore[no-untyped-def]
     for dataset in FACTOR_H5_DATASETS:
         (factor / f"{dataset}.h5").write_bytes(dataset.encode("ascii"))
     (factor / "static_factors.parquet").write_bytes(b"static")
+    (factor / "security_source_identity.json").write_bytes(DEFAULT_MANIFEST_PATH.read_bytes())
+    (factor / "moneyflow_alias_coverage_v1.json").write_text(
+        '{"schema_version":"qe_moneyflow_alias_coverage_receipt_v1","status":"PASS"}\n',
+        encoding="utf-8",
+    )
     index = root / "index_context"
     index.mkdir()
     (index / "index_daily.h5").write_bytes(b"index")
@@ -114,6 +120,10 @@ def test_publish_consumer_layout_creates_shared_hardlink_release(tmp_path: Path)
     factor = root / "components/factor_h5_static_candidate_v2/sector_data.h5"
     assert os.path.samefile(day_close, source_close)
     assert os.path.samefile(factor, root / "factor_bundle/sector_data.h5")
+    assert os.path.samefile(
+        root / "components/factor_h5_static_candidate_v2/security_source_identity.json",
+        root / "factor_bundle/security_source_identity.json",
+    )
     assert (
         root / "components/daily_bin_candidate/instruments/benchmark.txt"
     ).read_text(encoding="utf-8") == "000300.SH\t2018-08-01\t2024-07-05\n"

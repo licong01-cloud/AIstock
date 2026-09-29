@@ -96,6 +96,7 @@ targets:
       - backend/services/dataset_release/artifact_ready_source.py
       - backend/services/dataset_release/build_processor.py
       - backend/services/dataset_release/build_stage.py
+      - backend/services/dataset_release/candidate_validator.py
       - backend/services/dataset_release/canonical_stock_transformer.py
       - backend/services/dataset_release/factor_materializer.py
       - backend/services/dataset_release/index_contract.py
@@ -113,6 +114,10 @@ targets:
       - backend/services/dataset_release/component_artifact_manifest.py
       - backend/services/dataset_release/component_manifest_producer.py
       - backend/services/dataset_release/mixed_planner.py
+      - backend/services/dataset_release/monthly_consumer_layout.py
+      - backend/services/dataset_release/monthly_local_validation.py
+      - backend/services/dataset_release/monthly_worker_nodes.py
+      - backend/services/dataset_release/monthly_worker_runtime.py
       - backend/services/dataset_release/stk_limit_overlay.py
       - backend/services/dataset_release/worker.py
       - backend/services/dataset_release/windows_job.py
@@ -140,6 +145,7 @@ targets:
           - backend/services/dataset_release/artifact_ready_source.py
           - backend/services/dataset_release/build_processor.py
           - backend/services/dataset_release/build_stage.py
+          - backend/services/dataset_release/candidate_validator.py
           - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/factor_materializer.py
           - backend/services/dataset_release/index_contract.py
@@ -157,6 +163,10 @@ targets:
           - backend/services/dataset_release/component_artifact_manifest.py
           - backend/services/dataset_release/component_manifest_producer.py
           - backend/services/dataset_release/mixed_planner.py
+          - backend/services/dataset_release/monthly_consumer_layout.py
+          - backend/services/dataset_release/monthly_local_validation.py
+          - backend/services/dataset_release/monthly_worker_nodes.py
+          - backend/services/dataset_release/monthly_worker_runtime.py
           - backend/services/dataset_release/stk_limit_overlay.py
           - backend/services/dataset_release/worker.py
           - backend/services/dataset_release/windows_job.py

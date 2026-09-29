@@ -262,6 +262,18 @@ def publish_consumer_layout(
             factor_root / "static_factors.parquet",
         )
     )
+    factor_authorities = {}
+    for name in ("security_source_identity.json", "moneyflow_alias_coverage_v1.json"):
+        target = _hardlink(
+            _plain_file(resolved, f"factor_bundle/{name}", label=name),
+            factor_root / name,
+        )
+        factor_files.append(target)
+        factor_authorities[name] = {
+            "path": name,
+            "sha256": _sha256(target),
+            "size": target.stat().st_size,
+        }
 
     index_root.mkdir(exist_ok=False)
     index_data = _hardlink(
@@ -325,7 +337,9 @@ def publish_consumer_layout(
             "end": cutoff.isoformat(),
             "universe_key": profile.universe_key,
             "files": [f"{name}.h5" for name in FACTOR_H5_DATASETS]
-            + ["static_factors.parquet"],
+            + ["static_factors.parquet", *sorted(factor_authorities)],
+            "security_source_identity": factor_authorities["security_source_identity.json"],
+            "moneyflow_alias_coverage": factor_authorities["moneyflow_alias_coverage_v1.json"],
             "source_freeze": True,
             "full_history_content_hash": True,
         },
