@@ -90,6 +90,12 @@ def _row_identity(row: Mapping[str, Any]) -> dict[str, Any]:
     return output
 
 
+def _database_parameter(field: str, value: Any) -> Any:
+    if field in {"prediction_id", "supersedes_prediction_id"} and value is not None:
+        return str(value)
+    return value
+
+
 def _prediction_id(row: Mapping[str, Any]) -> uuid.UUID:
     return uuid.uuid5(
         PREDICTION_ID_NAMESPACE,
@@ -384,7 +390,7 @@ class RotationL2PredictionRepository:
                         cursor.execute(
                             f"SELECT {','.join(PREDICTION_COLUMNS)} FROM hmm_risk.rotation_l2_prediction "
                             "WHERE prediction_id=%s FOR UPDATE",
-                            (row["supersedes_prediction_id"],),
+                            (_database_parameter("supersedes_prediction_id", row["supersedes_prediction_id"]),),
                         )
                         raw_prior = cursor.fetchone()
                         if raw_prior is None:
@@ -404,7 +410,7 @@ class RotationL2PredictionRepository:
                             raise RotationL2PredictionError(
                                 REASON_CONFLICT, "prediction revision does not directly supersede its identity"
                             )
-                    values = [row[column] for column in PREDICTION_COLUMNS]
+                    values = [_database_parameter(column, row[column]) for column in PREDICTION_COLUMNS]
                     values[PREDICTION_COLUMNS.index("feature_contributions")] = (
                         canonical_json_bytes(row["feature_contributions"]).decode("utf-8")
                         if row["feature_contributions"] is not None

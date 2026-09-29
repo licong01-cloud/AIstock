@@ -5,10 +5,17 @@ from __future__ import annotations
 import hashlib
 import posixpath
 from datetime import date
+from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from backend.services.dataset_release.profile_contract import (
+    ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS,
+)
 from backend.services.quantevolver.qe_active_dataset_profile import (
+    ACTIVE_PROFILE_SCHEMA_V3,
+    ACTIVE_PROFILE_SCHEMA_V4,
     load_active_qe_profile,
+    load_qe_profile,
     resolve_active_dataset_consumer_binding,
 )
 
@@ -142,6 +149,83 @@ def freeze_optional_active_dataset_task_binding(
     )
 
 
+def freeze_explicit_dataset_task_binding(
+    *,
+    profile_path: str,
+    consumer_id: str,
+    node_id: str,
+) -> dict[str, Any]:
+    """Freeze one explicitly selected, canonical profile without moving the active pointer.
+
+    V4 profiles retain the derived-asset registry contract.  The historical V3
+    compatibility path is deliberately limited to ``factor_research`` because
+    that consumer only needs components already pinned by the canonical V3
+    profile; it must never become a general fallback for runtime consumers.
+    """
+
+    path = Path(_text(profile_path, field="profile_path"))
+    profile = load_qe_profile(path)
+    if profile.raw.get("schema_version") == ACTIVE_PROFILE_SCHEMA_V4:
+        return freeze_active_dataset_task_binding(
+            consumer_id=consumer_id,
+            node_id=node_id,
+            resolver=lambda **kwargs: resolve_active_dataset_consumer_binding(
+                profile=profile,
+                **kwargs,
+            ),
+        )
+    if (
+        profile.raw.get("schema_version") != ACTIVE_PROFILE_SCHEMA_V3
+        or consumer_id != "factor_research"
+    ):
+        raise FrozenDatasetTaskBindingError(
+            "explicit historical profiles only support the factor_research consumer"
+        )
+    node = profile.raw.get("node_bindings", {}).get(node_id)
+    if not isinstance(node, Mapping):
+        raise FrozenDatasetTaskBindingError(
+            f"explicit profile has no node binding for {node_id}"
+        )
+    candidate_root = _text(node.get("candidate_root"), field="candidate_root").rstrip("/")
+    if not candidate_root.startswith("/") or posixpath.normpath(candidate_root) != candidate_root:
+        raise FrozenDatasetTaskBindingError("explicit profile candidate root is not canonical POSIX")
+    components = profile.raw.get("components")
+    if not isinstance(components, Mapping):
+        raise FrozenDatasetTaskBindingError("explicit profile components are invalid")
+    try:
+        manifest_sha = ensure_sha256(
+            str(components.get("dataset_manifest_sha256") or ""),
+            field="dataset_manifest_sha256",
+        )
+    except CanonicalizationError as exc:
+        raise FrozenDatasetTaskBindingError(
+            "explicit profile dataset manifest SHA256 is invalid"
+        ) from exc
+    binding = {
+        "schema_version": "aistock_active_dataset_consumer_binding_v1",
+        "consumer_id": consumer_id,
+        "node_id": node_id,
+        "generation": profile.generation,
+        "release_id": profile.release_id,
+        "cutoff": profile.cutoff.isoformat(),
+        "dataset_manifest_sha256": manifest_sha,
+        "profile_sha256": profile.profile_sha256,
+        "profile_schema_version": ACTIVE_PROFILE_SCHEMA_V3,
+        "candidate_root": candidate_root,
+        "required_components": sorted(
+            ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS[consumer_id]
+        ),
+        "binding_mode": "explicit_profile_v3",
+        "resolved_once": True,
+        "legacy_fallback": False,
+    }
+    return freeze_active_dataset_task_binding(
+        consumer_id=consumer_id,
+        node_id=node_id,
+        resolver=lambda **_kwargs: binding,
+    )
+
+
 def require_frozen_dataset_task_binding(
     value: Mapping[str, Any],
     *,
@@ -255,6 +339,7 @@ __all__: Sequence[str] = (
     "dataset_environment_keys",
     "encode_qe_dataset_identity_roots",
     "freeze_active_dataset_task_binding",
+    "freeze_explicit_dataset_task_binding",
     "freeze_optional_active_dataset_task_binding",
     "frozen_dataset_environment",
     "require_frozen_dataset_task_binding",
