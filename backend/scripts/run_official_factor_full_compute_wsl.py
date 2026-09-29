@@ -19,7 +19,7 @@ for noisy in ("qlib", "rdagent", "urllib3", "filelock"):
 
 logger = logging.getLogger("run_official_factor_full_compute_wsl")
 REPO_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(REPO_ROOT / ".env", override=True)
+load_dotenv(REPO_ROOT / ".env", override=False)
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
