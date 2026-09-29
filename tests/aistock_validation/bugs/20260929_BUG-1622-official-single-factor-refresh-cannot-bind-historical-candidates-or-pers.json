@@ -239,8 +239,8 @@
   },
   "first_seen_at": "2026-09-29T03:28:31.667070Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7718049b8091f97790fc26922559f2a93d71f764",
+  "fixed_at": "2026-09-29T05:20:41Z",
   "github_issue_number": 5092,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5092",
   "last_seen_at": "2026-09-29T03:28:31.667070Z",
@@ -248,6 +248,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5096",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -275,6 +276,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -286,7 +288,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -295,6 +297,13 @@
     "fingerprint": "6087b9da196043e39627157c",
     "source_event_id": "FE-20260929-6087b9da1960"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_active_task_binding.py backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/test_correlation_compute_independence.py -q -x -> 58 passed",
+    "python -m pytest backend/tests/test_noxfile_validation_env.py -q -p no:cacheprovider -> 42 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 tests and 14/14 ownership mappings",
+    "python -m nox -s validation_catalog_integrity -> passed: 16 tests and 0 findings",
+    "python -m nox -s l0 -> passed: 0 blocking findings"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
