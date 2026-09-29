@@ -231,9 +231,13 @@ class PostgresHistoricalPriceReplaySource:
                        WHERE cal.is_trading = TRUE
                          AND cal.cal_date BETWEEN basic.list_date AND %s
                      )
-                   END AS listed_trading_days
+                   END AS listed_trading_days,
+                   adjustment.adj_factor
             FROM market.kline_daily_raw price
             LEFT JOIN market.stock_basic basic ON basic.ts_code = price.ts_code
+            LEFT JOIN market.adj_factor adjustment
+              ON adjustment.ts_code = price.ts_code
+             AND adjustment.trade_date = price.trade_date
             WHERE price.trade_date = %s AND price.ts_code = ANY(%s)
             ORDER BY price.ts_code
             """,
@@ -283,8 +287,10 @@ class PostgresHistoricalPriceReplaySource:
                 multiplier, source = _target_raw_price_multiplier(
                     symbol=symbol,
                     decision_raw_close=close,
+                    decision_adjustment_factor=row[4],
                     rows=dividends.get(symbol, []),
                     decision_as_of_trade_date=decision_trade_date,
+                    tick_size=0.01,
                 )
                 target_is_st = _project_target_st(st_events.get(symbol))
             except (AdvisoryModelFirstError, TypeError, ValueError, OverflowError) as exc:
@@ -333,6 +339,11 @@ class AdvisoryHistoricalPriceReplayService:
         if settlement_path.exists():
             return read_historical_price_replay_artifact(root).receipt.model_copy(
                 update={"status": "ALREADY_MATERIALIZED"}
+            )
+        if request.projection_producer_version != "advisory_entry_price_core_v2":
+            raise _replay_error(
+                "new historical replay computation requires the v2 projection producer identity",
+                "ADVISORY_HISTORICAL_PRICE_REPLAY_IDENTITY_MISMATCH",
             )
         predictions, prediction_sha256 = self._freeze_predictions(
             request=request,
@@ -518,6 +529,7 @@ def prepare_historical_price_replay_request(
         decision_end_trade_date=decision_end_trade_date,
         replay_as_of_date=replay_as_of_date,
         pit_universe_key=pit_universe_key,
+        projection_producer_version="advisory_entry_price_core_v2",
     )
     return request, source
 

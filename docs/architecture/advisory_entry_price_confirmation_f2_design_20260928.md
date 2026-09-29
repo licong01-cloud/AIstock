@@ -1,7 +1,7 @@
-# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.1
+# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.2
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Advisory。
-> 状态：SOURCE_IMPLEMENTED_LOCAL_VERIFIED_COORDINATE_INPUT_BLOCKED（2026-09-29）。四阶段源码/定向回归已完成，尚未合入；真实validation坐标不一致阻断v4确认，此外尚无合格新窗口、QE已确认独占时段或正式运行结果。
+> 状态：SOURCE_IMPLEMENTED_COORDINATE_V2_PASS_CONFIRMATION_INPUT_BLOCKED（2026-09-29）。四阶段源码/定向回归及v2坐标前置审计已完成，尚未合入；仍缺合格连续窗口、QE已确认独占时段及正式运行结果。
 > 配套：[独立价格角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)。
 
 ## 1. Background / 为什么需要新入口
@@ -137,7 +137,7 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 ## 12. Risks / 不确定性处理
 
-当前未证明新窗口存在；冻结v4含父Alpha/HMM等特征，缺少历史来源不能用最新值填充。数据库按日期查询不能自动证明公告/修订可见性；无法证明时只作探索。模型空间与公司行动坐标不一致先在开发数据修复并形成新模型身份，不能在确认中修正旧权威结果。20日/300行是最低支持条件，不是整个功能完成百分比或足够统计功效的保证。
+当前未证明合格连续新窗口存在；冻结v4含父Alpha/HMM等特征，缺少历史来源不能用最新值填充。数据库按日期查询不能自动证明公告/修订可见性；无法证明时只作探索。公司行动坐标已在开发数据形成独立v2投影身份，确认请求必须绑定该身份，不能改写旧v1权威结果。20日/300行是最低支持条件，不是整个功能完成百分比或足够统计功效的保证。
 
 vintage审核文件必须包含 `entry_coordinate_review`：schema=`advisory_entry_coordinate_review_v1`、status=PASS、原validation标签文件hash、scope hash、projection producer版本、checked_validation_rows、unavailable_rows=0、tolerance_abs_gap=1e-6、maximum_abs_gap_difference。检查数必须等于原validation可建模行数，最大差不得超过固定1e-6 gap（0.01 bps，数值一致性容差，不是coverage/收益门槛）。只在已消费validation运行；缺失、不全、超差或身份不符，正式prepare失败。禁止把坐标审计放到新holdout或根据确认效果选容差。v3曾以validation early stopping，因此模型fit截止也必须覆盖这些T标签，而不能只报train分区终点。
 
@@ -149,8 +149,8 @@ vintage审核文件必须包含 `entry_coordinate_review`：schema=`advisory_ent
 
 已修复/复审：control仅从原v3训练run的validation标签读取，检查实际T标签成熟时钟；预测冻结先于结果查询；每行重新核对校准量和tick/法规投影；crossing统计覆盖全部已输出预测，不能被后续停牌掩盖；重试绑定原消费收据；QE外部时段续约不改已有评价artifact。测试使用合成/已消费数据，不产生正式效果证据。
 
-当前只读资源前检返回WAITING_RESOURCE，完整资格材料尚未获得，因此没有prepare正式请求或提交实验。现有DB特征adapter保持D晚于父bundle continuation_cutoff的边界，不能借新入口绕回旧训练期。新日期还须满足本设计全部vintage/消费条件，不把日期后移当成自动OOS。
+当前只读资源前检仍返回`WAITING_RESOURCE / QE_TASK_NONTERMINAL_OR_UNKNOWN`，完整资格材料尚未获得，因此没有prepare正式请求或提交实验。现有DB特征adapter保持D晚于父bundle continuation_cutoff的边界，不能借新入口绕回旧训练期。新日期还须满足本设计全部vintage/消费条件，不把日期后移当成自动OOS。
 
-已消费validation的1,000行坐标审计发现3行公司行动不一致，最大差约9.61 bps；模型未执行，DB未写，新窗口未消费。当前v4的coordinate前置项不能签PASS。下一步先解决输入/标签定义，若改变冻结模型或投影身份须新版本协议；本源码交付不能解除该阻断，亦不能通过删除这3只股票解决。
+已消费validation的1,000行经v2生产器复核：检查1,000、不可用0、最大绝对gap差`1.1347649842008423e-7`，满足固定`1e-6`容差；3行公司行动全部保留。坐标前置项可签PASS，身份=`advisory_entry_price_core_v2`，标签SHA=`c4fc72b94e9e112bcc05405e8c7f6ec28bc2890b16c4ff978e3b7dfe0ee2b148`。该审计没有运行模型、写DB或消费新窗口。
 
-同轮只读候选元数据spike：匹配冻结包的ENABLED Top20 Program=`advp_3126dd77f9774d94850f37ad012f640f`，当前binding=`advb_f860140caa314665ad60ac089ed84b3f`，全市场池；已有30个PUBLISHED目标日（2026-08-14至2026-09-29），另有1个2026-07-16 REPLAY。只读取日期/数量/身份，未读取目标收益或运行模型。30条不等于30个成熟/未消费/可确认日期，尤其9月29日目标未成熟；此结果证明有既存输入可继续审核，不需默认等待未来20个交易日。
+同轮只读候选元数据spike：匹配冻结包的ENABLED Top20 Program=`advp_3126dd77f9774d94850f37ad012f640f`，当前binding=`advb_f860140caa314665ad60ac089ed84b3f`，全市场池；已有30个PUBLISHED目标日（2026-08-14至2026-09-29），另有1个2026-07-16 REPLAY。只读取日期/数量/身份，未读取目标收益或运行模型。现有30日包含缺口且只有较晚日期带原生universe receipt，不能拼接成最低20个连续合格日；不得重建候选、伪造receipt或降低门槛。冻结v4 test prediction历史回放可作为`NAVIGATION_ONLY`功能回归，但不能替代正式确认。

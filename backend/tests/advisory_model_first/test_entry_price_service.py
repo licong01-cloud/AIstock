@@ -63,8 +63,13 @@ def test_adjusted_training_label_and_pit_raw_projection_share_the_same_coordinat
     from backend.services.advisory_model_first.realtime_feature_source import _target_raw_price_multiplier
     symbol, close, raw_open = "000001.SZ", 10.0, 8.0 if stock else 10.2
     action = (symbol, D, T, None, stock, stock, 0.0, cash, cash, D)
-    multiplier, _ = _target_raw_price_multiplier(symbol=symbol, decision_raw_close=close,
-        rows=[action] if cash or stock else [], decision_as_of_trade_date=D)
+    multiplier, _ = _target_raw_price_multiplier(
+        symbol=symbol,
+        decision_raw_close=close,
+        decision_adjustment_factor=1.7,
+        rows=[action] if cash or stock else [],
+        decision_as_of_trade_date=D,
+    )
     # The Qlib adjusted coordinate is raw * factor; ex-date factor ratio is 1 / multiplier.
     factor_d, factor_t = 1.7, 1.7 / multiplier
     daily = pd.DataFrame({"open": [close * factor_d, raw_open * factor_t],
