@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/quantevolver/executors/backtest.py",
     "backend/tests/unified_engine/test_qe_prediction_replay.py",
+    "scripts/qrun_limit_minute.py",
     "tests/aistock_validation/bugs/20260929_BUG-1630-qe-prediction-replay-recomputes-custom-factors-before-frozen-prediction.json"
   ],
   "assigned_agent": null,
@@ -21,6 +22,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260929-9097fc5808ed",
       "timestamp": "2026-09-29T22:01:23.690139Z"
+    },
+    {
+      "action": "root_cause_confirmed",
+      "actor": "Codex",
+      "note": "BacktestExecutor appended --pred-backtest to the normal custom-factor command without removing prepare_factors.py, while the replay raw-label dataset retained a feature-bearing loader that required combined_factors_df.parquet.",
+      "timestamp": "2026-09-29T22:34:00Z"
+    },
+    {
+      "action": "red_green_regression_verified",
+      "actor": "Codex",
+      "note": "Prediction replay now strips only the exact factor-preparation chain, omits the executable prepare script, and replaces feature-bearing loaders with a label-only QlibDataLoader; full training keeps factor preparation and ambiguous label contracts fail closed.",
+      "timestamp": "2026-09-29T22:34:00Z"
     }
   ],
   "evidence_uris": [
@@ -31,13 +44,15 @@
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/executors/backtest.py",
-      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "scripts/qrun_limit_minute.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/executors/backtest.py",
-        "backend/tests/unified_engine/test_qe_prediction_replay.py"
+        "backend/tests/unified_engine/test_qe_prediction_replay.py",
+        "scripts/qrun_limit_minute.py"
       ],
       "impacted_modules": [
         "qe.core",
@@ -80,18 +95,21 @@
       ],
       "suggested_scope": [
         "backend/services/quantevolver/executors/backtest.py",
-        "backend/tests/unified_engine/test_qe_prediction_replay.py"
+        "backend/tests/unified_engine/test_qe_prediction_replay.py",
+        "scripts/qrun_limit_minute.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/quantevolver/executors/backtest.py",
-      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "scripts/qrun_limit_minute.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/quantevolver/executors/backtest.py",
-      "backend/tests/unified_engine/test_qe_prediction_replay.py"
+      "backend/tests/unified_engine/test_qe_prediction_replay.py",
+      "scripts/qrun_limit_minute.py"
     ]
   },
   "first_seen_at": "2026-09-29T22:01:23.690153Z",
@@ -117,11 +135,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python process instantiated qlib.data.dataset.loader.QlibDataLoader from the generated replay label-only config without accessing combined_factors_df.parquet."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
