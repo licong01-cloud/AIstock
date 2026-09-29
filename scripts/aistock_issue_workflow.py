@@ -3832,6 +3832,58 @@ def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, 
     return "passed", None, {"kind": "object"}
 
 
+def _validate_advisory_entry_price_status(
+    payload: Any,
+    *,
+    url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Bind the Entry Price status readback to the requested Advisory program."""
+
+    if not isinstance(payload, dict):
+        return "failed", "Entry Price status payload must be a JSON object", {}
+    if payload.get("ok") is not True or payload.get("errors"):
+        return "failed", "Entry Price status payload must report ok=true without errors", {}
+    if payload.get("schema_version") != "advisory_entry_price_status_v1":
+        return "failed", "Entry Price status schema_version is invalid", {}
+
+    path = urllib.parse.urlsplit(url).path
+    match = re.fullmatch(r"/api/v1/advisory/programs/([^/]+)/entry-price/status", path)
+    if match is None:
+        return "failed", "Entry Price status probe path is invalid", {}
+    requested_program_id = urllib.parse.unquote(match.group(1))
+    observed_program_id = payload.get("program_id")
+    if not isinstance(observed_program_id, str) or observed_program_id != requested_program_id:
+        return "failed", "Entry Price status program_id does not match the requested program", {}
+
+    configured = payload.get("configured")
+    database_written = payload.get("database_written")
+    status = payload.get("status")
+    if type(configured) is not bool:
+        return "failed", "Entry Price status configured must be boolean", {}
+    if database_written is not False:
+        return "failed", "Entry Price status must prove database_written=false", {}
+    if not isinstance(status, str):
+        return "failed", "Entry Price status must be a string", {}
+    if configured:
+        if status not in {"CONFIGURED", "QUALITY_REVIEW_REQUIRED"}:
+            return "failed", "configured Entry Price status is invalid", {}
+        if payload.get("binding_activated") is not False:
+            return "failed", "configured Entry Price status must prove binding_activated=false", {}
+    elif status != "NOT_CONFIGURED":
+        return "failed", "unconfigured Entry Price status must be NOT_CONFIGURED", {}
+
+    return (
+        "passed",
+        None,
+        {
+            "program_id": observed_program_id,
+            "configured": configured,
+            "status": status,
+            "database_written": database_written,
+        },
+    )
+
+
 def _validate_hmm_rotation_l2_overview(
     payload: Any,
     *,
@@ -4211,6 +4263,11 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
     (
+        re.compile(r"^/api/v1/advisory/programs/[^/]+/entry-price/status$"),
+        "advisory_entry_price_status",
+        _validate_advisory_entry_price_status,
+    ),
+    (
         re.compile(r"^/api/v1/hmm-risk/rotation-l2/overview$"),
         "hmm_rotation_l2_overview",
         _validate_hmm_rotation_l2_overview,
@@ -4342,7 +4399,12 @@ def _evaluate_business_smoke_semantics(
             }
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
-    elif contract_id in {"scheduler_verification_status", "factor_lifecycle_detail", "hmm_rotation_l2_overview"}:
+    elif contract_id in {
+        "scheduler_verification_status",
+        "factor_lifecycle_detail",
+        "hmm_rotation_l2_overview",
+        "advisory_entry_price_status",
+    }:
         verdict, reason, facts = validator(payload, url=url)
     else:
         verdict, reason, facts = validator(payload)

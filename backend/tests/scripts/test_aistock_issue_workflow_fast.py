@@ -46,6 +46,90 @@ def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: 
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
 
 
+def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
+    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+        f"http://127.0.0.1:8001/api/v1/advisory/programs/{program_id}/entry-price/status",
+        json.dumps(payload),
+        response_sha256="e" * 64,
+    )
+    return semantic
+
+
+def test_entry_price_status_semantic_contract_accepts_safe_unconfigured_readback() -> None:
+    semantic = _entry_price_status_semantic(
+        {
+            "ok": True,
+            "schema_version": "advisory_entry_price_status_v1",
+            "configured": False,
+            "program_id": "advp_test",
+            "status": "NOT_CONFIGURED",
+            "database_written": False,
+        }
+    )
+
+    assert semantic["contract_id"] == "advisory_entry_price_status"
+    assert semantic["verdict"] == "passed"
+    assert semantic["facts"] == {
+        "program_id": "advp_test",
+        "configured": False,
+        "status": "NOT_CONFIGURED",
+        "database_written": False,
+    }
+
+
+def test_entry_price_status_semantic_contract_accepts_non_activating_configured_readback() -> None:
+    semantic = _entry_price_status_semantic(
+        {
+            "ok": True,
+            "schema_version": "advisory_entry_price_status_v1",
+            "configured": True,
+            "program_id": "advp_test",
+            "status": "QUALITY_REVIEW_REQUIRED",
+            "database_written": False,
+            "binding_activated": False,
+        }
+    )
+
+    assert semantic["verdict"] == "passed"
+    assert semantic["facts"]["status"] == "QUALITY_REVIEW_REQUIRED"
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"ok": False}, "ok=true"),
+        ({"errors": ["readback failed"]}, "without errors"),
+        ({"schema_version": "wrong"}, "schema_version"),
+        ({"program_id": "advp_other"}, "does not match"),
+        ({"configured": "false"}, "configured must be boolean"),
+        ({"status": "CONFIGURED"}, "must be NOT_CONFIGURED"),
+        ({"database_written": True}, "database_written=false"),
+        (
+            {"configured": True, "status": "CONFIGURED", "binding_activated": True},
+            "binding_activated=false",
+        ),
+    ],
+)
+def test_entry_price_status_semantic_contract_rejects_invalid_or_unsafe_readback(
+    override: dict[str, Any],
+    reason: str,
+) -> None:
+    payload = {
+        "ok": True,
+        "schema_version": "advisory_entry_price_status_v1",
+        "configured": False,
+        "program_id": "advp_test",
+        "status": "NOT_CONFIGURED",
+        "database_written": False,
+    }
+    payload.update(override)
+
+    semantic = _entry_price_status_semantic(payload)
+
+    assert semantic["verdict"] == "failed"
+    assert reason in semantic["reason"]
+
+
 def _rotation_l2_overview_payload(run_id: str = "a" * 64) -> dict[str, Any]:
     return {
         "status": "ok",
