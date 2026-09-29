@@ -37,13 +37,24 @@
   ],
   "expected": "All WSL factor runners must preserve explicit scheduler task environment; repository .env may only fill missing defaults.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/scripts/run_correlation_compute_wsl.py",
+      "backend/scripts/run_official_evaluation_wsl.py",
+      "backend/scripts/run_official_factor_full_compute_wsl.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "tests/aistock_validation/bugs/20260929_BUG-1629-wsl-factor-runners-override-frozen-task-dataset-environment.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/scripts/run_correlation_compute_wsl.py",
+      "backend/scripts/run_official_evaluation_wsl.py",
+      "backend/scripts/run_official_factor_full_compute_wsl.py",
       "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "tests/aistock_validation/bugs/20260929_BUG-1629-wsl-factor-runners-override-frozen-task-dataset-environment.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/scripts/run_correlation_compute_wsl.py",
@@ -150,11 +161,15 @@
       "Windows Python -I loaded all three task-worktree WSL factor runner modules without database, dataset, or runtime mutation"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
