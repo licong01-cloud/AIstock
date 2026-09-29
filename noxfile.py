@@ -1530,6 +1530,7 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/tests/unified_engine/test_*.py",
             "backend/tests/test_multi_alpha*.py",
             "backend/tests/test_dispatch_service_env.py",
+            "backend/tests/test_correlation_compute_independence.py",
         ),
         overrides={
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",

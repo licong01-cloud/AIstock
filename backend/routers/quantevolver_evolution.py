@@ -3375,6 +3375,9 @@ def _run_correlation_compute_via_dispatch(
     as_of_date: str = None,
     job_id: str = None,
     data_date: str = None,
+    *,
+    target_factor_name: str | None = None,
+    dataset_profile_path: str | None = None,
 ):
     import asyncio
     import time as _time
@@ -3382,7 +3385,9 @@ def _run_correlation_compute_via_dispatch(
     global _active_dispatch_task_id
 
     payload = {
+        "mode": "target_only" if target_factor_name else "full",
         "factor_names": list(factor_names or []),
+        "target_factor_name": target_factor_name,
         "as_of_date": as_of_date,
         "job_id": str(job_id) if job_id else None,
         "data_date": data_date,
@@ -3396,12 +3401,21 @@ def _run_correlation_compute_via_dispatch(
         )
         _update_job_status(job_id, "running")
         try:
-            created = asyncio.run(_get_dispatch_service().create_and_submit_task({
-                "task_name": f"correlation_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            dispatch_request = {
+                "task_name": (
+                    f"correlation_target_{target_factor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    if target_factor_name
+                    else f"correlation_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                ),
                 "task_type": "correlation_compute",
                 "node_id": os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080"),
                 "payload": payload,
-            }))
+            }
+            if dataset_profile_path:
+                dispatch_request["dataset_profile_path"] = dataset_profile_path
+            created = asyncio.run(
+                _get_dispatch_service().create_and_submit_task(dispatch_request)
+            )
             task_id = created["task_id"]
             _active_dispatch_task_id = task_id
             deadline = _time.time() + _MATRIX_TIMEOUT_SEC
@@ -3469,6 +3483,22 @@ def _run_correlation_compute(factor_names: list, as_of_date: str = None, job_id:
     )
 
 
+def _run_target_correlation_refresh_via_dispatch(
+    *,
+    target_factor_name: str,
+    as_of_date: str | None,
+    data_date: str | None,
+    dataset_profile_path: str,
+):
+    return _run_correlation_compute_via_dispatch(
+        factor_names=[target_factor_name],
+        as_of_date=as_of_date,
+        data_date=data_date,
+        target_factor_name=target_factor_name,
+        dataset_profile_path=dataset_profile_path,
+    )
+
+
 def _get_loader(source: str = "single") -> FactorValueLoader:
     global _correlation_loader
     if _correlation_loader is None or getattr(_correlation_loader, '_source', None) != source:
@@ -3489,6 +3519,17 @@ class CorrelationComputeRequest(BaseModel):
     force_recompute: bool = Field(False, description="强制重新计算，忽略旧相关性结果")
     db_threshold: float = Field(0, description="写入 DB 的相关性阈值 (threshold=0 全量存储)")
     include_disabled: bool = Field(False, description="为 True 时包含已禁用因子")
+
+
+class CorrelationTargetRefreshRequest(BaseModel):
+    target_factor_name: str = Field(..., min_length=1)
+    as_of_date: str = Field(..., description="Must equal the official cache cutoff")
+    data_date: Optional[str] = Field(None, description="Scheduler metadata only")
+    dataset_profile_path: str = Field(
+        ...,
+        min_length=1,
+        description="Absolute canonical profile for the same official cache release",
+    )
 
 
 @router.post("/correlations/compute", summary="触发因子相关性矩阵计算")
@@ -3548,6 +3589,49 @@ def compute_correlations(req: CorrelationComputeRequest):
             "cache_root": cache_status.get("cache_root"),
             "cache_source": cache_status.get("cache_source"),
         },
+    }
+
+
+@router.post(
+    "/correlations/refresh-target",
+    summary="Refresh one factor's official correlations without resetting unrelated rows",
+)
+def refresh_target_correlations(req: CorrelationTargetRefreshRequest):
+    if _computing_lock.locked():
+        return {
+            "status": "computing",
+            "message": "another correlation computation is already running",
+            "progress": _correlation_progress.snapshot(),
+        }
+    target = req.target_factor_name.strip()
+    eligible = FactorEligibilityService().get_eligible_factor_names(
+        factor_names=[target],
+        include_disabled=False,
+    )
+    if eligible != [target]:
+        raise HTTPException(status_code=409, detail="target factor is not official-eligible")
+    cache_status = _correlation_compute_service.get_correlation_factor_cache_status()
+    if cache_status.get("as_of_date") != req.as_of_date:
+        raise HTTPException(
+            status_code=409,
+            detail="target correlation as_of_date differs from official cache",
+        )
+
+    global _compute_future
+    _compute_future = _compute_executor.submit(
+        _run_target_correlation_refresh_via_dispatch,
+        target_factor_name=target,
+        as_of_date=req.as_of_date,
+        data_date=req.data_date,
+        dataset_profile_path=req.dataset_profile_path,
+    )
+    return {
+        "status": "accepted",
+        "mode": "target_only",
+        "target_factor_name": target,
+        "as_of_date": req.as_of_date,
+        "dataset_profile_path": req.dataset_profile_path,
+        "unrelated_rows_reset": False,
     }
 
 
