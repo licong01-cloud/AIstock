@@ -1224,11 +1224,7 @@ class QEArchiveSourceAssembler:
         if not factor_names:
             factor_names = _ensure_list(task.get("base_factor_names"))
         freq = _infer_freq(runtime_flags, config_json)
-        label_horizon = _first_present(
-            runtime_flags,
-            ("label_horizon",),
-            default=task.get("label_horizon"),
-        )
+        label_horizon = _resolve_loop_label_horizon(config_json, task)
         limit_suspend_authoritative = _infer_limit_suspend_authoritative(runtime_flags)
 
         merged_config = dict(config_json)
@@ -1675,6 +1671,82 @@ def _first_present(mapping: Mapping[str, Any], keys: Sequence[str], *, default: 
         if value not in (None, "", [], {}):
             return value
     return default
+
+
+def _resolve_loop_label_horizon(
+    config: Mapping[str, Any],
+    task: Mapping[str, Any],
+) -> int | None:
+    """Resolve a loop horizon without inheriting another loop's task default.
+
+    Modern QE loop rows persist the authoritative horizon at the top level and
+    in ``model_params``.  Older rows may carry it in ``data_context``,
+    ``runtime_flags``, or ``custom_params``.  Explicit per-loop values must
+    agree; the task-level value is only a legacy fallback when the loop carries
+    no horizon at all.  A task may intentionally contain mixed-horizon loops,
+    so a task/loop mismatch is not itself an error.
+    """
+
+    candidates = (
+        ("config.label_horizon", config.get("label_horizon")),
+        (
+            "config.data_context.label_horizon",
+            _ensure_mapping(config.get("data_context")).get("label_horizon"),
+        ),
+        (
+            "config.model_params.label_horizon",
+            _ensure_mapping(config.get("model_params")).get("label_horizon"),
+        ),
+        (
+            "config.runtime_flags.label_horizon",
+            _ensure_mapping(config.get("runtime_flags")).get("label_horizon"),
+        ),
+        (
+            "config.custom_params.label_horizon",
+            _ensure_mapping(config.get("custom_params")).get("label_horizon"),
+        ),
+    )
+    resolved: list[tuple[str, int]] = []
+    for source, raw_value in candidates:
+        if raw_value in (None, ""):
+            continue
+        resolved.append((source, _normalize_archive_label_horizon(raw_value, source=source)))
+
+    if resolved:
+        authoritative_source, authoritative_value = resolved[0]
+        conflicts = [
+            f"{source}={value}"
+            for source, value in resolved[1:]
+            if value != authoritative_value
+        ]
+        if conflicts:
+            raise ValueError(
+                "qe_archive_loop_label_horizon_conflict: "
+                f"{authoritative_source}={authoritative_value}; "
+                + "; ".join(conflicts)
+            )
+        return authoritative_value
+
+    task_value = task.get("label_horizon")
+    if task_value in (None, ""):
+        return None
+    return _normalize_archive_label_horizon(task_value, source="task.label_horizon")
+
+
+def _normalize_archive_label_horizon(value: Any, *, source: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"qe_archive_invalid_label_horizon: {source} must be a positive integer")
+    if isinstance(value, int):
+        normalized = value
+    elif isinstance(value, float) and value.is_integer():
+        normalized = int(value)
+    elif isinstance(value, str) and value.strip().isdigit():
+        normalized = int(value.strip())
+    else:
+        raise ValueError(f"qe_archive_invalid_label_horizon: {source} must be a positive integer")
+    if normalized <= 0:
+        raise ValueError(f"qe_archive_invalid_label_horizon: {source} must be a positive integer")
+    return normalized
 
 
 def _jsonable(value: Any) -> Any:
