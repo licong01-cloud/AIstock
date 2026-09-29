@@ -101,7 +101,8 @@
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
     "fresh_process_evidence": [
-      "Conda AIstock fresh process imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction from fix commit 46cb9fb67beb787a0a123e947fbb940bc2467e72"
+      "Conda AIstock fresh process imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction from fix commit 46cb9fb67beb787a0a123e947fbb940bc2467e72",
+      "Conda AIstock fresh process at 5f368c55e imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction from the final worktree"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
