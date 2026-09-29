@@ -153,4 +153,4 @@ T日18:00且该日kline/suspend双审计ready后结算已存在的prediction。�
 
 多轮审核修复包括：预算传播至连接/SQL/权威PIT校验/HMM循环；最旧未尝试工作项优先，耗尽预算的capture不饿死待settlement；逐Program错误隔离；禁用/历史binding预测可继续结算；历史list读回不错误重绑；原子发布用非阻塞角色锁，忙时DEFERRED；artifact完整scope与连续/tick价格重新核验。
 
-既有136项定向回归通过，BUG-1623相关矩阵108项通过；前端类型检查0诊断、独立entry浏览器用例1 passed（现有依赖、独立3312临时端口、无后端/DB）。未发布真实角色，未生成新自然样本或正式历史确认结果；测试fake clock不作为PROSPECTIVE_OOS证据。原有生产目录中的旧样本数量没有因本次测试增加。尚未合入或重启，不能报告生产调度已经自动收集。v2坐标已PASS，但confirmation尚未产生，因此仍不能执行binding apply。
+既有136项定向回归通过，BUG-1623最终Advisory模块门禁为1,029项通过、6项跳过；前端类型检查0诊断、独立entry浏览器用例1 passed（现有依赖、独立3312临时端口、无后端/DB）。未发布真实角色，未生成新自然样本或正式历史确认结果；测试fake clock不作为PROSPECTIVE_OOS证据。原有生产目录中的旧样本数量没有因本次测试增加。尚未合入或重启，不能报告生产调度已经自动收集。v2坐标已PASS，但confirmation尚未产生，因此仍不能执行binding apply。

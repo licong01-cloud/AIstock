@@ -120,7 +120,7 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 
 ## 13. 2026-09-29 实施审核
 
-合同/PIT与集成/恢复多轮审核后修复：零候选不调用特征/模型；自然capture只选PUBLISHED荐股单；GET不刷新日历文件；原子发布时复查角色CAS/开盘边界；历史结果逐项核对完整scope。既有136项定向回归通过；BUG-1623追加的投影、确认、角色、历史回放和日常交付矩阵为108项通过。三份前端改动TypeScript诊断为0。CI未映射Advisory浏览器用例，因此使用现有lockfile匹配依赖和Playwright自有临时前端单独验证对应一条用例：1 passed，未启动/连接用户后端。
+合同/PIT与集成/恢复多轮审核后修复：零候选不调用特征/模型；自然capture只选PUBLISHED荐股单；GET不刷新日历文件；原子发布时复查角色CAS/开盘边界；历史结果逐项核对完整scope。既有136项定向回归通过；BUG-1623最终Advisory模块门禁为1,029项通过、6项跳过。三份前端改动TypeScript诊断为0。CI未映射Advisory浏览器用例，因此使用现有lockfile匹配依赖和Playwright自有临时前端单独验证对应一条用例：1 passed，未启动/连接用户后端。
 
 训练标签代码使用Qlib复权open/close比，运行时使用raw close及D可见公司行动投影。BUG-1623把新数值语义登记为`advisory_entry_price_core_v2`：读取D日raw close与D日`market.adj_factor`，按已在D日可见且T日实施的公告计算理论除权参考价，使用A股0.01元tick作ROUND_HALF_UP，再把目标factor按供应商四位精度投影；不读取T日行情或T日factor。旧v1合同和artifact保持不可变。
 
