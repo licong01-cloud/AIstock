@@ -9,6 +9,7 @@ import re
 import shlex
 from types import MappingProxyType
 from typing import Mapping, Sequence
+from urllib.parse import urlparse
 
 from .monthly_consumer_validation import RegisteredMonthlyConsumerValidationExecutor
 from .monthly_immutable_deploy import (
@@ -49,6 +50,8 @@ class MonthlyNodeRuntimeSettings:
     node1_host: str
     node1_project_root: str
     node1_python: str
+    wsl_qe_api_base_url: str = "http://127.0.0.1:5080/api/v1/qe_workspace"
+    node1_qe_api_base_url: str = "http://rdagent-node1:5080/api/v1/qe_workspace"
 
     def __post_init__(self) -> None:
         if _NAME.fullmatch(self.wsl_distro) is None or _HOST.fullmatch(self.node1_host) is None:
@@ -60,6 +63,13 @@ class MonthlyNodeRuntimeSettings:
             ("node1_python", self.node1_python),
         ):
             _posix(value, label=label)
+        for label, value in (
+            ("wsl_qe_api_base_url", self.wsl_qe_api_base_url),
+            ("node1_qe_api_base_url", self.node1_qe_api_base_url),
+        ):
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
+                raise MonthlyRuntimeConfigurationError(f"{label} must be an absolute HTTP(S) URL")
 
     @classmethod
     def from_env(cls) -> "MonthlyNodeRuntimeSettings":
@@ -78,7 +88,26 @@ class MonthlyNodeRuntimeSettings:
                 "monthly node runtime environment is incomplete",
                 context={"missing": missing},
             )
-        return cls(**values)
+        wsl_url = str(os.getenv("AISTOCK_MONTHLY_WSL_QE_API_BASE_URL") or "").strip()
+        node1_url = str(os.getenv("AISTOCK_MONTHLY_NODE1_QE_API_BASE_URL") or "").strip()
+        if not wsl_url:
+            wsl_url = "http://127.0.0.1:5080/api/v1/qe_workspace"
+        if not node1_url:
+            host = values["node1_host"].split("@", 1)[-1]
+            node1_url = f"http://{host}:5080/api/v1/qe_workspace"
+        return cls(
+            **values,
+            wsl_qe_api_base_url=wsl_url.rstrip("/"),
+            node1_qe_api_base_url=node1_url.rstrip("/"),
+        )
+
+    def dataset_identity_urls(self) -> Mapping[str, str]:
+        return MappingProxyType(
+            {
+                "wsl2-5080": self.wsl_qe_api_base_url.rstrip("/") + "/dataset-identity",
+                "rdagent-node1": self.node1_qe_api_base_url.rstrip("/") + "/dataset-identity",
+            }
+        )
 
     def probe_runners(self) -> Mapping[str, MonthlyNodeProbeRunner]:
         return MappingProxyType(

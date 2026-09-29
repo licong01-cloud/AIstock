@@ -164,3 +164,119 @@ def test_activation_verifier_is_wired_into_worker(monkeypatch, tmp_path: Path) -
     assert captured["service"] == "service"
     assert captured["authorization_store"].root == tmp_path
     assert callable(captured["activation_verifier"])
+
+
+def test_activation_verifier_requires_exact_running_node_identity(monkeypatch, tmp_path: Path) -> None:
+    from backend.services.dataset_release import monthly_worker_runtime as runtime_module
+
+    manifest = "a" * 64
+    profile = SimpleNamespace(
+        raw={
+            "components": {"dataset_manifest_sha256": manifest},
+            "node_bindings": {
+                "wsl2-5080": {"candidate_root": "/data/wsl/release"},
+                "rdagent-node1": {"candidate_root": "/data/node1/release"},
+            },
+        },
+        profile_sha256="b" * 64,
+    )
+    monkeypatch.setattr(runtime_module, "load_qe_profile", lambda _path: profile)
+    monkeypatch.setattr(runtime_module, "validate_controller_snapshot", lambda _profile: None)
+    nodes = SimpleNamespace(
+        dataset_identity_urls=lambda: {
+            "wsl2-5080": "http://wsl/dataset-identity",
+            "rdagent-node1": "http://node1/dataset-identity",
+        }
+    )
+
+    class Response:
+        def __init__(self, *, node_id: str, root: str) -> None:
+            self.node_id = node_id
+            self.root = root
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):  # type: ignore[no-untyped-def]
+            return {
+                "complete": True,
+                "dataset": {
+                    "dataset_manifest_sha256": manifest,
+                    "resolved_node_id": self.node_id,
+                    "resolved_data_root_uri": self.root,
+                },
+            }
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+        def get(self, _url: str, *, params):  # type: ignore[no-untyped-def]
+            return Response(node_id=params["node_id"], root=params["data_root_uri"])
+
+    monkeypatch.setattr(runtime_module.httpx, "Client", Client)
+
+    receipt = runtime_module._activation_verifier(tmp_path / "active.json", nodes)(
+        {"dataset_manifest_sha256": manifest}
+    )
+
+    assert receipt["status"] == "PASS"
+    assert set(receipt["node_dataset_identity_readbacks"]) == {"wsl2-5080", "rdagent-node1"}
+
+
+def test_activation_verifier_rejects_stale_running_node(monkeypatch, tmp_path: Path) -> None:
+    from backend.services.dataset_release import monthly_worker_runtime as runtime_module
+
+    manifest = "a" * 64
+    profile = SimpleNamespace(
+        raw={
+            "components": {"dataset_manifest_sha256": manifest},
+            "node_bindings": {"wsl2-5080": {"candidate_root": "/data/wsl/release"}},
+        },
+        profile_sha256="b" * 64,
+    )
+    monkeypatch.setattr(runtime_module, "load_qe_profile", lambda _path: profile)
+    monkeypatch.setattr(runtime_module, "validate_controller_snapshot", lambda _profile: None)
+    nodes = SimpleNamespace(
+        dataset_identity_urls=lambda: {"wsl2-5080": "http://wsl/dataset-identity"}
+    )
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):  # type: ignore[no-untyped-def]
+            return {
+                "complete": True,
+                "dataset": {
+                    "dataset_manifest_sha256": "c" * 64,
+                    "resolved_node_id": "wsl2-5080",
+                    "resolved_data_root_uri": "/data/wsl/release",
+                },
+            }
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:  # type: ignore[no-untyped-def]
+            pass
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+        def get(self, _url: str, *, params):  # type: ignore[no-untyped-def]
+            return Response()
+
+    monkeypatch.setattr(runtime_module.httpx, "Client", Client)
+
+    with pytest.raises(RuntimeError, match="running node dataset identity differs"):
+        runtime_module._activation_verifier(tmp_path / "active.json", nodes)(
+            {"dataset_manifest_sha256": manifest}
+        )

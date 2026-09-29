@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH
 from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_store import ControlStore
@@ -100,6 +101,13 @@ class _Shared:
         for dataset in FACTOR_H5_DATASETS:
             (factor / f"{dataset}.h5").write_bytes(dataset.encode("ascii"))
         (factor / "static_factors.parquet").write_bytes(b"static")
+        (factor / "security_source_identity.json").write_bytes(
+            DEFAULT_MANIFEST_PATH.read_bytes()
+        )
+        (factor / "moneyflow_alias_coverage_v1.json").write_text(
+            '{"schema_version":"qe_moneyflow_alias_coverage_receipt_v1","status":"PASS"}\n',
+            encoding="utf-8",
+        )
         index = staging_root / "index_context"
         index.mkdir()
         (index / "index_daily.h5").write_bytes(b"index")
