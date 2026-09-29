@@ -46,6 +46,127 @@ def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: 
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
 
 
+def _rotation_l2_overview_payload(run_id: str = "a" * 64) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "data": {
+            "run_id": run_id,
+            "model_hash": "b" * 64,
+            "trade_date": "2026-09-26",
+            "as_of_date": "2026-09-25",
+            "sector_count": 131,
+            "available_count": 119,
+            "canonical_row_sha256": "c" * 64,
+        },
+    }
+
+
+def _rotation_l2_semantic(
+    payload: Any,
+    *,
+    query: str = "run_id=" + "a" * 64,
+) -> dict[str, Any]:
+    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+        f"http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?{query}",
+        json.dumps(payload),
+        response_sha256="d" * 64,
+    )
+    return semantic
+
+
+def test_rotation_l2_overview_semantic_contract_binds_complete_run() -> None:
+    semantic = _rotation_l2_semantic(_rotation_l2_overview_payload())
+
+    assert semantic["contract_id"] == "hmm_rotation_l2_overview"
+    assert semantic["verdict"] == "passed"
+    assert semantic["facts"] == {
+        "run_id": "a" * 64,
+        "model_hash": "b" * 64,
+        "canonical_row_sha256": "c" * 64,
+        "trade_date": "2026-09-26",
+        "as_of_date": "2026-09-25",
+        "sector_count": 131,
+        "available_count": 119,
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {**_rotation_l2_overview_payload(), "status": "failed"},
+        {**_rotation_l2_overview_payload(), "ok": False},
+        {**_rotation_l2_overview_payload(), "errors": ["readback failed"]},
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_conflicting_envelope(payload: dict[str, Any]) -> None:
+    semantic = _rotation_l2_semantic(payload)
+
+    assert semantic["verdict"] == "failed"
+    assert "status=ok" in semantic["reason"]
+
+
+@pytest.mark.parametrize(
+    ("query", "payload", "reason"),
+    [
+        ("", _rotation_l2_overview_payload(), "exactly one non-empty run_id"),
+        (
+            "run_id=" + "a" * 64 + "&run_id=" + "a" * 64,
+            _rotation_l2_overview_payload(),
+            "exactly one non-empty run_id",
+        ),
+        ("run_id=" + "A" * 64, _rotation_l2_overview_payload("A" * 64), "lowercase SHA-256"),
+        ("run_id=" + "a" * 64, _rotation_l2_overview_payload("e" * 64), "does not match"),
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_unbound_run(
+    query: str,
+    payload: dict[str, Any],
+    reason: str,
+) -> None:
+    semantic = _rotation_l2_semantic(payload, query=query)
+
+    assert semantic["verdict"] == "failed"
+    assert reason in semantic["reason"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("sector_count", 130, "complete 131-sector catalog"),
+        ("sector_count", True, "complete 131-sector catalog"),
+        ("available_count", 132, "outside the sector catalog"),
+        ("canonical_row_sha256", None, "lowercase SHA-256"),
+        ("trade_date", "2026-09-31", "ISO date"),
+        ("trade_date", "2026-9-26", "ISO date"),
+        ("as_of_date", "2026-09-26", "must precede"),
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_invalid_business_data(
+    field: str,
+    value: Any,
+    reason: str,
+) -> None:
+    payload = _rotation_l2_overview_payload()
+    payload["data"][field] = value
+
+    semantic = _rotation_l2_semantic(payload)
+
+    assert semantic["verdict"] == "failed"
+    assert reason in semantic["reason"]
+
+
+def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
+    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+        "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/not-registered",
+        json.dumps({"status": "ok", "data": {}}),
+        response_sha256="f" * 64,
+    )
+
+    assert semantic["contract_id"] is None
+    assert semantic["verdict"] == "failed"
+    assert "no target-owned business-smoke semantic contract" in semantic["reason"]
+
+
 def test_ci_issue_classification_ignores_successful_runner_and_no_network_metadata() -> None:
     summary = {
         "diagnostic_status": "complete",

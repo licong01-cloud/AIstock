@@ -3832,6 +3832,73 @@ def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, 
     return "passed", None, {"kind": "object"}
 
 
+def _validate_hmm_rotation_l2_overview(
+    payload: Any,
+    *,
+    url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Bind Rotation L2 overview readback to one complete persisted run."""
+
+    if (
+        not isinstance(payload, dict)
+        or payload.get("status") != "ok"
+        or payload.get("ok") is False
+        or payload.get("errors")
+    ):
+        return "failed", "Rotation L2 overview must report status=ok", {}
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return "failed", "Rotation L2 overview is missing data", {}
+
+    parsed = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    requested_values = query.get("run_id") or []
+    if len(requested_values) != 1 or not str(requested_values[0]).strip():
+        return "failed", "Rotation L2 overview probe requires exactly one non-empty run_id query value", {}
+    requested_run_id = str(requested_values[0]).strip()
+    if re.fullmatch(r"[0-9a-f]{64}", requested_run_id) is None:
+        return "failed", "Rotation L2 overview probe run_id must be a lowercase SHA-256", {}
+    if data.get("run_id") != requested_run_id:
+        return "failed", "Rotation L2 overview run_id does not match the requested run", {}
+
+    facts: dict[str, Any] = {"run_id": requested_run_id}
+    for field in ("model_hash", "canonical_row_sha256"):
+        value = data.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            return "failed", f"Rotation L2 overview data.{field} must be a lowercase SHA-256", facts
+        facts[field] = value
+
+    parsed_dates: dict[str, str] = {}
+    for field in ("trade_date", "as_of_date"):
+        value = data.get(field)
+        if not isinstance(value, str):
+            return "failed", f"Rotation L2 overview data.{field} must be an ISO date", facts
+        try:
+            parsed_dates[field] = datetime.strptime(value, "%Y-%m-%d").date().isoformat()
+        except ValueError:
+            return "failed", f"Rotation L2 overview data.{field} must be an ISO date", facts
+        if parsed_dates[field] != value:
+            return "failed", f"Rotation L2 overview data.{field} must be an ISO date", facts
+    if parsed_dates["as_of_date"] >= parsed_dates["trade_date"]:
+        return "failed", "Rotation L2 overview as_of_date must precede trade_date", facts
+
+    sector_count = data.get("sector_count")
+    available_count = data.get("available_count")
+    if type(sector_count) is not int or sector_count != 131:
+        return "failed", "Rotation L2 overview must contain the complete 131-sector catalog", facts
+    if type(available_count) is not int or not 0 <= available_count <= sector_count:
+        return "failed", "Rotation L2 overview available_count is outside the sector catalog", facts
+
+    facts.update(
+        {
+            **parsed_dates,
+            "sector_count": sector_count,
+            "available_count": available_count,
+        }
+    )
+    return "passed", None, facts
+
+
 def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """QE dataset-profile must identify one usable active profile."""
     if not isinstance(payload, dict) or payload.get("ok") is not True:
@@ -4143,6 +4210,11 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_localsim_cutover_readiness,
     ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
+    (
+        re.compile(r"^/api/v1/hmm-risk/rotation-l2/overview$"),
+        "hmm_rotation_l2_overview",
+        _validate_hmm_rotation_l2_overview,
+    ),
     (re.compile(r"^/api/v1/quantevolver/dataset-profile$"), "qe_dataset_profile", _validate_qe_dataset_profile),
     (re.compile(r"^/api/v1/position-timing/intents$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
@@ -4270,7 +4342,7 @@ def _evaluate_business_smoke_semantics(
             }
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
-    elif contract_id in {"scheduler_verification_status", "factor_lifecycle_detail"}:
+    elif contract_id in {"scheduler_verification_status", "factor_lifecycle_detail", "hmm_rotation_l2_overview"}:
         verdict, reason, facts = validator(payload, url=url)
     else:
         verdict, reason, facts = validator(payload)
