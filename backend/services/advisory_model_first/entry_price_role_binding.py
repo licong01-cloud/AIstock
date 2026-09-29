@@ -22,7 +22,9 @@ from .research_control_contracts import EvidenceReferenceV1
 class EntryPriceRoleBindingV1(_Contract):
     schema_version: Literal["advisory_entry_price_role_binding_v1"] = "advisory_entry_price_role_binding_v1"
     role: Literal["ENTRY_PRICE"] = "ENTRY_PRICE"
-    projection_producer_version: Literal["advisory_entry_price_core_v1"] = "advisory_entry_price_core_v1"
+    projection_producer_version: Literal[
+        "advisory_entry_price_core_v1", "advisory_entry_price_core_v2"
+    ] = "advisory_entry_price_core_v1"
     objective_contract: Literal["RISK_MANAGED_ADVISORY"] = "RISK_MANAGED_ADVISORY"
     activation_mode: Literal["PRICE_DISTRIBUTION_SHADOW_ONLY"] = "PRICE_DISTRIBUTION_SHADOW_ONLY"
     program_id: str = Field(pattern=r"^advp_[A-Za-z0-9_-]{1,123}$")

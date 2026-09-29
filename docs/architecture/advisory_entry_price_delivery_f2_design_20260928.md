@@ -1,7 +1,7 @@
-# Advisory ENTRY_PRICE 绑定、每日发布与读回 F2 详细设计 v1.1
+# Advisory ENTRY_PRICE 绑定、每日发布与读回 F2 详细设计 v1.2
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Advisory。
-> 状态：SOURCE_IMPLEMENTED_LOCAL_VERIFIED_BINDING_AND_RUNTIME_PENDING（2026-09-29）。源码及定向回归已完成、尚未合入；生产ENTRY_PRICE未绑定，后端未操作。
+> 状态：SOURCE_IMPLEMENTED_COORDINATE_V2_LOCAL_VERIFIED_BINDING_AND_RUNTIME_PENDING（2026-09-29）。源码、v2坐标与定向回归已完成、尚未合入；生产ENTRY_PRICE未绑定，后端未操作。
 > 前置：[独立角色源码](advisory_entry_price_independent_role_f2_design_20260928.md)、[价格确认合同](advisory_entry_price_confirmation_f2_design_20260928.md)。
 
 ## 1. Background / 当前接入缺口
@@ -115,7 +115,7 @@ T日18:00且该日kline/suspend双审计ready后结算已存在的prediction。�
 
 ## 10. Design Acceptance Matrix
 
-本矩阵验收源码及定向回归；SOURCE_VERIFIED不表示生产交付。确认窗口、模型效果、用户重启、精确binding发布和真实prediction/settlement仍未完成，按已批准方案分阶段报告，不降低§8最终验收条件。UI独立entry浏览器用例已由隔离临时前端验证通过，CI仍待最终通过。
+本矩阵验收源码及定向回归；SOURCE_VERIFIED不表示生产交付。坐标前置项已由v2关闭，但确认窗口、模型效果、用户重启、精确binding发布和真实prediction/settlement仍未完成，按已批准方案分阶段报告，不降低§8最终验收条件。UI独立entry浏览器用例已由隔离临时前端验证通过，CI仍待最终通过。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -140,7 +140,7 @@ T日18:00且该日kline/suspend双审计ready后结算已存在的prediction。�
 
 ## 13. Production Gates / 四项符合性
 
-本次源码：DB、依赖安装、训练、binding、进程操作均noop；后端重启=user，role文件apply需明确目标，runtime evidence待实际读回。DESIGN-COMPLIANCE-001：入口、状态和恢复源码已交付定向验证，真实业务仍按§8独立验收；错误可见；候选/交易语义不变；复用授权和现有工作流，不私增审批或治理平台。
+本次源码：DB、依赖安装、训练、binding、进程操作均noop；后端重启=user，role文件apply需明确目标，runtime evidence待实际读回。v2角色准备必须引用同一v2确认identity；旧v1角色仍可读，不自动迁移。DESIGN-COMPLIANCE-001：入口、状态和恢复源码已交付定向验证，真实业务仍按§8独立验收；错误可见；候选/交易语义不变；复用授权和现有工作流，不私增审批或治理平台。
 
 ## 14. 2026-09-28 文档审核与修订记录
 
@@ -153,4 +153,4 @@ T日18:00且该日kline/suspend双审计ready后结算已存在的prediction。�
 
 多轮审核修复包括：预算传播至连接/SQL/权威PIT校验/HMM循环；最旧未尝试工作项优先，耗尽预算的capture不饿死待settlement；逐Program错误隔离；禁用/历史binding预测可继续结算；历史list读回不错误重绑；原子发布用非阻塞角色锁，忙时DEFERRED；artifact完整scope与连续/tick价格重新核验。
 
-136项定向回归通过，后续输入校验定向回归通过；前端类型检查0诊断、独立entry浏览器用例1 passed（现有依赖、独立3312临时端口、无后端/DB）。未发布真实角色，未生成新自然样本或历史确认结果；测试fake clock不作为PROSPECTIVE_OOS证据。原有生产目录中的旧样本数量没有因本次测试增加。尚未合入或重启，不能报告生产调度已经自动收集。当前v4真实validation坐标不一致，confirmation失败关闭，不能执行binding apply。
+既有136项定向回归通过，BUG-1623最终Advisory模块门禁为1,029项通过、6项跳过；前端类型检查0诊断、独立entry浏览器用例1 passed（现有依赖、独立3312临时端口、无后端/DB）。未发布真实角色，未生成新自然样本或正式历史确认结果；测试fake clock不作为PROSPECTIVE_OOS证据。原有生产目录中的旧样本数量没有因本次测试增加。尚未合入或重启，不能报告生产调度已经自动收集。v2坐标已PASS，但confirmation尚未产生，因此仍不能执行binding apply。
