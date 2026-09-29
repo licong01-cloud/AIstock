@@ -134,8 +134,8 @@
   },
   "first_seen_at": "2026-09-29T20:54:22.107191Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7afb3c62e9eba2ba8958dcc4ff261f3f7c78cd48",
+  "fixed_at": "2026-09-29T21:31:07Z",
   "github_issue_number": 5113,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5113",
   "last_seen_at": "2026-09-29T20:54:22.107191Z",
@@ -143,6 +143,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5115",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -168,6 +169,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -179,7 +181,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1629",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "17326e6cf86065e3",
+    "recorded_at": "2026-09-29T21:32:42.817450Z",
+    "runtime_contract_digest": "5a6d348a78d5fcd9e6ff3988d0799fcede3b1f2b3b9dff8f0ef19def0416adf2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "70312dfbf676e0b344e8e857fcf8dcaf8c207058",
+    "source_merge_commit": "7afb3c62e9eba2ba8958dcc4ff261f3f7c78cd48",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5115",
+    "validation_evidence": [
+      "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 33 passed",
+      "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
+      "python -m nox -s l0 -> passed; blocking=0"
+    ],
+    "validation_evidence_digest": "5617286cf969804b8e3a38d5b28d1319530842ecb01a145d18fbbed5b2d6001a"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.core"
   ],
@@ -188,6 +213,11 @@
     "fingerprint": "ccd91581e9420f4b01c4ad57",
     "source_event_id": "FE-20260929-ccd91581e942"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 33 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
+    "python -m nox -s l0 -> passed; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
