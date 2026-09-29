@@ -1,0 +1,418 @@
+{
+  "actual": "Three corporate-action rows exceed tolerance; maximum gap difference is 0.0009610814. A provider-compatible D-visible factor projection reduces the maximum to 1.1348e-7.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/realtime_feature_source.py",
+    "backend/services/advisory_model_first/entry_price_contracts.py",
+    "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+    "backend/services/advisory_model_first/entry_price_confirmation.py",
+    "backend/services/advisory_model_first/entry_price_role_binding.py",
+    "backend/services/advisory_model_first/historical_price_replay.py",
+    "backend/services/advisory_model_first/historical_price_replay_contracts.py",
+    "backend/tests/advisory_model_first/test_realtime_feature_source.py",
+    "backend/tests/advisory_model_first/test_entry_price_service.py",
+    "backend/tests/advisory_model_first/test_adaptive_price_calibration.py",
+    "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
+    "backend/tests/advisory_model_first/test_price_range_inference.py",
+    "backend/tests/advisory_model_first/test_historical_price_replay.py",
+    "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
+    "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+    "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+    "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md",
+    "tests/aistock_validation/bugs/20260929_BUG-1623-entry-price-corporate-action-projection-diverges-from-frozen-adjusted-la.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1623",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-29T03:45:16.183368Z",
+  "description": "Three corporate-action rows exceed tolerance; maximum gap difference is 0.0009610814. A provider-compatible D-visible factor projection reduces the maximum to 1.1348e-7.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260929-28512ad53f47",
+      "timestamp": "2026-09-29T03:45:16.183350Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md#14-实施审核状态"
+  ],
+  "expected": "A D-visible projection producer must reproduce all 1000 frozen validation gaps within the pre-registered 1e-6 tolerance without T-day future market data, while preserving the old producer identity.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/realtime_feature_source.py",
+      "backend/services/advisory_model_first/entry_price_contracts.py",
+      "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/services/advisory_model_first/entry_price_role_binding.py",
+      "backend/services/advisory_model_first/historical_price_replay.py",
+      "backend/services/advisory_model_first/historical_price_replay_contracts.py",
+      "backend/tests/advisory_model_first/test_realtime_feature_source.py",
+      "backend/tests/advisory_model_first/test_entry_price_service.py",
+      "backend/tests/advisory_model_first/test_adaptive_price_calibration.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
+      "backend/tests/advisory_model_first/test_price_range_inference.py",
+      "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/realtime_feature_source.py",
+        "backend/services/advisory_model_first/entry_price_contracts.py",
+        "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+        "backend/services/advisory_model_first/entry_price_confirmation.py",
+        "backend/services/advisory_model_first/entry_price_role_binding.py",
+        "backend/services/advisory_model_first/historical_price_replay.py",
+        "backend/services/advisory_model_first/historical_price_replay_contracts.py",
+        "backend/tests/advisory_model_first/test_realtime_feature_source.py",
+        "backend/tests/advisory_model_first/test_entry_price_service.py",
+        "backend/tests/advisory_model_first/test_adaptive_price_calibration.py",
+        "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
+        "backend/tests/advisory_model_first/test_historical_price_replay.py",
+        "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
+        "backend/tests/advisory_model_first/test_price_range_inference.py",
+        "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+        "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+        "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md"
+      ],
+      "impacted_modules": [
+        "advisory.model_first",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/realtime_feature_source.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/entry_price_contracts.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/entry_price_confirmation.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/entry_price_role_binding.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_realtime_feature_source.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_entry_price_service.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/realtime_feature_source.py",
+        "backend/services/advisory_model_first/entry_price_contracts.py",
+        "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+        "backend/services/advisory_model_first/entry_price_confirmation.py",
+        "backend/services/advisory_model_first/entry_price_role_binding.py",
+        "backend/services/advisory_model_first/historical_price_replay.py",
+        "backend/services/advisory_model_first/historical_price_replay_contracts.py",
+        "backend/tests/advisory_model_first/test_realtime_feature_source.py",
+        "backend/tests/advisory_model_first/test_entry_price_service.py",
+        "backend/tests/advisory_model_first/test_adaptive_price_calibration.py",
+        "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
+        "backend/tests/advisory_model_first/test_historical_price_replay.py",
+        "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
+        "backend/tests/advisory_model_first/test_price_range_inference.py",
+        "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+        "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+        "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/realtime_feature_source.py",
+      "backend/services/advisory_model_first/entry_price_contracts.py",
+      "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/services/advisory_model_first/entry_price_role_binding.py",
+      "backend/services/advisory_model_first/historical_price_replay.py",
+      "backend/services/advisory_model_first/historical_price_replay_contracts.py",
+      "backend/tests/advisory_model_first/test_realtime_feature_source.py",
+      "backend/tests/advisory_model_first/test_entry_price_service.py",
+      "backend/tests/advisory_model_first/test_adaptive_price_calibration.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
+      "backend/tests/advisory_model_first/test_price_range_inference.py",
+      "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/realtime_feature_source.py",
+      "backend/services/advisory_model_first/entry_price_contracts.py",
+      "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/services/advisory_model_first/entry_price_role_binding.py",
+      "backend/services/advisory_model_first/historical_price_replay.py",
+      "backend/services/advisory_model_first/historical_price_replay_contracts.py",
+      "backend/tests/advisory_model_first/test_realtime_feature_source.py",
+      "backend/tests/advisory_model_first/test_entry_price_service.py",
+      "backend/tests/advisory_model_first/test_adaptive_price_calibration.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay.py",
+      "backend/tests/advisory_model_first/test_historical_price_replay_contracts.py",
+      "backend/tests/advisory_model_first/test_price_range_inference.py",
+      "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md"
+    ]
+  },
+  "first_seen_at": "2026-09-29T03:45:16.183368Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5093,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5093",
+  "last_seen_at": "2026-09-29T03:45:16.183368Z",
+  "module": "advisory.model_first",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "python .codex_tmp/entry_coordinate_audit.py --env-file F:/Dev/AIstock/.env --labels F:/Dev/AIstock_model_artifacts/advisory_model_first/price_range_runs/advprreq_e788810c50b59802ec2344c3/daily_price_envelope_labels.parquet --output .codex_tmp/entry_coordinate_validation_audit_v2.csv",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory.model_first"
+  ],
+  "title": "Entry Price corporate-action projection diverges from frozen adjusted-label coordinate",
+  "trigger_condition": {
+    "fingerprint": "28512ad53f47116f5d43c9d9",
+    "source_event_id": "FE-20260929-28512ad53f47"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.model_first",
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "validation_receipts": [
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "85482e0d49f15927",
+      "reuse_key": "85482e0d49f159278be324e3f9b45bcaabf4bf698eb5af71f5e02666698fc09e",
+      "commit": "e1b74afd8e666b4f56bad04d687ae7d837bdc239",
+      "changed_files_digest": "c54dae3f7a47864b28924fb1d054b9d4ea123624eac3e1df73003bdcc19328e1",
+      "environment_identity": {
+        "os": "nt",
+        "platform": "windows",
+        "python": "3.12.12",
+        "executable": "python.exe"
+      },
+      "command": "nox -s advisory_modeling_backend",
+      "result": "1029 passed, 6 skipped",
+      "status": "passed",
+      "evidence_kind": "nox",
+      "plan": "advisory_modeling_backend",
+      "recorded_at": "2026-09-29T06:28:44.514119Z"
+    }
+  ],
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.model_first",
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

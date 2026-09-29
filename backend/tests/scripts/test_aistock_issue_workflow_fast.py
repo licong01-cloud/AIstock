@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -43,6 +44,127 @@ def test_pre_pr_gate_reuses_exact_ci_classifier_and_blocks_before_push(monkeypat
 
 def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: int = 0) -> dict[str, Any]:
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
+
+
+def _rotation_l2_overview_payload(run_id: str = "a" * 64) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "data": {
+            "run_id": run_id,
+            "model_hash": "b" * 64,
+            "trade_date": "2026-09-26",
+            "as_of_date": "2026-09-25",
+            "sector_count": 131,
+            "available_count": 119,
+            "canonical_row_sha256": "c" * 64,
+        },
+    }
+
+
+def _rotation_l2_semantic(
+    payload: Any,
+    *,
+    query: str = "run_id=" + "a" * 64,
+) -> dict[str, Any]:
+    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+        f"http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?{query}",
+        json.dumps(payload),
+        response_sha256="d" * 64,
+    )
+    return semantic
+
+
+def test_rotation_l2_overview_semantic_contract_binds_complete_run() -> None:
+    semantic = _rotation_l2_semantic(_rotation_l2_overview_payload())
+
+    assert semantic["contract_id"] == "hmm_rotation_l2_overview"
+    assert semantic["verdict"] == "passed"
+    assert semantic["facts"] == {
+        "run_id": "a" * 64,
+        "model_hash": "b" * 64,
+        "canonical_row_sha256": "c" * 64,
+        "trade_date": "2026-09-26",
+        "as_of_date": "2026-09-25",
+        "sector_count": 131,
+        "available_count": 119,
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {**_rotation_l2_overview_payload(), "status": "failed"},
+        {**_rotation_l2_overview_payload(), "ok": False},
+        {**_rotation_l2_overview_payload(), "errors": ["readback failed"]},
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_conflicting_envelope(payload: dict[str, Any]) -> None:
+    semantic = _rotation_l2_semantic(payload)
+
+    assert semantic["verdict"] == "failed"
+    assert "status=ok" in semantic["reason"]
+
+
+@pytest.mark.parametrize(
+    ("query", "payload", "reason"),
+    [
+        ("", _rotation_l2_overview_payload(), "exactly one non-empty run_id"),
+        (
+            "run_id=" + "a" * 64 + "&run_id=" + "a" * 64,
+            _rotation_l2_overview_payload(),
+            "exactly one non-empty run_id",
+        ),
+        ("run_id=" + "A" * 64, _rotation_l2_overview_payload("A" * 64), "lowercase SHA-256"),
+        ("run_id=" + "a" * 64, _rotation_l2_overview_payload("e" * 64), "does not match"),
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_unbound_run(
+    query: str,
+    payload: dict[str, Any],
+    reason: str,
+) -> None:
+    semantic = _rotation_l2_semantic(payload, query=query)
+
+    assert semantic["verdict"] == "failed"
+    assert reason in semantic["reason"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("sector_count", 130, "complete 131-sector catalog"),
+        ("sector_count", True, "complete 131-sector catalog"),
+        ("available_count", 132, "outside the sector catalog"),
+        ("canonical_row_sha256", None, "lowercase SHA-256"),
+        ("trade_date", "2026-09-31", "ISO date"),
+        ("trade_date", "2026-9-26", "ISO date"),
+        ("as_of_date", "2026-09-26", "must precede"),
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_invalid_business_data(
+    field: str,
+    value: Any,
+    reason: str,
+) -> None:
+    payload = _rotation_l2_overview_payload()
+    payload["data"][field] = value
+
+    semantic = _rotation_l2_semantic(payload)
+
+    assert semantic["verdict"] == "failed"
+    assert reason in semantic["reason"]
+
+
+def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
+    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+        "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/not-registered",
+        json.dumps({"status": "ok", "data": {}}),
+        response_sha256="f" * 64,
+    )
+
+    assert semantic["contract_id"] is None
+    assert semantic["verdict"] == "failed"
+    assert "no target-owned business-smoke semantic contract" in semantic["reason"]
 
 
 def test_ci_issue_classification_ignores_successful_runner_and_no_network_metadata() -> None:
@@ -174,6 +296,180 @@ def test_repository_runtime_catalog_preserves_representative_roles(
 
     assert payload["runtime_impact"] == expected_impact
     assert payload["target_ids"] == expected_targets
+
+
+def test_monthly_release_sources_select_supervised_process_probe() -> None:
+    catalog = workflow._load_runtime_target_catalog()
+    target = catalog["targets"]["worker-scheduler"]
+    monthly_sources = [
+        "backend/services/dataset_release/artifact_ready_build_source.py",
+        "backend/services/dataset_release/build_stage.py",
+        "backend/services/dataset_release/candidate_validator.py",
+        "backend/services/dataset_release/factor_materializer.py",
+        "backend/services/dataset_release/monthly_consumer_layout.py",
+        "backend/services/dataset_release/monthly_local_validation.py",
+        "backend/services/dataset_release/monthly_worker_nodes.py",
+        "backend/services/dataset_release/monthly_worker_runtime.py",
+    ]
+
+    selected, error = workflow._select_runtime_probe_route(target, runtime_files=monthly_sources)
+
+    assert error is None
+    assert selected["probe_route_id"] == "monthly_release_worker_process"
+    assert selected["probe_mode"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_MODE
+    assert selected["probes"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS
+    assert selected["probe_origins"] == ["http://127.0.0.1:8001", "http://localhost:8001"]
+
+
+def test_shared_release_source_without_monthly_anchor_keeps_generic_heartbeat_probe() -> None:
+    catalog = workflow._load_runtime_target_catalog()
+    target = catalog["targets"]["worker-scheduler"]
+
+    selected, error = workflow._select_runtime_probe_route(
+        target,
+        runtime_files=["backend/services/dataset_release/build_stage.py"],
+    )
+
+    assert error is None
+    assert selected["probe_route_id"] == "dataset_release_worker_heartbeat"
+    assert selected["probe_mode"] == workflow._DATASET_RELEASE_WORKER_HEARTBEAT_MODE
+
+
+def test_monthly_release_process_probes_do_not_consult_worker_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = {
+        "probe_origins": ["http://127.0.0.1:8001"],
+        "probes": workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS,
+    }
+    snapshot = {
+        "schema_version": "aistock_monthly_release_worker_process_snapshot_v1",
+        "backend_listener_count": 1,
+        "worker_count": 1,
+        "healthy": True,
+        "workers": [{"pid": 101, "ppid": 100}],
+    }
+    monkeypatch.setattr(workflow, "_monthly_release_worker_process_snapshot", lambda _target: snapshot)
+    monkeypatch.setattr(
+        workflow,
+        "_read_only_http_probe",
+        lambda name, url, **_kwargs: {
+            "name": name,
+            "url": url,
+            "status": "passed",
+            "_response_body": json.dumps({"commit": "a" * 40}),
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_read_dataset_release_worker_heartbeat_probes",
+        lambda *_args, **_kwargs: pytest.fail("monthly process probe must not read generic heartbeat"),
+    )
+
+    results = workflow._read_monthly_release_worker_process_probes(target, 3.0)
+
+    assert [item["name"] for item in results] == ["health_ref", "identity_ref", "business_smoke_ref"]
+    assert all(item["status"] == "passed" for item in results)
+    assert results[2]["semantic"]["contract_id"] == "monthly_release_worker_supervision"
+
+
+def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_port = 8_000 + 1
+    worker_path = tmp_path / "scripts" / "monthly_unified_dataset_release_worker.py"
+    worker_path.parent.mkdir(parents=True)
+    worker_path.write_text("# worker\n", encoding="utf-8")
+
+    class FakeChild:
+        pid = 102
+
+        @staticmethod
+        def ppid() -> int:
+            return 101
+
+        @staticmethod
+        def cmdline() -> list[str]:
+            return ["python", str(worker_path), "--serve", "--poll-seconds", "5.0"]
+
+        @staticmethod
+        def cwd() -> str:
+            return str(tmp_path)
+
+    class FakeParent:
+        pid = 101
+
+        @staticmethod
+        def cmdline() -> list[str]:
+            return ["python", "-m", "uvicorn", "backend.main:app", "--port", str(parent_port)]
+
+        @staticmethod
+        def cwd() -> str:
+            return str(tmp_path)
+
+        @staticmethod
+        def children(*, recursive: bool) -> list[FakeChild]:
+            assert recursive is False
+            return [FakeChild()]
+
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        workflow.psutil,
+        "net_connections",
+        lambda **_kwargs: [
+            SimpleNamespace(
+                pid=101,
+                status=workflow.psutil.CONN_LISTEN,
+                laddr=SimpleNamespace(port=parent_port),
+            )
+        ],
+    )
+    monkeypatch.setattr(workflow.psutil, "Process", lambda pid: FakeParent() if pid == 101 else pytest.fail())
+
+    snapshot = workflow._monthly_release_worker_process_snapshot(
+        {
+            "local_probe": {
+                "worker_script": "scripts/monthly_unified_dataset_release_worker.py",
+                "worker_mode": "--serve",
+                "parent_module": "backend.main:app",
+                "parent_port": parent_port,
+            }
+        }
+    )
+
+    assert snapshot["backend_listener_count"] == 1
+    assert snapshot["worker_count"] == 1
+    assert snapshot["healthy"] is True
+
+
+def test_monthly_release_process_probe_fails_closed_for_duplicate_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = {
+        "probe_origins": ["http://127.0.0.1:8001"],
+        "probes": workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS,
+    }
+    snapshot = {
+        "schema_version": "aistock_monthly_release_worker_process_snapshot_v1",
+        "backend_listener_count": 1,
+        "worker_count": 2,
+        "healthy": False,
+        "workers": [{"pid": 101, "ppid": 100}, {"pid": 102, "ppid": 100}],
+    }
+    monkeypatch.setattr(workflow, "_monthly_release_worker_process_snapshot", lambda _target: snapshot)
+    monkeypatch.setattr(
+        workflow,
+        "_read_only_http_probe",
+        lambda name, url, **_kwargs: {"name": name, "url": url, "status": "passed"},
+    )
+
+    results = workflow._read_monthly_release_worker_process_probes(target, 3.0)
+
+    assert results[0]["status"] == "failed"
+    assert results[2]["status"] == "failed"
+    assert results[2]["semantic"]["verdict"] == "failed"
+    assert "worker_count=2" in results[2]["error"]
 
 
 def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:

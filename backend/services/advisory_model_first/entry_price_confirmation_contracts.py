@@ -84,7 +84,9 @@ class EntryCoordinateReview(_Contract):
     status: Literal["PASS"]
     validation_labels_sha256: Sha256
     scope_sha256: Sha256
-    projection_producer_version: Literal["advisory_entry_price_core_v1"]
+    projection_producer_version: Literal[
+        "advisory_entry_price_core_v1", "advisory_entry_price_core_v2"
+    ]
     checked_validation_rows: int = Field(gt=0)
     unavailable_rows: Literal[0]
     tolerance_abs_gap: Literal[0.000001]
@@ -114,7 +116,9 @@ class AdvisoryEntryPriceConfirmationRequestV1(_Contract):
     )
     request_id: str = Field(pattern=r"^advepc_[0-9a-f]{24}$")
     request_sha256: Sha256
-    projection_producer_version: Literal["advisory_entry_price_core_v1"] = "advisory_entry_price_core_v1"
+    projection_producer_version: Literal[
+        "advisory_entry_price_core_v1", "advisory_entry_price_core_v2"
+    ] = "advisory_entry_price_core_v2"
     program_id: Nonempty
     binding_version_id: Nonempty
     scope: EntryPriceScope

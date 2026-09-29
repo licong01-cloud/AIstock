@@ -671,6 +671,7 @@ rules:
   - rule_id: qe_services
     priority: 80
     include:
+      - backend/scripts/run_correlation_compute_wsl.py
       - backend/services/quantevolver/**
       - backend/routers/quantevolver*.py
       - backend/tests/quantevolver/test_factor_emit_hook.py

@@ -1,0 +1,414 @@
+{
+  "actual": "Dispatch fails before task creation; correlation compute resets the whole matrix.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/active_task_binding.py",
+    "backend/services/dispatch_service.py",
+    "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "backend/scripts/run_correlation_compute_wsl.py",
+    "backend/routers/quantevolver.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/tests/dataset_release/test_active_task_binding.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+    "backend/tests/test_correlation_compute_independence.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/bugs/20260929_BUG-1622-official-single-factor-refresh-cannot-bind-historical-candidates-or-pers.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1622",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-29T03:28:31.667070Z",
+  "description": "Dispatch fails before task creation; correlation compute resets the whole matrix.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260929-6087b9da1960",
+      "timestamp": "2026-09-29T03:28:31.667050Z"
+    }
+  ],
+  "evidence_uris": [
+    "Issue #5092 and 2026-09-29 fail-closed preflight"
+  ],
+  "expected": "Freeze the exact authorized historical candidate and refresh only the selected factor correlations while preserving unrelated state.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/quantevolver.py",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/scripts/run_correlation_compute_wsl.py",
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "backend/services/quantevolver/correlation_compute_service.py",
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "tests/aistock_validation/bugs/20260929_BUG-1622-official-single-factor-refresh-cannot-bind-historical-candidates-or-pers.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/quantevolver.py",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/scripts/run_correlation_compute_wsl.py",
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "backend/services/quantevolver/correlation_compute_service.py",
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "tests/aistock_validation/bugs/20260929_BUG-1622-official-single-factor-refresh-cannot-bind-historical-candidates-or-pers.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/active_task_binding.py",
+        "backend/services/dispatch_service.py",
+        "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+        "backend/services/quantevolver/correlation_compute_service.py",
+        "backend/scripts/run_correlation_compute_wsl.py",
+        "backend/routers/quantevolver.py",
+        "backend/routers/quantevolver_evolution.py",
+        "backend/tests/dataset_release/test_active_task_binding.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+        "backend/tests/test_correlation_compute_independence.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "platform.db",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/active_task_binding.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dispatch_service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/correlation_compute_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/routers/quantevolver_evolution.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_active_task_binding.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/test_correlation_compute_independence.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/active_task_binding.py",
+        "backend/services/dispatch_service.py",
+        "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+        "backend/services/quantevolver/correlation_compute_service.py",
+        "backend/scripts/run_correlation_compute_wsl.py",
+        "backend/routers/quantevolver.py",
+        "backend/routers/quantevolver_evolution.py",
+        "backend/tests/dataset_release/test_active_task_binding.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+        "backend/tests/test_correlation_compute_independence.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/services/quantevolver/correlation_compute_service.py",
+      "backend/scripts/run_correlation_compute_wsl.py",
+      "backend/routers/quantevolver.py",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/services/quantevolver/correlation_compute_service.py",
+      "backend/scripts/run_correlation_compute_wsl.py",
+      "backend/routers/quantevolver.py",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ]
+  },
+  "first_seen_at": "2026-09-29T03:28:31.667070Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5092,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5092",
+  "last_seen_at": "2026-09-29T03:28:31.667070Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Submit target official compute against 20260920-v14-unified R8 and request target-only correlations",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "platform_api_backend",
+    "qe_read_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
+    "fresh_process_evidence": [
+      "Windows Python -I loaded the task-worktree explicit dataset binding, target-only correlation service, and API route without runtime or database mutation"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "Official single-factor refresh cannot bind historical candidates or persist target-only correlations",
+  "trigger_condition": {
+    "fingerprint": "6087b9da196043e39627157c",
+    "source_event_id": "FE-20260929-6087b9da1960"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qlib_data",
+        "platform_api",
+        "qe_read"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "platform_api_backend",
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qlib_data",
+          "platform_api",
+          "qe_read"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "platform_api_backend",
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

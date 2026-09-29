@@ -9,6 +9,7 @@ from backend.services.advisory_model_first.historical_price_replay_contracts imp
     build_historical_price_replay_receipt,
     build_historical_price_replay_request,
 )
+from backend.services.advisory_model_first.price_range_contracts import canonical_json_sha256
 
 
 def _request(**changes):
@@ -35,6 +36,31 @@ def test_request_is_permanently_navigation_only_historical_evidence():
     payload["evidence_level"] = "PROSPECTIVE_OOS"
     with pytest.raises(ValidationError):
         AdvisoryHistoricalPriceReplayRequestV1.model_validate(payload)
+
+
+def test_legacy_request_without_projection_identity_retains_its_original_hash():
+    request = _request()
+    payload = request.model_dump(mode="json", exclude={"replay_id", "request_sha256"})
+    assert payload["projection_producer_version"] is None
+    payload.pop("projection_producer_version")
+    digest = canonical_json_sha256(payload)
+    restored = AdvisoryHistoricalPriceReplayRequestV1.model_validate(
+        {
+            **payload,
+            "replay_id": f"advprhist_{digest[:24]}",
+            "request_sha256": digest,
+        }
+    )
+    assert restored.projection_producer_version is None
+    assert restored.request_sha256 == digest
+
+
+def test_projection_producer_version_changes_request_identity():
+    legacy = _request()
+    current = _request(projection_producer_version="advisory_entry_price_core_v2")
+    assert current.projection_producer_version == "advisory_entry_price_core_v2"
+    assert current.request_sha256 != legacy.request_sha256
+    assert current.replay_id != legacy.replay_id
 
 
 def test_request_rejects_unmatured_historical_window():
