@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+import psutil
 import yaml
 
 try:
@@ -155,6 +156,13 @@ _DATASET_RELEASE_WORKER_HEARTBEAT_REFS = {
     "health_ref": "worker_heartbeat.health",
     "identity_ref": "worker_heartbeat.identity",
     "business_smoke_ref": "worker_heartbeat.business",
+    "database_readback_ref": "not_required",
+}
+_MONTHLY_RELEASE_WORKER_PROCESS_MODE = "monthly_release_worker_process"
+_MONTHLY_RELEASE_WORKER_PROCESS_REFS = {
+    "health_ref": "monthly_worker_process.health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "monthly_worker_process.supervision",
     "database_readback_ref": "not_required",
 }
 VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
@@ -1911,6 +1919,20 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
         if type(max_files) is not int or not 0 < max_files <= 200:
             raise WorkflowError(f"{owner} local_probe max_files must be in 1..200")
 
+    def validate_monthly_worker_local_probe(owner: str, local_probe: Any) -> None:
+        if not isinstance(local_probe, dict):
+            raise WorkflowError(f"{owner} local_probe must be a mapping")
+        expected = {
+            "worker_script": "scripts/monthly_unified_dataset_release_worker.py",
+            "worker_mode": "--serve",
+            "parent_module": "backend.main:app",
+            "parent_port": 8001,
+        }
+        if local_probe != expected:
+            raise WorkflowError(f"{owner} local_probe must use the canonical monthly Worker process contract")
+        if not (root / str(local_probe["worker_script"])).is_file():
+            raise WorkflowError(f"{owner} monthly Worker script does not exist")
+
     seen_ports: dict[int, str] = {}
     for target_id, target in targets.items():
         if not isinstance(target, dict):
@@ -1928,6 +1950,18 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
                     f"runtime target {target_id} dataset-release heartbeat mode requires worker_scheduler"
                 )
             validate_worker_local_probe(f"runtime target {target_id}", target.get("local_probe"))
+        elif probe_mode == _MONTHLY_RELEASE_WORKER_PROCESS_MODE:
+            if target.get("runtime_kind") != "worker_scheduler":
+                raise WorkflowError(
+                    f"runtime target {target_id} monthly Worker process mode requires worker_scheduler"
+                )
+            if not target.get("probe_origins"):
+                raise WorkflowError(f"runtime target {target_id} is missing probe_origins")
+            if target.get("probes") != _MONTHLY_RELEASE_WORKER_PROCESS_REFS:
+                raise WorkflowError(
+                    f"runtime target {target_id} does not use canonical monthly Worker process probes"
+                )
+            validate_monthly_worker_local_probe(f"runtime target {target_id}", target.get("local_probe"))
         else:
             raise WorkflowError(f"runtime target {target_id} has unsupported probe_mode: {probe_mode}")
         probe_routes = target.get("probe_routes", [])
@@ -1946,20 +1980,49 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
                 not isinstance(item, str) or not item.strip() for item in route_globs
             ):
                 raise WorkflowError(f"runtime target {target_id} probe route {route_id} source_globs are invalid")
+            required_route_globs = route.get("required_source_globs", [])
+            if not isinstance(required_route_globs, list) or any(
+                not isinstance(item, str) or not item.strip() for item in required_route_globs
+            ):
+                raise WorkflowError(
+                    f"runtime target {target_id} probe route {route_id} required_source_globs are invalid"
+                )
+            if not set(required_route_globs).issubset(set(route_globs)):
+                raise WorkflowError(
+                    f"runtime target {target_id} probe route {route_id} requires sources outside its route"
+                )
             if not set(route_globs).issubset(set(flow._as_list(target.get("source_globs")))):
                 raise WorkflowError(
                     f"runtime target {target_id} probe route {route_id} contains sources outside its target"
                 )
-            if route.get("probe_mode") != _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+            route_mode = route.get("probe_mode")
+            if route_mode not in {
+                _DATASET_RELEASE_WORKER_HEARTBEAT_MODE,
+                _MONTHLY_RELEASE_WORKER_PROCESS_MODE,
+            }:
                 raise WorkflowError(f"runtime target {target_id} probe route {route_id} mode is unsupported")
-            if route.get("probes") != _DATASET_RELEASE_WORKER_HEARTBEAT_REFS:
-                raise WorkflowError(
-                    f"runtime target {target_id} probe route {route_id} does not use canonical heartbeat probes"
+            if route_mode == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+                if route.get("probes") != _DATASET_RELEASE_WORKER_HEARTBEAT_REFS:
+                    raise WorkflowError(
+                        f"runtime target {target_id} probe route {route_id} does not use canonical heartbeat probes"
+                    )
+                validate_worker_local_probe(
+                    f"runtime target {target_id} probe route {route_id}",
+                    route.get("local_probe"),
                 )
-            validate_worker_local_probe(
-                f"runtime target {target_id} probe route {route_id}",
-                route.get("local_probe"),
-            )
+            else:
+                if route.get("probes") != _MONTHLY_RELEASE_WORKER_PROCESS_REFS:
+                    raise WorkflowError(
+                        f"runtime target {target_id} probe route {route_id} does not use canonical monthly Worker probes"
+                    )
+                if not target.get("probe_origins"):
+                    raise WorkflowError(
+                        f"runtime target {target_id} probe route {route_id} requires probe_origins"
+                    )
+                validate_monthly_worker_local_probe(
+                    f"runtime target {target_id} probe route {route_id}",
+                    route.get("local_probe"),
+                )
         port = target.get("production_port")
         if port is not None:
             port = int(port)
@@ -2464,7 +2527,12 @@ def _select_runtime_probe_route(
             continue
         patterns = flow._as_list(route.get("source_globs"))
         matches = [any(_runtime_glob_matches(path, str(pattern)) for pattern in patterns) for path in files]
-        if matches and all(matches):
+        required_patterns = flow._as_list(route.get("required_source_globs"))
+        required_match = not required_patterns or any(
+            any(_runtime_glob_matches(path, str(pattern)) for pattern in required_patterns)
+            for path in files
+        )
+        if matches and all(matches) and required_match:
             fully_matched.append(route)
         elif any(matches):
             partially_matched.append(str(route.get("route_id") or "unknown"))
@@ -2487,7 +2555,8 @@ def _select_runtime_probe_route(
             "probes": route.get("probes"),
         }
     )
-    selected.pop("probe_origins", None)
+    if route.get("probe_mode") == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+        selected.pop("probe_origins", None)
     return selected, None
 
 
@@ -2598,6 +2667,19 @@ def build_runtime_contract(
                             f"runtime target {target_id} dataset-release heartbeat probes must match "
                             "the canonical local probe set"
                         )
+                elif probe_mode == _MONTHLY_RELEASE_WORKER_PROCESS_MODE:
+                    if target["probes"] != _MONTHLY_RELEASE_WORKER_PROCESS_REFS:
+                        blocking.append(
+                            f"runtime target {target_id} monthly Worker process probes must match "
+                            "the canonical process probe set"
+                        )
+                    identity_error = _validate_runtime_probe_ref(
+                        "identity_ref",
+                        target["probes"].get("identity_ref"),
+                        allowed_origins=flow._as_list(target.get("probe_origins")),
+                    )
+                    if identity_error:
+                        blocking.append(f"runtime target {target_id} {identity_error}")
                 else:
                     for field in ("health_ref", "identity_ref", "business_smoke_ref"):
                         if not target["probes"].get(field):
@@ -3023,6 +3105,183 @@ def _read_dataset_release_worker_heartbeat_probes(
             result["semantic"] = semantic
         results.append(result)
     return results
+
+
+def _resolved_process_argument(argument: str, *, cwd: Path) -> Path | None:
+    value = str(argument or "").strip().strip('"')
+    if not value or not value.lower().endswith(".py"):
+        return None
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    try:
+        return candidate.resolve()
+    except OSError:
+        return None
+
+
+def _monthly_release_worker_process_snapshot(target: dict[str, Any]) -> dict[str, Any]:
+    local_probe = target.get("local_probe") if isinstance(target.get("local_probe"), dict) else {}
+    worker_script = (REPO_ROOT / str(local_probe.get("worker_script") or "")).resolve()
+    worker_mode = str(local_probe.get("worker_mode") or "")
+    parent_module = str(local_probe.get("parent_module") or "")
+    parent_port = str(local_probe.get("parent_port") or "")
+    repo_root = REPO_ROOT.resolve()
+    workers: list[dict[str, Any]] = []
+
+    try:
+        backend_pids = sorted(
+            {
+                int(connection.pid)
+                for connection in psutil.net_connections(kind="tcp")
+                if connection.pid is not None
+                and connection.status == psutil.CONN_LISTEN
+                and connection.laddr
+                and int(connection.laddr.port) == int(parent_port)
+            }
+        )
+        for backend_pid in backend_pids:
+            parent = psutil.Process(backend_pid)
+            parent_cmdline = [str(item) for item in (parent.cmdline() or [])]
+            parent_cwd = Path(parent.cwd()).resolve()
+            parent_port_match = any(
+                parent_cmdline[index] == "--port" and parent_cmdline[index + 1] == parent_port
+                for index in range(max(0, len(parent_cmdline) - 1))
+            )
+            for process in parent.children(recursive=False):
+                info = {"pid": process.pid, "ppid": process.ppid()}
+                cmdline = [str(item) for item in (process.cmdline() or [])]
+                if not cmdline:
+                    continue
+                try:
+                    process_cwd = Path(process.cwd()).resolve()
+                    if not any(
+                        _resolved_process_argument(item, cwd=process_cwd) == worker_script
+                        for item in cmdline
+                    ):
+                        continue
+                    forbidden_modes = sorted(
+                        {item for item in ("--once", "--drain", "--preflight") if item in cmdline}
+                    )
+                    workers.append(
+                        {
+                            "pid": int(info["pid"]),
+                            "ppid": int(info["ppid"]),
+                            "worker_cwd_matches": process_cwd == repo_root,
+                            "worker_mode_matches": worker_mode in cmdline,
+                            "forbidden_modes": forbidden_modes,
+                            "parent_pid": int(parent.pid),
+                            "parent_cwd_matches": parent_cwd == repo_root,
+                            "parent_module_matches": parent_module in parent_cmdline,
+                            "parent_port_matches": parent_port_match,
+                        }
+                    )
+                except (OSError, RuntimeError, TypeError, ValueError, psutil.Error):
+                    continue
+    except psutil.Error as exc:
+        raise WorkflowError(f"monthly Worker process enumeration failed: {exc}") from exc
+
+    workers.sort(key=lambda item: int(item["pid"]))
+    healthy = bool(
+        len(backend_pids) == 1
+        and len(workers) == 1
+        and workers[0]["worker_cwd_matches"]
+        and workers[0]["worker_mode_matches"]
+        and not workers[0]["forbidden_modes"]
+        and workers[0]["parent_cwd_matches"]
+        and workers[0]["parent_module_matches"]
+        and workers[0]["parent_port_matches"]
+    )
+    return {
+        "schema_version": "aistock_monthly_release_worker_process_snapshot_v1",
+        "backend_listener_count": len(backend_pids),
+        "worker_count": len(workers),
+        "healthy": healthy,
+        "workers": workers,
+    }
+
+
+def _read_monthly_release_worker_process_probes(
+    target: dict[str, Any],
+    timeout_seconds: float,
+) -> list[dict[str, Any]]:
+    if timeout_seconds <= 0:
+        raise WorkflowError("monthly Worker process probe timeout must be positive")
+    probes = target.get("probes") if isinstance(target.get("probes"), dict) else {}
+    identity = _read_only_http_probe(
+        "identity_ref",
+        str(probes.get("identity_ref") or ""),
+        allowed_origins=flow._as_list(target.get("probe_origins")),
+        timeout_seconds=timeout_seconds,
+    )
+    try:
+        snapshot = _monthly_release_worker_process_snapshot(target)
+        raw = json.dumps(
+            snapshot,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        healthy = snapshot["healthy"] is True
+        reason = None if healthy else (
+            "monthly Worker supervision is not ready: "
+            f"backend_listener_count={snapshot['backend_listener_count']} "
+            f"worker_count={snapshot['worker_count']} workers={snapshot['workers']}"
+        )
+        response_sha = hashlib.sha256(raw).hexdigest()
+        common = {
+            "status_code": None,
+            "transport": {"status_code": None, "ok": True, "error": None, "kind": "local_process"},
+            "payload_schema": {"json": True, "kind": "object"},
+            "response_sha256": response_sha,
+            "response_bytes": len(raw),
+        }
+        health = {
+            "name": "health_ref",
+            "url": "monthly-worker-process://worker-scheduler/health_ref",
+            "status": "passed" if healthy else "failed",
+            **common,
+        }
+        business = {
+            "name": "business_smoke_ref",
+            "url": "monthly-worker-process://worker-scheduler/business_smoke_ref",
+            "status": "passed" if healthy else "failed",
+            **common,
+            "semantic": {
+                "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": "monthly_release_worker_supervision",
+                "verdict": "passed" if healthy else "failed",
+                "reason": reason,
+                "facts": {
+                    "backend_listener_count": snapshot["backend_listener_count"],
+                    "worker_count": snapshot["worker_count"],
+                    "supervised_worker_count": 1 if healthy else 0,
+                },
+                "expectation": None,
+                "expectation_digest": None,
+                "response_sha256": response_sha,
+            },
+        }
+        if reason:
+            health["error"] = reason
+            business["error"] = reason
+        return [health, identity, business]
+    except Exception as exc:
+        reason = f"monthly Worker process probe failed: {type(exc).__name__}: {exc}"
+        failed = []
+        for name in ("health_ref", "business_smoke_ref"):
+            failed.append(
+                {
+                    "name": name,
+                    "url": f"monthly-worker-process://worker-scheduler/{name}",
+                    "status": "failed",
+                    "error": reason,
+                    "transport": {"status_code": None, "ok": False, "error": reason, "kind": "local_process"},
+                    "payload_schema": {"json": False, "kind": "none"},
+                }
+            )
+        return [failed[0], identity, failed[1]]
 
 
 # ---------------------------------------------------------------------------
@@ -4258,6 +4517,8 @@ def build_post_restart_verify(
     if not blocking:
         if probe_mode == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
             results = _read_dataset_release_worker_heartbeat_probes(target, timeout_seconds)
+        elif probe_mode == _MONTHLY_RELEASE_WORKER_PROCESS_MODE:
+            results = _read_monthly_release_worker_process_probes(target, timeout_seconds)
         else:
             for name in ("health_ref", "identity_ref", "business_smoke_ref"):
                 results.append(
