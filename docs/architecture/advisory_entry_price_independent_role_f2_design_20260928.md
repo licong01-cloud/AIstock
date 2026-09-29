@@ -1,7 +1,7 @@
-# Advisory ENTRY_PRICE 独立价格角色 F2 详细设计 v1.1
+# Advisory ENTRY_PRICE 独立价格角色 F2 详细设计 v1.2
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Selection Center / Advisory。
-> 状态：SOURCE_IMPLEMENTED_LOCAL_VERIFIED_CI_PENDING（2026-09-29）。源码及定向回归已完成；尚未合入、确认模型或激活生产角色。文中的生产验收条件继续有效。
+> 状态：SOURCE_IMPLEMENTED_COORDINATE_V2_LOCAL_VERIFIED_CI_PENDING（2026-09-29）。provider-compatible v2 坐标源码及定向回归已完成；尚未合入、确认模型或激活生产角色。文中的生产验收条件继续有效。
 > 父级：[策略条件化模型蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) §5.3.1、§5.6、§16。
 > 配套：[一次性历史确认](advisory_entry_price_confirmation_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)。
 
@@ -94,7 +94,7 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 
 ## 9. Design Acceptance Matrix
 
-本矩阵保持稳定验收ID；SOURCE_VERIFIED只表示源码合同和定向回归通过，不等于模型确认或生产完成。UI类型检查与隔离浏览器用例均通过，CI仍需最终通过。真实开发数据坐标审计已执行但发现公司行动不一致，模型确认被阻断；窗口资格、生产binding与运行读回仍未完成。已批准源码/历史回归先行，不豁免这些生产条件。
+本矩阵保持稳定验收ID；SOURCE_VERIFIED只表示源码合同和定向回归通过，不等于模型确认或生产完成。UI类型检查与隔离浏览器用例均通过，CI仍需最终通过。真实开发数据坐标审计已由 v2 生产器闭合；窗口资格、正式确认、生产binding与运行读回仍未完成。已批准源码/历史回归先行，不豁免这些生产条件。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -120,8 +120,10 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 
 ## 13. 2026-09-29 实施审核
 
-合同/PIT与集成/恢复多轮审核后修复：零候选不调用特征/模型；自然capture只选PUBLISHED荐股单；GET不刷新日历文件；原子发布时复查角色CAS/开盘边界；历史结果逐项核对完整scope。136项定向回归通过，后续追加输入来源/坐标前置检查定向回归通过；三份前端改动TypeScript诊断为0。CI未映射Advisory浏览器用例，因此使用现有lockfile匹配依赖和Playwright自有临时前端单独验证对应一条用例：1 passed，未启动/连接用户后端。
+合同/PIT与集成/恢复多轮审核后修复：零候选不调用特征/模型；自然capture只选PUBLISHED荐股单；GET不刷新日历文件；原子发布时复查角色CAS/开盘边界；历史结果逐项核对完整scope。既有136项定向回归通过；BUG-1623追加的投影、确认、角色、历史回放和日常交付矩阵为108项通过。三份前端改动TypeScript诊断为0。CI未映射Advisory浏览器用例，因此使用现有lockfile匹配依赖和Playwright自有临时前端单独验证对应一条用例：1 passed，未启动/连接用户后端。
 
-训练标签代码使用Qlib复权open/close比，运行时使用raw close及D可见除权multiplier；同核公式测试通过，但真实数据不完全满足该假设。只读检查原v3已消费validation的1,000行，行情/因子/公告缺失0；997行无公司行动，最大浮点差约1.14e-7 gap；3行有公司行动，差分别约9.61/0.565/0.0854 bps。最大项为600016.SH，D=2025-09-15：raw close=4.33，公告税前股息=0.136，运行时理论基准4.194；原标签复权比对应基准约4.19。此为坐标不一致证据，不是模型预测或收益测试，也未消费新holdout。
+训练标签代码使用Qlib复权open/close比，运行时使用raw close及D可见公司行动投影。BUG-1623把新数值语义登记为`advisory_entry_price_core_v2`：读取D日raw close与D日`market.adj_factor`，按已在D日可见且T日实施的公告计算理论除权参考价，使用A股0.01元tick作ROUND_HALF_UP，再把目标factor按供应商四位精度投影；不读取T日行情或T日factor。旧v1合同和artifact保持不可变。
 
-当前v4不得进入新正式确认/发布。下一项模型工作先审计公司行动与复权坐标的可PIT映射，若需改数值语义，形成新的模型/投影身份及设计，不修改旧v4和既有历史结果，不使用T日未来factor修正D预测。确认mini-contract已补入validation坐标审计前置条件，详见配套设计。
+只在已消费validation的1,000行执行v2坐标审计：可用1,000、缺失0，最大绝对gap差`1.1347649842008423e-7`，低于预注册`1e-6`；3个公司行动行的差分别为`5.6567e-8`、`4.2966e-9`、`4.8889e-9`。该PASS只关闭数值坐标前置项，不是模型效果或收益证据，未读取sealed holdout。新回放请求必须显式绑定v2生产器身份；旧请求仅允许读取已完成artifact，不能以新语义重新计算。
+
+v2现在可以进入历史功能回归及正式确认的输入审核，但正式执行仍受QE不并行、连续合格窗口、完整vintage/消费材料约束；未满足时不得发布ENTRY_PRICE binding。

@@ -37,6 +37,9 @@ class AdvisoryHistoricalPriceReplayRequestV1(_FrozenContract):
     decision_use: Literal["NAVIGATION_ONLY"] = "NAVIGATION_ONLY"
     window_usage: Literal["CONSUMED_DEVELOPMENT_WINDOW"] = "CONSUMED_DEVELOPMENT_WINDOW"
     prediction_source: Literal["FROZEN_V4_TEST_PREDICTIONS"] = "FROZEN_V4_TEST_PREDICTIONS"
+    projection_producer_version: Literal[
+        "advisory_entry_price_core_v1", "advisory_entry_price_core_v2"
+    ] | None = None
     metric_semantics_version: Literal["MODEL_SPACE_AND_BUSINESS_PRICE_V1"] = "MODEL_SPACE_AND_BUSINESS_PRICE_V1"
     database_written: Literal[False] = False
     binding_activated: Literal[False] = False
@@ -54,7 +57,13 @@ class AdvisoryHistoricalPriceReplayRequestV1(_FrozenContract):
         return self
 
     def functional_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json", exclude={"replay_id", "request_sha256"})
+        # ``None`` preserves the hash of legacy v1 requests that predate an
+        # explicit projection-producer identity. New requests always bind v2.
+        return self.model_dump(
+            mode="json",
+            exclude={"replay_id", "request_sha256"},
+            exclude_none=True,
+        )
 
 
 class AdvisoryHistoricalPricePredictionRowV1(_FrozenContract):

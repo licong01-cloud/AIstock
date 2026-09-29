@@ -186,7 +186,9 @@ class EntryPriceCandidateV2(_Contract):
 
 class AdvisoryEntryPriceEnvelopeV2(_Contract):
     schema_version: Literal["advisory_entry_price_envelope_v2"] = "advisory_entry_price_envelope_v2"
-    projection_producer_version: Literal["advisory_entry_price_core_v1"] = "advisory_entry_price_core_v1"
+    projection_producer_version: Literal[
+        "advisory_entry_price_core_v1", "advisory_entry_price_core_v2"
+    ] = "advisory_entry_price_core_v2"
     role: Literal["ENTRY_PRICE"] = "ENTRY_PRICE"
     objective_contract: Literal["RISK_MANAGED_ADVISORY"] = "RISK_MANAGED_ADVISORY"
     evidence_state: Literal["EXPERIMENTAL", "CONFIRMED_PRICE_DISTRIBUTION"] = "EXPERIMENTAL"
