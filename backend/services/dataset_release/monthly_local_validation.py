@@ -10,6 +10,10 @@ from pathlib import Path
 import stat
 from typing import Any, Mapping, Sequence
 
+from backend.data_service.security_source_identity import (
+    load_security_source_identity_manifest,
+)
+
 from .canonical import canonical_json_bytes, digest_named_fields
 from .monthly_candidate_finalizer import MONTHLY_BUILD_EVIDENCE_SCHEMA
 from .monthly_consumer_layout import CONSUMER_LAYOUT_RECEIPT_SCHEMA
@@ -547,6 +551,37 @@ class MonthlyCandidateLocalValidationExecutor:
         ):
             raise MonthlyLocalValidationError("consumer layout readiness differs")
 
+        factor_prefix = "components/factor_h5_static_candidate_v2"
+        identity_path = _plain_file(
+            root,
+            f"{factor_prefix}/security_source_identity.json",
+            label="security source identity",
+        )
+        identity = load_security_source_identity_manifest(identity_path)
+        alias_path = _plain_file(
+            root,
+            f"{factor_prefix}/moneyflow_alias_coverage_v1.json",
+            label="moneyflow alias coverage",
+        )
+        alias = _read_canonical(alias_path, label="moneyflow alias coverage")
+        moneyflow_path = _plain_file(
+            root,
+            f"{factor_prefix}/moneyflow.h5",
+            label="moneyflow H5",
+        )
+        if (
+            alias.get("schema_version") != "qe_moneyflow_alias_coverage_receipt_v1"
+            or alias.get("status") != "PASS"
+            or alias.get("identity_authority") != identity.evidence()
+            or alias.get("moneyflow_sha256") != _sha256(moneyflow_path)
+            or alias.get("expected")
+            != int(alias.get("resolved", -1)) + int(alias.get("provider_absence", -1))
+            or any(int(alias.get(field, -1)) != 0 for field in ("unknown", "nonfinite", "mismatched"))
+            or alias.get("database_read") is not False
+            or alias.get("database_write") is not False
+        ):
+            raise MonthlyLocalValidationError("moneyflow alias coverage is incomplete")
+
         derive_receipt = context.prior_receipts.get("DERIVE")
         derive_scope = derive_receipt.get("scope") if isinstance(derive_receipt, Mapping) else None
         if not isinstance(derive_scope, Mapping):
@@ -603,6 +638,7 @@ class MonthlyCandidateLocalValidationExecutor:
                 "coverage_ref": _pin(root, coverage_path),
                 "physical_coverage_ref": _pin(root, core_coverage_path),
                 "consumer_layout_ref": _pin(root, layout_path),
+                "moneyflow_alias_coverage_ref": _pin(root, alias_path),
                 "source_freeze": True,
                 "database_write": False,
                 "unexplained_gap_count": 0,
@@ -650,6 +686,8 @@ class MonthlyCandidateLocalValidationExecutor:
             coverage_path,
             core_coverage_path,
             layout_path,
+            identity_path,
+            alias_path,
             registry_path,
             *derived_files,
         )

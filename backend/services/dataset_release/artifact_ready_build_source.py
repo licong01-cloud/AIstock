@@ -12,6 +12,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from backend.data_service.security_source_identity import (
+    MONEYFLOW_DATASET,
+    SecuritySourceIdentityManifest,
+    load_default_security_source_identity_manifest,
+)
+
 from .artifact_ready_source import (
     ARTIFACT_READY_ADJ_COVERAGE_SCHEMA,
     ARTIFACT_READY_COMPONENT_SCHEMA,
@@ -66,6 +72,7 @@ class ArtifactReadyBuildSource:
         source_content_root: str,
         source_partitions: Sequence[Mapping[str, Any]],
         artifact_ready_contract_ref: CASRef | Mapping[str, Any] | str,
+        security_source_identity: SecuritySourceIdentityManifest | None = None,
     ) -> None:
         self.cas = cas
         self.profile = profile
@@ -102,6 +109,9 @@ class ArtifactReadyBuildSource:
             self._validate_component_manifest(component, value)
             self.component_manifests[component] = dict(value)
         self.qfq_authority = loaded.qfq_denominator_authority
+        self.security_source_identity = (
+            security_source_identity or load_default_security_source_identity_manifest()
+        )
 
     @property
     def artifact_ready_content_root(self) -> str:
@@ -312,20 +322,49 @@ class ArtifactReadyBuildSource:
                 f"factor backing partition is missing/ambiguous: {dataset}:{partition_key}"
             )
         buffered: list[Mapping[str, Any]] = []
-        requested = {str(value).upper() for value in instruments}
+        requested = {
+            str(value).upper()
+            for value in (instruments or tuple(span.ts_code for span in self.pit_snapshot.spans))
+        }
+        source_requested = (
+            set(
+                self.security_source_identity.query_source_codes(
+                    requested,
+                    start,
+                    end,
+                    MONEYFLOW_DATASET,
+                )
+            )
+            if dataset == "moneyflow"
+            else requested
+        )
+
+        def frame_from_rows(rows: list[Mapping[str, Any]]) -> pd.DataFrame:
+            frame = pd.DataFrame.from_records(rows)
+            if dataset != "moneyflow" or frame.empty:
+                return frame
+            annotated = self.security_source_identity.annotate_source_rows(
+                frame,
+                canonical_codes=requested,
+                source_dataset=MONEYFLOW_DATASET,
+            )
+            annotated["source_ts_code"] = annotated["ts_code"].astype(str).str.upper()
+            annotated["ts_code"] = annotated.pop("_canonical_ts_code")
+            return annotated
+
         iterator = iter(partitions[0].rows)
         try:
             for row in iterator:
                 observed = _as_date(row.get("trade_date"))
-                if start <= observed <= end and (not requested or str(row.get("ts_code", "")).upper() in requested):
+                if start <= observed <= end and str(row.get("ts_code", "")).upper() in source_requested:
                     buffered.append(row)
                     if len(buffered) == max_rows:
-                        yield pd.DataFrame.from_records(buffered)
+                        yield frame_from_rows(buffered)
                         buffered = []
         finally:
             _close_iterator(iterator)
         if buffered:
-            yield pd.DataFrame.from_records(buffered)
+            yield frame_from_rows(buffered)
 
     def source_partition_evidence(self, component: Component) -> list[dict[str, Any]]:
         manifest = self.component_manifests[component]

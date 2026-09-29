@@ -7,6 +7,10 @@ from typing import Any
 
 import pytest
 
+from backend.data_service.security_source_identity import (
+    DEFAULT_MANIFEST_PATH,
+    load_security_source_identity_manifest,
+)
 from backend.services.dataset_release.canonical import (
     canonical_json_bytes,
     digest_named_fields,
@@ -53,10 +57,34 @@ def _fixture(
         _file(root / "components/daily_bin_candidate/instruments/benchmark.txt"),
         _file(root / "components/minute_bin_candidate/calendars/1min.txt"),
         _file(root / "components/factor_h5_static_candidate_v2/sector_data.h5"),
+        _file(root / "components/factor_h5_static_candidate_v2/moneyflow.h5"),
         _file(root / "components/index_context/index_daily.h5"),
         _file(root / "components/suspend_d_daily_candidate_v2/suspend_d.parquet"),
         _file(root / "components/sector_context_candidate_v1/sector_code_map.json"),
     ]
+    identity_path = root / "components/factor_h5_static_candidate_v2/security_source_identity.json"
+    identity_path.write_bytes(DEFAULT_MANIFEST_PATH.read_bytes())
+    identity = load_security_source_identity_manifest(identity_path)
+    alias_path = _json(
+        root / "components/factor_h5_static_candidate_v2/moneyflow_alias_coverage_v1.json",
+        {
+            "schema_version": "qe_moneyflow_alias_coverage_receipt_v1",
+            "status": "PASS",
+            "identity_authority": identity.evidence(),
+            "moneyflow_sha256": _sha(
+                root / "components/factor_h5_static_candidate_v2/moneyflow.h5"
+            ),
+            "expected": 0,
+            "resolved": 0,
+            "provider_absence": 0,
+            "unknown": 0,
+            "nonfinite": 0,
+            "mismatched": 0,
+            "database_read": False,
+            "database_write": False,
+        },
+    )
+    files.extend((identity_path, alias_path))
     pool_names = (
         "stock_universe",
         "csi300",
