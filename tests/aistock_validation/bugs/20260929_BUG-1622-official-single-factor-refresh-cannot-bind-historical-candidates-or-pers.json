@@ -11,6 +11,8 @@
     "backend/tests/dataset_release/test_active_task_binding.py",
     "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
     "backend/tests/test_correlation_compute_independence.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260929_BUG-1622-official-single-factor-refresh-cannot-bind-historical-candidates-or-pers.json"
   ],
   "assigned_agent": null,
@@ -215,7 +217,9 @@
       "backend/routers/quantevolver_evolution.py",
       "backend/tests/dataset_release/test_active_task_binding.py",
       "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
-      "backend/tests/test_correlation_compute_independence.py"
+      "backend/tests/test_correlation_compute_independence.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -228,7 +232,9 @@
       "backend/routers/quantevolver_evolution.py",
       "backend/tests/dataset_release/test_active_task_binding.py",
       "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
-      "backend/tests/test_correlation_compute_independence.py"
+      "backend/tests/test_correlation_compute_independence.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-09-29T03:28:31.667070Z",
