@@ -1,14 +1,59 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from backend.services.hmm_risk.contracts import canonical_sha256
 from backend.services.hmm_risk.rotation_l2 import ACCEPTANCE_SCHEMA
 from backend.services.hmm_risk.rotation_l2_prediction import (
+    PREDICTION_COLUMNS,
+    RotationL2PredictionRepository,
     RotationL2PredictionError,
+    _database_parameter,
     _validate_row,
     rows_from_acceptance,
 )
+
+
+class _Cursor:
+    def __init__(self) -> None:
+        self.inserted: list[tuple] = []
+        self._rows: list[tuple] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple | None = None) -> None:
+        normalized = " ".join(sql.split()).lower()
+        if normalized.startswith("insert into hmm_risk.rotation_l2_prediction"):
+            assert params is not None
+            self.inserted.append(params)
+            return
+        if "from hmm_risk.rotation_l2_prediction where run_id=%s order by" in normalized:
+            self._rows = list(self.inserted)
+            return
+        raise AssertionError(f"unexpected SQL: {normalized}")
+
+    def fetchall(self) -> list[tuple]:
+        return self._rows
+
+
+class _Connection:
+    def __init__(self, cursor: _Cursor) -> None:
+        self._cursor = cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def cursor(self) -> _Cursor:
+        return self._cursor
 
 
 def _acceptance() -> dict:
@@ -111,3 +156,25 @@ def test_writer_rejects_effect_and_capability_drift() -> None:
 
     with pytest.raises(RotationL2PredictionError, match="effect and L2 capability"):
         _validate_row(row)
+
+
+def test_writer_serializes_uuid_parameters_for_plain_psycopg2_connections() -> None:
+    cursor = _Cursor()
+    repository = RotationL2PredictionRepository(conn_factory=lambda: _Connection(cursor))
+
+    result = repository.write_rows(rows_from_acceptance(_acceptance()))
+
+    prediction_id_index = PREDICTION_COLUMNS.index("prediction_id")
+    supersedes_id_index = PREDICTION_COLUMNS.index("supersedes_prediction_id")
+    assert result["row_count"] == 131
+    assert all(isinstance(values[prediction_id_index], str) for values in cursor.inserted)
+    assert all(values[supersedes_id_index] is None for values in cursor.inserted)
+
+
+def test_database_parameter_serializes_both_uuid_columns_only() -> None:
+    value = uuid.uuid4()
+
+    assert _database_parameter("prediction_id", value) == str(value)
+    assert _database_parameter("supersedes_prediction_id", value) == str(value)
+    assert _database_parameter("run_id", value) is value
+    assert _database_parameter("supersedes_prediction_id", None) is None
