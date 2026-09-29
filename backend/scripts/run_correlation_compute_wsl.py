@@ -47,12 +47,23 @@ def main() -> int:
             _emit(event)
 
         compute_service.set_correlation_event_emitter(_event_emitter)
-        result = compute_service.run_correlation_compute_local(
-            factor_names=list(payload.get("factor_names") or []),
-            as_of_date=payload.get("as_of_date"),
-            job_id=payload.get("job_id"),
-            data_date=payload.get("data_date"),
-        )
+        mode = str(payload.get("mode") or "full").strip()
+        if mode == "target_only":
+            result = compute_service.run_target_correlation_refresh_local(
+                target_factor_name=str(payload.get("target_factor_name") or ""),
+                as_of_date=payload.get("as_of_date"),
+                job_id=payload.get("job_id"),
+                data_date=payload.get("data_date"),
+            )
+        elif mode == "full":
+            result = compute_service.run_correlation_compute_local(
+                factor_names=list(payload.get("factor_names") or []),
+                as_of_date=payload.get("as_of_date"),
+                job_id=payload.get("job_id"),
+                data_date=payload.get("data_date"),
+            )
+        else:
+            raise ValueError(f"unsupported correlation compute mode: {mode}")
         _emit({"type": "result", "data": result})
         return 0
     except Exception as exc:

@@ -37,8 +37,10 @@ from .quantevolver.qe_active_dataset_profile import (
 )
 from .dataset_release.active_task_binding import (
     encode_qe_dataset_identity_roots,
+    freeze_explicit_dataset_task_binding,
     freeze_optional_active_dataset_task_binding,
     frozen_dataset_environment,
+    require_frozen_dataset_task_binding,
 )
 
 logger = logging.getLogger("aistock.dispatch_service")
@@ -295,10 +297,30 @@ def _freeze_dispatch_dataset_binding(
     *,
     task_type: str,
     node_id: str,
+    explicit_profile_path: str | None = None,
+    frozen_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     consumer_id = _TASK_TYPE_DATASET_CONSUMER.get(task_type)
     if consumer_id is None:
         raise ValueError(f"task type has no registered dataset consumer: {task_type}")
+    if explicit_profile_path and frozen_binding is not None:
+        raise ValueError("explicit profile and frozen dataset binding are mutually exclusive")
+    if frozen_binding is not None:
+        return require_frozen_dataset_task_binding(
+            frozen_binding,
+            consumer_id=consumer_id,
+            node_id=node_id,
+        )
+    if explicit_profile_path:
+        if task_type not in {"official_factor_full_compute", "correlation_compute"}:
+            raise ValueError(
+                f"explicit dataset profile is not supported for task type {task_type}"
+            )
+        return freeze_explicit_dataset_task_binding(
+            profile_path=explicit_profile_path,
+            consumer_id=consumer_id,
+            node_id=node_id,
+        )
     return freeze_optional_active_dataset_task_binding(
         consumer_id=consumer_id,
         node_id=node_id,
@@ -1115,6 +1137,8 @@ class DispatchService:
         frozen_dataset_binding = _freeze_dispatch_dataset_binding(
             task_type=task_type,
             node_id=str(node["node_id"]),
+            explicit_profile_path=str(data.get("dataset_profile_path") or "").strip() or None,
+            frozen_binding=data.get("dataset_binding"),
         )
         config = {
             "task_type": task_type,
