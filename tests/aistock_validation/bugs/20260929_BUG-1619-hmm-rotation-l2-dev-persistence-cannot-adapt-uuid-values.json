@@ -103,7 +103,8 @@
     "fresh_process_evidence": [
       "Conda AIstock fresh process imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction from fix commit 46cb9fb67beb787a0a123e947fbb940bc2467e72",
       "Conda AIstock fresh process at 5f368c55e imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction from the final worktree",
-      "Conda AIstock fresh process at 793eefda4 imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction from the final worktree"
+      "Conda AIstock fresh process at 793eefda4 imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction from the final worktree",
+      "Conda AIstock fresh process at 2d2623b50 imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction after merging latest origin/main"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
