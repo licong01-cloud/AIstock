@@ -1,6 +1,8 @@
 {
   "actual": "BUG-1623 source PR #5099 is merged and the user restarted backend-main. Health and runtime identity pass; the read-only Entry Price endpoint returns ok=true, schema_version=advisory_entry_price_status_v1, configured=false, status=NOT_CONFIGURED, database_written=false. post-restart-verify still blocks because /api/v1/advisory/programs/{program_id}/entry-price/status has no target-owned business-smoke semantic contract. Add one exact fail-closed semantic validator and direct tests; do not change Advisory business behavior, backend runtime, database, or QE code.",
   "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "tests/aistock_validation/bugs/20260929_BUG-1627-post-restart-verifier-lacks-advisory-entry-price-status-semantic-contrac.json"
   ],
   "assigned_agent": null,
@@ -22,22 +24,70 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The post-restart verifier accepts only a schema-valid Entry Price status response for the requested program, records configured/status/database_written facts, and remains fail-closed for wrong program, schema, status, booleans, errors, or write claims.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260929_BUG-1627-post-restart-verifier-lacks-advisory-entry-price-status-semantic-contrac.json",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260929_BUG-1627-post-restart-verifier-lacks-advisory-entry-price-status-semantic-contrac.json",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
+      "changed_files": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      ],
+      "impacted_modules": [
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      ],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ]
   },
   "first_seen_at": "2026-09-29T19:43:42.424476Z",
   "fix_branch": null,
@@ -54,7 +104,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py post-restart-verify --issue-json tests/aistock_validation/bugs/20260929_BUG-1623-entry-price-corporate-action-projection-diverges-from-frozen-adjusted-la.json --target backend-main --expected-identity ad6d73e591a1666490cffae84f6518d8c2694efd --output-format full-json",
   "required_verification": [
     "l0",
     "validation_center_backend"
@@ -63,10 +113,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
