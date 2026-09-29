@@ -77,8 +77,8 @@
   },
   "first_seen_at": "2026-09-29T02:56:41.730534Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "62d3555447a7f25b6349098bf57d6955dbe1a000",
+  "fixed_at": "2026-09-29T05:04:22Z",
   "github_issue_number": 5090,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5090",
   "last_seen_at": "2026-09-29T02:56:41.730534Z",
@@ -86,6 +86,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5094",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -114,6 +115,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": true,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -125,7 +127,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -134,6 +136,14 @@
     "fingerprint": "c8eb87522b23457aa8b2a333",
     "source_event_id": "FE-20260929-c8eb87522b23"
   },
+  "validation_evidence": [
+    "validation-receipt: id=63ff5f8548cfc65b commit=8b0550249b0f7ccf146aec27e82bbaebc387dbd8 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_rotation_l2_prediction.py backend/tests/hmm_risk/test_import_rotation_l2_predictions.py backend/tests/hmm_risk/test_rotation_l2_api.py -q -p no:cacheprovider` result=`13 passed`",
+    "validation-receipt: id=25798e1665b5bf54 commit=8b0550249b0f7ccf146aec27e82bbaebc387dbd8 kind=nox plan=hmm_risk_pr_slice status=passed command=`nox -s hmm_risk_pr_slice` result=`21 passed`",
+    "validation-receipt: id=f1acd6ac49e1c04b commit=8b0550249b0f7ccf146aec27e82bbaebc387dbd8 kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`8 passed; 14/14 mapped`",
+    "validation-receipt: id=026cf00cce8d919f commit=8b0550249b0f7ccf146aec27e82bbaebc387dbd8 kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed; blocking=0`",
+    "validation-receipt: id=43a6b843432afe4d commit=8b0550249b0f7ccf146aec27e82bbaebc387dbd8 kind=ruff plan=direct status=passed command=`ruff check/format, py_compile, git diff --check` result=`passed`",
+    "nox -s l0 -> passed; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
