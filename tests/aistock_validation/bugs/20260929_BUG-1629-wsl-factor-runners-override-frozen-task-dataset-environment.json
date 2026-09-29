@@ -2,6 +2,8 @@
   "actual": "Remote task 279 preserved the correct R8 payload/env but run_official_evaluation_wsl replaced it with legacy .env values and failed dataset coverage preflight.",
   "allowed_write_scope": [
     "backend/scripts/run_correlation_compute_wsl.py",
+    "backend/scripts/run_official_evaluation_wsl.py",
+    "backend/scripts/run_official_factor_full_compute_wsl.py",
     "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260929_BUG-1629-wsl-factor-runners-override-frozen-task-dataset-environment.json"
@@ -22,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260929-ccd91581e942",
       "timestamp": "2026-09-29T20:54:22.107173Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Added the two sibling WSL factor runners after the same override=True defect was confirmed; file ownership is updated in the same fix.",
+      "timestamp": "2026-09-29T20:57:00Z"
     }
   ],
   "evidence_uris": [
