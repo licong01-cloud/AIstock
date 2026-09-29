@@ -734,6 +734,8 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/routers/test_managed_dataset_preparations.py",
         "backend/tests/dataset_release/test_source_pool.py",
         "backend/tests/dataset_release/test_candidate_validator.py",
+        "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+        "backend/tests/dataset_release/test_factor_materializer.py",
         "backend/tests/dataset_release/test_artifact_ready_source.py",
         "backend/tests/dataset_release/test_source_authority.py",
         "backend/tests/dataset_release/test_build_processor.py",
