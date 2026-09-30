@@ -73,6 +73,22 @@ def test_rehashed_initialization_cannot_change_approved_profile(fitted, field):
         subject.validate_fit_entry(changed, values, dates)
 
 
+def test_boolean_acceptance_and_integer_seed_are_not_numeric_equivalents(fitted):
+    values, dates, entry = fitted
+    changed = copy.deepcopy(entry)
+    changed["accepted"] = int(entry["accepted"])
+    with pytest.raises(subject.FormalStateError, match="authority differs"):
+        subject.validate_fit_entry(
+            subject.receipt({k: v for k, v in changed.items() if k != "receipt_sha256"}), values, dates
+        )
+    with pytest.raises(subject.FormalStateError, match="undeclared seed"):
+        subject.parameter_profile(42.0, np.ones(2))
+    candidates = _selection_candidates()
+    candidates[0]["seed"] = 42.0
+    with pytest.raises(subject.FormalStateError, match="schedule differs"):
+        subject.select_restart(candidates, ["A", "B"])
+
+
 def test_d3_sector_reference_prior_no_projection(fitted):
     values, _, _ = fitted
     model, initialization = subject.initialize(values, 42)

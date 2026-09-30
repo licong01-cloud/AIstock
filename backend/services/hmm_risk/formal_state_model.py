@@ -204,7 +204,7 @@ def project_validation(raw: np.ndarray, parameters: Mapping[str, Any], projectio
 
 
 def parameter_profile(seed: int, reference: np.ndarray) -> dict[str, Any]:
-    if seed not in SEEDS:
+    if type(seed) is not int or seed not in SEEDS:
         raise FormalStateError("hmm_risk_model_contract_unsupported", "undeclared seed")
     return dict(
         n_components=3,
@@ -731,7 +731,7 @@ def validate_fit_entry(
         or entry["final_train_likelihood"] != final["raw_likelihood"]
         or entry["train_posterior"] != posterior.tolist()
         or entry["structure"] != structure
-        or entry["accepted"] != structure["train_occupancy_valid"]
+        or entry["accepted"] is not structure["train_occupancy_valid"]
         or entry["reasons"] != structure["reasons"]
     ):
         raise FormalStateError("hmm_risk_model_receipt_invalid", "final numerical/structure authority differs")
@@ -745,7 +745,10 @@ def validate_fit_entry(
         "train_occupancy_status": "accepted" if structure["train_occupancy_valid"] else "failed",
         "score_source": "map_joint_stop_raw_observed_log_likelihood",
     }
-    if any(entry.get(key) != value for key, value in expected_status.items()):
+    if any(
+        entry.get(key) != value or (type(value) is bool and type(entry.get(key)) is not bool)
+        for key, value in expected_status.items()
+    ):
         raise FormalStateError("hmm_risk_model_receipt_invalid", "independent status differs")
     warnings = sorted(
         {
@@ -760,7 +763,7 @@ def validate_fit_entry(
 
 
 def select_restart(candidates: Sequence[Mapping[str, Any]], expected_codes: Sequence[str]) -> dict[str, Any]:
-    if [c["seed"] for c in candidates] != list(SEEDS):
+    if any(type(c["seed"]) is not int for c in candidates) or [c["seed"] for c in candidates] != list(SEEDS):
         raise FormalStateError("hmm_risk_model_restart_schedule_incomplete", "schedule differs")
     pool = []
     summaries = []
@@ -768,6 +771,8 @@ def select_restart(candidates: Sequence[Mapping[str, Any]], expected_codes: Sequ
         entries = candidate["entries"]
         if sorted(entries) != list(expected_codes):
             raise FormalStateError("hmm_risk_model_restart_family_incomplete", "sector set differs")
+        if any(type(e.get("accepted")) is not bool for e in entries.values()):
+            raise FormalStateError("hmm_risk_model_receipt_invalid", "candidate acceptance must be boolean")
         eligible = all(e["accepted"] for e in entries.values())
         scores = (
             [
