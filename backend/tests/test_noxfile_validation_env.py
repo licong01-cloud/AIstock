@@ -151,6 +151,7 @@ def test_direct_neighbor_pr_targets_select_smoke_changed_test_source_neighbor_an
     )
 
     assert noxfile._direct_neighbor_pr_targets(
+        fallback_tests=("backend/tests/example",),
         smoke_tests=(smoke,),
         source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
         test_globs=("backend/tests/example/test_*.py",),
@@ -158,22 +159,28 @@ def test_direct_neighbor_pr_targets_select_smoke_changed_test_source_neighbor_an
     ) == [smoke, changed_test, source_neighbor, router_neighbor]
 
 
-def test_direct_neighbor_pr_targets_falls_back_for_unmapped_live_source(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize("source", ["unmapped.py", "__init__.py", "deleted.py", "override.py"])
+def test_direct_neighbor_pr_targets_fallback_preserves_changed_tests(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str
 ) -> None:
-    source = "backend/services/example/unmapped.py"
+    source_path = f"backend/services/example/{source}"
+    changed_test = "backend/tests/example/test_changed.py"
+    deleted_test = "backend/tests/example/test_deleted.py"
+    full = ("backend/tests/example/test_full.py",)
     _configure_direct_neighbor_targets(
         monkeypatch,
         tmp_path,
-        changed_files=[source],
-        existing_paths=[source],
+        changed_files=[source_path, changed_test, deleted_test, changed_test],
+        existing_paths=[changed_test, *full, *([source_path] if source != "deleted.py" else [])],
     )
 
     assert noxfile._direct_neighbor_pr_targets(
+        fallback_tests=full,
         smoke_tests=(),
         source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
         test_globs=("backend/tests/example/test_*.py",),
-    ) is None
+        overrides={source_path: "backend/tests/example/test_missing_override.py"} if source == "override.py" else {},
+    ) == [*full, changed_test]
 
 
 def test_direct_neighbor_pr_targets_skip_deleted_tests_without_hiding_live_changes(
@@ -190,6 +197,7 @@ def test_direct_neighbor_pr_targets_skip_deleted_tests_without_hiding_live_chang
     )
 
     assert noxfile._direct_neighbor_pr_targets(
+        fallback_tests=("backend/tests/example",),
         smoke_tests=(smoke,),
         source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
         test_globs=("backend/tests/example/test_*.py",),
@@ -202,6 +210,7 @@ def test_direct_neighbor_pr_targets_preserves_full_plan_without_ci_summary(
     monkeypatch.delenv("AISTOCK_CI_CLASSIFIER_SUMMARY", raising=False)
 
     assert noxfile._direct_neighbor_pr_targets(
+        fallback_tests=("backend/tests/example",),
         smoke_tests=(),
         source_test_roots=(),
         test_globs=(),
@@ -238,6 +247,69 @@ def test_direct_neighbor_sessions_execute_selected_pr_slice(
     getattr(noxfile, session_name)(DummySession())
 
     assert selected[0] in pytest_args
+
+
+@pytest.mark.parametrize("source_first", [False, True])
+def test_qe_read_fallback_preserves_full_plan_and_changed_test(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source_first: bool
+) -> None:
+    changed_test = "backend/tests/unified_engine/test_label_horizon.py"
+    sources = [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/services/quantevolver/qe_custom_loaders.py",
+    ]
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.delenv("AISTOCK_CI_CLASSIFIER_SUMMARY", raising=False)
+    monkeypatch.setattr(noxfile, "_run_pytest", lambda _session, *args: calls.append(args))
+    noxfile.qe_read_backend(object())
+    full_targets = calls.pop()[:-3]
+    _configure_direct_neighbor_targets(
+        monkeypatch,
+        tmp_path,
+        changed_files=[*sources, changed_test] if source_first else [changed_test, *sources],
+        existing_paths=[changed_test, *sources],
+    )
+
+    noxfile.qe_read_backend(object())
+
+    assert calls == [(*full_targets, changed_test, "-q", "-p", "no:cacheprovider")]
+
+
+def test_direct_neighbor_fallback_passes_actual_collection_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from scripts import ci_plan_coverage as coverage
+
+    full_test = "backend/tests/example/test_full.py"
+    changed_test = "backend/tests/example/test_changed.py"
+    source = "backend/services/example/unmapped.py"
+    _configure_direct_neighbor_targets(
+        monkeypatch, tmp_path, changed_files=[source, changed_test], existing_paths=[source, full_test, changed_test]
+    )
+    for path in (full_test, changed_test):
+        (tmp_path / path).write_text("def test_contract():\n    assert True\n", encoding="utf-8")
+    targets = noxfile._direct_neighbor_pr_targets(
+        fallback_tests=(full_test,), smoke_tests=(),
+        source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
+        test_globs=("backend/tests/example/test_*.py",),
+    )
+    assert targets == [full_test, changed_test]
+    receipt = tmp_path / "collected.txt"
+    env = dict(os.environ, PYTHONPATH=str(ROOT))
+    env[coverage.RECEIPT_ENV] = str(receipt)
+    env[coverage.REPO_ROOT_ENV] = str(tmp_path)
+    env.pop("PYTEST_ADDOPTS", None)
+    monkeypatch.delenv(coverage.CLASSIFIER_SUMMARY_ENV, raising=False)
+    env.pop(coverage.CLASSIFIER_SUMMARY_ENV, None)
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", *targets, "-q", "-p", "no:cacheprovider", "-p", "scripts.ci_plan_coverage"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert coverage.verify_changed_test_coverage(
+        [changed_test], collected_tests=receipt.read_text(encoding="utf-8").splitlines(), repo_root=tmp_path
+    )["workflow_gate"] == "passed"
 
 
 def test_factor_research_session_executes_compact_full_suite_with_dev_disabled(
