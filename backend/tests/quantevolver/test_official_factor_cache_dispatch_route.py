@@ -170,6 +170,7 @@ def test_official_full_compute_binds_explicit_profile_paths_once(monkeypatch) ->
         "/factor_h5_static_candidate_v2"
     )
     assert captured["payload"]["qlib_bin_path"].endswith("/daily_bin_candidate")
+    assert captured["payload"]["universe_key"] == "aistock_equity_pit_canonical_v2"
     assert result["payload"]["dataset_profile_sha256"] == "a" * 64
 
 

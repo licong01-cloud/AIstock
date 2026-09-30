@@ -81,7 +81,10 @@ def _context(source: PredictionReplaySource, *, command_file: str = "frozen_pred
 def _executor(command: str = "cd /workspace && python qrun_limit_minute.py conf.yaml"):
     composer = MagicMock()
     composer.compose_experiment_in_memory.return_value = {
-        "experiment_files": {"conf.yaml": "not-a-generated-config"},
+        "experiment_files": {
+            "conf.yaml": "not-a-generated-config",
+            "prepare_factors.py": "must-not-run-during-replay",
+        },
         "wsl_command": command,
     }
     coordinator = _Coordinator()
@@ -160,22 +163,65 @@ def test_config_builder_keeps_replay_identity_out_of_executable_params() -> None
 
 def test_executor_injects_exact_prediction_replay_command_and_backtest_capacity() -> None:
     source = _source()
-    executor, coordinator = _executor()
+    executor, coordinator = _executor(
+        "cd /workspace && scrub && python prepare_factors.py && "
+        ". ./.factor_env && scrub && python qrun_limit_minute.py conf.yaml && "
+        "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py"
+    )
     result = asyncio.run(
         executor.submit(_config(), _context(source), mode=BacktestMode.PREDICTION_REPLAY)
     )
-    assert result.wsl_command.endswith(
-        "python qrun_limit_minute.py conf.yaml --pred-backtest frozen_prediction.pkl"
-    )
+    assert "python qrun_limit_minute.py conf.yaml --pred-backtest frozen_prediction.pkl" in result.wsl_command
     assert result.wsl_command.count("--pred-backtest") == 1
     assert "--backtest-only" not in result.wsl_command
+    assert "prepare_factors.py" not in result.wsl_command
+    assert ".factor_env" not in result.wsl_command
+    assert "read_exp_res.py" in result.wsl_command
     assert coordinator.payload.model_source is None
     assert coordinator.source.backtest_only is True
     assert coordinator.source.parallel_training_eligible is False
     assert coordinator.payload.experiment_files["frozen_prediction.pkl.b64"] == "cHJlZA=="
+    assert "prepare_factors.py" not in coordinator.payload.experiment_files
+    assert coordinator.payload.config["factor_list"] == ["f1"]
     requested = result.detail["execution_manifest"]["requested"]
     assert requested["mode"] == "prediction_replay"
     assert requested["prediction_replay_source"]["sha256"] == "a" * 64
+
+
+def test_executor_keeps_factor_preparation_for_full_train() -> None:
+    command = (
+        "cd /workspace && python prepare_factors.py && . ./.factor_env && "
+        "python qrun_limit_minute.py conf.yaml"
+    )
+    executor, coordinator = _executor(command)
+    config = ExperimentConfig(factor_names=["f1"], model_id="model_lstm_v1")
+    context = ExecutionContext(
+        task_id="qe_train",
+        loop_index=1,
+        experiment_name="qe_train/Loop1",
+        node_id="wsl2-5080",
+        submission_source_kind="qe_evolution_loop",
+        submission_source_execution_id="qe_train_Loop1",
+    )
+    result = asyncio.run(executor.submit(config, context, mode=BacktestMode.FULL_TRAIN))
+    assert "python prepare_factors.py" in result.wsl_command
+    assert ".factor_env" in result.wsl_command
+    assert "prepare_factors.py" in coordinator.payload.experiment_files
+
+
+def test_executor_replay_rejects_orphan_factor_preparation_marker() -> None:
+    executor, _ = _executor(
+        "cd /workspace && python prepare_factors.py && "
+        "python qrun_limit_minute.py conf.yaml"
+    )
+    with pytest.raises(ValueError, match="could not isolate"):
+        asyncio.run(
+            executor.submit(
+                _config(),
+                _context(_source()),
+                mode=BacktestMode.PREDICTION_REPLAY,
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -540,14 +586,67 @@ def test_runner_replay_dataset_uses_raw_labels_without_training_processors() -> 
     assert replay_handler["shared_processors"] == []
     assert replay_handler["infer_processors"] == []
     assert replay_handler["learn_processors"] == []
+    assert replay_handler["data_loader"] == {
+        "class": "QlibDataLoader",
+        "module_path": "qlib.data.dataset.loader",
+        "kwargs": {
+            "config": {
+                "label": [["Ref($close, -61) / Ref($close, -1) - 1"], ["LABEL0"]]
+            }
+        },
+    }
     assert replay_handler["instruments"] == "index_pool__star100"
-    assert replay_handler["data_loader"]["kwargs"]["label_horizon"] == 60
     assert replay["dataset"]["kwargs"]["segments"] == (
         original["task"]["dataset"]["kwargs"]["segments"]
     )
     assert original_handler["shared_processors"] == [{"class": "SharedModelProcessor"}]
     assert original_handler["infer_processors"] == [{"class": "RobustZScoreNorm"}]
     assert original_handler["learn_processors"][0]["class"] == "LongHorizonLabelMaturityPurge"
+
+
+def test_runner_replay_extracts_nested_loader_label_without_static_factors() -> None:
+    helpers = _load_runner_replay_helpers()
+    loader = {
+        "class": "NestedDataLoader",
+        "kwargs": {
+            "dataloader_l": [
+                {
+                    "class": "qlib.contrib.data.loader.Alpha158DL",
+                    "kwargs": {
+                        "config": {
+                            "label": [["Ref($close, -21) / Ref($close, -1) - 1"], ["LABEL0"]],
+                            "feature": [["$close"], ["CLOSE"]],
+                        }
+                    },
+                },
+                {
+                    "class": "qlib.data.dataset.loader.StaticDataLoader",
+                    "kwargs": {"config": "combined_factors_df.parquet"},
+                },
+            ]
+        },
+    }
+    replay_loader = helpers["_prediction_replay_label_only_loader"](loader)
+    assert replay_loader["class"] == "QlibDataLoader"
+    assert replay_loader["kwargs"]["config"] == {
+        "label": [["Ref($close, -21) / Ref($close, -1) - 1"], ["LABEL0"]]
+    }
+    assert "combined_factors_df.parquet" not in json.dumps(replay_loader)
+
+
+def test_runner_replay_rejects_ambiguous_nested_label_contract() -> None:
+    helpers = _load_runner_replay_helpers()
+    loader = {
+        "class": "NestedDataLoader",
+        "kwargs": {
+            "dataloader_l": [
+                {"kwargs": {"config": {"label": [["LABEL_A"], ["LABEL0"]]}}},
+                {"kwargs": {"config": {"label": [["LABEL_B"], ["LABEL0"]]}}},
+            ]
+        },
+    }
+    with pytest.raises(RuntimeError, match="QE_PRED_BACKTEST_LABEL_CONFIG_INVALID"):
+        helpers["_prediction_replay_label_only_loader"](loader)
 
 
 @pytest.mark.parametrize(

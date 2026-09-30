@@ -1,0 +1,296 @@
+{
+  "actual": "Remote task 280 received the R8 profile/path payload but failed require_qe_dataset_window against the legacy 2026-06-30 contract.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+    "tests/aistock_validation/bugs/20260930_BUG-1631-explicit-factor-dataset-profile-retains-legacy-universe-contract.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1631",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-30T03:48:12.903310Z",
+  "description": "Remote task 280 received the R8 profile/path payload but failed require_qe_dataset_window against the legacy 2026-06-30 contract.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260930-43cf02940710",
+      "timestamp": "2026-09-30T03:48:12.903292Z"
+    }
+  ],
+  "evidence_uris": [
+    "dispatch task fe301d84-ccde-4e60-8909-c158391ef1bf / remote task 280"
+  ],
+  "expected": "An explicit canonical R8 profile must bind the canonical_v2 PIT universe authority and preserve that authority through retry; non-profile behavior remains unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1631-explicit-factor-dataset-profile-retains-legacy-universe-contract.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1631-explicit-factor-dataset-profile-retains-legacy-universe-contract.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+        "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+    ]
+  },
+  "first_seen_at": "2026-09-30T03:48:12.903310Z",
+  "fix_branch": null,
+  "fix_commit": "bd3592579b5edc91488db27d51366209a9e33786",
+  "fixed_at": "2026-09-30T04:01:24Z",
+  "github_issue_number": 5119,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5119",
+  "last_seen_at": "2026-09-30T03:48:12.903310Z",
+  "module": "qe.core",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5120",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "POST /api/v1/quantevolver/factor-cache/compute with dataset_profile_path=qe_hmm_full_v2_20260831_profile_v14_r8_unified.json and end_date=2026-08-31",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
+    "fresh_process_evidence": [
+      "Windows Python -I loaded the task-worktree official factor dispatch service without database, dataset, or runtime mutation"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1631",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "edeaba72a5999166",
+    "recorded_at": "2026-09-30T04:02:24.118446Z",
+    "runtime_contract_digest": "5cd8c9ae96524148aee2be03664422f95c2064bab88ef9ec8b92880f0f6b7803",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5d682b6ece8be312a7b7e950f535ab640893be3c",
+    "source_merge_commit": "bd3592579b5edc91488db27d51366209a9e33786",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5120",
+    "validation_evidence": [
+      "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 33 passed",
+      "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
+      "python -m nox -s l0 -> passed; blocking=0"
+    ],
+    "validation_evidence_digest": "5617286cf969804b8e3a38d5b28d1319530842ecb01a145d18fbbed5b2d6001a"
+  },
+  "status": "fixed_source_pending_user_restart",
+  "suspected_modules": [
+    "qe.core"
+  ],
+  "title": "Explicit factor dataset profile retains legacy universe contract",
+  "trigger_condition": {
+    "fingerprint": "43cf02940710da314cdcfb86",
+    "source_event_id": "FE-20260930-43cf02940710"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 33 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
+    "python -m nox -s l0 -> passed; blocking=0"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.core",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.core",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
