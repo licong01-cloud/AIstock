@@ -131,6 +131,33 @@ def test_saved_sequence_length_is_not_inferred_from_model_name(tmp_path, length)
         assert inference_engine._saved_qe_step_len(*args) == length
 
 
+@pytest.mark.parametrize("empty", [False, True])
+def test_fresh_probe_validates_fitted_schema_without_fitting(tmp_path, monkeypatch, empty):
+    from backend import inference_engine
+    from backend.services.strategy_package.frozen_runtime_self_check import frozen_model_probe_payload
+    model_path = tmp_path / "params.pkl"
+    model_path.write_bytes(b"weights")
+    processors = [] if empty else [OrderedProcessor(["a", "b"])]
+    (tmp_path / "dataset").write_bytes(pickle.dumps(SimpleNamespace(step_len=20, handler=SimpleNamespace(infer_processors=processors))))
+    monkeypatch.setattr(inference_engine, "load_model_from_pkl", lambda path: (None, "pytorch", None, 2))
+    if empty:
+        with pytest.raises(ValueError, match="no inference processors"):
+            frozen_model_probe_payload(model_path)
+    else:
+        payload = frozen_model_probe_payload(model_path)
+        assert payload["fitted_feature_order"] == ["a", "b"]
+        assert payload["sequence_length"] == 20
+
+
+def test_admission_rejects_fitted_schema_mismatch_with_same_feature_count():
+    from backend.services.strategy_package.frozen_runtime_self_check import FrozenRuntimeModelProbeResult, _validate_fitted_feature_schema
+    from backend.services.trading_core.errors import StrategyPackageValidationError
+    probe = FrozenRuntimeModelProbeResult(model_kind="pytorch", expected_features=2, backend="test", metadata={"probe_payload": {"fitted_feature_order": ["a", "b"]}})
+    _validate_fitted_feature_schema(probe, ["b", "a"])
+    with pytest.raises(StrategyPackageValidationError):
+        _validate_fitted_feature_schema(probe, ["a", "wrong"])
+
+
 def test_cpu_loader_preserves_tensor_values_without_cuda(tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
     from backend import inference_engine

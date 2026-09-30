@@ -51,17 +51,30 @@
   "evidence_uris": [],
   "expected": "Package-owned inference uses original fitted processors and immutable hashes, independent of QE workspace.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/models.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/tests/strategy_package/test_frozen_preprocessor_assets.py",
+      "scripts/strategy_package_frozen_self_check.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1639-frozen-qe-strategypackage-drops-fitted-inference-preprocessors.json"
+    ],
     "added_files": [
       "backend/tests/strategy_package/test_frozen_preprocessor_assets.py"
     ],
     "changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/live_inference.py",
       "backend/services/strategy_package/models.py",
       "backend/services/strategy_package/package_asset_freeze.py",
-      "backend/services/strategy_package/live_inference.py",
-      "backend/services/strategy_package/frozen_runtime_self_check.py",
-      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py"
+      "backend/tests/strategy_package/test_frozen_preprocessor_assets.py",
+      "scripts/strategy_package_frozen_self_check.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1639-frozen-qe-strategypackage-drops-fitted-inference-preprocessors.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/models.py",
@@ -199,14 +212,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages",
+    "fresh_process_evidence": [
+      "WSL CPU-only real LSTM frozen replay: 18 protected assets, original weight + fitted DatasetH sha c73d454125dc37669209915672eb6f9774ae2c48270aa7404bd43fce76300722, 14 features, original order and step_len20 preserved; normalization, native TS sampler and final scores exact; refit=0 DB writes=0 service control=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages",
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
