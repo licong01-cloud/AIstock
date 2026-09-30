@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "Each learning segment includes only labels whose outcome ends within the segment; inference and portfolio windows stay unchanged.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1638-qe-h1-h20-learning-labels-cross-train-validation-test-boundaries.json",
       "backend/services/quantevolver/config_composer.py",
       "backend/services/quantevolver/qe_custom_loaders.py",
       "backend/tests/unified_engine/test_label_horizon.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1638-qe-h1-h20-learning-labels-cross-train-validation-test-boundaries.json",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/qe_custom_loaders.py",
+      "backend/tests/unified_engine/test_label_horizon.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
@@ -134,11 +141,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu fresh Qlib DataHandlerLP: h1 DK_I105/DK_L99 and h20 DK_I105/DK_L58; train/valid last mature dates verified, full signal end unchanged; no training/backtest/GPU/DB writes",
+      "WSL fresh Qlib DataHandlerLP h1 and h20 learn-only isolation passed, DK_I full 105 rows preserved; no model training, no service control",
+      "WSL Qlib DataHandlerLP fresh process h1/h20 DK_I105 preserved; DK_L99/58 and exact mature boundary passed; no experiments or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
