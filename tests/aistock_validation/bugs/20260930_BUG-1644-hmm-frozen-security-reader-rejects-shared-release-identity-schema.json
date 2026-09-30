@@ -101,18 +101,20 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/overview",
     "business_smoke_scope": "HMM API regression after user restart; shared alias semantics are separately verified by the file-only fresh-process reader smoke, not inferred from HTTP status.",
     "fresh_process_evidence": [
       "Conda base fresh process with socket.connect poisoned loaded the unchanged active v15 shared security file SHA256=9d52e8de9107aa300468850d2edde76609c4e15b1c14afd63110b5955f76e43a; canonical hash=21a47581be3aec0f6d7f41de4f863b549aa227f1a8026e4398ce4a5c20095a87; effective moneyflow alias before and after 2025-02-17 passed; database_access=false and dataset_write=false.",
-      "Conda AIstock isolated fresh process imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.security_identity from this task worktree with socket.connect poisoned; no network/database access. This is source import evidence, not runtime activation."
+      "Conda AIstock isolated fresh process imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.security_identity from this task worktree with socket.connect poisoned; no network/database access. This is source import evidence, not runtime activation.",
+      "Conda AIstock own-worktree fresh process imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.security_identity with network/database connections poisoned; passed"
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
