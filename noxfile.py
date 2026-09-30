@@ -631,20 +631,23 @@ def _direct_neighbor_pr_targets(
     smoke_tests: tuple[str, ...],
     source_test_roots: tuple[tuple[str, str], ...],
     test_globs: tuple[str, ...],
+    fallback_tests: tuple[str, ...],
     overrides: dict[str, str] | None = None,
 ) -> list[str] | None:
     """Return a bounded CI slice, or None to preserve the existing full plan.
 
     A changed test always executes itself. A changed source uses an exact
     same-stem neighbor or an explicit override. Any relevant path without a
-    live neighbor falls back to the prior complete session instead of adding
-    a new fail-closed blocker.
+    live neighbor falls back to the prior complete session plus live changed
+    tests, including tests outside that session's fixed fallback list.
     """
 
     changed_files = _ci_classifier_changed_files()
     if changed_files is None:
         return None
     targets = list(smoke_tests)
+    changed_tests: list[str] = []
+    full_plan_required = False
     relevant = False
     override_map = overrides or {}
     for path in changed_files:
@@ -653,29 +656,35 @@ def _direct_neighbor_pr_targets(
             if not (ROOT / path).is_file():
                 continue
             targets.append(path)
+            changed_tests.append(path)
             continue
         override = override_map.get(path)
         if override is not None:
             relevant = True
             if not (ROOT / override).is_file():
-                return None
-            targets.append(override)
+                full_plan_required = True
+            else:
+                targets.append(override)
             continue
         for source_root, test_root in source_test_roots:
             if not path.startswith(source_root) or not path.endswith(".py"):
                 continue
             relevant = True
             if not (ROOT / path).is_file() or Path(path).name == "__init__.py":
-                return None
+                full_plan_required = True
+                break
             relative = path.removeprefix(source_root)
             relative_path = Path(relative)
             candidate = (Path(test_root) / relative_path.parent / f"test_{relative_path.stem}.py").as_posix()
             if not (ROOT / candidate).is_file():
-                return None
-            targets.append(candidate)
+                full_plan_required = True
+            else:
+                targets.append(candidate)
             break
     if not relevant:
         return None
+    if full_plan_required:
+        return list(dict.fromkeys((*fallback_tests, *changed_tests)))
     return list(dict.fromkeys(targets))
 
 
@@ -754,6 +763,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
     ]
     pr_targets = _direct_neighbor_pr_targets(
+        fallback_tests=tuple(full_targets),
         smoke_tests=(
             "backend/tests/qlib_exporter/test_direct_monthly_benchmark.py",
             "backend/tests/dataset_release/test_index_pool_sidecar.py",
@@ -885,7 +895,13 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def advisory_phase0b_backend(session: nox.Session) -> None:
     """Run Phase 0B candidate-quality and direct historical-data regressions."""
+    full_targets = (
+        "backend/tests/advisory_phase0b",
+        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
+        "backend/tests/advisory_historical_range/test_phase1c3_batch_d_integrity.py",
+    )
     pr_targets = _direct_neighbor_pr_targets(
+        fallback_tests=full_targets,
         smoke_tests=("backend/tests/advisory_phase0b/test_contracts.py",),
         source_test_roots=(("backend/services/advisory_phase0b/", "backend/tests/advisory_phase0b/"),),
         test_globs=("backend/tests/advisory_phase0b/test_*.py",),
@@ -898,9 +914,7 @@ def advisory_phase0b_backend(session: nox.Session) -> None:
         return
     _run_pytest(
         session,
-        "backend/tests/advisory_phase0b",
-        "backend/tests/advisory_historical_range/test_r4_summary_service.py",
-        "backend/tests/advisory_historical_range/test_phase1c3_batch_d_integrity.py",
+        *full_targets,
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1525,6 +1539,7 @@ def qe_read_backend(session: nox.Session) -> None:
     if dynamic_relation_test.exists():
         targets.append("backend/tests/quantevolver/test_dynamic_residual_flow_relation_v1.py")
     pr_targets = _direct_neighbor_pr_targets(
+        fallback_tests=tuple(targets),
         smoke_tests=(
             "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
             "backend/tests/unified_engine/test_qe_config_truth.py::test_qe_exchange_defaults_to_configured_market_instead_of_all_catalog",
@@ -2792,6 +2807,7 @@ def position_timing_backend(session: nox.Session) -> None:
         external=True,
     )
     pr_targets = _direct_neighbor_pr_targets(
+        fallback_tests=("backend/tests/position_timing",),
         smoke_tests=(
             "backend/tests/position_timing/test_isolation.py",
             "backend/tests/position_timing/test_api.py",

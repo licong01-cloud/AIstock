@@ -1258,6 +1258,23 @@ def position_timing_backend(session):
     }
 
 
+def test_qe_changed_test_with_unmapped_sources_retains_static_plan_coverage() -> None:
+    root = Path(__file__).resolve().parents[3]
+    test_path = "backend/tests/unified_engine/test_label_horizon.py"
+    payload = classifier.classify_changed_files(
+        [
+            "backend/services/quantevolver/config_composer.py",
+            "backend/services/quantevolver/qe_custom_loaders.py",
+            test_path,
+        ],
+        repo_root=root,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["changed_test_plan_coverage"]["coverage"][test_path] == ["qe_read_backend"]
+    assert payload["unexecuted_test_files"] == []
+
+
 def test_arbitrary_dynamic_fallback_does_not_claim_test_coverage(tmp_path: Path) -> None:
     test_path = "backend/tests/position_timing/test_dynamic_contract.py"
     _write_test_file(tmp_path, test_path)
