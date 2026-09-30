@@ -28,20 +28,20 @@
     "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/BUG-1634-post-restart.json",
     "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/BUG-1635-post-restart.json"
   ],
-  "review_rounds": [
-    "Round 1: actual facade contract and counter truncation reviewed; red/unknown readback is preserved, not treated as price absence",
-    "Round 2: URL-bound dispatcher integration fixed; missing physical probe cannot be promoted to full-table MAX",
-    "Round 3: malformed source quality/status/counter types fail closed; empty evidence test corrected; no DB/process mutations",
-    "DESIGN-COMPLIANCE-001: full requested endpoint contract; errors visible; no business semantic changes; no new production gate"
-  ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1637-post-restart-verifier-lacks-local-data-freshness-semantic-contracts.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "tests/aistock_validation/bugs/20260930_BUG-1637-post-restart-verifier-lacks-local-data-freshness-semantic-contracts.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -113,14 +113,22 @@
     "l0",
     "validation_workflow_automation"
   ],
+  "review_rounds": [
+    "Round 1: actual facade contract and counter truncation reviewed; red/unknown readback is preserved, not treated as price absence",
+    "Round 2: URL-bound dispatcher integration fixed; missing physical probe cannot be promoted to full-table MAX",
+    "Round 3: malformed source quality/status/counter types fail closed; empty evidence test corrected; no DB/process mutations",
+    "DESIGN-COMPLIANCE-001: full requested endpoint contract; errors visible; no business semantic changes; no new production gate"
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
