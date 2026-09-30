@@ -22,6 +22,7 @@ import pandas as pd
 
 from backend.db.pg_pool import get_conn
 from backend.services.dataset_release.cas_store import canonical_json_bytes
+from backend.services.hmm_risk.jump_model import Preprocessor, causal_states
 from backend.services.hmm_risk.rotation_l1_gbdt import (
     BINDING_MBE_IC,
     CANONICAL_SECTOR_COUNT,
@@ -44,7 +45,6 @@ from backend.services.hmm_risk.rotation_l1_gbdt import (
     build_label_free_feature_panel,
     build_v16_single_date_feature_frame,
     canonical_sha256,
-    causal_states,
     close_processes,
     cross_section_rank_features,
     project_states,
@@ -1271,8 +1271,6 @@ def predict_single_date_rows(
         raw_market = _market_raw_features(benchmark_close, ordered)
     except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
         raise RotationL1PredictionError(REASON_INFERENCE, "single-date benchmark history is invalid") from exc
-    from backend.services.hmm_risk.rotation_l1_gbdt import Preprocessor
-
     preprocessor = Preprocessor(
         feature_names=MARKET_FEATURES,
         lower=tuple(float(value) for value in lower),

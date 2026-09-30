@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date
 import hashlib
 import json
@@ -49,6 +50,7 @@ from backend.services.dataset_release.direct_monthly import (
     _filter_frame_to_pit,
     _read_classification_intervals,
     _daily_benchmark_complete,
+    _load_sw_l2_projection,
 )
 
 
@@ -70,9 +72,7 @@ def test_component_plan_includes_suspend_and_sw_l1_components() -> None:
 
     assert tuple(item.component for item in plan) == DIRECT_COMPONENTS
     assert {item.action for item in plan} == {"COMPONENT_REBUILD"}
-    assert next(item for item in plan if item.component == "minute_bin").reason == (
-        "july_repair_plus_august_tail"
-    )
+    assert next(item for item in plan if item.component == "minute_bin").reason == ("july_repair_plus_august_tail")
     assert next(item for item in plan if item.component == "daily_bin").reason == (
         "canonical_v2_pool_and_target_cutoff"
     )
@@ -162,6 +162,40 @@ def test_benchmark_contract_keeps_provider_catalog_separate_from_pit_pool(tmp_pa
         benchmark_line + "\n", encoding="utf-8"
     )
     assert not _daily_benchmark_complete(layout)
+
+
+def test_terminal_successor_state_accepts_one_pinned_sector_context_extension(tmp_path) -> None:
+    base = _layout(tmp_path)
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=base.candidate_parent,
+        candidate_root=(
+            base.candidate_parent
+            / "20260831-qe_hmm_full_v2-direct-20260920-r8-unified-candidate"
+        ),
+        baseline_root=base.baseline_root,
+        cutoff=base.cutoff,
+    )
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    state["components"]["sector_context"] = {
+        "action": "ADD_FROZEN_SHARED_SECTOR_CONTEXT",
+        "status": "PASS",
+        "receipt_sha256": "a" * 64,
+    }
+    state["components"]["sector_quote_hotfix"] = {
+        "action": "SELECTIVE_REBUILD",
+        "status": "PASS",
+    }
+
+    write_state(layout, state)
+
+    observed = read_state(layout)
+    assert observed is not None
+    assert observed["components"]["sector_context"]["status"] == "PASS"
+    assert compact_status(observed)["components"]["sector_context"] == "PASS"
+    assert compact_status(observed)["components"]["sector_quote_hotfix"] == "PASS"
 
 
 def test_legacy_four_component_state_resumes_only_new_components(tmp_path) -> None:
@@ -317,9 +351,7 @@ def test_hardlink_baseline_components_reuses_files_without_changing_baseline(tmp
 
     result = hardlink_baseline_components(layout)
 
-    assert result["linked_files"] == len(DIRECT_REUSABLE_COMPONENT_DIRS) + len(
-        DIRECT_REUSABLE_REPORT_FILES
-    )
+    assert result["linked_files"] == len(DIRECT_REUSABLE_COMPONENT_DIRS) + len(DIRECT_REUSABLE_REPORT_FILES)
     assert result["content_hash_performed"] is False
     for directory in DIRECT_REUSABLE_COMPONENT_DIRS:
         source = baseline / "components" / directory / "payload.bin"
@@ -416,9 +448,7 @@ def test_suspend_component_rejects_empty_full_history_source(tmp_path, monkeypat
     monkeypatch.setattr(
         pd,
         "read_sql",
-        lambda *_args, **_kwargs: pd.DataFrame(
-            columns=["trade_date", "ts_code", "suspend_type", "suspend_timing"]
-        ),
+        lambda *_args, **_kwargs: pd.DataFrame(columns=["trade_date", "ts_code", "suspend_type", "suspend_timing"]),
     )
 
     with pytest.raises(DirectMonthlyError, match="source is empty"):
@@ -599,9 +629,7 @@ def test_daily_component_always_uses_structural_csv_resume(tmp_path, monkeypatch
     assert "--resume-csv" in captured["command"]
 
 
-def test_minute_component_uses_index_friendly_resume_without_full_history_validation(
-    tmp_path, monkeypatch
-) -> None:
+def test_minute_component_uses_index_friendly_resume_without_full_history_validation(tmp_path, monkeypatch) -> None:
     layout = _layout(tmp_path)
     captured: dict[str, object] = {}
 
@@ -707,11 +735,14 @@ def test_baseline_discovery_uses_latest_earlier_validated_metadata_only(tmp_path
     selected = discover_latest_validated_baseline(parent, cutoff=date(2026, 8, 31))
 
     assert selected.name == "candidate-2026-07-31-final_validation_validated"
-    assert default_candidate_path(
-        parent,
-        cutoff=date(2026, 8, 31),
-        observed_on=date(2026, 9, 2),
-    ).name == "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+    assert (
+        default_candidate_path(
+            parent,
+            cutoff=date(2026, 8, 31),
+            observed_on=date(2026, 9, 2),
+        ).name
+        == "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+    )
 
 
 def test_baseline_is_optional_for_first_direct_candidate(tmp_path) -> None:
@@ -745,10 +776,13 @@ def test_missing_legacy_baseline_does_not_hide_terminal_candidate(tmp_path) -> N
     )
 
     assert read_state(restored)["status"] == DIRECT_TERMINAL_STATUS
-    assert discover_latest_existing_direct_candidate(
-        layout.candidate_parent,
-        cutoff=layout.cutoff,
-    ) == layout.candidate_root
+    assert (
+        discover_latest_existing_direct_candidate(
+            layout.candidate_parent,
+            cutoff=layout.cutoff,
+        )
+        == layout.candidate_root
+    )
 
 
 def test_cleanup_terminal_candidate_removes_only_disposable_paths_and_detaches_baseline(
@@ -837,10 +871,7 @@ def test_direct_cleanup_cli_plans_then_applies_without_touching_components(
     assert planned["status"] == "PLAN_ONLY"
     assert layout.work_root.is_dir()
 
-    assert (
-        cli.main(["--profile", "qe_hmm_full_v2", "cleanup", "--latest", "--apply"])
-        == 0
-    )
+    assert cli.main(["--profile", "qe_hmm_full_v2", "cleanup", "--latest", "--apply"]) == 0
     applied = json.loads(capsys.readouterr().out)
     assert applied["status"] == "APPLIED"
     assert not layout.work_root.exists()
@@ -898,11 +929,7 @@ def test_sector_projection_uses_classification_without_index_membership(monkeypa
     result = _build_sector_frame_from_classification(
         daily,
         moneyflow,
-        intervals_by_symbol={
-            "000001.SZ": (
-                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),
-            )
-        },
+        intervals_by_symbol={"000001.SZ": (_ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),)},
         l2_projection={"480000": "801780.SI"},
         l2_code_map={"801780.SI": 42},
         start=date(2026, 8, 1),
@@ -912,6 +939,74 @@ def test_sector_projection_uses_classification_without_index_membership(monkeypa
     assert list(result["l2_code_id"]) == [42, 42]
     assert list(result["sw2_pct_change"]) == pytest.approx([1.0, 0.99])
     assert list(result["sw2_mf_net_amt"]) == pytest.approx([2.0, 3.0])
+
+
+def test_sector_projection_accepts_exact_frozen_published_snapshot() -> None:
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0]}, index=index)
+    published = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-08-03"]),
+            "index_l2_code": ["801780.SI"],
+            "open": [100.0],
+            "high": [102.0],
+            "low": [99.0],
+            "close": [101.0],
+            "pct_change": [1.0],
+            "vol": [10.0],
+            "amount": [20.0],
+            "pe": [12.0],
+            "pb": [1.2],
+            "total_mv": [1000.0],
+        }
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        pd.DataFrame(),
+        intervals_by_symbol={
+            "000001.SZ": (
+                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),
+            )
+        },
+        l2_projection={"480000": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+        published_daily=published,
+    )
+
+    assert result.iloc[0]["sw2_pct_change"] == pytest.approx(1.0)
+
+
+def test_l2_projection_freezes_same_snapshot_shared_code_map(monkeypatch) -> None:
+    rows = pd.DataFrame(
+        {
+            "industry_code": [f"{100000 + index}" for index in range(131)],
+            "index_code": [f"801{index:03d}.SI" for index in range(131)],
+        }
+    )
+    code_map = {f"801{index:03d}.SI": index * 2 + 1 for index in range(131)}
+    monkeypatch.setattr("backend.db.pg_pool.get_conn", lambda: nullcontext(object()))
+    monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr(
+        "backend.services.industry_code_map.load_sw_l2_code_map",
+        lambda _connection: code_map,
+    )
+
+    projection, loaded_map, payload = _load_sw_l2_projection()
+
+    assert len(projection) == 131
+    assert loaded_map == code_map
+    assert payload["entries"][-1] == {
+        "l2_code_id": 261,
+        "canonical_l2_code": "801130.SI",
+    }
+    assert payload["member_backed_codes"] == sorted(code_map)
+    assert payload["mapping_authority"]["authority_id"].startswith("market.sw_index_classify:SW2021:L2:")
 
 
 def test_classification_reader_merges_exact_identity_overlap_and_rejects_conflict(tmp_path) -> None:
@@ -943,9 +1038,7 @@ def test_classification_reader_merges_exact_identity_overlap_and_rejects_conflic
 
     result = _read_classification_intervals(layout)
 
-    assert result["000001.SZ"] == (
-        _ClassificationInterval(date(2021, 8, 2), date(2026, 9, 1), "480300"),
-    )
+    assert result["000001.SZ"] == (_ClassificationInterval(date(2021, 8, 2), date(2026, 9, 1), "480300"),)
     rows[1]["identity"] = {"l2_code": "480200"}
     target.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     with pytest.raises(DirectMonthlyError, match="intervals overlap"):
@@ -982,11 +1075,7 @@ def test_sector_published_fields_do_not_depend_on_moneyflow(monkeypatch) -> None
     result = _build_sector_frame_from_classification(
         daily,
         pd.DataFrame(),
-        intervals_by_symbol={
-            "000001.SZ": (
-                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),
-            )
-        },
+        intervals_by_symbol={"000001.SZ": (_ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),)},
         l2_projection={"480000": "801780.SI"},
         l2_code_map={"801780.SI": 42},
         start=date(2026, 8, 1),
@@ -1013,11 +1102,7 @@ def test_sector_projection_preserves_classified_row_when_both_fact_sources_are_e
     result = _build_sector_frame_from_classification(
         daily,
         pd.DataFrame(),
-        intervals_by_symbol={
-            "000001.SZ": (
-                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480300"),
-            )
-        },
+        intervals_by_symbol={"000001.SZ": (_ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480300"),)},
         l2_projection={"480300": "801780.SI"},
         l2_code_map={"801780.SI": 42},
         start=date(2026, 8, 1),
@@ -1053,9 +1138,7 @@ def test_resume_rebuilds_only_factor_when_factor_contract_changed(tmp_path) -> N
         encoding="utf-8",
     )
     layout.sw_l1_root.mkdir(parents=True)
-    _sw_l1_frame(end=layout.cutoff).to_hdf(
-        layout.sw_l1_root / "sector_data.h5", key="data", mode="w", format="table"
-    )
+    _sw_l1_frame(end=layout.cutoff).to_hdf(layout.sw_l1_root / "sector_data.h5", key="data", mode="w", format="table")
     (layout.sw_l1_root / "meta.json").write_text(
         json.dumps(
             {
@@ -1100,9 +1183,7 @@ def test_resume_rebuilds_only_factor_when_factor_contract_changed(tmp_path) -> N
     assert calls == ["factor_h5_static"]
 
 
-def test_direct_consumer_smoke_uses_contract_mode_without_strategy_thresholds(
-    tmp_path, monkeypatch
-) -> None:
+def test_direct_consumer_smoke_uses_contract_mode_without_strategy_thresholds(tmp_path, monkeypatch) -> None:
     layout = _layout(tmp_path)
     commands: list[list[str]] = []
 

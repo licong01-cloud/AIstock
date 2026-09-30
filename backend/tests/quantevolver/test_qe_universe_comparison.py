@@ -301,6 +301,107 @@ def test_custom_evo_rerun_reuses_persisted_binding_without_reading_active_profil
     }
 
 
+def test_custom_evo_routes_top_level_sector_blacklist_to_active_dataset_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_params: list[dict] = []
+
+    monkeypatch.setattr(
+        evolution_router,
+        "resolve_custom_loop_nodes",
+        lambda loops, _node: (
+            [{**loop, "node_id": "wsl2-5080"} for loop in loops],
+            "wsl2-5080",
+            {"wsl2-5080"},
+        ),
+    )
+
+    async def fake_preflight(_node_ids):
+        return {}
+
+    def fake_resolve_and_apply_active_qe_dataset(**kwargs):
+        params = dict(kwargs.get("custom_params") or {})
+        captured_params.append(params)
+        if params.get("sector_blacklist"):
+            params["_qe_sector_blacklist_policy"] = {
+                "blacklist_excluded_count": 7,
+            }
+            params["sector_blacklist_enabled"] = True
+        params["stock_pool"] = "index_pool__csi300"
+        return (
+            {"test_end": "2026-08-31", "backtest_end": "2026-08-28"},
+            params,
+            {
+                "generation": "generation-1",
+                "release_id": "release-1",
+                "cutoff": "2026-08-31",
+            },
+        )
+
+    monkeypatch.setattr(evolution_router, "preflight_qe_nodes", fake_preflight)
+    monkeypatch.setattr(profile_module, "load_active_qe_profile", lambda: object())
+    monkeypatch.setattr(
+        profile_module,
+        "resolve_and_apply_active_qe_dataset",
+        fake_resolve_and_apply_active_qe_dataset,
+    )
+
+    p10 = _request(["csi300", "csi500"]).base_loop.model_copy(
+        update={"universe_selection": {"mode": "single_index", "pool_ids": ["csi300"]}}
+    )
+    p11 = p10.model_copy(update={"sector_blacklist": ["801020.SI", "801010.SI"]})
+
+    loops, _node_id, _parallelism = asyncio.run(
+        evolution_router._prepare_custom_evo_loop_configs(
+            [p10, p11],
+            request_node_id="wsl2-5080",
+            node_parallelism_payload=None,
+        )
+    )
+
+    assert "sector_blacklist" not in captured_params[0]
+    assert captured_params[1]["sector_blacklist"] == ["801020.SI", "801010.SI"]
+    assert "_qe_sector_blacklist_policy" not in loops[0]["custom_params"]
+    assert loops[1]["custom_params"]["_qe_sector_blacklist_policy"] == {
+        "blacklist_excluded_count": 7,
+    }
+
+
+def test_custom_evo_sector_blacklist_requires_active_dataset_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        evolution_router,
+        "resolve_custom_loop_nodes",
+        lambda loops, _node: (
+            [{**loop, "node_id": "wsl2-5080"} for loop in loops],
+            "wsl2-5080",
+            {"wsl2-5080"},
+        ),
+    )
+
+    async def fake_preflight(_node_ids):
+        return {}
+
+    monkeypatch.setattr(evolution_router, "preflight_qe_nodes", fake_preflight)
+    monkeypatch.setattr(profile_module, "load_active_qe_profile", lambda: None)
+    p11 = _request(["csi300", "csi500"]).base_loop.model_copy(
+        update={"sector_blacklist": ["801010.SI"]}
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            evolution_router._prepare_custom_evo_loop_configs(
+                [p11],
+                request_node_id="wsl2-5080",
+                node_parallelism_payload=None,
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "qe_active_dataset_profile_missing" in str(exc_info.value.detail)
+
+
 def test_custom_evo_persisted_star50_binding_defaults_and_rejects_top50(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

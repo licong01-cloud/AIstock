@@ -8,12 +8,14 @@ aliases.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from typing import Any, Mapping
 
 from .qe_active_dataset_profile import is_pure_star50_universe
 from .qe_run_registry import qe_registration_summary
+from .qe_sector_blacklist_policy import SECTOR_BLACKLIST_POLICY_PARAM
 
 SCALAR_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
     "ic": ("ic", "IC"),
@@ -174,6 +176,10 @@ SUMMARY_CONFIG_KEYS = (
     "execution_algo",
     "node_id",
     "backtest_only",
+    "prediction_replay",
+    "prediction_source_task_id",
+    "prediction_source_loop_index",
+    "prediction_source_sha256",
 )
 
 COMPACT_STRATEGY_CONFIG_KEYS = (
@@ -616,6 +622,20 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
     custom_params = _mapping(cfg.get("custom_params"))
     execution_algo_params = _mapping(cfg.get("execution_algo_params"))
     unfilled_handler_params = _mapping(cfg.get("unfilled_handler_params"))
+    replay_source = _mapping(cfg.get("prediction_replay_source"))
+    if replay_source:
+        summary["prediction_replay_source"] = {
+            key: replay_source[key]
+            for key in (
+                "source_task_id",
+                "source_loop_index",
+                "source_node_id",
+                "catalog_path",
+                "sha256",
+                "size_bytes",
+            )
+            if key in replay_source
+        }
 
     if isinstance(model_params, Mapping):
         for key in ("label_horizon", "random_seed", "execution_algo"):
@@ -686,6 +706,40 @@ def compact_config_summary(config: Any) -> dict[str, Any]:
             "mode": selection.get("mode") or "stock_universe",
             "pool_ids": list(selection.get("pool_ids") or []),
             "label": selection.get("instrument_name") or selection.get("stock_pool"),
+        }
+    execution_data_exclusions = next(
+        (
+            candidate
+            for source in (cfg, model_params, custom_params, strategy_params)
+            if isinstance((candidate := source.get("execution_data_exclusions")), list)
+            and candidate
+        ),
+        [],
+    )
+    if execution_data_exclusions:
+        canonical = json.dumps(
+            execution_data_exclusions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        summary["execution_data_exclusions"] = {
+            "count": len(execution_data_exclusions),
+            "instruments": sorted(
+                {
+                    str(item.get("instrument"))
+                    for item in execution_data_exclusions
+                    if isinstance(item, Mapping) and item.get("instrument")
+                }
+            ),
+            "reason_codes": sorted(
+                {
+                    str(item.get("reason_code"))
+                    for item in execution_data_exclusions
+                    if isinstance(item, Mapping) and item.get("reason_code")
+                }
+            ),
+            "contract_sha256": hashlib.sha256(canonical).hexdigest(),
         }
     strategy_topk = first_number(strategy_summary.get("topk"))
     if is_pure_star50_universe(
@@ -778,6 +832,16 @@ def compact_policy_summary(config: Any, metrics: Any) -> dict[str, Any]:
             "enhanced_metrics.policy_diagnostics.blacklist_excluded_count",
         ),
     )
+    if blacklist_action_count is None:
+        materialized_policy = _first_by_alias(
+            config_sources,
+            (SECTOR_BLACKLIST_POLICY_PARAM,),
+        )
+        if isinstance(materialized_policy, Mapping):
+            blacklist_action_count = _first_number_from_sources(
+                [materialized_policy],
+                ("blacklist_excluded_count",),
+            )
     blacklist_effective, blacklist_reason = _policy_effect(
         enabled=blacklist_enabled,
         count=blacklist_action_count,
@@ -889,6 +953,19 @@ def compact_loop_row(row: Mapping[str, Any]) -> dict[str, Any]:
         item["factor_count"] = len(factors)
     if config_summary:
         item["config_summary"] = config_summary
+    replay_result = _mapping(_mapping(raw_metrics).get("prediction_replay_result"))
+    if replay_result:
+        item["prediction_replay_result"] = {
+            key: replay_result[key]
+            for key in (
+                "source_prediction_sha256",
+                "executable_prediction_panel_sha256",
+                "source_prediction_rows",
+                "executable_prediction_rows",
+                "excluded_prediction_rows",
+            )
+            if key in replay_result
+        }
     item["policy_summary"] = compact_policy_summary(config_source, raw_metrics)
     item["metrics_summary"] = metrics
     return item

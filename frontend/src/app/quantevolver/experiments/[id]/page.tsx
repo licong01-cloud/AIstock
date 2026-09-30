@@ -317,6 +317,13 @@ export default function ExperimentDetailPage({ params }: { params: { id: string 
             <div>Label：{registration.label_horizon ?? "-"}</div>
             <div>制品：{retention.status || "available"}{retention.cleaned_at ? `（${new Date(retention.cleaned_at).toLocaleString("zh-CN")}）` : ""}</div>
             <div>数仓：{archiveStatus?.archive_status || "not_archived"}{archiveReason ? `（${archiveReason}）` : ""}</div>
+            <div data-testid="qe-detail-value-class">价值分类：{archiveStatus?.value_class || "classification_pending"}</div>
+            <div data-testid="qe-detail-warehouse-status">数仓持久化：{archiveStatus?.warehouse_status || "pending"}</div>
+            <div data-testid="qe-detail-asset-status">资产发布：{archiveStatus?.asset_status || "pending"}</div>
+            <div>资产原因：{archiveStatus?.asset_reason_code || "-"}</div>
+            <div data-testid="qe-detail-workspace-status">Workspace：{archiveStatus?.workspace_status || "active"}</div>
+            <div>受保护所有者：{archiveStatus?.protected_owner_count ?? 0}</div>
+            {archiveStatus?.duplicate_of && <div>精确重复 survivor：{archiveStatus.duplicate_of}</div>}
             <div>创建：{exp.created_at ? new Date(exp.created_at).toLocaleString("zh-CN") : "-"}</div>
             <div>开始：{exp.started_at ? new Date(exp.started_at).toLocaleString("zh-CN") : "-"}</div>
             <div>完成：{exp.completed_at ? new Date(exp.completed_at).toLocaleString("zh-CN") : "-"}</div>

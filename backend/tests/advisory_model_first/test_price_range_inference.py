@@ -295,11 +295,12 @@ def test_corporate_action_multiplier_uses_tax_cash_and_share_distribution() -> N
     multiplier, source = _target_raw_price_multiplier(
         symbol="000001.SZ",
         decision_raw_close=10.0,
+        decision_adjustment_factor=1.0,
         rows=[row],
         decision_as_of_trade_date=date(2026, 7, 20),
     )
-    assert np.isclose(multiplier, 9.8 / 11.0)
-    assert source.endswith("implemented_action")
+    assert np.isclose(multiplier, 1.0 / 1.1223)
+    assert source.endswith("provider_projection_v2")
 
 
 def test_corporate_action_multiplier_ignores_actions_not_known_at_decision() -> None:
@@ -318,6 +319,7 @@ def test_corporate_action_multiplier_ignores_actions_not_known_at_decision() -> 
     multiplier, source = _target_raw_price_multiplier(
         symbol="000001.SZ",
         decision_raw_close=10.0,
+        decision_adjustment_factor=None,
         rows=[row],
         decision_as_of_trade_date=date(2026, 7, 20),
     )
@@ -342,6 +344,7 @@ def test_corporate_action_multiplier_rejects_missing_implementation_knowledge_da
         _target_raw_price_multiplier(
             symbol="000001.SZ",
             decision_raw_close=10.0,
+            decision_adjustment_factor=1.0,
             rows=[row],
             decision_as_of_trade_date=date(2026, 7, 20),
         )

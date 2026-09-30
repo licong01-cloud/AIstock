@@ -70,6 +70,7 @@ from .qe_active_dataset_profile import (
     QE_RUN_STOCK_POOL_CONTENT_PARAM,
     load_active_qe_profile,
 )
+from .qe_sector_blacklist_policy import SECTOR_BLACKLIST_POLICY_PARAM
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
 from .qe_run_registry import (
@@ -662,6 +663,9 @@ DEFAULT_QE_EXECUTION_ALGO = "TWAP"
 SUSPEND_FILTER_FILE = "qe_suspend_filter.json"
 RISK_POLICY_FILE = "qe_event_risk_policy.json"
 FROZEN_BUILD_SPEC_FILE = "qe_frozen_build_spec.json"
+EXECUTION_DATA_EXCLUSIONS_PARAM = "execution_data_exclusions"
+EXECUTION_DATA_EXCLUSION_SCHEMA = "qe_execution_data_exclusion_v1"
+EXECUTION_DATA_EXCLUSION_REASON = "minute_source_gap_confirmed_unfillable"
 SECTOR_RISK_OVERLAY_MANIFEST_FILE = "qe_sector_risk_overlay_manifest.json"
 SECTOR_RISK_OVERLAY_DATA_FILE = "qe_sector_risk_overlay.parquet"
 SECTOR_RISK_OVERLAY_ACTION_LOG = "qe_sector_risk_overlay_actions.jsonl"
@@ -1235,7 +1239,80 @@ class ConfigComposer:
             params.get("filter_suspended_on_signal")
             or params.get("exclude_suspended")
             or params.get("filter_suspend_d")
+            or params.get(EXECUTION_DATA_EXCLUSIONS_PARAM)
         )
+
+    @staticmethod
+    def _normalize_execution_data_exclusions(
+        custom_params: Optional[Dict[str, Any]],
+        *,
+        backtest_start,
+        backtest_end,
+    ) -> list[dict[str, str]]:
+        """Validate explicit run-scoped exclusions without weakening coverage checks."""
+
+        raw = (custom_params or {}).get(EXECUTION_DATA_EXCLUSIONS_PARAM)
+        if raw in (None, []):
+            return []
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"{EXECUTION_DATA_EXCLUSIONS_PARAM} must be a list of explicit contracts"
+            )
+        normalized: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for index, item in enumerate(raw):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}] must be an object"
+                )
+            instrument = str(item.get("instrument") or "").strip().upper()
+            start_date = str(item.get("start_date") or "")
+            end_date = str(item.get("end_date") or "")
+            evidence_sha256 = str(item.get("evidence_sha256") or "").strip().lower()
+            if item.get("schema_version") != EXECUTION_DATA_EXCLUSION_SCHEMA:
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].schema_version must be "
+                    f"{EXECUTION_DATA_EXCLUSION_SCHEMA}"
+                )
+            if not re.fullmatch(r"[0-9]{6}\.(SH|SZ)", instrument):
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].instrument is invalid"
+                )
+            if item.get("scope") != "full_backtest_window":
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].scope must be full_backtest_window"
+                )
+            if start_date != backtest_start.isoformat() or end_date != backtest_end.isoformat():
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}] must cover the exact backtest "
+                    f"window {backtest_start.isoformat()}..{backtest_end.isoformat()}"
+                )
+            if item.get("reason_code") != EXECUTION_DATA_EXCLUSION_REASON:
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].reason_code must be "
+                    f"{EXECUTION_DATA_EXCLUSION_REASON}"
+                )
+            if not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256):
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM}[{index}].evidence_sha256 must be sha256"
+                )
+            if instrument in seen:
+                raise ValueError(
+                    f"{EXECUTION_DATA_EXCLUSIONS_PARAM} contains duplicate instrument {instrument}"
+                )
+            seen.add(instrument)
+            normalized.append(
+                {
+                    "schema_version": EXECUTION_DATA_EXCLUSION_SCHEMA,
+                    "instrument": instrument,
+                    "scope": "full_backtest_window",
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "reason_code": EXECUTION_DATA_EXCLUSION_REASON,
+                    "evidence_sha256": evidence_sha256,
+                }
+            )
+        return sorted(normalized, key=lambda value: value["instrument"])
 
     @staticmethod
     def _parse_date(value: str):
@@ -1517,6 +1594,11 @@ class ConfigComposer:
         backtest_end = self._parse_date(data_split["backtest_end"])
         if backtest_end < backtest_start:
             raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
+        execution_data_exclusions = self._normalize_execution_data_exclusions(
+            custom_params,
+            backtest_start=backtest_start,
+            backtest_end=backtest_end,
+        )
         formal_request = _formal_dataset_request(custom_params)
         formal_binding = formal_request.binding() if formal_request is not None else None
         direct_binding = _direct_v2_dataset_binding(custom_params)
@@ -1542,17 +1624,11 @@ class ConfigComposer:
                 "qlib_data_path/QLIB_DATA_PATH_WSL is empty; "
                 "cannot pin the frozen risk policy source"
             )
-        direct_selection_mode = (
-            str(direct_binding.selection_pins.get("mode") or "stock_universe")
-            if direct_binding is not None
-            else "stock_universe"
-        )
         if (
             direct_binding is not None
             and provider_uri_day != direct_binding.provider_uri_day
             and not (
                 direct_binding.schema_version == "qe_direct_v2_dataset_binding_v3"
-                and direct_selection_mode != "stock_universe"
                 and provider_uri_day.endswith("/qe_provider_day")
             )
         ):
@@ -1669,6 +1745,10 @@ class ConfigComposer:
             # any pin/identity/coverage mismatch fails closed on the compute
             # node and there is no database fallback.
             "suspend": suspend_identity,
+            # A run may explicitly exclude a symbol only when an immutable,
+            # full-window evidence contract is supplied.  This never mutates
+            # the canonical PIT universe or the frozen dataset.
+            EXECUTION_DATA_EXCLUSIONS_PARAM: execution_data_exclusions,
         }
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
 
@@ -1715,6 +1795,7 @@ class ConfigComposer:
     def _validate_hmm_coefficients_json(content: str) -> None:
         data = json.loads(content)
         membership_fields = (
+            "stock_sector_applicability_by_date",
             "stock_sector_membership_spans",
             "stock_sector_map_by_date",
             "stock_sector_map",
@@ -1734,7 +1815,9 @@ class ConfigComposer:
         if not memberships or not all(isinstance(value, dict) for value in memberships):
             raise RuntimeError("precomputed HMM coefficients contain no stock-sector membership")
 
-        maps_by_date = data.get("stock_sector_map_by_date")
+        maps_by_date = data.get("stock_sector_map_by_date") or data.get(
+            "stock_sector_applicability_by_date"
+        )
         if maps_by_date:
             coefficient_dates = set(data["daily_coefficients"])
             missing_dates = sorted(coefficient_dates - set(maps_by_date))
@@ -1972,11 +2055,27 @@ class ConfigComposer:
 
         # HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         hmm_json_content: Optional[str] = None
+        hmm_binding_json: Optional[str] = None
         if _cp.get("enable_sector_hmm"):
-            # 构造 strategy_params 供 _precompute_hmm_coefficients 使用
+            from backend.services.hmm_risk.qe_assistance_transport import (
+                BINDING_PARAM,
+                binding_json,
+                normalize_artifact_binding,
+            )
+
             _hmm_sp = dict(custom_params or {})
-            hmm_json_content = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
-            custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
+            artifact_binding = _hmm_sp.get(BINDING_PARAM)
+            if artifact_binding is not None:
+                normalized_binding = normalize_artifact_binding(
+                    artifact_binding,
+                    verify_local_file=False,
+                )
+                custom_params["hmm_coefficients_file"] = normalized_binding["remote_path"]
+                hmm_binding_json = binding_json(normalized_binding)
+                custom_params.pop(BINDING_PARAM, None)
+            else:
+                hmm_json_content = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
+                custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
 
             # 严格验证：策略必须原生支持 HMM
             _hmm_supported_classes = {
@@ -2059,6 +2158,10 @@ class ConfigComposer:
         if hmm_json_content:
             hmm_path = exp_dir / "hmm_sector_coefficients.json"
             hmm_path.write_text(hmm_json_content, encoding="utf-8")
+        if hmm_binding_json:
+            from backend.services.hmm_risk.qe_assistance_transport import BINDING_FILE
+
+            (exp_dir / BINDING_FILE).write_text(hmm_binding_json, encoding="utf-8")
 
         if frozen_build_spec_json:
             (exp_dir / FROZEN_BUILD_SPEC_FILE).write_text(frozen_build_spec_json, encoding="utf-8")
@@ -2340,14 +2443,15 @@ class ConfigComposer:
             qlib_minute_path = direct_v2_dataset_binding.provider_uri_1min
             factor_data_dir = direct_v2_dataset_binding.factor_data_dir
         day_provider_prepare_command: str | None = None
+        run_stock_pool_content = (custom_params or {}).get(QE_RUN_STOCK_POOL_CONTENT_PARAM)
         if (
             direct_v2_dataset_binding is not None
             and direct_v2_dataset_binding.schema_version == "qe_direct_v2_dataset_binding_v3"
-            and direct_v2_dataset_binding.selection_pins["mode"] != "stock_universe"
+            and run_stock_pool_content is not None
         ):
             selection = dict(direct_v2_dataset_binding.selection_pins)
             filename = str(selection["instruments_file"])
-            content = (custom_params or {}).get(QE_RUN_STOCK_POOL_CONTENT_PARAM)
+            content = run_stock_pool_content
             if not isinstance(content, str) or hashlib.sha256(content.encode("utf-8")).hexdigest() != selection["instruments_sha256"]:
                 raise ValueError(
                     "reason_code=qe_universe_sidecar_hash_mismatch: "
@@ -2420,14 +2524,29 @@ class ConfigComposer:
         # 0) HMM 预计算（必须在 conf.yaml 之前，使 hmm_coefficients_file 写入策略 kwargs）
         # 与 compose_experiment() 一致，从 custom_params 检查 enable_sector_hmm
         if _cp.get("enable_sector_hmm"):
-            # 构造 strategy_params 供 _precompute_hmm_coefficients 使用
+            from backend.services.hmm_risk.qe_assistance_transport import (
+                BINDING_FILE,
+                BINDING_PARAM,
+                binding_json,
+                normalize_artifact_binding,
+            )
+
             _hmm_sp = dict(_cp)
-            hmm_json = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
-            experiment_files["hmm_sector_coefficients.json"] = hmm_json
-            # 注入到 custom_params 以便 _compose_conf_yaml 写入 strategy kwargs
             if custom_params is None:
                 custom_params = {}
-            custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
+            artifact_binding = _hmm_sp.get(BINDING_PARAM)
+            if artifact_binding is not None:
+                normalized_binding = normalize_artifact_binding(
+                    artifact_binding,
+                    verify_local_file=False,
+                )
+                custom_params["hmm_coefficients_file"] = normalized_binding["remote_path"]
+                experiment_files[BINDING_FILE] = binding_json(normalized_binding)
+                custom_params.pop(BINDING_PARAM, None)
+            else:
+                hmm_json = self._resolve_hmm_coefficients_json(_hmm_sp, data_split)
+                experiment_files["hmm_sector_coefficients.json"] = hmm_json
+                custom_params["hmm_coefficients_file"] = "hmm_sector_coefficients.json"
 
             # 严格验证：策略必须原生支持 HMM，禁止静默替换策略
             _hmm_supported_classes = {
@@ -2781,7 +2900,7 @@ class ConfigComposer:
         import re as _re
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
-        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
+        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2", "hmm_qe_assistance_contract",
                                    "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
         deps_dict: Dict[str, str] = {}
 
@@ -4106,6 +4225,7 @@ class ConfigComposer:
             QE_RUN_COVERAGE_RECEIPT_PARAM,
             QE_ACTIVE_PROFILE_SUMMARY_PARAM,
             QE_RUN_REGISTRATION_PARAM,
+            SECTOR_BLACKLIST_POLICY_PARAM,
             # Industry blacklist metadata is persisted for UI/detail traceability.
             # The executable restriction is represented by stock_pool, not by
             # passing these metadata objects into the Qlib strategy constructor.
@@ -4118,7 +4238,9 @@ class ConfigComposer:
             "filter_suspend_d",
             "suspend_filter_file",
             "suspend_filter_strict",
+            EXECUTION_DATA_EXCLUSIONS_PARAM,
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
+            "_precomputed_hmm_coefficients_artifact_binding",
         } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS | _REMOVED_GATS_RESOURCE_OPTIONS
 
         if custom_params:
@@ -6201,7 +6323,7 @@ class ConfigComposer:
         link_data_cmd = (
             '_FDD="${RDAGENT_FACTOR_DATA_WSL:-.}" && '
             'for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do '
-            '[ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .; done; true'
+            'if [ ! -e "$f" ] && [ -e "$_FDD/$f" ]; then ln -sf "$_FDD/$f" .; fi; done'
         )
 
         runner = "qrun_limit_minute.py" if seed_ensemble_enabled or backtest_freq != "day" else "qrun_limit.py"
@@ -6319,7 +6441,9 @@ class ConfigComposer:
 _FDD="${{RDAGENT_FACTOR_DATA_WSL:-}}"
 [ -n "$_FDD" ] || _FDD={manual_factor_data_default}
 for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do
-  [ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .
+  if [ ! -e "$f" ] && [ -e "$_FDD/$f" ]; then
+    ln -sf "$_FDD/$f" .
+  fi
 done"""
         direct_validation_manual = (
             f"{scrub_credentials}\npython qe_validate_direct_v2_dataset.py"
@@ -6627,10 +6751,15 @@ model_cls = {nn_class_name}
                 strict_value is True
                 or (isinstance(strict_value, str) and strict_value.lower() == "true")
             )
+        coefficient_window: dict[str, Any] | None = None
+        active_manifest_bound = False
         if strict_no_leakage:
             allowed_windows = hmm_config_json.get("coefficient_windows") or []
-            strict_window_ok = any(
-                str(window.get("preset")) == str(preset_key)
+            matching_windows = [
+                dict(window)
+                for window in allowed_windows
+                if isinstance(window, dict)
+                and str(window.get("preset")) == str(preset_key)
                 and str(window.get("test_start")) == str(test_start)
                 and str(window.get("backtest_end")) == str(backtest_end)
                 and (
@@ -6640,30 +6769,129 @@ model_cls = {nn_class_name}
                         and window.get("strict_no_leakage").lower() == "true"
                     )
                 )
-                for window in allowed_windows
-                if isinstance(window, dict)
-            )
-            if not strict_window_ok:
+            ]
+            if not matching_windows:
                 raise ValueError(
                     "strict_no_leakage HMM 只能用于已登记的无泄漏系数窗口: "
                     f"preset={preset_key}, test_start={test_start}, backtest_end={backtest_end}"
                 )
+            active_summary = strategy_params.get(QE_ACTIVE_PROFILE_SUMMARY_PARAM)
+            if active_summary is not None:
+                if not isinstance(active_summary, dict):
+                    raise ValueError("HMM active dataset summary must be an object")
+                identity_fields = {
+                    "dataset_generation": "generation",
+                    "release_id": "release_id",
+                    "dataset_manifest_identity": "dataset_manifest_sha256",
+                    "dataset_manifest_file_sha256": "dataset_manifest_file_sha256",
+                    "active_profile_sha256": "profile_sha256",
+                }
+                active_manifest_bound = any(
+                    str(active_summary.get(field) or "").strip()
+                    for field in ("dataset_manifest_sha256", "dataset_manifest_file_sha256")
+                )
+            if active_manifest_bound:
+                missing_summary = sorted(
+                    summary_field
+                    for summary_field in identity_fields.values()
+                    if not str(active_summary.get(summary_field) or "").strip()
+                )
+                if missing_summary:
+                    raise ValueError(
+                        "HMM active dataset summary is missing immutable identity fields: "
+                        f"{missing_summary}"
+                    )
+                matching_windows = [
+                    window
+                    for window in matching_windows
+                    if all(
+                        str(window.get(window_field) or "")
+                        == str(active_summary.get(summary_field) or "")
+                        for window_field, summary_field in identity_fields.items()
+                    )
+                ]
+                if not matching_windows:
+                    raise ValueError(
+                        "HMM coefficient window is not registered for the active dataset identity: "
+                        f"generation={active_summary['generation']} "
+                        f"manifest={active_summary['dataset_manifest_sha256']}"
+                    )
+            if len(matching_windows) != 1:
+                raise ValueError(
+                    "HMM coefficient window registration is ambiguous: "
+                    f"preset={preset_key}, test_start={test_start}, "
+                    f"backtest_end={backtest_end}, matches={len(matching_windows)}"
+                )
+            coefficient_window = matching_windows[0]
+            if active_manifest_bound:
+                missing_binding = sorted(
+                    field
+                    for field in (
+                        "coefficient_filename",
+                        "coefficient_sha256",
+                        "coefficient_bytes",
+                    )
+                    if coefficient_window.get(field) in (None, "")
+                )
+                if missing_binding:
+                    raise ValueError(
+                        "active-dataset HMM coefficient window is missing immutable artifact binding: "
+                        f"{missing_binding}"
+                    )
 
         local_model_path = self._local_hmm_artifact_path(str(model_path))
         local_coeff_text = ""
         if local_model_path is not None:
             try:
+                registered_filename = str(
+                    (coefficient_window or {}).get("coefficient_filename") or coeff_filename
+                ).strip()
+                if Path(registered_filename).name != registered_filename:
+                    raise ValueError("registered HMM coefficient filename must be a basename")
                 coeff_local_path = ensure_aistock_artifact_path(
-                    local_model_path.parent / coeff_filename,
+                    local_model_path.parent / registered_filename,
                     purpose="QE HMM coefficient artifact",
                     extra_roots=[AISTOCK_PROJECT_ROOT / "backend" / "data" / "hmm_models"],
                 )
                 if coeff_local_path.exists() and coeff_local_path.is_file():
+                    if coefficient_window is not None and coefficient_window.get("coefficient_sha256"):
+                        expected_sha = str(coefficient_window["coefficient_sha256"]).strip().lower()
+                        actual_sha = self._file_sha256(coeff_local_path)
+                        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha) or actual_sha != expected_sha:
+                            raise ValueError(
+                                "registered HMM coefficient SHA-256 differs from the immutable artifact: "
+                                f"expected={expected_sha} actual={actual_sha}"
+                            )
+                    if coefficient_window is not None and coefficient_window.get("coefficient_bytes") is not None:
+                        expected_bytes = coefficient_window["coefficient_bytes"]
+                        if (
+                            isinstance(expected_bytes, bool)
+                            or not isinstance(expected_bytes, int)
+                            or expected_bytes <= 0
+                            or coeff_local_path.stat().st_size != expected_bytes
+                        ):
+                            raise ValueError("registered HMM coefficient byte size differs from the immutable artifact")
                     local_coeff_text = coeff_local_path.read_text(encoding="utf-8").strip()
             except Exception as exc:
+                if coefficient_window is not None:
+                    raise
                 logger.debug("HMM local coefficient lookup skipped: %s", exc)
         if local_coeff_text:
             data = json.loads(local_coeff_text)
+            if coefficient_window is not None and active_manifest_bound:
+                expected_identity = {
+                    "generation": active_summary["generation"],
+                    "release_id": active_summary["release_id"],
+                    "dataset_manifest_sha256": active_summary["dataset_manifest_sha256"],
+                    "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+                    "active_profile_sha256": active_summary["profile_sha256"],
+                }
+                actual_identity = data.get("dataset_identity")
+                if not isinstance(actual_identity, dict) or any(
+                    str(actual_identity.get(key) or "") != str(value)
+                    for key, value in expected_identity.items()
+                ):
+                    raise ValueError("HMM coefficient artifact dataset identity differs from the active profile")
             if "daily_coefficients" in data and any(
                 data.get(field)
                 for field in (
@@ -6680,10 +6908,11 @@ model_cls = {nn_class_name}
                 )
                 return local_coeff_text
 
+        searched_filename = str((coefficient_window or {}).get("coefficient_filename") or coeff_filename)
         searched_path = (
-            str(local_model_path.parent / coeff_filename)
+            str(local_model_path.parent / searched_filename)
             if local_model_path is not None
-            else f"{model_path}/{coeff_filename}"
+            else f"{model_path}/{searched_filename}"
         )
         raise RuntimeError(
             "HMM coefficients must be provided as a precomputed AIstock-local artifact "
@@ -6717,7 +6946,7 @@ model_cls = {nn_class_name}
         import re as _re
         # 只允许从 AIstock 本地代码/资产目录复制策略类文件，避免直接读取
         # RDAgent/WSL worker workspace 或误复制运行时文件。
-        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2",
+        _STRATEGY_DEP_WHITELIST = {"score_weighted_strategy", "score_weighted_strategy_v2", "hmm_qe_assistance_contract",
                                    "tail_twap_strategy", "tail_twap_v24_strategy", "qe_board_lot_exchange", "close_execution_strategy", "qe_suspend_filter", "qe_event_risk_policy", "qe_suspend_filter_strategy", "qe_suspend_filter_score_weighted_strategy", "qe_sector_risk_overlay", "qe_sector_risk_overlay_strategy"}
 
         def _copy_deps_recursive(code: str, copied: set) -> str:
@@ -7310,4 +7539,3 @@ model_cls = {nn_class_name}
             return (None, None)
         except Exception as e:
             raise RuntimeError(f"[QE] 因子来源检测失败: factor={factor_name}, {e}") from e
-

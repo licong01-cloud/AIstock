@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from fnmatch import fnmatchcase
 import json
 import os
 import sys
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
 from scripts import issue_flow as flow  # noqa: E402
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
+DIRECT_NEIGHBOR_GLOB_PREFIX = "direct-neighbor-glob:"
 CLOSE_SYNC_STATUSES = {
     "fixed",
     "fixed_source_pending_user_restart",
@@ -138,6 +140,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/ci_failure_issue_summary.py",
     "scripts/ci/prepare_self_hosted_workspace.py",
     "scripts/ci_workflow_policy_scan.py",
+    "scripts/maintain_aistock_git_mirror.ps1",
     "scripts/configure_aistock_github_runner.ps1",
     "scripts/start_aistock_github_runner.ps1",
     "scripts/supervise_aistock_github_runner.ps1",
@@ -194,6 +197,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
     "scripts/ci/prepare_self_hosted_workspace.py": ("backend/tests/scripts/test_prepare_self_hosted_workspace.py",),
     "scripts/ci_workflow_policy_scan.py": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
+    "scripts/maintain_aistock_git_mirror.ps1": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
     "scripts/configure_aistock_github_runner.ps1": ("backend/tests/scripts/test_configure_aistock_github_runner.py",),
     "scripts/start_aistock_github_runner.ps1": ("backend/tests/scripts/test_start_aistock_github_runner.py",),
     "scripts/supervise_aistock_github_runner.ps1": ("backend/tests/scripts/test_start_aistock_github_runner.py",),
@@ -413,6 +417,26 @@ def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str,
     return sessions
 
 
+def _apply_plan_subsumption(
+    plan_keys: list[str], plans: dict[str, dict[str, Any]]
+) -> tuple[list[str], dict[str, str]]:
+    """Remove selected plans whose work is explicitly covered by another selected plan."""
+
+    ordered = list(dict.fromkeys(str(plan_key) for plan_key in plan_keys))
+    selected = set(ordered)
+    suppressed: dict[str, str] = {}
+    for covering_key in ordered:
+        plan = plans.get(covering_key) or {}
+        raw_subsumes = plan.get("subsumes") or []
+        if isinstance(raw_subsumes, str):
+            raw_subsumes = [raw_subsumes]
+        for raw_covered_key in raw_subsumes:
+            covered_key = str(raw_covered_key).strip()
+            if covered_key and covered_key != covering_key and covered_key in selected:
+                suppressed.setdefault(covered_key, covering_key)
+    return [plan_key for plan_key in ordered if plan_key not in suppressed], suppressed
+
+
 def _is_python_test_file(path: str, *, repo_root: Path) -> bool:
     normalized = _normalize_path(path)
     name = normalized.rsplit("/", 1)[-1]
@@ -480,8 +504,40 @@ def _normalize_nox_test_target(value: str) -> str | None:
     return None
 
 
+def _is_direct_neighbor_target_call(node: ast.AST | None) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_direct_neighbor_pr_targets"
+    )
+
+
+def _resolve_direct_neighbor_fallback(
+    node: ast.AST,
+    values: dict[str, list[str]],
+    direct_neighbor_variables: dict[str, list[str]],
+) -> list[str]:
+    """Return declared test globs only when a trusted slice has a fallback."""
+
+    if not isinstance(node, ast.Starred) or not isinstance(node.value, ast.BoolOp):
+        return []
+    expression = node.value
+    if not isinstance(expression.op, ast.Or) or len(expression.values) < 2:
+        return []
+    selected = expression.values[0]
+    if not isinstance(selected, ast.Name) or selected.id not in direct_neighbor_variables:
+        return []
+    fallback_targets: list[str] = []
+    for fallback in expression.values[1:]:
+        fallback_targets.extend(_resolve_nox_literal(fallback, values))
+    if not any(_normalize_nox_test_target(target) for target in fallback_targets):
+        return []
+    return [f"{DIRECT_NEIGHBOR_GLOB_PREFIX}{pattern}" for pattern in direct_neighbor_variables[selected.id]]
+
+
 def _session_test_targets(function: ast.FunctionDef) -> set[str]:
     values: dict[str, list[str]] = {}
+    direct_neighbor_variables: dict[str, list[str]] = {}
     nodes = sorted(ast.walk(function), key=lambda item: (getattr(item, "lineno", -1), getattr(item, "col_offset", -1)))
     for node in nodes:
         if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
@@ -492,7 +548,22 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             resolved = _resolve_nox_literal(node.value, values) if node.value is not None else []
             for target in targets:
-                if isinstance(target, ast.Name) and resolved:
+                if not isinstance(target, ast.Name):
+                    continue
+                if _is_direct_neighbor_target_call(node.value):
+                    test_globs = next(
+                        (
+                            _resolve_nox_literal(keyword.value, values)
+                            for keyword in node.value.keywords
+                            if keyword.arg == "test_globs"
+                        ),
+                        [],
+                    )
+                    if test_globs:
+                        direct_neighbor_variables[target.id] = test_globs
+                else:
+                    direct_neighbor_variables.pop(target.id, None)
+                if resolved:
                     values[target.id] = resolved
         elif (
             isinstance(node, ast.Call)
@@ -512,7 +583,14 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
         call_name = _nox_call_name(node)
         resolved_args: list[str] = []
         for argument in node.args:
-            resolved_args.extend(_resolve_nox_literal(argument, values))
+            resolved = _resolve_nox_literal(argument, values)
+            if not resolved:
+                resolved = _resolve_direct_neighbor_fallback(
+                    argument,
+                    values,
+                    direct_neighbor_variables,
+                )
+            resolved_args.extend(resolved)
         is_pytest_call = call_name == "_run_pytest" or (
             call_name in {"run", "run_always"} and "pytest" in {item.casefold() for item in resolved_args}
         )
@@ -522,6 +600,8 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
             target = _normalize_nox_test_target(value)
             if target:
                 targets.add(target)
+            elif value.startswith(DIRECT_NEIGHBOR_GLOB_PREFIX):
+                targets.add(value)
     return targets
 
 
@@ -545,6 +625,9 @@ def _selected_nox_test_targets(*, repo_root: Path, sessions: list[str]) -> tuple
 def _test_target_covers_path(target: str, path: str) -> bool:
     normalized_target = _normalize_path(target).rstrip("/")
     normalized_path = _normalize_path(path)
+    if normalized_target.startswith(DIRECT_NEIGHBOR_GLOB_PREFIX):
+        pattern = normalized_target.removeprefix(DIRECT_NEIGHBOR_GLOB_PREFIX)
+        return fnmatchcase(normalized_path, pattern)
     if any(token in normalized_target for token in "*?["):
         return False
     if normalized_target.endswith(".py"):
@@ -636,6 +719,7 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         for plan_key in DIRECT_BACKEND_PLAN_KEYS_BY_FILE.get(path, ()):
             if plan_key not in required_plans:
                 required_plans.append(plan_key)
+        required_plans, _ = _apply_plan_subsumption(required_plans, plans)
         for plan_key in required_plans:
             if plan_key not in selected_plan_keys:
                 selected_plan_keys.append(plan_key)
@@ -660,10 +744,22 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             mapped_files.append(path)
         elif _is_code_path(path):
             unmapped_files.append(path)
+    selected_plan_keys, suppressed_plan_keys = _apply_plan_subsumption(selected_plan_keys, plans)
+    for path, path_sessions in file_backend_sessions.items():
+        effective_sessions = list(path_sessions)
+        for covered_key, covering_key in suppressed_plan_keys.items():
+            covered_session = str((plans.get(covered_key) or {}).get("nox_session") or "").strip()
+            covering_session = str((plans.get(covering_key) or {}).get("nox_session") or "").strip()
+            if covered_session in effective_sessions:
+                effective_sessions = [session for session in effective_sessions if session != covered_session]
+                if covering_session and covering_session not in effective_sessions:
+                    effective_sessions.append(covering_session)
+        file_backend_sessions[path] = effective_sessions
     sessions = _backend_sessions_from_selection({"required_plans": selected_plan_keys}, plans)
     dev_db_plan_keys = _dev_db_plan_keys({"required_plans": selected_plan_keys}, plans)
     return {
         "selected_plan_keys": selected_plan_keys,
+        "suppressed_plan_keys": suppressed_plan_keys,
         "backend_sessions": sessions,
         "dev_db_plan_keys": dev_db_plan_keys,
         "frontend_test_targets": frontend_test_targets,
@@ -890,6 +986,7 @@ def classify_changed_files(
     ]
     catalog_selection = _catalog_backend_selection(business_files)
     selected_plan_keys = catalog_selection["selected_plan_keys"]
+    suppressed_plan_keys = catalog_selection["suppressed_plan_keys"]
     backend_sessions = catalog_selection["backend_sessions"]
     dev_db_plan_keys = catalog_selection["dev_db_plan_keys"]
     frontend_test_targets = catalog_selection["frontend_test_targets"]
@@ -940,6 +1037,13 @@ def classify_changed_files(
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
     if backend_sessions:
         reasons.append("backend code matched direct nox sessions: " + ", ".join(backend_sessions))
+    if suppressed_plan_keys:
+        reasons.append(
+            "redundant validation plans were subsumed: "
+            + ", ".join(
+                f"{covered}->{covering}" for covered, covering in suppressed_plan_keys.items()
+            )
+        )
     if dev_db_plan_keys:
         reasons.append("database validation must use the existing DEV database: " + ", ".join(dev_db_plan_keys))
     if frontend_files:
@@ -1025,6 +1129,7 @@ def classify_changed_files(
         "dependency_files": dependency_files,
         "backend_plan_keys": catalog_selection["required_plans"],
         "selected_plan_keys": selected_plan_keys,
+        "suppressed_plan_keys": suppressed_plan_keys,
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
         "mapped_backend_files": mapped_backend_files,
         "frontend_required": frontend_required,

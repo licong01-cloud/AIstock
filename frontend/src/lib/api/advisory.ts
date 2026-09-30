@@ -491,6 +491,67 @@ export type AdvisoryPriceRangeShadow = {
   message: string | null;
 };
 
+type AdvisoryEntryAuxiliary<T> = {
+  status: "AVAILABLE" | "UNAVAILABLE";
+  payload: T;
+  source_identity: { outcome_bundle_id: string; review_policy_sha256: string } | null;
+  reason_code: string | null;
+};
+
+export type AdvisoryEntryPriceCandidate = {
+  symbol: string;
+  decision_reference_price: number | null;
+  decision_price_trade_date: string | null;
+  target_raw_price_multiplier: number | null;
+  tick_size: number | null;
+  regulatory_price_range: AdvisoryPriceRangeCandidate["regulatory_price_range"];
+  entry_price: {
+    status: "AVAILABLE" | "UNAVAILABLE";
+    raw_range: AdvisoryPriceRangeCandidate["entry_price_range"];
+    calibrated_range: AdvisoryPriceRangeCandidate["calibrated_entry_price_range"];
+    calibration: AdvisoryPriceRangeCandidate["entry_gap_calibration"];
+    reason_code: string | null;
+    message: string | null;
+  };
+  take_profit: AdvisoryEntryAuxiliary<AdvisoryPriceRangeCandidate["take_profit_price"]>;
+  protective: AdvisoryEntryAuxiliary<AdvisoryPriceRangeCandidate["protective_price"]>;
+  stop_loss: AdvisoryEntryAuxiliary<AdvisoryPriceRangeCandidate["stop_loss_price"]>;
+};
+
+export type AdvisoryEntryPrice = {
+  schema_version: "advisory_entry_price_envelope_v2";
+  projection_producer_version: "advisory_entry_price_core_v1";
+  role: "ENTRY_PRICE";
+  objective_contract: "RISK_MANAGED_ADVISORY";
+  evidence_state: "EXPERIMENTAL" | "CONFIRMED_PRICE_DISTRIBUTION";
+  availability_status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+  auxiliary_availability: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+  program_id: string;
+  binding_version_id: string | null;
+  package_id: string | null;
+  package_manifest_sha256: string | null;
+  style_profile_hash: string | null;
+  review_policy_sha256: string | null;
+  universe_identity_sha256: string | null;
+  candidate_projection_sha256: string | null;
+  feature_schema_sha256: string | null;
+  training_lineage: { parent_bundle_id: string; outcome_bundle_id: string } | null;
+  role_binding_sha256: string | null;
+  price_range_bundle_id: string | null;
+  price_range_bundle_manifest_sha256: string | null;
+  decision_as_of_trade_date: string | null;
+  target_trade_date: string | null;
+  price_basis: "UNADJUSTED_CNY_DECISION_CLOSE";
+  nominal_coverage: number | null;
+  calibration_state: "UNCALIBRATED" | "CALIBRATED_INTERVAL";
+  candidate_count: number;
+  available_count: number;
+  unavailable_count: number;
+  candidates: AdvisoryEntryPriceCandidate[];
+  reason_code: string | null;
+  message: string | null;
+};
+
 export type AdvisoryModelShadowResponse = {
   status: "EXPERIMENTAL_SHADOW" | "MODEL_UNAVAILABLE";
   calibration_state: "UNCALIBRATED" | "NOT_APPLICABLE_RANKING_SCORE";
@@ -511,6 +572,14 @@ export type AdvisoryModelShadowResponse = {
   hmm_unavailable: JsonObject[];
   outcome: AdvisoryOutcomeShadow;
   price_range: AdvisoryPriceRangeShadow;
+  entry_price?: AdvisoryEntryPrice;
+  entry_price_collection?: {
+    configured_enabled: boolean;
+    last_run_at: string | null;
+    source: "SCHEDULER_MEMORY_NOT_DURABLE_EVIDENCE";
+    status: string;
+    attempts: Array<{ target_trade_date?: string | null; stage?: string; status: string; reason_code?: string }>;
+  };
   reason_code: string | null;
   message: string | null;
 };
@@ -1248,9 +1317,9 @@ export const advisoryApi = {
   async listVersionDetail(listVersionId: string): Promise<AdvisoryListVersionDetail> {
     return apiFetch<AdvisoryListVersionDetail>(`/advisory/list-versions/${encodeURIComponent(listVersionId)}`);
   },
-  async modelShadow(programId: string, targetTradeDate: string): Promise<AdvisoryModelShadowResponse> {
+  async modelShadow(programId: string, targetTradeDate: string, priceContract: "legacy-v1" | "entry-v2" = "legacy-v1", entryListVersionId?: string): Promise<AdvisoryModelShadowResponse> {
     return apiFetch<AdvisoryModelShadowResponse>(
-      `/advisory/programs/${encodeURIComponent(programId)}/model-shadow?target_trade_date=${encodeURIComponent(targetTradeDate)}`,
+      `/advisory/programs/${encodeURIComponent(programId)}/model-shadow?target_trade_date=${encodeURIComponent(targetTradeDate)}&price_contract=${priceContract}${entryListVersionId ? `&entry_list_version_id=${encodeURIComponent(entryListVersionId)}` : ""}`,
     );
   },
   async forwardRuns(programId: string, limit = 20): Promise<AdvisoryForwardRun[]> {

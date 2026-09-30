@@ -139,8 +139,7 @@ modules:
     ui_routes: [/quantevolver/experiments, /qe-archive]
     test_plans:
       required_on_change: [l0, qe_data_contract_backend]
-      recommended: [qe_read_backend]
-      recommended: [qe_read_l3]
+      recommended: [qe_read_backend, qe_read_l3]
   - module_id: qe.data_completeness
     display_name: QE data completeness
     parent_module: qe
@@ -261,7 +260,8 @@ modules:
     ui_routes: [/hmm-risk]
     api_routes: [/api/v1/hmm-risk/*]
     test_plans:
-      required_on_change: [l0, hmm_risk_pr_slice, hmm_risk_backend, hmm_risk_ui]
+      required_on_change: [l0, hmm_risk_pr_slice, hmm_risk_ui]
+      recommended: [hmm_risk_backend]
   - module_id: factor_library
     display_name: Factor library
     module_type: product_feature
@@ -297,6 +297,7 @@ modules:
     ui_routes: [/qlib]
     test_plans:
       required_on_change: [l0, qlib_data_backend]
+      recommended: [frontend_type_lint]
   - module_id: market_regime
     display_name: Market Regime
     module_type: data_pipeline
@@ -327,7 +328,7 @@ modules:
     ui_routes: [/local-data, /qlib]
     test_plans:
       required_on_change: [l0, data_sync_autonomy_backend]
-      recommended: [data_sync_autonomy_backend]
+      recommended: [data_sync_autonomy_backend, frontend_type_lint]
   - module_id: analysis
     display_name: Stock analysis
     module_type: product_feature

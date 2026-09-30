@@ -19,7 +19,7 @@ from backend.services.hmm_risk.risk_l1_g2b import (
     load_model,
     predict_single_date,
 )
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.contracts import canonical_sha256
 
 REASON_WRITER = "hmm_risk_risk_l1_prediction_write_failed"
 REASON_READBACK = "hmm_risk_risk_l1_prediction_readback_mismatch"

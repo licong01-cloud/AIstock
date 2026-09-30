@@ -929,3 +929,28 @@ research surface、rotation capability、forward confirmation与advisory五轴�
 | decision | 精确方案 | 状态 |
 |---|---|---|
 | C-013-G2A-V16-AUTHORITY-REBIND-A | v1.6显式双input读取；仅source/mapping identity可变；完整logical panel/benchmark必须bitwise canonical相同；重算双fresh-process与新acceptance | USER_APPROVED_IMPLEMENTED_TESTED_PENDING_FORMAL_RECLOSURE |
+
+### 24.9 终止实验链源码退役边界（BUG-1519）
+
+`market_relative_ridge_candidate`、`market_relative_ridge_holdout`、
+`market_relative_jump_spike` 与 G2-A v1.5 已分别达到本文登记的
+`NOT_AVAILABLE`/`TERMINAL` 终态，不再具有可执行训练、CLI 或候选生成入口。
+其生产源码与专属测试应原子删除；删除不撤销历史实验结论，也不允许通过兼容代理、
+旧模块转发或复制实现保留隐式入口。
+
+当前 v1.6/G2-C 仍需要的 `PreparedComponent`、`Preprocessor`、
+`SequenceData`、`causal_states` 与 `fit_jump_model` 属于当前市场上下文的通用算法能力，
+迁移到语义中立的 `backend/services/hmm_risk/jump_model.py`。该模块不拥有实验选择、
+holdout、artifact、数据库或 runtime 行为，且只接受当前批准的 K=2、jump penalty=4.0、
+seed=42 参数。现有 preprocess receipt schema identity 保持不变，避免改变已生效的
+V16 model/input authority。
+
+v1.4 仅保留 V16 authority-rebind 所需的外部冻结 receipt 只读校验：验证外层 canonical
+hash、contract/process identity、输入 identity、被 paired diagnostic 实际消费的有限
+Rank IC 序列，以及 tail/database/runtime 均未执行。v1.4/v1.5 的 fit、battery、label
+transform、closure 和 CLI 训练分支全部不再可执行；V16 仍须显式提供并校验冻结 v1.4
+reference，不得重算、改写或伪造 baseline。
+
+该退役不改变 V16/G2-C 的 PIT、31-sector denominator、identity、schema、score、state、
+writer/readback 或 fail-closed 合同，不授权训练、实验、tail、DDL/DML、依赖安装、runtime
+activation 或进程控制。

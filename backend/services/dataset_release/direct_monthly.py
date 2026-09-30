@@ -23,13 +23,18 @@ import sys
 import tempfile
 from typing import Any, Callable, Mapping, Sequence
 
+from .canonical import digest_named_fields
 from .errors import DatasetReleaseError
+from .shared_sector_context import build_release_sw_l2_code_map_payload
 
 
 DIRECT_MONTHLY_SCHEMA = "qe_direct_monthly_candidate_v1"
 LEGACY_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v1"
 PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v2"
 DIRECT_MONTHLY_STATE_SCHEMA = "qe_direct_monthly_state_v3"
+DIRECT_SUCCESSOR_COMPONENTS = frozenset(
+    {"sector_context", "sector_quote_hotfix", "sector_data_completion"}
+)
 DIRECT_COMPONENTS = (
     "daily_bin",
     "minute_bin",
@@ -81,7 +86,7 @@ DIRECT_INDEX_CODES = (
     "399107.SZ",
 )
 _CANDIDATE_NAME = re.compile(
-    r"[0-9]{8}-qe_hmm_full_v2-direct-[0-9]{8}(?:-r[1-9][0-9]*)?-candidate\Z"
+    r"[0-9]{8}-qe_hmm_full_v2-direct-[0-9]{8}(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?-candidate\Z"
 )
 
 
@@ -113,9 +118,7 @@ class DirectMonthlyLayout:
         if candidate.parent != parent or _CANDIDATE_NAME.fullmatch(candidate.name) is None:
             raise DirectMonthlyError("direct candidate must be a canonical direct child of candidate_root")
         if baseline is not None and (
-            baseline.parent != parent
-            or baseline == candidate
-            or (baseline.exists() and not baseline.is_dir())
+            baseline.parent != parent or baseline == candidate or (baseline.exists() and not baseline.is_dir())
         ):
             raise DirectMonthlyError("baseline candidate must be a different direct child of candidate_root")
         if candidate.exists() and not candidate.is_dir():
@@ -157,13 +160,7 @@ class DirectMonthlyLayout:
 
     @property
     def industry_authority_root(self) -> Path:
-        return (
-            self.candidate_parent
-            / ".industry_pit_authority"
-            / "qe_hmm_full_v2"
-            / self.cutoff.isoformat()
-            / "full"
-        )
+        return self.candidate_parent / ".industry_pit_authority" / "qe_hmm_full_v2" / self.cutoff.isoformat() / "full"
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,10 +284,24 @@ def _upgrade_legacy_state(value: Any) -> Any:
             "status": "PENDING",
         }
         schema = DIRECT_MONTHLY_STATE_SCHEMA
-    if schema != DIRECT_MONTHLY_STATE_SCHEMA or set(upgraded_components) != set(DIRECT_COMPONENTS):
+    if (
+        schema != DIRECT_MONTHLY_STATE_SCHEMA
+        or not set(DIRECT_COMPONENTS).issubset(upgraded_components)
+        or set(upgraded_components) - set(DIRECT_COMPONENTS) - DIRECT_SUCCESSOR_COMPONENTS
+    ):
         return value
     upgraded["components"] = upgraded_components
     upgraded["schema_version"] = schema
+    if upgraded.get("status") == DIRECT_TERMINAL_STATUS and "sector_context" in upgraded_components:
+        # Release successors created before BUG-1591 carried the component
+        # evidence but omitted the direct runner's constant no-side-effect
+        # fields.  Normalize those constants only in memory so status remains
+        # read-only and immutable candidates are never rewritten.
+        upgraded.setdefault("profile", "qe_hmm_full_v2")
+        upgraded.setdefault("source_freeze", False)
+        upgraded.setdefault("full_history_content_hash", False)
+        upgraded.setdefault("prepublish_source_recheck", False)
+        upgraded.setdefault("resource_admission", False)
     if upgraded.get("status") == DIRECT_TERMINAL_STATUS and any(
         record.get("status") != "PASS" for record in upgraded_components.values()
     ):
@@ -331,7 +342,9 @@ class DirectMonthlyRunner:
         self,
         handlers: Mapping[str, ComponentHandler],
         *,
-        validator: Callable[[DirectMonthlyLayout], Mapping[str, Any]] = lambda layout: validate_direct_candidate(layout),
+        validator: Callable[[DirectMonthlyLayout], Mapping[str, Any]] = lambda layout: validate_direct_candidate(
+            layout
+        ),
     ) -> None:
         if set(handlers) != set(DIRECT_COMPONENTS):
             raise DirectMonthlyError("direct monthly handlers must cover all components exactly")
@@ -426,10 +439,10 @@ def _validate_state(layout: DirectMonthlyLayout, value: Any) -> None:
         or value.get("profile") != "qe_hmm_full_v2"
         or value.get("cutoff") != layout.cutoff.isoformat()
         or value.get("candidate_root") != str(layout.candidate_root)
-        or value.get("baseline_root")
-        != (str(layout.baseline_root) if layout.baseline_root is not None else None)
+        or value.get("baseline_root") != (str(layout.baseline_root) if layout.baseline_root is not None else None)
         or not isinstance(components, Mapping)
-        or set(components) != set(DIRECT_COMPONENTS)
+        or not set(DIRECT_COMPONENTS).issubset(components)
+        or set(components) - set(DIRECT_COMPONENTS) - DIRECT_SUCCESSOR_COMPONENTS
         or value.get("source_freeze") is not False
         or value.get("full_history_content_hash") is not False
         or value.get("prepublish_source_recheck") is not False
@@ -447,6 +460,10 @@ def _validate_state(layout: DirectMonthlyLayout, value: Any) -> None:
             "FAILED",
         }:
             raise DirectMonthlyError(f"direct monthly component state differs: {component}")
+    for component in DIRECT_SUCCESSOR_COMPONENTS & set(components):
+        record = components[component]
+        if not isinstance(record, Mapping) or record.get("status") != "PASS":
+            raise DirectMonthlyError(f"direct successor component state differs: {component}")
 
 
 def compact_status(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -457,7 +474,8 @@ def compact_status(value: Mapping[str, Any]) -> dict[str, Any]:
         "cutoff": value["cutoff"],
         "candidate_root": value["candidate_root"],
         "components": {
-            name: value["components"][name]["status"] for name in DIRECT_COMPONENTS
+            name: value["components"][name]["status"]
+            for name in (*DIRECT_COMPONENTS, *sorted(DIRECT_SUCCESSOR_COMPONENTS & set(value["components"])))
         },
         "source_freeze": False,
         "full_history_content_hash": False,
@@ -595,14 +613,14 @@ def hardlink_baseline_components(layout: DirectMonthlyLayout) -> Mapping[str, An
                 target.mkdir(parents=True, exist_ok=True)
                 continue
             if not source.is_file():
-                raise DirectMonthlyError(f"baseline component contains an unsupported entry: {directory_name}/{relative}")
+                raise DirectMonthlyError(
+                    f"baseline component contains an unsupported entry: {directory_name}/{relative}"
+                )
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 os.link(source, target)
             except OSError as exc:
-                raise DirectMonthlyError(
-                    f"same-volume hardlink reuse failed for {directory_name}/{relative}"
-                ) from exc
+                raise DirectMonthlyError(f"same-volume hardlink reuse failed for {directory_name}/{relative}") from exc
             linked_files += 1
             logical_bytes += source.stat().st_size
     target_reports = layout.reports_root
@@ -659,8 +677,7 @@ def discover_latest_validated_baseline(candidate_parent: Path, *, cutoff: date) 
 
 def default_candidate_path(candidate_parent: Path, *, cutoff: date, observed_on: date) -> Path:
     return candidate_parent / (
-        f"{cutoff.strftime('%Y%m%d')}-qe_hmm_full_v2-direct-"
-        f"{observed_on.strftime('%Y%m%d')}-candidate"
+        f"{cutoff.strftime('%Y%m%d')}-qe_hmm_full_v2-direct-{observed_on.strftime('%Y%m%d')}-candidate"
     )
 
 
@@ -680,9 +697,7 @@ def discover_latest_existing_direct_candidate(
             layout = DirectMonthlyLayout.create(
                 candidate_parent=candidate_parent,
                 candidate_root=candidate,
-                baseline_root=(
-                    Path(str(raw["baseline_root"])) if raw.get("baseline_root") is not None else None
-                ),
+                baseline_root=(Path(str(raw["baseline_root"])) if raw.get("baseline_root") is not None else None),
                 cutoff=cutoff,
             )
             state = read_state(layout)
@@ -753,9 +768,10 @@ def _run_qlib_component(
         command.append("--skip-validation")
     log_root = layout.candidate_root / "logs"
     log_root.mkdir(parents=True, exist_ok=True)
-    with (log_root / f"{component}.stdout.log").open("a", encoding="utf-8") as stdout, (
-        log_root / f"{component}.stderr.log"
-    ).open("a", encoding="utf-8") as stderr:
+    with (
+        (log_root / f"{component}.stdout.log").open("a", encoding="utf-8") as stdout,
+        (log_root / f"{component}.stderr.log").open("a", encoding="utf-8") as stderr,
+    ):
         completed = subprocess.run(
             command,
             cwd=project_root,
@@ -874,10 +890,7 @@ def _write_bytes_atomic(path: Path, payload: bytes) -> None:
 def _write_json_atomic(path: Path, value: Mapping[str, Any]) -> None:
     _write_bytes_atomic(
         path,
-        (
-            json.dumps(dict(value), ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
-            + "\n"
-        ).encode("utf-8"),
+        (json.dumps(dict(value), ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n").encode("utf-8"),
     )
 
 
@@ -1037,13 +1050,15 @@ def _daily_benchmark_complete(layout: DirectMonthlyLayout) -> bool:
             or receipt.get("full_history_content_hash") is not False
         ):
             return False
-        benchmark_line = (
-            f"{DIRECT_BENCHMARK_CODE}\t{DIRECT_START_DATE.isoformat()}\t{layout.cutoff.isoformat()}"
-        )
+        benchmark_line = f"{DIRECT_BENCHMARK_CODE}\t{DIRECT_START_DATE.isoformat()}\t{layout.cutoff.isoformat()}"
         all_lines = all_path.read_text(encoding="utf-8").splitlines()
         stock_lines = stocks_path.read_text(encoding="utf-8").splitlines()
         stock_codes = [line.split("\t", 1)[0].upper() for line in stock_lines]
-        if all_lines.count(benchmark_line) != 1 or DIRECT_BENCHMARK_CODE in stock_codes:
+        if (
+            all_lines.count(benchmark_line) != 1
+            or DIRECT_BENCHMARK_CODE in stock_codes
+            or not set(stock_lines).issubset(set(all_lines))
+        ):
             return False
         if benchmark_path.read_text(encoding="utf-8").splitlines() != [benchmark_line]:
             return False
@@ -1057,10 +1072,7 @@ def _daily_benchmark_complete(layout: DirectMonthlyLayout) -> bool:
             "meta_export": meta_path,
             "source_index_daily_h5": layout.components_root / "index_context" / "index_daily.h5",
             "daily_export_report": layout.reports_root / "daily_bin_candidate_stock_daily_all.json",
-            **{
-                f"feature_{field}": feature_root / f"{field}.day.bin"
-                for field in DIRECT_BENCHMARK_FIELDS
-            },
+            **{f"feature_{field}": feature_root / f"{field}.day.bin" for field in DIRECT_BENCHMARK_FIELDS},
         }
         if set(pins) != set(paths):
             return False
@@ -1133,10 +1145,10 @@ def build_daily_benchmark_component(
         if feature_target.exists():
             raise DirectMonthlyError("daily benchmark target appeared during staging")
 
-        benchmark_line = (
-            f"{DIRECT_BENCHMARK_CODE}\t{DIRECT_START_DATE.isoformat()}\t{layout.cutoff.isoformat()}"
+        benchmark_line = f"{DIRECT_BENCHMARK_CODE}\t{DIRECT_START_DATE.isoformat()}\t{layout.cutoff.isoformat()}"
+        all_payload = (
+            original_all + (b"" if original_all.endswith(b"\n") else b"\n") + benchmark_line.encode("utf-8") + b"\n"
         )
-        all_payload = original_all + (b"" if original_all.endswith(b"\n") else b"\n") + benchmark_line.encode("utf-8") + b"\n"
         stocks_path = daily_root / "instruments" / "stock_universe.txt"
         benchmark_path = daily_root / "instruments" / "benchmark.txt"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -1188,10 +1200,7 @@ def build_daily_benchmark_component(
             "meta_export": meta_path,
             "source_index_daily_h5": layout.components_root / "index_context" / "index_daily.h5",
             "daily_export_report": export_report_path,
-            **{
-                f"feature_{field}": feature_target / f"{field}.day.bin"
-                for field in DIRECT_BENCHMARK_FIELDS
-            },
+            **{f"feature_{field}": feature_target / f"{field}.day.bin" for field in DIRECT_BENCHMARK_FIELDS},
         }
         receipt = {
             "schema_version": DIRECT_BENCHMARK_SCHEMA,
@@ -1208,9 +1217,7 @@ def build_daily_benchmark_component(
             "source_freeze": False,
             "full_history_content_hash": False,
             "sha256": {name: _sha256_file(path) for name, path in pin_paths.items()},
-            "staged_feature_sha256": {
-                name: value for name, value in sorted(bin_hashes.items())
-            },
+            "staged_feature_sha256": {name: value for name, value in sorted(bin_hashes.items())},
         }
         _write_json_atomic(_benchmark_receipt_path(layout), receipt)
     if not _daily_benchmark_complete(layout):
@@ -1290,12 +1297,11 @@ def build_suspend_d_component(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
     ]
     source = source.merge(spans, on="ts_code", how="inner", validate="many_to_many")
     source = source.loc[
-        (source["trade_date"] >= source["eligible_start"])
-        & (source["trade_date"] <= source["eligible_end"])
+        (source["trade_date"] >= source["eligible_start"]) & (source["trade_date"] <= source["eligible_end"])
     ]
-    source = source.loc[
-        :, ["trade_date", "ts_code", "suspend_type", "suspend_timing"]
-    ].sort_values(["trade_date", "ts_code"])
+    source = source.loc[:, ["trade_date", "ts_code", "suspend_type", "suspend_timing"]].sort_values(
+        ["trade_date", "ts_code"]
+    )
     if source.empty:
         raise DirectMonthlyError("suspend_d has no rows inside the canonical-v2 PIT universe")
     if source.duplicated(["trade_date", "ts_code"]).any():
@@ -1347,6 +1353,7 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
     import pyarrow.parquet as pq
 
     from backend.data_service import qe_data_service as qe_data
+    from backend.data_service.security_source_identity import load_default_security_source_identity_manifest
     from backend.qlib_exporter.authoritative_bin_exporter import resolve_stock_universe_from_pit_spans
     from backend.services.dataset_release.static_schema import STATIC_ORDERED_COLUMNS
     from backend.services.industry_code_map import UNKNOWN_L2_CODE_ID
@@ -1364,6 +1371,9 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
     if output.exists() and any(output.iterdir()):
         raise DirectMonthlyError("partial factor_h5_static output requires explicit inspection")
     output.mkdir(parents=True, exist_ok=True)
+    security_identity = load_default_security_source_identity_manifest()
+    security_identity_path = output / "security_source_identity.json"
+    shutil.copyfile(security_identity.source_path, security_identity_path)
     codes = resolve_stock_universe_from_pit_spans(
         start=DIRECT_START_DATE,
         end=layout.cutoff,
@@ -1372,7 +1382,7 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
     )
     spans = _load_pit_spans(DIRECT_UNIVERSE_KEY, DIRECT_START_DATE, layout.cutoff)
     industry_intervals = _read_classification_intervals(layout)
-    l2_projection, l2_code_map = _load_sw_l2_projection()
+    l2_projection, l2_code_map, l2_code_map_payload = _load_sw_l2_projection()
     h5_names = {
         "daily_pv.h5": "daily_pv",
         "daily_basic.h5": "daily_basic",
@@ -1392,7 +1402,18 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
             lookback_start = max(DIRECT_START_DATE, chunk_start - pd.Timedelta(days=45).to_pytimedelta())
             daily = qe_data.load_daily_pv(codes, lookback_start, chunk_end)
             daily_basic = qe_data.load_daily_basic(codes, lookback_start, chunk_end)
-            moneyflow = qe_data.load_moneyflow(codes, lookback_start, chunk_end)
+            moneyflow_source = qe_data.load_moneyflow(
+                codes,
+                lookback_start,
+                chunk_end,
+                security_identity=security_identity,
+                preserve_source_codes=True,
+            )
+            moneyflow = qe_data.canonicalize_moneyflow_source_frame(
+                moneyflow_source,
+                codes,
+                security_identity=security_identity,
+            )
             bak_basic = qe_data.load_bak_basic(codes, lookback_start, chunk_end)
             cyq_perf = qe_data.load_cyq_perf(codes, lookback_start, chunk_end)
             margin = qe_data.load_margin_detail(codes, lookback_start, chunk_end)
@@ -1408,7 +1429,7 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
             raw_frames = {
                 "daily_pv.h5": daily,
                 "daily_basic.h5": daily_basic,
-                "moneyflow.h5": moneyflow,
+                "moneyflow.h5": moneyflow_source,
                 "bak_basic.h5": bak_basic,
                 "cyq_perf.h5": cyq_perf,
                 "sector_data.h5": sector_chunk,
@@ -1454,7 +1475,18 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
             if static.empty:
                 raise DirectMonthlyError(f"PIT factor denominator is empty for {chunk_start}~{chunk_end}")
             for name, frame in raw_frames.items():
-                bounded = _filter_frame_to_pit(frame, spans, chunk_start, chunk_end)
+                bounded = (
+                    _filter_moneyflow_source_to_pit(
+                        frame,
+                        spans=spans,
+                        start=chunk_start,
+                        end=chunk_end,
+                        security_identity=security_identity,
+                        canonical_codes=codes,
+                    )
+                    if name == "moneyflow.h5"
+                    else _filter_frame_to_pit(frame, spans, chunk_start, chunk_end)
+                )
                 if bounded.empty and name in {"daily_pv.h5", "daily_basic.h5", "moneyflow.h5"}:
                     raise DirectMonthlyError(f"required factor file is empty for {name}:{chunk_start}~{chunk_end}")
                 if not bounded.empty:
@@ -1503,6 +1535,8 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
         ),
         encoding="utf-8",
     )
+    code_map_path = output / "sector_code_map.json"
+    _write_json_new(code_map_path, l2_code_map_payload)
     _write_json_new(
         meta_path,
         {
@@ -1515,6 +1549,17 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
             "static_rows": static_rows,
             "static_columns": len(STATIC_ORDERED_COLUMNS),
             "sector_authority": DIRECT_SECTOR_AUTHORITY,
+            "sector_code_map": {
+                "path": "sector_code_map.json",
+                "sha256": _sha256_file(code_map_path),
+                "schema_version": l2_code_map_payload["schema_version"],
+                "code_map_digest": l2_code_map_payload["code_map_digest"],
+                "member_backed_digest": l2_code_map_payload["member_backed_digest"],
+            },
+            "security_source_identity": {
+                "path": "security_source_identity.json",
+                **security_identity.evidence(),
+            },
             "source_freeze": False,
             "full_history_content_hash": False,
         },
@@ -1721,10 +1766,47 @@ def _filter_frame_to_pit(frame, spans, start: date, end: date):
     ]
     columns = list(frame.columns)
     if merged.empty:
-        return pd.DataFrame(columns=columns, index=pd.MultiIndex.from_arrays([[], []], names=["datetime", "instrument"]))
+        return pd.DataFrame(
+            columns=columns, index=pd.MultiIndex.from_arrays([[], []], names=["datetime", "instrument"])
+        )
     if merged.duplicated(["datetime", "instrument"]).any():
         raise DirectMonthlyError("PIT join produced duplicate factor keys")
     return merged.set_index(["datetime", "instrument"])[columns].sort_index()
+
+
+def _filter_moneyflow_source_to_pit(
+    frame,
+    *,
+    spans,
+    start: date,
+    end: date,
+    security_identity,
+    canonical_codes: Sequence[str],
+):
+    """Apply canonical PIT spans while retaining source-specific HDF identities."""
+
+    import pandas as pd
+
+    if frame is None or frame.empty:
+        return frame
+    columns = list(frame.columns)
+    source = frame.reset_index().rename(columns={"datetime": "trade_date", "instrument": "ts_code"})
+    annotated = security_identity.annotate_source_rows(
+        source,
+        canonical_codes=canonical_codes,
+        source_dataset="market.moneyflow_ts",
+    )
+    annotated["_source_ts_code"] = annotated.pop("ts_code")
+    annotated["datetime"] = pd.to_datetime(annotated["trade_date"])
+    annotated["instrument"] = annotated["_canonical_ts_code"]
+    canonical = annotated.set_index(["datetime", "instrument"])
+    bounded = _filter_frame_to_pit(canonical, spans, start, end).reset_index()
+    if bounded.empty:
+        return frame.iloc[0:0].copy()
+    bounded["datetime"] = pd.to_datetime(bounded.pop("trade_date"))
+    bounded["instrument"] = bounded.pop("_source_ts_code")
+    bounded = bounded.drop(columns=["_canonical_ts_code"])
+    return bounded.set_index(["datetime", "instrument"]).sort_index()[columns]
 
 
 def _slice_frame(frame, start: date, end: date):
@@ -1768,9 +1850,7 @@ def _read_classification_intervals(
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise DirectMonthlyError(
-                    f"classification PIT row is invalid at line {line_number}"
-                ) from exc
+                raise DirectMonthlyError(f"classification PIT row is invalid at line {line_number}") from exc
             identity = row.get("identity")
             if row.get("unavailable_reason") is not None or not isinstance(identity, Mapping):
                 continue
@@ -1788,9 +1868,7 @@ def _read_classification_intervals(
                     end_values.append(date.fromisoformat(str(row["causal_use_to_exclusive"])))
                 end_exclusive = min(end_values)
             except ValueError as exc:
-                raise DirectMonthlyError(
-                    f"classification PIT dates are invalid at line {line_number}"
-                ) from exc
+                raise DirectMonthlyError(f"classification PIT dates are invalid at line {line_number}") from exc
             if end_exclusive <= start:
                 continue
             intervals.setdefault(symbol, []).append(
@@ -1819,7 +1897,7 @@ def _read_classification_intervals(
     return normalized
 
 
-def _load_sw_l2_projection() -> tuple[Mapping[str, str], Mapping[str, int]]:
+def _load_sw_l2_projection() -> tuple[Mapping[str, str], Mapping[str, int], Mapping[str, Any]]:
     import pandas as pd
 
     from backend.db.pg_pool import get_conn
@@ -1852,7 +1930,30 @@ def _load_sw_l2_projection() -> tuple[Mapping[str, str], Mapping[str, int]]:
     missing_ids = sorted(set(projection.values()).difference(code_map))
     if missing_ids:
         raise DirectMonthlyError(f"SW L2 published codes lack stable ids: {missing_ids[:5]}")
-    return projection, code_map
+    ordered_projection = [
+        {"taxonomy_l2_code": code, "canonical_l2_code": projection[code]} for code in sorted(projection)
+    ]
+    ordered_catalog = [
+        {"canonical_l2_code": code, "l2_code_id": int(code_map[code])}
+        for code in sorted(code_map, key=lambda value: (code_map[value], value))
+    ]
+    authority_sha256 = digest_named_fields(
+        "aistock_sw_l2_catalog_snapshot_v1",
+        {
+            "projection": ordered_projection,
+            "catalog": ordered_catalog,
+        },
+    )
+    try:
+        payload = build_release_sw_l2_code_map_payload(
+            code_to_id=code_map,
+            member_backed_codes=sorted(set(projection.values())),
+            authority_id=f"market.sw_index_classify:SW2021:L2:{authority_sha256[:16]}",
+            authority_sha256=authority_sha256,
+        )
+    except ValueError as exc:
+        raise DirectMonthlyError(f"SW L2 shared code map is invalid: {exc}") from exc
+    return projection, code_map, payload
 
 
 def _classify_panel_index(
@@ -1877,9 +1978,7 @@ def _classify_panel_index(
         dates = keys.loc[absolute_positions, "datetime"]
         matched = np.zeros(len(positions), dtype=np.int8)
         for interval in intervals_by_symbol.get(symbol, ()):
-            mask = (dates >= pd.Timestamp(interval.start)) & (
-                dates < pd.Timestamp(interval.end_exclusive)
-            )
+            mask = (dates >= pd.Timestamp(interval.start)) & (dates < pd.Timestamp(interval.end_exclusive))
             if not bool(mask.any()):
                 continue
             local = np.flatnonzero(mask.to_numpy())
@@ -1908,7 +2007,7 @@ def _load_sw_daily_for_projection(index_codes: Sequence[str], start: date, end: 
     with get_conn() as connection:
         frame = pd.read_sql(
             f"""
-            SELECT trade_date,ts_code,{','.join(columns)}
+            SELECT trade_date,ts_code,{",".join(columns)}
             FROM market.sw_daily
             WHERE trade_date BETWEEN %s AND %s
               AND ts_code = ANY(%s)
@@ -1935,6 +2034,7 @@ def _build_sector_frame_from_classification(
     l2_code_map: Mapping[str, int],
     start: date,
     end: date,
+    published_daily=None,
 ):
     import numpy as np
     import pandas as pd
@@ -1948,11 +2048,34 @@ def _build_sector_frame_from_classification(
     )
     if assignments.empty:
         return pd.DataFrame()
-    published = _load_sw_daily_for_projection(
-        assignments["index_l2_code"].dropna().astype(str).unique().tolist(),
-        start,
-        end,
-    )
+    if published_daily is None:
+        published = _load_sw_daily_for_projection(
+            assignments["index_l2_code"].dropna().astype(str).unique().tolist(),
+            start,
+            end,
+        )
+    else:
+        published = published_daily.copy()
+        required = {
+            "datetime",
+            "index_l2_code",
+            "open",
+            "high",
+            "low",
+            "close",
+            "pct_change",
+            "vol",
+            "amount",
+            "pe",
+            "pb",
+            "total_mv",
+        }
+        if set(published.columns) != required:
+            raise DirectMonthlyError("frozen published SW L2 daily snapshot columns differ")
+        published["datetime"] = pd.to_datetime(published["datetime"]).dt.normalize()
+        published["index_l2_code"] = published["index_l2_code"].map(_canonical_index_code)
+        if published.duplicated(["datetime", "index_l2_code"]).any():
+            raise DirectMonthlyError("frozen published SW L2 daily snapshot contains duplicate keys")
     sw_fields = {
         "open": "sw2_open",
         "high": "sw2_high",
@@ -1991,9 +2114,7 @@ def _build_sector_frame_from_classification(
         if not flow_assignment.empty:
             available = [column for column in flow_fields if column in moneyflow.columns]
             if available:
-                flow = moneyflow.loc[flow_assignment.index, available].join(
-                    flow_assignment[["index_l2_code"]]
-                )
+                flow = moneyflow.loc[flow_assignment.index, available].join(flow_assignment[["index_l2_code"]])
                 flow = flow.reset_index()
                 grouped = (
                     flow.groupby(["datetime", "index_l2_code"], as_index=False)[available]
@@ -2024,9 +2145,7 @@ def _build_sector_frame_from_classification(
             how="left",
             validate="many_to_one",
         )
-    rows["l2_code_id"] = (
-        rows["index_l2_code"].map(l2_code_map).fillna(-1).astype("int16")
-    )
+    rows["l2_code_id"] = rows["index_l2_code"].map(l2_code_map).fillna(-1).astype("int16")
     value_columns = [*sw_fields.values(), *flow_fields.values()]
     for column in value_columns:
         if column not in rows:
@@ -2193,8 +2312,7 @@ def _component_output_complete(layout: DirectMonthlyLayout, component: str) -> b
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     return (
-        value.get("schema_version") == DIRECT_FACTOR_SCHEMA
-        and value.get("sector_authority") == DIRECT_SECTOR_AUTHORITY
+        value.get("schema_version") == DIRECT_FACTOR_SCHEMA and value.get("sector_authority") == DIRECT_SECTOR_AUTHORITY
     )
 
 
@@ -2234,6 +2352,7 @@ def validate_direct_candidate(layout: DirectMonthlyLayout) -> Mapping[str, Any]:
                 "static_factors.parquet",
                 "static_factors_schema.json",
                 "static_factors_schema.csv",
+                "sector_code_map.json",
             )
         ),
         "index_context": _meta_reaches_cutoff(index / "meta.json", layout.cutoff)
@@ -2344,9 +2463,7 @@ def validate_direct_candidate_with_smoke(
                 check=False,
             )
             if completed.returncode != 0:
-                raise DirectMonthlyError(
-                    f"direct candidate WSL smoke failed with code {completed.returncode}"
-                )
+                raise DirectMonthlyError(f"direct candidate WSL smoke failed with code {completed.returncode}")
     index_frame = pd.read_hdf(layout.components_root / "index_context" / "index_daily.h5", key="data")
     if index_frame.empty:
         raise DirectMonthlyError("HMM index input smoke found an empty index frame")

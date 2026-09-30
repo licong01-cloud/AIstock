@@ -6,7 +6,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class PredictionReplaySource(BaseModel):
+    """Resolved immutable prediction identity staged into a target workspace."""
+
+    source_task_id: str
+    source_loop_index: int = Field(ge=1)
+    source_node_id: str
+    catalog_path: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: int = Field(gt=0)
 
 
 class ExecutionContext(BaseModel):
@@ -17,6 +28,7 @@ class ExecutionContext(BaseModel):
     node_id: str | None = None
     callback_url: str | None = None
     model_source: dict[str, Any] | None = None
+    prediction_replay_source: PredictionReplaySource | None = None
     extra_experiment_files: dict[str, str] | None = None
     require_fixed_seed: bool = False
     resource_session_id: str | None = None

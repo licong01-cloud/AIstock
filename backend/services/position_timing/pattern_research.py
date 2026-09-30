@@ -67,6 +67,11 @@ from .pattern_strategy import (
     breakout_observed,
     pattern_feature_frame,
 )
+from .pattern_adj_factor_restatement import (
+    AdjFactorRestatementAuthority,
+    audit_candidate_adj_factor_restatement,
+    open_adj_factor_restatement_authority,
+)
 from .pattern_rights_issue import (
     RIGHTS_ISSUE_PARTICIPATION_POLICY,
     RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256,
@@ -84,6 +89,7 @@ ARTIFACT_FOLDER = "pattern_strategy_v1"
 LEGACY_REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v1"
 FACTOR_COVERAGE_REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v2"
 REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v3"
+RESTATEMENT_REQUEST_SCHEMA = "position_timing_pattern_strategy_request_v4"
 RECEIPT_SCHEMA = "position_timing_pattern_strategy_receipt_v1"
 BUNDLE_SCHEMA = "position_timing_pattern_strategy_bundle_v1"
 POPULATION_SEED_TEXT = "20260911"
@@ -104,6 +110,8 @@ PRE_OUTCOME_SUPERSESSION_REASON = "PRE_OUTCOME_JSON_ROUND_TRIP_IDENTITY_FIX"
 INCOMPLETE_COVERAGE_SUPERSESSION_REASON = (
     "COVERAGE_INCOMPLETE_SUSPENDED_EX_DATE_REFERENCE_MAPPING_FIX"
 )
+SOURCE_REVISION_SELECTION_AUTHORITY = "FROZEN_SOURCE_REVISION_REQUEST"
+SOURCE_REVISION_REASON = "CANDIDATE_ADJ_FACTOR_RESTATEMENT_R5"
 
 CORPORATE_ACTION_APPLICATION_POLICY: Mapping[str, Any] = {
     "schema_version": "position_timing_pattern_corporate_action_application_policy_v2",
@@ -244,6 +252,7 @@ def apply_pattern_corporate_action_policy(
     start: date,
     end: date,
     candidate_source_sha256: str,
+    prevalidated_action_keys: Sequence[tuple[str, date]] = (),
 ) -> tuple[CorporateActionBook, Mapping[str, Any]]:
     """Validate stock distributions against qfq factors and normalize exceptions.
 
@@ -265,6 +274,17 @@ def apply_pattern_corporate_action_policy(
     tolerance = Decimal(
         str(CORPORATE_ACTION_APPLICATION_POLICY["stock_factor_relative_tolerance"])
     )
+    prevalidated = tuple(
+        sorted({(str(symbol).upper(), action_date) for symbol, action_date in prevalidated_action_keys})
+    )
+    if len(prevalidated) != len(tuple(prevalidated_action_keys)):
+        raise ActionValueError("PATTERN_CORPORATE_ACTION_PREVALIDATED_KEYS_INVALID")
+    available_keys = {
+        (action.symbol, action.effective_trade_date) for action in corporate_actions.actions
+    }
+    if any(key not in available_keys for key in prevalidated):
+        raise ActionValueError("PATTERN_CORPORATE_ACTION_PREVALIDATED_KEYS_INVALID")
+    prevalidated_set = set(prevalidated)
     ignored_keys: set[tuple[str, date]] = set()
     replacements: dict[tuple[str, date], CorporateAction] = {}
     normalized: list[dict[str, Any]] = []
@@ -280,6 +300,7 @@ def apply_pattern_corporate_action_policy(
                 end_inclusive=end,
             )
             if action.quantity_multiplier > 1
+            and (action.symbol, action.effective_trade_date) not in prevalidated_set
         )
         if not scoped_actions:
             continue
@@ -386,6 +407,27 @@ def apply_pattern_corporate_action_policy(
             [_corporate_action_identity(action) for action in retained]
         ),
     }
+    if prevalidated:
+        audit_identity.update(
+            {
+                "factor_mismatch_count": 0,
+                "factor_unverifiable_count": 0,
+                "prevalidated_action_count": len(prevalidated),
+                "prevalidated_action_keys": [
+                    f"{symbol}/{action_date.isoformat()}"
+                    for symbol, action_date in prevalidated
+                ],
+                "prevalidated_action_keys_sha256": canonical_sha256(
+                    [
+                        {
+                            "symbol": symbol,
+                            "effective_trade_date": action_date.isoformat(),
+                        }
+                        for symbol, action_date in prevalidated
+                    ]
+                ),
+            }
+        )
     audit = {
         **audit_identity,
         "application_sha256": canonical_sha256(audit_identity),
@@ -1652,11 +1694,29 @@ def replay_full_policy_symbol(
     entry_observer: Callable[[pd.DataFrame, int], bool] | None = None,
     supplemental_exit_enabled: bool = True,
     risk_managed_open_baseline_enabled: bool = False,
+    terminal_liquidation_enabled: bool = False,
     parent_count: int = 1,
     additional_friction_bps: Decimal = Decimal(0),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Counter[str]]:
-    if not isinstance(supplemental_exit_enabled, bool) or not isinstance(
-        risk_managed_open_baseline_enabled, bool
+    if (
+        isinstance(parent_count, bool)
+        or not isinstance(parent_count, int)
+        or parent_count < 1
+    ):
+        raise ActionValueError("PATTERN_PARENT_ORDER_COUNT_INVALID")
+    if (
+        not isinstance(additional_friction_bps, Decimal)
+        or not additional_friction_bps.is_finite()
+        or additional_friction_bps < 0
+    ):
+        raise ActionValueError("PATTERN_ADDITIONAL_FRICTION_INVALID")
+    if not all(
+        isinstance(value, bool)
+        for value in (
+            supplemental_exit_enabled,
+            risk_managed_open_baseline_enabled,
+            terminal_liquidation_enabled,
+        )
     ):
         raise ActionValueError("PATTERN_OPTION_FLAG_INVALID")
     observe_entry = entry_observer or breakout_observed
@@ -1694,8 +1754,18 @@ def replay_full_policy_symbol(
         if current_template_id != exit_edge_template_id:
             exit_edge_active = False
             exit_edge_template_id = current_template_id
+        pit_eligible = bool(bars.iloc[ordinal].get("pit_active"))
+        if active_event is not None and not pit_eligible:
+            counts["ENTRY_EVENT_CANCELLED_OUTSIDE_PIT"] += 1
+            blocked_until = max(
+                blocked_until,
+                active_event.breakout_ordinal
+                + TEMPLATE_BY_ID[active_event.template_id].pullback_wait_sessions,
+            )
+            active_event = None
+            event_reference = None
         has_inventory = any(state.quantity for state in states.values())
-        if has_inventory and not bool(bars.iloc[ordinal].get("pit_active")):
+        if has_inventory and not pit_eligible:
             counts["HELD_INVENTORY_OUTSIDE_PIT_BUY_ELIGIBILITY"] += 1
         reference = (
             _inventory_raw_close(bars.iloc[ordinal]) if has_inventory else _pattern_raw_close(bars.iloc[ordinal])
@@ -1705,8 +1775,12 @@ def replay_full_policy_symbol(
             states[role] = _roll_state_to_decision(states[role])
 
         if reference is None:
-            counts["DECISION_PRICE_UNAVAILABLE"] += 1
-            if active_event is not None:
+            source_unavailable = has_inventory or pit_eligible
+            if source_unavailable:
+                counts["DECISION_PRICE_UNAVAILABLE"] += 1
+            else:
+                counts["OUTSIDE_PIT_NO_ACTION"] += 1
+            if active_event is not None and source_unavailable:
                 counts["PATTERN_SOURCE_UNAVAILABLE"] += 1
                 blocked_until = max(
                     blocked_until,
@@ -1770,7 +1844,11 @@ def replay_full_policy_symbol(
                             * (last_prices["POLICY"] or Decimal(0))
                             / wealth["POLICY"]
                         ),
-                        "policy_authority": "SOURCE_UNAVAILABLE_NO_ACTION",
+                        "policy_authority": (
+                            "SOURCE_UNAVAILABLE_NO_ACTION"
+                            if source_unavailable
+                            else "OUTSIDE_PIT_NO_ACTION"
+                        ),
                         "template_id": current_template_id,
                     }
                 )
@@ -1829,6 +1907,7 @@ def replay_full_policy_symbol(
                 active_event is None
                 and policy_plan is None
                 and ordinal >= blocked_until
+                and pit_eligible
                 and observe_entry(features, ordinal)
             ):
                 candidate = _max_budgeted_buy(symbol, policy_state, reference)
@@ -1858,7 +1937,7 @@ def replay_full_policy_symbol(
                 counts["BREAKOUT_OBSERVED"] += 1
 
         plans["POLICY"] = policy_plan or ActionPlan(symbol, 0, reference)
-        if not buy_hold_complete and bool(bars.iloc[ordinal].get("pit_active")):
+        if not buy_hold_complete and pit_eligible:
             plans["BUY_AND_HOLD"] = _max_budgeted_buy(symbol, states["BUY_AND_HOLD"], reference)
         else:
             plans["BUY_AND_HOLD"] = ActionPlan(symbol, 0, reference)
@@ -1867,7 +1946,7 @@ def replay_full_policy_symbol(
             l1_risk is None
             and risk_managed_open_baseline_enabled
             and states[l1_baseline].quantity == 0
-            and bool(bars.iloc[ordinal].get("pit_active"))
+            and pit_eligible
         ):
             plans[l1_baseline] = _max_budgeted_buy(
                 symbol, states[l1_baseline], reference
@@ -1953,6 +2032,210 @@ def replay_full_policy_symbol(
                     "template_id": current_template_id,
                 }
             )
+    if terminal_liquidation_enabled:
+        if terminal_ordinal + TERMINAL_MAX_DEFER >= len(bars):
+            raise ActionValueError(
+                "PATTERN_TERMINAL_LIQUIDATION_RANGE_INVALID",
+                symbol=symbol,
+            )
+        if not any(state.quantity for state in states.values()):
+            counts["TERMINAL_LIQUIDATION_NOT_REQUIRED"] += 1
+        else:
+            liquidated = False
+            for target_ordinal in range(
+                terminal_ordinal + 1,
+                terminal_ordinal + TERMINAL_MAX_DEFER + 1,
+            ):
+                decision_ordinal = target_ordinal - 1
+                target_action = corporate_actions.on(
+                    symbol, calendar_dates[target_ordinal]
+                )
+                target_price = _inventory_raw_close(bars.iloc[target_ordinal])
+                attempt_roles = tuple(
+                    role for role, state in states.items() if state.quantity
+                )
+                attempt_fills: dict[str, Fill] = {}
+                for role in tuple(states):
+                    state = _roll_state_to_decision(states[role])
+                    state = _carry_to_target(
+                        state,
+                        symbol=symbol,
+                        decision_ordinal=decision_ordinal,
+                        calendar_dates=calendar_dates,
+                        corporate_actions=corporate_actions,
+                    )
+                    if not state.quantity:
+                        states[role] = state
+                        continue
+                    reference = last_prices[role] or target_price
+                    if reference is None:
+                        raise ActionValueError(
+                            "PATTERN_TERMINAL_REFERENCE_UNAVAILABLE",
+                            symbol=symbol,
+                            path_role=role,
+                        )
+                    plan = ActionPlan(
+                        symbol,
+                        -state.quantity,
+                        reference,
+                        risk_exit=True,
+                    )
+                    fill = daily_fill(
+                        plan,
+                        bars.iloc[target_ordinal],
+                        sellable=state.sellable,
+                        parent_count=parent_count,
+                        full_exit=True,
+                        slippage_bps=Decimal(0),
+                    )
+                    if fill.status == "FILLED" and additional_friction_bps:
+                        fill = Fill(
+                            "FILLED",
+                            fill.delta,
+                            fill.price,
+                            fill.fee
+                            + Decimal(abs(fill.delta))
+                            * fill.price
+                            * additional_friction_bps
+                            / Decimal(10000),
+                            "ADDITIONAL_FRICTION_SCENARIO",
+                        )
+                    if fill.status == "UNKNOWN":
+                        raise ActionValueError(
+                            "PATH_VALUATION_UNKNOWN",
+                            symbol=symbol,
+                            path_role=f"FULL_{role}_TERMINAL",
+                            reason=fill.reason,
+                            target_trade_date=calendar_dates[
+                                target_ordinal
+                            ].isoformat(),
+                        )
+                    states[role] = apply_fill(state, fill)
+                    attempt_fills[role] = fill
+                    cumulative_fees[role] += fill.fee
+                    fills.append(
+                        _fill_record(
+                            symbol=symbol,
+                            path_role=f"FULL_{role}_TERMINAL",
+                            decision_ordinal=decision_ordinal,
+                            calendar_dates=calendar_dates,
+                            plan=plan,
+                            fill=fill,
+                            anchor_ordinal=terminal_ordinal,
+                        )
+                    )
+                    counts[f"{role}_TERMINAL_{fill.status}"] += 1
+
+                filled_roles = {
+                    role
+                    for role, fill in attempt_fills.items()
+                    if fill.status == "FILLED"
+                }
+                if filled_roles and filled_roles != set(attempt_roles):
+                    raise ActionValueError(
+                        "PATTERN_TERMINAL_LIQUIDATION_ASYMMETRIC",
+                        symbol=symbol,
+                        target_trade_date=calendar_dates[target_ordinal].isoformat(),
+                    )
+                for role in states:
+                    if target_price is not None:
+                        last_prices[role] = target_price
+                    elif states[role].quantity:
+                        last_prices[role] = _mapped_reference_to_target(
+                            last_prices[role],
+                            bars=bars,
+                            decision_ordinal=decision_ordinal,
+                            action=target_action,
+                        )
+                    if last_prices[role] is None and states[role].quantity:
+                        raise ActionValueError(
+                            "PATTERN_VALUATION_PRICE_UNAVAILABLE",
+                            symbol=symbol,
+                        )
+                wealth = {
+                    role: (
+                        _mark_to_market(state, symbol, last_prices[role])
+                        if state.quantity
+                        else state.cash
+                    )
+                    for role, state in states.items()
+                }
+                gross_wealth = {
+                    role: (
+                        state.cash
+                        + cumulative_fees[role]
+                        + Decimal(state.quantity)
+                        * (last_prices[role] or Decimal(0))
+                    )
+                    for role, state in states.items()
+                }
+                terminal_authority = (
+                    "TERMINAL_LIQUIDATED"
+                    if not any(state.quantity for state in states.values())
+                    else "TERMINAL_DEFERRED_NO_FILL"
+                )
+                for baseline in ("BUY_AND_HOLD", l1_baseline):
+                    difference = wealth["POLICY"] - wealth[baseline]
+                    increment = difference - previous_difference[baseline]
+                    previous_difference[baseline] = difference
+                    gross_difference = (
+                        gross_wealth["POLICY"] - gross_wealth[baseline]
+                    )
+                    gross_increment = (
+                        gross_difference - previous_gross_difference[baseline]
+                    )
+                    previous_gross_difference[baseline] = gross_difference
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "valuation_date": calendar_dates[target_ordinal],
+                            "decision_as_of": cutoff_on(
+                                calendar_dates[decision_ordinal]
+                            ),
+                            "feature_available_at": cutoff_on(
+                                calendar_dates[decision_ordinal]
+                            ),
+                            "comparison": f"P_MINUS_{baseline}",
+                            "incremental_net_value_bps": float(
+                                increment
+                                / REFERENCE_CAPITAL_CNY
+                                * Decimal(10000)
+                            ),
+                            "incremental_gross_value_bps": float(
+                                gross_increment
+                                / REFERENCE_CAPITAL_CNY
+                                * Decimal(10000)
+                            ),
+                            "policy_wealth_cny": float(wealth["POLICY"]),
+                            "baseline_wealth_cny": float(wealth[baseline]),
+                            "policy_quantity": states["POLICY"].quantity,
+                            "baseline_quantity": states[baseline].quantity,
+                            "policy_exposure": float(
+                                Decimal(states["POLICY"].quantity)
+                                * (last_prices["POLICY"] or Decimal(0))
+                                / wealth["POLICY"]
+                            ),
+                            "policy_authority": terminal_authority,
+                            "template_id": template_id,
+                        }
+                    )
+                if terminal_authority == "TERMINAL_LIQUIDATED":
+                    counts["TERMINAL_LIQUIDATED"] += 1
+                    counts["TERMINAL_DEFERRED_TRADING_DAYS"] += (
+                        target_ordinal - terminal_ordinal - 1
+                    )
+                    liquidated = True
+                    break
+            if not liquidated:
+                raise ActionValueError(
+                    "PATTERN_TERMINAL_LIQUIDATION_UNAVAILABLE",
+                    symbol=symbol,
+                    nominal_terminal_date=calendar_dates[
+                        terminal_ordinal
+                    ].isoformat(),
+                    max_defer_trading_days=TERMINAL_MAX_DEFER,
+                )
+
     counts[
         "ALWAYS_OPEN_RISK_MANAGED_BASELINE_ENABLED"
         if risk_managed_open_baseline_enabled
@@ -2479,6 +2762,105 @@ def _model_contract() -> Mapping[str, Any]:
     return MODEL_CONTRACT
 
 
+def _source_revision_population_plan(
+    *,
+    timing_root: Path,
+    parent_request_path: Path,
+    candidate_root: Path,
+    corporate_action_snapshot: Path,
+    suspension_snapshot: Path,
+    rights_authority_canonical_sha256: str,
+    source_revision_request_path: Path,
+) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any], Mapping[str, Any]]:
+    source_path = source_revision_request_path.resolve()
+    source_request = _load_request(source_path)
+    source_reference = file_reference(source_path)
+    source_bundle = (
+        timing_root
+        / "research"
+        / ARTIFACT_FOLDER
+        / "bundles"
+        / source_request["request_sha256"]
+    )
+    inspected = inspect_pattern_bundle(source_bundle)
+    try:
+        coverage = json.loads(
+            (source_bundle / "coverage.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as exc:
+        raise ActionValueError("PATTERN_SOURCE_REVISION_COVERAGE_UNAVAILABLE") from exc
+    receipt = inspected["receipt"]
+    evolution = receipt.get("evolution") or {}
+    expected_prototype_comparisons = {
+        "E1_MINUS_E0",
+        "X1_MINUS_X0",
+        "P_MINUS_BUY_AND_HOLD",
+        "P_MINUS_FROZEN_L1",
+    }
+    expected_evolution_comparisons = {
+        "Q_MINUS_P",
+        "Q_MINUS_BUY_AND_HOLD",
+        "ENHANCED_MINUS_CORE",
+        "ENHANCED_MINUS_P",
+        "ENHANCED_MINUS_BUY_AND_HOLD",
+    }
+    if (
+        source_request.get("schema_version") != REQUEST_SCHEMA
+        or Path(source_request["timing_root"]).resolve() != timing_root
+        or Path(source_request["candidate_root"]).resolve() == candidate_root.resolve()
+        or source_request.get("parent_request")
+        != file_reference(parent_request_path.resolve())
+        or source_request.get("corporate_action_snapshot")
+        != file_reference(corporate_action_snapshot.resolve())
+        or source_request.get("suspension_snapshot")
+        != file_reference(suspension_snapshot.resolve())
+        or source_request.get("rights_issue_authority_canonical_sha256")
+        != rights_authority_canonical_sha256
+        or source_request.get("rights_issue_participation_policy_sha256")
+        != RIGHTS_ISSUE_PARTICIPATION_POLICY_SHA256
+        or source_request.get("prototype_contract_sha256")
+        != PROTOTYPE_CONTRACT_SHA256
+        or source_request.get("optimizer_contract_sha256")
+        != _optimizer_contract_sha256()
+        or source_request.get("model_contract_sha256") != _model_contract_sha256()
+        or len(source_request.get("training_symbols") or ()) != EVALUATION_SYMBOL_LIMIT
+        or len(source_request.get("evaluation_symbols") or ())
+        != EVALUATION_SYMBOL_LIMIT
+        or len(source_request.get("snapshot_symbols") or ())
+        != EVALUATION_SYMBOL_LIMIT * 2
+        or coverage.get("coverage_complete") is not True
+        or coverage.get("excluded") != {}
+        or receipt.get("selected_trial_count") != 0
+        or evolution.get("selected_trial_count") != 0
+        or set(receipt.get("comparisons") or {}) != expected_prototype_comparisons
+        or set(evolution.get("comparisons") or {}) != expected_evolution_comparisons
+    ):
+        raise ActionValueError("PATTERN_SOURCE_REVISION_REQUEST_INVALID")
+    manifest_reference = file_reference(source_bundle / "manifest.json")
+    return (
+        {
+            "schema_version": "position_timing_pattern_population_plan_v1",
+            "parent_request": source_request["parent_request"],
+            "candidate_root": candidate_root.resolve().as_posix(),
+            "candidate_selection_authority": SOURCE_REVISION_SELECTION_AUTHORITY,
+            "training_symbols": tuple(source_request["training_symbols"]),
+            "evaluation_symbols": tuple(source_request["evaluation_symbols"]),
+            "snapshot_symbols": tuple(source_request["snapshot_symbols"]),
+            "population_spec": source_request["population_spec"],
+            "prior_request_identity": source_request["prior_request_identity"],
+            "outcomes_read": True,
+            "new_candidate_outcomes_read": False,
+            "source_result_read_for_lineage_validation": True,
+        },
+        source_request,
+        source_reference,
+        {
+            "reference": manifest_reference,
+            "manifest_sha256": inspected["manifest"]["manifest_sha256"],
+        },
+    )
+
+
 def prepare_pattern_request(
     *,
     timing_root: Path,
@@ -2487,9 +2869,11 @@ def prepare_pattern_request(
     candidate_root: Path,
     candidate_manifest_sha256: str,
     rights_authority_canonical_sha256: str,
+    adj_factor_restatement_authority_canonical_sha256: str | None = None,
     corporate_action_snapshot: Path,
     suspension_snapshot: Path,
     supersedes_request_path: Path | None = None,
+    source_revision_request_path: Path | None = None,
 ) -> Path:
     repository_root = repository_root.resolve()
     source_commit = _clean_repository_commit(repository_root)
@@ -2498,6 +2882,15 @@ def prepare_pattern_request(
         timing_root=timing_root
     )
     rights_policy_reference = file_reference(rights_policy_path)
+    has_source_revision = source_revision_request_path is not None
+    has_restatement_authority = (
+        adj_factor_restatement_authority_canonical_sha256 is not None
+    )
+    if (
+        has_source_revision != has_restatement_authority
+        or (has_source_revision and supersedes_request_path is not None)
+    ):
+        raise ActionValueError("PATTERN_SOURCE_REVISION_ARGUMENTS_INVALID")
     superseded_request: Mapping[str, Any] | None = None
     superseded_reference: Mapping[str, Any] | None = None
     superseded_lineage: list[str] = []
@@ -2561,12 +2954,31 @@ def prepare_pattern_request(
             supersession_reason = INCOMPLETE_COVERAGE_SUPERSESSION_REASON
         else:
             supersession_reason = PRE_OUTCOME_SUPERSESSION_REASON
-    plan = plan_pattern_population(
-        timing_root=timing_root,
-        parent_request_path=parent_request_path.resolve(),
-        candidate_root=candidate_root,
-        exclude_prior_request_sha256s=superseded_lineage,
-    )
+    source_revision_request: Mapping[str, Any] | None = None
+    source_revision_reference: Mapping[str, Any] | None = None
+    source_revision_bundle_manifest: Mapping[str, Any] | None = None
+    if source_revision_request_path is not None:
+        (
+            plan,
+            source_revision_request,
+            source_revision_reference,
+            source_revision_bundle_manifest,
+        ) = _source_revision_population_plan(
+            timing_root=timing_root,
+            parent_request_path=parent_request_path.resolve(),
+            candidate_root=candidate_root,
+            corporate_action_snapshot=corporate_action_snapshot.resolve(),
+            suspension_snapshot=suspension_snapshot.resolve(),
+            rights_authority_canonical_sha256=rights_authority_canonical_sha256,
+            source_revision_request_path=source_revision_request_path,
+        )
+    else:
+        plan = plan_pattern_population(
+            timing_root=timing_root,
+            parent_request_path=parent_request_path.resolve(),
+            candidate_root=candidate_root,
+            exclude_prior_request_sha256s=superseded_lineage,
+        )
     if superseded_request is not None and (
         tuple(plan["training_symbols"])
         != tuple(superseded_request["training_symbols"])
@@ -2615,9 +3027,38 @@ def prepare_pattern_request(
         )
     suspension_scope = _snapshot_scope(suspension_snapshot.resolve(), expected_symbols=symbols, start=start, end=end)
     candidate = DailyCandidate.open(Path(plan["candidate_root"]))
+    # Freeze only the formal 128-stock replay population here.  The auxiliary
+    # r5 restatement audit intentionally includes 300506.SZ even though it is
+    # outside that population, and DailyCandidate tracks every source file it
+    # reads.  Use an isolated reader below so auxiliary provenance cannot alter
+    # the replay source identity.
+    coverage = candidate.coverage(symbols)
+    restatement_authority: AdjFactorRestatementAuthority | None = None
+    restatement_audit: Mapping[str, Any] | None = None
+    if adj_factor_restatement_authority_canonical_sha256 is not None:
+        restatement_authority = open_adj_factor_restatement_authority(
+            candidate_root=candidate.root,
+            expected_candidate_manifest_sha256=candidate_manifest_sha256,
+            expected_authority_canonical_sha256=(
+                adj_factor_restatement_authority_canonical_sha256
+            ),
+        )
+        if (
+            restatement_authority.candidate_manifest_reference
+            != rights_authority.candidate_manifest_reference
+            or restatement_authority.candidate_dataset_manifest_sha256
+            != rights_authority.candidate_dataset_manifest_sha256
+            or restatement_authority.candidate_revision
+            != rights_authority.candidate_revision
+        ):
+            raise ActionValueError(
+                "ADJ_FACTOR_RESTATEMENT_CANDIDATE_IDENTITY_MISMATCH"
+            )
+        restatement_audit = audit_candidate_adj_factor_restatement(
+            DailyCandidate.open(candidate.root), restatement_authority
+        )
     # Both development and outer populations are consumed by this request;
     # binding only evaluation files would leave model training source mutable.
-    coverage = candidate.coverage(symbols)
     corporate_book = CorporateActionBook.open(corporate_action_snapshot.resolve())
     corporate_source_snapshot = combined_corporate_action_source_snapshot(
         dividend_snapshot_sha256=corporate_book.snapshot_sha256,
@@ -2677,8 +3118,16 @@ def prepare_pattern_request(
         ),
         "policy_source": Path(__file__).with_name("policy.py"),
     }
+    if restatement_authority is not None:
+        source_code_paths["adj_factor_restatement_source"] = Path(__file__).with_name(
+            "pattern_adj_factor_restatement.py"
+        )
     request = {
-        "schema_version": REQUEST_SCHEMA,
+        "schema_version": (
+            RESTATEMENT_REQUEST_SCHEMA
+            if restatement_authority is not None
+            else REQUEST_SCHEMA
+        ),
         "pipeline_id": PIPELINE_ID,
         "created_at": datetime.now(TZ).isoformat(),
         "repository_root": repository_root.as_posix(),
@@ -2773,6 +3222,78 @@ def prepare_pattern_request(
         "database_write": False,
         "runtime_write": False,
     }
+    if restatement_authority is not None:
+        if (
+            restatement_audit is None
+            or source_revision_request is None
+            or source_revision_reference is None
+            or source_revision_bundle_manifest is None
+        ):
+            raise ActionValueError("PATTERN_SOURCE_REVISION_BINDING_INCOMPLETE")
+        source_revision_binding: dict[str, Any] = {
+            "schema_version": "position_timing_pattern_source_revision_binding_v1",
+            "reason": SOURCE_REVISION_REASON,
+            "source_request": source_revision_reference,
+            "source_request_sha256": source_revision_request["request_sha256"],
+            "source_bundle_manifest": source_revision_bundle_manifest["reference"],
+            "source_bundle_manifest_sha256": source_revision_bundle_manifest[
+                "manifest_sha256"
+            ],
+            "source_candidate_manifest_sha256": source_revision_request[
+                "candidate_manifest_sha256"
+            ],
+            "source_candidate_dataset_manifest_sha256": source_revision_request[
+                "candidate_dataset_manifest_sha256"
+            ],
+            "source_candidate_revision": source_revision_request[
+                "candidate_revision"
+            ],
+            "frozen_population_sha256": canonical_sha256(
+                {
+                    "training_symbols": request["training_symbols"],
+                    "evaluation_symbols": request["evaluation_symbols"],
+                    "snapshot_symbols": request["snapshot_symbols"],
+                    "population_spec": request["population_spec"],
+                    "prior_request_identity": request["prior_request_identity"],
+                }
+            ),
+            "source_result_used_only_for_technical_lineage_validation": True,
+            "new_hypothesis_or_population_selection": False,
+        }
+        source_revision_binding["binding_sha256"] = canonical_sha256(
+            source_revision_binding
+        )
+        request.update(
+            {
+                "source_revision_binding": source_revision_binding,
+                "source_revision_binding_sha256": source_revision_binding[
+                    "binding_sha256"
+                ],
+                "adj_factor_restatement_authority": (
+                    restatement_authority.authority_reference
+                ),
+                "adj_factor_restatement_authority_canonical_sha256": (
+                    restatement_authority.authority_canonical_sha256
+                ),
+                "adj_factor_restatement_diagnosis_sha256": (
+                    restatement_authority.diagnosis_sha256
+                ),
+                "adj_factor_restatement_series": [
+                    {
+                        "symbol": series.symbol,
+                        "start": series.start.isoformat(),
+                        "end": series.end.isoformat(),
+                        "row_count": series.row_count,
+                        "ordered_rows_sha256": series.ordered_rows_sha256,
+                    }
+                    for series in restatement_authority.series
+                ],
+                "adj_factor_restatement_audit": restatement_audit,
+                "adj_factor_restatement_audit_sha256": restatement_audit[
+                    "audit_sha256"
+                ],
+            }
+        )
     request["request_sha256"] = canonical_sha256(request)
     path = timing_root / "research" / ARTIFACT_FOLDER / "requests" / f"{request['request_sha256']}.json"
     PositionTimingArtifactStore._publish_immutable(path, canonical_json_bytes(request))
@@ -2828,7 +3349,8 @@ def _rights_issue_request_contract_invalid(request: Mapping[str, Any]) -> bool:
         else ()
     )
     return (
-        request.get("candidate_selection_authority") != "EXPLICIT_PREPARE_ARGUMENT"
+        request.get("candidate_selection_authority")
+        not in {"EXPLICIT_PREPARE_ARGUMENT", SOURCE_REVISION_SELECTION_AUTHORITY}
         or (
             has_supersession
             and (
@@ -2933,6 +3455,148 @@ def _rights_issue_request_contract_invalid(request: Mapping[str, Any]) -> bool:
         or tuple(factor_audit.get("bound_rights_issue_event_ids") or ())
         != application_event_ids
         or factor_audit.get("factor_account_participation_inference") is not False
+    )
+
+
+def _source_revision_request_contract_invalid(request: Mapping[str, Any]) -> bool:
+    binding = request.get("source_revision_binding")
+    authority_reference = request.get("adj_factor_restatement_authority")
+    audit = request.get("adj_factor_restatement_audit")
+    declared_series = request.get("adj_factor_restatement_series")
+    binding_identity = (
+        {key: value for key, value in binding.items() if key != "binding_sha256"}
+        if isinstance(binding, Mapping)
+        else {}
+    )
+    audit_identity = (
+        {key: value for key, value in audit.items() if key != "audit_sha256"}
+        if isinstance(audit, Mapping)
+        else {}
+    )
+    frozen_population_sha256 = canonical_sha256(
+        {
+            "training_symbols": request.get("training_symbols"),
+            "evaluation_symbols": request.get("evaluation_symbols"),
+            "snapshot_symbols": request.get("snapshot_symbols"),
+            "population_spec": request.get("population_spec"),
+            "prior_request_identity": request.get("prior_request_identity"),
+        }
+    )
+    audit_series = audit.get("series") if isinstance(audit, Mapping) else None
+    expected_series = (
+        [
+            {
+                "symbol": item.get("symbol"),
+                "start": item.get("start"),
+                "end": item.get("end"),
+                "row_count": item.get("authority_row_count"),
+                "ordered_rows_sha256": item.get("ordered_rows_sha256"),
+            }
+            for item in audit_series
+        ]
+        if isinstance(audit_series, Sequence)
+        and not isinstance(audit_series, (str, bytes))
+        and all(isinstance(item, Mapping) for item in audit_series)
+        else None
+    )
+    source_request_reference = (
+        binding.get("source_request") if isinstance(binding, Mapping) else None
+    )
+    source_bundle_manifest = (
+        binding.get("source_bundle_manifest")
+        if isinstance(binding, Mapping)
+        else None
+    )
+    declared_series_valid = (
+        isinstance(declared_series, Sequence)
+        and not isinstance(declared_series, (str, bytes))
+        and all(isinstance(item, Mapping) for item in declared_series)
+    )
+    declared_symbols = (
+        [item.get("symbol") for item in declared_series]
+        if declared_series_valid
+        else []
+    )
+    return (
+        request.get("candidate_selection_authority")
+        != SOURCE_REVISION_SELECTION_AUTHORITY
+        or any(
+            request.get(key) is not None
+            for key in (
+                "superseded_request",
+                "superseded_request_sha256",
+                "superseded_request_lineage_sha256s",
+                "supersession_reason",
+            )
+        )
+        or not isinstance(binding, Mapping)
+        or binding.get("schema_version")
+        != "position_timing_pattern_source_revision_binding_v1"
+        or binding.get("reason") != SOURCE_REVISION_REASON
+        or binding.get("binding_sha256") != canonical_sha256(binding_identity)
+        or request.get("source_revision_binding_sha256")
+        != binding.get("binding_sha256")
+        or not isinstance(source_request_reference, Mapping)
+        or not str(source_request_reference.get("path") or "")
+        or len(str(source_request_reference.get("sha256", ""))) != 64
+        or len(str(binding.get("source_request_sha256", ""))) != 64
+        or not isinstance(source_bundle_manifest, Mapping)
+        or not str(source_bundle_manifest.get("path") or "")
+        or len(str(source_bundle_manifest.get("sha256", ""))) != 64
+        or len(str(binding.get("source_bundle_manifest_sha256", ""))) != 64
+        or len(str(binding.get("source_candidate_manifest_sha256", ""))) != 64
+        or len(
+            str(binding.get("source_candidate_dataset_manifest_sha256", ""))
+        )
+        != 64
+        or not str(binding.get("source_candidate_revision") or "")
+        or binding.get("frozen_population_sha256")
+        != frozen_population_sha256
+        or binding.get("source_result_used_only_for_technical_lineage_validation")
+        is not True
+        or binding.get("new_hypothesis_or_population_selection") is not False
+        or not isinstance(authority_reference, Mapping)
+        or not str(authority_reference.get("path") or "")
+        or len(str(authority_reference.get("sha256", ""))) != 64
+        or len(
+            str(
+                request.get(
+                    "adj_factor_restatement_authority_canonical_sha256", ""
+                )
+            )
+        )
+        != 64
+        or len(str(request.get("adj_factor_restatement_diagnosis_sha256", "")))
+        != 64
+        or not isinstance(audit, Mapping)
+        or audit.get("audit_sha256") != canonical_sha256(audit_identity)
+        or request.get("adj_factor_restatement_audit_sha256")
+        != audit.get("audit_sha256")
+        or audit.get("candidate_manifest_sha256")
+        != request.get("candidate_manifest_sha256")
+        or audit.get("candidate_dataset_manifest_sha256")
+        != request.get("candidate_dataset_manifest_sha256")
+        or audit.get("candidate_revision") != request.get("candidate_revision")
+        or audit.get("authority_file_sha256")
+        != authority_reference.get("sha256")
+        or audit.get("authority_canonical_sha256")
+        != request.get("adj_factor_restatement_authority_canonical_sha256")
+        or audit.get("diagnosis_sha256")
+        != request.get("adj_factor_restatement_diagnosis_sha256")
+        or audit.get("coverage_complete") is not True
+        or audit.get("candidate_factor_dates_without_authority_count") != 0
+        or audit.get("normalized_factor_mismatch_count") != 0
+        or audit.get("required_stable_seam_count") != 2
+        or audit.get("factor_account_participation_inference") is not False
+        or audit.get("outcomes_read") is not False
+        or audit.get("database_read") is not False
+        or audit.get("database_write") is not False
+        or audit.get("candidate_write") is not False
+        or audit.get("runtime_action_performed") is not False
+        or audit.get("series_count") != 2
+        or not declared_series_valid
+        or declared_series != expected_series
+        or declared_symbols != ["300506.SZ", "688109.SH"]
     )
 
 
@@ -3099,14 +3763,28 @@ def _load_request(path: Path) -> dict[str, Any]:
         )
     if (
         request_schema
-        not in {LEGACY_REQUEST_SCHEMA, FACTOR_COVERAGE_REQUEST_SCHEMA, REQUEST_SCHEMA}
+        not in {
+            LEGACY_REQUEST_SCHEMA,
+            FACTOR_COVERAGE_REQUEST_SCHEMA,
+            REQUEST_SCHEMA,
+            RESTATEMENT_REQUEST_SCHEMA,
+        }
         or (
-            request_schema in {FACTOR_COVERAGE_REQUEST_SCHEMA, REQUEST_SCHEMA}
+            request_schema
+            in {
+                FACTOR_COVERAGE_REQUEST_SCHEMA,
+                REQUEST_SCHEMA,
+                RESTATEMENT_REQUEST_SCHEMA,
+            }
             and (not has_application_contract or not has_factor_coverage_contract)
         )
         or (
-            request_schema == REQUEST_SCHEMA
+            request_schema in {REQUEST_SCHEMA, RESTATEMENT_REQUEST_SCHEMA}
             and _rights_issue_request_contract_invalid(request)
+        )
+        or (
+            request_schema == RESTATEMENT_REQUEST_SCHEMA
+            and _source_revision_request_contract_invalid(request)
         )
         or request.get("pipeline_id") != PIPELINE_ID
         or request.get("request_sha256") != canonical_sha256(identity)
@@ -3245,7 +3923,10 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
             != request.get("factor_action_coverage_audit")
         )
     rights_identity_mismatch = False
-    if request.get("schema_version") == REQUEST_SCHEMA:
+    if request.get("schema_version") in {
+        REQUEST_SCHEMA,
+        RESTATEMENT_REQUEST_SCHEMA,
+    }:
         authority_reference = request.get("rights_issue_authority") or {}
         rights_identity_mismatch = (
             receipt.get("candidate_manifest_sha256")
@@ -3273,6 +3954,29 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
             != request.get("superseded_request_lineage_sha256s")
             or receipt.get("supersession_reason")
             != request.get("supersession_reason")
+        )
+    restatement_identity_mismatch = False
+    if request.get("schema_version") == RESTATEMENT_REQUEST_SCHEMA:
+        restatement_reference = (
+            request.get("adj_factor_restatement_authority") or {}
+        )
+        restatement_identity_mismatch = (
+            receipt.get("source_revision_binding_sha256")
+            != request.get("source_revision_binding_sha256")
+            or receipt.get("source_revision_binding")
+            != request.get("source_revision_binding")
+            or receipt.get("adj_factor_restatement_authority_file_sha256")
+            != restatement_reference.get("sha256")
+            or receipt.get(
+                "adj_factor_restatement_authority_canonical_sha256"
+            )
+            != request.get("adj_factor_restatement_authority_canonical_sha256")
+            or receipt.get("adj_factor_restatement_diagnosis_sha256")
+            != request.get("adj_factor_restatement_diagnosis_sha256")
+            or receipt.get("adj_factor_restatement_audit_sha256")
+            != request.get("adj_factor_restatement_audit_sha256")
+            or receipt.get("adj_factor_restatement_audit")
+            != request.get("adj_factor_restatement_audit")
         )
     if (
         manifest.get("schema_version") != BUNDLE_SCHEMA
@@ -3305,6 +4009,7 @@ def inspect_pattern_bundle(bundle: Path) -> Mapping[str, Any]:
         or application_identity_mismatch
         or factor_coverage_identity_mismatch
         or rights_identity_mismatch
+        or restatement_identity_mismatch
         or any(receipt.get(flag) is not False for flag in false_flags)
         or manifest.get("request_sha256") != request["request_sha256"]
         or manifest.get("receipt_sha256") != receipt["receipt_sha256"]
@@ -3395,7 +4100,17 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
                 request["rights_issue_authority"],
                 request["rights_issue_participation_policy_artifact"],
             )
-            if request["schema_version"] == REQUEST_SCHEMA
+            if request["schema_version"]
+            in {REQUEST_SCHEMA, RESTATEMENT_REQUEST_SCHEMA}
+            else ()
+        ),
+        *(
+            (
+                request["adj_factor_restatement_authority"],
+                request["source_revision_binding"]["source_request"],
+                request["source_revision_binding"]["source_bundle_manifest"],
+            )
+            if request["schema_version"] == RESTATEMENT_REQUEST_SCHEMA
             else ()
         ),
         *((superseded_reference,) if isinstance(superseded_reference, Mapping) else ()),
@@ -3407,30 +4122,75 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
     observed_source = candidate.coverage(tuple(request["snapshot_symbols"]))
     if observed_source["source_sha256"] != request["candidate_source_identity"]["source_sha256"]:
         raise ActionValueError("PATTERN_CANDIDATE_SOURCE_CHANGED")
-    observed_prior = prior_timing_request_population(
-        timing_root / "research",
-        exclude_request_sha256s=tuple(
-            item
-            for item in dict.fromkeys(
-                (
-                    request["request_sha256"],
-                    *(superseded_lineage or ()),
-                    superseded_request_sha256,
-                )
-            )
-            if isinstance(item, str)
-        ),
-    )
-    if observed_prior["aggregate_sha256"] != request["prior_request_identity"]["aggregate_sha256"]:
-        raise ActionValueError("PATTERN_PRIOR_REQUEST_SET_CHANGED")
     evaluation_symbols = tuple(request["evaluation_symbols"])
-    expected = select_pattern_evaluation_symbols(
-        candidate.symbols,
-        forbidden_symbols=tuple(request["prior_request_identity"]["forbidden_symbols"])
-        + tuple(request["training_symbols"]),
-    )
-    if evaluation_symbols != expected:
-        raise ActionValueError("PATTERN_EVALUATION_POPULATION_DRIFT")
+    if request["schema_version"] == RESTATEMENT_REQUEST_SCHEMA:
+        binding = request["source_revision_binding"]
+        (
+            observed_plan,
+            observed_source_revision,
+            observed_source_revision_reference,
+            observed_source_bundle_manifest,
+        ) = _source_revision_population_plan(
+            timing_root=timing_root,
+            parent_request_path=Path(request["parent_request"]["path"]),
+            candidate_root=Path(request["candidate_root"]),
+            corporate_action_snapshot=Path(
+                request["corporate_action_snapshot"]["path"]
+            ),
+            suspension_snapshot=Path(request["suspension_snapshot"]["path"]),
+            rights_authority_canonical_sha256=request[
+                "rights_issue_authority_canonical_sha256"
+            ],
+            source_revision_request_path=Path(binding["source_request"]["path"]),
+        )
+        if (
+            tuple(observed_plan["training_symbols"])
+            != tuple(request["training_symbols"])
+            or tuple(observed_plan["evaluation_symbols"])
+            != evaluation_symbols
+            or tuple(observed_plan["snapshot_symbols"])
+            != tuple(request["snapshot_symbols"])
+            or observed_plan["population_spec"] != request["population_spec"]
+            or observed_plan["prior_request_identity"]
+            != request["prior_request_identity"]
+            or observed_source_revision_reference != binding["source_request"]
+            or observed_source_revision["request_sha256"]
+            != binding["source_request_sha256"]
+            or observed_source_bundle_manifest["reference"]
+            != binding["source_bundle_manifest"]
+            or observed_source_bundle_manifest["manifest_sha256"]
+            != binding["source_bundle_manifest_sha256"]
+        ):
+            raise ActionValueError("PATTERN_SOURCE_REVISION_POPULATION_DRIFT")
+    else:
+        observed_prior = prior_timing_request_population(
+            timing_root / "research",
+            exclude_request_sha256s=tuple(
+                item
+                for item in dict.fromkeys(
+                    (
+                        request["request_sha256"],
+                        *(superseded_lineage or ()),
+                        superseded_request_sha256,
+                    )
+                )
+                if isinstance(item, str)
+            ),
+        )
+        if (
+            observed_prior["aggregate_sha256"]
+            != request["prior_request_identity"]["aggregate_sha256"]
+        ):
+            raise ActionValueError("PATTERN_PRIOR_REQUEST_SET_CHANGED")
+        expected = select_pattern_evaluation_symbols(
+            candidate.symbols,
+            forbidden_symbols=tuple(
+                request["prior_request_identity"]["forbidden_symbols"]
+            )
+            + tuple(request["training_symbols"]),
+        )
+        if evaluation_symbols != expected:
+            raise ActionValueError("PATTERN_EVALUATION_POPULATION_DRIFT")
     source_corporate_actions = CorporateActionBook.open(
         Path(request["corporate_action_snapshot"]["path"])
     )
@@ -3445,7 +4205,12 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
     rights_authority: RightsIssueAuthority | None = None
     rights_application_audit: Mapping[str, Any] | None = None
     corporate_source_snapshot: Mapping[str, Any] | None = None
-    if request["schema_version"] == REQUEST_SCHEMA:
+    restatement_authority: AdjFactorRestatementAuthority | None = None
+    restatement_audit: Mapping[str, Any] | None = None
+    if request["schema_version"] in {
+        REQUEST_SCHEMA,
+        RESTATEMENT_REQUEST_SCHEMA,
+    }:
         rights_authority = open_rights_issue_authority(
             candidate_root=Path(request["candidate_root"]),
             expected_candidate_manifest_sha256=request["candidate_manifest_sha256"],
@@ -3481,6 +4246,46 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
             != request["corporate_action_source_snapshot"]
         ):
             raise ActionValueError("RIGHTS_ISSUE_APPLICATION_IDENTITY_DRIFT")
+    if request["schema_version"] == RESTATEMENT_REQUEST_SCHEMA:
+        restatement_authority = open_adj_factor_restatement_authority(
+            candidate_root=Path(request["candidate_root"]),
+            expected_candidate_manifest_sha256=request[
+                "candidate_manifest_sha256"
+            ],
+            expected_authority_canonical_sha256=request[
+                "adj_factor_restatement_authority_canonical_sha256"
+            ],
+        )
+        observed_restatement_series = [
+            {
+                "symbol": series.symbol,
+                "start": series.start.isoformat(),
+                "end": series.end.isoformat(),
+                "row_count": series.row_count,
+                "ordered_rows_sha256": series.ordered_rows_sha256,
+            }
+            for series in restatement_authority.series
+        ]
+        restatement_audit = audit_candidate_adj_factor_restatement(
+            DailyCandidate.open(Path(request["candidate_root"])),
+            restatement_authority,
+        )
+        if (
+            restatement_authority.candidate_manifest_reference
+            != request["candidate_manifest"]
+            or restatement_authority.candidate_dataset_manifest_sha256
+            != request["candidate_dataset_manifest_sha256"]
+            or restatement_authority.candidate_revision
+            != request["candidate_revision"]
+            or restatement_authority.authority_reference
+            != request["adj_factor_restatement_authority"]
+            or restatement_authority.diagnosis_sha256
+            != request["adj_factor_restatement_diagnosis_sha256"]
+            or observed_restatement_series
+            != request["adj_factor_restatement_series"]
+            or restatement_audit != request["adj_factor_restatement_audit"]
+        ):
+            raise ActionValueError("ADJ_FACTOR_RESTATEMENT_IDENTITY_DRIFT")
     if "corporate_action_application_sha256" in request:
         corporate_actions, corporate_application_audit = apply_pattern_corporate_action_policy(
             candidate,
@@ -3982,6 +4787,28 @@ def run_pattern_request(request_path: Path) -> Mapping[str, Any]:
         "cost_assumption_sensitivity_flags": cost_assumption_sensitive,
         "evolution": evolution_receipt,
     }
+    if request["schema_version"] == RESTATEMENT_REQUEST_SCHEMA:
+        receipt.update(
+            {
+                "source_revision_binding": request["source_revision_binding"],
+                "source_revision_binding_sha256": request[
+                    "source_revision_binding_sha256"
+                ],
+                "adj_factor_restatement_authority_file_sha256": request[
+                    "adj_factor_restatement_authority"
+                ]["sha256"],
+                "adj_factor_restatement_authority_canonical_sha256": request[
+                    "adj_factor_restatement_authority_canonical_sha256"
+                ],
+                "adj_factor_restatement_diagnosis_sha256": request[
+                    "adj_factor_restatement_diagnosis_sha256"
+                ],
+                "adj_factor_restatement_audit_sha256": request[
+                    "adj_factor_restatement_audit_sha256"
+                ],
+                "adj_factor_restatement_audit": restatement_audit,
+            }
+        )
     receipt["receipt_sha256"] = canonical_sha256(receipt)
     _publish_bundle(
         bundle,
@@ -4024,7 +4851,11 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--candidate-root", type=Path, required=True)
     prepare.add_argument("--candidate-manifest-sha256", required=True)
     prepare.add_argument("--rights-authority-canonical-sha256", required=True)
+    prepare.add_argument(
+        "--adj-factor-restatement-authority-canonical-sha256"
+    )
     prepare.add_argument("--supersedes-request", type=Path)
+    prepare.add_argument("--source-revision-request", type=Path)
     prepare.add_argument("--corporate-action-snapshot", type=Path, required=True)
     prepare.add_argument("--suspension-snapshot", type=Path, required=True)
     run = sub.add_parser("run")
@@ -4049,7 +4880,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rights_authority_canonical_sha256=(
                     args.rights_authority_canonical_sha256
                 ),
+                adj_factor_restatement_authority_canonical_sha256=(
+                    args.adj_factor_restatement_authority_canonical_sha256
+                ),
                 supersedes_request_path=args.supersedes_request,
+                source_revision_request_path=args.source_revision_request,
                 corporate_action_snapshot=args.corporate_action_snapshot,
                 suspension_snapshot=args.suspension_snapshot,
             ).as_posix()

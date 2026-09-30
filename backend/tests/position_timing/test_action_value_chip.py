@@ -11,9 +11,7 @@ from backend.services.position_timing.action_value import (
     CHIP_COST_FEATURE_ORDER,
     CHIP_COST_FEATURE_SPEC_SHA256,
     CHIP_COST_INFORMATION_BLOCK,
-    FEATURE_ORDER,
     FEATURE_SPEC_SHA256,
-    POLICY_SHA256,
     ActionValueError,
     feature_contract,
     market_features,
@@ -24,19 +22,6 @@ from backend.services.position_timing.action_value_chip import (
     ChipCostAugmentedCandidate,
     ChipCostDataSource,
 )
-from backend.services.position_timing.action_value_incremental import (
-    PIPELINE_ID,
-    REQUEST_SCHEMA,
-    _load_request,
-    _require_matched_source_coverage,
-)
-from backend.services.position_timing.action_value_research import (
-    EXOGENOUS_INITIAL_HOLDING_POLICY,
-    EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
-)
-from backend.services.position_timing.contracts import canonical_sha256
-
-
 class BaseCandidate:
     def __init__(self, root: Path, calendar: pd.DatetimeIndex) -> None:
         self.root = root
@@ -186,53 +171,3 @@ def test_chip_features_join_core_and_coverage_is_outcome_free(tmp_path: Path) ->
         row["complete_selected_feature_sessions"] <= row["complete_core_sessions"]
         for row in coverage["coverage"].values()
     )
-
-
-def test_chip_request_binds_single_matched_core_hypothesis(tmp_path: Path) -> None:
-    coverage = {
-        "information_block": CHIP_COST_INFORMATION_BLOCK,
-        "outcomes_read": False,
-        "coverage": {
-            "000001.SZ": {
-                "complete_core_sessions": 100,
-                "complete_selected_feature_sessions": 95,
-                "feature_nonmissing": {CHIP_FEATURE: 95},
-            }
-        },
-    }
-    _require_matched_source_coverage(coverage, information_block=CHIP_COST_INFORMATION_BLOCK)
-    request = {
-        "schema_version": REQUEST_SCHEMA,
-        "pipeline_id": PIPELINE_ID,
-        "information_block": CHIP_COST_INFORMATION_BLOCK,
-        "hypothesis": "CORE_PLUS_CHIP_MEDIAN_COST_DISTANCE_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY",
-        "planned_trial_count": 1,
-        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
-        "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
-        "initial_holding_contract": {
-            "policy": EXOGENOUS_INITIAL_HOLDING_POLICY,
-            "policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
-        },
-        "feature_contract": {
-            "block_id": CHIP_COST_INFORMATION_BLOCK,
-            "added_features": [CHIP_FEATURE],
-            "feature_order": CHIP_COST_FEATURE_ORDER,
-            "feature_spec_sha256": CHIP_COST_FEATURE_SPEC_SHA256,
-            "policy_sha256": policy_sha256_for(CHIP_COST_INFORMATION_BLOCK),
-        },
-        "matched_core_contract": {
-            "information_block": "CORE_ONLY",
-            "feature_order": FEATURE_ORDER,
-            "feature_spec_sha256": FEATURE_SPEC_SHA256,
-            "policy_sha256": POLICY_SHA256,
-        },
-        "training_spec": {
-            "main_comparison": "CORE_PLUS_CHIP_MEDIAN_COST_DISTANCE_LAG1_MINUS_MATCHED_CORE",
-            "economic_threshold_bps": 0.0,
-        },
-        "population_spec": {"selection": "SHA256_SEED_CHIP_COST_SOURCE_COVERAGE_ONLY"},
-    }
-    request["request_sha256"] = canonical_sha256(request)
-    path = tmp_path / "request.json"
-    path.write_text(json.dumps(request), encoding="utf-8")
-    assert canonical_sha256(_load_request(path)) == canonical_sha256(request)

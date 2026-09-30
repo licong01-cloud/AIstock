@@ -73,6 +73,7 @@ class AdvisoryForwardService:
         after_close_hour: int | None = None,
         after_close_minute: int | None = None,
         evaluation_market_source: AdvisoryForwardEvaluationMarketSource | Any | None = None,
+        entry_price_service: Any | None = None,
     ) -> None:
         self.repository = repository or AdvisoryForwardPGRepository()
         self.program_service = program_service or AdvisoryProgramService()
@@ -80,6 +81,8 @@ class AdvisoryForwardService:
         self.model_resolver = model_resolver or AdvisoryModelBindingResolver()
         self.calendar = calendar or TradingCalendarStatusService()
         self.evaluation_market_source = evaluation_market_source or AdvisoryForwardEvaluationMarketSource()
+        from backend.services.advisory_model_first.entry_price_daily_service import AdvisoryEntryPriceDailyService
+        self.entry_price_service = entry_price_service or AdvisoryEntryPriceDailyService(now_provider=now_provider)
         self.now_provider = now_provider or (lambda: datetime.now(SHANGHAI_TZ))
         if after_close_hour is None and after_close_minute is None:
             self.after_close_hour, self.after_close_minute = _after_close_time()
@@ -135,6 +138,7 @@ class AdvisoryForwardService:
                 "decision_as_of_trade_date": None,
                 "publication_due": False,
                 "results": results,
+                "entry_price": self._entry_price_after_baseline(),
             }
         decision_date = now.date()
         target_date = self.calendar.next_trading_day(decision_date, inclusive=False)
@@ -169,7 +173,16 @@ class AdvisoryForwardService:
             "target_trade_date": target_date.isoformat(),
             "publication_due": True,
             "results": results,
+            "entry_price": self._entry_price_after_baseline(),
         }
+
+    def _entry_price_after_baseline(self) -> dict[str, Any]:
+        try:
+            return self.entry_price_service.run_once()
+        except Exception as exc:
+            # Optional price collection must not invalidate already completed baseline actions.
+            return {"status": "FAILED", "reason_code": getattr(exc, "reason_code", "ADVISORY_ENTRY_DAILY_UNAVAILABLE"),
+                    "error_type": type(exc).__name__}
 
     def detail(self, forward_run_id: str) -> dict[str, Any]:
         return self.repository.get(forward_run_id)
