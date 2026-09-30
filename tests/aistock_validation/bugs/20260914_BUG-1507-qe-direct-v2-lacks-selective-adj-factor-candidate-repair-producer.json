@@ -1,6 +1,8 @@
 {
   "actual": "After full-market production adj_factor reconciliation job 66711159-7165-4212-9a1d-c95df3685e41, the immutable r4 QE candidate differs on 4,904 provider symbols and 1,842,557 daily factor cells. The canonical monthly CLI only performs component-wide rebuilds and cannot create a new immutable candidate by rebuilding only affected stock/date outputs while preserving byte-identical unaffected files. Add a data-owned, fail-closed selective producer and tests; it must never modify the baseline candidate, active profile, QE model/runtime, DB, services, or unrelated components.",
   "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20260914_BUG-1507-qe-direct-v2-lacks-selective-adj-factor-candidate-repair-producer.json",
     "backend/services/dataset_release/adj_factor_candidate_repair.py",
     "scripts/repair_qe_adj_factor_candidate.py",
@@ -35,16 +37,32 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
+      "scripts/repair_qe_adj_factor_candidate.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1507-qe-direct-v2-lacks-selective-adj-factor-candidate-repair-producer.json",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "backend/services/dataset_release/adj_factor_candidate_repair.py",
       "scripts/repair_qe_adj_factor_candidate.py",
       "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py"
     ],
     "changed_files": [
+      "backend/services/dataset_release/adj_factor_candidate_repair.py",
       "backend/services/dataset_release/direct_monthly.py",
-      "backend/tests/dataset_release/test_direct_monthly.py"
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
+      "scripts/repair_qe_adj_factor_candidate.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1507-qe-direct-v2-lacks-selective-adj-factor-candidate-repair-producer.json",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -54,6 +72,8 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py",
       "backend/services/dataset_release/adj_factor_candidate_repair.py",
       "scripts/repair_qe_adj_factor_candidate.py",
       "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
@@ -62,6 +82,8 @@
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20260914_BUG-1507-qe-direct-v2-lacks-selective-adj-factor-candidate-repair-producer.json",
       "backend/services/dataset_release/adj_factor_candidate_repair.py",
       "scripts/repair_qe_adj_factor_candidate.py",
@@ -93,15 +115,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/data-stats",
+    "fresh_process_evidence": [
+      "python -I fresh process imported producer and CLI, verified normalized factor and parser contract -> passed BUG1507_FRESH_PROCESS_CONTRACT_OK database_access=false dataset_write=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
