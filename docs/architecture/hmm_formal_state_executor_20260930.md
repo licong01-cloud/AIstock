@@ -73,8 +73,8 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | formal_state_authority.py; formal_state_domains.py; formal_state_input.py; formal_state_executor.py | test_formal_state_authority.py：9 passed；官方 DB 只读目录 freeze + adapter readback 成功；历史 stable-taxonomy-backcast 训练视图覆盖 131/131；A5 full-key partition/opportunity/eligibility 定向测试通过 | PARTIAL | 31/131 文本投影、A5 逐键构造及严格 v3 mapping manifest 读取已补齐；完整文件 source constructor 尚未接通。真实 source preflight 仍须使用已审核的 BUG-1641 reader |
-| F-002 | formal_state_model.py | pytest backend/tests/hmm_risk/test_formal_state_executor.py -q -p no:cacheprovider；25 passed | PARTIAL | 定向数值/结构测试通过，不代表全部合同审核完成 |
-| F-003 | formal_state_executor.py; run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py；signed-zero mismatch 与 CLI durable failure 测试 | PARTIAL | 未运行正式 fresh-process grid；仍需 parent/selected artifact 全链审核 |
+| F-002 | formal_state_model.py | test_formal_state_executor.py；原数值/结构矩阵及固定 D1 projection 定向测试 | PARTIAL | 已接入批准的 801207.SI raw exact-zero、full-20 preprocess 后固定 19D likelihood；其他行业不自动降维。定向测试不代表全部合同审核完成 |
+| F-003 | formal_state_executor.py; run_formal_state_model_set.py | test_formal_state_executor.py；signed-zero mismatch、CLI durable failure、child projection 重新哈希后拒绝、完整 mixed-shape serialization 与零-refit selected readback | PARTIAL | 未运行正式 fresh-process grid；真实 source-to-selected artifact 全链验证仍未完成，合成序列化测试不证明模型通过验收 |
 | F-004 | formal_state_calendar.py; formal_state_input.py; formal_state_model.py; formal_state_executor.py | test_formal_state_calendar.py；完整 182 日、compact finite payload、mask/source/hash 漂移、空 sentinel、diagnostic tie、失败 ledger 和零-refit 回读 | PARTIAL | carrier/manifest、逐日 ledger、T/O/U/E 和共享语义回读已实现；须在完整文件构造接通后完成真实 source 与 selected artifact 全链验证，不以单元测试推导正式验收 |
 | F-005 | run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py；仅合成测试，正式 fits=0/5184 | BLOCKED | 仅在 F-001～F-004 真正完成后执行，不把合成单元测试写为正式训练 |
 
@@ -83,9 +83,11 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 文件 SHA256=`1a0e5f492e8d87c7732c36303495ca7e06efb5a052651f343ff72004dc7c569f`。
 目录投影与 executor 定向矩阵在批准的单线程 Conda base 中合计 34 passed；其中目录测试 9 passed。
 H5 reader 修复为 [BUG-1641 PR #5153](https://github.com/licong01-cloud/AIstock/pull/5153)，
-最终 HEAD=`80fc1088d14bed52e9155c30c9dffb90dd1e7b09`，2026-10-01 只读核验 OPEN、CI 全绿，未合入。
-真实 v15 source preflight 在该独立修复 worktree 执行，不代表本 feature 的旧基线 reader 已包含修复。
-后续先闭合 reader 修复，再完成完整 C-010/A5 文件构造与 D6 carrier/readback；不需要数据窗口创建私有行业编号或改写 v15。
+源码 merge=`03bf3f571ef288a429c026e05fe4c46a0c22772c`；close-sync PR #5163 merge=
+`878f5291fa778b2f647bd7747b6920efb4574550`，Issue #5147 已关闭，BUG status=fixed。
+本 feature 已安全合并上述 main，包含 reader 修复；先前独立 worktree 的真实 v15 source preflight
+不冒充本 feature 的最终 source-to-request 验收。接下来完成完整 C-010/A5 文件构造与 D6 carrier/readback；
+不需要数据窗口创建私有行业编号或改写 v15。
 
 2026-10-01 增量实现仍属于上述同一个源码任务包，没有新建研究阶段或模型合同：
 
@@ -96,6 +98,17 @@ H5 reader 修复为 [BUG-1641 PR #5153](https://github.com/licong01-cloud/AIstoc
 - 聚焦回归 58 passed；后续相关 fix-point 分别 13、35、11 passed（最后一组含 task-code fresh-process import/DB poison）。Ruff、py_compile、diff、14/14 ownership、module registry 8 passed 和 L0 blocking=0。上述为工作树实现验证，未伪写成正式训练或 PR 最终 HEAD 全量验收。
 - 尚未完成完整 file-only source constructor、实际 source-to-request 和 selected model-set 全链审核，因此 F2 不报告 PASS、不创建实现 PR。
 - 正式训练仍为 0/5184；没有 selection、正式 D6、model/READY、数据集/数据库写入或进程操作。单元测试只使用合成数据。
+
+本轮继续同一个实现任务包的复审修复：固定 D1 v2 projection 保存 full feature/preprocess/source identity、
+raw 与 processed IEEE-754 payload hash、固定 mask、effective dimension；parent 在 D5 前从 request 重算投影，
+D6 先验证完整 20D O payload，再使用同一固定 19D mask，selected artifact 保留逐 entry projection 与维数直方图。
+非 allowlist 常量维不自动删除，仍由各 restart 的初始化明确失败；不因投影新增检查跳过正常 grid 迭代。
+合成序列化矩阵覆盖四个 family-level 和 31/131 分母，但不作为正式 D3～D6 acceptance 或模型生成证据。
+完整文件 constructor 与真实 source/request/selected 链未闭合，F-001～F-004 继续保持 PARTIAL。
+最终聚焦矩阵实际运行 75 passed（executor/calendar/domains/authority/stock_fact_observation）；
+固定投影及 selected artifact fix-point 16 passed。Ruff check/format、py_compile、git diff --check、
+module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5 前投影 identity 闭合和
+非 allowlist 常量维不得中断正常 restart schedule；不把这些代码测试写作正式 fit/D5/D6 的结果。
 
 ## Rollout / Rollback
 
@@ -122,13 +135,14 @@ forward 仍遵循 as-published PIT；历史 non-as-known-taxonomy 身份不能�
 
 production_ddl_gate=noop；production_dml_gate=noop；dependency_install=noop。
 Conda AIstock mutation=false；dataset/profile mutation=false；runtime/process control=false。
-正式训练获授权；PR merge 未获本次授权。模块生产影响须以最终 changed files 的 workflow/runtime contract 为准。
+正式训练及后续提交/合入已获用户授权；不因此跳过完整实现、正式审核、F2 和 CI。
+当前未完成的 feature 不创建或合入部分交付 PR。模块生产影响须以最终 changed files 的 workflow/runtime contract 为准。
 
 ## DESIGN-COMPLIANCE-001 当前复审
 
 1. 无简化交付：当前整体明确未完成，完整 C-010/A5 和 D6 carrier 不用简化证据替代；未请求合入。
 2. 无静默错误：source/seed/hash/tie/非有限值与 durable failure 采用显式拒绝，缺口继续报告。
 3. 无业务漂移：模型合同与 full denominator 不变；未来 utility 纠回复用 daily-excess sum；D6 不新增 O-only tie 门禁。
-4. 无未经批准门禁/审批：不增加资源、availability ratio、统计 significance 或人工 sector 特批；PR merge 仍按用户指定单独确认。
+4. 无未经批准门禁/审批：不增加资源、availability ratio、统计 significance 或人工 sector 特批；本次合入授权不扩展为服务控制、数据写入或删除授权。
 
 本记录不是正式验收通过声明；F2 当前不得 PASS。

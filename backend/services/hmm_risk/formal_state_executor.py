@@ -27,8 +27,9 @@ from backend.services.hmm_risk.formal_state_model import (
     FormalStateError,
     array,
     fit_entry,
-    preprocess_apply,
     preprocess_fit,
+    project_training,
+    project_validation,
     receipt,
     restore_model,
     select_restart,
@@ -224,13 +225,24 @@ def train_repeat(request: Mapping[str, Any]) -> dict[str, Any]:
             raw_series = request["series"][key]
             codes = request["sector_codes"][level]
             preprocess = preprocess_fit([np.asarray(raw_series[c]["train_values"]) for c in codes], family)
+            projected = {
+                code: project_training(
+                    np.asarray(raw_series[code]["train_values"]),
+                    preprocess,
+                    family=family,
+                    level=level,
+                    sector=code,
+                    source_receipt_sha256=raw_series[code]["source_receipt_sha256"],
+                )
+                for code in codes
+            }
             candidates = []
             for seed in SEEDS:
                 entries = {}
                 for code in codes:
                     attempts += 1
                     source = raw_series[code]
-                    values = preprocess_apply(np.asarray(source["train_values"]), preprocess)
+                    values, projection = projected[code]
                     try:
                         result = fit_entry(values, source["train_dates"], seed)
                     except Exception as exc:
@@ -244,7 +256,9 @@ def train_repeat(request: Mapping[str, Any]) -> dict[str, Any]:
                                 "evidence": getattr(exc, "evidence", None),
                             }
                         )
-                    entries[code] = result
+                    entries[code] = receipt(
+                        {**{k: v for k, v in result.items() if k != "receipt_sha256"}, "projection": projection}
+                    )
                     print(
                         f"fit {attempts}/2592 {key} seed={seed} sector={code} accepted={result['accepted']}", flush=True
                     )
@@ -284,7 +298,7 @@ def finalize(request: Mapping[str, Any], first: Mapping[str, Any], second: Mappi
     selections = {}
     semantic = {}
     for key, group in first["groups"].items():
-        level = key.split(":")[1]
+        family, level = key.split(":")
         codes = request["sector_codes"][level]
         series = request["series"][key]
         expected_preprocess = preprocess_fit(
@@ -292,12 +306,27 @@ def finalize(request: Mapping[str, Any], first: Mapping[str, Any], second: Mappi
         )
         if group["preprocess"] != expected_preprocess:
             raise FormalStateError("hmm_risk_model_receipt_invalid", "train-global preprocess differs")
+        projected = {
+            code: project_training(
+                np.asarray(series[code]["train_values"]),
+                expected_preprocess,
+                family=family,
+                level=level,
+                sector=code,
+                source_receipt_sha256=series[code]["source_receipt_sha256"],
+            )
+            for code in codes
+        }
         for candidate in group["candidates"]:
             if sorted(candidate["entries"]) != codes:
                 raise FormalStateError("hmm_risk_model_restart_family_incomplete", "child sector set differs")
             for code in codes:
                 entry = candidate["entries"][code]
                 verify_hash(entry)
+                if entry.get("projection") != projected[code][1]:
+                    raise FormalStateError(
+                        "hmm_risk_model_inactive_dimension_contract_invalid", "child projection authority differs"
+                    )
                 if (
                     "initialization" in entry
                     and entry["initialization"]["kmeans_parameters"]["random_state"] != candidate["seed"]
@@ -305,7 +334,7 @@ def finalize(request: Mapping[str, Any], first: Mapping[str, Any], second: Mappi
                     raise FormalStateError("hmm_risk_model_receipt_invalid", "candidate seed differs")
                 validate_fit_entry(
                     entry,
-                    preprocess_apply(np.asarray(series[code]["train_values"]), expected_preprocess),
+                    projected[code][0],
                     series[code]["train_dates"],
                 )
         selection = select_restart(group["candidates"], request["sector_codes"][level])
@@ -318,13 +347,14 @@ def finalize(request: Mapping[str, Any], first: Mapping[str, Any], second: Mappi
             fitted = selected["entries"][code]
             source = request["series"][key][code]["validation"]
             try:
-                values = preprocess_apply(
+                values = project_validation(
                     array(
                         source["observation_values_f64"],
-                        (len(source["observation_available_positions"]), fitted["feature_count"]),
+                        (len(source["observation_available_positions"]), len(series[code]["feature_names"])),
                         "validation values",
                     ),
                     group["preprocess"],
+                    fitted["projection"],
                 )
                 arguments = dict(
                     carrier=source,
@@ -408,13 +438,26 @@ def validate_semantic_readback(
         selected = next(c for c in group["candidates"] if c["seed"] == final["selection"][key]["selected_seed"])
         for code in codes:
             source = request["series"][key][code]["validation"]
-            values = preprocess_apply(
+            _, expected_projection = project_training(
+                np.asarray(request["series"][key][code]["train_values"]),
+                group["preprocess"],
+                family=family,
+                level=level,
+                sector=code,
+                source_receipt_sha256=request["series"][key][code]["source_receipt_sha256"],
+            )
+            if selected["entries"][code].get("projection") != expected_projection:
+                raise FormalStateError(
+                    "hmm_risk_model_inactive_dimension_contract_invalid", "selected projection authority differs"
+                )
+            values = project_validation(
                 array(
                     source["observation_values_f64"],
                     (len(source["observation_available_positions"]), len(features)),
                     "validation compact values",
                 ),
                 group["preprocess"],
+                selected["entries"][code]["projection"],
             )
             validate_calendar_evidence(
                 final["semantic"][key][code],
@@ -427,6 +470,100 @@ def validate_semantic_readback(
                 source_receipt_sha256=request["policy"]["receipt_sha256"],
                 selected_identity={"family": family, "level": level, "sector": code, "seed": selected["seed"]},
             )
+
+
+def selected_model_set(
+    final: Mapping[str, Any], request: Mapping[str, Any], groups: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Extract only already-selected entries; preserve full/mixed identity."""
+    verify_hash(final)
+    if final["d3_d6_accepted"] is not True or final["request_sha256"] != request["receipt_sha256"]:
+        raise FormalStateError("hmm_risk_model_receipt_invalid", "accepted current request required")
+    expected_keys = {f"{family}:{level}" for family in FAMILIES for level in ("L1", "L2")}
+    if set(final["selection"]) != expected_keys or set(final["semantic"]) != expected_keys:
+        raise FormalStateError("hmm_risk_model_restart_family_incomplete", "accepted four-level closure required")
+    selected_models = {}
+    for key, selection in final["selection"].items():
+        if selection["accepted"] is not True:
+            raise FormalStateError("hmm_risk_model_selection_unavailable", "cannot publish blocked level")
+        selected = next(c for c in groups[key]["candidates"] if c["seed"] == selection["selected_seed"])
+        family, level = key.split(":")
+        codes = request["sector_codes"][level]
+        if len(codes) != (31 if level == "L1" else 131) or codes != sorted(set(codes)):
+            raise FormalStateError("hmm_risk_model_restart_family_incomplete", "31/131 selected denominator differs")
+        if sorted(selected["entries"]) != codes or sorted(final["semantic"][key]) != codes:
+            raise FormalStateError("hmm_risk_model_restart_family_incomplete", "selected sector set differs")
+        models = {}
+        for code in codes:
+            entry = selected["entries"][code]
+            semantic = final["semantic"][key][code]
+            if (
+                not entry["accepted"]
+                or semantic["assignment_status"] != "accepted"
+                or semantic["evidence_status"] != "accepted"
+            ):
+                raise FormalStateError("hmm_risk_model_receipt_invalid", "blocked model/semantic cannot publish")
+            _, projection = project_training(
+                np.asarray(request["series"][key][code]["train_values"]),
+                groups[key]["preprocess"],
+                family=family,
+                level=level,
+                sector=code,
+                source_receipt_sha256=request["series"][key][code]["source_receipt_sha256"],
+            )
+            if entry["projection"] != projection or entry["feature_count"] != projection["likelihood_feature_count"]:
+                raise FormalStateError(
+                    "hmm_risk_model_inactive_dimension_contract_invalid", "selected projection shape differs"
+                )
+            model = restore_model(entry["model"])
+            if model.means_.shape != (3, projection["likelihood_feature_count"]):
+                raise FormalStateError(
+                    "hmm_risk_model_inactive_dimension_contract_invalid", "selected model shape differs"
+                )
+            models[code] = {
+                "model": entry["model"],
+                "projection": projection,
+                "projection_sha256": projection["receipt_sha256"],
+                "feature_names": projection["feature_names"],
+                "likelihood_feature_count": entry["feature_count"],
+                "entry_sha256": entry["receipt_sha256"],
+                "semantic": semantic,
+            }
+        dimensions = {}
+        for model in models.values():
+            dimension = str(model["likelihood_feature_count"])
+            dimensions[dimension] = dimensions.get(dimension, 0) + 1
+        selected_models[key] = {
+            "seed": selected["seed"],
+            "preprocess": groups[key]["preprocess"],
+            "models": models,
+            "likelihood_feature_count_histogram": dict(sorted(dimensions.items())),
+        }
+    return receipt(
+        {
+            "schema_version": "hmm_risk_formal_accepted_model_set_v1",
+            "acceptance": final,
+            "request_sha256": request["receipt_sha256"],
+            "selected_models": selected_models,
+            "contracts": CONTRACTS,
+            "source_identity": request["source_identity"],
+            "industry_authority": request["industry_authority"],
+            "policy": request["policy"],
+            "ready": False,
+            "phase2_ready": False,
+        }
+    )
+
+
+def validate_selected_model_set(
+    payload: Mapping[str, Any], final: Mapping[str, Any], request: Mapping[str, Any], groups: Mapping[str, Any]
+) -> None:
+    """Independent source-bound reconstruction, without fit or seed selection."""
+    verify_hash(payload)
+    validate_semantic_readback(final, request, groups)
+    expected = selected_model_set(final, request, groups)
+    if canonical_json_bytes(payload) != canonical_json_bytes(expected):
+        raise FormalStateError("hmm_risk_model_receipt_invalid", "selected artifact source/readback differs")
 
 
 def run_two_processes(request_path: Path, output: Path, child_script: Path) -> Path:
@@ -464,33 +601,10 @@ def run_two_processes(request_path: Path, output: Path, child_script: Path) -> P
         validate_semantic_readback(read_json(output / "acceptance.json"), request, groups)
         if final["d3_d6_accepted"]:
             # Numerical/semantic acceptance is not predictive-product READY.
-            selected_models = {}
-            for key, selection in final["selection"].items():
-                selected = next(c for c in groups[key]["candidates"] if c["seed"] == selection["selected_seed"])
-                selected_models[key] = {
-                    "seed": selected["seed"],
-                    "preprocess": groups[key]["preprocess"],
-                    "models": {
-                        code: {
-                            "model": entry["model"],
-                            "entry_sha256": entry["receipt_sha256"],
-                            "semantic": final["semantic"][key][code],
-                        }
-                        for code, entry in selected["entries"].items()
-                    },
-                }
-            payload = {
-                "acceptance": final,
-                "request_sha256": request["receipt_sha256"],
-                "selected_models": selected_models,
-                "contracts": CONTRACTS,
-                "source_identity": request["source_identity"],
-                "industry_authority": request["industry_authority"],
-                "policy": request["policy"],
-                "ready": False,
-                "phase2_ready": False,
-            }
-            write_once(output / "accepted_model_set.json", receipt(payload))
+            payload = selected_model_set(final, request, groups)
+            model_path = output / "accepted_model_set.json"
+            write_once(model_path, payload)
+            validate_selected_model_set(read_json(model_path), final, request, groups)
         return output / "acceptance.json"
     except Exception as exc:
         write_once(

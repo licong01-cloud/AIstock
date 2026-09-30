@@ -87,6 +87,217 @@ def test_preprocess_is_train_global_and_immutable():
         subject.preprocess_fit([np.ones((120, 2))], subject.FAMILIES[1])
 
 
+def _projection_fixture():
+    rng = np.random.RandomState(42)
+    raw = rng.normal(size=(120, 20))
+    raw[:, 19] = -0.0
+    other_sector = rng.normal(loc=-3.0, size=(800, 20))
+    parameters = subject.preprocess_fit([raw, other_sector], subject.FAMILIES[1])
+    return raw, parameters
+
+
+def test_d1_fixed_projection_after_full_preprocess_and_d6_zero_refit():
+    raw, parameters = _projection_fixture()
+    projected, projection = subject.project_training(
+        raw, parameters, family=subject.FAMILIES[1], level="L2", sector="801207.SI", source_receipt_sha256="a" * 64
+    )
+    full = subject.preprocess_apply(raw, parameters)
+    assert np.all(full[:, 19] == full[0, 19]) and full[0, 19] != 0
+    assert projected.shape == (120, 19)
+    assert projection["feature_count"] == 20 and projection["likelihood_feature_count"] == 19
+    assert projection["inactive_feature_names"] == ["sf_dispersion_5d_neg"]
+    assert projection["all_raw_inactive_values_exact_zero"]
+    np.testing.assert_array_equal(projected, full[:, :19])
+    np.testing.assert_array_equal(subject.project_validation(raw[:3], parameters, projection), projected[:3])
+    assert subject.project_validation(np.empty((0, 20)), parameters, projection).shape == (0, 19)
+
+
+@pytest.mark.parametrize("bad", [1e-300, 1.0, float("nan"), float("inf")])
+def test_d1_no_near_zero_nonzero_or_nonfinite_allowlist(bad):
+    raw, parameters = _projection_fixture()
+    raw[0, 19] = bad
+    with pytest.raises(subject.FormalStateError):
+        subject.project_training(
+            raw, parameters, family=subject.FAMILIES[1], level="L2", sector="801207.SI", source_receipt_sha256="a" * 64
+        )
+
+
+def test_d1_no_dynamic_projection_for_other_sector_or_level():
+    raw, parameters = _projection_fixture()
+    for level, sector in (("L2", "801206.SI"), ("L1", "801207.SI")):
+        values, projection = subject.project_training(
+            raw, parameters, family=subject.FAMILIES[1], level=level, sector=sector, source_receipt_sha256="a" * 64
+        )
+        assert values.shape == (120, 20) and projection["inactive_feature_indices"] == []
+        with pytest.raises(subject.FormalStateError, match="sector-local variance"):
+            subject.initialize(values, 42)
+    rng = np.random.RandomState(43)
+    full = rng.normal(size=(120, 20))
+    identity_values, identity = subject.project_training(
+        full, parameters, family=subject.FAMILIES[1], level="L2", sector="801206.SI", source_receipt_sha256="b" * 64
+    )
+    assert identity["likelihood_feature_count"] == 20 and identity["inactive_feature_indices"] == []
+    np.testing.assert_array_equal(identity_values, subject.preprocess_apply(full, parameters))
+
+
+@pytest.mark.parametrize("drift", ["mask", "algorithm", "preprocess", "validation", "full_features"])
+def test_d1_rehashed_drift_does_not_authorize_projection(drift):
+    raw, parameters = _projection_fixture()
+    _, projection = subject.project_training(
+        raw, parameters, family=subject.FAMILIES[1], level="L2", sector="801207.SI", source_receipt_sha256="a" * 64
+    )
+    raw = raw[:3].copy()
+    if drift == "mask":
+        projection["active_feature_mask"][0] = 1
+    elif drift == "algorithm":
+        projection["algorithm_version"] = "unknown"
+    elif drift == "preprocess":
+        parameters = {**parameters, "center": [v + 0.1 for v in parameters["center"]]}
+    elif drift == "validation":
+        raw[0, 19] = 1e-300
+    else:
+        raw = raw[:, :19]
+    projection = subject.receipt({k: v for k, v in projection.items() if k != "receipt_sha256"})
+    with pytest.raises(subject.FormalStateError):
+        subject.project_validation(raw, parameters, projection)
+
+
+def test_d5_mixed_dimension_uses_effective_dimension_not_global_twenty():
+    candidates = _selection_candidates()
+    for candidate in candidates:
+        candidate["entries"]["a"].update(final_train_likelihood=-1900.0, training_rows=100, feature_count=19)
+    result = subject.select_restart(candidates, ["a"])
+    assert result["selected_seed"] == 42
+    assert result["candidates"][0]["scores"] == [-1.0]
+
+
+@pytest.mark.parametrize(
+    "field", ["source_profile_receipt_sha256", "projected_matrix_sha256", "active_feature_indices"]
+)
+def test_parent_rejects_rehashed_child_projection_before_d5(monkeypatch, field):
+    raw, _ = _projection_fixture()
+    other = np.random.RandomState(43).normal(size=(120, 20))
+    preprocess = subject.preprocess_fit([other, raw], subject.FAMILIES[1])
+    codes = ["801206.SI", "801207.SI"]
+    series = {
+        code: {"train_values": values.tolist(), "train_dates": ["2022-01-03"] * 120, "source_receipt_sha256": "a" * 64}
+        for code, values in zip(codes, (other, raw))
+    }
+    entries = {}
+    for code in codes:
+        _, projection = subject.project_training(
+            np.asarray(series[code]["train_values"]),
+            preprocess,
+            family=subject.FAMILIES[1],
+            level="L2",
+            sector=code,
+            source_receipt_sha256="a" * 64,
+        )
+        if code == "801207.SI":
+            projection[field] = list(range(20)) if field == "active_feature_indices" else "b" * 64
+            projection = subject.receipt({k: v for k, v in projection.items() if k != "receipt_sha256"})
+        entries[code] = subject.receipt(
+            {"accepted": False, "reasons": ["hmm_risk_model_fit_failed"], "projection": projection}
+        )
+    key = f"{subject.FAMILIES[1]}:L2"
+    groups = {
+        key: {"preprocess": preprocess, "candidates": [{"seed": seed, "entries": entries} for seed in subject.SEEDS]}
+    }
+    groups.update(
+        {f"{family}:{level}": {} for family in subject.FAMILIES for level in ("L1", "L2") if f"{family}:{level}" != key}
+    )
+    repeat = subject.receipt(
+        {
+            "request_sha256": "c" * 64,
+            "fit_attempts": 2592,
+            "selection_performed": False,
+            "validation_accessed": False,
+            "groups": groups,
+        }
+    )
+    monkeypatch.setattr(executor, "validate_fit_entry", lambda *_: None)
+    monkeypatch.setattr(executor, "select_restart", lambda *_: pytest.fail("D5 accessed before projection closure"))
+    with pytest.raises(subject.FormalStateError, match="projection authority differs"):
+        executor.finalize(
+            {"receipt_sha256": "c" * 64, "sector_codes": {"L2": codes}, "series": {key: series}}, repeat, repeat
+        )
+
+
+def test_selected_artifact_preserves_mixed_shape_and_zero_refit(monkeypatch):
+    # Synthetic serialization only, not a source/D3-D6 acceptance claim.
+    codes = {
+        "L1": [f"801{i:03}.SI" for i in range(31)],
+        "L2": sorted([f"802{i:03}.SI" for i in range(130)] + ["801207.SI"]),
+    }
+    request = {
+        "receipt_sha256": "a" * 64,
+        "sector_codes": codes,
+        "series": {},
+        "source_identity": {},
+        "industry_authority": {},
+        "policy": {},
+    }
+    groups, selections, semantic = {}, {}, {}
+    rng = np.random.RandomState(44)
+    for family in subject.FAMILIES:
+        dimension = 7 if family == subject.FAMILIES[0] else 20
+        raw = rng.normal(size=(4, dimension))
+        special = raw.copy()
+        special[:, -1] = 0
+        preprocess = subject.preprocess_fit([raw, special], family)
+        for level in ("L1", "L2"):
+            key = f"{family}:{level}"
+            entries, source, meanings = {}, {}, {}
+            for code in codes[level]:
+                values = special if (family, level, code) == (subject.FAMILIES[1], "L2", "801207.SI") else raw
+                _, projection = subject.project_training(
+                    values, preprocess, family=family, level=level, sector=code, source_receipt_sha256="b" * 64
+                )
+                d = projection["likelihood_feature_count"]
+                entries[code] = subject.receipt(
+                    {
+                        "accepted": True,
+                        "projection": projection,
+                        "feature_count": d,
+                        "model": {
+                            "startprob": [1 / 3] * 3,
+                            "transmat": np.eye(3).tolist(),
+                            "means": np.zeros((3, d)).tolist(),
+                            "covariance": np.ones((3, d)).tolist(),
+                        },
+                    }
+                )
+                source[code] = {"train_values": values.tolist(), "source_receipt_sha256": "b" * 64}
+                meanings[code] = {"assignment_status": "accepted", "evidence_status": "accepted"}
+            request["series"][key] = source
+            groups[key] = {"preprocess": preprocess, "candidates": [{"seed": 42, "entries": entries}]}
+            selections[key] = {"accepted": True, "selected_seed": 42}
+            semantic[key] = meanings
+    final = subject.receipt(
+        {
+            "d3_d6_accepted": True,
+            "request_sha256": request["receipt_sha256"],
+            "selection": selections,
+            "semantic": semantic,
+        }
+    )
+    payload = executor.selected_model_set(final, request, groups)
+    mixed = payload["selected_models"][f"{subject.FAMILIES[1]}:L2"]
+    assert mixed["likelihood_feature_count_histogram"] == {"19": 1, "20": 130}
+    assert np.asarray(mixed["models"]["801207.SI"]["model"]["means"]).shape == (3, 19)
+    assert len(mixed["models"]["801207.SI"]["feature_names"]) == 20
+    assert payload["ready"] is payload["phase2_ready"] is False
+    monkeypatch.setattr(executor, "validate_semantic_readback", lambda *_: None)
+    monkeypatch.setattr(executor, "fit_entry", lambda *_: pytest.fail("unexpected fit"))
+    monkeypatch.setattr(executor, "select_restart", lambda *_: pytest.fail("unexpected selection"))
+    executor.validate_selected_model_set(payload, final, request, groups)
+    changed = copy.deepcopy(payload)
+    changed["selected_models"][f"{subject.FAMILIES[1]}:L2"]["models"]["801207.SI"]["feature_names"].reverse()
+    changed = subject.receipt({k: v for k, v in changed.items() if k != "receipt_sha256"})
+    with pytest.raises(subject.FormalStateError, match="source/readback differs"):
+        executor.validate_selected_model_set(changed, final, request, groups)
+
+
 def test_train_persistent_path_and_singleton_fail():
     hard = np.tile(np.repeat([0, 1, 2], 60), 3)
     posterior = np.eye(3)[hard]

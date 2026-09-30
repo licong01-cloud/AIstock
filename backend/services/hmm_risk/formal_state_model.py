@@ -6,6 +6,7 @@ database, runtime registry, or product capability is mutated by this module.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from datetime import date
 from typing import Any, Mapping, Sequence
@@ -13,7 +14,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from scipy.special import logsumexp
 
-from backend.services.hmm_risk.contracts import canonical_sha256
+from backend.services.hmm_risk.contracts import ALL_CORE_FEATURES, BASE_FEATURES, canonical_sha256
 
 VERSION = "hmm_risk_formal_state_executor_v1"
 SEEDS = tuple(range(42, 50))
@@ -75,6 +76,127 @@ def preprocess_apply(values: np.ndarray, parameters: Mapping[str, Any]) -> np.nd
     return (np.clip(values, parameters["low"], parameters["high"]) - parameters["center"]) / parameters["scale"]
 
 
+def _matrix_sha256(values: np.ndarray) -> str:
+    return hashlib.sha256(np.asarray(values, dtype="<f8", order="C").tobytes(order="C")).hexdigest()
+
+
+def project_training(
+    raw: np.ndarray,
+    parameters: Mapping[str, Any],
+    *,
+    family: str,
+    level: str,
+    sector: str,
+    source_receipt_sha256: str,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Apply full preprocess, then the one approved fixed D1 mask.
+
+    This is not automatic variance-based feature selection.  The global family
+    feature identity remains 7/20 even when one L2 model uses 19 coordinates.
+    """
+    features = list(BASE_FEATURES if family == FAMILIES[0] else ALL_CORE_FEATURES)
+    if family not in FAMILIES or level not in ("L1", "L2"):
+        raise FormalStateError("hmm_risk_model_inactive_dimension_contract_invalid", "projection identity invalid")
+    raw = np.asarray(raw, dtype=np.float64)
+    if raw.ndim != 2:
+        raise FormalStateError("hmm_risk_model_inactive_dimension_contract_invalid", "raw feature matrix required")
+    array(raw, (len(raw), len(features)), "full raw train features")
+    if (
+        not len(raw)
+        or not isinstance(source_receipt_sha256, str)
+        or len(source_receipt_sha256) != 64
+        or any(c not in "0123456789abcdef" for c in source_receipt_sha256)
+    ):
+        raise FormalStateError("hmm_risk_model_inactive_dimension_contract_invalid", "source profile identity missing")
+    inactive = [19] if (family, level, sector) == (FAMILIES[1], "L2", "801207.SI") else []
+    if inactive and not np.all(raw[:, 19] == 0.0):
+        raise FormalStateError(
+            "hmm_risk_model_inactive_dimension_contract_invalid", "allowlisted raw coordinate not exact zero"
+        )
+    processed = preprocess_apply(raw, parameters)
+    array(processed, raw.shape, "full preprocessed features")
+    active = [i for i in range(len(features)) if i not in inactive]
+    projected = processed[:, active]
+    body = {
+        "schema_version": "hmm_risk_formal_fixed_projection_v1",
+        "algorithm_version": "hmm_risk_c008_b3_d1_inactive_dimension_v2",
+        "family": family,
+        "level": level,
+        "sector_code": sector,
+        "feature_names": features,
+        "feature_count": len(features),
+        "likelihood_feature_count": len(active),
+        "active_feature_indices": active,
+        "inactive_feature_indices": inactive,
+        "active_feature_names": [features[i] for i in active],
+        "inactive_feature_names": [features[i] for i in inactive],
+        "active_feature_mask": [i in active for i in range(len(features))],
+        "preprocess_sha256": canonical_sha256(parameters),
+        "source_profile_receipt_sha256": source_receipt_sha256,
+        "raw_matrix_sha256": _matrix_sha256(raw),
+        "preprocessed_matrix_sha256": _matrix_sha256(processed),
+        "raw_inactive_vector_sha256": _matrix_sha256(raw[:, inactive]),
+        "expected_preprocessed_inactive_vector_sha256": _matrix_sha256(processed[:, inactive]),
+        "observed_preprocessed_inactive_vector_sha256": _matrix_sha256(processed[:, inactive]),
+        "preprocessed_matches_approved_transform": True,
+        "all_raw_inactive_values_exact_zero": bool(np.all(raw[:, inactive] == 0.0)),
+        "projected_matrix_shape": list(projected.shape),
+        "projected_matrix_sha256": _matrix_sha256(projected),
+        "dynamic_activation": False,
+    }
+    body["mask_sha256"] = canonical_sha256(body["active_feature_mask"])
+    return projected, receipt(body)
+
+
+def project_validation(raw: np.ndarray, parameters: Mapping[str, Any], projection: Mapping[str, Any]) -> np.ndarray:
+    """Full finite O payload precedes preprocess and the frozen training mask."""
+    if projection["receipt_sha256"] != canonical_sha256(
+        {k: v for k, v in projection.items() if k != "receipt_sha256"}
+    ) or projection["preprocess_sha256"] != canonical_sha256(parameters):
+        raise FormalStateError(
+            "hmm_risk_model_inactive_dimension_contract_invalid", "projection/preprocess hash differs"
+        )
+    features = list(BASE_FEATURES if projection["family"] == FAMILIES[0] else ALL_CORE_FEATURES)
+    inactive = (
+        [19]
+        if (projection["family"], projection["level"], projection["sector_code"]) == (FAMILIES[1], "L2", "801207.SI")
+        else []
+    )
+    active = [i for i in range(len(features)) if i not in inactive]
+    mask = [i in active for i in range(len(features))]
+    if (
+        projection["schema_version"] != "hmm_risk_formal_fixed_projection_v1"
+        or projection["algorithm_version"] != "hmm_risk_c008_b3_d1_inactive_dimension_v2"
+        or projection["family"] not in FAMILIES
+        or projection["level"] not in ("L1", "L2")
+        or projection["feature_names"] != features
+        or projection["feature_count"] != len(features)
+        or type(projection["feature_count"]) is not int
+        or projection["likelihood_feature_count"] != len(active)
+        or type(projection["likelihood_feature_count"]) is not int
+        or projection["active_feature_indices"] != active
+        or projection["inactive_feature_indices"] != inactive
+        or any(
+            type(i) is not int for i in projection["active_feature_indices"] + projection["inactive_feature_indices"]
+        )
+        or projection["active_feature_mask"] != mask
+        or any(type(value) is not bool for value in projection["active_feature_mask"])
+        or projection["active_feature_names"] != [features[i] for i in active]
+        or projection["inactive_feature_names"] != [features[i] for i in inactive]
+        or projection["mask_sha256"] != canonical_sha256(mask)
+        or projection["dynamic_activation"] is not False
+    ):
+        raise FormalStateError("hmm_risk_model_inactive_dimension_contract_invalid", "fixed mask identity differs")
+    raw = array(raw, (len(raw), len(features)), "full validation features")
+    if inactive and not np.all(raw[:, 19] == 0.0):
+        raise FormalStateError(
+            "hmm_risk_model_inactive_dimension_contract_invalid", "validation inactive raw coordinate not exact zero"
+        )
+    processed = preprocess_apply(raw, parameters)
+    array(processed, raw.shape, "full validation preprocess")
+    return processed[:, active]
+
+
 def parameter_profile(seed: int, reference: np.ndarray) -> dict[str, Any]:
     if seed not in SEEDS:
         raise FormalStateError("hmm_risk_model_contract_unsupported", "undeclared seed")
@@ -106,7 +228,7 @@ def initialize(values: np.ndarray, seed: int) -> tuple[Any, dict[str, Any]]:
     n, d = values.shape
     array(values, (n, d), "train observations")
     reference = values.var(axis=0, ddof=0)
-    if np.any(reference <= 0) or not np.isfinite(reference).all():
+    if np.any(reference <= 0) or not np.isfinite(reference).all() or np.any(np.ptp(values, axis=0) == 0):
         raise FormalStateError("hmm_risk_model_initialization_failed", "sector-local variance must be positive")
     km_parameters = dict(
         n_clusters=3,
