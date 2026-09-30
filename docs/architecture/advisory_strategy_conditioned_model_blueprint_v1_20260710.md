@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.67
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.68
 
 > 初始日期：2026-07-10
-> 修订日期：2026-09-28
+> 修订日期：2026-09-30
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`ENTRY_PRICE_SOURCE_LOCAL_VERIFIED_COORDINATE_INPUT_BLOCKED`（2026-09-29）；原v3/v4模型与历史结果保留，P0/N3研究负结果不改判。独立entry、历史四阶段及每日接入源码已实现，136项定向回归及后续输入校验、1项浏览器用例通过；PR #5088尚未合入。真实validation发现公司行动坐标不一致，未运行正式确认、发布binding或操作用户后端。
+> 当前状态：`ENTRY_PRICE_SOURCE_MERGED_RUNTIME_VERIFIED_CONFIRMATION_INPUT_AND_RESOURCE_BLOCKED`（2026-09-30）。独立entry、历史四阶段及每日接入经PR #5099合入，merge=`ad6d73e591a1666490cffae84f6518d8c2694efd`；用户已重启，BUG-1623语义验证与close-sync完成。v2坐标1,000行检查PASS，源码门禁1,029 passed/6 skipped、独立浏览器用例1 passed。原v3/v4和P0/N3研究结论不改判；正式价格确认、ENTRY_PRICE绑定及其真实每日预测/结算仍未完成。BUG-1632正在修复消费者资源前检分页，未修改QE代码或控制用户进程。
 > 当前价格/执行边界：Advisory只研发和发布基于日频PIT信息的次交易日价格区间，不研发分钟线择时、最佳分钟买卖点、拆单或成交执行策略。未来QE、Paper或Execution模块可通过版本化只读合同独立消费价格区间，但消费、回测、执行和激活均不属于本蓝图范围。
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 均有真实实现与独立验证，但尚无当前同时提供四类输出的组合bundle。`AdvisoryDailyPriceEnvelopeV1`源码、v3三头真实训练 artifact `30e8a75b...` 和 v4 validation-only 校准 artifact `508fedfe...` 均已完成；validation/test 覆盖率分别为 `0.811702/0.733125`，校准扩张量为 0。PR #4732 / merge `3be76e742...` 已交付独立自然前向收集通道；首次正式 request `advprpros_405d704a7dbe866eb0b6ae0e` 和 prediction bundle `631d5011858684403d84d1d0975ec0e0642c1d8f52ebd62048829187a1e5435c` 在 T=`2026-09-15` 开盘前完成，20/20候选可用并通过exact retry，且零目标结果访问、零binding、零数据库写入、零sealed holdout消费。T日18:00后自然settlement `advprsett_14c46af1fa2bdb92088b425c` 已发布：20/20市场及模型可用，业务coverage `0.70`、lower/upper miss `0.25/0.05`、平均/中位宽度 `288.615/249.832 bps`、平均/中位mid误差 `116.422/63.188 bps`；单日只进入`ACCUMULATING`，不能选择或激活模型。PR #4785 / merge `8021790ab...` 又交付固定rolling-20D matured CQR历史导航审计；正式 request `advpradapt_8c81ea2bd2f70d75e1683fe9` 在已消费80日回放上selected=0，故保持静态v4、零新binding和零运行时激活，P0-D exact descriptor仍只绑定meta-label shadow，M3/M4 child typed unavailable。
 > 2026-09-28接入核查：上述v4与历史结果不变，权威本地price prospective目录仍仅1日20行；自然CLI未自动接入scheduler。当前P0-D分支及V1 M3依赖阻断独立entry输出。新详细设计已补齐独立角色、新窗口确认、Program级binding和每日接入方案，源码及确认均待执行。
@@ -204,7 +204,7 @@ H0 的权威详细设计为
 | 系统级上游Alpha | `QE_ROLLING_LSTM_CANDIDATE_ONLY` | rolling LSTM seed123完成四vintage并显示相对rolling LGBM改善，但仍待两seed、LOO和2026H1 Top50负收益解释；尚无新StrategyPackage或Advisory binding |
 | QE因子分析运行态 | `DIRECT_V2_SOURCE_MERGED_BACKEND_RESTART_PENDING` | PR #4352源码和DEV/WSL验证已完成；生产API/后台任务是否加载新源须用户重启后另行readback。该状态不计为模型效果，也不阻断离线主线 |
 | QE股票池管理能力 | `QE_PUBLIC_CONTRACT_AVAILABLE_EXPERIMENTS_OWNED_BY_QE` | QE公开合同支持`stock_universe/single_index/index_union`；活动profile、具体实验和运行态由QE窗口单独负责，Advisory不得修改或代为提交 |
-| Advisory股票池管理能力 | `F2_IMPLEMENTED_LOCAL_VERIFIED_LIVE_UNIVERSE_DEV_READY_PR_OPEN` | Program binding显式保存QE同形`universe_selection`；单指数/指数并集使用共享PIT核心指数成分权威过滤Selection候选并保存receipt，全市场保持兼容且不增加成员查询。历史优先冻结canonical PIT；正式forward以D-1截止解析准入并分别保存D/D-1，双源不可用fail closed。API/UI、每日复评、历史回放和正式forward使用同一合同；无需DDL。DEV已验证2026-09-11单池/并集可解析，周一目标无需未来PIT；日频DB-only价格合同由独立后续PR完成；源码尚未合入或运行时激活 |
+| Advisory股票池管理能力 | `SOURCE_MERGED_RUNTIME_VERIFIED_DAILY_DB_ONLY` | Program binding显式保存QE同形`universe_selection`；单指数/指数并集使用共享PIT核心指数成分权威过滤Selection候选并保存receipt，全市场保持兼容且不增加成员查询。历史优先冻结canonical PIT；正式forward以D-1截止解析准入并分别保存D/D-1，双源不可用fail closed。API/UI、每日复评、历史回放和正式forward使用同一合同；无需DDL。2026-09-13用户重启后的只读smoke已核验运行时身份、D-1股票池及日频DB-only价格，详见页首；不等于新股票池的ENTRY_PRICE模型范围已确认 |
 | 相邻Exit证据 | `POSITION_TIMING_INCONCLUSIVE_OR_UNDERPOWERED` | L2无selected model，L4b-1无selected side；保持自然证据积累，不进入Advisory主线完成度 |
 
 PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c0fe0f94010d6874b8b799`；P0-D PR #3368 已于 2026-08-13 合入 `458199cd902323e006ac23d3767c908637068fa8`，后续通过descriptor rotation作为experimental shadow接入。P0-L源码PR #3959、BUG-1251修复PR #3967和close-sync PR #3969均已合入；P0-E至P0-L均未激活。最近相关主线为：PR #4343 `3b4781a2c...`合入G2-A direct-v2 v3 input适配，PR #4347 `d71479b31...`记录QE rolling LSTM/sector诊断，PR #4352 `983739db3...`修复QE因子分析direct-v2数据权威但生产backend待用户重启，PR #4353 `a7609c41b...`合入G2-A development执行器，PR #4357 `f05ee69d2...`合入设计，PR #4361 `2f653687d`合入QE活动数据集/PIT股票池源码但未激活profile；G2-A v1.2已17/39结构停止，PR #4359仍开放。因果Admission v2.1 R1源码PR #4395、跨OS仓库身份BUG-1395/PR #4402及registry聚合BUG-1396/PR #4404已合入；正式研究从`main@a317f7c2...`完成且selected=0。M4 v1 artifact保持原身份，但当前Program descriptor已旋转为不含M3/M4 child的P0-D meta-label。源码合入、正式实验、descriptor接入、运行时加载、模型角色覆盖和自然OOS成熟继续分别报告。
@@ -537,7 +537,7 @@ existing admitted StrategyPackage
 
 #### 5.3.1 日级价格区间发布与外部消费边界
 
-既有合同为`AdvisoryDailyPriceEnvelopeV1`（legacy-v1完整价格信封）。已实现显式`entry-v2`附加独立买入区间响应，保持V1默认行为及原artifact不变；新源码尚未合入/启用。ENTRY_PRICE可用性独立于M3/Ranking，训练来源身份和实际父Alpha特征依赖仍保留。旧P0-D直接短路价格输出、V1要求全部辅助区间成功的问题，由[独立角色设计](advisory_entry_price_independent_role_f2_design_20260928.md)的新通道解决，旧通道语义不变。每个价格预测仍至少绑定以下适用字段；V2未启用辅助角色时按角色返回unavailable，不补规则值：
+既有合同为`AdvisoryDailyPriceEnvelopeV1`（legacy-v1完整价格信封）。显式`entry-v2`附加独立买入区间响应已随PR #5099合入并经用户重启加载，保持V1默认行为及原artifact不变；ENTRY_PRICE角色尚未绑定。其可用性独立于M3/Ranking，训练来源身份和实际父Alpha特征依赖仍保留。旧P0-D直接短路价格输出、V1要求全部辅助区间成功的问题，由[独立角色设计](advisory_entry_price_independent_role_f2_design_20260928.md)的新通道解决，旧通道语义不变。每个价格预测仍至少绑定以下适用字段；V2未启用辅助角色时按角色返回unavailable，不补规则值：
 
 ```text
 symbol
@@ -1898,34 +1898,36 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 本页是当前执行路线；§1.3和§9保存完整演进结果，正式registry/route保留历史身份，不为补账或归档新增工时。业务目标始终为可验证的成本后超额收益与风险管理收益，分别按双合同评价。QE统一执行上游Alpha的历史复验、多seed、因子/模型组合和新候选搜索；Advisory不建立第二条Alpha实验线，但负责自身日级价格区间模型、正式binding、API/UI和消费侧业务验证。Advisory不研发分钟择时或执行策略。
 
-### 16.1 主动业务任务（ENTRY_PRICE优先；源码本地验证，确认及生产待完成）
+### 16.1 主动业务任务（ENTRY_PRICE优先；源码已合入并读回，模型确认及角色交付待完成）
 
-2026-09-28用户要求优先完成买入价格区间并启动长任务。本节替代此前QE交付消费优先的排期；仍不运行Advisory第二条Alpha实验线。2026-09-29完成首轮源码及多轮定向审核/修复，尚未合入；没有正式模型实验、角色binding或生产写入。
+2026-09-28用户要求优先完成买入价格区间并启动长任务。本节替代此前QE交付消费优先的排期；仍不运行Advisory第二条Alpha实验线。PR #5099已交付独立价格源码及v2投影；用户重启后语义验证通过，PR #5102完成BUG-1623同步，PR #5109/#5111完成对应运行验收器修复及同步。源码及未配置状态可用，不等于模型确认或生产价格输出。
 
 | 顺序 / 编号 | 任务、依赖与精确交付 | 当前状态及完成条件 |
 |---|---|---|
-| EP0 / 设计 | [独立价格角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[一次性历史确认](advisory_entry_price_confirmation_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md) | PR #5079设计已合入；本次v1.1同步源码验收和剩余运行条件，不把F2结构通过当效果通过 |
-| EP1 / 独立entry | 解开P0-D短路、M3依赖和V1全字段耦合；显式entry-v2及V1默认兼容；单日/批量共用价格内核 | 源码/定向回归通过，前端类型检查0诊断、隔离浏览器1项通过；CI及合入待完成。保留训练来源身份，无排名/交易语义变更 |
-| EP2 / 新窗口输入与历史推理 | 先处理validation公司行动坐标不一致，再核验候选/父Alpha、训练切分、消费记录与vintage | 四阶段CLI已实现；坐标审计1000行无缺失、3行超数值容差，最大约9.61 bps，当前v4不能正式确认。不得用T日factor、删股或改旧标签消除差异；需数值变更时先形成新版本设计，不绕过新窗口资格 |
+| EP0 / 设计 | [独立价格角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[一次性历史确认](advisory_entry_price_confirmation_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md) | PR #5079设计已合入；配套v1.3同步真实源码/运行进展，不把结构通过当效果通过 |
+| EP1 / 独立entry | 解开P0-D短路、M3依赖和V1全字段耦合；显式entry-v2及V1默认兼容；单日/批量共用价格内核 | PR #5099已合入、用户重启及未配置语义读回通过；保留训练来源身份，无排名/交易语义变更 |
+| EP2 / 新窗口输入与历史推理 | 坐标前置项已关闭；核验候选/父Alpha、训练切分、消费记录与vintage；已消费窗口先做功能回放 | v2审计1,000行、缺失0、最大绝对gap差1.1347649842008423e-7，低于固定1e-6。不读T日factor、不删公司行动行、不改旧模型/标签。正式连续窗口及完整PIT/消费身份未齐，功能回放与正式确认分别报告 |
 | EP3 / 一次性确认 | 先冻结整个窗口预测，再揭示历史open/停牌；按confirmation设计的支持、coverage、宽度及control对照判定 | 输入不齐、结果未确认、欠功效分别报告；只有CONFIRMED_PRICE_DISTRIBUTION允许同scope shadow绑定；不等待未来20个交易日才能开发和验证 |
-| EP4 / binding与每日源码 | 最小Program级ENTRY_PRICE CAS指针、API/UI读回、现有Advisory周期有界capture/settle；可在确认期间完成源码和旧窗口回归 | 源码及fake-clock回归已完成；未合入/部署，binding发布依赖EP3。价格角色独立，不覆盖Ranking；历史禁用角色可结算，capture缺日不回填 |
-| EP5 / 生产接入 | 代码多轮审核、CI及合入；用户重启；精确角色发布、API/UI及实际prediction/settlement读回 | 合入、重启、binding、预测和成熟结算分报；完成仅指entry价格参考，不声明买入收益增量 |
+| EP4 / binding与每日源码 | 最小Program级ENTRY_PRICE CAS指针、API/UI读回、现有Advisory周期有界capture/settle；可在确认期间完成旧窗口回归 | 源码已合入并加载；只读status=NOT_CONFIGURED。binding发布依赖EP3；价格角色不覆盖Ranking，历史禁用角色可结算，capture缺日不回填 |
+| EP5 / 生产接入 | 确认通过后精确角色发布、API/UI及实际prediction/settlement读回；新增运行源码变更由用户重启 | #5099合入/用户重启/未配置语义验证已完成；binding、预测和成熟结算未完成。仅确认entry价格参考，不声明买入收益增量 |
 | 后续 / QE-DELIVERY-CONSUME | 现有只读预检消费QE正式包；QE统一Alpha、seed和因子研究 | 源码已完成；六旧包此前runtime_asset_admission/LEGACY_UNIVERSE_UNSPECIFIED状态须交付时复核，本轮不豁免资产准入 |
 | 后续 / PRODUCT-VALIDATION | 新合格包同policy/code身份的Ranking/Admission与业务历史对比 | 已有Historical Range对比、指数股票池、DAILY_DB_ONLY源码/运行时验收保留，不重复建设 |
 
 当前v3/v4、80日历史回放和rolling-20D导航审计均已完成，后者selected=0；独立entry方案不得重选该arm、修改旧窗口结果。新历史确认未执行。若窗口不合格，源码开发和已消费窗口功能验证继续，生产角色仍明确未确认；不通过改证据名称绕过限制。
 
-本地136项定向回归通过，覆盖同核投影、PIT/缺失保留、四阶段恢复、完整scope读回、角色CAS、盘前时钟及预算公平性。正式历史执行需QE窗口确认的具体独占时段；当前只读任务快照返回WAITING_RESOURCE，不提交实验。新CLI的prepare只核验元数据，predict/settle/evaluate每个阶段及日期块检查时段与QE任务状态。没有新增自然或正式OOS样本。
+源码最终Advisory门禁1,029 passed/6 skipped，覆盖同核投影、PIT/缺失保留、四阶段恢复、完整scope读回、角色CAS、盘前时钟及预算公平性。正式历史执行需QE窗口确认的具体独占时段。2026-09-30只读资源前检仍为WAITING_RESOURCE：公开任务详情中qe_20260716_042842_fd61、qe_20260810_221723_14ab、qe_20260824_101005_ce66均为paused，不能自动认定终态；历史实验canonical_status缺失也不得仅凭raw completed放行。BUG-1632仅修复本模块误用展开子项分页，改用完整平铺列表，保留上述fail-closed边界。prepare只核验元数据；predict/settle/evaluate每阶段及日期块复检独占时段和QE状态。没有新增自然或正式OOS样本。
 
-下一业务阻断不是等待新的20个交易日，而是开发期坐标一致性：原validation的Qlib复权标签与公告公司行动换算在3行不一致，600016.SH的D=2025-09-15基准价理论值4.194与标签约4.19不同；其余997行仅浮点误差。先在已消费数据解释精度/公司行动规则并设计可PIT的新身份，不盲改冻结v4；确认入口已要求绑定原validation hash、完整人口和固定1e-6 gap数值容差的审计。该审计不是新增收益实验，不改变旧coverage结果，也不授权回选已失败模型。
+坐标差异已由provider-compatible v2关闭：理论除权参考价先按0.01元tick作ROUND_HALF_UP，目标factor以供应商四位精度投影；只使用D可见公告、D raw close和D factor。原标签SHA=c4fc72b94e9e112bcc05405e8c7f6ec28bc2890b16c4ff978e3b7dfe0ee2b148，旧v1模型及artifact不变。当前业务阻断是合格历史输入和QE资源协调，不是等待新的20个交易日；数值PASS也不改变旧coverage或授权回选失败arm。
 
-已核验匹配包的ENABLED Top20 Program存在30个PUBLISHED目标日（2026-08-14～09-29）的荐股单元数据；不代表都已成熟或未消费，未查询目标效果。坐标问题解决后可审核这些既存输入，不以等待20个新交易日作为开发前置。
+2026-09-30元数据读回：匹配包的ENABLED Top20 Program有31个PUBLISHED目标日（2026-08-14～09-30），另有1个REPLAY。仅11日带原生universe receipt（09-15～09-30），低于最低20日支持要求；日期存在缺口，不能将31日拼接成连续合格窗口。未读取目标效果，也不声明全部成熟、PIT或未消费。已准备的v4 test回放advprhist_5135d6b0f6a53c706f0fc561（D=2025-11-07～2026-03-10）仅NAVIGATION_ONLY，资源未放行前不执行。新推理输入材料如无法证明PIT/lineage则仅探索性，不可绑定。
+
+执行顺序：①修复消费者分页并取得QE资源放行后完成已消费历史批量功能回放；②不读取目标效果的连续窗口资格审核；③合格时冻结全窗口预测再揭示结果，完成固定v4与validation control确认；④确认失败且定位到可改进缺口时进入新lineage模型改进，确认通过则发布同scope价格角色，欠功效不盲目调参；⑤完成API/UI及capture/settle业务闭环；⑥消费QE交付的新包和指数股票池。这里的“发布”必须先满足CONFIRMED_PRICE_DISTRIBUTION；无合格输入时保持明确阻塞，不重建候选或借自然等待替代历史验证。
 
 新模型推理仍需exact包候选及实际103特征。遇上游缺失只报告最小依赖给所属窗口；不修改QE/Selection公共代码。ENTRY_PRICE未确认为任何新包/新股票池可用前，其状态保持typed unavailable。
 
 ### 16.2 被动观察（零研发排期）
 
-- 基线/P0-D自然observation继续由既有调度形成；价格独立CLI截至2026-09-28仅核验1日20行，尚未接入自动收集。EP4补齐调度后才可报告价格持续积累；旧P0-D observation不得算入ENTRY_PRICE确认。
+- 基线/P0-D自然observation继续由既有调度形成；价格独立CLI截至2026-09-28仅核验1日20行。EP4每日源码已加载，但ENTRY_PRICE未配置，当前没有该角色的自动价格积累；旧P0-D observation不得算入其确认。
 - Position Timing继续自然形成真实可达action cards和outcomes；L2/L4b-1只在冻结人口达到其预注册支持条件后复验，不合成卡、不补历史人口、不以当前不足触发新模型搜索。
 - P1-A固定历史R0/R1已完成且selected=0；生产更新继续等待自然成熟residual，但这是被动证据积累，不形成主动待办。LONG_TREND无真实包输入时也不形成主动待办。
 
