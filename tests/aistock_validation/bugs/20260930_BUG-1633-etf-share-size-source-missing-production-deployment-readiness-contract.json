@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1633",
-  "closed_at": null,
+  "closed_at": "2026-09-30T06:18:45Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -124,8 +124,8 @@
   },
   "first_seen_at": "2026-09-30T05:40:30.507027Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8737e3a03f962f037d13eda4f62d305c48b06287",
+  "fixed_at": "2026-09-30T06:18:45Z",
   "github_issue_number": 5128,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5128",
   "last_seen_at": "2026-09-30T05:40:30.507027Z",
@@ -133,6 +133,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5135",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -157,6 +158,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -166,7 +168,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1633",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cfc5fbfd7d83e628",
+    "recorded_at": "2026-09-30T06:19:56.254216Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "118dba2d42d285b84c1a8fdf258569242a8cfbc4",
+    "source_merge_commit": "8737e3a03f962f037d13eda4f62d305c48b06287",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5135",
+    "validation_evidence": [
+      "validation-receipt: id=f0a6e6107245a250 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 data_sync_autonomy_backend` result=`passed 8 ownership and 411 sync tests,1 skipped`",
+      "validation-receipt: id=fbb123f561a1e3f9 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 16 tests`",
+      "validation-receipt: id=7365a5ac4c1384f0 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=5626715a80dffa3f commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_prepare_etf_share_size_deployment.py -q` result=`passed 5 tests including isolated CLI; DEV passed;production apply pending`"
+    ],
+    "validation_evidence_digest": "481a4f883911683e755b340f33778898ec3486dc1fd87bf863612aefb1aeb696"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -175,6 +201,12 @@
     "fingerprint": "a6bb25dcc21ef7d70dfc541f",
     "source_event_id": "FE-20260930-a6bb25dcc21e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f0a6e6107245a250 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 data_sync_autonomy_backend` result=`passed 8 ownership and 411 sync tests,1 skipped`",
+    "validation-receipt: id=fbb123f561a1e3f9 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 16 tests`",
+    "validation-receipt: id=7365a5ac4c1384f0 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=5626715a80dffa3f commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_prepare_etf_share_size_deployment.py -q` result=`passed 5 tests including isolated CLI; DEV passed;production apply pending`"
+  ],
   "verification_budget": {
     "budget": "deep",
     "ci_premerge_plans": [],
