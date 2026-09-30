@@ -42,6 +42,99 @@ def test_pre_pr_gate_reuses_exact_ci_classifier_and_blocks_before_push(monkeypat
     assert any("local CI classifier" in item for item in gate["blocking"])
 
 
+def _local_data_payload(overview: bool = False) -> dict[str, Any]:
+    row = {'data_kind': 'adj_factor', 'stats_max_date': '2026-08-11',
+           'audit_ready_date': '2026-09-29', 'ready_date': '2026-09-29',
+           'audit_quality_status': 'ok', 'physical_max_date': None,
+           'physical_max_date_source': 'not_probed', 'stats_date_source': 'data_stats_cache',
+           'readiness_source': 'dataset_date_refresh_audit', 'cache_state': 'stale',
+           'readiness_status': 'audit_success', 'operator_action_required': False}
+    data: dict[str, Any] = {'items': [row]}
+    if overview:
+        data = {'datasets': [row], 'dataset_count': 1, 'stale_dataset_count': 1,
+                'stale_stats_cache_count': 1, 'readiness_unknown_count': 0,
+                'quality_blocked_dataset_count': 0, 'running_job_count': 0,
+                'active_alert_count': 0, 'blocked_target_count': 0,
+                'retry_target_count': 0, 'status': 'yellow'}
+    return {'success': True, 'operation': 'local_data_health_overview' if overview else 'local_data_list_data_stats',
+            'risk_level': 'read_only', 'data': data}
+
+
+@pytest.mark.parametrize('overview', [False, True])
+def test_local_data_freshness_separates_cache_and_readiness(overview: bool) -> None:
+    endpoint = 'overview' if overview else 'data-stats'
+    _, verdict = workflow._evaluate_business_smoke_semantics(
+        f'http://127.0.0.1:8001/api/v1/local-data/{endpoint}',
+        json.dumps(_local_data_payload(overview)), response_sha256='a'*64)
+    assert verdict['verdict'] == 'passed'
+    assert verdict['contract_id'] == 'local_data_freshness'
+    assert verdict['facts']['stale'] == 1
+
+
+@pytest.mark.parametrize(('key', 'value'), [
+    ('physical_max_date', '2026-09-29'), ('physical_max_date_source', 'cache'),
+    ('stats_date_source', 'live'), ('readiness_source', 'cache'),
+    ('ready_date', '2026-08-11'), ('cache_state', 'fresh'),
+    ('readiness_status', 'unknown'), ('operator_action_required', 0),
+    ('audit_ready_date', '2026-09-31'), ('stats_max_date', '2026-8-11'),
+    ('audit_quality_status', {}),
+])
+def test_local_data_freshness_rejects_conflated_evidence(key: str, value: Any) -> None:
+    payload = _local_data_payload()
+    payload['data']['items'][0][key] = value
+    status, _, _ = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
+    assert status == 'failed'
+
+
+@pytest.mark.parametrize('state', ['unknown', 'quality_blocked'])
+def test_local_data_freshness_preserves_non_ready_states(state: str) -> None:
+    payload = _local_data_payload()
+    row = payload['data']['items'][0]
+    row['readiness_status'] = state
+    if state == 'unknown':
+        row.update(audit_ready_date=None, ready_date=None, cache_state='audit_missing')
+    else:
+        row['audit_quality_status'] = 'low_coverage'
+    status, _, facts = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
+    assert status == 'passed' and facts[state] == 1
+
+
+@pytest.mark.parametrize(('key', 'value'), [('success', False), ('operation', 'wrong'), ('risk_level', 'write')])
+def test_local_data_freshness_requires_read_only_envelope(key: str, value: Any) -> None:
+    payload = _local_data_payload()
+    payload[key] = value
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
+
+
+def test_local_data_overview_validates_counters_without_hiding_real_alerts() -> None:
+    payload = _local_data_payload(True)
+    data = payload['data']
+    data.update(status='red', blocked_target_count=4, active_alert_count=4)
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'passed'
+    data['status'] = 'green'
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
+    data.update(status='red', dataset_count=2, readiness_unknown_count=1)
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'passed'
+    data['stale_stats_cache_count'] = 0
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
+
+
+def test_local_data_freshness_rejects_missing_and_duplicate_dataset_evidence() -> None:
+    payload = _local_data_payload()
+    payload['data']['items'].append(dict(payload['data']['items'][0]))
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
+    payload['data']['items'] = []
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
+
+
+@pytest.mark.parametrize(('key', 'value'), [('status', {}), ('dataset_count', True),
+                                         ('readiness_unknown_count', -1)])
+def test_local_data_overview_rejects_malformed_summary(key: str, value: Any) -> None:
+    payload = _local_data_payload(True)
+    payload['data'][key] = value
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
+
+
 def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: int = 0) -> dict[str, Any]:
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
 

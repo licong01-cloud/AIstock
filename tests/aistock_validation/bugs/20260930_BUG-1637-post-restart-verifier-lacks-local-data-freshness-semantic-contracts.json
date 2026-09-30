@@ -23,7 +23,17 @@
       "timestamp": "2026-09-30T06:48:57.124128Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "BUG-1634/1635 runtime identity=361c3c8de4d3c2badd80642365657973eb396ec7; local-data overview/data-stats freshness semantic validation passed against real restarted backend, process_control=false",
+    "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/BUG-1634-post-restart.json",
+    "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/BUG-1635-post-restart.json"
+  ],
+  "review_rounds": [
+    "Round 1: actual facade contract and counter truncation reviewed; red/unknown readback is preserved, not treated as price absence",
+    "Round 2: URL-bound dispatcher integration fixed; missing physical probe cannot be promoted to full-table MAX",
+    "Round 3: malformed source quality/status/counter types fail closed; empty evidence test corrected; no DB/process mutations",
+    "DESIGN-COMPLIANCE-001: full requested endpoint contract; errors visible; no business semantic changes; no new production gate"
+  ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
