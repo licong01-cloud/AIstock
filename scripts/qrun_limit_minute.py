@@ -2117,6 +2117,10 @@ def _prediction_replay_raw_label_task_config(config: dict[str, Any]) -> dict[str
     if not isinstance(handler_kwargs, dict):
         raise RuntimeError("QE_PRED_BACKTEST_HANDLER_KWARGS_INVALID")
 
+    data_loader = handler_kwargs.get("data_loader")
+    if data_loader is not None:
+        handler_kwargs["data_loader"] = _prediction_replay_label_only_loader(data_loader)
+
     for processor_key in ("shared_processors", "infer_processors", "learn_processors"):
         processors = handler_kwargs.get(processor_key)
         if processors is not None and not isinstance(processors, (list, tuple)):
@@ -2126,6 +2130,60 @@ def _prediction_replay_raw_label_task_config(config: dict[str, Any]) -> dict[str
             )
         handler_kwargs[processor_key] = []
     return task_config
+
+
+def _prediction_replay_label_only_loader(data_loader: Any) -> dict[str, Any]:
+    """Replace a feature-bearing loader with an exact label-only Qlib loader."""
+
+    if not isinstance(data_loader, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_DATA_LOADER_CONFIG_INVALID")
+
+    loader_class = str(data_loader.get("class") or "").strip()
+    loader_kwargs = data_loader.get("kwargs")
+    if not loader_class or not isinstance(loader_kwargs, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_DATA_LOADER_CONFIG_INVALID")
+
+    label_config: Any = None
+    if loader_class.rsplit(".", 1)[-1] == "DynamicFactorsOnlyLoader":
+        label_fields = {"close": "$close", "open": "$open", "vwap": "$vwap"}
+        label_type = str(loader_kwargs.get("label_type") or "close").strip().lower()
+        if label_type not in label_fields:
+            raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID")
+        try:
+            label_horizon = int(loader_kwargs.get("label_horizon", 1))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID") from exc
+        if label_horizon not in {1, 3, 5, 10, 20, 30, 40, 60, 120, 180}:
+            raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID")
+        field = label_fields[label_type]
+        expression = f"Ref({field}, -{label_horizon + 1}) / Ref({field}, -1) - 1"
+        label_config = [[expression], ["LABEL0"]]
+    else:
+        candidates: list[Any] = []
+
+        def collect_label_configs(value: Any) -> None:
+            if isinstance(value, dict):
+                config_value = value.get("config")
+                if isinstance(config_value, dict) and "label" in config_value:
+                    candidates.append(config_value["label"])
+                for nested in value.values():
+                    collect_label_configs(nested)
+            elif isinstance(value, (list, tuple)):
+                for nested in value:
+                    collect_label_configs(nested)
+
+        collect_label_configs(data_loader)
+        if len(candidates) != 1:
+            raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID")
+        label_config = candidates[0]
+
+    if not isinstance(label_config, (list, tuple)) or not label_config:
+        raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID")
+    return {
+        "class": "QlibDataLoader",
+        "module_path": "qlib.data.dataset.loader",
+        "kwargs": {"config": {"label": label_config}},
+    }
 
 
 def _load_prediction_replay_source_ref(pred_path: Path) -> dict[str, Any] | None:

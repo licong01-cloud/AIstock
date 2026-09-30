@@ -6,6 +6,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from ..canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
 from ..dataset_release.active_task_binding import (
     freeze_explicit_dataset_task_binding,
     frozen_dataset_environment,
@@ -46,6 +47,7 @@ class OfficialFactorFullComputeDispatchService:
         effective_node_id = node_id or _DEFAULT_DISPATCH_NODE_ID
         frozen_binding = None
         if dataset_profile_path:
+            universe_key = CANONICAL_PIT_UNIVERSE_KEY
             frozen_binding = freeze_explicit_dataset_task_binding(
                 profile_path=dataset_profile_path,
                 consumer_id="factor_research",

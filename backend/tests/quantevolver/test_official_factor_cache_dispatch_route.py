@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import sys
@@ -169,6 +170,7 @@ def test_official_full_compute_binds_explicit_profile_paths_once(monkeypatch) ->
         "/factor_h5_static_candidate_v2"
     )
     assert captured["payload"]["qlib_bin_path"].endswith("/daily_bin_candidate")
+    assert captured["payload"]["universe_key"] == "aistock_equity_pit_canonical_v2"
     assert result["payload"]["dataset_profile_sha256"] == "a" * 64
 
 
@@ -425,6 +427,31 @@ def test_official_evaluation_wsl_runner_delegates_full_compute_payload(monkeypat
     assert emitted["type"] == "result"
     assert emitted["data"]["success"] is True
     assert captured["payload"] == payload
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    [
+        "run_correlation_compute_wsl.py",
+        "run_official_evaluation_wsl.py",
+        "run_official_factor_full_compute_wsl.py",
+    ],
+)
+def test_wsl_factor_runners_never_override_explicit_task_environment(script_name: str) -> None:
+    script_path = Path(__file__).resolve().parents[3] / "backend" / "scripts" / script_name
+    tree = ast.parse(script_path.read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "load_dotenv"
+    ]
+
+    assert len(calls) == 1
+    override = next((item.value for item in calls[0].keywords if item.arg == "override"), None)
+    assert isinstance(override, ast.Constant)
+    assert override.value is False
 
 
 def test_factor_metrics_scheduler_submits_official_full_compute_dispatch(monkeypatch):
