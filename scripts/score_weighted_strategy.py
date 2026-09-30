@@ -35,6 +35,9 @@ except ModuleNotFoundError as exc:
 
 logger = logging.getLogger(__name__)
 
+L2_OVERLAY_UNAVAILABLE_POLICY = "explicit_no_l2_overlay_v1"
+L2_OVERLAY_UNAVAILABLE_REASON = "hmm_l2_quote_unavailable_no_overlay"
+
 
 class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
     """
@@ -375,6 +378,43 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
                 f"HMM config {self.hmm_coefficients_file} has no stock-sector membership"
             )
 
+        unavailable_by_date = self._hmm_config.get("quote_unavailable_sector_codes_by_date")
+        policy = self._hmm_config.get("l2_overlay_unavailable_policy")
+        if unavailable_by_date is not None or policy is not None:
+            authority = self._hmm_config.get("quote_availability_authority")
+            digest = self._hmm_config.get("quote_availability_digest")
+            authority_sha256 = str(
+                authority.get("authority_sha256") if isinstance(authority, dict) else ""
+            )
+            digest_sha256 = str(digest or "")
+            if policy != L2_OVERLAY_UNAVAILABLE_POLICY or not isinstance(
+                unavailable_by_date, dict
+            ):
+                raise RuntimeError("invalid explicit HMM L2 quote-unavailability policy")
+            if (
+                not isinstance(authority, dict)
+                or set(authority) != {"authority_id", "authority_sha256"}
+                or not str(authority["authority_id"]).strip()
+                or len(authority_sha256) != 64
+                or set(authority_sha256) - set("0123456789abcdef")
+                or len(digest_sha256) != 64
+                or set(digest_sha256) - set("0123456789abcdef")
+            ):
+                raise RuntimeError("invalid HMM quote-availability authority identity")
+            for trade_date, sectors in unavailable_by_date.items():
+                if (
+                    not isinstance(trade_date, str)
+                    or not isinstance(sectors, list)
+                    or sectors != sorted(set(sectors))
+                    or any(not isinstance(code, str) or not code.strip() for code in sectors)
+                ):
+                    raise RuntimeError("invalid HMM quote-unavailable sector projection")
+                day_coeffs = self._hmm_config["daily_coefficients"].get(trade_date)
+                if not isinstance(day_coeffs, dict) or set(sectors) & set(day_coeffs):
+                    raise RuntimeError(
+                        f"HMM quote availability overlaps coefficients: date={trade_date}"
+                    )
+
         self._hmm_config_loaded = True
         logger.info(
             "Loaded HMM config: %d sectors, preset=%s",
@@ -450,8 +490,24 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
                 f"请检查预计算日期范围是否覆盖回测区间。"
             )
 
+        unavailable_by_date = hmm_config.get("quote_unavailable_sector_codes_by_date")
+        if unavailable_by_date is None:
+            unavailable_sectors = set()
+        else:
+            day_unavailable = unavailable_by_date.get(trade_date_str)
+            if not isinstance(day_unavailable, list):
+                raise RuntimeError(
+                    f"HMM quote-unavailability authority is missing trade date {trade_date_str}"
+                )
+            unavailable_sectors = set(day_unavailable)
+            if unavailable_sectors & set(day_coeffs):
+                raise RuntimeError(
+                    f"HMM quote availability overlaps coefficients: date={trade_date_str}"
+                )
+
         adjusted = pred_score.copy()
         n_adjusted = 0
+        no_overlay_rows = []
         strict_pit_membership = bool(
             hmm_config.get("stock_sector_membership_spans")
             or hmm_config.get("stock_sector_map_by_date")
@@ -464,6 +520,15 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
                 if abs(coeff - 1.0) > 1e-6:
                     adjusted[stock_id] *= coeff
                     n_adjusted += 1
+            elif sector_code and sector_code in unavailable_sectors:
+                no_overlay_rows.append(
+                    {
+                        "stock_id": str(stock_id),
+                        "sector_code": sector_code,
+                        "coefficient": None,
+                        "reason": L2_OVERLAY_UNAVAILABLE_REASON,
+                    }
+                )
             elif strict_pit_membership:
                 missing_membership.append(str(stock_id))
 
@@ -473,6 +538,12 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
                 f"date={trade_date_str} missing={len(missing_membership)} "
                 f"sample={missing_membership[:5]}"
             )
+
+        self._last_hmm_adjustment_trace = {
+            "date": trade_date_str,
+            "policy": hmm_config.get("l2_overlay_unavailable_policy"),
+            "no_l2_overlay_rows": no_overlay_rows,
+        }
 
         if n_adjusted > 0:
             logger.info(

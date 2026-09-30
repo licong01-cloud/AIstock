@@ -54,6 +54,7 @@ def _request(source: Path):
         decision_end_trade_date=date(2026, 1, 6),
         replay_as_of_date=date(2026, 1, 8),
         pit_universe_key="canonical-pit-v1",
+        projection_producer_version="advisory_entry_price_core_v2",
     )
 
 
@@ -122,6 +123,23 @@ def test_batch_replay_freezes_predictions_before_database_outcomes(tmp_path):
     assert frozen["realized_outcome_accessed"] is False
     assert all("entry_gap_return" not in row for row in frozen["rows"])
     assert data_source.calls == 2
+
+
+def test_batch_replay_rejects_new_computation_without_projection_identity(tmp_path):
+    source_path = _source(tmp_path / "predictions.parquet")
+    current = _request(source_path)
+    legacy = build_historical_price_replay_request(
+        **current.model_dump(
+            exclude={"replay_id", "request_sha256", "projection_producer_version"}
+        )
+    )
+    with pytest.raises(AdvisoryModelFirstError) as raised:
+        AdvisoryHistoricalPriceReplayService().run(
+            request=legacy,
+            prediction_source_path=source_path,
+            output_root=tmp_path / "out",
+        )
+    assert raised.value.reason_code == "ADVISORY_HISTORICAL_PRICE_REPLAY_IDENTITY_MISMATCH"
 
 
 def test_batch_replay_exact_retry_is_immutable(tmp_path):

@@ -154,6 +154,7 @@ class AuditBackedDataHealthChecker:
                 "bak_basic",
                 "cyq_perf",
                 "daily_basic",
+                "etf_share_size",
                 "index_daily",
                 "kline_daily_raw",
                 "kline_minute_raw",

@@ -5,10 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from backend.core.qe_prediction_replay_contract import normalize_prediction_replay_contract
 from backend.mcp.common import sanitize_tail
-from backend.services.quantevolver.experiment_config import (
-    normalize_prediction_replay_contract,
-)
 
 if TYPE_CHECKING:
     from backend.mcp.registry import ModuleRegistry
@@ -203,9 +201,7 @@ def _validate_node_parallelism(
             errors.append(f"node_parallelism[{node_id!r}] must be an integer")
             continue
         if limit < 1 or limit > MAX_QE_NODE_PARALLELISM:
-            errors.append(
-                f"node_parallelism[{node_id!r}] must be between 1 and {MAX_QE_NODE_PARALLELISM}"
-            )
+            errors.append(f"node_parallelism[{node_id!r}] must be between 1 and {MAX_QE_NODE_PARALLELISM}")
         normalized[node_id] = limit
     return normalized
 
@@ -246,9 +242,15 @@ def _validate_custom_evo_config(config: dict[str, Any], errors: list[str]) -> No
         loops.append(loop)
         _require_string_list(loop.get("factor_keys"), context=f"custom_evo.loops[{idx}].factor_keys", errors=errors)
         _require_non_empty_string(loop.get("model_id"), context=f"custom_evo.loops[{idx}].model_id", errors=errors)
-        _validate_optional_mapping(loop.get("strategy_params"), context=f"custom_evo.loops[{idx}].strategy_params", errors=errors)
-        _validate_optional_mapping(loop.get("model_params"), context=f"custom_evo.loops[{idx}].model_params", errors=errors)
-        _validate_optional_mapping(loop.get("runtime_flags"), context=f"custom_evo.loops[{idx}].runtime_flags", errors=errors)
+        _validate_optional_mapping(
+            loop.get("strategy_params"), context=f"custom_evo.loops[{idx}].strategy_params", errors=errors
+        )
+        _validate_optional_mapping(
+            loop.get("model_params"), context=f"custom_evo.loops[{idx}].model_params", errors=errors
+        )
+        _validate_optional_mapping(
+            loop.get("runtime_flags"), context=f"custom_evo.loops[{idx}].runtime_flags", errors=errors
+        )
         _validate_optional_mapping(loop.get("data_split"), context=f"custom_evo.loops[{idx}].data_split", errors=errors)
         _validate_optional_label_horizon(
             loop.get("label_horizon"),
@@ -422,9 +424,7 @@ def register(registry: "ModuleRegistry") -> None:
     ) -> tuple[str | None, dict[str, int] | None]:
         current_config: Mapping[str, Any] = {}
         if node_id is None or node_parallelism is None:
-            payload = client.get(
-                f"/quantevolver/evolution/tasks/{task_id}/custom-evo-config"
-            )
+            payload = client.get(f"/quantevolver/evolution/tasks/{task_id}/custom-evo-config")
             candidate = payload.get("data", payload) if isinstance(payload, Mapping) else None
             if not isinstance(candidate, Mapping):
                 raise ValueError(
@@ -448,9 +448,7 @@ def register(registry: "ModuleRegistry") -> None:
             and current_node_id is not None
             and safe_node != current_node_id
         ):
-            raise ValueError(
-                "node_parallelism is required when changing a custom_evo mutation to a different node_id"
-            )
+            raise ValueError("node_parallelism is required when changing a custom_evo mutation to a different node_id")
 
         resolved_parallelism: Any = node_parallelism
         if resolved_parallelism is None:
@@ -506,11 +504,7 @@ def register(registry: "ModuleRegistry") -> None:
                 "created_from": created_from,
                 "created_to": created_to,
                 "source_type": source_type,
-                "consumer_id": (
-                    _require_consumer_id(consumer_id)
-                    if consumer_id not in (None, "")
-                    else None
-                ),
+                "consumer_id": (_require_consumer_id(consumer_id) if consumer_id not in (None, "") else None),
                 "run_kind": run_kind,
                 "purpose": purpose,
                 "status": status,
@@ -557,11 +551,19 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/experiments/{safe}/trade-stats")
 
     @registry.mcp.tool(name="qe_experiment_validate_config")
-    def qe_experiment_validate_config(template_kind: str, config_json: dict[str, Any], include_normalized: bool = False) -> Any:
+    def qe_experiment_validate_config(
+        template_kind: str, config_json: dict[str, Any], include_normalized: bool = False
+    ) -> Any:
         return _validate_experiment_config(template_kind, config_json or {}, include_normalized=include_normalized)
 
     @registry.mcp.tool(name="qe_single_experiment_create_pending")
-    def qe_single_experiment_create_pending(config_json: dict[str, Any], created_by_name: str | None = None, source_context_json: dict[str, Any] | None = None, purpose: str = "research", consumer_id: str = "qe_mainline") -> Any:
+    def qe_single_experiment_create_pending(
+        config_json: dict[str, Any],
+        created_by_name: str | None = None,
+        source_context_json: dict[str, Any] | None = None,
+        purpose: str = "research",
+        consumer_id: str = "qe_mainline",
+    ) -> Any:
         normalized_config = _require_valid_experiment_config("single_experiment", config_json or {})
         normalized_config["created_by_type"] = "mcp"
         normalized_config["created_by_name"] = created_by_name or "mcp_gateway"
@@ -576,18 +578,24 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/experiments/{safe}/editable-config")
 
     @registry.mcp.tool(name="qe_single_experiment_update_config_confirmed")
-    def qe_single_experiment_update_config_confirmed(experiment_id: str, config_json: dict[str, Any], confirm_update: str | None = None) -> Any:
+    def qe_single_experiment_update_config_confirmed(
+        experiment_id: str, config_json: dict[str, Any], confirm_update: str | None = None
+    ) -> Any:
         registry.confirm(confirm_update, QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM, "confirm_update")
         normalized_config = _require_valid_experiment_config("single_experiment", config_json or {})
         safe = registry.sanitize(experiment_id, "experiment_id")
         return client.put(f"/quantevolver/experiments/{safe}/editable-config", normalized_config)
 
     @registry.mcp.tool(name="qe_experiment_run_confirmed")
-    def qe_experiment_run_confirmed(experiment_id: str, node_id: str | None = None, confirm_run: str | None = None) -> Any:
+    def qe_experiment_run_confirmed(
+        experiment_id: str, node_id: str | None = None, confirm_run: str | None = None
+    ) -> Any:
         registry.confirm(confirm_run, QE_EXPERIMENT_RUN_CONFIRM, "confirm_run")
         safe = registry.sanitize(experiment_id, "experiment_id")
         safe_node = registry.sanitize(node_id, "node_id") if node_id else None
-        return client.post(f"/quantevolver/experiments/{safe}/run", params={"engine_mode": "unified", "node_id": safe_node})
+        return client.post(
+            f"/quantevolver/experiments/{safe}/run", params={"engine_mode": "unified", "node_id": safe_node}
+        )
 
     @registry.mcp.tool(name="qe_experiment_stop_confirmed")
     def qe_experiment_stop_confirmed(experiment_id: str, confirm_stop: str | None = None) -> Any:
@@ -614,17 +622,23 @@ def register(registry: "ModuleRegistry") -> None:
     @registry.mcp.tool(name="qe_custom_evo_get_loop_config")
     def qe_custom_evo_get_loop_config(task_id: str, loop_index: int) -> Any:
         safe = registry.sanitize(task_id, "task_id")
-        return client.get(f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/config")
+        return client.get(
+            f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/config"
+        )
 
     @registry.mcp.tool(name="qe_custom_evo_get_loop_metrics")
     def qe_custom_evo_get_loop_metrics(task_id: str, loop_index: int) -> Any:
         safe = registry.sanitize(task_id, "task_id")
-        return client.get(f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/metrics")
+        return client.get(
+            f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/metrics"
+        )
 
     @registry.mcp.tool(name="qe_custom_evo_get_loop_analysis")
     def qe_custom_evo_get_loop_analysis(task_id: str, loop_index: int) -> Any:
         safe = registry.sanitize(task_id, "task_id")
-        return client.get(f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/analysis")
+        return client.get(
+            f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/analysis"
+        )
 
     @registry.mcp.tool(name="qe_custom_evo_get_config")
     def qe_custom_evo_get_config(task_id: str) -> Any:
@@ -637,7 +651,19 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/evolution/tasks/{safe}/logs/tail", params={"tail": sanitize_tail(tail)})
 
     @registry.mcp.tool(name="qe_custom_evo_create_pending")
-    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None, phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False, purpose: str = "research", consumer_id: str = "qe_mainline") -> Any:
+    def qe_custom_evo_create_pending(
+        task_name: str,
+        loops: list[dict[str, Any]],
+        target_desc: str = "",
+        node_id: str | None = None,
+        node_parallelism: dict[str, int] | None = None,
+        engine_mode: str = "unified",
+        clone_from_task_id: str | None = None,
+        phase_pipeline_enabled: bool = False,
+        resource_telemetry_enabled: bool = False,
+        purpose: str = "research",
+        consumer_id: str = "qe_mainline",
+    ) -> Any:
         normalized_config = _require_valid_experiment_config(
             "custom_evo",
             {
@@ -671,7 +697,18 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_update_config_confirmed")
-    def qe_custom_evo_update_config_confirmed(task_id: str, task_name: str, loops: list[dict[str, Any]], confirm_update: str | None = None, target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False) -> Any:
+    def qe_custom_evo_update_config_confirmed(
+        task_id: str,
+        task_name: str,
+        loops: list[dict[str, Any]],
+        confirm_update: str | None = None,
+        target_desc: str = "",
+        node_id: str | None = None,
+        node_parallelism: dict[str, int] | None = None,
+        engine_mode: str = "unified",
+        phase_pipeline_enabled: bool = False,
+        resource_telemetry_enabled: bool = False,
+    ) -> Any:
         registry.confirm(confirm_update, QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM, "confirm_update")
         normalized_config = _require_valid_experiment_config(
             "custom_evo",
@@ -701,7 +738,9 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_run_confirmed")
-    def qe_custom_evo_run_confirmed(task_id: str, force_full_train: bool = False, confirm_custom_evo: str | None = None) -> Any:
+    def qe_custom_evo_run_confirmed(
+        task_id: str, force_full_train: bool = False, confirm_custom_evo: str | None = None
+    ) -> Any:
         registry.confirm(confirm_custom_evo, QE_CUSTOM_EVO_RUN_CONFIRM, "confirm_custom_evo")
         safe = registry.sanitize(task_id, "task_id")
         return client.post(
@@ -716,7 +755,9 @@ def register(registry: "ModuleRegistry") -> None:
         return client.delete(f"/quantevolver/evolution/tasks/{safe}")
 
     @registry.mcp.tool(name="qe_custom_evo_retry_loop_confirmed")
-    def qe_custom_evo_retry_loop_confirmed(task_id: str, loop_index: int, retry_mode: str = "auto", confirm_retry: str | None = None) -> Any:
+    def qe_custom_evo_retry_loop_confirmed(
+        task_id: str, loop_index: int, retry_mode: str = "auto", confirm_retry: str | None = None
+    ) -> Any:
         registry.confirm(confirm_retry, "QE_CUSTOM_EVO_RETRY", "confirm_retry")
         safe = registry.sanitize(task_id, "task_id")
         return client.post(
@@ -725,7 +766,16 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_rerun_loop_confirmed")
-    def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None, node_id: str | None = None, node_parallelism: dict[str, int] | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
+    def qe_custom_evo_rerun_loop_confirmed(
+        task_id: str,
+        loop_index: int,
+        loop: dict[str, Any],
+        confirm_rerun: str | None = None,
+        node_id: str | None = None,
+        node_parallelism: dict[str, int] | None = None,
+        phase_pipeline_enabled: bool | None = None,
+        resource_telemetry_enabled: bool | None = None,
+    ) -> Any:
         registry.confirm(confirm_rerun, "QE_CUSTOM_EVO_RERUN", "confirm_rerun")
         loop_payload = dict(loop or {})
         _ensure_loop_fixed_seed(loop_payload, context="qe_custom_evo_rerun_loop_confirmed.loop")
@@ -748,7 +798,15 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_append_loops_confirmed")
-    def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None, node_id: str | None = None, node_parallelism: dict[str, int] | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
+    def qe_custom_evo_append_loops_confirmed(
+        task_id: str,
+        loops: list[dict[str, Any]],
+        confirm_append: str | None = None,
+        node_id: str | None = None,
+        node_parallelism: dict[str, int] | None = None,
+        phase_pipeline_enabled: bool | None = None,
+        resource_telemetry_enabled: bool | None = None,
+    ) -> Any:
         registry.confirm(confirm_append, "QE_CUSTOM_EVO_APPEND", "confirm_append")
         loop_payloads = [dict(loop or {}) for loop in (loops or [])]
         for idx, loop in enumerate(loop_payloads, start=1):
@@ -874,8 +932,7 @@ def register(registry: "ModuleRegistry") -> None:
                 "task_name": task_name,
                 "pool_ids": list(pool_ids),
                 "topk_by_pool": {
-                    pool_id: 20 if str(pool_id).strip().lower() == "star50" else int(topk)
-                    for pool_id in pool_ids
+                    pool_id: 20 if str(pool_id).strip().lower() == "star50" else int(topk) for pool_id in pool_ids
                 },
                 "base_loop": _comparison_base_loop(
                     factor_keys=factor_keys,

@@ -3505,6 +3505,7 @@ class TDXScheduler:
         if target_date is not None and failure_category in {
             "required_field_low_coverage",
             "required_field_coverage_unproven",
+            "required_source_field_unpublished",
         }:
             return target_date, target_date
         return self._compute_auto_range(dataset)

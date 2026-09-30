@@ -173,7 +173,9 @@ def test_phase0_module_registry_registers_all_blueprint_modules_with_owner() -> 
         item = by_id[module_id]
         assert item.get("parent_module") == "research_assistant"
         assert item.get("owner") == "claude_code_boundary"
-        assert "ra_phase0_baseline" in (item.get("test_plans") or {}).get("required_on_change", [])
+        required_plans = (item.get("test_plans") or {}).get("required_on_change", [])
+        assert "l0" in required_plans
+        assert any(plan != "l0" for plan in required_plans)
 
 
 def test_phase0_file_ownership_maps_blueprint_surfaces_without_ambiguity() -> None:

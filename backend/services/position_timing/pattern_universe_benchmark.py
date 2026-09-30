@@ -278,11 +278,23 @@ def _validate_interval_frame(
     return result
 
 
-def open_candidate_pool_memberships(candidate: DailyCandidate) -> CandidatePoolMemberships:
+def open_candidate_pool_memberships(
+    candidate: DailyCandidate,
+    *,
+    expected_candidate_manifest_sha256: str | None = None,
+    expected_candidate_dataset_sha256: str | None = None,
+    expected_pool_files: Mapping[str, Mapping[str, Any]] | None = None,
+) -> CandidatePoolMemberships:
+    if expected_candidate_manifest_sha256 is None:
+        expected_candidate_manifest_sha256 = EXPECTED_CANDIDATE_MANIFEST_SHA256
+    if expected_candidate_dataset_sha256 is None:
+        expected_candidate_dataset_sha256 = EXPECTED_CANDIDATE_DATASET_SHA256
+    if expected_pool_files is None:
+        expected_pool_files = EXPECTED_POOL_FILES
     root = candidate.root.resolve()
     manifest_path = root / "qe_dataset_manifest.json"
     manifest_reference = file_reference(manifest_path)
-    if manifest_reference["sha256"] != EXPECTED_CANDIDATE_MANIFEST_SHA256:
+    if manifest_reference["sha256"] != expected_candidate_manifest_sha256:
         raise ActionValueError("PATTERN_BENCHMARK_CANDIDATE_IDENTITY_MISMATCH")
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -295,7 +307,7 @@ def open_candidate_pool_memberships(candidate: DailyCandidate) -> CandidatePoolM
     sidecars = ((manifest.get("st_pit_manifest") or {}).get("index_membership_sidecars") or {})
     if (
         manifest.get("availability_status") != "CANDIDATE_READY"
-        or declared_dataset_sha256 != EXPECTED_CANDIDATE_DATASET_SHA256
+        or declared_dataset_sha256 != expected_candidate_dataset_sha256
         or declared_dataset_sha256 != canonical_sha256(manifest_identity)
         or set(sidecars) != set(POOL_IDS)
     ):
@@ -304,7 +316,7 @@ def open_candidate_pool_memberships(candidate: DailyCandidate) -> CandidatePoolM
     intervals: dict[str, pd.DataFrame] = {}
     references: dict[str, Mapping[str, Any]] = {}
     for pool_id in POOL_IDS:
-        expected = EXPECTED_POOL_FILES[pool_id]
+        expected = expected_pool_files[pool_id]
         declared = sidecars[pool_id]
         if (
             declared.get("path") != expected["path"]

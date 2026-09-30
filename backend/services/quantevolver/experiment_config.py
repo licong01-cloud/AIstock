@@ -4,13 +4,15 @@ QE Unified Engine — ExperimentConfig data model.
 Single source of truth for all parameters passed to compose_experiment_in_memory().
 Replaces the ad-hoc loop_custom_params dicts scattered across the four call paths.
 """
+
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, StrictBool, model_validator
+
+from backend.core.qe_prediction_replay_contract import normalize_prediction_replay_contract
 
 from .long_trend_evaluation_contract import (
     EVALUATOR_VERSION,
@@ -85,84 +87,6 @@ QE_RUNTIME_METADATA_KEYS = frozenset(
 
 SEED_ENSEMBLE_LEVELS = frozenset({"score", "portfolio"})
 SEED_ENSEMBLE_AGGS = frozenset({"mean", "rank_mean", "median"})
-QE_PREDICTION_REPLAY_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-
-
-def normalize_prediction_replay_contract(
-    value: Mapping[str, Any] | None,
-    *,
-    context: str = "prediction_replay",
-) -> dict[str, Any]:
-    """Validate and normalize the control-plane prediction replay identity."""
-
-    source = dict(value or {})
-    enabled_value = source.get("prediction_replay", False)
-    if not isinstance(enabled_value, bool):
-        raise ValueError(f"{context}: prediction_replay must be a boolean")
-    enabled = enabled_value
-    source_task_value = source.get("prediction_source_task_id")
-    source_task_id = source_task_value.strip() if isinstance(source_task_value, str) else ""
-    source_loop_value = source.get("prediction_source_loop_index")
-    expected_sha256_value = source.get("prediction_source_sha256")
-    expected_sha256 = (
-        expected_sha256_value.strip().lower()
-        if isinstance(expected_sha256_value, str)
-        else ""
-    )
-
-    if enabled and source.get("backtest_only") is True:
-        raise ValueError(f"{context}: prediction_replay and backtest_only are mutually exclusive")
-    if not enabled:
-        if any(
-            raw_value not in (None, "")
-            for raw_value in (
-                source_task_value,
-                source_loop_value,
-                expected_sha256_value,
-            )
-        ):
-            raise ValueError(
-                f"{context}: prediction source fields require prediction_replay=true"
-            )
-        return {
-            "prediction_replay": False,
-            "prediction_source_task_id": None,
-            "prediction_source_loop_index": None,
-            "prediction_source_sha256": None,
-        }
-
-    if not source_task_id:
-        raise ValueError(
-            f"{context}: prediction_source_task_id must be a non-empty string"
-        )
-    if isinstance(source_loop_value, bool) or source_loop_value in (None, ""):
-        raise ValueError(f"{context}: prediction_source_loop_index is required")
-    if isinstance(source_loop_value, int):
-        source_loop_index = source_loop_value
-    elif isinstance(source_loop_value, str) and re.fullmatch(
-        r"[0-9]+", source_loop_value.strip()
-    ):
-        source_loop_index = int(source_loop_value)
-    else:
-        raise ValueError(
-            f"{context}: prediction_source_loop_index must be an integer"
-        )
-    if source_loop_index < 1:
-        raise ValueError(f"{context}: prediction_source_loop_index must be >= 1")
-    if expected_sha256_value not in (None, "") and not isinstance(
-        expected_sha256_value, str
-    ):
-        raise ValueError(
-            f"{context}: prediction_source_sha256 must be a hexadecimal string"
-        )
-    if expected_sha256 and not QE_PREDICTION_REPLAY_SHA256_RE.fullmatch(expected_sha256):
-        raise ValueError(f"{context}: prediction_source_sha256 must be 64 hex characters")
-    return {
-        "prediction_replay": True,
-        "prediction_source_task_id": source_task_id,
-        "prediction_source_loop_index": source_loop_index,
-        "prediction_source_sha256": expected_sha256 or None,
-    }
 
 
 def split_qe_runtime_metadata(params: dict[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -222,10 +146,7 @@ def normalize_qe_seed_ensemble_config(
     raw_seeds = value.get("seeds")
     if not isinstance(raw_seeds, list) or not raw_seeds:
         raise ValueError(f"{context}.seeds must be a non-empty explicit seed list")
-    seeds = [
-        normalize_qe_random_seed(seed, field_name=f"{context}.seeds[{idx}]")
-        for idx, seed in enumerate(raw_seeds)
-    ]
+    seeds = [normalize_qe_random_seed(seed, field_name=f"{context}.seeds[{idx}]") for idx, seed in enumerate(raw_seeds)]
     if len(set(seeds)) != len(seeds):
         raise ValueError(f"{context}.seeds must not contain duplicate seeds")
 
@@ -363,9 +284,7 @@ def ensure_qe_risk_policy(custom_params: dict[str, Any] | None, *, source: str =
     hard_actions = [str(item).strip() for item in hard_actions if str(item or "").strip()]
     required_actions = {"block_buy", "force_exit"}
     if not required_actions.issubset(set(hard_actions)):
-        raise ValueError(
-            f"{source}: risk_policy.hard_actions must include {sorted(required_actions)}"
-        )
+        raise ValueError(f"{source}: risk_policy.hard_actions must include {sorted(required_actions)}")
     policy["hard_actions"] = hard_actions
 
     params["risk_policy"] = policy
@@ -414,9 +333,7 @@ class HmmConfig(BaseModel):
     def _validate_hmm_consistency(self) -> "HmmConfig":
         if self.enable_sector_hmm:
             if not self.hmm_model_version_id:
-                raise ValueError(
-                    "enable_sector_hmm=True requires hmm_model_version_id"
-                )
+                raise ValueError("enable_sector_hmm=True requires hmm_model_version_id")
             if not self.sector_hmm_model_path:
                 raise ValueError(
                     "enable_sector_hmm=True requires sector_hmm_model_path "
@@ -560,22 +477,16 @@ class ExperimentConfig(BaseModel):
         if self.alpha_mode == "multi" and not self.multi_alpha_config:
             raise ValueError("multi_alpha_config required when alpha_mode='multi'")
         if self.long_trend_profile_id is not None:
-            self.long_trend_profile_id = get_long_trend_profile(
-                str(self.long_trend_profile_id).strip()
-            ).profile_id
+            self.long_trend_profile_id = get_long_trend_profile(str(self.long_trend_profile_id).strip()).profile_id
         if (
             self.long_trend_evaluation is not None
             and self.long_trend_profile_id is not None
             and self.long_trend_evaluation.profile_id != self.long_trend_profile_id
         ):
-            raise ValueError(
-                "long_trend_profile_id conflicts with the resolved long_trend_evaluation profile"
-            )
+            raise ValueError("long_trend_profile_id conflicts with the resolved long_trend_evaluation profile")
         self.label_horizon = normalize_label_horizon(self.label_horizon)
         if self.canonical_pit_dataset is not None:
-            self.canonical_pit_dataset = require_qe_formal_dataset_request(
-                self.canonical_pit_dataset
-            )
+            self.canonical_pit_dataset = require_qe_formal_dataset_request(self.canonical_pit_dataset)
         replay = normalize_prediction_replay_contract(
             {
                 "prediction_replay": self.prediction_replay,
@@ -591,13 +502,9 @@ class ExperimentConfig(BaseModel):
         self.prediction_source_loop_index = replay["prediction_source_loop_index"]
         self.prediction_source_sha256 = replay["prediction_source_sha256"]
         if self.universe_selection is not None:
-            self.universe_selection = UniverseSelection.from_value(
-                self.universe_selection
-            ).as_dict()
+            self.universe_selection = UniverseSelection.from_value(self.universe_selection).as_dict()
             if self.stock_pool:
-                raise ValueError(
-                    "stock_pool and universe_selection cannot be supplied together for new QE work"
-                )
+                raise ValueError("stock_pool and universe_selection cannot be supplied together for new QE work")
         try:
             self.strategy_params = enforce_qe_universe_topk(
                 self.strategy_params,
@@ -691,9 +598,7 @@ class ExperimentConfig(BaseModel):
                     field_name="extra_params.label_horizon",
                 )
                 if extra_horizon != effective_label_horizon:
-                    raise ValueError(
-                        "extra_params.label_horizon conflicts with ExperimentConfig.label_horizon"
-                    )
+                    raise ValueError("extra_params.label_horizon conflicts with ExperimentConfig.label_horizon")
                 # Keep label_horizon controlled by the unified field above.
                 extra_params.pop("label_horizon", None)
             params.update(extra_params)
@@ -702,11 +607,9 @@ class ExperimentConfig(BaseModel):
         # It is explicitly filtered by ConfigComposer and never reaches a
         # Qlib strategy constructor.
         if self.canonical_pit_dataset is not None:
-            params[QE_FORMAL_DATASET_REQUEST_PARAM] = (
-                require_qe_formal_dataset_request(
-                    self.canonical_pit_dataset
-                ).as_dict()
-            )
+            params[QE_FORMAL_DATASET_REQUEST_PARAM] = require_qe_formal_dataset_request(
+                self.canonical_pit_dataset
+            ).as_dict()
 
         # 12. initial_cash must NOT flow into custom_params
         params.pop("initial_cash", None)
@@ -759,28 +662,28 @@ class AlphaGroup(BaseModel):
     生成子实验的 conf.yaml。
     """
 
-    group_name: str                           # "pv_medium", "mf", "fundamental"
+    group_name: str  # "pv_medium", "mf", "fundamental"
     factor_names: list[str]
-    model_id: str                             # catalog model_id 或 __builtin_xxx__
-    dataset_type: str = "DatasetH"            # "DatasetH" / "TSDatasetH"
+    model_id: str  # catalog model_id 或 __builtin_xxx__
+    dataset_type: str = "DatasetH"  # "DatasetH" / "TSDatasetH"
     model_params: dict[str, Any] | None = None  # 可选超参覆盖
-    compute_resource: str = "cpu"             # "cpu" / "gpu"
-    preferred_node_id: str | None = None      # "wsl2-5080" / "rdagent-node1"
-    holding_period_hint: str | None = None    # "short" / "medium" / "long" (信息标注)
+    compute_resource: str = "cpu"  # "cpu" / "gpu"
+    preferred_node_id: str | None = None  # "wsl2-5080" / "rdagent-node1"
+    holding_period_hint: str | None = None  # "short" / "medium" / "long" (信息标注)
 
     # ── 模型复用 (v1.1 backtest-only) ──────────────────────────────
-    model_source_experiment_id: str | None = None   # 复用来源实验 ID
-    model_source_group_name: str | None = None      # 复用来源组名（默认同 group_name）
-    reuse_mode: str = "retrain"                     # "retrain" / "reuse_prediction" / "reuse_model"
+    model_source_experiment_id: str | None = None  # 复用来源实验 ID
+    model_source_group_name: str | None = None  # 复用来源组名（默认同 group_name）
+    reuse_mode: str = "retrain"  # "retrain" / "reuse_prediction" / "reuse_model"
 
 
 class MetaModelConfig(BaseModel):
     """Meta-Model 合成配置。"""
 
-    method: str = "ic_weighted"               # "ic_weighted" / "ols" / "stacking"
-    cv_strategy: str = "train_valid_test"     # "train_valid_test" (回测) / "walk_forward" (实盘)
+    method: str = "ic_weighted"  # "ic_weighted" / "ols" / "stacking"
+    cv_strategy: str = "train_valid_test"  # "train_valid_test" (回测) / "walk_forward" (实盘)
     lookback_days: int = 60
-    cv_params: dict[str, Any] | None = None   # purge_days, embargo_days, n_splits
+    cv_params: dict[str, Any] | None = None  # purge_days, embargo_days, n_splits
 
 
 class MultiAlphaConfig(BaseModel):
@@ -791,8 +694,8 @@ class MultiAlphaConfig(BaseModel):
 
     alpha_groups: list[AlphaGroup]
     meta_model: MetaModelConfig = MetaModelConfig()
-    execution_mode: str = "serial"            # "serial" / "local_parallel" / "distributed"
-    auto_selected: bool = False               # 是否由自动选因子引擎生成
+    execution_mode: str = "serial"  # "serial" / "local_parallel" / "distributed"
+    auto_selected: bool = False  # 是否由自动选因子引擎生成
 
     @model_validator(mode="after")
     def _validate_groups(self) -> "MultiAlphaConfig":

@@ -565,6 +565,158 @@ def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
     assert all(command[0] != "npm" for command in calls)
 
 
+def test_mcp_gateway_phase5_invokes_prebuilt_frontend_entrypoints_directly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    for relative in noxfile.FRONTEND_DIRECT_ENTRYPOINTS:
+        entrypoint = frontend / "node_modules" / relative
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text("// pinned CLI\n", encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    class DummySession:
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+        def chdir(self, path: str) -> None:
+            calls.append(("chdir", path))
+
+    noxfile.mcp_gateway_phase5_assistant(DummySession())  # type: ignore[arg-type]
+
+    assert ("node", "node_modules/next/dist/bin/next", "lint") in calls
+    assert ("node", "node_modules/next/dist/bin/next", "build") in calls
+    assert (
+        "node",
+        "node_modules/@playwright/test/cli.js",
+        "test",
+        "tests/research-assistant/phase5-mcp-gateway-ui.spec.ts",
+        "--project",
+        "chromium",
+    ) in calls
+    assert not any(command[:2] in {("npm", "run"), ("npx", "playwright")} for command in calls)
+
+
+def test_ra_phase7_invokes_prebuilt_frontend_entrypoints_directly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    for relative in noxfile.FRONTEND_DIRECT_ENTRYPOINTS:
+        entrypoint = frontend / "node_modules" / relative
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text("// pinned CLI\n", encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    class DummySession:
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+        def chdir(self, path: str) -> None:
+            calls.append(("chdir", path))
+
+    noxfile.ra_phase7_full_accept(DummySession())  # type: ignore[arg-type]
+
+    assert ("node", "node_modules/next/dist/bin/next", "lint") in calls
+    assert ("node", "node_modules/next/dist/bin/next", "build") in calls
+    assert sum(
+        command[:3]
+        == ("node", "node_modules/@playwright/test/cli.js", "test")
+        for command in calls
+    ) == 2
+    assert not any(command[:2] in {("npm", "run"), ("npx", "playwright")} for command in calls)
+
+
+def test_nightly_ra_sessions_reuse_only_successful_same_run_prerequisites(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    for relative in noxfile.FRONTEND_DIRECT_ENTRYPOINTS:
+        entrypoint = frontend / "node_modules" / relative
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text("// pinned CLI\n", encoding="utf-8")
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
+    monkeypatch.setenv(
+        noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV,
+        "mcp_gateway_phase5_assistant",
+    )
+    calls: list[tuple[str, ...]] = []
+    logs: list[str] = []
+
+    class DummySession:
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+        def chdir(self, path: str) -> None:
+            calls.append(("chdir", path))
+
+        def log(self, message: str) -> None:
+            logs.append(message)
+
+    noxfile.ra_phase7_full_accept(DummySession())  # type: ignore[arg-type]
+
+    assert any("backend/tests/research_assistant" in command for command in calls)
+    assert ("node", "node_modules/next/dist/bin/next", "lint") not in calls
+    assert ("node", "node_modules/next/dist/bin/next", "build") not in calls
+    assert any("mcp_gateway_phase5_assistant" in message for message in logs)
+
+    calls.clear()
+    noxfile.mcp_gateway_phase5_assistant(DummySession())  # type: ignore[arg-type]
+
+    assert any("tests/mcp" in command for command in calls)
+    assert ("node", "node_modules/next/dist/bin/next", "lint") in calls
+    assert ("node", "node_modules/next/dist/bin/next", "build") in calls
+
+    calls.clear()
+    monkeypatch.setenv(
+        noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV,
+        "ra_phase7_full_accept",
+    )
+    noxfile.research_assistant_backend(DummySession())  # type: ignore[arg-type]
+
+    assert any("backend/services/research_assistant" in command for command in calls)
+    assert not any("backend/tests/research_assistant" in command for command in calls)
+    assert any("ra_phase7_full_accept" in message for message in logs)
+
+
+def test_research_assistant_backend_runs_full_without_nightly_predecessor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, raising=False)
+    monkeypatch.delenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, raising=False)
+    calls: list[tuple[str, ...]] = []
+
+    class DummySession:
+        def run(self, *args: str, **_kwargs: object) -> None:
+            calls.append(tuple(args))
+
+    noxfile.research_assistant_backend(DummySession())  # type: ignore[arg-type]
+
+    assert any("backend/tests/research_assistant" in command for command in calls)
+
+
+def test_nightly_session_reuse_is_disabled_without_runner_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV,
+        "research_assistant_backend,ra_phase7_full_accept",
+    )
+    monkeypatch.delenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, raising=False)
+
+    assert noxfile._nightly_session_completed("research_assistant_backend") is False
+
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
+    monkeypatch.setenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, "")
+
+    assert noxfile._nightly_session_completed("research_assistant_backend") is False
+
+
 def test_terminate_process_tree_uses_taskkill_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, ...]] = []
 

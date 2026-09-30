@@ -34,11 +34,24 @@ FRONTEND_DIRECT_ENTRYPOINTS = (
     Path("next/dist/bin/next"),
 )
 NIGHTLY_SESSION_ARGS_FILE_ENV = "AISTOCK_NIGHTLY_SESSION_ARGS_FILE"
+NIGHTLY_SESSION_RUNNER_ENV = "AISTOCK_NIGHTLY_SESSION_RUNNER"
+NIGHTLY_COMPLETED_SESSIONS_ENV = "AISTOCK_NIGHTLY_COMPLETED_SESSIONS"
 
 nox.options.reuse_existing_virtualenvs = True
 nox.options.sessions = ["l0"]
 
 _VALIDATION_ENV_LOADED = False
+
+
+def _nightly_session_completed(session_name: str) -> bool:
+    if os.environ.get(NIGHTLY_SESSION_RUNNER_ENV) != "1":
+        return False
+    completed = {
+        item.strip()
+        for item in os.environ.get(NIGHTLY_COMPLETED_SESSIONS_ENV, "").split(",")
+        if item.strip()
+    }
+    return session_name in completed
 
 
 def _validation_env_candidates() -> list[Path]:
@@ -656,11 +669,7 @@ def _direct_neighbor_pr_targets(
                 return None
             relative = path.removeprefix(source_root)
             relative_path = Path(relative)
-            candidate = (
-                Path(test_root)
-                / relative_path.parent
-                / f"test_{relative_path.stem}.py"
-            ).as_posix()
+            candidate = (Path(test_root) / relative_path.parent / f"test_{relative_path.stem}.py").as_posix()
             if not (ROOT / candidate).is_file():
                 return None
             targets.append(candidate)
@@ -680,7 +689,53 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/core_index_membership",
         "backend/tests/dataset_release/test_index_pool_sidecar.py",
         "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/dataset_release/test_release_successor.py",
+        "backend/tests/dataset_release/test_shared_sector_context.py",
+        "backend/tests/dataset_release/test_monthly_repair_journal.py",
+        "backend/tests/dataset_release/test_monthly_snapshot.py",
+        "backend/tests/dataset_release/test_monthly_build_bridge.py",
+        "backend/tests/dataset_release/test_monthly_build_executor.py",
+        "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+        "backend/tests/dataset_release/test_monthly_supervised_build.py",
+        "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+        "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+        "backend/tests/dataset_release/test_monthly_local_validation.py",
+        "backend/tests/dataset_release/test_monthly_consumer_validation.py",
+        "backend/tests/dataset_release/test_monthly_consumer_registry.py",
+        "backend/tests/dataset_release/test_monthly_node_probe.py",
+        "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
+        "backend/tests/dataset_release/test_monthly_remote_deploy.py",
+        "backend/tests/dataset_release/test_runtime_release_registration.py",
+        "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+        "backend/tests/dataset_release/test_monthly_worker_composition.py",
+        "backend/tests/dataset_release/test_monthly_production.py",
+        "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+        "backend/tests/dataset_release/test_monthly_worker_supervisor.py",
+        "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+        "backend/tests/dataset_release/test_active_task_binding.py",
+        "backend/tests/dataset_release/test_managed_consumer_task.py",
+        "backend/tests/dataset_release/test_monthly_hmm_consumer_probe.py",
+        "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
+        "backend/tests/dataset_release/test_monthly_shared_consumer_probe.py",
+        "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+        "backend/tests/dataset_release/test_monthly_shared_components.py",
+        "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+        "backend/tests/dataset_release/test_monthly_source_audit.py",
+        "backend/tests/dataset_release/test_monthly_postgres_source.py",
+        "backend/tests/dataset_release/test_monthly_source_producer.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py",
+        "backend/tests/dataset_release/test_monthly_worker.py",
+        "backend/tests/dataset_release/test_monthly_registry.py",
+        "backend/tests/dataset_release/test_monthly_runtime.py",
+        "backend/tests/dataset_release/test_monthly_stage_adapter.py",
+        "backend/tests/dataset_release/test_monthly_official_adapters.py",
+        "backend/tests/dataset_release/test_qlib_bounded_update.py",
+        "backend/tests/routers/test_monthly_dataset_releases.py",
+        "backend/tests/routers/test_managed_dataset_preparations.py",
+        "backend/tests/dataset_release/test_source_pool.py",
         "backend/tests/dataset_release/test_candidate_validator.py",
+        "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+        "backend/tests/dataset_release/test_factor_materializer.py",
         "backend/tests/dataset_release/test_artifact_ready_source.py",
         "backend/tests/dataset_release/test_source_authority.py",
         "backend/tests/dataset_release/test_build_processor.py",
@@ -690,7 +745,12 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_wsl_python310_datetime_compat.py",
         "backend/tests/scripts/test_build_core_index_membership_authority.py",
         "backend/tests/scripts/test_prepare_core_index_membership_pit.py",
+        "backend/tests/scripts/test_dataset_release_source_stage.py",
+        "backend/tests/scripts/test_dataset_release_hmm_authority.py",
         "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+        "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+        "backend/tests/data_service/test_security_source_identity.py",
+        "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
     ]
     pr_targets = _direct_neighbor_pr_targets(
         smoke_tests=(
@@ -704,12 +764,24 @@ def qlib_data_backend(session: nox.Session) -> None:
         test_globs=(
             "backend/tests/qlib_exporter/test_*.py",
             "backend/tests/dataset_release/test_*.py",
+            "backend/tests/routers/test_managed_dataset_preparations.py",
             "backend/tests/core_index_membership/test_*.py",
             "backend/tests/scripts/test_*qlib*.py",
             "backend/tests/scripts/test_*backtest_dataset*.py",
+            "backend/tests/data_service/test_security_source_identity.py",
+            "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
         ),
         overrides={
+            "scripts/build_dataset_release_successor.py": "backend/tests/dataset_release/test_release_successor.py",
+            "scripts/build_shared_sector_context_component.py": "backend/tests/dataset_release/test_shared_sector_context.py",
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
+            "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+            "scripts/audit_qe_moneyflow_alias_coverage.py": "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+            "scripts/monthly_unified_dataset_release_worker.py": "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+            "scripts/dataset_release_hmm_authority.py": "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+            "backend/routers/monthly_dataset_releases.py": "backend/tests/routers/test_monthly_dataset_releases.py",
+            "backend/routers/advisory.py": "backend/tests/routers/test_managed_dataset_preparations.py",
+            "backend/routers/position_timing.py": "backend/tests/routers/test_managed_dataset_preparations.py",
         },
     )
     selected_targets = list(full_targets)
@@ -811,9 +883,7 @@ def advisory_phase0b_backend(session: nox.Session) -> None:
     """Run Phase 0B candidate-quality and direct historical-data regressions."""
     pr_targets = _direct_neighbor_pr_targets(
         smoke_tests=("backend/tests/advisory_phase0b/test_contracts.py",),
-        source_test_roots=(
-            ("backend/services/advisory_phase0b/", "backend/tests/advisory_phase0b/"),
-        ),
+        source_test_roots=(("backend/services/advisory_phase0b/", "backend/tests/advisory_phase0b/"),),
         test_globs=("backend/tests/advisory_phase0b/test_*.py",),
         overrides={
             "scripts/advisory_phase0b_candidate_quality_audit.py": "backend/tests/advisory_phase0b/test_cli.py",
@@ -971,7 +1041,11 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "scripts/repair_pt_next_018_source_data.py",
         "scripts/repair_suspend_688766.py",
         "scripts/audit_suspend_d_coverage.py",
+        "scripts/repair_suspended_minute_placeholders.py",
+        "backend/services/minute_data_session_contract.py",
         "scripts/ingest_tushare_adj_factor.py",
+        "scripts/validate_etf_share_size_source.py",
+        "scripts/prepare_etf_share_size_deployment.py",
         "noxfile.py",
         external=True,
     )
@@ -979,6 +1053,10 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         session,
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_etf_share_size_source.py",
+        "backend/tests/scripts/test_validate_etf_share_size_source.py",
+        "backend/tests/scripts/test_prepare_etf_share_size_deployment.py",
+        "backend/tests/test_local_data_management_facade.py",
         "backend/tests/test_data_sync_targets.py",
         "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
@@ -997,6 +1075,8 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_repair_suspend_688766.py",
         "backend/tests/services/test_adj_factor_history_reconciler.py",
         "backend/tests/services/test_suspend_d_coverage.py",
+        "backend/tests/ingestion/test_minute_data_session_contract.py",
+        "backend/tests/ingestion/test_ingest_incremental_minute.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1374,6 +1454,7 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_sector_risk_overlay_evaluation.py",
         "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
         "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+        "backend/tests/unified_engine/test_qe_frozen_suspend_filter.py",
         "backend/tests/unified_engine/test_qe_sector_risk_overlay_strategy.py",
         "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_requires_day_minute_window_parity",
         "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py::test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry",
@@ -1419,6 +1500,7 @@ def qe_read_backend(session: nox.Session) -> None:
         "backend/tests/quantevolver/test_qe_registered_submission.py",
         "backend/tests/quantevolver/test_qe_universe_comparison.py",
         "backend/tests/quantevolver/test_qe_custom_loader_instruments.py",
+        "backend/tests/test_dispatch_service_env.py",
         "backend/tests/multi_alpha/test_durable_router.py",
         "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
         "backend/tests/strategy_package/test_multi_alpha_live_selection.py",
@@ -1453,6 +1535,8 @@ def qe_read_backend(session: nox.Session) -> None:
             "backend/tests/quantevolver/test_*.py",
             "backend/tests/unified_engine/test_*.py",
             "backend/tests/test_multi_alpha*.py",
+            "backend/tests/test_dispatch_service_env.py",
+            "backend/tests/test_correlation_compute_independence.py",
         ),
         overrides={
             "backend/routers/multi_alpha.py": "backend/tests/multi_alpha/test_durable_router.py",
@@ -1657,6 +1741,7 @@ def qe_archive_backend(session: nox.Session) -> None:
         "backend/tests/test_qe_archive_schema.py",
         "backend/tests/test_qe_execution_templates_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
+        "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
         "backend/tests/qe_templates/test_template_validator.py",
         "backend/tests/test_aistock_qe_mcp_servers.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
@@ -1763,6 +1848,7 @@ def mcp_gateway_manifest_quality(session: nox.Session) -> None:
     _run_pytest(
         session,
         "tests/mcp",
+        "backend/tests/mcp",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1797,6 +1883,7 @@ def mcp_gateway_phase6_resource_monitor(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
     """Run full Phase 5 RA manifest catalog, audit, and UI acceptance gates."""
+    _ensure_frontend_node_modules(session)
     phase5_paths = [
         "backend/mcp/tool_manifest.py",
         "backend/routers/research_assistant.py",
@@ -1881,11 +1968,11 @@ def mcp_gateway_phase5_assistant(session: nox.Session) -> None:
         external=True,
     )
     session.chdir("frontend")
-    session.run("npm", "run", "lint", env=frontend_env, external=True)
-    session.run("npm", "run", "build", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "lint", env=frontend_env, external=True)
+    session.run("node", "node_modules/next/dist/bin/next", "build", env=frontend_env, external=True)
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/phase5-mcp-gateway-ui.spec.ts",
         "--project",
@@ -2463,12 +2550,31 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         "-p",
         "no:cacheprovider",
     )
+    _ensure_frontend_node_modules(session)
     session.chdir("frontend")
-    session.run("npm", "run", "lint", env=frontend_env, external=True)
-    session.run("npm", "run", "build", env=frontend_env, external=True)
+    if _nightly_session_completed("mcp_gateway_phase5_assistant"):
+        session.log(
+            "Reusing successful mcp_gateway_phase5_assistant frontend lint/build "
+            "within this Nightly run."
+        )
+    else:
+        session.run(
+            "node",
+            "node_modules/next/dist/bin/next",
+            "lint",
+            env=frontend_env,
+            external=True,
+        )
+        session.run(
+            "node",
+            "node_modules/next/dist/bin/next",
+            "build",
+            env=frontend_env,
+            external=True,
+        )
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/phase7-frontend-acceptance.spec.ts",
         "--project",
@@ -2477,8 +2583,8 @@ def ra_phase7_full_accept(session: nox.Session) -> None:
         external=True,
     )
     session.run(
-        "npx",
-        "playwright",
+        "node",
+        "node_modules/@playwright/test/cli.js",
         "test",
         "tests/research-assistant/research-assistant.spec.ts",
         "--project",
@@ -2527,13 +2633,16 @@ def research_assistant_backend(session: nox.Session) -> None:
         "backend/routers/research_assistant.py",
         external=True,
     )
-    _run_pytest(
-        session,
-        "backend/tests/research_assistant",
-        "-q",
-        "-p",
-        "no:cacheprovider",
-    )
+    if _nightly_session_completed("ra_phase7_full_accept"):
+        session.log("Reusing successful ra_phase7_full_accept backend coverage within this Nightly run.")
+    else:
+        _run_pytest(
+            session,
+            "backend/tests/research_assistant",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+        )
 
 
 @nox.session(venv_backend="none")
@@ -2683,9 +2792,7 @@ def position_timing_backend(session: nox.Session) -> None:
             "backend/tests/position_timing/test_isolation.py",
             "backend/tests/position_timing/test_api.py",
         ),
-        source_test_roots=(
-            ("backend/services/position_timing/", "backend/tests/position_timing/"),
-        ),
+        source_test_roots=(("backend/services/position_timing/", "backend/tests/position_timing/"),),
         test_globs=("backend/tests/position_timing/test_*.py",),
         overrides={
             "backend/routers/position_timing.py": "backend/tests/position_timing/test_api.py",
@@ -2824,12 +2931,22 @@ def factor_research_backend(session: nox.Session) -> None:
         "backend/tests/factor_research/test_repository_dev.py",
     ]
     session.run(
-        "python", "-m", "pytest",
-        *full_targets, "-q",
-        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True,
+        "python",
+        "-m",
+        "pytest",
+        *full_targets,
+        "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}),
+        external=True,
     )
-    session.run(sys.executable, "-X", "utf8", "backend/tests/factor_research/fresh_process_smoke.py",
-                env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}), external=True)
+    session.run(
+        sys.executable,
+        "-X",
+        "utf8",
+        "backend/tests/factor_research/fresh_process_smoke.py",
+        env=_env({"AISTOCK_DEV_DB_E2E": "0", "FACTOR_RESEARCH_DEV_ENV_FILE": ""}),
+        external=True,
+    )
 
 
 @nox.session(venv_backend="none")
@@ -2838,8 +2955,13 @@ def factor_research_dev_db(session: nox.Session) -> None:
     if not os.environ.get("FACTOR_RESEARCH_DEV_ENV_FILE"):
         session.error("Explicit FACTOR_RESEARCH_DEV_ENV_FILE required for existing DEV validation")
     session.run(
-        "python", "-m", "pytest", "backend/tests/factor_research/test_repository_dev.py", "-q",
-        env=_env({"AISTOCK_DEV_DB_E2E": "1"}), external=True,
+        "python",
+        "-m",
+        "pytest",
+        "backend/tests/factor_research/test_repository_dev.py",
+        "-q",
+        env=_env({"AISTOCK_DEV_DB_E2E": "1"}),
+        external=True,
     )
 
 
@@ -3559,8 +3681,7 @@ def _hmm_risk_live_sources_for_test(test_path: str) -> list[str]:
     return [
         source
         for source in dict.fromkeys(candidates)
-        if (ROOT / source).is_file()
-        and HMM_RISK_PR_NEIGHBOR_OVERRIDES.get(source, test_path) == test_path
+        if (ROOT / source).is_file() and HMM_RISK_PR_NEIGHBOR_OVERRIDES.get(source, test_path) == test_path
     ]
 
 
