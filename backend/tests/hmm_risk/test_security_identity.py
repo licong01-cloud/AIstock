@@ -21,10 +21,18 @@ def _manifest_path() -> Path:
     )
 
 
-def test_manifest_resolves_effective_alias_and_dataset_specific_default() -> None:
+@pytest.mark.parametrize(
+    "schema", ["hmm_risk_security_source_identity_manifest_v1", "aistock_security_source_identity_v1"]
+)
+def test_manifest_resolves_effective_alias_and_dataset_specific_default(tmp_path: Path, schema: str) -> None:
     path = _manifest_path()
     payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["schema_version"] = schema
+    path = tmp_path / "identity.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     manifest = load_security_source_identity_manifest(path, expected_sha256=canonical_sha256(payload))
+    assert manifest.evidence()["schema_version"] == schema
+    assert manifest.manifest_sha256 == canonical_sha256(payload)
 
     historical = manifest.resolve("302132.SZ", date(2024, 6, 28), "market.moneyflow_ts")
     assert historical.source_ts_code == "300114.SZ"
@@ -40,18 +48,27 @@ def test_manifest_resolves_effective_alias_and_dataset_specific_default() -> Non
     assert daily_basic.resolution_kind == "canonical_same_code"
 
 
-def test_manifest_rejects_hash_mismatch(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "schema", ["hmm_risk_security_source_identity_manifest_v1", "aistock_security_source_identity_v1"]
+)
+def test_manifest_rejects_hash_mismatch(tmp_path: Path, schema: str) -> None:
     path = _manifest_path()
     copied = tmp_path / "identity.json"
-    copied.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["schema_version"] = schema
+    copied.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     with pytest.raises(StateModelSetError, match="manifest hash mismatch"):
         load_security_source_identity_manifest(copied, expected_sha256="0" * 64)
 
 
-def test_manifest_rejects_overlapping_effective_aliases(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "schema", ["hmm_risk_security_source_identity_manifest_v1", "aistock_security_source_identity_v1"]
+)
+def test_manifest_rejects_overlapping_effective_aliases(tmp_path: Path, schema: str) -> None:
     path = _manifest_path()
     payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["schema_version"] = schema
     duplicate = dict(payload["rows"][0])
     duplicate["effective_start"] = "2024-01-01"
     duplicate["effective_end"] = "2025-02-16"
@@ -73,9 +90,13 @@ def test_manifest_rejects_overlapping_effective_aliases(tmp_path: Path) -> None:
         load_security_source_identity_manifest(target, expected_sha256=canonical_sha256(payload))
 
 
-def test_manifest_rejects_tampered_row_hash(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "schema", ["hmm_risk_security_source_identity_manifest_v1", "aistock_security_source_identity_v1"]
+)
+def test_manifest_rejects_tampered_row_hash(tmp_path: Path, schema: str) -> None:
     path = _manifest_path()
     payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["schema_version"] = schema
     payload["rows"][0]["source_ts_code"] = "300115.SZ"
     target = tmp_path / "tampered.json"
     target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -93,4 +114,16 @@ def test_manifest_rejects_explicit_alias_that_does_not_change_source_code(tmp_pa
     target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     with pytest.raises(StateModelSetError, match="explicit alias must change"):
+        load_security_source_identity_manifest(target, expected_sha256=canonical_sha256(payload))
+
+
+@pytest.mark.parametrize(
+    "schema", ["aistock_security_source_identity_v2", "hmm_risk_security_source_identity_manifest_v2", None, []]
+)
+def test_manifest_rejects_unknown_schema_even_with_matching_hash(tmp_path: Path, schema: object) -> None:
+    payload = json.loads(_manifest_path().read_text(encoding="utf-8"))
+    payload["schema_version"] = schema
+    target = tmp_path / "unknown.json"
+    target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(StateModelSetError, match="schema"):
         load_security_source_identity_manifest(target, expected_sha256=canonical_sha256(payload))
