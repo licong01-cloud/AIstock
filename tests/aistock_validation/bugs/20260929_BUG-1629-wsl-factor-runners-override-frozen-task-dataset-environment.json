@@ -157,7 +157,7 @@
   "risk_area": "regression",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/factor-cache/stats",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/correlations/status",
     "fresh_process_evidence": [
       "Windows Python -I loaded all three task-worktree WSL factor runner modules without database, dataset, or runtime mutation"
     ],
