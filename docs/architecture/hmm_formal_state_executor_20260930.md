@@ -74,7 +74,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | formal_state_authority.py; formal_state_domains.py; formal_state_input.py; formal_state_executor.py | test_formal_state_authority.py：9 passed；官方 DB 只读目录 freeze + adapter readback 成功；历史 stable-taxonomy-backcast 训练视图覆盖 131/131；A5 full-key partition/opportunity/eligibility 定向测试通过 | PARTIAL | 31/131 文本投影、A5 逐键构造及严格 v3 mapping manifest 读取已补齐；完整文件 source constructor 尚未接通。真实 source preflight 仍须使用已审核的 BUG-1641 reader |
+| F-001 | formal_state_authority.py; formal_state_domains.py; formal_state_input.py; formal_state_executor.py | 官方 DB 只读目录 freeze + adapter readback 成功；历史 stable-taxonomy-backcast 训练视图覆盖 131/131；A5 full-key partition/opportunity/eligibility 定向测试通过；真实 file-only constructor 已执行并明确拒绝未经 authority 闭合的资金流缺失 | BLOCKED | constructor 已接通，但冻结 v15 缺少 302132.SZ 在训练窗口的历史资金流；不以代码完成替代真实输入验收，详见本轮输入终态 |
 | F-002 | formal_state_model.py | test_formal_state_executor.py；原数值/结构矩阵及固定 D1 projection 定向测试 | PARTIAL | 已接入批准的 801207.SI raw exact-zero、full-20 preprocess 后固定 19D likelihood；其他行业不自动降维。定向测试不代表全部合同审核完成 |
 | F-003 | formal_state_executor.py; run_formal_state_model_set.py | test_formal_state_executor.py；signed-zero mismatch、CLI durable failure、child projection 重新哈希后拒绝、完整 mixed-shape serialization 与零-refit selected readback | PARTIAL | 未运行正式 fresh-process grid；真实 source-to-selected artifact 全链验证仍未完成，合成序列化测试不证明模型通过验收 |
 | F-004 | formal_state_calendar.py; formal_state_input.py; formal_state_model.py; formal_state_executor.py | test_formal_state_calendar.py；完整 182 日、compact finite payload、mask/source/hash 漂移、空 sentinel、diagnostic tie、失败 ledger 和零-refit 回读 | PARTIAL | carrier/manifest、逐日 ledger、T/O/U/E 和共享语义回读已实现；须在完整文件构造接通后完成真实 source 与 selected artifact 全链验证，不以单元测试推导正式验收 |
@@ -118,6 +118,22 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 
 完整 file-only C-010/A5 constructor 与 `prepare` CLI 已实现，复用现有 shared reader、alias/PIT resolver、stock-fact 聚合和严格 receipt validator。
 没有用九维产品 bundle、count-only contributor receipt 或模型私有行业编号替代正式输入。真实源构造仍在执行，完成前 F-001 不报告通过。
+
+上述“仍在执行”为启动时记录；最终输入终态如下，后续步骤以此为准。
+
+### 本轮输入终态：冻结 v15 历史资金流覆盖阻断
+
+第二轮 file-only constructor 非零退出，失败点为 `302132.SZ/2021-07-30` 未找到资金流，且没有精确 provider-absence authority。未生成正式 request，fits 仍为 0/5184。
+只读索引查询同时检查历史代码 `300114.SZ` 和规范代码 `302132.SZ`，不是通过猜测代码或数据库 fallback 补数据：
+
+- 当前 moneyflow H5 的历史代码记录仅 120 行，日期 `2024-08-13..2025-02-14`；规范代码记录 377 行，日期 `2025-02-17..2026-08-31`。
+- 正式训练窗口 `2022-01-04..2024-06-28` 有 601 个冻结交易日；该股票 591 行完整价格、10 行合法空 sentinel，与 10 个停牌日期一致。窗口内两种代码均没有资金流记录。
+- 现有 `provider_absence_v1.json` 不包含该股票，不能将上述缺失自动解释为 provider absence，也不能直接排除该股票、填零、前填或改变 A5 eligibility。
+- 这说明之前的 120/120 alias 修复只证明其当时目标日期已闭合，不证明本次完整训练与预热窗口覆盖。当前不能宣称 v15 已满足正式训练输入。
+- 后续由数据 owner 对正式文件源范围 `2020-07-30..2025-04-30` 审核该 alias 的真实来源覆盖：可取得的数据通过通用不可变 successor 补齐；确属 provider absence 的日期须提供精确受审 authority。不得原地修改 v15；变更冻结 release identity 必须另行获得授权，不得只替换 manifest 哈希。
+- HMM 保留现有完整 constructor 和 fail-closed；F-001/F-005 为 BLOCKED，F-002～F-004 不因单元测试通过升级为正式模型验收。当前不创建部分交付 PR，不启动训练或选择 seed。
+
+本次只查询既有冻结文件；数据集、active profile、市场数据库、模型合同及服务进程均未修改。
 
 - 第一轮真实构造在 0 fits 处发现 shared security schema 的 HMM consumer 缺陷：BUG-1644 / Issue #5170；独立源码 PR #5171 已合入，merge=`46f17a242852e2a6d7132157e7d2a7efb9513002`。共享 v15 文件 SHA 保持不变，不是数据缺失，也不需要修改数据集。
 - BUG-1644 actual runtime 分类为 backend-main；fresh-process import/file smoke 已通过，运行态仍等待用户重启。close-sync PR #5172 保持 OPEN，不提前合入或关闭 Issue。
