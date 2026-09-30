@@ -95,6 +95,34 @@ def write_once(path: Path, body: Mapping[str, Any]) -> None:
         raise FormalStateError("hmm_risk_formal_output_readback_failed", str(path))
 
 
+def validate_output_location(path: Path, *, dataset_root: Path | None = None) -> Path:
+    """Validate before *any* write, including failure receipts and temp spools."""
+    if not path.is_absolute():
+        raise FormalStateError("hmm_risk_formal_output_invalid", "output path must be explicit and absolute")
+    repository = Path(__file__).resolve().parents[3]
+    roots = [repository]
+    git_file = repository / ".git"
+    if git_file.is_file():
+        text = git_file.read_text(encoding="utf-8").strip()
+        if not text.startswith("gitdir: "):
+            raise FormalStateError("hmm_risk_formal_output_invalid", "worktree Git identity is invalid")
+        git_dir = (repository / text.removeprefix("gitdir: ")).resolve()
+        common = (git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()).resolve()
+        roots.append(common.parent)
+    if dataset_root is not None:
+        roots.append(dataset_root)
+    isjunction = getattr(os.path, "isjunction", lambda _: False)
+    for parent in (path, *path.parents):
+        if parent.is_symlink() or isjunction(parent):
+            raise FormalStateError("hmm_risk_formal_output_invalid", "output path has an indirect ancestor")
+        if (parent / "direct_monthly_state.json").is_file():
+            raise FormalStateError("hmm_risk_formal_output_invalid", "output is inside an immutable release")
+    resolved = path.resolve()
+    if any(resolved.is_relative_to(root.resolve()) for root in roots):
+        raise FormalStateError("hmm_risk_formal_output_invalid", "output is inside source or dataset")
+    return resolved
+
+
 def verify_hash(value: Mapping[str, Any]) -> None:
     if value.get("receipt_sha256") != canonical_sha256({k: v for k, v in value.items() if k != "receipt_sha256"}):
         raise FormalStateError("hmm_risk_formal_identity_mismatch", "canonical receipt differs")
@@ -567,12 +595,13 @@ def validate_selected_model_set(
 
 
 def run_two_processes(request_path: Path, output: Path, child_script: Path) -> Path:
+    request = load_request(request_path)
+    output = validate_output_location(output, dataset_root=Path(request["source_identity"]["dataset_root"]))
     if output.exists():
         raise FormalStateError("hmm_risk_formal_output_collision", "output must be a new directory")
     output.mkdir(parents=True)
     env = {**os.environ, **{key: "1" for key in THREAD_VARIABLES}, "PYTHONPATH": str(child_script.resolve().parents[2])}
     try:
-        request = load_request(request_path)
         repeat_paths = []
         for number in (1, 2):
             result_path = output / f"process_{number}.json"

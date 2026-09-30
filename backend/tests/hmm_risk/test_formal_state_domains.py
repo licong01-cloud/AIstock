@@ -274,3 +274,10 @@ def test_file_collector_retains_independent_price_and_moneyflow_receipts():
         == "hmm_risk_c010_price_domain_weight_denominator_invalid"
     )
     assert evidence["l2_invalid_price_domain"][0]["missing_evidence"]
+    double_failure = [dict(row) for row in broken]
+    double_failure[1]["close_yuan"] = None
+    inputs._collect_domains(rows[0]["trade_date"], double_failure, **args)
+    item = evidence["l2_invalid_price_domain"][-1]
+    assert len(item["price_complete_symbols"]) == 8
+    assert item["price_count_coverage"] == 0.8 and item["price_weight_coverage"] is None
+    assert {entry["symbol"] for entry in item["missing_evidence"]} == {rows[0]["symbol"], rows[1]["symbol"]}

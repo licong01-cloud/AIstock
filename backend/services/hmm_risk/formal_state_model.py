@@ -103,7 +103,7 @@ def project_training(
     features = list(BASE_FEATURES if family == FAMILIES[0] else ALL_CORE_FEATURES)
     if family not in FAMILIES or level not in ("L1", "L2"):
         raise FormalStateError("hmm_risk_model_inactive_dimension_contract_invalid", "projection identity invalid")
-    raw = np.asarray(raw, dtype=np.float64)
+    raw = np.asarray(raw)
     if raw.ndim != 2:
         raise FormalStateError("hmm_risk_model_inactive_dimension_contract_invalid", "raw feature matrix required")
     array(raw, (len(raw), len(features)), "full raw train features")

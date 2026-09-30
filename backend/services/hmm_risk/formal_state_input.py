@@ -29,12 +29,15 @@ from backend.services.hmm_risk.stock_fact_observation import (
     C010_FORMULA_VERSION,
     C010_POLICY_VERSION,
     MONEYFLOW_STOCK_FIELDS,
+    PRICE_STOCK_FIELDS,
     ObservationCoverageError,
     aggregate_l1_day,
     build_c010_feature_domain_panel,
     complete_c010_domain_receipts,
     project_stock_fact_rows_for_direct_level,
     validate_c010_policy_manifest,
+    _missing_row_evidence,
+    _row_complete,
 )
 
 SOURCE_START = date(2020, 7, 30)
@@ -175,7 +178,15 @@ def _collect_domains(
                 aggregate = aggregate_l1_day(values, moneyflow_contributor_eligibility=eligibility)
             except ObservationCoverageError as exc:
                 symbols = sorted(row["symbol"] for row in expected)
-                missing_symbols = {entry.get("symbol") for entry in exc.missing_evidence}
+                # A denominator failure occurs before the shared aggregator
+                # inspects price fields. Do not call its weight-only remainder
+                # "price complete"; independently reuse the shared row checker.
+                missing = []
+                for row in expected:
+                    fields = [field for field in _row_complete(row)[1] if field in PRICE_STOCK_FIELDS]
+                    if fields:
+                        missing.append(_missing_row_evidence(row, fields))
+                missing_symbols = {entry.get("symbol") for entry in missing}
                 complete = [symbol for symbol in symbols if symbol not in missing_symbols]
                 weights = [row.get("prev_circ_mv_cny") for row in expected]
                 known_weights = all(isinstance(v, (int, float)) and math.isfinite(v) and v > 0 for v in weights)
@@ -189,15 +200,15 @@ def _collect_domains(
                     "price_expected_symbol_sha256": canonical_sha256(symbols),
                     "price_complete_symbols": complete,
                     "price_complete_symbol_sha256": canonical_sha256(complete),
-                    "price_count_coverage": exc.count_coverage,
-                    "price_weight_coverage": exc.weight_coverage,
+                    "price_count_coverage": len(complete) / len(symbols),
+                    "price_weight_coverage": exc.weight_coverage if known_weights else None,
                     "price_expected_weight": math.fsum(weights) if known_weights else None,
                     "price_complete_weight": (
                         math.fsum(row["prev_circ_mv_cny"] for row in expected if row["symbol"] in complete)
                         if known_weights
                         else None
                     ),
-                    "missing_evidence": list(exc.missing_evidence),
+                    "missing_evidence": missing,
                 }
                 evidence[f"{prefix}_invalid_price_domain"].append({**body, "entry_sha256": canonical_sha256(body)})
             else:
@@ -376,7 +387,9 @@ def prepare_file_request(
     if not calendar or calendar[0] != SOURCE_START or calendar[-1] != SOURCE_END:
         raise FormalStateError("hmm_risk_formal_input_invalid", "approved warmup/utility source calendar incomplete")
     forbidden = (Path(__file__).resolve().parents[3], assets["release_root"])
-    work_parent = source_reader._external_root(work_parent, forbidden)
+    from backend.services.hmm_risk.formal_state_executor import validate_output_location
+
+    work_parent = validate_output_location(work_parent, dataset_root=assets["release_root"])
     work_parent.mkdir(parents=True, exist_ok=True)
     adapter = source_reader._industry_adapter(industry_authority, forbidden_roots=(forbidden[0],))
     l1, l2 = source_reader._canonical_sector_codes(adapter)

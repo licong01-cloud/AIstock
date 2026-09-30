@@ -24,6 +24,7 @@ from backend.services.hmm_risk.formal_state_executor import (  # noqa: E402
     receipt,
     run_two_processes,
     train_repeat,
+    validate_output_location,
     write_once,
 )
 
@@ -53,13 +54,20 @@ def main() -> int:
             parser.error("prepare requires all explicit source arguments and no --request")
     elif args.request is None or any(value is not None for value in source_args):
         parser.error("executor modes require --request and no preparation arguments")
+    # An unsafe failure path must never be used to report its own rejection.
+    # Location rejection is stderr-only and happens before output/temp creation.
+    try:
+        args.output = validate_output_location(args.output, dataset_root=args.candidate_root)
+        if args.mode == "prepare":
+            args.work_parent = validate_output_location(args.work_parent, dataset_root=args.candidate_root)
+    except Exception as exc:
+        print(f"unsafe output rejected without writing: {exc}", file=sys.stderr)
+        return 1
     try:
         if args.mode == "prepare":
             from backend.services.hmm_risk.formal_state_executor import read_json
             from backend.services.hmm_risk.formal_state_input import prepare_file_request
-            from backend.services.hmm_risk.rotation_l1_input_bundle import _external_root
 
-            _external_root(args.output.parent, forbidden_roots=(ROOT, args.candidate_root))
             result = prepare_file_request(
                 candidate_root=args.candidate_root,
                 security_identity_manifest=args.security_identity_manifest,
