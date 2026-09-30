@@ -1,7 +1,7 @@
-# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.2
+# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.3
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Advisory。
-> 状态：SOURCE_IMPLEMENTED_COORDINATE_V2_PASS_CONFIRMATION_INPUT_BLOCKED（2026-09-29）。四阶段源码/定向回归及v2坐标前置审计已完成，尚未合入；仍缺合格连续窗口、QE已确认独占时段及正式运行结果。
+> 状态：SOURCE_MERGED_COORDINATE_V2_PASS_CONFIRMATION_INPUT_AND_RESOURCE_BLOCKED（2026-09-30）。PR #5099已合入四阶段源码及v2坐标，用户重启后语义验证通过；仍缺合格连续窗口、QE已确认独占时段及正式运行结果。
 > 配套：[独立价格角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)。
 
 ## 1. Background / 为什么需要新入口
@@ -44,7 +44,7 @@
 
 ## 5. Contracts / 请求、输入及阶段
 
-拟新增 `AdvisoryEntryPriceConfirmationRequestV1`：request hash、study_type=CONFIRMATION（复用Advisory的ResearchStudyType.CONFIRMATION，不修改QE registry）、objective_contract、decision_use、证据分类、研究族lineage、窗口资格依据、日期计划、候选引用/hash、model/package/manifest/style/policy/universe/schema、active profile及data release/node root、训练截止、transform/calibration identity、版本化算法及评价spec。
+已实现 `AdvisoryEntryPriceConfirmationRequestV1`：request hash、study_type=CONFIRMATION（复用Advisory的ResearchStudyType.CONFIRMATION，不修改QE registry）、objective_contract、decision_use、证据分类、研究族lineage、窗口资格依据、日期计划、候选引用/hash、model/package/manifest/style/policy/universe/schema、active profile及data release/node root、训练截止、transform/calibration identity、版本化算法及评价spec。
 
 登记映射遵循现有Advisory控制面：合格OOT确认使用`study_type=CONFIRMATION / decision_use=DIRECTION_GATE`；开发回归使用`EXPLORATORY_SCREEN / NAVIGATION_ONLY`。确认通过的artifact可被后续`ACTIVATION / ACTIVATION_EVIDENCE`记录引用，但确认记录本身不得冒用该组合。激活仅指ENTRY_PRICE shadow，不允许发布收益策略。协议身份包含下面的统计标准；无法填完整即不能开始目标结果读取。路径从显式请求/profile解析；需要RD-Agent数据身份时显式传入节点data_root_uri并验证complete=true。long-trend snapshot不属于本任务。
 
@@ -154,3 +154,7 @@ vintage审核文件必须包含 `entry_coordinate_review`：schema=`advisory_ent
 已消费validation的1,000行经v2生产器复核：检查1,000、不可用0、最大绝对gap差`1.1347649842008423e-7`，满足固定`1e-6`容差；3行公司行动全部保留。坐标前置项可签PASS，身份=`advisory_entry_price_core_v2`，标签SHA=`c4fc72b94e9e112bcc05405e8c7f6ec28bc2890b16c4ff978e3b7dfe0ee2b148`。该审计没有运行模型、写DB或消费新窗口。
 
 同轮只读候选元数据spike：匹配冻结包的ENABLED Top20 Program=`advp_3126dd77f9774d94850f37ad012f640f`，当前binding=`advb_f860140caa314665ad60ac089ed84b3f`，全市场池；已有30个PUBLISHED目标日（2026-08-14至2026-09-29），另有1个2026-07-16 REPLAY。只读取日期/数量/身份，未读取目标收益或运行模型。现有30日包含缺口且只有较晚日期带原生universe receipt，不能拼接成最低20个连续合格日；不得重建候选、伪造receipt或降低门槛。冻结v4 test prediction历史回放可作为`NAVIGATION_ONLY`功能回归，但不能替代正式确认。
+
+2026-09-30重新读回元数据：31个PUBLISHED目标日（新增09-30）及1个REPLAY；仅11个PUBLISHED日带原生advisory_universe_receipt（09-15～09-30），尚低于最低20日支持要求，且receipt存在本身仍不证明完整PIT/lineage资格。新增日期不自动解决历史缺口。现有exploratory输入材料明确pit_visibility_verified=false，不能改签为ELIGIBLE_LOCKED_HISTORICAL_OOT；本轮没有读取目标效果或产生新的确认请求。
+
+资源审核发现消费者误用了include_children=true：该视图按父实验分页却展开子行，不能用返回行数推进父offset。BUG-1632改用公开平铺include_children=false，逐行覆盖父实验和子运行，保留分页完整性/身份/状态检查。三项公开QE task详情仍paused（qe_20260716_042842_fd61、qe_20260810_221723_14ab、qe_20260824_101005_ce66）；legacy canonical_status缺失同样不推断idle。只有QE窗口解决状态可判定性并确认独占时段后才能执行，不能由Advisory终止任务或自造时段。已消费v4功能回放亦不绕过不并行要求。
