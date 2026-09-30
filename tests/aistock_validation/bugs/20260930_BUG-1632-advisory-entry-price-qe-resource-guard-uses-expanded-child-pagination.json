@@ -177,7 +177,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/entry-price/status",
     "fresh_process_evidence": [
       "Fresh Windows Python from BUG-1632 task worktree imported QEEntryResourceGuard and queried public API using flat include_children=false; returned WAITING_RESOURCE/QE_TASK_NONTERMINAL_OR_UNKNOWN without DB writes or process control",
-      "Fresh Python imports BUG-1632 tracked source and real flat QE API returns fail-closed WAITING_RESOURCE without writes"
+      "Fresh Python imports BUG-1632 tracked source and real flat QE API returns fail-closed WAITING_RESOURCE without writes",
+      "Fresh Python imported tracked QEEntryResourceGuard; flat API returns WAITING_RESOURCE/QE_TASK_NONTERMINAL_OR_UNKNOWN without DB writes or user-process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
