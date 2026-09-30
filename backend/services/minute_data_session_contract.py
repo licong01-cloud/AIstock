@@ -52,8 +52,10 @@ def suspended_no_trade(conn, symbol, day):
     start = dt.datetime.combine(day, dt.time(), CHINA_TZ)
     with conn.cursor() as cur:
         cur.execute(SUSPEND_SQL, (symbol, day, symbol, day, symbol, day))
-        full_day, daily_zero, daily_conflict = cur.fetchone()
-        if not full_day or not daily_zero or daily_conflict:
+        full_day, _daily_zero, daily_conflict = cur.fetchone()
+        # Full-day suspension may legitimately have no daily row. Do not
+        # invent a daily placeholder as a prerequisite for accepting it.
+        if not full_day or daily_conflict:
             return False
         cur.execute(MINUTE_CONFLICT_SQL, (symbol, start, start + dt.timedelta(days=1)))
         return not cur.fetchone()[0]

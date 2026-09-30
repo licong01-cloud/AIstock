@@ -38,11 +38,16 @@ def test_independently_confirmed_suspension_is_suppressed_without_timestamp_rewr
     assert values[0][0].hour == 13
 
 
-@pytest.mark.parametrize("evidence", [[(False, True, False)], [(True, False, False)],
+@pytest.mark.parametrize("evidence", [[(False, True, False)],
                                     [(True, True, True)], [(True, True, False), (True,)]])
 def test_intraday_unproven_or_traded_data_fails_closed(evidence):
     with pytest.raises(ValueError, match="suspension_unproven"):
         guard_minute_values(Conn(evidence), "000016.SZ", dt.date(2026, 9, 29), [row((13, 0))])
+
+
+def test_full_day_suspension_without_daily_row_needs_no_fabricated_daily_placeholder():
+    assert guard_minute_values(Conn([(True, False, False), (False,)]), "000016.SZ",
+                               dt.date(2026, 9, 29), [row((13, 0))]) == []
 
 
 @pytest.mark.parametrize("volume,amount", [(1, 0), (0, 1), (None, 0), (0, None), (float('nan'), 0)])
