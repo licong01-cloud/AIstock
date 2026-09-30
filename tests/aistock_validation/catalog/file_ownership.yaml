@@ -1171,6 +1171,7 @@ rules:
       - backend/routers/monthly_dataset_releases.py
       - backend/deps.py
       - backend/tests/dataset_release/**
+      - backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py
       - backend/tests/routers/test_dataset_releases.py
       - backend/tests/routers/test_monthly_dataset_releases.py
       - backend/tests/routers/test_managed_dataset_preparations.py
@@ -1185,6 +1186,7 @@ rules:
       - scripts/monthly_unified_dataset_release.py
       - scripts/monthly_unified_dataset_release_worker.py
       - scripts/build_dataset_release_successor.py
+      - scripts/repair_qe_adj_factor_candidate.py
       - scripts/build_shared_sector_context_component.py
       - scripts/update_backtest_dataset_monthly.py
       - scripts/export_qe_qlib_candidate.py

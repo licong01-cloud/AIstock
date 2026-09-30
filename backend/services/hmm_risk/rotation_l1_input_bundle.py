@@ -505,12 +505,14 @@ def _load_table_h5_window(
         timestamps.tz is not None
         or not timestamps.equals(timestamps.normalize())
         or any(_STOCK_CODE.fullmatch(value) is None for value in instruments)
-        or not frame.index.is_monotonic_increasing
-        or timestamps[0].date() < start
-        or timestamps[-1].date() > end
+        or timestamps.hasnans
+        or timestamps.min().date() < start
+        or timestamps.max().date() > end
     ):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 window keys differ")
-    return frame
+    # Physical HDF append order is not data identity. Sort only in memory;
+    # duplicate keys are rejected above, never deduplicated or overwritten.
+    return frame.sort_index()
 
 
 def _load_fixed_h5_window(
@@ -624,22 +626,22 @@ def _fixed_h5_inventory(
                 table, rows = _table_h5_columns(group, expected_columns=expected_columns, expected_dtype=dtype)
                 if rows <= 0:
                     raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 is empty")
-                first_date = int(table.cols.datetime[0])
-                last_date = int(table.cols.datetime[rows - 1])
-                if first_date > last_date:
-                    raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 dates are not ordered")
+                first_date: int | None = None
+                last_date: int | None = None
                 instruments: set[str] = set()
-                previous_date: int | None = None
                 for start in range(0, rows, 100_000):
                     stop = min(rows, start + 100_000)
                     dates = np.asarray(table.cols.datetime[start:stop], dtype=np.int64)
                     codes = np.asarray(table.cols.instrument[start:stop])
-                    if np.any(dates[1:] < dates[:-1]) or (
-                        previous_date is not None and len(dates) and int(dates[0]) < previous_date
-                    ):
-                        raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 dates are not ordered")
-                    if len(dates):
-                        previous_date = int(dates[-1])
+                    # Incremental immutable components can append historical
+                    # alias corrections. Compute true extrema; require valid
+                    # daily timestamps rather than a physical row ordering.
+                    timestamps = pd.DatetimeIndex(pd.to_datetime(dates, unit="ns"))
+                    if timestamps.hasnans or not timestamps.equals(timestamps.normalize()):
+                        raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 dates are invalid")
+                    low, high = int(dates.min()), int(dates.max())
+                    first_date = low if first_date is None else min(first_date, low)
+                    last_date = high if last_date is None else max(last_date, high)
                     for raw in codes:
                         try:
                             code = bytes(raw).rstrip(b"\x00").decode("ascii")
