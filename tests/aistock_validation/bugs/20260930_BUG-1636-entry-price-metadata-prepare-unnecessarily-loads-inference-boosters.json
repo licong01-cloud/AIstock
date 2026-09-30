@@ -83,8 +83,8 @@
   },
   "first_seen_at": "2026-09-30T06:10:06.910246Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "361c3c8de4d3c2badd80642365657973eb396ec7",
+  "fixed_at": "2026-09-30T06:29:39Z",
   "github_issue_number": 5132,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5132",
   "last_seen_at": "2026-09-30T06:10:06.910246Z",
@@ -92,6 +92,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5139",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -116,6 +117,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -127,7 +129,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1636",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c56ece2df03dbe8b",
+    "recorded_at": "2026-09-30T06:30:58.847208Z",
+    "runtime_contract_digest": "3973a330bce9906bf4edde3744ef812ca7462b035601fae31d6784df1ad86533",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8ba782899bb0585a0020cd3f656a7a4fefd3e544",
+    "source_merge_commit": "361c3c8de4d3c2badd80642365657973eb396ec7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5139",
+    "validation_evidence": [
+      "validation-receipt: id=1aa21e217ca2a8ab commit=8ba782899bb0585a0020cd3f656a7a4fefd3e544 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_entry_price_confirmation.py backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py backend/tests/advisory_model_first/test_entry_price_service.py -q` result=`passed`",
+      "validation-receipt: id=c3c277fa67b57e4b commit=8ba782899bb0585a0020cd3f656a7a4fefd3e544 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/advisory_model_first/entry_price_confirmation.py backend/tests/advisory_model_first/test_entry_price_confirmation.py` result=`passed`",
+      "validation-receipt: id=6b42fb181720e0d4 commit=8ba782899bb0585a0020cd3f656a7a4fefd3e544 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed`",
+      "validation-receipt: id=98f2a196202ba381 commit=8ba782899bb0585a0020cd3f656a7a4fefd3e544 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "b5d8ff235beabda179f2dbb2e031c4604bac66e92d3a8ca31e7080c969e025a4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -136,6 +162,12 @@
     "fingerprint": "91c8c7f98ede6a8eeea9ba6a",
     "source_event_id": "FE-20260930-91c8c7f98ede"
   },
+  "validation_evidence": [
+    "validation-receipt: id=1aa21e217ca2a8ab commit=8ba782899bb0585a0020cd3f656a7a4fefd3e544 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_model_first/test_entry_price_confirmation.py backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py backend/tests/advisory_model_first/test_entry_price_service.py -q` result=`passed`",
+    "validation-receipt: id=c3c277fa67b57e4b commit=8ba782899bb0585a0020cd3f656a7a4fefd3e544 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/advisory_model_first/entry_price_confirmation.py backend/tests/advisory_model_first/test_entry_price_confirmation.py` result=`passed`",
+    "validation-receipt: id=6b42fb181720e0d4 commit=8ba782899bb0585a0020cd3f656a7a4fefd3e544 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed`",
+    "validation-receipt: id=98f2a196202ba381 commit=8ba782899bb0585a0020cd3f656a7a4fefd3e544 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
