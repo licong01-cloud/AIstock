@@ -1,6 +1,17 @@
 {
   "actual": "First completed legacy child with canonical_status null blocks; original full-market historical list lacks native universe receipt; shared Windows Python lacks LightGBM.",
   "allowed_write_scope": [
+    "backend/services/selection_center/advisory_input_archive.py",
+    "backend/tests/selection_center/test_advisory_input_archive.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/simulation_signal/strategy_package_selection.py",
+    "backend/services/advisory_program.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "backend/services/advisory_model_first/entry_price_legacy_provenance.py",
+    "backend/tests/advisory_model_first/test_entry_price_legacy_provenance.py",
+    "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+    "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
     "backend/services/advisory_model_first/entry_price_confirmation.py",
     "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
     "backend/services/advisory_model_first/entry_price_service.py",
@@ -32,12 +43,13 @@
     }
   ],
   "evidence_uris": [
+    "F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_legacy_prepare_v1/entry_price_confirmations/advepc_4178fffbd9c93e0bd84216a5/input_review.json",
     "F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_native_concurrent/entry_price_confirmations/advepc_fda8f36ceae1ffe0e77db23c/manifest.json",
     "F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_native_concurrent/entry_price_confirmations/advepc_fda8f36ceae1ffe0e77db23c/evaluation.json"
   ],
-  "expected": "Historical replay uses local capacity checks with bounded CPU and read-only DB access, no QE history scans or required exclusive slot. Use an explicitly selected existing predictor environment and existing identity-complete historical lists for a separately registered exploratory replay; legacy lists without native universe identity remain unavailable and require owner-supplied PIT evidence. Formal and natural paths retain strict identity.",
+  "expected": "Historical replay uses local capacity and bounded inference with no QE exclusivity. Explicitly approved EXPLORATORY_SCREEN may read the entire original frozen plan through hash-bound legacy evidence, without promoting it to native identity. Run/list/package/policy/D-1/candidate/DSE hash contradictions fail closed. Formal and natural paths remain strict. Future new Advisory Selection runs atomically archive complete source members and frozen execution inputs with run/list/artifact hash references; never capture old runs retrospectively.",
   "external_owner_requirements": [
-    "Selection/data owner: supply existing immutable historical candidate export with actual package manifest, selection runtime/review policy and universe-as-of receipt for missing dates. Never backfill current binding as historical truth. No Advisory candidate rebuild or DB write.",
+    "Selection/data owner: full original members remain unproven on 2026-08-14/17/18; genuinely retained historical sources only. All 20 recovered legacy days still lack native capture/run-artifact-member receipts. No fabrication, current-config backfill, candidate rebuild or DB write. These limitations do not block the user-approved frozen-candidate exploratory prepare, but do block native COMPLETE and formal/OOT claims.",
     "Data owner: a formal locked historical OOT requires a complete PIT/vintage input window after every upstream/model/transform/calibration fit boundary; existing non-vintage 8-day functional replay is NAVIGATION_ONLY and cannot activate a binding."
   ],
   "file_scope_contract": {
@@ -240,7 +252,9 @@
     "fresh_process_evidence": [
       "2026-09-30 isolated existing AIstock Python (LightGBM 4.6.0): native-list prepare and predict/settle/evaluate succeeded without QE-exclusive slot; request advepc_fda8f36ceae1ffe0e77db23c, 8 days/160 candidates. prediction SHA256 62b9ee71e0f21298fc1c01d0dc9cfc8086ceb28c464ec6639289f7dc68f864c7; latest-source fresh-process predict exact retry returned the same digest. No backend control or database writes.",
       "2026-09-30 real frozen entry_gap_q10 model: bounded predictor and reference prediction exactly equal; model file SHA256 unchanged. Native OpenMP/OpenBLAS pools observed 2 threads. Existing environment only; no dependency installation.",
-      "Existing AIstock Python loaded latest Advisory source; request advepc_fda8f36ceae1ffe0e77db23c exact retry preserved prediction digest 62b9ee71e0f21298fc1c01d0dc9cfc8086ceb28c464ec6639289f7dc68f864c7; no backend restart"
+      "Existing AIstock Python loaded latest Advisory source; request advepc_fda8f36ceae1ffe0e77db23c exact retry preserved prediction digest 62b9ee71e0f21298fc1c01d0dc9cfc8086ceb28c464ec6639289f7dc68f864c7; no backend restart",
+      "AIstock Python fresh CLI prepare advepc_4178fffbd9c93e0bd84216a5: 29 dates, no inference or target outcomes",
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m backend.services.advisory_model_first.entry_price_confirmation_cli prepare: advepc_4178fffbd9c93e0bd84216a5 -> passed, 29-day metadata only, no target outcomes or research run"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",

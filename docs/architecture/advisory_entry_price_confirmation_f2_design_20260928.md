@@ -1,7 +1,8 @@
-# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.4
+# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.5
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Advisory。
 > 状态：SOURCE_LOCAL_VERIFIED_EXPLORATORY_REPLAY_COMPLETED（2026-09-30）。PR #5099已合入四阶段源码及v2坐标，BUG-1632/1636已完成用户重启验证；BUG-1640按最新授权移除纯历史回放的QE独占依赖，实施本机容量检查，完成8日/160候选的真实探索回放。正式确认仍缺合格连续窗口；新修复尚未合入，不宣称后端激活。
+> 最新接续：2026-10-01，原29日批准legacy探索计划只读prepare通过；区分9日原生名单与20日非原生恢复证据，三日完整成员限制保留，原生receipt恢复为0。未来输入自动留档源码及定向测试完成；PR #5150仍待本轮提交后的新CI/合入，不宣称运行时激活或新研究结果。
 > 配套：[独立价格角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)。
 
 ## 1. Background / 为什么需要新入口
@@ -56,6 +57,24 @@
 
 control必须从`model_root/price_range_runs/<v4原训练request_id>/daily_price_envelope_labels.parquet`的原validation分区读取；日期集合与bundle内split精确匹配，不读取test分区、不任选子集。校准与early-stopping使用validation标签的实际T时钟，不仅比较D日期。未来结果不能因调用者自报更早的fit日期而通过验证。
 
+#### 5.1.1 BUG-1640：显式批准的既存冻结候选例外
+
+2026-10-01用户批准原29日`EXPLORATORY_SCREEN / NAVIGATION_ONLY / HISTORICAL_REPLAY / CONSUMED_OR_NON_VINTAGE`计划消费恢复的legacy证据。新增`legacy_provenance`三项文件引用（原计划、历史身份证据、消费者handoff），每项绑定文件SHA256/字节数，参加request身份；没有该字段的旧v1请求哈希保持不变。CLI必须显式提供证据/handoff的路径和批准SHA，不自动发现或降级原生校验。原计划、日期、原候选、控制参数、包及policy必须完全相等；仅该哈希绑定计划允许原有非连续日期，正式confirmation仍要求连续窗口。
+
+原计划的`historical_universe_receipt_sha256`是事后摘要引用，不是原生receipt：原文件哈希完整保留该引用，消费者单独显示`source_plan_historical_summary_ref`和`source_plan_summary_ref_is_native=false`，不迁入原生日合同。恢复证据仅适用于没有原生receipt的旧名单；已存在但错误或空的原生receipt不得被例外覆盖。自然capture及CONFIRMATION不得使用该入口。逐日核对run/list/review/package/manifest/policy/D-1/DSE/candidate frame hash及实时读回的名单明细；任一矛盾fail closed，不运行Selection、不重选股票、不删日期、不取当前配置回填。
+
+消费结果区分原生名单引用、恢复的非原生证据、未证明项。17日成员内容与历史hash精确一致只证明内容匹配，不证明历史捕获时间或原生完整性；08-14、08-17、08-18完整原始成员未证明，禁止声称其全市场股票池完整复现。20日原生receipt恢复数仍为0。`PREPARE_INPUT_VERIFIED`仅是准入只读读回成功，不是`NATIVE_IDENTITY_COMPLETE`、价格确认或激活证据。
+
+#### 5.1.2 未来Selection输入自动留档（本次已登记Selection范围）
+
+新建、非preview的Selection来源Advisory发布，在独立`advisory_archive_context`中传递Program/binding/原policy/D-1和配置的`AISTOCK_ADVISORY_MODEL_ROOT`；不把这些控制面字段加入评分参数或QE配置。Selection结果只增加实际已消费score-artifact的输出引用，不改变模型、排序或过滤。
+
+Selection Center保存`selection_input_archives/<selection_run_id>/inputs.json`：完整原策略源股票池成员及内容hash、完整冻结候选及逐包候选、D-1/交易日历约束、包manifest、实际score-artifact全文/hash、DSE/PIT/runtime身份和review-policy。成员读取只用已激活canonical PIT的公开只读接口、`ensure=False`；与实际artifact使用的universe hash、数量和D-1精确核对，不触发数据准备/激活/重建。不按当前配置为旧run执行该过程；显式传入旧run仅校验其既有引用。
+
+文件在实际执行时间原子、不可覆盖保存，成功后run/runtime引用文件SHA和各包artifact内容SHA；Advisory review/list summary显式继承同一引用，发布和Entry消费均校验文件/hash/Program/binding/policy/runtime/候选。源score-artifact保持不可变，不回写旧artifact；归档artifact显式绑定run及已使用的源artifact。观察时间是真实UTC，不倒填；`historical_vintage_proven=false`，归档本身不得将历史运行升为自然前向或合格OOT。该“完整池”指原策略实际输入池，不将Top20候选冒充全池；Advisory指数准入仍由既有原生指数合同独立判定，不宣称它改变原策略源股票池。
+
+根目录缺失、D-1不是上一交易日、实际artifact/DSE缺失、成员/hash/包/时钟矛盾或保存失败，均不完成成功run；原先未请求该Advisory归档上下文的Selection/Paper/Simulation路径保持原逻辑。该新增源码仅用内存repository/临时文件验证，本次不执行任何真实Selection、DB写入或发布；生产加载仍等待用户重启。
+
 ### 5.2 predict
 
 批量读取D及之前的已有日频文件/数据库PIT输入；同日期view裁剪business_date与available_at，as-of缺证不得用最新静态属性替代。加载v4三个头一次，逐日期共用ENTRY_PRICE内核，不加载M3推理、不依赖Ranking成功。先发布连续gap、raw/calibrated/tick范围、公司行动/法规投影、control范围、逐股状态及全部输入hash；prediction完成前禁止结果reader。
@@ -97,7 +116,7 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 现有Windows base解释器缺LightGBM，但`C:/Users/lc999/miniconda3/envs/AIstock/python.exe`已具备LightGBM 4.6.0及相关库。回放运行前用`entry_price_replay_runtime.validate_replay_dependencies()`和`probe_replay_capacity(output_root)`做消费者侧预检，再显式调用该解释器的confirmation CLI。环境名称不构成模型/PIT证据，所有冻结资产hash仍由原loader核验。
 
-股票池输入修复不修改receipt语义：只从现有原生名单中选择身份完整的连续日期，在未读取结果前登记独立EXPLORATORY_SCREEN请求；不得把之前请求事后缩窗后宣称确认通过。无原生身份的旧日继续明确INPUT_UNAVAILABLE，并向Selection/数据窗口请求既存只读来源，不补写历史记录。正式确认的20日/300行、PIT及未消费约束不变。
+股票池输入修复不修改receipt语义：默认只消费现有原生名单；无原生身份的旧日仅可按§5.1.1已批准、原计划哈希绑定的legacy探索合同消费既存冻结候选，不补写历史记录，不事后缩窗或宣称确认通过。正式确认的20日/300行、连续窗口、PIT及未消费约束不变。
 
 实施顺序：用旧已消费样本完成合同与同核parity → 窗口资格spike → 冻结spec/control → 一次完整推理 → 目标结果揭示与评价 → 向delivery交付结论。实现无可用新窗口时继续完成源码与历史功能验证，报告确认阻塞；不通过改名伪造sealed，不默认依赖QE新训练。
 
@@ -119,6 +138,9 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 | F-525 | 一次性window消费，exact retry只恢复，失败不回选 |
 | F-526 | 输出可验证confirmation scope/hash，经济结果不由exit code替代 |
 | F-527 | 仅Advisory只读数据/写artifact，无QE训练或生产操作 |
+| F-528 | legacy仅限批准探索计划；run/list/package/policy/D-1/candidate/hash逐项拒绝矛盾 |
+| F-529 | 原生/恢复/未证明分开；20日零恢复原生receipt，三日完整成员限制保留 |
+| F-530 | 未来完整源股票池及冻结候选原子留档，run/list/artifact显式hash绑定，失败不发布成功 |
 
 ## 10. Design Acceptance Matrix
 
@@ -134,6 +156,9 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 | F-525 | §4.2、§5.4 | backend/tests/advisory_model_first/test_entry_price_confirmation.py | SOURCE_VERIFIED | none |
 | F-526 | §5.4、§7 | backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py | SOURCE_VERIFIED | none |
 | F-527 | §3、§7；entry_price_replay_runtime.py | backend/tests/advisory_model_first/test_entry_price_confirmation.py；test_entry_price_confirmation_cli.py；test_entry_price_replay_runtime.py | SOURCE_VERIFIED | none |
+| F-528 | §5.1.1；entry_price_legacy_provenance.py/confirmation_contracts.py/entry_price_service.py | backend/tests/advisory_model_first/test_entry_price_legacy_provenance.py；backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py | SOURCE_VERIFIED | none |
+| F-529 | §5.1.1；input_review.json/LegacyExploratoryInputs.identity | 29日只读prepare；backend/tests/advisory_model_first/test_entry_price_legacy_provenance.py | SOURCE_VERIFIED | none |
+| F-530 | §5.1.2；selection_center/advisory_input_archive.py/service.py；advisory_program.py；StrategyPackageSelectionResult | backend/tests/selection_center/test_advisory_input_archive.py；backend/tests/watchlist/test_advisory_program.py | SOURCE_VERIFIED | none |
 
 ## 11. Rollout / Rollback
 
@@ -162,3 +187,5 @@ vintage审核文件必须包含 `entry_coordinate_review`：schema=`advisory_ent
 2026-09-30重新读回元数据：31个PUBLISHED目标日（新增09-30）及1个REPLAY；仅11个PUBLISHED日带原生advisory_universe_receipt（09-15～09-30），尚低于最低20日支持要求，且receipt存在本身仍不证明完整PIT/lineage资格。新增日期不自动解决历史缺口。现有exploratory输入材料明确pit_visibility_verified=false，不能改签为ELIGIBLE_LOCKED_HISTORICAL_OOT；本轮没有读取目标效果或产生新的确认请求。
 
 历史资源审核发现消费者误用了include_children=true；BUG-1632修复分页并已完成重启验证。随后完整1610条记录没有running/queued，但已completed的子项`qe_20260921_181440_81c5_L2`因canonical_status缺失被拒绝，其对应task也completed；三个旧paused记录不是当前首个阻点。BUG-1640按最新用户授权仅对历史confirmation回放改用本机容量检查，不修改QE公共代码或要求QE补账。自然每日通道保留原协调合同；本次不宣称QE原子独占或其任务状态已改变。
+
+2026-10-01接续：PR #5150初始head=239292d48de19e1c0268ffe4541b46c96fa4739b，OPEN且未合入；同步最新main后补充上述legacy入口和未来留档。原29日计划SHA=a7077d03bec3189deb45620f1e6ed387eadcb4315fa2dd02a493c0415450e7d4，数据证据SHA=38f72217f01fad2ac605483b77c00e2aa419991fbc38f1b066b660725be01996，handoff SHA=bf3c8f61f907662c1a5b3215fab23e22bf2262f50b144be42e2f4b56a0861561。新独立只读prepare请求`advepc_4178fffbd9c93e0bd84216a5`成功验证原29日/原候选：9日原生名单、20日非原生恢复证据、17日成员内容匹配、三日成员未证明、恢复原生receipt=0。输出根为`F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_legacy_prepare_v1`；旧spec/输入/实验均未覆盖。prepare只核元数据及旧已消费validation控制输入；没有target outcomes、收益读回、预测、settle/evaluate、研究run或数据库写入。探索输入准入已不被legacy身份缺失阻断；三日原始完整成员、20日原生run/artifact/member capture链及正式合格连续窗口仍未证明，不签原生COMPLETE或确认PASS。

@@ -20,6 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--model-root", type=Path, required=True)
         command.add_argument("--output-root", type=Path, required=True)
         command.add_argument("--spec" if name == "prepare" else "--request", type=Path, required=True)
+        if name == "prepare":
+            command.add_argument("--legacy-evidence", type=Path)
+            command.add_argument("--legacy-evidence-sha256")
+            command.add_argument("--legacy-handoff", type=Path)
+            command.add_argument("--legacy-handoff-sha256")
         if name in {"prepare", "predict", "settle"}:
             command.add_argument("--env-file", type=Path, required=True)
         if name in {"predict", "settle", "evaluate"}:
@@ -39,6 +44,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         service = AdvisoryEntryPriceConfirmationService()
         if args.command == "prepare":
             spec = json.loads(args.spec.read_text(encoding="utf-8"))
+            if any((args.legacy_evidence, args.legacy_evidence_sha256, args.legacy_handoff, args.legacy_handoff_sha256)):
+                from .research_control import evidence_reference_for_file
+                if not all((args.legacy_evidence, args.legacy_evidence_sha256, args.legacy_handoff, args.legacy_handoff_sha256)):
+                    raise ValueError("legacy evidence and handoff require explicit complete path/hash pairs")
+                refs = {}
+                for key, path, expected in (
+                    ("identity_evidence", args.legacy_evidence, args.legacy_evidence_sha256),
+                    ("consumer_handoff", args.legacy_handoff, args.legacy_handoff_sha256),
+                ):
+                    ref = evidence_reference_for_file(path, role=key)
+                    if ref.sha256 != expected:
+                        raise ValueError("legacy authority does not match the operator-approved hash")
+                    refs[key] = ref.model_dump(mode="json")
+                refs["source_plan"] = evidence_reference_for_file(args.spec, role="APPROVED_ORIGINAL_PLAN").model_dump(mode="json")
+                spec["legacy_provenance"] = refs
             path = service.prepare(spec=spec, model_root=args.model_root, output_root=args.output_root)
             payload = {"stage": "PREPARED", "request_path": path.as_posix()}
         elif args.command == "inspect":

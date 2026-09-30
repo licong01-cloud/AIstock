@@ -43,11 +43,14 @@ class AdvisoryEntryPriceConfirmationService:
 
     def prepare(self, *, spec: dict, model_root, output_root) -> Path:
         request = build_entry_price_confirmation_request(**spec)
-        self._verify(request, model_root=model_root)
+        review = self._verify(request, model_root=model_root)
         target = _root(output_root, request)
         target.mkdir(parents=True, exist_ok=True)
         with _exclusive_file_lock(target / "stage.lock"):
-            _immutable_json(target / "request.json", request.model_dump(mode="json"))
+            payload = request.model_dump(mode="json", exclude={"legacy_provenance"} if request.legacy_provenance is None else set())
+            _immutable_json(target / "request.json", payload)
+            if request.legacy_provenance is not None:
+                _immutable_json(target / "input_review.json", review)
             self._register(request, target, stage="PREPARED", result_class="CONTROL_READY", generated=0, evaluated=0)
         return target / "request.json"
 
@@ -55,6 +58,8 @@ class AdvisoryEntryPriceConfirmationService:
         request, root = _read_request(request_path, output_root)
         self._check_execution(request, exclusive_slot, root)
         self._verify(request, model_root=model_root)
+        from .entry_price_legacy_provenance import load_legacy_exploratory_inputs
+        legacy = load_legacy_exploratory_inputs(request)
         if self._day_service is None:
             from .entry_price_replay_runtime import validate_replay_dependencies
             validate_replay_dependencies()  # Dependency failure must precede window consumption.
@@ -76,6 +81,7 @@ class AdvisoryEntryPriceConfirmationService:
                     target_trade_date=day.target_trade_date, scope=request.scope,
                     role_binding_sha256=request.request_sha256,
                     frozen_input_ids={key: getattr(day, key) for key in ("list_version_id", "review_run_id", "selection_run_id")},
+                    **({"legacy_provenance": legacy} if legacy is not None else {}),
                 )
                 predictions.append(_prediction_day(request, result))
                 self._check_execution(request, exclusive_slot, root)
@@ -247,6 +253,8 @@ def _historical_calendar_connection():
 def verify_confirmation_inputs(request, *, model_root):
     from .model_bundle import load_frozen_research_bundle
     from .price_range_runtime_bundle import load_frozen_price_range_bundle
+    from .entry_price_legacy_provenance import load_legacy_exploratory_inputs
+    legacy = load_legacy_exploratory_inputs(request)
 
     for reference in (request.data_identity.vintage_evidence, request.data_identity.candidate_provenance,
                       request.data_identity.consumption_review, request.control.validation_labels):
@@ -308,16 +316,28 @@ def verify_confirmation_inputs(request, *, model_root):
         _verify_qualification_review(request, validation_rows=len(usable))
     from .entry_price_service import _frame_sha256
     reader = _cached_day_service(metadata_only=True)
+    recovered, unproven = [], []
     for day in request.days:
         prepared = reader.prepare_day(
             model_root=model_root, program_id=request.program_id, binding_version_id=request.binding_version_id,
             target_trade_date=day.target_trade_date, scope=scope, role_binding_sha256=request.request_sha256,
             frozen_input_ids={key: getattr(day, key) for key in ("list_version_id", "review_run_id", "selection_run_id")},
+            **({"legacy_provenance": legacy} if legacy is not None else {}),
         )
         if (prepared.decision_date != day.decision_as_of_trade_date
                 or tuple(prepared.candidates["instrument"]) != day.candidate_symbols
                 or _frame_sha256(prepared.candidates) != day.candidate_source_sha256):
             _invalid("prepared candidate provenance differs from frozen source metadata")
+        if legacy is not None and day.target_trade_date in legacy.metadata:
+            recovered.append(day.target_trade_date.isoformat())
+            if not legacy.identity(day.target_trade_date)["full_member_content_match"]:
+                unproven.append(day.target_trade_date.isoformat())
+    return {"schema_version": "advisory_entry_prepare_input_review_v1", "status": "PREPARE_INPUT_VERIFIED",
+            "planned_dates": len(request.days), "native_list_dates": len(request.days) - len(recovered),
+            "recovered_non_native_dates": recovered, "unproven_full_member_dates": unproven,
+            "native_receipts_recovered": 0, "historical_evidence_upgraded": False,
+            "target_outcomes_read": False, "research_run_started": False,
+            "request_sha256": request.request_sha256}
 
 
 def _verify_qualification_review(request, *, validation_rows=None):

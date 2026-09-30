@@ -1,10 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.69
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.70
 
 > 初始日期：2026-07-10
-> 修订日期：2026-09-30
+> 修订日期：2026-10-01
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
 > 当前状态：`ENTRY_PRICE_CONCURRENT_REPLAY_LOCAL_VERIFIED_CONFIRMATION_INPUT_BLOCKED`（2026-09-30）。独立entry、历史四阶段及每日接入经PR #5099合入，merge=`ad6d73e591a1666490cffae84f6518d8c2694efd`；用户已重启，BUG-1623、BUG-1632/1636语义验证及close-sync完成。v2坐标1,000行检查PASS，既有源码门禁1,029 passed/6 skipped、独立浏览器用例1 passed。BUG-1640的Advisory侧容量/推理修复完成本地62项测试及8日/160候选真实探索回放，新修复尚未合入；原v3/v4和P0/N3研究结论不改判。正式价格确认、ENTRY_PRICE绑定及其真实每日预测/结算仍未完成；不修改QE代码、数据或用户进程。
 > 当前价格/执行边界：Advisory只研发和发布基于日频PIT信息的次交易日价格区间，不研发分钟线择时、最佳分钟买卖点、拆单或成交执行策略。未来QE、Paper或Execution模块可通过版本化只读合同独立消费价格区间，但消费、回测、执行和激活均不属于本蓝图范围。
+> 最新接续：2026-10-01，BUG-1640原29日批准legacy探索计划只读prepare已通过，未来新Advisory Selection输入原子留档源码/定向测试完成。PR #5150需本轮新CI与合入；20日恢复证据均非原生、其中三日完整成员未证明，不改变正式确认阻断、角色未绑定或旧研究结论。
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 均有真实实现与独立验证，但尚无当前同时提供四类输出的组合bundle。`AdvisoryDailyPriceEnvelopeV1`源码、v3三头真实训练 artifact `30e8a75b...` 和 v4 validation-only 校准 artifact `508fedfe...` 均已完成；validation/test 覆盖率分别为 `0.811702/0.733125`，校准扩张量为 0。PR #4732 / merge `3be76e742...` 已交付独立自然前向收集通道；首次正式 request `advprpros_405d704a7dbe866eb0b6ae0e` 和 prediction bundle `631d5011858684403d84d1d0975ec0e0642c1d8f52ebd62048829187a1e5435c` 在 T=`2026-09-15` 开盘前完成，20/20候选可用并通过exact retry，且零目标结果访问、零binding、零数据库写入、零sealed holdout消费。T日18:00后自然settlement `advprsett_14c46af1fa2bdb92088b425c` 已发布：20/20市场及模型可用，业务coverage `0.70`、lower/upper miss `0.25/0.05`、平均/中位宽度 `288.615/249.832 bps`、平均/中位mid误差 `116.422/63.188 bps`；单日只进入`ACCUMULATING`，不能选择或激活模型。PR #4785 / merge `8021790ab...` 又交付固定rolling-20D matured CQR历史导航审计；正式 request `advpradapt_8c81ea2bd2f70d75e1683fe9` 在已消费80日回放上selected=0，故保持静态v4、零新binding和零运行时激活，P0-D exact descriptor仍只绑定meta-label shadow，M3/M4 child typed unavailable。
 > 2026-09-28接入核查：上述v4与历史结果不变，权威本地price prospective目录仍仅1日20行；自然CLI未自动接入scheduler。当前P0-D分支及V1 M3依赖阻断独立entry输出。新详细设计已补齐独立角色、新窗口确认、Program级binding和每日接入方案，源码及确认均待执行。
 > 当前价格历史回放：BUG-1512 已补齐与自然前向证据隔离的两阶段批量PIT回放。正式 v4 已消费test窗口 `2025-11-07..2026-03-10` 一次处理80个决策日/1600候选，耗时5.4秒，数据库历史结果1600/1600可用、零停牌、零不明缺行、零crossing；连续模型gap空间coverage为`0.733125`，最终0.01元tick/涨跌停投影后的业务价格coverage为`0.81375`，rounding rescue/harm为`129/0`，平均区间宽度`141.74 bps`、平均mid误差`47.52 bps`。receipt `advprhist_23e8ce5a...`固定为`HISTORICAL_REPLAY/NAVIGATION_ONLY`、不读sealed、不激活。固定的rolling-20D matured CQR在75个active交易日/1500行上把连续coverage从`0.731333`提高到`0.782667`，但按交易日聚类bootstrap的增益点估计仅`0.012667`、95%区间`[-0.003333,0.030000]`，下界未过0；因此lineage以selected=0终止，不调参、不绑定。18:00只约束自然前向结算，不再阻塞功能、回归或历史统计验证。
@@ -1914,6 +1915,8 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | 后续 / PRODUCT-VALIDATION | 新合格包同policy/code身份的Ranking/Admission与业务历史对比 | 已有Historical Range对比、指数股票池、DAILY_DB_ONLY源码/运行时验收保留，不重复建设 |
 
 当前v3/v4、80日历史回放和rolling-20D导航审计均已完成，后者selected=0；独立entry方案不得重选该arm、修改旧窗口结果。新历史确认未执行。若窗口不合格，源码开发和已消费窗口功能验证继续，生产角色仍明确未确认；不通过改证据名称绕过限制。
+
+2026-10-01 BUG-1640接续（PR #5150）：显式批准的原29日探索计划新增只读legacy证据入口，三项引用绑定原计划/数据证据/handoff文件SHA，原日期、候选、包、policy、D-1及DSE/hash逐项核对；只对该原计划保留原有非连续日期，不放宽confirmation、自然capture或错误原生receipt。两轮实际prepare均成功，新请求`advepc_4178fffbd9c93e0bd84216a5`：9日原生名单、20日恢复的非原生历史证据、17日完整成员内容匹配、08-14/17/18完整原始成员仍未证明。20日恢复原生receipt=0，不能宣称原生身份COMPLETE、三日全市场复现或确认PASS；原计划事后“历史receipt”摘要引用不升级为原生。此次未predict/settle/evaluate、未读取目标收益、未启动研究run。未来新Selection来源Advisory发布增加原子输入留档（已先登记Selection精确范围）：完整原策略源股票池、冻结候选、D-1/PIT、实际已消费artifact/DSE、包manifest及policy，run/list/artifact哈希显式绑定，观察时间真实UTC、不倒填；缺失/矛盾/保存失败不形成成功run。详情见confirmation设计§5.1.1～5.1.2；源码验收与运行时加载、历史证据完整性分别报告。
 
 既有Advisory门禁1,029 passed/6 skipped，覆盖同核投影、PIT/缺失保留、四阶段恢复、完整scope读回、角色CAS、盘前时钟及预算公平性。BUG-1632修复消费者平铺分页、BUG-1636修复prepare误加载推理器，均已完成用户重启验证。此前资源检查被已完成但canonical_status缺失的旧实验阻断，另有三项历史paused记录；这些记录不能作为纯历史推理的实际占用证据。2026-09-30用户授权纯历史回放与QE并行，BUG-1640仅在Advisory历史确认路径替换该独占检查：每阶段/日期块检查本机可用内存和输出磁盘，512 MiB内存、128 MiB磁盘为工作缓冲下限，CPU忙不单独拒绝；独立进程LightGBM及BLAS/OpenMP最多2线程，数据库只读且单条SQL超时30秒。该许可不涵盖QE训练、调度、每日自然资源合同或其他模块修改。prepare仍只核元数据；真实predict必须在显式现存AIstock环境校验LightGBM与threadpoolctl后才能消费窗口。不自动安装依赖。尚无新增自然或正式OOS样本。
 
