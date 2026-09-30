@@ -56,6 +56,7 @@ test("registered QE run is visible before dispatch and logs require an explicit 
           strategy_id: "TWAP",
           registration_summary: {
             source_type: "mcp",
+            consumer_id: "advisory",
             purpose: "research",
             node_id: "rdagent-node1",
             dataset_release_id: "qe-20260831",
@@ -76,7 +77,7 @@ test("registered QE run is visible before dispatch and logs require an explicit 
 
   await page.goto("/quantevolver/experiments");
   await expect(page.getByText(experimentId).first()).toBeVisible({ timeout: 120_000 });
-  await expect(page.getByText(/mcp\s*\/\s*research/).first()).toBeVisible();
+  await expect(page.getByText(/mcp\s*\/\s*advisory\s*\/\s*research/).first()).toBeVisible();
   await expect(page.getByText(/qe-20260831/).first()).toBeVisible();
   await expect(page.getByText(/running:1/).first()).toBeVisible();
   await expect.poll(() => statusReads).toBeGreaterThan(0);
@@ -115,4 +116,23 @@ test("hidden-page guards suppress QE status and log traffic", () => {
   expect(hook).toContain("DISCONNECTED_STATUS_POLL_INTERVAL = 30000");
   expect(pageSource).toContain('if (document.visibilityState !== "visible") return;');
   expect(pageSource).toContain("Math.max(30, refreshInterval)");
+});
+
+
+test("history uses server pagination and human business filters", () => {
+  const pageSource = readFileSync(
+    resolve(process.cwd(), "src/app/quantevolver/experiments/page.tsx"),
+    "utf8",
+  );
+
+  expect(pageSource).toContain('data-testid="qe-history-business-filters"');
+  expect(pageSource).toContain('aria-label="开始日期"');
+  expect(pageSource).toContain('aria-label="股票池"');
+  expect(pageSource).toContain('aria-label="业务消费者"');
+  expect(pageSource).toContain('updateHistoryFilter("consumer_id"');
+  expect(pageSource).toContain('aria-label="数仓状态"');
+  expect(pageSource).toContain('include_children: "true"');
+  expect(pageSource).not.toContain("EXPERIMENT_HISTORY_BATCH_SIZE");
+  expect(pageSource).not.toContain("refresh all to inspect every experiment");
+  expect(pageSource).toContain('exp.registration_summary ? "清理制品" : "删除"');
 });

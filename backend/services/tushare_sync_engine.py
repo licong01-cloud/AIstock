@@ -9,9 +9,11 @@ import datetime as dt
 import importlib
 import json
 import logging
+import math
 import os
 import time
 import uuid
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
@@ -43,6 +45,91 @@ ZERO_ROW_VALID_DATASETS = {
     "stock_st_events",
     *FINANCIAL_EVENT_RAW_DATASETS,
 }
+
+# BUG-1425: contract version for the daily_basic required-field coverage
+# receipt written into refresh-audit metadata. Must stay in sync with
+# audit_backed_data_health._status_from_audit validation.
+DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA = "daily_basic_required_field_coverage_v1"
+DAILY_BASIC_REQUIRED_FIELD = "turnover_rate_f"
+DAILY_BASIC_REQUIRED_RATIO = 0.95
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Return True when value is a real, finite number (not NaN/inf/None)."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            return not math.isnan(float(value)) and not math.isinf(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return False
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() in {"nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}:
+            return False
+        try:
+            parsed = float(text)
+        except ValueError:
+            return False
+        return not math.isnan(parsed) and not math.isinf(parsed)
+    return False
+
+
+def _daily_basic_required_field_coverage_receipt(
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build the required-field coverage receipt for a daily_basic batch.
+
+    BUG-1425: the freshness gate in audit_backed_data_health requires this
+    receipt in the refresh-audit metadata for every successful daily_basic
+    sync. The receipt proves the ``turnover_rate_f`` field coverage so the
+    gate does not fall back to ``required_field_coverage_unproven``.
+    """
+    row_count = len(rows)
+    finite_count = sum(
+        1
+        for row in rows
+        if _is_finite_number(row.get(DAILY_BASIC_REQUIRED_FIELD))
+    )
+    ratio = finite_count / row_count if row_count > 0 else 0.0
+    return {
+        "schema_version": DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA,
+        "field": DAILY_BASIC_REQUIRED_FIELD,
+        "finite_count": finite_count,
+        "row_count": row_count,
+        "ratio": ratio,
+        "required_ratio": DAILY_BASIC_REQUIRED_RATIO,
+    }
+
+
+def _etf_share_size_publication_quality(
+    rows: List[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Detect the provider's shares-only intermediate publication stage.
+
+    Tushare can publish all ETF share rows before any daily size values are
+    available. Requiring a percentage would create an arbitrary universe-size
+    gate and would penalize legitimate late overseas ETFs. The narrow contract
+    here only rejects an entire source field being unavailable for the day.
+    """
+
+    row_count = len(rows)
+    share_count = sum(1 for row in rows if _is_finite_number(row.get("total_share")))
+    size_count = sum(1 for row in rows if _is_finite_number(row.get("total_size")))
+    receipt = {
+        "schema_version": "etf_share_size_publication_quality_v1",
+        "row_count": row_count,
+        "total_share_finite_count": share_count,
+        "total_size_finite_count": size_count,
+    }
+    if row_count > 0 and share_count > 0 and size_count > 0:
+        return receipt, {"quality_status": "ok"}
+    return receipt, {
+        "quality_status": "low_coverage",
+        "failure_category": "required_source_field_unpublished",
+    }
 _logger = logging.getLogger(__name__)
 
 _DIVIDEND_ECONOMIC_COLUMNS = (
@@ -457,7 +544,12 @@ class TushareSyncEngine:
 
     def _fetch_from_tushare(self, spec: DatasetSpec, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Call Tushare API with rate limiting, retry, and optional pagination."""
-        col_names = list(spec.columns.keys())
+        provider_columns = [
+            column
+            for column in spec.columns
+            if column != spec.snapshot_date_column
+        ]
+        col_names = provider_columns
         db_to_api = {c: spec.api_field_map.get(c, c) for c in col_names}
         api_fields = [db_to_api[c] for c in col_names]
         api_to_db = {v: k for k, v in db_to_api.items()}
@@ -1121,6 +1213,17 @@ class TushareSyncEngine:
                     "tushare_api": spec.tushare_api,
                     "mode": spec.query_mode.value,
                 }
+                if spec.name == "etf_share_size":
+                    publication_quality, audit_quality = _etf_share_size_publication_quality(rows)
+                    audit_metadata["publication_quality"] = publication_quality
+                if spec.name == "daily_basic":
+                    # BUG-1425: persist the required-field coverage receipt so
+                    # the freshness gate can prove turnover_rate_f coverage
+                    # instead of failing closed with
+                    # required_field_coverage_unproven.
+                    audit_metadata["required_field_coverage"] = (
+                        _daily_basic_required_field_coverage_receipt(rows)
+                    )
                 if canonicalized_source_revisions:
                     audit_metadata["canonicalized_source_revisions"] = (
                         canonicalized_source_revisions
@@ -1331,6 +1434,12 @@ class TushareSyncEngine:
         for params in param_sets:
             try:
                 rows = self._fetch_from_tushare(spec, params)
+                if spec.snapshot_date_column:
+                    snapshot_date = dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()
+                    rows = [
+                        {**row, spec.snapshot_date_column: snapshot_date}
+                        for row in rows
+                    ]
                 if spec.row_limit > 0 and len(rows) >= spec.row_limit:
                     raise RuntimeError(
                         f"{spec.name} single_call params={params} returned {len(rows)} rows; "

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
@@ -67,6 +67,7 @@ from ..services.quantevolver.qe_log_broker import (
 from ..services.quantevolver.experiment_config import (
     LongTrendEvaluationOptIn,
     ensure_qe_risk_policy,
+    normalize_prediction_replay_contract,
     normalize_label_horizon,
     normalize_qe_random_seed,
     split_qe_runtime_metadata,
@@ -237,6 +238,16 @@ def _model_to_dict(model: BaseModel) -> Dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _active_dataset_params_from_custom_loop(cfg_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Project top-level loop controls into the active-dataset resolver input."""
+
+    params = dict(cfg_dict.get("custom_params") or {})
+    sector_blacklist = cfg_dict.get("sector_blacklist")
+    if sector_blacklist is not None:
+        params["sector_blacklist"] = list(sector_blacklist)
+    return params
 
 
 def _sync_stock_pool_to_remote(stock_pool_path: str, node: dict):
@@ -1344,8 +1355,13 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
 
         # 为 loops 配置分配 loop_index
         loops_config = []
+        from ..services.quantevolver.qe_active_dataset_profile import (
+            QEActiveDatasetProfileError,
+            enforce_qe_universe_topk,
+        )
+
         for i, loop_cfg in enumerate(req.loops, start=1):
-            cfg_dict = loop_cfg.dict()
+            cfg_dict = _model_to_dict(loop_cfg)
             _reject_nested_runtime_flags(
                 cfg_dict.get("strategy_params"),
                 f"strategy_loop[{i}].strategy_params",
@@ -1356,6 +1372,21 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
                 cfg_dict.get("execution_algo"),
                 f"strategy_loop[{i}].execution_algo",
             )
+            try:
+                cfg_dict["strategy_params"] = enforce_qe_universe_topk(
+                    cfg_dict.get("strategy_params"),
+                    universe_selection=cfg_dict.get("universe_selection"),
+                    stock_pool=cfg_dict.get("stock_pool"),
+                )
+            except QEActiveDatasetProfileError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "reason_code": exc.reason_code,
+                        "message": str(exc),
+                        "context": {"loop": i, **exc.context},
+                    },
+                ) from exc
             loops_config.append(cfg_dict)
 
         new_task_id = await scheduler.strategy_fork_task(
@@ -1377,7 +1408,6 @@ async def strategy_fork_task(task_id: str, req: StrategyEvolutionForkRequest):
             "source_task_id": task_id,
             "from_loop_index": req.from_loop_index,
             "total_loops": len(loops_config),
-            "execution_mode": req.execution_mode or "serial",
             "message": f"策略演进任务已创建，{len(loops_config)} 个策略回测 Loop 后台启动中",
         }
     except HTTPException:
@@ -1491,7 +1521,23 @@ class CustomEvoLoopConfig(BaseModel):
     backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")
     model_source_task_id: Optional[str] = Field(None, description="模型来源任务 ID（backtest_only=True 时必填）")
     model_source_loop_index: Optional[int] = Field(None, description="模型来源 Loop 索引（backtest_only=True 时必填）")
+    prediction_replay: StrictBool = Field(False, description="Replay one immutable completed-loop pred.pkl without training or inference")
+    prediction_source_task_id: Optional[str] = Field(None, description="Completed source QE task for prediction replay")
+    prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
+    prediction_source_sha256: Optional[str] = Field(None, description="Optional expected SHA256 pin for the source pred.pkl")
     node_id: Optional[str] = Field(None, description="Loop execution node; blank inherits Loop1")
+
+    @model_validator(mode="after")
+    def _validate_prediction_replay(self) -> "CustomEvoLoopConfig":
+        replay = normalize_prediction_replay_contract(
+            self.model_dump(),
+            context="custom_evo_loop",
+        )
+        self.prediction_replay = replay["prediction_replay"]
+        self.prediction_source_task_id = replay["prediction_source_task_id"]
+        self.prediction_source_loop_index = replay["prediction_source_loop_index"]
+        self.prediction_source_sha256 = replay["prediction_source_sha256"]
+        return self
 
 class CustomEvolutionCreateRequest(BaseModel):
     task_name: str = Field(..., description="任务名称")
@@ -1512,6 +1558,11 @@ class CustomEvolutionCreateRequest(BaseModel):
         None,
         description="Immutable registered QE long-trend profile for the new task",
     )
+    consumer_id: str = Field(
+        "qe_mainline",
+        pattern="^(qe_mainline|advisory)$",
+        description="QE business consumer",
+    )
     created_by_type: str = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型")
     created_by_name: Optional[str] = Field(None, description="创建来源名称")
     purpose: str = Field("research", pattern="^(research|validation)$")
@@ -1528,6 +1579,10 @@ class UniverseComparisonCreateRequest(BaseModel):
     node_parallelism: Optional[Dict[str, int]] = None
     auto_start: bool = False
     long_trend_profile_id: Optional[str] = None
+    topk_by_pool: Optional[Dict[str, StrictInt]] = Field(
+        None,
+        description="Explicit per-arm TopK overrides; STAR50 must be 20",
+    )
 
 
 class CustomEvoConfigUpdateRequest(BaseModel):
@@ -1619,6 +1674,11 @@ def _public_custom_evo_config(config: Dict[str, Any]) -> Dict[str, Any]:
         loop.pop("custom_params", None)
         loop.pop("resolved_dataset", None)
         if persisted is not None:
+            # Active-profile tasks expose the canonical semantic selector only.
+            # ``stock_pool`` is a derived compatibility path inside the frozen
+            # binding; returning both fields makes this public payload invalid
+            # when it is submitted through the same create/update contract.
+            loop.pop("stock_pool", None)
             loop["universe_selection"] = persisted["universe_selection"]
             summary = persisted["profile_summary"]
             loop["dataset_summary"] = {
@@ -1658,13 +1718,27 @@ async def _prepare_custom_evo_loop_configs(
             raise HTTPException(status_code=400, detail=f"Loop {pos}: model_id is required")
         if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: hmm_model_version_id is required when HMM is enabled")
-        if loop_cfg.backtest_only:
-            if not loop_cfg.model_source_task_id or loop_cfg.model_source_loop_index is None:
-                raise HTTPException(status_code=400, detail=f"Loop {pos}: backtest-only requires model_source")
+        if loop_cfg.backtest_only or loop_cfg.prediction_replay:
+            reuse_mode = "prediction replay" if loop_cfg.prediction_replay else "backtest-only"
+            source_task_id = (
+                loop_cfg.model_source_task_id
+                if loop_cfg.backtest_only
+                else loop_cfg.prediction_source_task_id
+            )
+            source_loop_index = (
+                loop_cfg.model_source_loop_index
+                if loop_cfg.backtest_only
+                else loop_cfg.prediction_source_loop_index
+            )
+            if not source_task_id or source_loop_index is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Loop {pos}: {reuse_mode} requires a source task and loop",
+                )
             try:
                 source_label_horizon = scheduler._get_source_loop_label_horizon(
-                    loop_cfg.model_source_task_id,
-                    loop_cfg.model_source_loop_index,
+                    source_task_id,
+                    source_loop_index,
                 )
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=f"Loop {pos}: {e}") from e
@@ -1673,38 +1747,38 @@ async def _prepare_custom_evo_loop_configs(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Loop {pos}: backtest-only label_horizon={loop_label_horizon} does not match "
-                        f"source model label_horizon={source_label_horizon}"
+                        f"Loop {pos}: {reuse_mode} label_horizon={loop_label_horizon} does not match "
+                        f"source loop label_horizon={source_label_horizon}"
                     ),
                 )
             source_factors = _get_source_loop_factors(
-                loop_cfg.model_source_task_id,
-                loop_cfg.model_source_loop_index,
+                source_task_id,
+                source_loop_index,
             )
             if source_factors is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: source loop factors cannot be read; backtest-only is not allowed",
+                    detail=f"Loop {pos}: source loop factors cannot be read; {reuse_mode} is not allowed",
                 )
             current_factors = sorted(k.split("||")[0] for k in loop_cfg.factor_keys)
             if current_factors != sorted(source_factors):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: backtest-only requires the same factor list as the source model",
+                    detail=f"Loop {pos}: {reuse_mode} requires the same factor list as the source loop",
                 )
             source_disable_alpha158 = _get_source_loop_disable_alpha158(
-                loop_cfg.model_source_task_id,
-                loop_cfg.model_source_loop_index,
+                source_task_id,
+                source_loop_index,
             )
             if source_disable_alpha158 is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: source Alpha158 baseline setting cannot be read; backtest-only is not allowed",
+                    detail=f"Loop {pos}: source Alpha158 baseline setting cannot be read; {reuse_mode} is not allowed",
                 )
             if bool(loop_cfg.disable_alpha158) != bool(source_disable_alpha158):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: backtest-only requires the same Alpha158 baseline setting as the source model",
+                    detail=f"Loop {pos}: {reuse_mode} requires the same Alpha158 baseline setting as the source loop",
                 )
 
     loops_config: List[Dict[str, Any]] = []
@@ -1735,7 +1809,7 @@ async def _prepare_custom_evo_loop_configs(
             f"custom_loop[{pos}].execution_algo",
         )
         cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
-        if loop_cfg.backtest_only and pos in loop_source_horizons:
+        if (loop_cfg.backtest_only or loop_cfg.prediction_replay) and pos in loop_source_horizons:
             cfg_dict["source_label_horizon"] = loop_source_horizons[pos]
         loops_config.append(cfg_dict)
 
@@ -1755,6 +1829,7 @@ async def _prepare_custom_evo_loop_configs(
 
     from ..services.quantevolver.qe_active_dataset_profile import (
         QEActiveDatasetProfileError,
+        enforce_qe_universe_topk,
         load_active_qe_profile,
         reject_client_dataset_internals,
         resolve_and_apply_active_qe_dataset,
@@ -1813,7 +1888,9 @@ async def _prepare_custom_evo_loop_configs(
         )
     if unresolved and active_profile is None:
         semantic_requested = any(
-            cfg.get("universe_selection") is not None for _pos, cfg in unresolved
+            cfg.get("universe_selection") is not None
+            or bool(cfg.get("sector_blacklist"))
+            for _pos, cfg in unresolved
         )
         if semantic_requested or required_profile_identity is not None:
             raise HTTPException(
@@ -1839,8 +1916,9 @@ async def _prepare_custom_evo_loop_configs(
                     ),
                 )
         for pos, cfg_dict in unresolved:
+            active_dataset_params = _active_dataset_params_from_custom_loop(cfg_dict)
             try:
-                reject_client_dataset_internals(cfg_dict.get("custom_params"))
+                reject_client_dataset_internals(active_dataset_params)
             except RuntimeError as exc:
                 raise HTTPException(status_code=400, detail=f"Loop {pos}: {exc}") from exc
             if cfg_dict.get("stock_pool") and cfg_dict.get("universe_selection") is not None:
@@ -1853,7 +1931,7 @@ async def _prepare_custom_evo_loop_configs(
                     node_id=str(cfg_dict["node_id"]),
                     data_split=cfg_dict.get("data_split"),
                     universe_selection=cfg_dict.get("universe_selection"),
-                    custom_params=cfg_dict.get("custom_params"),
+                    custom_params=active_dataset_params,
                     label_horizon=int(cfg_dict.get("label_horizon") or 1),
                     profile=active_profile,
                 )
@@ -1864,6 +1942,23 @@ async def _prepare_custom_evo_loop_configs(
             cfg_dict["custom_params"] = active_params
             cfg_dict["stock_pool"] = active_params.get("stock_pool")
             cfg_dict["resolved_dataset"] = summary
+
+    for pos, cfg_dict in enumerate(loops_config, start=1):
+        try:
+            cfg_dict["strategy_params"] = enforce_qe_universe_topk(
+                cfg_dict.get("strategy_params"),
+                universe_selection=cfg_dict.get("universe_selection"),
+                stock_pool=cfg_dict.get("stock_pool"),
+            )
+        except QEActiveDatasetProfileError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason_code": exc.reason_code,
+                    "message": str(exc),
+                    "context": {"loop": pos, **exc.context},
+                },
+            ) from exc
 
     synced_stock_pool_keys: set[tuple[str, str]] = set()
     for cfg_dict in loops_config:
@@ -1968,6 +2063,7 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             clone_from_task_id=req.clone_from_task_id,
             auto_start=req.auto_start,
             long_trend_profile_id=req_long_trend_profile_id,
+            consumer_id=req.consumer_id,
             created_by_type=req.created_by_type,
             created_by_name=req.created_by_name,
             purpose=req.purpose,
@@ -2012,6 +2108,11 @@ async def create_universe_comparison_task(
 ):
     """Reuse custom-evo orchestration; only the selected universe may vary by arm."""
 
+    from ..services.quantevolver.qe_active_dataset_profile import (
+        QEActiveDatasetProfileError,
+        enforce_qe_universe_topk,
+    )
+
     base = _model_to_dict(req.base_loop)
     if base.get("stock_pool") or base.get("universe_selection") is not None:
         raise HTTPException(
@@ -2024,9 +2125,21 @@ async def create_universe_comparison_task(
             status_code=400,
             detail="pool_ids must contain at least two unique non-empty pools",
         )
+    topk_by_pool = dict(req.topk_by_pool or {})
+    unknown_topk_pools = sorted(set(topk_by_pool) - set(pool_ids))
+    if unknown_topk_pools:
+        raise HTTPException(
+            status_code=400,
+            detail=f"topk_by_pool contains pools outside pool_ids: {unknown_topk_pools}",
+        )
+    if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in topk_by_pool.values()):
+        raise HTTPException(
+            status_code=400,
+            detail="topk_by_pool values must be positive integers",
+        )
     group_id = f"qeucmp_{uuid.uuid4().hex[:20]}"
     loops: list[CustomEvoLoopConfig] = []
-    arm_summaries: list[dict[str, str]] = []
+    arm_summaries: list[dict[str, Any]] = []
     for pool_id in pool_ids:
         arm = dict(base)
         arm["label"] = f"universe:{pool_id}"
@@ -2035,16 +2148,41 @@ async def create_universe_comparison_task(
             if pool_id == "stock_universe"
             else {"mode": "single_index", "pool_ids": [pool_id]}
         )
+        if pool_id in topk_by_pool:
+            strategy_params = dict(arm.get("strategy_params") or {})
+            strategy_params["topk"] = topk_by_pool[pool_id]
+            arm["strategy_params"] = strategy_params
+        try:
+            arm["strategy_params"] = enforce_qe_universe_topk(
+                arm.get("strategy_params"),
+                universe_selection=arm["universe_selection"],
+            )
+        except QEActiveDatasetProfileError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "reason_code": exc.reason_code,
+                    "message": str(exc),
+                    "context": {"pool_id": pool_id, **exc.context},
+                },
+            ) from exc
         flags = dict(arm.get("runtime_flags") or {})
         flags["qe_universe_comparison"] = {
             "schema_version": "qe_universe_comparison_arm_v1",
             "comparison_group_id": group_id,
             "comparison_mode": "separate_runs",
             "arm_label": pool_id,
+            "arm_topk": (arm.get("strategy_params") or {}).get("topk"),
         }
         arm["runtime_flags"] = flags
         loops.append(CustomEvoLoopConfig(**arm))
-        arm_summaries.append({"pool_id": pool_id, "arm_label": pool_id})
+        arm_summaries.append(
+            {
+                "pool_id": pool_id,
+                "arm_label": pool_id,
+                "topk": (arm.get("strategy_params") or {}).get("topk"),
+            }
+        )
 
     result = await create_custom_evolution_task(
         CustomEvolutionCreateRequest(
@@ -2153,6 +2291,29 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
                 ensure_loop_fixed_seed(dict(loop), context=f"custom_evo.task[{task_id}].loops[{idx}]")
             except ValueError as exc:
                 raise_http_seed_error(exc)
+        if req.force_full_train:
+            replay_loops = [
+                loop.get("loop_index")
+                for loop in config.get("loops") or []
+                if loop.get("prediction_replay")
+            ]
+            if replay_loops:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "force_full_train cannot override immutable prediction replay "
+                        f"loops={replay_loops}"
+                    ),
+                )
+        claim = scheduler.claim_custom_evo_start(task_id)
+        if not claim.get("claimed"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"custom_evo task {task_id} could not be claimed for its first start. "
+                    f"reason={claim.get('start_reason')}"
+                ),
+            )
         background_tasks.add_task(
             scheduler.submit_custom_evo_all_loops,
             task_id,
@@ -3214,6 +3375,9 @@ def _run_correlation_compute_via_dispatch(
     as_of_date: str = None,
     job_id: str = None,
     data_date: str = None,
+    *,
+    target_factor_name: str | None = None,
+    dataset_profile_path: str | None = None,
 ):
     import asyncio
     import time as _time
@@ -3221,7 +3385,9 @@ def _run_correlation_compute_via_dispatch(
     global _active_dispatch_task_id
 
     payload = {
+        "mode": "target_only" if target_factor_name else "full",
         "factor_names": list(factor_names or []),
+        "target_factor_name": target_factor_name,
         "as_of_date": as_of_date,
         "job_id": str(job_id) if job_id else None,
         "data_date": data_date,
@@ -3235,12 +3401,21 @@ def _run_correlation_compute_via_dispatch(
         )
         _update_job_status(job_id, "running")
         try:
-            created = asyncio.run(_get_dispatch_service().create_and_submit_task({
-                "task_name": f"correlation_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            dispatch_request = {
+                "task_name": (
+                    f"correlation_target_{target_factor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    if target_factor_name
+                    else f"correlation_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                ),
                 "task_type": "correlation_compute",
                 "node_id": os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080"),
                 "payload": payload,
-            }))
+            }
+            if dataset_profile_path:
+                dispatch_request["dataset_profile_path"] = dataset_profile_path
+            created = asyncio.run(
+                _get_dispatch_service().create_and_submit_task(dispatch_request)
+            )
             task_id = created["task_id"]
             _active_dispatch_task_id = task_id
             deadline = _time.time() + _MATRIX_TIMEOUT_SEC
@@ -3308,6 +3483,22 @@ def _run_correlation_compute(factor_names: list, as_of_date: str = None, job_id:
     )
 
 
+def _run_target_correlation_refresh_via_dispatch(
+    *,
+    target_factor_name: str,
+    as_of_date: str | None,
+    data_date: str | None,
+    dataset_profile_path: str,
+):
+    return _run_correlation_compute_via_dispatch(
+        factor_names=[target_factor_name],
+        as_of_date=as_of_date,
+        data_date=data_date,
+        target_factor_name=target_factor_name,
+        dataset_profile_path=dataset_profile_path,
+    )
+
+
 def _get_loader(source: str = "single") -> FactorValueLoader:
     global _correlation_loader
     if _correlation_loader is None or getattr(_correlation_loader, '_source', None) != source:
@@ -3328,6 +3519,17 @@ class CorrelationComputeRequest(BaseModel):
     force_recompute: bool = Field(False, description="强制重新计算，忽略旧相关性结果")
     db_threshold: float = Field(0, description="写入 DB 的相关性阈值 (threshold=0 全量存储)")
     include_disabled: bool = Field(False, description="为 True 时包含已禁用因子")
+
+
+class CorrelationTargetRefreshRequest(BaseModel):
+    target_factor_name: str = Field(..., min_length=1)
+    as_of_date: str = Field(..., description="Must equal the official cache cutoff")
+    data_date: Optional[str] = Field(None, description="Scheduler metadata only")
+    dataset_profile_path: str = Field(
+        ...,
+        min_length=1,
+        description="Absolute canonical profile for the same official cache release",
+    )
 
 
 @router.post("/correlations/compute", summary="触发因子相关性矩阵计算")
@@ -3387,6 +3589,49 @@ def compute_correlations(req: CorrelationComputeRequest):
             "cache_root": cache_status.get("cache_root"),
             "cache_source": cache_status.get("cache_source"),
         },
+    }
+
+
+@router.post(
+    "/correlations/refresh-target",
+    summary="Refresh one factor's official correlations without resetting unrelated rows",
+)
+def refresh_target_correlations(req: CorrelationTargetRefreshRequest):
+    if _computing_lock.locked():
+        return {
+            "status": "computing",
+            "message": "another correlation computation is already running",
+            "progress": _correlation_progress.snapshot(),
+        }
+    target = req.target_factor_name.strip()
+    eligible = FactorEligibilityService().get_eligible_factor_names(
+        factor_names=[target],
+        include_disabled=False,
+    )
+    if eligible != [target]:
+        raise HTTPException(status_code=409, detail="target factor is not official-eligible")
+    cache_status = _correlation_compute_service.get_correlation_factor_cache_status()
+    if cache_status.get("as_of_date") != req.as_of_date:
+        raise HTTPException(
+            status_code=409,
+            detail="target correlation as_of_date differs from official cache",
+        )
+
+    global _compute_future
+    _compute_future = _compute_executor.submit(
+        _run_target_correlation_refresh_via_dispatch,
+        target_factor_name=target,
+        as_of_date=req.as_of_date,
+        data_date=req.data_date,
+        dataset_profile_path=req.dataset_profile_path,
+    )
+    return {
+        "status": "accepted",
+        "mode": "target_only",
+        "target_factor_name": target,
+        "as_of_date": req.as_of_date,
+        "dataset_profile_path": req.dataset_profile_path,
+        "unrelated_rows_reset": False,
     }
 
 

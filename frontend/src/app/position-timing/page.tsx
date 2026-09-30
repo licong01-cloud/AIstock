@@ -96,6 +96,36 @@ type CardSet = {
 };
 
 type CurrentCards = { status: string; card_set?: CardSet | null };
+type ModelActionValue = {
+  action: string;
+  objective: string;
+  estimated_net_action_value_bps: number;
+  planned_delta_qty?: number | null;
+};
+type ModelAdviceItem = {
+  canonical_symbol: string;
+  display_name?: string | null;
+  primary_source_role: string;
+  status: string;
+  action: string;
+  authority?: string;
+  sizing_status?: string;
+  planned_delta_qty?: number | null;
+  reason_codes: string[];
+  candidate_action_values?: ModelActionValue[];
+  research_population_status?: string;
+  executable_alert: false;
+};
+type ModelAdviceSet = {
+  decision_trade_date: string;
+  target_trade_date: string;
+  advice_tier: string;
+  effect_evidence: string;
+  model_sha256: string;
+  model_training_cutoff: string;
+  items: ModelAdviceItem[];
+};
+type CurrentModelAdvice = { status: string; advice_set?: ModelAdviceSet | null };
 type Evidence = {
   product_evidence_tier: string;
   event_counts: Record<string, number>;
@@ -112,6 +142,13 @@ type Evidence = {
   };
   hmm_runtime_role: string;
   selection_runtime_role: string;
+  action_value_v2?: {
+    runtime_status: string;
+    advice_tier: string;
+    effect_evidence?: string | null;
+    model_sha256?: string | null;
+    stock_confidence_interpretation: string;
+  };
   cost_disclosure: {
     min_commission_scope_verification: string;
     thresholds_cny: Record<string, number>;
@@ -218,6 +255,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export default function PositionTimingPage() {
   const [intentRows, setIntentRows] = useState<IntentRow[]>([]);
   const [current, setCurrent] = useState<CurrentCards | null>(null);
+  const [modelAdvice, setModelAdvice] = useState<CurrentModelAdvice | null>(null);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [loading, setLoading] = useState(true);
@@ -229,14 +267,19 @@ export default function PositionTimingPage() {
   const [alertEdges, setAlertEdges] = useState<AlertEdge[]>([]);
 
   const loadReadModels = useCallback(async () => {
-    const [intentPayload, cardsPayload, evidencePayload] = await Promise.all([
+    const modelAdviceRequest = requestJson<CurrentModelAdvice>("/model-advice/current").catch(
+      () => ({ status: "MODEL_ADVICE_READ_UNAVAILABLE", advice_set: null }),
+    );
+    const [intentPayload, cardsPayload, modelAdvicePayload, evidencePayload] = await Promise.all([
       requestJson<IntentList>("/intents"),
       requestJson<CurrentCards>("/cards/current"),
+      modelAdviceRequest,
       requestJson<Evidence>("/evidence"),
     ]);
     setIntentRows(intentPayload.items);
     setScopeWarnings(intentPayload.scope_warnings || []);
     setCurrent(cardsPayload);
+    setModelAdvice(modelAdvicePayload);
     setEvidence(evidencePayload);
     setDrafts((previous) => {
       const next = { ...previous };
@@ -544,6 +587,51 @@ export default function PositionTimingPage() {
         )}
       </SectionCard>
 
+      <SectionCard title="日频模型影子分析" eyebrow="per-stock experimental action value">
+        <p>
+          逐股结果来自本地冻结模型，只是动作价值估计，不是个股胜率或收益保证；未获联合支持前不改变正式 L1 卡，也不触发盘中提醒。
+        </p>
+        {modelAdvice?.advice_set?.items?.length ? (
+          <div className="pv2-grid pv2-grid-2" data-testid="model-advice-list">
+            {modelAdvice.advice_set.items.map((item) => (
+              <article className="pv2-card" key={item.canonical_symbol} data-testid={`model-advice-${item.canonical_symbol}`}>
+                <div className="pv2-card-head">
+                  <div>
+                    <div className="pv2-eyebrow">{item.primary_source_role} · {item.canonical_symbol}</div>
+                    <h2>{item.display_name || item.canonical_symbol}</h2>
+                  </div>
+                  <strong style={{ fontSize: 20 }}>{item.action}</strong>
+                </div>
+                <p><strong>状态：</strong> {item.status} · {item.sizing_status || "无定量结果"}</p>
+                <p><strong>研究人口：</strong> {item.research_population_status || "UNAVAILABLE"}</p>
+                {item.planned_delta_qty !== null && item.planned_delta_qty !== undefined ? (
+                  <p><strong>模型建议变化：</strong> {item.planned_delta_qty > 0 ? "+" : ""}{item.planned_delta_qty} 股</p>
+                ) : (
+                  <p><strong>模型建议变化：</strong> 仅方向参考，不虚构用户预算数量</p>
+                )}
+                {item.candidate_action_values?.length ? (
+                  <p>
+                    <strong>候选动作值：</strong>{" "}
+                    {item.candidate_action_values.map((candidate) => (
+                      <span key={`${candidate.action}-${candidate.objective}-${candidate.planned_delta_qty ?? "direction"}`} style={{ marginRight: 12 }}>
+                        {candidate.action} {candidate.estimated_net_action_value_bps.toFixed(2)} bps
+                      </span>
+                    ))}
+                  </p>
+                ) : null}
+                <p><strong>原因：</strong> {item.reason_codes.map(reasonLabel).join(" / ") || "模型评估完成"}</p>
+                <p className="pv2-mono" style={{ fontSize: 12 }}>不生成 alert · model {modelAdvice.advice_set?.model_sha256.slice(0, 12)}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p data-testid="model-advice-status">
+            当前状态：<span className="pv2-mono">{modelAdvice?.status || (loading ? "LOADING" : "NO_MODEL_ADVICE")}</span>。
+            正式规则卡继续独立运行。
+          </p>
+        )}
+      </SectionCard>
+
       <SectionCard title="下一决策日意图" eyebrow="timing-owned user input">
         <p>真实持仓始终分析；自选股须显式勾选。范围和意图更新只影响下一张尚未签发的卡片。</p>
         {scopeWarnings.length ? (
@@ -647,6 +735,11 @@ export default function PositionTimingPage() {
         <p>
           L2 仅为总体研究证据：{evidence?.l2_formal_audit?.effect_evidence || "-"}，入选模型 {evidence?.l2_formal_audit?.selected_model_id || "无"}；
           当前状态 <span className="pv2-mono">{evidence?.l2_runtime_status || "-"}</span>，不得解释为个股胜率或运行时建议。
+        </p>
+        <p>
+          Action Value v2：<span className="pv2-mono">{evidence?.action_value_v2?.runtime_status || "NOT_AVAILABLE"}</span>；
+          证据层 {evidence?.action_value_v2?.advice_tier || "EXPERIMENTAL_MODEL_ADVICE_NOT_AVAILABLE"}，
+          总体结论 {evidence?.action_value_v2?.effect_evidence || "尚无"}。研究统计与逐股估计分开展示。
         </p>
         <p>
           最低佣金按父订单估算，券商聚合口径为 <span className="pv2-mono">{evidence?.cost_disclosure?.min_commission_scope_verification || "-"}</span>。

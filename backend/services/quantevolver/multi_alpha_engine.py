@@ -146,6 +146,7 @@ class MultiAlphaEngine:
         parent_params = attach_qe_run_registration(
             parent_params,
             run_kind="multi_alpha",
+            consumer_id=getattr(self, "registration_context", {}).get("consumer_id"),
             source_type=getattr(self, "registration_context", {}).get("source_type"),
             created_by_name=getattr(self, "registration_context", {}).get("created_by_name"),
             purpose=getattr(self, "registration_context", {}).get("purpose"),

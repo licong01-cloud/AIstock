@@ -242,7 +242,8 @@ def compute_ts_info_density(factor_values) -> Optional[str]:
                 if len(autocorrs) == 0:
                     return None
                 daily_autocorr = float(autocorrs.mean())
-            except Exception:
+            except Exception as exc:
+                logger.warning("factor time-series density unavailable: %s", type(exc).__name__)
                 return None
         else:
             if len(factor_values) < 5:
@@ -875,6 +876,7 @@ def _analyze_factor_v2(
     code_text: Optional[str],
     metrics: Dict[str, Any],
     official_grade: Optional[str],
+    llm_model: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """合并后的单次 LLM 调用：分类 + 评级解释 + 描述生成。
 
@@ -963,6 +965,8 @@ def _analyze_factor_v2(
     try:
         from .llm_client import get_llm_kwargs
         kwargs = get_llm_kwargs("factor_analyst")
+        if llm_model is not None:
+            kwargs["model"] = llm_model
 
         response = llm.completion(
             messages=[
@@ -1120,10 +1124,13 @@ class FactorAnalyst:
         factor_name: str,
         factor_source: str,
         use_llm: bool = False,
+        *,
+        llm_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         """分析单个因子：分类 + 描述。评级只读，从正式评级表读取。
 
         use_llm=True 时走 v2 合并调用（单次 LLM），否则走规则。
+        llm_model 仅覆盖本次调用，不修改全局绑定，不在失败后自动换模型。
         正式评级由 FactorRatingService (UI 评级管理工具栏) 统一产出，
         此方法只做分类和描述，不得修改评级。
         """
@@ -1178,8 +1185,10 @@ class FactorAnalyst:
         # ── v2 合并 LLM 调用 ──
         factor_profile = None
         if use_llm:
+            explicit_model = {"llm_model": llm_model} if llm_model is not None else {}
             v2_result = _analyze_factor_v2(
-                factor_name, factor_source, expression, code_text, ind, official_grade)
+                factor_name, factor_source, expression, code_text, ind, official_grade,
+                **explicit_model)
             if v2_result:
                 llm_category = v2_result["category"]
                 llm_dimension = v2_result.get("dimension", "time_series")
@@ -1628,8 +1637,8 @@ class FactorAnalyst:
                                 name_b = id_to_name.get(row[1], "")
                                 correlation_data[f"{name_a}_{name_b}"] = float(row[2])
                                 correlation_data[f"{name_b}_{name_a}"] = float(row[2])
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("factor selection correlation lookup unavailable: %s", type(exc).__name__)
 
         # 选择策略：先保证多样性，再按评级填充
         selected = []
@@ -1811,7 +1820,8 @@ class FactorAnalyst:
                         return None
                     cols = [desc[0] for desc in cur.description]
                     return dict(zip(cols, row))
-        except Exception:
+        except Exception as exc:
+            logger.warning("factor independent metrics unavailable for %s: %s", factor_name, type(exc).__name__)
             return None
 
     def _get_experiment_track_summary(self, factor_name: str) -> Optional[Dict]:
@@ -1841,7 +1851,8 @@ class FactorAnalyst:
                     if summary.get("last_experiment_date"):
                         summary["last_experiment_date"] = str(summary["last_experiment_date"])[:10]
                     return summary
-        except Exception:
+        except Exception as exc:
+            logger.warning("factor experiment summary unavailable for %s: %s", factor_name, type(exc).__name__)
             return None
 
     def _get_multi_window_metrics(self, factor_name: str) -> Optional[Dict]:
@@ -1872,7 +1883,8 @@ class FactorAnalyst:
                                 'rank_icir': row[4]
                             }
                     return result
-        except Exception:
+        except Exception as exc:
+            logger.warning("factor multi-window metrics unavailable for %s: %s", factor_name, type(exc).__name__)
             return None
 
     def _get_all_factors(self, source_filter: Optional[str] = None) -> List[Dict]:

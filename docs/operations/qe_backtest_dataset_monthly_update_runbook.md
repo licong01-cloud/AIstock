@@ -7,6 +7,22 @@
 
 ## 0. 2026-09-01 最短交付路径（唯一有效）
 
+### 0.0 单一 release 规则
+
+每个 cutoff 的正式月更最终只能有一个 candidate root、一个 manifest identity 和一个待激活 profile；QE、HMM、
+荐股及其他消费者必须通过全局 profile 解析同一 release。禁止为某一消费者另建终端数据集分支，禁止模块硬编码
+`qlib_bin`、`factor_data`、sector sidecar 或历史 candidate 路径。
+
+发布顺序固定为：冻结源身份 → 全 PIT membership → quote availability → sector quote 完整性 → 共享 sector
+context → 六池覆盖 → QE P10/P11 → HMM file-only preflight → 三端哈希 → 单次 profile 激活。全 PIT membership
+扩大后，必须重新核对所有 quote-available 行业日期；缺失只允许从同 cutoff 的冻结权威 source snapshot 补建。
+正式停发行业保留 membership 和真实 moneyflow，但不得伪造 quote。任一缺口、歧义、哈希漂移或消费者 smoke
+失败时，唯一 candidate 保持 `NOT_READY`，不得用第二个 QE/HMM candidate 绕过。
+
+未变化的 daily/minute/factor/index/suspend 等组件按哈希复用，只重建受影响组件。staging/repair snapshot 不属于
+release，不得写入 profile。三端验证通过后只切换一次全局 profile；旧 release 保留用于复现，但不再作为当前模块
+的独立 active 配置。
+
 目标是生成 cutoff=`2026-08-31` 的独立 `qe_hmm_full_v2` candidate。禁止覆盖现有 2026-07-31 candidate、
 禁止 production activation、禁止重复真实 sample，禁止在本任务中新增门禁或平台能力。
 

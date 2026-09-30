@@ -82,9 +82,10 @@ class BacktestExecutor(ProductionBacktestExecutor):
             client,
             submission_coordinator=_UnitSubmissionCoordinator(),
         )
+        self.submission_backtest_only = []
 
-    @staticmethod
-    def _submission_source_for_context(_ctx):
+    def _submission_source_for_context(self, _ctx, *, backtest_only=False):
+        self.submission_backtest_only.append(backtest_only)
         return SimpleNamespace(submission_intent_hash="a" * 64)
 
 
@@ -302,6 +303,30 @@ class TestBacktestExecutorBasic:
         )
         assert source.source_execution_id == "task_normal_Loop3"
 
+    def test_evolution_source_preserves_resolved_parallel_training_contract(self):
+        claim_source = MagicMock()
+        record_waiting = MagicMock()
+        ctx = ExecutionContext(
+            task_id="task_parallel",
+            loop_index=4,
+            experiment_name="task_parallel/Loop4",
+            node_id="wsl2-5080",
+            submission_source_kind="qe_evolution_loop",
+            submission_source_execution_id="task_parallel_Loop4",
+            submission_node_capacity=2,
+            parallel_training_eligible=True,
+        )
+
+        with patch.object(
+            backtest_module.QEExecutionSourceClaimFactory,
+            "evolution_loop",
+            return_value=(claim_source, record_waiting),
+        ):
+            source = ProductionBacktestExecutor._submission_source_for_context(ctx)
+
+        assert source.requested_node_capacity == 2
+        assert source.parallel_training_eligible is True
+
     def test_qe_experiment_without_claim_id_uses_execution_id_for_claim(self):
         claim_source = MagicMock()
         record_waiting = MagicMock()
@@ -371,6 +396,7 @@ class TestBacktestExecutorBasic:
         )
 
         assert "--backtest-only" in result.wsl_command
+        assert executor.submission_backtest_only == [True]
 
     def test_full_train_does_not_inject_backtest_only(self):
         executor = BacktestExecutor(make_mock_composer(), make_mock_client())
@@ -382,6 +408,7 @@ class TestBacktestExecutorBasic:
         )
 
         assert "--backtest-only" not in (result.wsl_command or "")
+        assert executor.submission_backtest_only == [False]
 
     def test_seed_ensemble_reaches_composer_but_not_model_params(self):
         composer = make_mock_composer()

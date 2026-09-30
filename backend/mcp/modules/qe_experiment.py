@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from backend.core.qe_prediction_replay_contract import normalize_prediction_replay_contract
 from backend.mcp.common import sanitize_tail
 
 if TYPE_CHECKING:
@@ -22,6 +23,7 @@ QE_TEMPLATE_DELETE_CONFIRM = "QE_TEMPLATE_DELETE"
 QE_TEMPLATE_CREATE_AND_RUN_CONFIRM = "QE_TEMPLATE_CREATE_AND_RUN"
 
 TOOL_NAMES = (
+    "qe_dataset_profile_get",
     "qe_experiment_list",
     "qe_experiment_get",
     "qe_experiment_get_status",
@@ -50,6 +52,8 @@ TOOL_NAMES = (
     "qe_custom_evo_rerun_loop_confirmed",
     "qe_custom_evo_append_loops_confirmed",
     "qe_template_create",
+    "qe_single_experiment_template_create",
+    "qe_universe_comparison_task_create",
     "qe_template_get",
     "qe_template_validate",
     "qe_template_materialize_confirmed",
@@ -76,6 +80,13 @@ def _require_purpose(purpose: str) -> str:
     return normalized
 
 
+def _require_consumer_id(consumer_id: str) -> str:
+    normalized = str(consumer_id).strip().lower()
+    if normalized not in {"qe_mainline", "advisory"}:
+        raise ValueError("consumer_id must be qe_mainline or advisory")
+    return normalized
+
+
 def _require_positive_loop_index(loop_index: int) -> int:
     parsed = int(loop_index)
     if parsed < 1:
@@ -86,7 +97,7 @@ def _require_positive_loop_index(loop_index: int) -> int:
 def _ensure_loop_fixed_seed(loop: dict[str, Any], *, context: str) -> None:
     """Fail fast before scheduling trainable custom-evo loops without a seed."""
 
-    if bool(loop.get("backtest_only")):
+    if bool(loop.get("backtest_only")) or bool(loop.get("prediction_replay")):
         return
     runtime_flags = dict(loop.get("runtime_flags") or {})
     seed_keys = ("random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed")
@@ -190,9 +201,7 @@ def _validate_node_parallelism(
             errors.append(f"node_parallelism[{node_id!r}] must be an integer")
             continue
         if limit < 1 or limit > MAX_QE_NODE_PARALLELISM:
-            errors.append(
-                f"node_parallelism[{node_id!r}] must be between 1 and {MAX_QE_NODE_PARALLELISM}"
-            )
+            errors.append(f"node_parallelism[{node_id!r}] must be between 1 and {MAX_QE_NODE_PARALLELISM}")
         normalized[node_id] = limit
     return normalized
 
@@ -233,15 +242,30 @@ def _validate_custom_evo_config(config: dict[str, Any], errors: list[str]) -> No
         loops.append(loop)
         _require_string_list(loop.get("factor_keys"), context=f"custom_evo.loops[{idx}].factor_keys", errors=errors)
         _require_non_empty_string(loop.get("model_id"), context=f"custom_evo.loops[{idx}].model_id", errors=errors)
-        _validate_optional_mapping(loop.get("strategy_params"), context=f"custom_evo.loops[{idx}].strategy_params", errors=errors)
-        _validate_optional_mapping(loop.get("model_params"), context=f"custom_evo.loops[{idx}].model_params", errors=errors)
-        _validate_optional_mapping(loop.get("runtime_flags"), context=f"custom_evo.loops[{idx}].runtime_flags", errors=errors)
+        _validate_optional_mapping(
+            loop.get("strategy_params"), context=f"custom_evo.loops[{idx}].strategy_params", errors=errors
+        )
+        _validate_optional_mapping(
+            loop.get("model_params"), context=f"custom_evo.loops[{idx}].model_params", errors=errors
+        )
+        _validate_optional_mapping(
+            loop.get("runtime_flags"), context=f"custom_evo.loops[{idx}].runtime_flags", errors=errors
+        )
         _validate_optional_mapping(loop.get("data_split"), context=f"custom_evo.loops[{idx}].data_split", errors=errors)
         _validate_optional_label_horizon(
             loop.get("label_horizon"),
             context=f"custom_evo.loops[{idx}].label_horizon",
             errors=errors,
         )
+        try:
+            loop.update(
+                normalize_prediction_replay_contract(
+                    loop,
+                    context=f"custom_evo.loops[{idx}]",
+                )
+            )
+        except ValueError as exc:
+            errors.append(str(exc))
         if bool(loop.get("backtest_only")):
             _require_non_empty_string(
                 loop.get("model_source_task_id"),
@@ -256,7 +280,7 @@ def _validate_custom_evo_config(config: dict[str, Any], errors: list[str]) -> No
                         errors.append(f"custom_evo.loops[{idx}].model_source_loop_index must be >= 1")
                 except (TypeError, ValueError):
                     errors.append(f"custom_evo.loops[{idx}].model_source_loop_index must be an integer")
-        else:
+        elif not bool(loop.get("prediction_replay")):
             try:
                 _ensure_loop_fixed_seed(loop, context=f"custom_evo.loops[{idx}]")
             except ValueError as exc:
@@ -340,6 +364,53 @@ def _require_valid_experiment_config(template_kind: str, config_json: dict[str, 
     return dict(result["normalized_config"])
 
 
+def _comparison_base_loop(
+    *,
+    factor_keys: list[str],
+    model_id: str,
+    strategy_id: str | None,
+    node_id: str | None,
+    random_seed: int,
+    topk: int,
+    n_drop: int,
+    label_horizon: int,
+    execution_algo: str,
+    train_start: str | None,
+    train_end: str | None,
+    valid_start: str | None,
+    valid_end: str | None,
+    test_start: str | None,
+    test_end: str | None,
+    backtest_end: str | None,
+) -> dict[str, Any]:
+    split = {
+        key: value
+        for key, value in {
+            "train_start": train_start,
+            "train_end": train_end,
+            "valid_start": valid_start,
+            "valid_end": valid_end,
+            "test_start": test_start,
+            "test_end": test_end,
+            "backtest_end": backtest_end,
+        }.items()
+        if value
+    }
+    loop: dict[str, Any] = {
+        "factor_keys": list(factor_keys),
+        "model_id": model_id,
+        "strategy_id": strategy_id,
+        "strategy_params": {"topk": int(topk), "n_drop": int(n_drop)},
+        "runtime_flags": {"random_seed": int(random_seed)},
+        "label_horizon": int(label_horizon),
+        "execution_algo": execution_algo,
+        "node_id": node_id,
+    }
+    if split:
+        loop["data_split"] = split
+    return loop
+
+
 def register(registry: "ModuleRegistry") -> None:
     """Register QE Experiment tools on the shared MCP gateway."""
 
@@ -353,9 +424,7 @@ def register(registry: "ModuleRegistry") -> None:
     ) -> tuple[str | None, dict[str, int] | None]:
         current_config: Mapping[str, Any] = {}
         if node_id is None or node_parallelism is None:
-            payload = client.get(
-                f"/quantevolver/evolution/tasks/{task_id}/custom-evo-config"
-            )
+            payload = client.get(f"/quantevolver/evolution/tasks/{task_id}/custom-evo-config")
             candidate = payload.get("data", payload) if isinstance(payload, Mapping) else None
             if not isinstance(candidate, Mapping):
                 raise ValueError(
@@ -379,9 +448,7 @@ def register(registry: "ModuleRegistry") -> None:
             and current_node_id is not None
             and safe_node != current_node_id
         ):
-            raise ValueError(
-                "node_parallelism is required when changing a custom_evo mutation to a different node_id"
-            )
+            raise ValueError("node_parallelism is required when changing a custom_evo mutation to a different node_id")
 
         resolved_parallelism: Any = node_parallelism
         if resolved_parallelism is None:
@@ -400,12 +467,61 @@ def register(registry: "ModuleRegistry") -> None:
             raise ValueError("QE config validation failed: " + "; ".join(errors))
         return safe_node, normalized_parallelism
 
+    @registry.mcp.tool(name="qe_dataset_profile_get")
+    def qe_dataset_profile_get() -> Any:
+        return client.get("/quantevolver/dataset-profile")
+
     @registry.mcp.tool(name="qe_experiment_list")
-    def qe_experiment_list(limit: int = 50, offset: int = 0, include_children: bool = False, detail: str = "summary") -> Any:
+    def qe_experiment_list(
+        limit: int = 50,
+        offset: int = 0,
+        include_children: bool = False,
+        detail: str = "summary",
+        created_from: str | None = None,
+        created_to: str | None = None,
+        source_type: str | None = None,
+        consumer_id: str | None = None,
+        run_kind: str | None = None,
+        purpose: str | None = None,
+        status: str | None = None,
+        node_id: str | None = None,
+        model: str | None = None,
+        factor: str | None = None,
+        dataset_release: str | None = None,
+        universe_pool: str | None = None,
+        execution_algo: str | None = None,
+        archive_status: str | None = None,
+        query: str | None = None,
+    ) -> Any:
         _require_detail(detail)
+        params = {
+            key: value
+            for key, value in {
+                "limit": limit,
+                "offset": offset,
+                "include_children": include_children,
+                "detail": detail,
+                "created_from": created_from,
+                "created_to": created_to,
+                "source_type": source_type,
+                "consumer_id": (_require_consumer_id(consumer_id) if consumer_id not in (None, "") else None),
+                "run_kind": run_kind,
+                "purpose": purpose,
+                "status": status,
+                "node_id": node_id,
+                "model": model,
+                "factor": factor,
+                "dataset_release": dataset_release,
+                "universe_pool": universe_pool,
+                "execution_algo": execution_algo,
+                "archive_status": archive_status,
+                "query": query,
+            }.items()
+            if value not in (None, "")
+        }
         return client.get(
             "/quantevolver/experiments",
-            params={"limit": limit, "offset": offset, "include_children": include_children, "detail": detail},
+            params=params,
         )
 
     @registry.mcp.tool(name="qe_experiment_get")
@@ -435,16 +551,25 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/experiments/{safe}/trade-stats")
 
     @registry.mcp.tool(name="qe_experiment_validate_config")
-    def qe_experiment_validate_config(template_kind: str, config_json: dict[str, Any], include_normalized: bool = False) -> Any:
+    def qe_experiment_validate_config(
+        template_kind: str, config_json: dict[str, Any], include_normalized: bool = False
+    ) -> Any:
         return _validate_experiment_config(template_kind, config_json or {}, include_normalized=include_normalized)
 
     @registry.mcp.tool(name="qe_single_experiment_create_pending")
-    def qe_single_experiment_create_pending(config_json: dict[str, Any], created_by_name: str | None = None, source_context_json: dict[str, Any] | None = None, purpose: str = "research") -> Any:
+    def qe_single_experiment_create_pending(
+        config_json: dict[str, Any],
+        created_by_name: str | None = None,
+        source_context_json: dict[str, Any] | None = None,
+        purpose: str = "research",
+        consumer_id: str = "qe_mainline",
+    ) -> Any:
         normalized_config = _require_valid_experiment_config("single_experiment", config_json or {})
         normalized_config["created_by_type"] = "mcp"
         normalized_config["created_by_name"] = created_by_name or "mcp_gateway"
         normalized_config["source_context_json"] = source_context_json
         normalized_config["purpose"] = _require_purpose(purpose)
+        normalized_config["consumer_id"] = _require_consumer_id(consumer_id)
         return client.post("/quantevolver/experiments/pending", normalized_config)
 
     @registry.mcp.tool(name="qe_single_experiment_get_config")
@@ -453,18 +578,24 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/experiments/{safe}/editable-config")
 
     @registry.mcp.tool(name="qe_single_experiment_update_config_confirmed")
-    def qe_single_experiment_update_config_confirmed(experiment_id: str, config_json: dict[str, Any], confirm_update: str | None = None) -> Any:
+    def qe_single_experiment_update_config_confirmed(
+        experiment_id: str, config_json: dict[str, Any], confirm_update: str | None = None
+    ) -> Any:
         registry.confirm(confirm_update, QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM, "confirm_update")
         normalized_config = _require_valid_experiment_config("single_experiment", config_json or {})
         safe = registry.sanitize(experiment_id, "experiment_id")
         return client.put(f"/quantevolver/experiments/{safe}/editable-config", normalized_config)
 
     @registry.mcp.tool(name="qe_experiment_run_confirmed")
-    def qe_experiment_run_confirmed(experiment_id: str, node_id: str | None = None, confirm_run: str | None = None) -> Any:
+    def qe_experiment_run_confirmed(
+        experiment_id: str, node_id: str | None = None, confirm_run: str | None = None
+    ) -> Any:
         registry.confirm(confirm_run, QE_EXPERIMENT_RUN_CONFIRM, "confirm_run")
         safe = registry.sanitize(experiment_id, "experiment_id")
         safe_node = registry.sanitize(node_id, "node_id") if node_id else None
-        return client.post(f"/quantevolver/experiments/{safe}/run", params={"engine_mode": "unified", "node_id": safe_node})
+        return client.post(
+            f"/quantevolver/experiments/{safe}/run", params={"engine_mode": "unified", "node_id": safe_node}
+        )
 
     @registry.mcp.tool(name="qe_experiment_stop_confirmed")
     def qe_experiment_stop_confirmed(experiment_id: str, confirm_stop: str | None = None) -> Any:
@@ -491,17 +622,23 @@ def register(registry: "ModuleRegistry") -> None:
     @registry.mcp.tool(name="qe_custom_evo_get_loop_config")
     def qe_custom_evo_get_loop_config(task_id: str, loop_index: int) -> Any:
         safe = registry.sanitize(task_id, "task_id")
-        return client.get(f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/config")
+        return client.get(
+            f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/config"
+        )
 
     @registry.mcp.tool(name="qe_custom_evo_get_loop_metrics")
     def qe_custom_evo_get_loop_metrics(task_id: str, loop_index: int) -> Any:
         safe = registry.sanitize(task_id, "task_id")
-        return client.get(f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/metrics")
+        return client.get(
+            f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/metrics"
+        )
 
     @registry.mcp.tool(name="qe_custom_evo_get_loop_analysis")
     def qe_custom_evo_get_loop_analysis(task_id: str, loop_index: int) -> Any:
         safe = registry.sanitize(task_id, "task_id")
-        return client.get(f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/analysis")
+        return client.get(
+            f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/analysis"
+        )
 
     @registry.mcp.tool(name="qe_custom_evo_get_config")
     def qe_custom_evo_get_config(task_id: str) -> Any:
@@ -514,7 +651,19 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/evolution/tasks/{safe}/logs/tail", params={"tail": sanitize_tail(tail)})
 
     @registry.mcp.tool(name="qe_custom_evo_create_pending")
-    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None, phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False, purpose: str = "research") -> Any:
+    def qe_custom_evo_create_pending(
+        task_name: str,
+        loops: list[dict[str, Any]],
+        target_desc: str = "",
+        node_id: str | None = None,
+        node_parallelism: dict[str, int] | None = None,
+        engine_mode: str = "unified",
+        clone_from_task_id: str | None = None,
+        phase_pipeline_enabled: bool = False,
+        resource_telemetry_enabled: bool = False,
+        purpose: str = "research",
+        consumer_id: str = "qe_mainline",
+    ) -> Any:
         normalized_config = _require_valid_experiment_config(
             "custom_evo",
             {
@@ -543,11 +692,23 @@ def register(registry: "ModuleRegistry") -> None:
                 "created_by_type": "mcp",
                 "created_by_name": "mcp_gateway",
                 "purpose": _require_purpose(purpose),
+                "consumer_id": _require_consumer_id(consumer_id),
             },
         )
 
     @registry.mcp.tool(name="qe_custom_evo_update_config_confirmed")
-    def qe_custom_evo_update_config_confirmed(task_id: str, task_name: str, loops: list[dict[str, Any]], confirm_update: str | None = None, target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False) -> Any:
+    def qe_custom_evo_update_config_confirmed(
+        task_id: str,
+        task_name: str,
+        loops: list[dict[str, Any]],
+        confirm_update: str | None = None,
+        target_desc: str = "",
+        node_id: str | None = None,
+        node_parallelism: dict[str, int] | None = None,
+        engine_mode: str = "unified",
+        phase_pipeline_enabled: bool = False,
+        resource_telemetry_enabled: bool = False,
+    ) -> Any:
         registry.confirm(confirm_update, QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM, "confirm_update")
         normalized_config = _require_valid_experiment_config(
             "custom_evo",
@@ -577,7 +738,9 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_run_confirmed")
-    def qe_custom_evo_run_confirmed(task_id: str, force_full_train: bool = False, confirm_custom_evo: str | None = None) -> Any:
+    def qe_custom_evo_run_confirmed(
+        task_id: str, force_full_train: bool = False, confirm_custom_evo: str | None = None
+    ) -> Any:
         registry.confirm(confirm_custom_evo, QE_CUSTOM_EVO_RUN_CONFIRM, "confirm_custom_evo")
         safe = registry.sanitize(task_id, "task_id")
         return client.post(
@@ -592,7 +755,9 @@ def register(registry: "ModuleRegistry") -> None:
         return client.delete(f"/quantevolver/evolution/tasks/{safe}")
 
     @registry.mcp.tool(name="qe_custom_evo_retry_loop_confirmed")
-    def qe_custom_evo_retry_loop_confirmed(task_id: str, loop_index: int, retry_mode: str = "auto", confirm_retry: str | None = None) -> Any:
+    def qe_custom_evo_retry_loop_confirmed(
+        task_id: str, loop_index: int, retry_mode: str = "auto", confirm_retry: str | None = None
+    ) -> Any:
         registry.confirm(confirm_retry, "QE_CUSTOM_EVO_RETRY", "confirm_retry")
         safe = registry.sanitize(task_id, "task_id")
         return client.post(
@@ -601,7 +766,16 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_rerun_loop_confirmed")
-    def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None, node_id: str | None = None, node_parallelism: dict[str, int] | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
+    def qe_custom_evo_rerun_loop_confirmed(
+        task_id: str,
+        loop_index: int,
+        loop: dict[str, Any],
+        confirm_rerun: str | None = None,
+        node_id: str | None = None,
+        node_parallelism: dict[str, int] | None = None,
+        phase_pipeline_enabled: bool | None = None,
+        resource_telemetry_enabled: bool | None = None,
+    ) -> Any:
         registry.confirm(confirm_rerun, "QE_CUSTOM_EVO_RERUN", "confirm_rerun")
         loop_payload = dict(loop or {})
         _ensure_loop_fixed_seed(loop_payload, context="qe_custom_evo_rerun_loop_confirmed.loop")
@@ -624,7 +798,15 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_append_loops_confirmed")
-    def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None, node_id: str | None = None, node_parallelism: dict[str, int] | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
+    def qe_custom_evo_append_loops_confirmed(
+        task_id: str,
+        loops: list[dict[str, Any]],
+        confirm_append: str | None = None,
+        node_id: str | None = None,
+        node_parallelism: dict[str, int] | None = None,
+        phase_pipeline_enabled: bool | None = None,
+        resource_telemetry_enabled: bool | None = None,
+    ) -> Any:
         registry.confirm(confirm_append, "QE_CUSTOM_EVO_APPEND", "confirm_append")
         loop_payloads = [dict(loop or {}) for loop in (loops or [])]
         for idx, loop in enumerate(loop_payloads, start=1):
@@ -664,6 +846,114 @@ def register(registry: "ModuleRegistry") -> None:
                 "description": description,
                 "config_json": normalized_config,
                 "archive_policy": archive_policy,
+            },
+        )
+
+    @registry.mcp.tool(name="qe_single_experiment_template_create")
+    def qe_single_experiment_template_create(
+        title: str,
+        factor_names: list[str],
+        model_id: str,
+        strategy_id: str | None = None,
+        node_id: str | None = None,
+        universe_mode: str = "stock_universe",
+        pool_ids: list[str] | None = None,
+        train_start: str | None = None,
+        train_end: str | None = None,
+        valid_start: str | None = None,
+        valid_end: str | None = None,
+        test_start: str | None = None,
+        test_end: str | None = None,
+        backtest_end: str | None = None,
+        random_seed: int = 123,
+        archive_policy: str = "AUTO",
+        description: str | None = None,
+    ) -> Any:
+        split_values = {
+            "train_start": train_start,
+            "train_end": train_end,
+            "valid_start": valid_start,
+            "valid_end": valid_end,
+            "test_start": test_start,
+            "test_end": test_end,
+            "backtest_end": backtest_end,
+        }
+        config: dict[str, Any] = {
+            "factor_names": list(factor_names),
+            "model_id": model_id,
+            "strategy_id": strategy_id,
+            "node_id": node_id,
+            "universe_selection": {
+                "mode": universe_mode,
+                "pool_ids": list(pool_ids or []),
+            },
+            "custom_params": {"random_seed": int(random_seed)},
+        }
+        explicit_split = {key: value for key, value in split_values.items() if value}
+        if explicit_split:
+            config["data_split"] = explicit_split
+        normalized_config = _require_valid_experiment_config("single_experiment", config)
+        return client.post(
+            "/qe-templates",
+            {
+                "template_kind": "single_experiment",
+                "title": title,
+                "description": description,
+                "config_json": normalized_config,
+                "archive_policy": archive_policy,
+            },
+        )
+
+    @registry.mcp.tool(name="qe_universe_comparison_task_create")
+    def qe_universe_comparison_task_create(
+        task_name: str,
+        pool_ids: list[str],
+        factor_keys: list[str],
+        model_id: str,
+        strategy_id: str | None = None,
+        node_id: str | None = None,
+        random_seed: int = 123,
+        topk: int = 50,
+        n_drop: int = 5,
+        label_horizon: int = 20,
+        execution_algo: str = "TWAP",
+        train_start: str | None = None,
+        train_end: str | None = None,
+        valid_start: str | None = None,
+        valid_end: str | None = None,
+        test_start: str | None = None,
+        test_end: str | None = None,
+        backtest_end: str | None = None,
+        auto_start: bool = False,
+    ) -> Any:
+        return client.post(
+            "/quantevolver/evolution/universe-comparison-tasks",
+            {
+                "task_name": task_name,
+                "pool_ids": list(pool_ids),
+                "topk_by_pool": {
+                    pool_id: 20 if str(pool_id).strip().lower() == "star50" else int(topk) for pool_id in pool_ids
+                },
+                "base_loop": _comparison_base_loop(
+                    factor_keys=factor_keys,
+                    model_id=model_id,
+                    strategy_id=strategy_id,
+                    node_id=node_id,
+                    random_seed=random_seed,
+                    topk=topk,
+                    n_drop=n_drop,
+                    label_horizon=label_horizon,
+                    execution_algo=execution_algo,
+                    train_start=train_start,
+                    train_end=train_end,
+                    valid_start=valid_start,
+                    valid_end=valid_end,
+                    test_start=test_start,
+                    test_end=test_end,
+                    backtest_end=backtest_end,
+                ),
+                "node_id": node_id,
+                "auto_start": bool(auto_start),
             },
         )
 

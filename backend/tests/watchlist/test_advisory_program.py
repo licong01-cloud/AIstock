@@ -882,6 +882,7 @@ def test_review_from_selection_accepts_target_date_with_explicit_data_cutoff() -
     }
     assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-08"
     assert runtime_config["selection_artifact_config"]["cutoff_policy"] == "FIXED_CUTOFF"
+    assert runtime_config["selection_price_mode"] == "DAILY_DB_ONLY"
     assert runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
     assert result.active_pool[0].effective_entry_date == date(2026, 6, 9)
     assert result.list_items[0].effective_trade_date == date(2026, 6, 9)

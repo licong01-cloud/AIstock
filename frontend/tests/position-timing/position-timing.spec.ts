@@ -100,6 +100,33 @@ test("position timing keeps scope explicit and emits only a human reminder", asy
       await route.fulfill({ json: { status: "VALID_TODAY", card_set: { card_set_id: "ptset_1", decision_trade_date: "2026-09-03", target_trade_date: "2026-09-04", cards: [card] } } });
       return;
     }
+    if (path.endsWith("/model-advice/current")) {
+      await route.fulfill({ json: {
+        status: "VALID_TODAY",
+        advice_set: {
+          decision_trade_date: "2026-09-03",
+          target_trade_date: "2026-09-04",
+          advice_tier: "EXPERIMENTAL_MODEL_ADVICE",
+          effect_evidence: "INCONCLUSIVE",
+          model_sha256: hash,
+          model_training_cutoff: "2026-08-31T20:00:00+08:00",
+          items: [{
+            canonical_symbol: "000001.SZ",
+            display_name: "平安银行",
+            primary_source_role: "HOLDING",
+            status: "AVAILABLE",
+            action: "HOLD",
+            sizing_status: "DIRECTION_ONLY",
+            planned_delta_qty: null,
+            reason_codes: ["MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE"],
+            candidate_action_values: [{ action: "HOLD", objective: "NO_ACTION", estimated_net_action_value_bps: 0, planned_delta_qty: null }],
+            research_population_status: "IN_FROZEN_RESEARCH_SAMPLE",
+            executable_alert: false,
+          }],
+        },
+      } });
+      return;
+    }
     if (path.endsWith("/evidence")) {
       await route.fulfill({ json: {
         product_evidence_tier: "RULE_BASED_RISK_MANAGEMENT",
@@ -116,6 +143,7 @@ test("position timing keeps scope explicit and emits only a human reminder", asy
         },
         hmm_runtime_role: "CONTEXT_ONLY",
         selection_runtime_role: "CONTEXT_ONLY",
+        action_value_v2: { runtime_status: "VALID_TODAY", advice_tier: "EXPERIMENTAL_MODEL_ADVICE", effect_evidence: "INCONCLUSIVE", model_sha256: hash, stock_confidence_interpretation: "MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE" },
         cost_disclosure: { min_commission_scope_verification: "BROKER_UNVERIFIED", thresholds_cny: { "1.00": 58824, "0.50": 117648, "0.25": 235295 } },
         outcome_evidence: { status: "AVAILABLE", coverage_counts: { matured: 0, pending: 5, unavailable: 0, materialization_missing: 0 }, paired_matured: { count: 0 }, intervention_intent: { count: 0 } },
       } });
@@ -159,10 +187,56 @@ test("position timing keeps scope explicit and emits only a human reminder", asy
   await expect(page.getByText("L2 审计结论")).toBeVisible();
   await expect(page.getByText(/RIDGE_V1: NEGATIVE\/ADEQUATE/)).toBeVisible();
   await expect(page.getByText("入选模型 无", { exact: false })).toBeVisible();
+  await expect(page.getByTestId("model-advice-000001.SZ")).toContainText("仅方向参考");
+  await expect(page.getByTestId("model-advice-list")).toContainText("HOLD 0.00 bps");
 
   await page.getByLabel("600000.SH 纳入择时分析").click();
   await expect.poll(() => scopeWrites.length).toBe(1);
   await expect(page.getByLabel("600000.SH 纳入择时分析")).toBeChecked();
   expect(scopeWrites[0]).toEqual({ analysis_enabled: true });
   await expect(page.getByRole("button", { name: /下单|自动交易|买入|卖出/ })).toHaveCount(0);
+});
+
+test("experimental model read failure does not hide the rule product", async ({ page }) => {
+  await page.route("**/api/v1/position-timing/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/materialize")) {
+      await route.fulfill({ json: { status: "ALREADY_MATERIALIZED" } });
+    } else if (path.endsWith("/intents")) {
+      await route.fulfill({ json: { items: [], scope_warnings: [] } });
+    } else if (path.endsWith("/cards/current")) {
+      await route.fulfill({ json: { status: "NO_CARD_SET", card_set: null } });
+    } else if (path.endsWith("/model-advice/current")) {
+      await route.fulfill({
+        status: 503,
+        json: { detail: { error_code: "MODEL_ADVICE_ARTIFACT_INVALID" } },
+      });
+    } else if (path.endsWith("/evidence")) {
+      await route.fulfill({
+        json: {
+          product_evidence_tier: "RULE_BASED_RISK_MANAGEMENT",
+          event_counts: {},
+          l2_runtime_status: "OFFLINE_PIPELINE_AVAILABLE_NO_RUNTIME_MODEL",
+          hmm_runtime_role: "CONTEXT_ONLY",
+          selection_runtime_role: "CONTEXT_ONLY",
+          cost_disclosure: {
+            min_commission_scope_verification: "BROKER_UNVERIFIED",
+            thresholds_cny: { "1.00": 58824, "0.50": 117648, "0.25": 235295 },
+          },
+        },
+      });
+    } else if (path.endsWith("/alerts/poll")) {
+      await route.fulfill({ json: { status: "NO_CARD_SET", items: [] } });
+    } else {
+      await route.abort();
+    }
+  });
+
+  await page.goto("/position-timing");
+
+  await expect(page.getByRole("heading", { name: "持仓与自选择时建议" })).toBeVisible();
+  await expect(page.getByText(/正式规则卡继续独立运行/)).toBeVisible();
+  await expect(page.getByTestId("model-advice-status")).toContainText(
+    "MODEL_ADVICE_READ_UNAVAILABLE",
+  );
 });

@@ -7214,8 +7214,14 @@ class SimulationLifecycleScheduler:
         broker = context.local_broker
         configure = getattr(broker, "configure_execution_runtime", None)
         terminalize = getattr(broker, "terminalize_historical_residuals", None)
+        clear_terminalization_scope = getattr(broker, "clear_historical_terminalization_scope", None)
         exporter = getattr(broker, "export_execution_snapshot", None)
-        if not callable(configure) or not callable(terminalize) or not callable(exporter):
+        if (
+            not callable(configure)
+            or not callable(terminalize)
+            or not callable(clear_terminalization_scope)
+            or not callable(exporter)
+        ):
             raise RuntimeConfigInvalidError(
                 "LocalSim broker cannot terminalize a historical durable residual generation",
                 context={
@@ -7226,43 +7232,47 @@ class SimulationLifecycleScheduler:
                 },
             )
         configure(run_id=run.run_id, binding_id=binding.binding_id)
-        handles = tuple(
-            terminalize(
-                plan_id=plan.plan_id,
-                orders=persisted_orders,
-                states=states,
-                residual_classifications=classifications,
-                as_of_time=recovery_as_of,
+        try:
+            handles = tuple(
+                terminalize(
+                    plan_id=plan.plan_id,
+                    orders=persisted_orders,
+                    states=states,
+                    residual_classifications=classifications,
+                    as_of_time=recovery_as_of,
+                )
             )
-        )
-        raw_snapshot = exporter(handles=handles)
-        snapshot = LocalSimExecutionSnapshot(
-            orders=tuple(raw_snapshot.get("orders") or ()),
-            fills=tuple(raw_snapshot.get("fills") or ()),
-            events=tuple(raw_snapshot.get("events") or ()),
-            cash_entries=tuple(raw_snapshot.get("cash_entries") or ()),
-            positions=dict(raw_snapshot.get("positions") or {}),
-            account=raw_snapshot.get("account"),
-            handle_statuses=tuple(raw_snapshot.get("handle_statuses") or ()),
-        )
-        execution = SimulationExecutionResult(
-            run=run,
-            execution_plan=plan,
-            broker_backend=binding.broker_backend,
-            status="SUBMITTED",
-            intent_count=len(plan.intents),
-            broker_result=LocalSimPlanSubmitResult(
-                order_intents=tuple(LocalSimExecutionBridge().build_order_intents(plan)),
-                handles=handles,
-                execution_snapshot=snapshot,
-            ),
-        )
-        local_persistence = self._persist_local_sim_execution_result(
-            binding=binding,
-            run=run,
-            execution=execution,
-            context=context,
-        )
+            raw_snapshot = exporter(handles=handles)
+            snapshot = LocalSimExecutionSnapshot(
+                orders=tuple(raw_snapshot.get("orders") or ()),
+                fills=tuple(raw_snapshot.get("fills") or ()),
+                events=tuple(raw_snapshot.get("events") or ()),
+                cash_entries=tuple(raw_snapshot.get("cash_entries") or ()),
+                positions=dict(raw_snapshot.get("positions") or {}),
+                account=raw_snapshot.get("account"),
+                handle_statuses=tuple(raw_snapshot.get("handle_statuses") or ()),
+            )
+            execution = SimulationExecutionResult(
+                run=run,
+                execution_plan=plan,
+                broker_backend=binding.broker_backend,
+                status="SUBMITTED",
+                intent_count=len(plan.intents),
+                broker_result=LocalSimPlanSubmitResult(
+                    order_intents=tuple(LocalSimExecutionBridge().build_order_intents(plan)),
+                    handles=handles,
+                    execution_snapshot=snapshot,
+                ),
+            )
+            predecessor_marks = self._previous_local_sim_mark_records(run)
+            local_persistence = self._persist_local_sim_execution_result(
+                binding=binding,
+                run=run,
+                execution=execution,
+                context=context,
+            )
+        finally:
+            clear_terminalization_scope(plan_id=plan.plan_id)
         if local_persistence is None or not bool(local_persistence.payload.get("terminal")):
             raise DataUnavailableError(
                 "Historical failed LocalSim residual generation did not persist as terminal",
@@ -7275,6 +7285,19 @@ class SimulationLifecycleScheduler:
             )
         latest = self.repository.get_simulation_daily_run(run.run_id)
         latest_states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
+        terminal_marks = self._previous_local_sim_mark_records(latest)
+        if terminal_marks != predecessor_marks:
+            raise DataUnavailableError(
+                "Historical failed LocalSim terminalization changed the predecessor valuation marks",
+                context={
+                    "reason_code": f"{reason_prefix}_VALUATION_MARKS_CHANGED",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                    "predecessor_mark_set_sha256": canonical_json_sha256(predecessor_marks),
+                    "terminal_mark_set_sha256": canonical_json_sha256(terminal_marks),
+                },
+            )
         self._validate_local_sim_post_close_state_closure(latest)
         latest_persistence = latest.run_payload_json.get("local_sim_persistence")
         remaining_active = tuple(state for state in latest_states if not state.is_terminal)
@@ -7344,6 +7367,8 @@ class SimulationLifecycleScheduler:
             "durable_minute_loop_advanced": False,
             "historical_realtime_market_data_requested": False,
             "broker_execution_replayed": False,
+            "valuation_marks_preserved": True,
+            "valuation_mark_set_sha256": canonical_json_sha256(predecessor_marks),
             "residual_order_count": historical_residual["residual_order_count"],
             "capital_residual_count": historical_residual["capital_residual_count"],
             "schedule_residual_count": historical_residual["schedule_residual_count"],
@@ -12288,13 +12313,34 @@ class SimulationLifecycleScheduler:
                     "plan_id": execution.execution_plan.plan_id,
                 },
             )
+        historical_terminalization_plan_id = getattr(
+            context.local_broker,
+            "historical_terminalization_plan_id",
+            None,
+        )
+        historical_terminalization = historical_terminalization_plan_id is not None
+        if historical_terminalization and (
+            not isinstance(historical_terminalization_plan_id, str)
+            or historical_terminalization_plan_id.strip() != execution.execution_plan.plan_id
+        ):
+            raise DataUnavailableError(
+                "LocalSim historical market-mark scope does not match the execution plan",
+                context={
+                    "reason_code": "LOCALSIM_HISTORICAL_MARK_SCOPE_CONFLICT",
+                    "plan_id": execution.execution_plan.plan_id,
+                    "historical_terminalization_plan_id": historical_terminalization_plan_id,
+                },
+            )
+        previous_mark_records = (
+            SimulationLifecycleScheduler._previous_local_sim_mark_records(execution.run) if positions else {}
+        )
         raw_records = (
             loader(
                 symbols=tuple(positions),
                 trade_date=execution.run.trade_date,
                 as_of_time=snapshot_time,
                 pre_trade_tradability=context.pre_trade_tradability,
-                previous_marks=SimulationLifecycleScheduler._previous_local_sim_mark_records(execution.run),
+                previous_marks=previous_mark_records,
             )
             if positions
             else {}
@@ -12338,6 +12384,29 @@ class SimulationLifecycleScheduler:
                         "mark_symbol": record.symbol,
                     },
                 )
+            if historical_terminalization:
+                try:
+                    predecessor_record = LocalSimMarketMarkV1.model_validate(previous_mark_records[symbol])
+                except Exception as exc:
+                    raise DataUnavailableError(
+                        "LocalSim historical terminalization predecessor mark is missing or invalid",
+                        context={
+                            "reason_code": "LOCALSIM_HISTORICAL_MARK_PREDECESSOR_INVALID",
+                            "symbol": symbol,
+                            "plan_id": execution.execution_plan.plan_id,
+                        },
+                    ) from exc
+                if record != predecessor_record:
+                    raise DataUnavailableError(
+                        "LocalSim historical terminalization changed a predecessor valuation mark",
+                        context={
+                            "reason_code": "LOCALSIM_HISTORICAL_MARK_CHANGED",
+                            "symbol": symbol,
+                            "plan_id": execution.execution_plan.plan_id,
+                            "predecessor_mark_hash": predecessor_record.mark_hash,
+                            "terminal_mark_hash": record.mark_hash,
+                        },
+                    )
             if record.as_of_time.replace(tzinfo=None) > snapshot_time.replace(tzinfo=None):
                 raise DataUnavailableError(
                     "LocalSim authoritative market mark is later than the account snapshot",
@@ -12382,7 +12451,10 @@ class SimulationLifecycleScheduler:
                     or record.provenance != LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
                     or float(record.price) != float(fact.pre_close)
                     or record.source != expected_source
-                    or record.as_of_time.replace(tzinfo=None) != snapshot_time.replace(tzinfo=None)
+                    or (
+                        not historical_terminalization
+                        and record.as_of_time.replace(tzinfo=None) != snapshot_time.replace(tzinfo=None)
+                    )
                 ):
                     raise DataUnavailableError(
                         "LocalSim suspended mark is not proven by the previous trading-day close",

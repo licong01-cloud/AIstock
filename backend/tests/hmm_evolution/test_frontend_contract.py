@@ -41,7 +41,6 @@ def test_phase_one_registers_only_real_evolution_routes() -> None:
     assert "/hmm-evolution" in combined
     assert "/hmm-risk" not in combined
     assert "/hmm-research-training" not in combined
-    assert not (REPO_ROOT / "frontend/src/app/hmm-risk").exists()
     assert not (REPO_ROOT / "frontend/src/app/hmm-research-training").exists()
 
 

@@ -15,15 +15,13 @@ from backend.services.advisory_phase0b.errors import (
     REASON_WINNER_REGISTRY_CONFLICT,
 )
 from backend.services.advisory_phase0b.audit_service import Phase0BMetricEngine
+from backend.services.advisory_phase0b.report_store import Phase0BTargetAuditReportV1
 from backend.services.advisory_phase0b.service import Phase0BCandidateQualityAuditService
 from backend.services.advisory_phase0b.snapshot_reader import (
     Phase0BSnapshotReadResultV1,
     Phase0BTargetProgramBindingV1,
 )
-from backend.tests.advisory_phase0b.test_audit_service import (
-    _full_request,
-    _populate_metric_spool,
-)
+from backend.tests.advisory_phase0b.test_contracts import _request
 from backend.tests.advisory_phase0b.test_snapshot_reader import _entry, _receipt
 from backend.tests.advisory_phase0b.test_spool import _roots
 
@@ -35,7 +33,6 @@ class _Reader:
 
     def read_into_spool(self, *, request: Any, spool: Any) -> Phase0BSnapshotReadResultV1:
         self.read_count += 1
-        _populate_metric_spool(spool)
         target = request.audit_targets[0]
         return Phase0BSnapshotReadResultV1(
             first_catalog_receipt=_receipt(),
@@ -62,7 +59,7 @@ class _ChangingReader(_Reader):
 
 
 def _two_target_request() -> Any:
-    request = _full_request()
+    request = _request()
     first_target = request.audit_targets[0]
     second_payload = first_target.model_dump(mode="python")
     second_payload.update(
@@ -148,14 +145,6 @@ def _two_snapshot_receipt() -> Any:
 class _TwoSnapshotReader(_Reader):
     def read_into_spool(self, *, request: Any, spool: Any) -> Phase0BSnapshotReadResultV1:
         self.read_count += 1
-        _populate_metric_spool(spool)
-        _populate_metric_spool(
-            spool,
-            snapshot_id="snapshot-2",
-            package_id="package-2",
-            manifest_sha256="b" * 64,
-            range_program_hash="8" * 64,
-        )
         bindings = tuple(
             Phase0BTargetProgramBindingV1(
                 target_hash=str(target.target_hash),
@@ -171,7 +160,25 @@ class _TwoSnapshotReader(_Reader):
         )
 
 
-class _FailSecondTargetMetricEngine(Phase0BMetricEngine):
+class _MetricEngine(Phase0BMetricEngine):
+    def evaluate_target(self, **kwargs: Any) -> Phase0BTargetAuditReportV1:
+        target = kwargs["target"]
+        return Phase0BTargetAuditReportV1(
+            target_hash=str(target.target_hash),
+            snapshot_id=target.snapshot_id,
+            program_id=target.program_id,
+            package_id=target.package_id,
+            manifest_sha256=target.manifest_sha256,
+            alpha_mode=target.alpha_mode,
+            style_hypothesis=target.style_hypothesis,
+            decision_date_count=0,
+            metric_results=(),
+            package_conclusion=None,
+            phase2_phase3_recommendations=(),
+        )
+
+
+class _FailSecondTargetMetricEngine(_MetricEngine):
     def __init__(self) -> None:
         self.target_count = 0
 
@@ -190,14 +197,17 @@ def test_service_runs_one_atomic_bundle_and_cleans_exact_spool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository_root, dataset_root, output_root = _roots(tmp_path)
-    request = _full_request()
+    request = _request()
     reader = _Reader()
     monkeypatch.setattr(
         "backend.services.advisory_phase0b.service.phase0b_producer_code_closure_hash",
         lambda **_kwargs: request.producer_code_closure_hash,
     )
 
-    receipt = Phase0BCandidateQualityAuditService(snapshot_reader=reader).run(  # type: ignore[arg-type]
+    receipt = Phase0BCandidateQualityAuditService(
+        snapshot_reader=reader,  # type: ignore[arg-type]
+        metric_engine=_MetricEngine(),
+    ).run(
         request=request,
         repository_root=repository_root,
         dataset_root=dataset_root,
@@ -217,7 +227,7 @@ def test_service_rejects_producer_drift_before_snapshot_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository_root, dataset_root, output_root = _roots(tmp_path)
-    request = _full_request()
+    request = _request()
     reader = _Reader()
     monkeypatch.setattr(
         "backend.services.advisory_phase0b.service.phase0b_producer_code_closure_hash",
@@ -270,7 +280,7 @@ def test_service_final_catalog_change_publishes_no_report_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository_root, dataset_root, output_root = _roots(tmp_path)
-    request = _full_request()
+    request = _request()
     reader = _ChangingReader()
     monkeypatch.setattr(
         "backend.services.advisory_phase0b.service.phase0b_producer_code_closure_hash",
@@ -278,7 +288,10 @@ def test_service_final_catalog_change_publishes_no_report_receipt(
     )
 
     with pytest.raises(Phase0BAuditError) as captured:
-        Phase0BCandidateQualityAuditService(snapshot_reader=reader).run(  # type: ignore[arg-type]
+        Phase0BCandidateQualityAuditService(
+            snapshot_reader=reader,  # type: ignore[arg-type]
+            metric_engine=_MetricEngine(),
+        ).run(
             request=request,
             repository_root=repository_root,
             dataset_root=dataset_root,

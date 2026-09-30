@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import date
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
+
+from backend.data_service.security_source_identity import (
+    load_default_security_source_identity_manifest,
+)
 
 from backend.services.dataset_release.artifact_ready_build_source import (
     ArtifactReadyBuildSource,
@@ -74,6 +79,46 @@ def test_single_code_minute_selection_opens_only_its_stable_hash_bucket() -> Non
     assert partitions[0].identity.endswith(f"bucket-{selected:04d}")
     assert source._reader.partition_keys == [f"2026-07-01_2026-07-31_bucket-{selected:04d}"]
     assert [row["ts_code"] for row in rows] == [code]
+
+
+def test_moneyflow_factor_reader_expands_source_alias_and_keeps_both_identities() -> None:
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source.security_source_identity = load_default_security_source_identity_manifest()
+    source.pit_snapshot = SimpleNamespace(spans=())
+    partition = SimpleNamespace(
+        identity="moneyflow_ts:2024-08-01_2025-02-28",
+        rows=iter(
+            (
+                {
+                    "ts_code": "300114.SZ",
+                    "trade_date": "2024-08-13",
+                    "net_mf_amount": 12.0,
+                },
+                {
+                    "ts_code": "000001.SZ",
+                    "trade_date": "2024-08-13",
+                    "net_mf_amount": 99.0,
+                },
+            )
+        ),
+    )
+    source.ordered_partitions = lambda *_args, **_kwargs: (partition,)
+
+    frames = list(
+        source.iter_factor_frames(
+            "moneyflow",
+            "2024-08-01_2025-02-28",
+            start=date(2024, 8, 1),
+            end=date(2025, 2, 28),
+            max_rows=100,
+            instruments=("302132.SZ",),
+        )
+    )
+
+    assert len(frames) == 1
+    assert frames[0]["ts_code"].tolist() == ["302132.SZ"]
+    assert frames[0]["source_ts_code"].tolist() == ["300114.SZ"]
+    assert pd.to_numeric(frames[0]["net_mf_amount"]).tolist() == [12.0]
 
 
 def test_effective_daily_rows_stream_database_then_missing_only_overlay(tmp_path) -> None:

@@ -1,5 +1,5 @@
 {
-  "actual": "The recovery path invokes _drive_existing_local_sim at the prior trade date after close, reaches risk validation with zero executable bars, returns FAILED_RETRYABLE, and schedules the same deterministic recovery indefinitely.",
+  "actual": "The first source fix stopped historical realtime replay, but post-restart recovery still returns FAILED_RETRYABLE because a valid frozen suspended-position mark from 14:56 is compared with the 15:00 terminalization timestamp and rejected as LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN.",
   "allowed_write_scope": [
     "backend/services/simulation_execution/localsim/runtime.py",
     "backend/services/simulation_runtime/scheduler.py",
@@ -22,10 +22,17 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260907-404dc35a3f28",
       "timestamp": "2026-09-07T06:36:44.318090Z"
+    },
+    {
+      "action": "post_restart_fixpoint_failed",
+      "actor": "codex",
+      "note": "Runtime identity included source merge 655a34f8, but simrun_555075b03708358f remained FAILED_RETRYABLE after 14 attempts because frozen valuation time and terminalization time were incorrectly required to be equal.",
+      "timestamp": "2026-09-09T06:49:49.415661Z"
     }
   ],
   "evidence_uris": [
-    "simrun_555075b03708358f; order ord_c4a902bbfe9c44bfb49540514e27538f; LOCAL_SIM_INTRADAY_ADVANCE_FAILED; recovery failures=10"
+    "simrun_555075b03708358f; order ord_c4a902bbfe9c44bfb49540514e27538f; LOCAL_SIM_INTRADAY_ADVANCE_FAILED; recovery failures=10",
+    "2026-09-09 read-only runtime evidence: attempt_count=14; previous suspended mark 002998.SZ as_of_time=14:56; recovery snapshot_time=15:00; reason_code=LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN"
   ],
   "expected": "Cross-day recovery validates the exact durable generation and terminalizes remaining prior-day quantities once as CAPITAL_RESIDUAL or SCHEDULE_RESIDUAL using the existing frozen orders, fills, cash ledger, positions, and outbox lineage. It must not replay broker execution, request unavailable historical realtime bars, alter economic facts, or report false success.",
   "file_scope_contract": {
@@ -103,7 +110,7 @@
   "fixed_at": null,
   "github_issue_number": 4379,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4379",
-  "last_seen_at": "2026-09-07T06:36:44.318111Z",
+  "last_seen_at": "2026-09-09T06:49:49.415661Z",
   "module": "simulation_runtime",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -115,6 +122,7 @@
   "reproduce_command": "GET /api/v1/simulation-runtime/runs/simrun_555075b03708358f and inspect scheduler_loop_health STALE_LOCALSIM_FAILED_RUN_RECOVERY",
   "required_verification": [
     "l0",
+    "platform_api_backend",
     "simulation_core_l2"
   ],
   "risk_area": "bug",
@@ -131,8 +139,12 @@
       "schema_version": "aistock_expected_terminal_outcome_v1"
     },
     "fresh_process_evidence": [
-      "fresh pytest process exercised both failed statuses and capital-residual closure without historical realtime market-data calls: 3 passed",
-      "fresh simulation_core_l2 process loaded the changed LocalSim runtime and scheduler code; 830 passed, 4 skipped"
+      "fresh AIstock pytest process exercised suspended-mark timestamp separation, exact predecessor mark preservation, both failed statuses, exporter-failure scope cleanup, and capital-residual closure without historical realtime market-data calls: 3 passed",
+      "fresh validation_module_registry_l0 process passed ownership/catalog validation: 8 passed; files=14, mapped=14, unmapped=0, ambiguous=0",
+      "fresh platform_api_backend process passed: 15 passed",
+      "fresh simulation_core_l2 process loaded the changed LocalSim runtime and scheduler code: 767 passed, 3 skipped; related cross-module matrix: 63 passed, 1 skipped",
+      "AIstock environment loaded changed runtime and scheduler; exact fixpoint 3 passed and simulation_core_l2 passed",
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe loaded the changed LocalSim runtime and scheduler; exact fixpoint 3 passed and simulation_core_l2 830 passed, 4 skipped"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",

@@ -14,12 +14,16 @@ from backend.services.advisory_model_first.feature_schema_v1 import (
 )
 from backend.services.advisory_model_first.outcome_split import OutcomeDateSplit
 from backend.services.advisory_model_first.price_range_bundle import (
+    publish_daily_price_envelope_bundle,
     publish_price_range_bundle,
+    read_daily_price_envelope_bundle_manifest,
     read_price_range_bundle_manifest,
 )
 from backend.services.advisory_model_first.price_range_contracts import (
     PRICE_RANGE_MODEL_NAMES,
+    PRICE_RANGE_QUANTILE_MODEL_NAMES,
     PriceRangeInputArtifactV1,
+    build_frozen_daily_price_envelope_training_request,
     build_frozen_price_range_training_request,
     canonical_json_sha256,
 )
@@ -77,6 +81,25 @@ def _request(tmp_path: Path):
         repository_commit="4" * 40,
         output_root=str(tmp_path),
         created_at="2026-08-10T00:00:00Z",
+    )
+
+
+def _request_v2(tmp_path: Path):
+    legacy = _request(tmp_path)
+    values = legacy.model_dump(
+        exclude={
+            "schema_version",
+            "request_id",
+            "request_sha256",
+            "created_at",
+            "label_policy_version",
+            "entry_gap_condition",
+            "trainer_seed",
+        }
+    )
+    return build_frozen_daily_price_envelope_training_request(
+        **values,
+        created_at="2026-09-14T00:00:00Z",
     )
 
 
@@ -145,6 +168,84 @@ def _training(split: OutcomeDateSplit) -> PriceRangeTrainingResult:
             "evaluation_history": {name: {} for name in PRICE_RANGE_MODEL_NAMES}
         },
     )
+
+
+def _training_v3(split: OutcomeDateSplit) -> PriceRangeTrainingResult:
+    test_dates = pd.DatetimeIndex(split.test)
+    row_count = len(test_dates) * 20
+    decision_dates = test_dates.repeat(20)
+    return PriceRangeTrainingResult(
+        models={name: _Model(name) for name in PRICE_RANGE_QUANTILE_MODEL_NAMES},
+        feature_names=tuple(MODEL_FEATURE_COLUMNS),
+        categorical_vocabulary={"l2_code_id": (1, 2)},
+        metrics={
+            "model_count": 3,
+            "status": "EXPERIMENTAL_SHADOW",
+            "calibration_state": "UNCALIBRATED",
+            "test_row_count": row_count,
+            "test_date_count": 80,
+            "heads": {
+                name: {
+                    "row_count": row_count,
+                    "best_iteration": 2,
+                    "condition": "NEXT_TRADING_DAY_VALID_OPEN",
+                }
+                for name in PRICE_RANGE_QUANTILE_MODEL_NAMES
+            },
+            "entry_gap_distribution": {
+                "condition": "NEXT_TRADING_DAY_VALID_OPEN"
+            },
+        },
+        test_predictions=pd.DataFrame(
+            {
+                "decision_as_of_trade_date": decision_dates,
+                "target_trade_date": decision_dates + pd.offsets.BDay(1),
+                "instrument": [
+                    f"{rank:06d}.SZ" for _date in test_dates for rank in range(1, 21)
+                ],
+                "selection_effective_rank": list(range(1, 21)) * len(test_dates),
+                "parent_combined_score": 0.5,
+                "entry_gap_label_status": "AVAILABLE",
+                "entry_gap_label_reason": "target_open_observed",
+                "entry_gap_return": 0.01,
+                "entry_gap_q10": -0.01,
+                "entry_gap_q50": 0.01,
+                "entry_gap_q90": 0.03,
+                "entry_gap_condition": "NEXT_TRADING_DAY_VALID_OPEN",
+            }
+        ),
+        training_log={
+            "evaluation_history": {
+                name: {} for name in PRICE_RANGE_QUANTILE_MODEL_NAMES
+            }
+        },
+    )
+
+
+def test_daily_price_envelope_v3_bundle_is_exact_and_has_no_binary_head(
+    tmp_path: Path,
+) -> None:
+    split = _split()
+    bundle_id, bundle_path, manifest = publish_daily_price_envelope_bundle(
+        model_root=tmp_path,
+        request=_request_v2(tmp_path),
+        split=split,
+        training=_training_v3(split),
+        environment_report={
+            "conda_environment": "rdagent-gpu",
+            "lightgbm_version": "4.0",
+            "pyarrow_version": "20.0",
+        },
+        resource_report={"peak_rss_bytes": 100, "limit_bytes": 8 * 1024**3},
+    )
+
+    assert manifest["schema_version"] == "advisory_price_range_bundle_v3"
+    assert manifest["output_schema_version"] == "advisory_daily_price_envelope_v1"
+    assert manifest["model_names"] == list(PRICE_RANGE_QUANTILE_MODEL_NAMES)
+    assert "entry_executable_probability" not in manifest["model_names"]
+    assert read_daily_price_envelope_bundle_manifest(
+        bundle_path, expected_bundle_id=bundle_id
+    ) == manifest
 
 
 def test_price_range_bundle_is_atomic_exact_and_tamper_evident(tmp_path: Path) -> None:

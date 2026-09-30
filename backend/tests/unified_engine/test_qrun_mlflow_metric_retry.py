@@ -16,6 +16,12 @@ RUNNER_PATH = PROJECT_ROOT / "scripts" / "qrun_limit_minute.py"
 DAY_RUNNER_PATH = PROJECT_ROOT / "scripts" / "qrun_limit.py"
 
 
+class _FakeQlibConfig(dict):
+    def get_kernels(self, freq: str) -> int:
+        del freq
+        return int(self["kernels"])
+
+
 def _load_runner(monkeypatch: pytest.MonkeyPatch, runner_path: Path = RUNNER_PATH):
     qlib = types.ModuleType("qlib")
     qlib_model = types.ModuleType("qlib.model")
@@ -37,7 +43,15 @@ def _load_runner(monkeypatch: pytest.MonkeyPatch, runner_path: Path = RUNNER_PAT
     qlib_record_temp = types.ModuleType("qlib.workflow.record_temp")
     qlib_workflow.record_temp = qlib_record_temp
     qlib_config = types.ModuleType("qlib.config")
-    qlib_config.C = {"exp_manager": {"kwargs": {}}}
+    qlib_config.C = _FakeQlibConfig(kernels=26, exp_manager={"kwargs": {}})
+    qlib.init_calls = []
+
+    def fake_init(**kwargs) -> None:
+        qlib.init_calls.append(dict(kwargs))
+        # Model QlibConfig.set(): qlib.init resets C before applying kwargs.
+        qlib_config.C["kernels"] = kwargs.get("kernels", 26)
+
+    qlib.init = fake_init
 
     for name, module in {
         "qlib": qlib,
@@ -125,8 +139,96 @@ def test_qrun_minute_quote_universe_requires_day_minute_window_parity(tmp_path, 
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
 
-def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
+def test_qrun_minute_coverage_accepts_only_suspend_or_explicit_full_window_explanations(
     tmp_path, monkeypatch
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    day_root = tmp_path / "day"
+    minute_root = tmp_path / "minute"
+    (day_root / "instruments").mkdir(parents=True)
+    (day_root / "calendars").mkdir(parents=True)
+    (minute_root / "instruments").mkdir(parents=True)
+    pool_name = "filtered_pool_20260630"
+    (day_root / "instruments" / f"{pool_name}.txt").write_text(
+        "000627.SZ\t2026-06-01\t2026-06-29\n"
+        "601989.SH\t2026-06-01\t2026-06-29\n",
+        encoding="utf-8",
+    )
+    (minute_root / "instruments" / f"{pool_name}.txt").write_text(
+        "000627.SZ\t2026-06-01 09:30:00\t2026-06-26 15:00:00\n"
+        "601989.SH\t2026-06-01 09:30:00\t2026-06-26 15:00:00\n",
+        encoding="utf-8",
+    )
+    (day_root / "calendars" / "day.txt").write_text(
+        "2026-06-26\n2026-06-27\n2026-06-28\n2026-06-29\n",
+        encoding="utf-8",
+    )
+    exclusions = [
+        {
+            "schema_version": "qe_execution_data_exclusion_v1",
+            "instrument": "601989.SH",
+            "scope": "full_backtest_window",
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-29",
+            "reason_code": "minute_source_gap_confirmed_unfillable",
+            "evidence_sha256": "b" * 64,
+        }
+    ]
+    artifact = {
+        "enabled": True,
+        "suspended_by_date": {
+            "2026-06-26": [],
+            "2026-06-27": ["000627.SZ"],
+            "2026-06-28": ["000627.SZ"],
+            "2026-06-29": ["000627.SZ"],
+        },
+        "execution_data_exclusions": exclusions,
+        "execution_data_exclusion_contract_sha256": hashlib.sha256(
+            json.dumps(
+                exclusions,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    (tmp_path / "qe_suspend_filter.json").write_text(
+        json.dumps(artifact), encoding="utf-8"
+    )
+    config = _minute_config(minute_root, day_root)
+
+    runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    assert config["qe_minute_coverage_summary"] == {
+        "schema_version": "qe_minute_coverage_summary_v1",
+        "selection_market": pool_name,
+        "expected_spans": 2,
+        "suspension_explained_days": 3,
+        "execution_exclusion_explained_days": 3,
+        "execution_data_exclusion_count": 1,
+    }
+
+    artifact["execution_data_exclusions"] = []
+    artifact["execution_data_exclusion_contract_sha256"] = hashlib.sha256(b"[]").hexdigest()
+    (tmp_path / "qe_suspend_filter.json").write_text(
+        json.dumps(artifact), encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="601989.SH:2026-06-27"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+
+def test_qrun_builds_suspend_artifact_before_minute_coverage_validation() -> None:
+    run_main_source = RUNNER_PATH.read_text(encoding="utf-8").split(
+        "def _run_main(args):", 1
+    )[1]
+
+    assert run_main_source.index("ensure_frozen_suspend_filter_artifact(cwd=") < run_main_source.index(
+        "_validate_minute_instrument_coverage_contract(config, cwd="
+    )
+
+
+@pytest.mark.parametrize("binding_schema", ["qe_direct_v2_dataset_binding_v2", "qe_direct_v2_dataset_binding_v3"])
+def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
+    tmp_path, monkeypatch, binding_schema
 ) -> None:
     runner, _record_temp = _load_runner(monkeypatch)
     day_root = tmp_path / "day"
@@ -146,16 +248,26 @@ def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
     )
     config = _minute_config(minute_root, day_root)
     config["market"] = "stock_universe"
-    (tmp_path / "qe_direct_v2_dataset_binding.json").write_text(
+    selection_pins = {
+        "stock_pool": "stock_universe",
+        "instruments_sha256": hashlib.sha256(
+            (day_instruments / "stock_universe.txt").read_bytes()
+        ).hexdigest(),
+    }
+    if binding_schema == "qe_direct_v2_dataset_binding_v3":
+        selection_pins = {
+            "mode": "stock_universe",
+            "pool_ids": [],
+            "instrument_name": "stock_universe",
+            "instruments_file": "stock_universe.txt",
+            "instruments_sha256": selection_pins["instruments_sha256"],
+        }
+    binding_path = tmp_path / "qe_direct_v2_dataset_binding.json"
+    binding_path.write_text(
         json.dumps(
             {
-                "schema_version": "qe_direct_v2_dataset_binding_v2",
-                "selection_pins": {
-                    "stock_pool": "stock_universe",
-                    "instruments_sha256": hashlib.sha256(
-                        (day_instruments / "stock_universe.txt").read_bytes()
-                    ).hexdigest(),
-                },
+                "schema_version": binding_schema,
+                "selection_pins": selection_pins,
                 "minute_pins": {
                     "instruments_sha256": hashlib.sha256(minute_all.read_bytes()).hexdigest(),
                 },
@@ -180,6 +292,13 @@ def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
     )
     with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_BINDING_HASH_MISMATCH"):
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    if binding_schema == "qe_direct_v2_dataset_binding_v3":
+        invalid_binding = json.loads(binding_path.read_text(encoding="utf-8"))
+        invalid_binding["selection_pins"]["instruments_file"] = "other.txt"
+        binding_path.write_text(json.dumps(invalid_binding), encoding="utf-8")
+        with pytest.raises(RuntimeError, match="QE_MINUTE_INSTRUMENT_BINDING_INVALID"):
+            runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
 
 def test_qrun_minute_quote_universe_missing_market_fails_closed(tmp_path, monkeypatch) -> None:
@@ -213,6 +332,55 @@ def test_qrun_pred_backtest_rejects_nonempty_prediction_with_zero_execution(tmp_
 
     recorder.indicators = pd.DataFrame({"count": [1, 0], "deal_amount": [1000.0, 0.0]})
     runner._validate_pred_backtest_has_execution(recorder, config, prediction)
+
+
+def test_qrun_pred_backtest_filters_replayed_prediction_to_run_scoped_dataset(
+    monkeypatch,
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    prediction_index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2026-08-03"), "000001.SZ"),
+            (pd.Timestamp("2026-08-03"), "000002.SZ"),
+            (pd.Timestamp("2026-08-04"), "000002.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    label_index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2026-08-03"), "000002.SZ"),
+            (pd.Timestamp("2026-08-04"), "000002.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    prediction = pd.DataFrame({"score": [0.9, 0.8, 0.7]}, index=prediction_index)
+    label = pd.DataFrame({"label": [0.1, 0.2]}, index=label_index)
+
+    filtered = runner._filter_pred_backtest_to_dataset(prediction, label)
+
+    assert filtered.index.tolist() == label_index.tolist()
+    assert prediction.shape[0] == 3
+
+
+def test_qrun_pred_backtest_rejects_empty_run_scoped_prediction(monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    prediction = pd.DataFrame(
+        {"score": [0.9]},
+        index=pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+            names=["datetime", "instrument"],
+        ),
+    )
+    label = pd.DataFrame(
+        {"label": [0.1]},
+        index=pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2026-08-03"), "000002.SZ")],
+            names=["datetime", "instrument"],
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="QE_PRED_BACKTEST_UNIVERSE_EMPTY"):
+        runner._filter_pred_backtest_to_dataset(prediction, label)
 
 
 def test_qrun_minute_guards_do_not_change_non_minute_backtests(tmp_path, monkeypatch) -> None:
@@ -594,3 +762,73 @@ def test_qrun_installs_mlflow_retry_after_init_before_task_train(runner_path: Pa
     install_index = run_main.index("_install_mlflow_metric_read_retry()")
     train_index = run_main.index("recorder = _task_train_with_gats_industry_provider(")
     assert init_index < install_index < train_index
+
+
+@pytest.mark.parametrize(
+    ("runner_path", "freq"),
+    [(RUNNER_PATH, "1min"), (DAY_RUNNER_PATH, "day")],
+)
+def test_qrun_passes_four_kernel_limit_through_qlib_init(
+    monkeypatch: pytest.MonkeyPatch,
+    runner_path: Path,
+    freq: str,
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch, runner_path)
+    config = {
+        "qlib_init": {
+            "provider_uri": {"day": "/data/day", "1min": "/data/minute"},
+            "kernels": 99,
+        }
+    }
+    exp_manager = {"kwargs": {"uri": "file:/tmp/mlruns"}}
+
+    qlib_init_config = runner._qlib_init_config_with_kernel_limit(config)
+    runner.qlib.init(**qlib_init_config, exp_manager=exp_manager)
+    runner._verify_qlib_kernel_limit(freq)
+
+    assert len(runner.qlib.init_calls) == 1
+    assert runner.qlib.init_calls[0]["kernels"] == 4
+    assert runner.qlib.init_calls[0]["provider_uri"] == config["qlib_init"]["provider_uri"]
+    assert runner.qlib.init_calls[0]["exp_manager"] is exp_manager
+    assert runner.C.get_kernels(freq) == 4
+    assert config["qlib_init"]["kernels"] == 99
+
+
+@pytest.mark.parametrize(
+    ("runner_path", "freq"),
+    [(RUNNER_PATH, "1min"), (DAY_RUNNER_PATH, "day")],
+)
+def test_qrun_fails_closed_when_effective_kernel_limit_does_not_stick(
+    monkeypatch: pytest.MonkeyPatch,
+    runner_path: Path,
+    freq: str,
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch, runner_path)
+
+    def ignore_requested_kernels(**_kwargs) -> None:
+        runner.C["kernels"] = 26
+
+    monkeypatch.setattr(runner.qlib, "init", ignore_requested_kernels)
+    qlib_init_config = runner._qlib_init_config_with_kernel_limit(
+        {"qlib_init": {"provider_uri": "/data/day"}}
+    )
+    runner.qlib.init(**qlib_init_config, exp_manager={"kwargs": {}})
+
+    with pytest.raises(RuntimeError, match="QE_QLIB_KERNEL_LIMIT_NOT_EFFECTIVE"):
+        runner._verify_qlib_kernel_limit(freq)
+
+    assert runner.C.get_kernels(freq) == 26
+
+
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_verifies_kernel_limit_before_provider_read(runner_path: Path) -> None:
+    source = runner_path.read_text(encoding="utf-8")
+    run_main = source[source.index("def _run_main") :]
+
+    build_at = run_main.index("_qlib_init_config_with_kernel_limit(config)")
+    init_at = run_main.index("qlib.init(**qlib_init_config")
+    verify_at = run_main.index("_verify_qlib_kernel_limit(")
+    provider_read_at = run_main.index("load_benchmark_series(config)")
+
+    assert build_at < init_at < verify_at < provider_read_at
+    assert 'C["kernels"] = 4' not in run_main

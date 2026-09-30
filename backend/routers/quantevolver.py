@@ -227,6 +227,11 @@ class GenerateConfigRequest(BaseModel):
     alpha_mode: Optional[str] = Field(None, description="single (默认) / multi")
     multi_alpha_config: Optional[Dict[str, Any]] = Field(None, description="Multi-Alpha 分组配置 JSON")
     parent_multi_alpha_id: Optional[str] = Field(None, description="源实验ID（演进血统追踪）")
+    consumer_id: str = Field(
+        "qe_mainline",
+        pattern="^(qe_mainline|advisory)$",
+        description="QE business consumer: qe_mainline or advisory",
+    )
     created_by_type: Optional[str] = Field("ui", pattern="^(ui|mcp|scheduler|agent)$", description="创建来源类型: ui/mcp/scheduler/agent")
     created_by_name: Optional[str] = Field(None, description="创建来源名称")
     purpose: str = Field("research", pattern="^(research|validation)$")
@@ -3107,6 +3112,7 @@ def generate_config(req: GenerateConfigRequest):
         provenance.update(
             {
                 "created_by_type": req.created_by_type or "ui",
+                "consumer_id": req.consumer_id,
                 "purpose": req.purpose,
             }
         )
@@ -3115,6 +3121,7 @@ def generate_config(req: GenerateConfigRequest):
         custom_params["qe_mcp_provenance"] = provenance
 
         from ..services.quantevolver.qe_active_dataset_profile import (
+            enforce_qe_universe_topk,
             load_active_qe_profile,
             resolve_and_apply_active_qe_dataset,
         )
@@ -3141,6 +3148,12 @@ def generate_config(req: GenerateConfigRequest):
                 label_horizon=int(custom_params.get("label_horizon") or 1),
                 profile=active_profile,
             )
+
+        custom_params = enforce_qe_universe_topk(
+            custom_params,
+            universe_selection=req.universe_selection,
+            stock_pool=custom_params.get("stock_pool"),
+        )
 
 
         cc = ConfigComposer()
@@ -3209,6 +3222,7 @@ def generate_config(req: GenerateConfigRequest):
                 active_dataset_profile=active_profile,
                 universe_selection=req.universe_selection,
                 registration_context={
+                    "consumer_id": req.consumer_id,
                     "source_type": req.created_by_type or "ui",
                     "created_by_name": req.created_by_name,
                     "purpose": req.purpose,
@@ -3342,6 +3356,7 @@ def generate_config(req: GenerateConfigRequest):
             "qe_universe_mode_invalid",
             "qe_universe_pool_unknown",
             "qe_universe_window_coverage_incomplete",
+            "qe_star50_topk_required",
         }
         raise HTTPException(
             status_code=400 if e.reason_code in request_codes else 503,
@@ -3370,6 +3385,7 @@ def create_pending_experiment(req: SingleExperimentPendingCreateRequest):
     provenance = {
         "runtime_first": True,
         "created_by_type": req.created_by_type or "mcp",
+        "consumer_id": req.consumer_id,
         "created_by_name": req.created_by_name,
         "source_context_json": req.source_context_json,
         "provenance": req.provenance,
@@ -3399,6 +3415,25 @@ def create_pending_experiment(req: SingleExperimentPendingCreateRequest):
 def list_experiments(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    created_from: Optional[str] = Query(None, description="Created at or after this ISO date/time"),
+    created_to: Optional[str] = Query(None, description="Created on or before this ISO date"),
+    source_type: Optional[str] = Query(None, description="ui, mcp, scheduler, or agent"),
+    consumer_id: Optional[str] = Query(
+        None,
+        pattern="^(qe_mainline|advisory)$",
+        description="qe_mainline or advisory",
+    ),
+    run_kind: Optional[str] = Query(None, description="single, custom evolution, strategy evolution, auto evolution, or multi-alpha"),
+    purpose: Optional[str] = Query(None, description="research or validation"),
+    status: Optional[str] = Query(None, description="Canonical QE status"),
+    node_id: Optional[str] = Query(None, description="Execution node business name"),
+    model: Optional[str] = Query(None, description="Model name contains"),
+    factor: Optional[str] = Query(None, description="Factor name contains"),
+    dataset_release: Optional[str] = Query(None, description="Dataset release id"),
+    universe_pool: Optional[str] = Query(None, description="Stock-pool id"),
+    execution_algo: Optional[str] = Query(None, description="Minute execution algorithm"),
+    archive_status: Optional[str] = Query(None, description="Archive/recommendation status"),
+    query: Optional[str] = Query(None, description="Experiment name, model, or factor text"),
     alpha_mode: Optional[str] = Query(None, description="过滤 alpha_mode: single/multi"),
     include_children: bool = Query(False, description="按历史页分组返回父实验及其演进 Loop"),
     detail: str = Query("summary", pattern="^(summary|full)$", description="summary 默认不返回 result_metrics/custom_params 大 JSON；full 保留旧完整字段"),
@@ -3407,13 +3442,35 @@ def list_experiments(
     try:
         from ..services.quantevolver.config_composer import ConfigComposer
         cc = ConfigComposer()
-        result = cc.list_experiments(limit=limit, offset=offset, include_children=include_children, detail=detail)
-        # alpha_mode 过滤（在应用层过滤，避免改动 ConfigComposer 内部查询）
-        if alpha_mode and result.get("ok") and result.get("items"):
-            result["items"] = [
-                exp for exp in result["items"]
-                if exp.get("alpha_mode", "single") == alpha_mode
-            ]
+        filters = {
+            key: value
+            for key, value in {
+                "alpha_mode": alpha_mode,
+                "created_from": created_from,
+                "created_to": created_to,
+                "source_type": source_type,
+                "consumer_id": consumer_id,
+                "run_kind": run_kind,
+                "purpose": purpose,
+                "status": status,
+                "node_id": node_id,
+                "model": model,
+                "factor": factor,
+                "dataset_release": dataset_release,
+                "universe_pool": universe_pool,
+                "execution_algo": execution_algo,
+                "archive_status": archive_status,
+                "query": query,
+            }.items()
+            if value not in (None, "")
+        }
+        result = cc.list_experiments(
+            limit=limit,
+            offset=offset,
+            include_children=include_children,
+            detail=detail,
+            filters=filters,
+        )
         return result
     except Exception as e:
         logger.exception("获取实验列表失败")
@@ -4452,6 +4509,13 @@ class FactorCacheComputeRequest(BaseModel):
     force: bool = Field(False, description="强制重算（忽略已覆盖的缓存）")
     strict_backtest_data: bool = Field(True, description="严格使用 QE 默认历史 factor_data_dir 数据（用于全局因子值缓存）")
     auto_sync_remote: bool = Field(True, description="本地缓存计算成功后自动同步到远端执行节点")
+    dataset_profile_path: Optional[str] = Field(
+        None,
+        description=(
+            "Optional absolute canonical dataset profile selected by the control plane; "
+            "does not change the active profile pointer"
+        ),
+    )
 
 
 class FactorCacheRetryFailedRequest(BaseModel):
@@ -4498,9 +4562,13 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         node_id = exp_record.get("node_id") or None
 
     rdagent_cfg = cc._fetch_workspace_config(node_id)
-    factor_data_dir = rdagent_cfg.get("factor_data_dir")
-    qlib_bin_path = rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
-    if req.strict_backtest_data and not factor_data_dir:
+    factor_data_dir = None if req.dataset_profile_path else rdagent_cfg.get("factor_data_dir")
+    qlib_bin_path = (
+        None
+        if req.dataset_profile_path
+        else rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
+    )
+    if req.strict_backtest_data and not factor_data_dir and not req.dataset_profile_path:
         raise HTTPException(400, "failed to resolve QE factor_data_dir")
 
     if not resolved_start or not resolved_end:
@@ -4527,6 +4595,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
             qlib_bin_path=qlib_bin_path,
             node_id=node_id,
             task_id=task_id,
+            dataset_profile_path=req.dataset_profile_path,
         )
     except Exception as e:
         logger.exception("failed to submit official factor full-compute dispatch")
@@ -4549,8 +4618,12 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "data_source_mode": "official_offline_backtest_factor_data",
         "cache_source": "official_offline_backtest_factor_data",
         "code_source": "code_text",
-        "factor_data_dir": factor_data_dir,
-        "qlib_bin_path": qlib_bin_path,
+        "factor_data_dir": dispatch_result.get("payload", {}).get("factor_data_dir"),
+        "qlib_bin_path": dispatch_result.get("payload", {}).get("qlib_bin_path"),
+        "dataset_profile_path": req.dataset_profile_path,
+        "dataset_profile_sha256": dispatch_result.get("payload", {}).get(
+            "dataset_profile_sha256"
+        ),
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
         "cache_root": dispatch_result.get("cache_root"),
@@ -4567,8 +4640,12 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
         "include_disabled": bool(req.factor_names and req.include_disabled),
-        "factor_data_dir": factor_data_dir,
-        "qlib_bin_path": qlib_bin_path,
+        "factor_data_dir": dispatch_result.get("payload", {}).get("factor_data_dir"),
+        "qlib_bin_path": dispatch_result.get("payload", {}).get("qlib_bin_path"),
+        "dataset_profile_path": req.dataset_profile_path,
+        "dataset_profile_sha256": dispatch_result.get("payload", {}).get(
+            "dataset_profile_sha256"
+        ),
         "node_id": dispatch_result.get("node_id") or node_id,
         "cache_source": "official_offline_backtest_factor_data",
         "code_source": "code_text",
@@ -4639,6 +4716,8 @@ def factor_cache_retry_failed(task_id: str, req: FactorCacheRetryFailedRequest):
         node_id=str(task_detail.get("node_id") or "") or None,
         task_id=worker_task_id,
         resumed_from_task_id=task_id,
+        dataset_profile_path=payload.get("dataset_profile_path"),
+        expected_profile_sha256=payload.get("dataset_profile_sha256"),
     )
     dispatch_task_id = str(dispatch_result.get("dispatch_task_id") or dispatch_result.get("task_id") or worker_task_id)
     _active_cache_tasks[dispatch_task_id] = {
@@ -6352,16 +6431,17 @@ def _load_multi_alpha_status_payload(experiment_id: str, experiment_status: str)
 
 
 def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -> None:
-    """Persist artifact collection failure without downgrading runtime success.
+    """Persist artifact collection failure as an unsuccessful experiment.
 
-    RD-Agent has already reported every group loop as completed before this
-    helper is called.  The authoritative experiment status must therefore stay
-    completed while the artifact lifecycle records the collection failure.
+    A remote process exit is not an experiment success.  QE cannot report a
+    completed experiment until its required Qlib artifacts have been read and
+    validated locally.
     """
     lifecycle = {
         "multi_alpha_lifecycle": {
             "stage": "failed_artifact",
             "runtime_status": "completed",
+            "experiment_status": "failed",
             "collection_status": "failed",
             "artifact_status": "failed",
             "errors": [error_message],
@@ -6371,7 +6451,7 @@ def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE qe_experiments
-                   SET status = 'completed',
+                   SET status = 'failed',
                        result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
                        completed_at = NOW()
                    WHERE experiment_id = %s""",
@@ -6386,6 +6466,7 @@ def _mark_experiment_collection_failure(experiment_id: str, error_message: str) 
         "qe_completion_lifecycle": {
             "stage": "artifact_collection_failed",
             "runtime_status": "completed",
+            "experiment_status": "failed",
             "collection_status": "failed",
             "artifact_status": "failed",
             "errors": [error_message],
@@ -6395,7 +6476,7 @@ def _mark_experiment_collection_failure(experiment_id: str, error_message: str) 
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE qe_experiments
-                   SET status = 'completed',
+                   SET status = 'failed',
                        result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
                        completed_at = NOW()
                    WHERE experiment_id = %s""",
@@ -6932,6 +7013,10 @@ async def _run_multi_alpha_experiment(
     submitted_nodes: list[dict] = []
     waiting_nodes: list[dict] = []
     submission_coordinator = QEWorkspaceSubmissionCoordinator()
+    multi_alpha_consumer_id = str(
+        (_cp.get("_qe_run_registration") or {}).get("consumer_id")
+        or "qe_mainline"
+    )
 
     if is_distributed:
         # ── 分布式：各节点独立提交 ────────────────────────────
@@ -6991,6 +7076,7 @@ async def _run_multi_alpha_experiment(
                 owner_id=qe_submission_owner_id(),
                 claim_source=claim_source,
                 record_waiting_capacity=record_waiting,
+                consumer_id=multi_alpha_consumer_id,
             )
             client = QEWorkspaceClient.for_node(n_id)
             try:
@@ -7131,6 +7217,7 @@ async def _run_multi_alpha_experiment(
             owner_id=qe_submission_owner_id(),
             claim_source=claim_source,
             record_waiting_capacity=record_waiting,
+            consumer_id=multi_alpha_consumer_id,
         )
         client = QEWorkspaceClient.for_node(only_node_id)
         async with client:
@@ -7302,6 +7389,15 @@ async def _run_experiment_unified(
             require_fixed_seed=True,
             submission_source_kind="qe_experiment",
             submission_source_execution_id=experiment_id,
+            submission_consumer_id=str(
+                _parse_json_object(
+                    _parse_json_object(exp_record.get("custom_params")).get(
+                        "_qe_run_registration"
+                    )
+                )
+                .get("consumer_id")
+                or "qe_mainline"
+            ),
         )
 
         from ..services.quantevolver.qe_run_registry import QERunRegistry
@@ -7624,13 +7720,14 @@ async def reconcile_experiment_run_status(experiment_id: str):
                         error_msg = f"Multi-Alpha result collection failed: {me}"
                         logger.error(f"Multi-Alpha result collection failed: {experiment_id}: {me}", exc_info=True)
                         _mark_multi_alpha_artifact_failure(experiment_id, error_msg)
-                        result["status"] = "completed"
+                        result["status"] = "failed"
                         result["error"] = error_msg
                         result["multi_alpha_stage"] = "failed_artifact"
                         result["artifact_status"] = "failed"
                         if "multi_alpha" in result:
                             result["multi_alpha"]["stage"] = "failed_artifact"
                             result["multi_alpha"]["runtime_status"] = "completed"
+                            result["multi_alpha"]["experiment_status"] = "failed"
                             result["multi_alpha"]["collection_status"] = "failed"
                             result["multi_alpha"]["artifact_status"] = "failed"
                             result["multi_alpha"]["artifact_errors"] = [error_msg]
@@ -7668,7 +7765,7 @@ async def reconcile_experiment_run_status(experiment_id: str):
                             logger.error(f"Auto-sync metrics failed for {experiment_id}: {me}", exc_info=True)
                             error_msg = f"Auto-sync metrics failed: {me}"
                             _mark_experiment_collection_failure(experiment_id, error_msg)
-                            result["status"] = "completed"
+                            result["status"] = "failed"
                             result["artifact_status"] = "failed"
                             result["collection_status"] = "failed"
                             result["error"] = error_msg
@@ -8273,6 +8370,16 @@ async def stop_multi_alpha_experiment(experiment_id: str):
 _QE_DELETE_ACTIVE_STATUSES = {"running", "processing", "queued", "submitted"}
 
 
+def _is_registered_qe_history_row(row: Mapping[str, Any]) -> bool:
+    raw = row.get("custom_params")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return False
+    return isinstance(raw, Mapping) and isinstance(raw.get("_qe_run_registration"), Mapping)
+
+
 def _cursor_row_to_dict(cur: Any, row: Any) -> dict[str, Any] | None:
     """Convert psycopg/fake cursor rows without requiring RealDictCursor."""
     if row is None:
@@ -8391,7 +8498,7 @@ async def delete_experiment(
 
             cur.execute(
                 """
-                SELECT task_id, status, node_id, base_experiment_id
+                SELECT task_id, status, node_id, base_experiment_id, strategy_evo_config
                 FROM qe_evolution_tasks
                 WHERE base_experiment_id = ANY(%s::text[])
                    OR task_id = ANY(%s::text[])
@@ -8450,6 +8557,13 @@ async def delete_experiment(
             multi_alpha_groups = _fetchall_dicts(cur)
 
     assert selected_exp is not None  # for type checkers
+    registered_history = _is_registered_qe_history_row(selected_exp) or any(
+        _is_registered_qe_history_row(row) for row in child_experiments
+    ) or any(
+        isinstance(row.get("strategy_evo_config"), Mapping)
+        and isinstance(row["strategy_evo_config"].get("_qe_run_registration"), Mapping)
+        for row in related_tasks
+    )
     default_node_id = resolve_default_qe_node_id()
     selected_is_child_loop = bool(selected_exp.get("parent_experiment_id") or selected_exp.get("is_evolution_loop")) and not child_experiments
 
@@ -8623,6 +8737,46 @@ async def delete_experiment(
                 "worker_cleanup_results": cleanup_results,
             },
         )
+
+    # Registered formal runs keep their Level-0 history.  For those rows this
+    # legacy route is an artifact-cleanup action, not a control-record delete.
+    if registered_history:
+        retention = {
+            "schema_version": "qe_artifact_retention_v1",
+            "status": "cleaned" if cleanup_workspace else "available",
+            "cleaned_at": datetime.now().astimezone().isoformat() if cleanup_workspace else None,
+            "cleanup_scope": "workspace_and_aistock_cache" if cleanup_workspace else "none",
+        }
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_experiments
+                    SET custom_params = jsonb_set(
+                            COALESCE(custom_params, '{}'::jsonb),
+                            '{_qe_artifact_retention}',
+                            %s::jsonb,
+                            true
+                        ),
+                        updated_at = NOW()
+                    WHERE experiment_id = ANY(%s::text[])
+                    """,
+                    (json.dumps(retention), experiment_ids_to_delete),
+                )
+            conn.commit()
+        return {
+            "ok": True,
+            "experiment_id": experiment_id,
+            "history_retained": True,
+            "artifact_retention": retention,
+            "worker_workspace_cleanup_mode": "node_api_only" if cleanup_workspace else "skipped",
+            "worker_cleanup_results": cleanup_results,
+            "local_cleanup": {
+                "cleaned_dirs": cleaned_dirs,
+                "optuna_files_deleted": optuna_deleted,
+            },
+            "deleted_experiment_ids": [],
+        }
 
     # 3. 清理DB记录（事务内，按外键依赖顺序删除）
     with get_conn() as conn:

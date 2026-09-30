@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -22,6 +22,8 @@ from backend.services.trading_core.exit_guard import ExitGuardContext, evaluate 
 from backend.services.trading_core.price_guard import PriceGuardContext, evaluate as evaluate_price_guard
 
 from .artifact_store import PositionTimingArtifactStore
+from .action_value import ActionValueError, cutoff_on
+from .action_value_runtime import current_model_advice, materialize_model_advice
 from .alerts import (
     ParsedAlertQuote,
     eligibility_identity,
@@ -134,6 +136,9 @@ class PositionTimingDependencies:
     source_commit_provider: Callable[[], str]
     realtime_quote_loader: Callable[[list[str]], dict[str, dict[str, Any]]] | None = None
     outcome_snapshot_loader: Callable[[list[str], date, date], dict[str, Any]] | None = None
+    action_value_snapshot_loader: (
+        Callable[[list[str], date, date, datetime], dict[str, Any]] | None
+    ) = None
 
 
 class PositionTimingService:
@@ -307,11 +312,112 @@ class PositionTimingService:
     def materialize(self) -> dict[str, Any]:
         card_result = self._materialize_card_set()
         outcome_result = self._materialize_due_outcomes()
+        model_result = self._materialize_action_value_advice()
         return {
             **card_result,
             "outcome_materialization_status": outcome_result["status"],
             "outcome_materialization": outcome_result,
+            "model_advice_materialization_status": model_result["status"],
+            "model_advice_materialization": model_result,
         }
+
+    def _materialize_action_value_advice(self) -> dict[str, Any]:
+        now = self._now()
+        if not (self.store.root / "research" / "action_value_v2" / "current.json").exists():
+            return {
+                "schema_version": "position_timing_model_advice_v2",
+                "status": "MODEL_RESEARCH_NOT_AVAILABLE",
+                "created": False,
+                "advice_set": None,
+            }
+        try:
+            decision_date, decision_as_of, target_date = self._resolve_action_value_clock(now)
+            members, _ = self._load_universe()
+            scope = self.store.get_analysis_scope()
+            if scope.updated_at > decision_as_of:
+                raise ActionValueError("ANALYSIS_SCOPE_CHANGED_AFTER_CUTOFF")
+            selected, _ = self._analysis_members(members=members, scope=scope)
+            selected_symbols = [
+                member.canonical_symbol
+                for member in selected
+                if member.normalization_reason is None
+                and _is_supported_a_share(member.canonical_symbol)
+            ]
+            delist_snapshot = self._safe_batch_load(
+                self.dependencies.delist_snapshot_loader,
+                selected_symbols,
+                decision_date,
+                unavailable_code="DELIST_SOURCE_UNAVAILABLE",
+            )
+            delist_identity_valid = _has_valid_batch_identity(delist_snapshot)
+            delist_rows = delist_snapshot.get("rows") or {}
+            start_date = decision_date - timedelta(days=370)
+            calendar = tuple(
+                self.dependencies.calendar_service.list_trading_days(start_date, decision_date)
+            )[-80:]
+            intent_by_symbol = {item.canonical_symbol: item for item in self.store.list_intents()}
+            payload = []
+            for member in selected:
+                if member.normalization_reason is not None:
+                    continue
+                delist_fact = dict(delist_rows.get(member.canonical_symbol) or {})
+                if not delist_identity_valid:
+                    delist_risk, delist_reason = None, "DELIST_SOURCE_IDENTITY_INVALID"
+                elif (
+                    "delist_flag" not in delist_fact
+                    or not delist_fact.get("evidence_hash")
+                ):
+                    delist_risk, delist_reason = None, "DELIST_IDENTITY_UNAVAILABLE"
+                elif not _available_by(
+                    delist_fact.get("feature_available_at"), decision_as_of
+                ):
+                    delist_risk, delist_reason = None, "DELIST_PIT_UNAVAILABLE"
+                else:
+                    delist_risk, delist_reason = bool(delist_fact["delist_flag"]), None
+                payload.append(
+                    {
+                    "canonical_symbol": member.canonical_symbol,
+                    "display_name": member.display_name,
+                    "primary_source_role": member.primary_source_role.value,
+                    "holding": dict(member.holding or {}),
+                    "intent": (
+                        intent_by_symbol[member.canonical_symbol].model_dump(mode="json")
+                        if member.canonical_symbol in intent_by_symbol
+                        else {}
+                    ),
+                        "delist_risk": delist_risk,
+                        "delist_reason_code": delist_reason,
+                        "delist_identity": _per_card_identity_ref(
+                            delist_snapshot.get("identity"), row=delist_fact
+                        ),
+                    }
+                )
+            return materialize_model_advice(
+                timing_root=self.store.root,
+                now=now,
+                decision_date=decision_date,
+                decision_as_of=decision_as_of,
+                target_date=target_date,
+                calendar=calendar,
+                members=payload,
+                snapshot_loader=self.dependencies.action_value_snapshot_loader,
+            )
+        except ActionValueError as exc:
+            return {
+                "schema_version": "position_timing_model_advice_v2",
+                "status": exc.code,
+                "created": False,
+                "advice_set": None,
+                "reason_codes": [exc.code],
+            }
+        except Exception as exc:
+            return {
+                "schema_version": "position_timing_model_advice_v2",
+                "status": "MODEL_ADVICE_MATERIALIZATION_UNAVAILABLE",
+                "created": False,
+                "advice_set": None,
+                "reason_codes": [type(exc).__name__],
+            }
 
     def _materialize_card_set(self) -> dict[str, Any]:
         now = self._now()
@@ -1153,6 +1259,16 @@ class PositionTimingService:
             "card_set": card_set,
         }
 
+    def current_model_advice(self) -> dict[str, Any]:
+        try:
+            return current_model_advice(timing_root=self.store.root, now=self._now())
+        except ActionValueError as exc:
+            raise PositionTimingServiceError(
+                exc.code,
+                "模型择时建议 artifact 不可用或身份不一致",
+                context=exc.details,
+            ) from exc
+
     def poll_alerts(self) -> dict[str, Any]:
         """Evaluate frozen T+1 trigger edges without writing any artifact."""
 
@@ -1425,6 +1541,10 @@ class PositionTimingService:
 
     def evidence(self) -> dict[str, Any]:
         outcome_evidence = self._outcome_evidence()
+        try:
+            model_advice = current_model_advice(timing_root=self.store.root, now=self._now())
+        except ActionValueError as exc:
+            model_advice = {"status": exc.code, "advice_set": None}
         return {
             "schema_version": "position_timing_evidence_v1",
             "product_evidence_tier": "RULE_BASED_RISK_MANAGEMENT",
@@ -1434,6 +1554,16 @@ class PositionTimingService:
             "l2_formal_audit": POSITION_TIMING_L2_FORMAL_AUDIT_REFERENCE_V1,
             "hmm_runtime_role": "CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE",
             "selection_runtime_role": "CONTEXT_ONLY_NOT_WIRED_IN_BLOCK_ONE",
+            "action_value_v2": {
+                "runtime_status": model_advice["status"],
+                "advice_tier": (
+                    (model_advice.get("advice_set") or {}).get("advice_tier")
+                    or "EXPERIMENTAL_MODEL_ADVICE_NOT_AVAILABLE"
+                ),
+                "effect_evidence": (model_advice.get("advice_set") or {}).get("effect_evidence"),
+                "model_sha256": (model_advice.get("advice_set") or {}).get("model_sha256"),
+                "stock_confidence_interpretation": "MODEL_ESTIMATE_NOT_STOCK_CONFIDENCE",
+            },
             "outcome_evidence": outcome_evidence,
             "cost_disclosure": {
                 "min_commission_scope": PERSONAL_MANUAL_COMPONENT_COST_V1["min_commission_scope"],
@@ -2481,6 +2611,30 @@ class PositionTimingService:
             "identity_sha256": canonical_sha256(identity_payload),
         }
 
+    def _resolve_action_value_clock(self, now: datetime) -> tuple[date, datetime, date]:
+        """Resolve the separate v2 20:00 decision clock without changing v1."""
+
+        try:
+            status = self.dependencies.calendar_service.status(as_of_date=now.date())
+            if status.get("is_trading_day") and now.time() >= time(20, 0):
+                decision_date = now.date()
+            elif status.get("is_trading_day"):
+                previous = status.get("previous_trading_day")
+                if not previous:
+                    raise ActionValueError("DECISION_TRADE_DATE_UNAVAILABLE")
+                decision_date = date.fromisoformat(str(previous))
+            else:
+                latest = status.get("latest_completed_trading_day")
+                if not latest:
+                    raise ActionValueError("DECISION_TRADE_DATE_UNAVAILABLE")
+                decision_date = date.fromisoformat(str(latest))
+            target_date = self.dependencies.calendar_service.next_trading_day(decision_date)
+        except ActionValueError:
+            raise
+        except Exception as exc:
+            raise ActionValueError("TRADING_CALENDAR_UNAVAILABLE", cause=type(exc).__name__) from exc
+        return decision_date, cutoff_on(decision_date), target_date
+
     @staticmethod
     def _safe_batch_load(
         loader: Callable[[list[str], date], dict[str, Any]],
@@ -3187,6 +3341,64 @@ def _default_outcome_snapshot_loader(
     }
 
 
+def _default_action_value_snapshot_loader(
+    symbols: list[str], start_date: date, end_date: date, captured_at: datetime
+) -> dict[str, Any]:
+    """Capture a bounded current EOD feature source; never reconstruct old versions."""
+
+    import psycopg2.extras as pgx
+
+    from backend.db.pg_pool import get_conn
+
+    stock = _default_outcome_snapshot_loader(symbols, start_date, end_date)
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT trade_date, close
+                FROM market.index_daily
+                WHERE ts_code = '000300.SH'
+                  AND trade_date BETWEEN %s AND %s
+                ORDER BY trade_date
+                """,
+                (start_date, end_date),
+            )
+            source_rows = [dict(row) for row in cur.fetchall()]
+    benchmark_rows: dict[str, dict[str, Any]] = {}
+    for source_row in source_rows:
+        observed_date = source_row.get("trade_date")
+        close = _positive_decimal(source_row.get("close"))
+        if not isinstance(observed_date, date) or close is None:
+            continue
+        benchmark_rows[observed_date.isoformat()] = {
+            "trade_date": observed_date.isoformat(),
+            "close": close,
+            "feature_available_at": cutoff_on(observed_date).isoformat(),
+        }
+    rows = stock["rows"]
+    for symbol_rows in rows.values():
+        for key, row in symbol_rows.items():
+            row["feature_available_at"] = cutoff_on(date.fromisoformat(key)).isoformat()
+    identity = {
+        "source": "POSITION_TIMING_CURRENT_EOD_DB_CAPTURE_V2",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "captured_at": captured_at.isoformat(),
+        "rows_sha256": canonical_sha256({"rows": rows, "benchmark_rows": benchmark_rows}),
+        "historical_ingestion_timestamps_verified": False,
+        "optional_blocks": [],
+    }
+    identity["identity_sha256"] = canonical_sha256(identity)
+    return {
+        "rows": rows,
+        "benchmark_rows": benchmark_rows,
+        "identity": identity,
+        "adjustment_identity": stock["adjustment_identity"],
+        "limit_identity": stock["limit_identity"],
+        "captured_at": captured_at.isoformat(),
+    }
+
+
 def _resolve_source_commit() -> str:
     """Resolve the code identity once while this module is being imported."""
 
@@ -3248,6 +3460,7 @@ def build_position_timing_service(*, artifact_root: str | Path | None = None) ->
         source_commit_provider=_source_commit,
         realtime_quote_loader=fetch_tdx_realtime_quotes,
         outcome_snapshot_loader=_default_outcome_snapshot_loader,
+        action_value_snapshot_loader=_default_action_value_snapshot_loader,
     )
     return PositionTimingService(store=PositionTimingArtifactStore(artifact_root), dependencies=dependencies)
 

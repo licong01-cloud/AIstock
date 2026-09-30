@@ -62,7 +62,7 @@ DAILY_BASIC_PROVIDER_FIELDS = (
     "total_mv",
     "circ_mv",
 )
-DAILY_BASIC_REQUIRED_FINITE_FIELDS = ("turnover_rate_f",)
+DAILY_BASIC_REQUIRED_FINITE_FIELDS = ("turnover_rate_f", "volume_ratio")
 DAILY_BASIC_REQUIRED_FINITE_RATIO = 0.95
 
 

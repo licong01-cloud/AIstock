@@ -2,14 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
+from backend.routers import quantevolver as quantevolver_router
+from backend.services.quantevolver import config_composer as composer_module
 from backend.services.quantevolver import multi_alpha_engine as engine_module
+from backend.services.quantevolver import node_execution as node_execution_module
+from backend.services.quantevolver.config_composer import (
+    ConfigComposer,
+    RDAGENT_DEFAULT_DATA_SPLIT,
+)
+from backend.services.quantevolver.experiment_config import (
+    QE_CONTROL_PLANE_METADATA_KEYS,
+    QE_RUNTIME_METADATA_KEYS,
+    split_qe_runtime_metadata,
+)
 from backend.services.quantevolver.multi_alpha_engine import MultiAlphaEngine
+from backend.services.quantevolver.node_execution import QENodePreflightError, preflight_qe_node
+from backend.services.quantevolver.qe_active_execution_capacity import (
+    QEWorkspaceSubmissionCoordinator,
+)
 from backend.services.quantevolver.qe_run_registry import (
     QE_RUN_REGISTRATION_PARAM,
     PlannedQELoop,
@@ -17,7 +35,501 @@ from backend.services.quantevolver.qe_run_registry import (
     QERunRegistryError,
     attach_qe_run_registration,
     build_qe_run_registration,
+    normalize_qe_run_consumer_id,
 )
+from backend.services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
+
+
+def test_custom_evo_planned_pending_rows_remain_startable() -> None:
+    state = AutoEvolutionScheduler()._custom_evo_start_state_from_rows(
+        {
+            "task_type": "custom_evo",
+            "status": "pending",
+            "current_loop": 0,
+        },
+        [
+            {
+                "loop_index": 1,
+                "status": "pending",
+                "experiment_id": None,
+                "config_json": {"_qe_run_registration": {"task_id": "task-a"}},
+            },
+            {
+                "loop_index": 2,
+                "status": "pending",
+                "experiment_id": None,
+                "config_json": {"_qe_run_registration": {"task_id": "task-a"}},
+            },
+        ],
+    )
+
+    assert state["startable"] is True
+    assert state["editable"] is True
+    assert state["resume_allowed"] is False
+    assert state["submitted_loop_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"status": "running", "experiment_id": None, "config_json": {}},
+        {
+            "status": "pending",
+            "experiment_id": "task-a_L1",
+            "config_json": {},
+        },
+        {
+            "status": "pending",
+            "experiment_id": None,
+            "config_json": {"execution_manifest": {"task_id": "task-a"}},
+        },
+        {
+            "status": "pending",
+            "experiment_id": None,
+            "config_json": "{not-json",
+        },
+    ],
+)
+def test_custom_evo_pending_or_active_submission_evidence_stays_nonstartable(row) -> None:
+    state = AutoEvolutionScheduler()._custom_evo_start_state_from_rows(
+        {
+            "task_type": "custom_evo",
+            "status": "pending",
+            "current_loop": 0,
+        },
+        [{"loop_index": 1, **row}],
+    )
+
+    assert state["startable"] is False
+    assert state["resume_allowed"] is True
+    assert state["submitted_loop_count"] == 1
+
+
+class _CustomEvoStartClaimCursor:
+    def __init__(self, state):
+        self.state = state
+        self.rows = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(str(sql).split())
+        self.rows = []
+        if normalized.startswith("SELECT * FROM qe_evolution_tasks"):
+            self.rows = [dict(self.state["task"])]
+        elif normalized.startswith("SELECT loop_index, loop_id, status"):
+            self.rows = [dict(row) for row in self.state["loops"]]
+        elif normalized.startswith("UPDATE qe_evolution_tasks SET status = 'running'"):
+            task = self.state["task"]
+            if (
+                task["task_type"] == "custom_evo"
+                and task["status"] == "pending"
+                and task["current_loop"] == 0
+            ):
+                task["status"] = "running"
+                self.rows = [{"task_id": params[0]}]
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+    def fetchall(self):
+        return list(self.rows)
+
+
+class _CustomEvoStartClaimConnection:
+    def __init__(self, state):
+        self.state = state
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def cursor(self, *_args, **_kwargs):
+        return _CustomEvoStartClaimCursor(self.state)
+
+    def commit(self):
+        self.state["commits"] += 1
+
+
+def test_custom_evo_start_claim_is_atomic_and_single_use(monkeypatch) -> None:
+    state = {
+        "task": {
+            "task_id": "task-a",
+            "task_type": "custom_evo",
+            "status": "pending",
+            "current_loop": 0,
+        },
+        "loops": [
+            {
+                "loop_index": 1,
+                "loop_id": "task-a_Loop1",
+                "status": "pending",
+                "node_id": "wsl2-5080",
+                "experiment_id": None,
+                "config_json": {QE_RUN_REGISTRATION_PARAM: {"task_id": "task-a"}},
+                "updated_at": None,
+            }
+        ],
+        "commits": 0,
+    }
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_evolution_service.get_conn",
+        lambda: _CustomEvoStartClaimConnection(state),
+    )
+    scheduler = AutoEvolutionScheduler()
+
+    first = scheduler.claim_custom_evo_start("task-a")
+    second = scheduler.claim_custom_evo_start("task-a")
+
+    assert first["claimed"] is True
+    assert state["task"]["status"] == "running"
+    assert second["claimed"] is False
+    assert second["startable"] is False
+    assert "status is running" in second["start_reason"]
+    assert state["commits"] == 2
+
+
+class _WorkspaceConfigClient:
+    def __init__(self, workspace_base: str):
+        self.workspace_base = workspace_base
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return None
+
+    async def get_workspace_config(self):
+        return {"workspace_base": self.workspace_base}
+
+
+def _preflight_registered_node(monkeypatch, *, configured_root: str, api_root: str):
+    node = {
+        "node_id": "wsl2-5080",
+        "api_base_url": "http://127.0.0.1:9000",
+        "status": "online",
+        "workspace_base": configured_root,
+        "factor_data_dir": "/mnt/x/factors",
+        "qlib_data_path": "/mnt/x/day",
+        "qlib_minute_path": "/mnt/x/minute",
+        "qlib_rdagent_root": "/mnt/f/Dev/RD-Agent-main",
+    }
+    monkeypatch.setattr(node_execution_module, "get_compute_node", lambda _node_id: dict(node))
+    monkeypatch.setattr(
+        node_execution_module.QEWorkspaceClient,
+        "for_node",
+        staticmethod(lambda _node_id: _WorkspaceConfigClient(api_root)),
+    )
+    return asyncio.run(preflight_qe_node("wsl2-5080"))
+
+
+@pytest.mark.parametrize(
+    "api_root",
+    ["", ".", "relative/qe_workspace", "/", "//host/qe_workspace", "/mnt/f/qe/../other", r"C:\qe"],
+)
+def test_registered_submission_preflight_rejects_noncanonical_api_workspace_root(monkeypatch, api_root):
+    with pytest.raises(QENodePreflightError) as exc_info:
+        _preflight_registered_node(monkeypatch, configured_root="/mnt/f/qe_workspace", api_root=api_root)
+    assert exc_info.value.error_code == "QE_NODE_WORKSPACE_ROOT_INVALID"
+
+
+def test_registered_submission_preflight_rejects_db_api_workspace_mismatch(monkeypatch):
+    with pytest.raises(QENodePreflightError) as exc_info:
+        _preflight_registered_node(
+            monkeypatch,
+            configured_root="/mnt/f/qe_workspace",
+            api_root="/tmp/other-qe-workspace",
+        )
+    assert exc_info.value.error_code == "QE_NODE_WORKSPACE_ROOT_MISMATCH"
+    assert exc_info.value.context["configured_workspace_base"] == "/mnt/f/qe_workspace"
+    assert exc_info.value.context["api_workspace_base"] == "/tmp/other-qe-workspace"
+
+
+def test_registered_submission_preflight_normalizes_matching_trailing_slash(monkeypatch):
+    node = _preflight_registered_node(
+        monkeypatch,
+        configured_root="/mnt/f/qe_workspace",
+        api_root="/mnt/f/qe_workspace/",
+    )
+    assert node["workspace_config"]["workspace_base"] == "/mnt/f/qe_workspace"
+
+
+def test_registered_control_metadata_never_reaches_strategy_kwargs() -> None:
+    yaml_text = ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
+            "portfolio_config": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {},
+            },
+        },
+        data_split={
+            "train_start": "2020-01-01",
+            "train_end": "2020-12-31",
+            "valid_start": "2021-01-01",
+            "valid_end": "2021-06-30",
+            "test_start": "2021-07-01",
+            "test_end": "2021-12-31",
+            "backtest_end": "2021-12-31",
+        },
+        custom_params={
+            "topk": 20,
+            "qe_mcp_provenance": {"created_by_name": "Codex"},
+            "qe_factor_sources": {"alpha_a": "official"},
+            "qe_pending_task_source": "mcp",
+            "qe_pending_created_by": "Codex",
+        },
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="1min",
+    )
+
+    assert "topk: 20" in yaml_text
+    for metadata_key in (
+        "qe_mcp_provenance",
+        "qe_factor_sources",
+        "qe_pending_task_source",
+        "qe_pending_created_by",
+    ):
+        assert metadata_key not in yaml_text
+
+
+def test_registered_control_metadata_uses_canonical_runtime_metadata_contract() -> None:
+    registered_keys = {
+        "qe_mcp_provenance",
+        "qe_factor_sources",
+        "qe_pending_task_source",
+        "qe_pending_created_by",
+    }
+    params = {
+        "topk": 20,
+        "qe_mcp_provenance": {"created_by_name": "Codex"},
+        "qe_factor_sources": {"alpha_a": "official"},
+        "qe_pending_task_source": "mcp",
+        "qe_pending_created_by": "Codex",
+    }
+
+    executable, metadata = split_qe_runtime_metadata(params)
+
+    assert registered_keys <= QE_CONTROL_PLANE_METADATA_KEYS
+    assert QE_RUN_REGISTRATION_PARAM in QE_CONTROL_PLANE_METADATA_KEYS
+    assert registered_keys <= QE_RUNTIME_METADATA_KEYS
+    assert QE_RUN_REGISTRATION_PARAM not in QE_RUNTIME_METADATA_KEYS
+    assert executable == {"topk": 20}
+    assert set(metadata) == registered_keys
+
+
+def _compose_registration_contract_yaml(custom_params: dict) -> str:
+    return ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "score_weighted_topk_v2",
+            "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
+            "portfolio_config": {
+                "class": "ScoreWeightedTopkStrategyV2",
+                "kwargs": {},
+            },
+        },
+        data_split={
+            "train_start": "2020-01-01",
+            "train_end": "2020-12-31",
+            "valid_start": "2021-01-01",
+            "valid_end": "2021-06-30",
+            "test_start": "2021-07-01",
+            "test_end": "2021-12-31",
+            "backtest_end": "2021-12-31",
+        },
+        custom_params=custom_params,
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="1min",
+    )
+
+
+@pytest.mark.parametrize(
+    ("path_name", "custom_params"),
+    [
+        (
+            "registered_single",
+            attach_qe_run_registration(
+                {"topk": 20},
+                run_kind="single",
+                source_type="ui",
+                purpose="research",
+            ),
+        ),
+        (
+            "registered_pending_single",
+            {
+                **attach_qe_run_registration(
+                    {"topk": 20},
+                    run_kind="single",
+                    source_type="mcp",
+                    purpose="research",
+                ),
+                "qe_mcp_provenance": {"created_by_name": "Advisory"},
+                "qe_factor_sources": {"alpha_a": "official"},
+                "qe_pending_task_source": "mcp",
+                "qe_pending_created_by": "Advisory",
+            },
+        ),
+        (
+            "custom_evo",
+            attach_qe_run_registration(
+                {"topk": 20},
+                run_kind="custom_evolution_loop",
+                source_type="agent",
+                purpose="research",
+            ),
+        ),
+        (
+            "multi_alpha",
+            attach_qe_run_registration(
+                {"topk": 20},
+                run_kind="multi_alpha_loop",
+                source_type="scheduler",
+                purpose="validation",
+            ),
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_registration_metadata_does_not_change_standard_execution_yaml(
+    path_name: str,
+    custom_params: dict,
+) -> None:
+    del path_name
+    baseline = _compose_registration_contract_yaml({"topk": 20})
+
+    assert _compose_registration_contract_yaml(custom_params) == baseline
+
+
+@pytest.mark.parametrize("catalog_owner", ["portfolio_config", "default_kwargs"])
+def test_database_custom_strategy_preserves_catalog_owned_ensemble_only(
+    catalog_owner: str,
+) -> None:
+    catalog_ensemble = {"mode": "catalog_owned", "members": ["alpha_a", "alpha_b"]}
+    portfolio_kwargs = {"topk": 20}
+    default_kwargs = {}
+    catalog_params = {
+        "ensemble": catalog_ensemble,
+        QE_RUN_REGISTRATION_PARAM: {"must_not": "execute"},
+        "qe_mcp_provenance": {"must_not": "execute"},
+    }
+    if catalog_owner == "portfolio_config":
+        portfolio_kwargs.update(catalog_params)
+    else:
+        default_kwargs.update(catalog_params)
+    yaml_text = ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "database_custom_ensemble",
+            "source_code": "class DatabaseCustomEnsembleStrategy:\n    pass\n",
+            "portfolio_config": {
+                "class": "DatabaseCustomEnsembleStrategy",
+                "kwargs": portfolio_kwargs,
+            },
+            "default_kwargs": default_kwargs,
+        },
+        data_split={
+            "train_start": "2020-01-01",
+            "train_end": "2020-12-31",
+            "valid_start": "2021-01-01",
+            "valid_end": "2021-06-30",
+            "test_start": "2021-07-01",
+            "test_end": "2021-12-31",
+            "backtest_end": "2021-12-31",
+        },
+        custom_params={
+            "ensemble": {"enabled": True, "seeds": [42, 2026]},
+            QE_RUN_REGISTRATION_PARAM: {"schema_version": "qe_run_registration_v1"},
+            "qe_mcp_provenance": {"created_by_name": "Advisory"},
+        },
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="1min",
+    )
+
+    strategy_kwargs = yaml.safe_load(yaml_text)["port_analysis_config"]["strategy"]["kwargs"]
+    assert strategy_kwargs["ensemble"] == catalog_ensemble
+    assert QE_RUN_REGISTRATION_PARAM not in strategy_kwargs
+    assert "qe_mcp_provenance" not in strategy_kwargs
+
+
+def test_database_custom_strategy_does_not_accept_caller_owned_runtime_ensemble() -> None:
+    yaml_text = ConfigComposer()._compose_conf_yaml(
+        factors_info=[],
+        model_info=None,
+        strategy_info={
+            "strategy_id": "database_custom_without_ensemble",
+            "source_code": "class DatabaseCustomStrategy:\n    pass\n",
+            "portfolio_config": {
+                "class": "DatabaseCustomStrategy",
+                "kwargs": {"topk": 20},
+            },
+        },
+        data_split={
+            "train_start": "2020-01-01",
+            "train_end": "2020-12-31",
+            "valid_start": "2021-01-01",
+            "valid_end": "2021-06-30",
+            "test_start": "2021-07-01",
+            "test_end": "2021-12-31",
+            "backtest_end": "2021-12-31",
+        },
+        custom_params={"ensemble": {"enabled": True, "seeds": [42, 2026]}},
+        has_custom_factors=False,
+        has_alpha158=False,
+        backtest_freq="1min",
+    )
+
+    strategy_kwargs = yaml.safe_load(yaml_text)["port_analysis_config"]["strategy"]["kwargs"]
+    assert "ensemble" not in strategy_kwargs
+
+
+def test_registered_control_metadata_remains_in_persisted_custom_params(monkeypatch) -> None:
+    captured: dict = {}
+
+    class _CaptureRegistry:
+        def __init__(self, *, connection_factory):
+            assert connection_factory is composer_module.get_conn
+
+        def reserve_single(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(composer_module, "QERunRegistry", _CaptureRegistry)
+    custom_params = {
+        "topk": 20,
+        "qe_mcp_provenance": {"created_by_name": "Codex"},
+        "qe_factor_sources": {"alpha_a": "official"},
+    }
+
+    ConfigComposer()._save_experiment_record(
+        experiment_id="qe_registered_metadata",
+        experiment_name="registered metadata",
+        exp_dir="/tmp/qe_registered_metadata",
+        factor_names=["alpha_a"],
+        model_id="lgbm",
+        strategy_id="score_weighted_topk_v2",
+        data_split={"test_end": "2026-08-31"},
+        custom_params=custom_params,
+    )
+
+    persisted = captured["custom_params"]
+    assert persisted["qe_mcp_provenance"] == {"created_by_name": "Codex"}
+    assert persisted["qe_factor_sources"] == {"alpha_a": "official"}
+    assert QE_RUN_REGISTRATION_PARAM in persisted
 
 
 class _StateCursor:
@@ -200,6 +712,7 @@ def test_registration_summary_is_portable_and_complete() -> None:
     )
 
     assert registration["source_type"] == "mcp"
+    assert registration["consumer_id"] == "qe_mainline"
     assert registration["purpose"] == "research"
     assert registration["dataset_release_id"] == "qe-20260831"
     assert registration["universe_pool_ids"] == ["000300.SH"]
@@ -218,6 +731,124 @@ def test_registration_rejects_unknown_purpose() -> None:
         build_qe_run_registration(run_kind="single", purpose="smoke")
     with pytest.raises(QERunRegistryError, match="qe_run_source_type_invalid"):
         build_qe_run_registration(run_kind="single", source_type="unknown-runner")
+    with pytest.raises(QERunRegistryError, match="qe_run_consumer_id_invalid"):
+        normalize_qe_run_consumer_id("unknown-consumer")
+    with pytest.raises(QERunRegistryError, match="qe_run_consumer_id_invalid"):
+        normalize_qe_run_consumer_id("")
+
+
+def test_advisory_consumer_is_distinct_from_source_and_purpose() -> None:
+    registration = build_qe_run_registration(
+        run_kind="custom_evolution",
+        consumer_id="advisory",
+        source_type="mcp",
+        purpose="research",
+    )
+
+    assert registration["consumer_id"] == "advisory"
+    assert registration["source_type"] == "mcp"
+    assert registration["purpose"] == "research"
+
+
+def test_single_pending_create_forwards_advisory_consumer(monkeypatch) -> None:
+    captured = {}
+
+    def fake_generate(req):
+        captured["request"] = req
+        return {"experiment_id": "exp-advisory"}
+
+    monkeypatch.setattr(quantevolver_router, "generate_config", fake_generate)
+    req = quantevolver_router.SingleExperimentPendingCreateRequest(
+        factor_names=["alpha_a"],
+        model_id="model_lgbm_v1",
+        custom_params={"random_seed": 42},
+        consumer_id="advisory",
+    )
+
+    result = quantevolver_router.create_pending_experiment(req)
+
+    assert result["operation"] == "create_pending"
+    assert captured["request"].consumer_id == "advisory"
+    assert (
+        captured["request"].custom_params["qe_mcp_provenance"]["consumer_id"]
+        == "advisory"
+    )
+
+
+def test_advisory_effective_capacity_is_one_and_mainline_capacity_is_unchanged() -> None:
+    effective = QEWorkspaceSubmissionCoordinator._effective_consumer_capacity
+
+    assert effective(4, "qe_mainline") == 4
+    assert effective(4, "advisory") == 1
+    assert effective(1, "advisory") == 1
+    with pytest.raises(QERunRegistryError, match="qe_run_consumer_id_invalid"):
+        effective(4, "unknown")
+
+
+def test_run_registration_metadata_is_not_forwarded_to_strategy_kwargs(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(composer_module, "load_active_qe_profile", lambda: None)
+    composer = ConfigComposer()
+    monkeypatch.setattr(
+        composer,
+        "_get_factors_info",
+        lambda *_args, **_kwargs: [
+            {
+                "factor_name": "DemoFactor",
+                "source": "custom",
+                "code_text": (
+                    "def calculate_DemoFactor(instruments, start_date, end_date):\n"
+                    "    return None\n"
+                ),
+            }
+        ],
+    )
+    monkeypatch.setattr(composer, "_get_model_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_fetch_workspace_config",
+        lambda *_args, **_kwargs: {
+            "workspace_base": "/tmp/qe_workspace",
+            "qlib_data_path": "/tmp/qlib_day",
+            "qlib_minute_path": "/tmp/qlib_minute",
+            "factor_data_dir": "/tmp/factor_data",
+        },
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **kwargs: (kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read")
+
+    custom_params = attach_qe_run_registration(
+        {"execution_node_id": "wsl2-5080"},
+        run_kind="custom_evolution_loop",
+        source_type="agent",
+        purpose="research",
+        task_id="qe-registration-filter",
+        loop_index=1,
+        node_id="wsl2-5080",
+        factor_names=["DemoFactor"],
+    )
+    result = composer.compose_experiment_in_memory(
+        factor_names=["DemoFactor"],
+        model_id=None,
+        data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+        custom_params=custom_params,
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+    )
+
+    assert QE_RUN_REGISTRATION_PARAM not in result["experiment_files"]["conf.yaml"]
 
 
 def test_single_reservation_rejects_missing_or_non_created_identity() -> None:
@@ -298,6 +929,7 @@ def test_single_and_task_reservations_are_read_back_before_dispatch() -> None:
             PlannedQELoop(2, "rdagent-node1", {"factor_list": ["f2"], "model_id": "LGBModel"}),
         ],
         source_type="mcp",
+        consumer_id="advisory",
         purpose="validation",
     )
 
@@ -305,6 +937,12 @@ def test_single_and_task_reservations_are_read_back_before_dispatch() -> None:
     assert sorted(state["loops"]) == [("task-1", 1), ("task-1", 2)]
     assert state["loops"][("task-1", 1)]["status"] == "pending"
     assert state["loops"][("task-1", 2)]["config_json"][QE_RUN_REGISTRATION_PARAM]["purpose"] == "validation"
+    assert (
+        state["loops"][("task-1", 2)]["config_json"][QE_RUN_REGISTRATION_PARAM][
+            "consumer_id"
+        ]
+        == "advisory"
+    )
     assert (
         state["loops"][("task-1", 2)]["config_json"]["custom_params"][
             QE_RUN_REGISTRATION_PARAM
@@ -395,7 +1033,11 @@ def _engine_for_order_test():
     engine.composer = object()
     engine.active_dataset_profile = None
     engine.parent_custom_params = {}
-    engine.registration_context = {"source_type": "mcp", "purpose": "research"}
+    engine.registration_context = {
+        "consumer_id": "advisory",
+        "source_type": "mcp",
+        "purpose": "research",
+    }
     engine.parent_multi_alpha_id = None
     return engine, group
 
@@ -527,6 +1169,10 @@ def test_multi_alpha_reserves_parent_and_children_before_materialization(monkeyp
         def reserve_multi_alpha(self, **kwargs):
             assert kwargs["parent_experiment_id"] == "qe-multi"
             assert kwargs["assignments"] == [assignment]
+            assert (
+                kwargs["custom_params"][QE_RUN_REGISTRATION_PARAM]["consumer_id"]
+                == "advisory"
+            )
             order.append("reserved")
 
     def fail_after_reservation(*_args, **_kwargs):

@@ -1,6 +1,7 @@
 import datetime as dt
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 import re
 from typing import Any
@@ -50,11 +51,13 @@ def _complete_daily_basic_row(
     code: str,
     *,
     turnover_rate_f: object = 1.0,
+    volume_ratio: object = 1.0,
 ) -> dict[str, object]:
     return {
         "trade_date": trade_date,
         "ts_code": code,
         "turnover_rate_f": turnover_rate_f,
+        "volume_ratio": volume_ratio,
     }
 
 
@@ -124,9 +127,11 @@ def test_canonical_weekend_compensation_is_weekly_saturday_and_defaults_are_uniq
     _validate_default_schedules(_DEFAULT_SCHEDULES)
 
     weekend = next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "_weekend_compensation")
+    daily_basic = next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "daily_basic")
     assert weekend["frequency"] == "weekly"
     assert weekend["day_of_week"] == "saturday"
     assert weekend["at"] == "10:00"
+    assert daily_basic["at"] == "20:30"
 
     with pytest.raises(ValueError, match="mode-insensitive default dataset has multiple schedules"):
         _validate_default_schedules(
@@ -1109,6 +1114,62 @@ def test_daily_basic_audit_without_required_field_receipt_is_not_ready():
     assert result.summary()["error_message"] == "daily_basic required-field coverage receipt is missing or invalid"
 
 
+def test_daily_basic_audit_without_receipt_uses_physical_table_fallback():
+    """BUG-1425: historical audit rows without the receipt must not hard-fail
+    closed when the physical table proves full coverage."""
+    from backend.services.audit_backed_data_health import AuditBackedDataHealthChecker
+
+    checker = AuditBackedDataHealthChecker({})
+    checker._verify_daily_basic_coverage_from_table = lambda **kwargs: {
+        "schema_version": "daily_basic_required_field_coverage_v1",
+        "field": "turnover_rate_f",
+        "finite_count": 5549,
+        "row_count": 5549,
+        "ratio": 1.0,
+        "required_ratio": 0.95,
+    }
+
+    result = checker._status_from_audit(
+        dataset="daily_basic",
+        expected_date=dt.date(2026, 9, 8),
+        latest_success={
+            "trade_date": dt.date(2026, 9, 8),
+            "row_count": 5549,
+            "quality_status": "ok",
+            "metadata": {"tushare_api": "daily_basic", "mode": "by_date"},
+        },
+        latest_expected=None,
+    )
+
+    assert result.status == "ok"
+    assert result.is_fresh is True
+    assert result.failure_category is None
+
+
+def test_daily_basic_audit_without_receipt_fails_closed_when_table_mismatch():
+    """BUG-1425: fallback must not fabricate evidence when physical rows
+    disagree with the audit row count."""
+    from backend.services.audit_backed_data_health import AuditBackedDataHealthChecker
+
+    checker = AuditBackedDataHealthChecker({})
+    checker._verify_daily_basic_coverage_from_table = lambda **kwargs: None
+
+    result = checker._status_from_audit(
+        dataset="daily_basic",
+        expected_date=dt.date(2026, 9, 8),
+        latest_success={
+            "trade_date": dt.date(2026, 9, 8),
+            "row_count": 5549,
+            "quality_status": "ok",
+            "metadata": {"tushare_api": "daily_basic", "mode": "by_date"},
+        },
+        latest_expected=None,
+    )
+
+    assert result.status == "low_coverage"
+    assert result.failure_category == "required_field_coverage_unproven"
+
+
 def test_daily_basic_fetch_declares_full_provider_field_contract() -> None:
     calls: list[dict[str, object]] = []
 
@@ -1154,6 +1215,38 @@ def test_daily_basic_required_turnover_coverage_fails_closed_before_upsert(monke
     assert upserts == []
 
 
+def test_daily_basic_required_volume_ratio_coverage_fails_closed_before_upsert(monkeypatch: Any) -> None:
+    trade_date = dt.date(2026, 9, 4)
+    rows = [
+        _complete_daily_basic_row(trade_date, f"{index:06d}.SZ", volume_ratio=None)
+        for index in range(100)
+    ]
+    upserts: list[object] = []
+    monkeypatch.setattr(daily_basic_ingestion, "_date_range", lambda *_args: [trade_date])
+    monkeypatch.setattr(daily_basic_ingestion, "_fetch_daily_basic_for_date", lambda *_args: rows)
+    monkeypatch.setattr(
+        daily_basic_ingestion,
+        "_upsert_daily_basic",
+        lambda *_args: upserts.append(object()) or len(rows),
+    )
+    monkeypatch.setattr(daily_basic_ingestion, "_update_job_progress", lambda *_args: None)
+    monkeypatch.setattr(daily_basic_ingestion, "_log", lambda *_args: None)
+
+    stats = daily_basic_ingestion.run_ingestion(
+        _DailyBasicConnection(),
+        object(),
+        "incremental",
+        trade_date,
+        trade_date,
+        uuid.UUID("00000000-0000-0000-0000-000000000003"),
+        0,
+    )
+
+    assert stats["failed_days"] == 1
+    assert stats["success_days"] == 0
+    assert upserts == []
+
+
 def test_daily_basic_required_turnover_coverage_allows_bounded_symbol_gaps() -> None:
     trade_date = dt.date(2026, 9, 4)
     rows = [
@@ -1161,6 +1254,7 @@ def test_daily_basic_required_turnover_coverage_allows_bounded_symbol_gaps() -> 
             trade_date,
             f"{index:06d}.SZ",
             turnover_rate_f=None if index < 5 else 1.0,
+            volume_ratio=None if index < 5 else 1.0,
         )
         for index in range(100)
     ]
@@ -1168,6 +1262,7 @@ def test_daily_basic_required_turnover_coverage_allows_bounded_symbol_gaps() -> 
     receipt = daily_basic_ingestion._validate_required_field_coverage(rows, trade_date)
 
     assert receipt["required_field_coverage"]["turnover_rate_f"]["finite_count"] == 95
+    assert receipt["required_field_coverage"]["volume_ratio"]["finite_count"] == 95
 
 
 def test_daily_basic_audit_with_required_field_receipt_is_ready():
@@ -1222,12 +1317,14 @@ def test_daily_basic_refresh_audit_records_required_field_low_coverage(monkeypat
     def fake_fetchall(sql, _params=()):
         if "FROM market.daily_basic" in sql:
             assert "required_turnover_rate_f_count" in sql
+            assert "required_volume_ratio_count" in sql
             return [
                 {
                     "trade_date": trade_date,
                     "row_count": 5548,
                     "data_max_at": trade_date,
-                    "required_turnover_rate_f_count": 0,
+                    "required_turnover_rate_f_count": 5548,
+                    "required_volume_ratio_count": 0,
                 }
             ]
         if "FROM market.trading_calendar" in sql:
@@ -1263,9 +1360,13 @@ def test_daily_basic_refresh_audit_records_required_field_low_coverage(monkeypat
     assert captured[0][0] == "failure"
     assert captured[0][1]["quality_status"] == "low_coverage"
     assert captured[0][1]["failure_category"] == "required_field_low_coverage"
+    assert "field=volume_ratio" in captured[0][1]["error_message"]
     coverage = captured[0][1]["metadata"]["required_field_coverage"]
-    assert coverage["finite_count"] == 0
+    assert coverage["finite_count"] == 5548
     assert coverage["row_count"] == 5548
+    coverages = captured[0][1]["metadata"]["required_field_coverages"]
+    assert coverages["schema_version"] == "daily_basic_required_field_coverages_v2"
+    assert coverages["fields"]["volume_ratio"]["finite_count"] == 0
 
 
 def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
@@ -2029,6 +2130,71 @@ def test_suspend_d_current_trading_day_rejects_non_trading_day():
         assert "non-trading day" in str(exc)
     else:
         raise AssertionError("expected current_trading_day to reject non-trading day")
+
+
+@pytest.mark.parametrize(
+    ("today", "expected_start", "expected_lookback", "expected_max_findings"),
+    [
+        (dt.date(2026, 9, 13), None, 60, 200),
+        (dt.date(2026, 9, 12), dt.date(2018, 8, 1), None, 500),
+    ],
+)
+def test_freshness_check_runs_daily_or_weekly_suspend_coverage_fail_closed(
+    monkeypatch, today, expected_start, expected_lookback, expected_max_findings
+):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._db_cfg = {}
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 8, 31)
+    scheduler._record_freshness_retry_targets = lambda _results: []
+    scheduler._execute = lambda *_args, **_kwargs: None
+    updates = []
+    scheduler._update_ingestion_schedule = lambda schedule_id, **kwargs: updates.append(
+        (schedule_id, kwargs)
+    )
+    conn = object()
+    monkeypatch.setattr(scheduler_module, "_get_conn", lambda _cfg: nullcontext(conn))
+
+    class _Checker:
+        def __init__(self, _cfg):
+            pass
+
+        def check_all(self):
+            return []
+
+    monkeypatch.setattr(scheduler_module, "AuditBackedDataHealthChecker", _Checker)
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime.combine(today, dt.time(12, 0), tzinfo=dt.timezone.utc),
+    )
+    calls = []
+    monkeypatch.setattr(
+        scheduler_module,
+        "audit_suspend_d_coverage",
+        lambda observed_conn, **kwargs: calls.append((observed_conn, kwargs))
+        or {
+            "summary": {"coverage_complete": False, "unresolved_run_count": 2},
+            "database_write_performed": False,
+        },
+    )
+
+    scheduler._run_data_freshness_check(
+        uuid.uuid4(),
+        "freshness",
+        "schedule",
+        {},
+    )
+
+    assert calls[0][0] is conn
+    assert calls[0][1]["start_date"] == expected_start
+    assert calls[0][1]["lookback_trading_days"] == expected_lookback
+    assert calls[0][1]["max_findings"] == expected_max_findings
+    assert updates[0][1]["last_status"] == "failed"
+
+
+def test_suspend_d_full_history_due_only_on_saturday():
+    assert TDXScheduler._suspend_d_full_history_due(dt.date(2026, 9, 12)) is True
+    assert TDXScheduler._suspend_d_full_history_due(dt.date(2026, 9, 13)) is False
 
 
 def test_bug_1106_migration_is_idempotent_and_contains_no_business_dml():

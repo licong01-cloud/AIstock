@@ -11,6 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PLAN_CATALOG_PATH = REPO_ROOT / "tests" / "aistock_validation" / "catalog" / "test_plans.yaml"
 
 ALLOWED_COMMAND_KEYS: dict[str, str] = {
+    "nox_factor_research_backend": "factor_research_backend",
+    "nox_factor_research_dev_db": "factor_research_dev_db",
     "nox_l0": "l0",
     "nox_guardrail_changed_files": "guardrail_changed_files",
     "nox_validation_coverage_backend": "validation_coverage_backend",
@@ -37,6 +39,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_qe_long_trend_phase4_ui": "qe_long_trend_phase4_ui",
     "nox_qe_sector_risk_overlay_backend": "qe_sector_risk_overlay_backend",
     "nox_hmm_evolution_backend": "hmm_evolution_backend",
+    "nox_hmm_risk_pr_slice": "hmm_risk_pr_slice",
     "nox_hmm_risk_backend": "hmm_risk_backend",
     "nox_platform_api_backend": "platform_api_backend",
     "nox_position_timing_backend": "position_timing_backend",
@@ -86,6 +89,7 @@ ALLOWED_COMMAND_KEYS: dict[str, str] = {
     "nox_rl_execution_ui": "rl_execution_ui",
     "nox_frontend_type_lint": "frontend_type_lint",
     "nox_hmm_evolution_ui": "hmm_evolution_ui",
+    "nox_hmm_risk_ui": "hmm_risk_ui",
     "nox_watchlist_backend": "watchlist_backend",
     "nox_watchlist_ui": "watchlist_ui",
     "nox_qlib_data_backend": "qlib_data_backend",

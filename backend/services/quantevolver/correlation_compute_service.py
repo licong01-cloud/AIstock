@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -18,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import pandas as pd
 from psycopg2.extras import execute_values
 
 from ...db.pg_pool import get_conn
@@ -355,6 +357,297 @@ def _current_correlation_eligible_factor_ids(include_disabled: bool = False) -> 
     if not factor_ids:
         raise RuntimeError("当前无符合相关性 official 准入规则的因子")
     return factor_ids
+
+
+def _persist_target_correlations(
+    *,
+    target_factor_name: str,
+    records: List[Dict[str, Any]],
+    as_of_date: str,
+    universe_metadata: Dict[str, Any],
+) -> int:
+    """Atomically replace only correlation rows involving one target factor."""
+
+    catalog_rows = FactorEligibilityService().list_eligible_factors(include_disabled=True)
+    name_to_id = {
+        str(row["factor_name"]): int(row["id"])
+        for row in catalog_rows
+        if row.get("id") is not None and row.get("factor_name")
+    }
+    target_id = name_to_id.get(target_factor_name)
+    if target_id is None:
+        raise RuntimeError(f"target factor is absent from catalog: {target_factor_name}")
+    seen: dict[tuple[int, int], tuple[Any, ...]] = {}
+    for record in records:
+        factor_a = str(record.get("factor_a") or "")
+        factor_b = str(record.get("factor_b") or "")
+        if target_factor_name not in {factor_a, factor_b}:
+            raise RuntimeError("target-only correlation payload contains an unrelated pair")
+        other_name = factor_b if factor_a == target_factor_name else factor_a
+        other_id = name_to_id.get(other_name)
+        if other_id is None or other_id == target_id:
+            raise RuntimeError(f"target-only correlation reference is invalid: {other_name}")
+        correlation = float(record["correlation"])
+        if not math.isfinite(correlation) or correlation < -1.0 or correlation > 1.0:
+            raise RuntimeError("target-only correlation value is invalid")
+        pair = (min(target_id, other_id), max(target_id, other_id))
+        if pair in seen:
+            raise RuntimeError("target-only correlation payload contains duplicate pairs")
+        seen[pair] = (
+            pair[0],
+            pair[1],
+            correlation,
+            str(record.get("method") or "spearman_ewma"),
+            as_of_date,
+            252,
+            universe_metadata.get("universe_key"),
+            universe_metadata.get("universe_rule_version"),
+            universe_metadata.get("universe_fingerprint_sha256"),
+            universe_metadata.get("index_policy"),
+        )
+    if not seen:
+        raise RuntimeError("target-only correlation refresh produced no valid pairs")
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM qe_factor_correlations
+                    WHERE factor_a_id = %s OR factor_b_id = %s
+                    RETURNING factor_a_id, factor_b_id
+                    """,
+                    (target_id, target_id),
+                )
+                deleted_pairs = list(cur.fetchall())
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO qe_factor_correlations
+                        (factor_a_id, factor_b_id, correlation, method,
+                         as_of_date, data_window_days, universe, universe_rule_version,
+                         universe_fingerprint_sha256, index_policy, computed_at)
+                    VALUES %s
+                    """,
+                    list(seen.values()),
+                    template="(%s, %s, %s, %s, %s::DATE, %s, %s, %s, %s, %s, NOW())",
+                    page_size=2000,
+                )
+                affected_reference_ids = sorted(
+                    {
+                        factor_id
+                        for pair in [*deleted_pairs, *seen.keys()]
+                        for factor_id in pair
+                        if factor_id != target_id
+                    }
+                )
+                if affected_reference_ids:
+                    cur.execute(
+                        """
+                        UPDATE aistock_factor_catalog c
+                        SET correlation_pair_count = (
+                            SELECT COUNT(*)
+                            FROM qe_factor_correlations q
+                            WHERE q.factor_a_id = c.id OR q.factor_b_id = c.id
+                        )
+                        WHERE c.id = ANY(%s)
+                        """,
+                        (affected_reference_ids,),
+                    )
+                cur.execute(
+                    """
+                    UPDATE aistock_factor_catalog
+                    SET correlation_computed_at = NOW(),
+                        correlation_pair_count = %s
+                    WHERE id = %s
+                    """,
+                    (len(seen), target_id),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return len(seen)
+
+
+def run_target_correlation_refresh_local(
+    *,
+    target_factor_name: str,
+    as_of_date: str | None = None,
+    job_id: str | None = None,
+    data_date: str | None = None,
+) -> Dict[str, Any]:
+    """Compute target x eligible-reference correlations and replace only target rows."""
+
+    del data_date
+    assert_wsl_runtime("correlation_target_refresh_local")
+    target = str(target_factor_name or "").strip()
+    if not target:
+        raise ValueError("target_factor_name is required")
+    with _computing_lock:
+        _update_job_status(job_id, "running")
+        try:
+            eligible_rows = FactorEligibilityService().list_eligible_factors(
+                include_disabled=False
+            )
+            eligible_names = sorted(
+                {
+                    str(row.get("factor_name") or "").strip()
+                    for row in eligible_rows
+                    if str(row.get("factor_name") or "").strip()
+                }
+            )
+            if target not in eligible_names:
+                raise ValueError(f"target factor is not official-eligible: {target}")
+            pipeline = get_correlation_factor_value_pipeline()
+            cached_names = {
+                str(item.get("factor_name") or "")
+                for item in pipeline.get_cached_singles()
+            }
+            if target not in cached_names:
+                raise ValueError(f"target factor has no official single cache: {target}")
+            missing_references = sorted(
+                name
+                for name in eligible_names
+                if name != target and name not in cached_names
+            )
+            if missing_references:
+                raise ValueError(
+                    "official eligible references are missing from the cache: "
+                    f"{missing_references[:10]}"
+                )
+            references = [name for name in eligible_names if name != target]
+            if not references:
+                raise ValueError("target correlation refresh has no eligible cached references")
+
+            meta_path = Path(str(pipeline._output_dir)) / "_meta.json"
+            if not meta_path.is_file():
+                raise ValueError("official factor cache metadata is missing")
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            resolved_as_of = str(as_of_date or meta.get("as_of_date") or "").strip()
+            if not resolved_as_of:
+                raise ValueError("target correlation refresh as_of_date is unavailable")
+            try:
+                datetime.strptime(resolved_as_of, "%Y-%m-%d")
+            except ValueError as exc:
+                raise ValueError(
+                    "target correlation refresh as_of_date is invalid"
+                ) from exc
+            if meta.get("as_of_date") != resolved_as_of:
+                raise ValueError("target correlation as_of_date differs from official cache")
+            if meta.get("moneyflow_unit_contract_version") != MONEYFLOW_UNIT_CONTRACT_VERSION:
+                raise ValueError("official factor cache moneyflow unit contract differs")
+            expected_factor_dir = str(os.getenv("RDAGENT_FACTOR_DATA_WSL") or "").strip()
+            expected_qlib_path = str(os.getenv("QE_QLIB_DATA_PATH") or "").strip()
+            if expected_factor_dir and meta.get("factor_data_dir") != expected_factor_dir:
+                raise ValueError("official factor cache factor_data_dir differs from task binding")
+            if expected_qlib_path and meta.get("qlib_bin_path") != expected_qlib_path:
+                raise ValueError("official factor cache qlib_bin_path differs from task binding")
+
+            cache_universe_key = _official_cache_universe_key()
+            universe_metadata = FactorUniverseMaskService().metadata(
+                start_date="2018-08-01",
+                end_date=resolved_as_of,
+                universe_key=cache_universe_key,
+            )
+            for field in (
+                "universe_key",
+                "universe_rule_version",
+                "universe_fingerprint_sha256",
+                "index_policy",
+            ):
+                if meta.get(field) != universe_metadata.get(field):
+                    raise ValueError(f"official factor cache {field} differs from PIT authority")
+            factor_meta = meta.get("factors") if isinstance(meta.get("factors"), dict) else {}
+            for factor_name in [target, *references]:
+                item = factor_meta.get(factor_name)
+                if not isinstance(item, dict) or not item.get("as_of_date"):
+                    item = _infer_single_factor_cache_meta(pipeline, factor_name)
+                if item.get("as_of_date") != resolved_as_of:
+                    raise ValueError(
+                        f"factor cache as_of_date differs for {factor_name}: "
+                        f"{item.get('as_of_date')} != {resolved_as_of}"
+                    )
+            loader = get_correlation_factor_value_loader(source="single")
+            engine = CorrelationEngine(loader)
+            trading_dates = loader.get_trading_dates("2000-01-01", resolved_as_of)
+            window_dates = trading_dates[-252:]
+            if len(window_dates) < 126:
+                raise ValueError("target correlation refresh has insufficient trading dates")
+            records: list[dict[str, Any]] = []
+            loaded_reference_count = 0
+            unavailable_pair_count = 0
+            # Read through the loader's filtered, uncached path so the process
+            # retains only one bounded 252-day reference batch at a time.
+            reference_batch_size = 64
+            for offset in range(0, len(references), reference_batch_size):
+                reference_batch = references[offset : offset + reference_batch_size]
+                columns = []
+                for factor_name in [target, *reference_batch]:
+                    frame = loader._read_single_filtered(
+                        factor_name,
+                        window_dates[0],
+                        window_dates[-1],
+                    )
+                    if frame is None or frame.empty:
+                        raise ValueError(
+                            f"official single cache is unreadable or empty: {factor_name}"
+                        )
+                    columns.append(frame.iloc[:, 0].rename(factor_name))
+                panel = pd.concat(columns, axis=1, join="outer").sort_index()
+                del columns
+                if target not in panel.columns:
+                    raise ValueError("target factor is absent from the loaded official panel")
+                loaded_references = [
+                    name for name in reference_batch if name in panel.columns
+                ]
+                if len(loaded_references) != len(reference_batch):
+                    missing = sorted(set(reference_batch) - set(loaded_references))
+                    raise ValueError(
+                        f"eligible references disappeared during panel loading: {missing[:10]}"
+                    )
+                result = engine.compute_selected_submatrix(
+                    panel[[target]],
+                    panel[loaded_references],
+                    as_of_date=resolved_as_of,
+                )
+                rows = result.records()
+                loaded_reference_count += len(loaded_references)
+                unavailable_pair_count += sum(
+                    row["status"] != "available" for row in rows
+                )
+                records.extend(
+                    {
+                        "factor_a": row["candidate"],
+                        "factor_b": row["reference"],
+                        "correlation": row["correlation"],
+                        "method": "spearman_ewma",
+                    }
+                    for row in rows
+                    if row["status"] == "available"
+                )
+                del panel, result
+            written = _persist_target_correlations(
+                target_factor_name=target,
+                records=records,
+                as_of_date=resolved_as_of,
+                universe_metadata=universe_metadata,
+            )
+            _update_job_status(job_id, "success")
+            return {
+                "success": True,
+                "status": "success",
+                "mode": "target_only",
+                "target_factor_name": target,
+                "reference_count": loaded_reference_count,
+                "written_pair_count": written,
+                "unavailable_pair_count": unavailable_pair_count,
+                "as_of_date": resolved_as_of,
+                "unrelated_rows_modified": 0,
+            }
+        except Exception as exc:
+            _update_job_status(job_id, "failed", str(exc))
+            raise
 
 
 def _reconcile_correlation_state(reset_all: bool = False) -> Dict[str, int]:
@@ -809,7 +1102,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             # ── 成功响应: 显式汇报成功/失败因子数 + 排除原因分类 ──
             # 排除来源两类 (互斥):
             # 1) missing_from_cache: Phase 1 缺独立指标缓存 (missing_factors)
-            # 2) degenerate_nan: Phase 2 engine 内部剔除 (NaN 覆盖率 > 20%)
+            # 2) degenerate_nan: Phase 2 engine 仅剔除当前相关性窗口 100% NaN 的因子
             #    通过 compute_factors (Phase 1 后) - result.factor_names (Phase 2 后) 反推
             _requested_count = len(factor_names)
             _no_valid_pair_factors = sorted(set(no_valid_pair_factors))
@@ -1081,6 +1374,7 @@ def _persist_correlation_metadata(result: CorrelationResult) -> None:
 # Public aliases used by scripts/router code. The leading-underscore functions
 # are kept because existing call sites and tests may still reference them.
 run_correlation_compute_local = _run_correlation_compute_local
+persist_target_correlations = _persist_target_correlations
 persist_correlations_batch = _persist_correlations_batch
 persist_correlation_metadata = _persist_correlation_metadata
 current_correlation_eligible_factor_ids = _current_correlation_eligible_factor_ids

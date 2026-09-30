@@ -38,15 +38,15 @@ def _read_calendar(qlib_bin: Path) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(dates["date"])
 
 
-def _read_instruments(qlib_bin: Path) -> dict[str, tuple[str, str]]:
-    """Read instrument date ranges. Returns {INSTRUMENT: (start, end)}."""
+def _read_instruments(qlib_bin: Path) -> dict[str, list[tuple[str, str]]]:
+    """Read every declared instrument span, preserving repeated symbols."""
     inst_file = qlib_bin / "instruments" / "all.txt"
-    result = {}
-    with open(inst_file, "r") as f:
+    result: dict[str, list[tuple[str, str]]] = {}
+    with open(inst_file, "r", encoding="utf-8") as f:
         for line in f:
             parts = line.strip().split("\t")
             if len(parts) >= 3:
-                result[parts[0]] = (parts[1], parts[2])
+                result.setdefault(parts[0], []).append((parts[1], parts[2]))
     return result
 
 
@@ -77,17 +77,22 @@ def _load_all_close_prices(qlib_bin: Path) -> pd.DataFrame:
     features_dir = qlib_bin / "features"
 
     records = []
-    for inst_upper, (inst_start, _inst_end) in instruments.items():
+    missing_bins: list[str] = []
+    for inst_upper, inst_spans in instruments.items():
         bin_path = features_dir / inst_upper.lower() / "close.day.bin"
         if not bin_path.exists():
+            missing_bins.append(inst_upper)
             continue
         values, cal_start_idx = _read_single_bin(bin_path)
         n_values = min(len(values), len(calendar) - cal_start_idx)
         values = values[:n_values]
         dates = calendar[cal_start_idx : cal_start_idx + n_values]
-        # Respect inst_start from all.txt (IPO filter applied by snapshot_writer)
-        start_ts = pd.Timestamp(inst_start)
-        mask = dates >= start_ts
+        # all.txt may contain multiple PIT-eligible spans for one symbol.  The
+        # spans are inclusive Qlib instrument bounds; retaining only the last
+        # row would silently erase earlier eligible history.
+        mask = np.zeros(len(dates), dtype=bool)
+        for inst_start, inst_end in inst_spans:
+            mask |= (dates >= pd.Timestamp(inst_start)) & (dates <= pd.Timestamp(inst_end))
         dates = dates[mask]
         values = values[mask]
         if len(dates) == 0:
@@ -103,6 +108,13 @@ def _load_all_close_prices(qlib_bin: Path) -> pd.DataFrame:
 
     if not records:
         raise ValueError("No close price data found in qlib_bin")
+
+    if missing_bins:
+        logger.warning(
+            "Qlib instruments without close.day.bin: %d (sample=%s)",
+            len(missing_bins),
+            missing_bins[:5],
+        )
 
     result = pd.concat(records)
     result.sort_index(inplace=True)

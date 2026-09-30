@@ -1,10 +1,36 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers.position_timing import get_position_timing_service, router
-from conftest import CHINA_TZ
+from conftest import CHINA_TZ, FakeCalendar
+
+
+def test_action_value_clock_uses_latest_elapsed_20h_cutoff(service_factory) -> None:
+    before_cutoff = service_factory(now=datetime(2026, 9, 3, 9, 41, tzinfo=CHINA_TZ))
+    assert before_cutoff._resolve_action_value_clock(before_cutoff._now()) == (
+        date(2026, 9, 2),
+        datetime(2026, 9, 2, 20, 0, tzinfo=CHINA_TZ),
+        date(2026, 9, 3),
+    )
+
+    at_cutoff = service_factory(now=datetime(2026, 9, 3, 20, 0, tzinfo=CHINA_TZ))
+    assert at_cutoff._resolve_action_value_clock(at_cutoff._now()) == (
+        date(2026, 9, 3),
+        datetime(2026, 9, 3, 20, 0, tzinfo=CHINA_TZ),
+        date(2026, 9, 4),
+    )
+
+    weekend = service_factory(
+        now=datetime(2026, 9, 5, 9, 41, tzinfo=CHINA_TZ),
+        calendar=FakeCalendar(today=date(2026, 9, 5), is_trading_day=False),
+    )
+    assert weekend._resolve_action_value_clock(weekend._now()) == (
+        date(2026, 9, 4),
+        datetime(2026, 9, 4, 20, 0, tzinfo=CHINA_TZ),
+        date(2026, 9, 7),
+    )
 
 
 def test_block_one_get_endpoints_do_not_create_timing_artifacts(service_factory) -> None:
@@ -16,6 +42,7 @@ def test_block_one_get_endpoints_do_not_create_timing_artifacts(service_factory)
 
     assert client.get("/api/v1/position-timing/intents").status_code == 200
     assert client.get("/api/v1/position-timing/cards/current").status_code == 200
+    assert client.get("/api/v1/position-timing/model-advice/current").status_code == 200
     assert client.get("/api/v1/position-timing/evidence").status_code == 200
     assert client.get("/api/v1/position-timing/alerts/poll").status_code == 200
     assert not service.store.root.exists()
@@ -56,6 +83,7 @@ def test_block_one_api_surface_and_side_effect_boundaries(service_factory) -> No
     materialize = client.post("/api/v1/position-timing/materialize")
     assert materialize.status_code == 200
     assert materialize.json()["outcome_materialization_status"] == "NO_DUE_OUTCOMES"
+    assert materialize.json()["model_advice_materialization_status"] == "MODEL_RESEARCH_NOT_AVAILABLE"
     assert len(materialize.json()["card_set"]["cards"]) == 2
     assert len(materialize.json()["card_set"]["cards_sha256"]) == 64
 
@@ -83,6 +111,7 @@ def test_block_one_api_surface_and_side_effect_boundaries(service_factory) -> No
     assert not any("order" in path for path in route_paths)
     assert "/api/v1/position-timing/alerts/poll" in route_paths
     assert "/api/v1/position-timing/alerts/{trigger_id}/claim" in route_paths
+    assert "/api/v1/position-timing/model-advice/current" in route_paths
 
 
 def test_alert_poll_and_claim_api_use_bounded_snapshot(service_factory) -> None:

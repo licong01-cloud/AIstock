@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -276,9 +276,12 @@ def continue_sector_hmm(
     continuation_cutoff: str,
     required_l2_code_ids: Sequence[int],
     precomputed_observations: pd.DataFrame | None = None,
+    deadline_check: Callable[[], None] | None = None,
 ) -> FreshHMMContinuationResult:
     """Continue frozen per-sector posteriors using only post-cutoff observations."""
 
+    if deadline_check is not None:
+        deadline_check()
     if hmm_bundle.get("schema_version") != "fresh_sector_hmm_bundle_v1":
         raise AdvisoryModelFirstError(
             "fresh HMM bundle schema is invalid",
@@ -334,6 +337,8 @@ def continue_sector_hmm(
     states: list[pd.DataFrame] = []
     unavailable: list[dict[str, Any]] = []
     for code in sorted({int(value) for value in required_l2_code_ids if int(value) >= 0}):
+        if deadline_check is not None:
+            deadline_check()
         model = models.get(str(code))
         if model is None:
             unavailable.append(
@@ -389,6 +394,7 @@ def continue_sector_hmm(
             transmat=np.asarray(model["transmat"], dtype=float),
             means=np.asarray(model["means"], dtype=float),
             covariances=np.asarray(model["covariances"], dtype=float),
+            deadline_check=deadline_check,
         )
         canonical_by_raw = {int(key): int(value) for key, value in model["canonical_state_by_raw"].items()}
         raw_state = posterior.argmax(axis=1)
@@ -491,6 +497,7 @@ def _continue_causal_filter(
     transmat: np.ndarray,
     means: np.ndarray,
     covariances: np.ndarray,
+    deadline_check: Callable[[], None] | None = None,
 ) -> np.ndarray:
     state_count = len(previous_posterior)
     if (
@@ -510,6 +517,8 @@ def _continue_causal_filter(
     alpha = np.log(np.clip(previous_posterior / previous_posterior.sum(), 1e-300, None))
     posterior = np.empty_like(log_emission)
     for index in range(len(matrix)):
+        if deadline_check is not None and index % 32 == 0:
+            deadline_check()
         alpha = log_emission[index] + logsumexp(alpha[:, None] + log_transition, axis=0)
         alpha -= logsumexp(alpha)
         posterior[index] = np.exp(alpha)

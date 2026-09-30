@@ -23,6 +23,8 @@ QE_RUN_REGISTRATION_PARAM = "_qe_run_registration"
 QE_RUN_REGISTRATION_SCHEMA = "qe_run_registration_v1"
 QE_RUN_PURPOSES = frozenset({"research", "validation"})
 QE_RUN_SOURCE_TYPES = frozenset({"ui", "mcp", "scheduler", "agent"})
+QE_RUN_CONSUMERS = frozenset({"qe_mainline", "advisory"})
+QE_RUN_DEFAULT_CONSUMER = "qe_mainline"
 _CANONICAL_STATUS_ALIASES = {
     "created": "planned",
     "pending": "queued",
@@ -111,6 +113,31 @@ def normalize_qe_run_source_type(value: Any) -> str:
     return source_type
 
 
+def normalize_qe_run_consumer_id(value: Any) -> str:
+    consumer_id = (
+        QE_RUN_DEFAULT_CONSUMER
+        if value is None
+        else str(value).strip().lower()
+    )
+    if consumer_id not in QE_RUN_CONSUMERS:
+        raise QERunRegistryError(
+            "qe_run_consumer_id_invalid",
+            f"consumer_id must be one of {sorted(QE_RUN_CONSUMERS)}, got {value!r}",
+        )
+    return consumer_id
+
+
+def qe_registration_summary(value: Any) -> dict[str, Any]:
+    """Normalize a persisted registration without mutating the stored payload."""
+
+    registration = _mapping(value)
+    if registration:
+        registration["consumer_id"] = normalize_qe_run_consumer_id(
+            registration.get("consumer_id")
+        )
+    return registration
+
+
 def canonical_qe_status(value: Any) -> str:
     status = str(value or "unknown").strip().lower()
     return _CANONICAL_STATUS_ALIASES.get(status, status)
@@ -120,6 +147,7 @@ def build_qe_run_registration(
     *,
     run_kind: str,
     custom_params: Mapping[str, Any] | None = None,
+    consumer_id: str | None = None,
     source_type: str | None = None,
     created_by_name: str | None = None,
     purpose: str | None = None,
@@ -156,6 +184,11 @@ def build_qe_run_registration(
     registration: dict[str, Any] = {
         "schema_version": QE_RUN_REGISTRATION_SCHEMA,
         "run_kind": str(run_kind).strip().lower(),
+        "consumer_id": normalize_qe_run_consumer_id(
+            consumer_id
+            if consumer_id is not None
+            else provenance.get("consumer_id")
+        ),
         "source_type": effective_source,
         "purpose": normalize_qe_run_purpose(purpose or provenance.get("purpose")),
         "factor_count": len(factors),
@@ -235,6 +268,7 @@ def attach_qe_planned_loop_registration(
     config: Mapping[str, Any],
     *,
     run_kind: str,
+    consumer_id: str | None = None,
     source_type: str,
     created_by_name: str | None,
     purpose: str,
@@ -249,6 +283,7 @@ def attach_qe_planned_loop_registration(
     params = attach_qe_run_registration(
         _mapping(loop_config.get("custom_params")),
         run_kind=run_kind,
+        consumer_id=consumer_id,
         source_type=source_type,
         created_by_name=created_by_name,
         purpose=purpose,
@@ -377,6 +412,7 @@ class QERunRegistry:
         base_experiment_id: str,
         task_kind: str,
         planned_loops: Sequence[PlannedQELoop],
+        consumer_id: str | None = None,
         source_type: str = "scheduler",
         created_by_name: str | None = None,
         purpose: str = "research",
@@ -407,9 +443,18 @@ class QERunRegistry:
                 first_config = dict(first_planned.config or {})
                 parent_params = _mapping(parent_row[3])
                 parent_params.update(_mapping(first_config.get("custom_params")))
+                parent_registration = qe_registration_summary(
+                    parent_params.get(QE_RUN_REGISTRATION_PARAM)
+                )
+                effective_consumer = normalize_qe_run_consumer_id(
+                    consumer_id
+                    if consumer_id is not None
+                    else parent_registration.get("consumer_id")
+                )
                 registration = build_qe_run_registration(
                     run_kind=task_kind,
                     custom_params=parent_params,
+                    consumer_id=effective_consumer,
                     source_type=source_type,
                     created_by_name=created_by_name,
                     purpose=purpose,
@@ -452,6 +497,7 @@ class QERunRegistry:
                     loop_config = attach_qe_planned_loop_registration(
                         dict(planned.config or {}),
                         run_kind=f"{task_kind}_loop",
+                        consumer_id=effective_consumer,
                         source_type=source_type,
                         created_by_name=created_by_name,
                         purpose=purpose,
@@ -809,7 +855,7 @@ class QERunRegistry:
 
         task_registrations: dict[str, dict[str, Any]] = {}
         for row in task_registration_rows:
-            registration = _mapping(
+            registration = qe_registration_summary(
                 _mapping(row.get("strategy_evo_config")).get(QE_RUN_REGISTRATION_PARAM)
             )
             if not registration:
@@ -849,7 +895,7 @@ class QERunRegistry:
 
         for item in projected:
             params = _mapping(item.get("custom_params"))
-            registration = _mapping(params.get(QE_RUN_REGISTRATION_PARAM))
+            registration = qe_registration_summary(params.get(QE_RUN_REGISTRATION_PARAM))
             if not item.get("is_evolution_loop"):
                 registration = (
                     task_registrations.get(str(item.get("qe_task_id") or ""))

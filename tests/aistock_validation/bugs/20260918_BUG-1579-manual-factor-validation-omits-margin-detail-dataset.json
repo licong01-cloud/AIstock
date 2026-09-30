@@ -1,0 +1,307 @@
+{
+  "actual": "backend/services/manual_factor_service.py DATA_FILES omits margin_detail.h5, so standard validation cannot execute margin factors and formal delivery is blocked.",
+  "allowed_write_scope": [
+    "backend/services/manual_factor_service.py",
+    "backend/tests/test_manual_factor_service_wsl_output.py",
+    "tests/aistock_validation/bugs/20260918_BUG-1579-manual-factor-validation-omits-margin-detail-dataset.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1579",
+  "closed_at": "2026-09-18T17:35:56.372980Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-18T07:43:36.629089Z",
+  "description": "backend/services/manual_factor_service.py DATA_FILES omits margin_detail.h5, so standard validation cannot execute margin factors and formal delivery is blocked.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260918-7642783d58d1",
+      "timestamp": "2026-09-18T07:43:36.629070Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_factor_research/margin-net-repay-tminus1-r7-delivery-20260918/review.md"
+  ],
+  "expected": "Manual factor validation stages margin_detail.h5 from the configured factor workspace and validates a margin-based factor without database writes.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/manual_factor_service.py",
+      "backend/tests/test_manual_factor_service_wsl_output.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/manual_factor_service.py",
+        "backend/tests/test_manual_factor_service_wsl_output.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "factor_library",
+        "qe.core"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/manual_factor_service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/test_manual_factor_service_wsl_output.py",
+          "impact_modules": [
+            "qe.core"
+          ],
+          "primary_module": "factor_library",
+          "risk_level": "high",
+          "rule_id": "factor_library_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/manual_factor_service.py",
+        "backend/tests/test_manual_factor_service_wsl_output.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/manual_factor_service.py",
+      "backend/tests/test_manual_factor_service_wsl_output.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/manual_factor_service.py",
+      "backend/tests/test_manual_factor_service_wsl_output.py"
+    ]
+  },
+  "first_seen_at": "2026-09-18T07:43:36.629089Z",
+  "fix_branch": null,
+  "fix_commit": "530bba42b9a09f102dbb457ef3e549604ba945bd",
+  "fixed_at": "2026-09-18T07:56:59Z",
+  "github_issue_number": 4925,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4925",
+  "last_seen_at": "2026-09-18T07:43:36.629089Z",
+  "module": "factor_library.research",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4926",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/register_manual_factor.py validate --name m_md_net_repay_rate_10d_tminus1 --code-file <candidate.py>",
+  "required_verification": [
+    "l0",
+    "platform_api_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/CORD10?source=alpha158&expected_is_available=true",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh Python and WSL Ubuntu rdagent-gpu Python 3.10 imported backend.services.manual_factor_service from the BUG-1579 worktree and asserted margin_detail.h5 is staged.",
+      "Windows fresh process imported DATA_FILES and asserted margin_detail.h5; WSL Ubuntu rdagent-gpu Python 3.10 fresh process passed the same assertion"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1579-close-sync-20260918\\tmp\\issue_workflow\\BUG-1579\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1579",
+      "business_smoke_semantic": {
+        "contract_id": "factor_lifecycle_detail",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "89777230a4065d3bf05bdc7f2761190708ad8e2331f12d7d3988d7d2917945af",
+      "expected_identity": "530bba42b9a09f102dbb457ef3e549604ba945bd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-18T17:34:10.260032Z",
+      "mode": "read_only",
+      "observed_identity": "c4b626e0a5c6ad285d6befea8cdb6fbabe9ce7c0",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "31050acf249fb6f04ce100f34718c2cd00fd408bef9f42bea2db3f88439d3877",
+      "receipt_sha256": "3d4a3dc4d809fc1955feb74a64be483615df5afc3591990181a1ac42f821ea1f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "403ca96b1f2b26894c05d381f374cbf1875e5250c76788b4e7f7652561113559",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1579",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5376c440003f5d77",
+    "recorded_at": "2026-09-18T07:57:53.500247Z",
+    "runtime_contract_digest": "740f1001321a5b38f5471c4a337b7a274687c8832ab09585778448008bdf3401",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "abd502be330104b67e02bd39cf24a4b5158a7537",
+    "source_merge_commit": "530bba42b9a09f102dbb457ef3e549604ba945bd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4926",
+    "validation_evidence": [
+      "validation-receipt: id=30507b4f91fe7460 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_manual_factor_service_wsl_output.py -q` result=`2 passed`",
+      "validation-receipt: id=06ccd0f000fe6895 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/manual_factor_service.py backend/tests/test_manual_factor_service_wsl_output.py` result=`passed`",
+      "validation-receipt: id=2bcea8d5ccc9d1a3 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=compile plan=direct status=passed command=`python -m py_compile backend/services/manual_factor_service.py backend/tests/test_manual_factor_service_wsl_output.py` result=`passed`",
+      "validation-receipt: id=14e543c2e4a6aab5 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+      "validation-receipt: id=ef2dda38bc16639c commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`"
+    ],
+    "validation_evidence_digest": "30af63b2f4e0424835f80b8669e2c0a3c922b70424e97a7857d132a9ffcc37e8"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "factor_library.research"
+  ],
+  "title": "Manual factor validation omits margin_detail dataset",
+  "trigger_condition": {
+    "fingerprint": "7642783d58d1935ac67e1ef2",
+    "source_event_id": "FE-20260918-7642783d58d1"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=30507b4f91fe7460 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_manual_factor_service_wsl_output.py -q` result=`2 passed`",
+    "validation-receipt: id=06ccd0f000fe6895 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/manual_factor_service.py backend/tests/test_manual_factor_service_wsl_output.py` result=`passed`",
+    "validation-receipt: id=2bcea8d5ccc9d1a3 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=compile plan=direct status=passed command=`python -m py_compile backend/services/manual_factor_service.py backend/tests/test_manual_factor_service_wsl_output.py` result=`passed`",
+    "validation-receipt: id=14e543c2e4a6aab5 commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+    "validation-receipt: id=ef2dda38bc16639c commit=78619747b8f3fc29d5b461e111991a4ffa24057a kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
+    "post-restart-verify workflow_gate=verified; runtime identity contains 530bba42; health 200; CORD10 factor lifecycle detail semantic contract passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "factor_library.research",
+        "platform_api"
+      ],
+      "plans": [
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "factor_library.research",
+          "platform_api"
+        ],
+        "plans": [
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

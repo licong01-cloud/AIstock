@@ -1339,6 +1339,9 @@ class LocalSimPersistenceCoordinator:
             }
             payload_patch: dict[str, Any] = {
                 "local_sim_persistence": {**final_persistence_payload, "status": "PROJECTION_PENDING"},
+                "broker_called": True,
+                "submitted_intents": len(orders),
+                "failed_intents": 0,
                 "last_stage": "LOCAL_SIM_ECONOMIC_COMMITTED",
             }
             if execution_states:
