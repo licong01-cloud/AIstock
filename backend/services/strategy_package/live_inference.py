@@ -887,6 +887,23 @@ class QEExperimentRuntimeAssetResolver:
             source_dir=source_dir,
             package_id=package_key,
         )
+        if model_asset.preprocessor_asset is not None:
+            processor = model_asset.preprocessor_asset
+            processor_payload = self._read_package_asset_bytes(
+                asset_ref=processor.asset_ref,
+                expected_sha256=processor.sha256,
+                package_id=package_key,
+                asset_kind="preprocessor",
+                logical_name=str(model_asset.model_id),
+            )
+            if len(processor_payload) != processor.size_bytes:
+                raise PackageAssetInvalidError(
+                    "frozen fitted preprocessor size mismatch",
+                    context={"reason_code": "strategy_package_preprocessor_size_mismatch", "package_id": package_key},
+                )
+            _write_inside_runtime_source(
+                model_dir / "dataset", processor_payload, source_dir=source_dir, package_id=package_key,
+            )
         self._materialize_model_code_assets(
             model_asset,
             model_dir=model_dir,
