@@ -6,6 +6,7 @@ import fnmatch
 import hashlib
 import io
 import json
+import math
 import os
 import platform
 import re
@@ -4015,6 +4016,89 @@ def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[st
     return "failed", f"correlation status payload reports unknown status: {normalized}", {}
 
 
+def _validate_factor_metrics_results(
+    payload: Any, *, url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Verify a bound metrics readback, not offline algorithm acceptance."""
+    if (not isinstance(payload, dict) or payload.get("ok") is not True
+            or payload.get("domain") != "factor_metrics.result" or payload.get("errors")
+            or payload.get("error") or payload.get("success") is False
+            or ("status" in payload and payload["status"] not in ("ok", "success", "completed"))
+            or payload.get("summary_first") is not True):
+        return "failed", "factor metrics results require a successful summary envelope", {}
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    bindings = {
+        "factor_name": "factor_name", "calc_batch_id": "calc_batch_id", "eval_window": "eval_window",
+        "snapshot_date": "expected_snapshot_date", "universe": "expected_universe",
+        "return_horizon": "expected_return_horizon",
+    }
+    expected: dict[str, str] = {}
+    for field, key in bindings.items():
+        values = query.get(key) or []
+        if len(values) != 1 or not values[0].strip():
+            return "failed", f"factor metrics probe requires exactly one non-empty {key}", {}
+        expected[field] = values[0]
+    try:
+        snapshot = datetime.strptime(expected["snapshot_date"], "%Y-%m-%d").date()
+    except ValueError:
+        return "failed", "factor metrics expected_snapshot_date must be an ISO date", {}
+    if snapshot.isoformat() != expected["snapshot_date"]:
+        return "failed", "factor metrics expected_snapshot_date must be an ISO date", {}
+    limits = query.get("limit") or []
+    offsets = query.get("offset", ["0"])
+    if (len(limits) != 1 or not re.fullmatch(r"[1-9][0-9]{0,2}", limits[0])
+            or not 1 <= int(limits[0]) <= 100 or offsets != ["0"]):
+        return "failed", "factor metrics probe requires limit=1..100 and offset=0", {}
+    limit = int(limits[0])
+    items, total, page = payload.get("items"), payload.get("total"), payload.get("pagination")
+    if not isinstance(items, list) or not items or type(total) is not int or total <= 0:
+        return "failed", "factor metrics readback must contain non-empty persisted results", {}
+    if not isinstance(page, dict):
+        return "failed", "factor metrics readback is missing pagination", {}
+    for field, value in {"limit": limit, "offset": 0, "next_offset": limit, "total": total}.items():
+        if type(page.get(field)) is not int or page[field] != value:
+            return "failed", f"factor metrics pagination.{field} contradicts the probe/results", {}
+    if page.get("has_more") is not (total > limit) or len(items) != min(limit, total):
+        return "failed", "factor metrics pagination contradicts item count", {}
+    row_ids: set[int] = set()
+    for row in items:
+        if not isinstance(row, dict):
+            return "failed", "factor metrics result must be an object", {}
+        for field, value in expected.items():
+            if row.get(field) != value:
+                return "failed", f"factor metrics {field} does not match the declared probe", {}
+        row_id, days = row.get("id"), row.get("n_trading_days")
+        if type(row_id) is not int or row_id <= 0 or row_id in row_ids:
+            return "failed", "factor metrics ids must be unique positive integers", {}
+        row_ids.add(row_id)
+        if type(days) is not int or days <= 0:
+            return "failed", "factor metrics n_trading_days must be positive", {}
+        for field, value in row.items():
+            if type(value) in {int, float} and (abs(value) > sys.float_info.max or not math.isfinite(value)):
+                return "failed", f"factor metrics {field} must be finite", {}
+        for field, bounds in {
+            "ic_mean": (-1, 1), "rank_ic_mean": (-1, 1),
+            "ic_positive_ratio": (0, 1), "coverage": (0, 1),
+            "icir": None, "rank_icir": None,
+        }.items():
+            value = row.get(field)
+            if (type(value) not in {int, float} or abs(value) > sys.float_info.max
+                    or not math.isfinite(value) or (bounds and not bounds[0] <= value <= bounds[1])):
+                return "failed", f"factor metrics {field} is missing, non-finite or out of range", {}
+        calculated_at = row.get("calculated_at")
+        try:
+            calculated = datetime.fromisoformat(calculated_at.replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError):
+            return "failed", "factor metrics calculated_at must be a timezone-aware timestamp", {}
+        if calculated.tzinfo is None or calculated.utcoffset() is None or calculated.date() < snapshot:
+            return "failed", "factor metrics calculated_at precedes the snapshot or lacks timezone", {}
+    return "passed", None, {
+        **expected, "row_ids": sorted(row_ids), "row_count": len(items), "total": total,
+        "acceptance_scope": "bound_metrics_readback_only",
+        "offline_algorithm_acceptance": "requires_separate_bug_specific_evidence",
+    }
+
+
 def _validate_factor_lifecycle_detail(
     payload: Any,
     *,
@@ -4362,6 +4446,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/quantevolver/dataset-profile$"), "qe_dataset_profile", _validate_qe_dataset_profile),
     (re.compile(r"^/api/v1/position-timing/intents$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
+    (re.compile(r"^/api/v1/factor-metrics/results$"), "factor_metrics_results", _validate_factor_metrics_results),
     (
         re.compile(r"^/api/v1/factor-library/factors/[^/]+$"),
         "factor_lifecycle_detail",
@@ -4489,6 +4574,7 @@ def _evaluate_business_smoke_semantics(
     elif contract_id in {
         "scheduler_verification_status",
         "factor_lifecycle_detail",
+        "factor_metrics_results",
         "hmm_rotation_l2_overview",
         "advisory_entry_price_status",
         "local_data_freshness",

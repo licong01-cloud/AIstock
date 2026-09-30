@@ -139,6 +139,82 @@ def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: 
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
 
 
+_METRICS_PROBE = (
+    "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=sample&calc_batch_id=batch1"
+    "&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=pit_v2"
+    "&expected_return_horizon=1d&limit=1"
+)
+
+
+def _metrics_payload() -> dict[str, Any]:
+    return {"ok": True, "domain": "factor_metrics.result", "summary_first": True, "total": 1,
+            "items": [{"id": 1, "factor_name": "sample", "calc_batch_id": "batch1", "eval_window": "full",
+                       "snapshot_date": "2026-08-31", "universe": "pit_v2", "return_horizon": "1d",
+                       "coverage": .9, "n_trading_days": 100, "ic_mean": -.1, "rank_ic_mean": -.2,
+                       "icir": -2., "rank_icir": -3., "ic_positive_ratio": .4,
+                       "calculated_at": "2026-09-30T13:04:21+08:00"}],
+            "pagination": {"limit": 1, "offset": 0, "next_offset": 1, "total": 1, "has_more": False}}
+
+
+def test_factor_metrics_semantics_bind_real_results_without_profitability_threshold() -> None:
+    _, verdict = workflow._evaluate_business_smoke_semantics(
+        _METRICS_PROBE, json.dumps(_metrics_payload()), response_sha256="a" * 64
+    )
+    assert verdict["verdict"] == "passed" and verdict["contract_id"] == "factor_metrics_results"
+    assert verdict["facts"]["calc_batch_id"] == "batch1"
+    assert verdict["facts"]["acceptance_scope"] == "bound_metrics_readback_only"
+    assert verdict["facts"]["offline_algorithm_acceptance"] == "requires_separate_bug_specific_evidence"
+
+
+@pytest.mark.parametrize("query", [
+    "limit=1", "", "factor_name=sample&limit=1",
+    _METRICS_PROBE.split("?", 1)[1] + "&calc_batch_id=other",
+    _METRICS_PROBE.split("?", 1)[1].replace("batch1", "other"),
+    _METRICS_PROBE.split("?", 1)[1].replace("2026-08-31", "2026-8-31"),
+    _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=0"),
+    _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=" + "9" * 5000),
+    _METRICS_PROBE.split("?", 1)[1] + "&offset=1",
+])
+def test_factor_metrics_semantics_reject_unbound_or_conflicting_probe(query: str) -> None:
+    assert workflow._validate_factor_metrics_results(
+        _metrics_payload(), url=_METRICS_PROBE.split("?", 1)[0] + "?" + query
+    )[0] == "failed"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("factor_name", "other"), ("calc_batch_id", "old_batch"), ("eval_window", "2024"),
+    ("snapshot_date", "2026-06-30"), ("universe", "old_pool"), ("return_horizon", "20d"),
+    ("id", True), ("n_trading_days", 0), ("coverage", float("nan")), ("ic_mean", float("inf")),
+    ("rank_ic_mean", 2), ("ic_positive_ratio", -1), ("icir", None), ("rank_icir", "1"),
+    ("h20_ic_mean", float("nan")), ("ic_mean", 10 ** 500),
+    ("calculated_at", "2026-09-30T13:04:21"), ("calculated_at", "2026-08-30T13:04:21+08:00"),
+])
+def test_factor_metrics_semantics_reject_invalid_business_rows(field: str, value: Any) -> None:
+    payload = _metrics_payload()
+    payload["items"][0][field] = value
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("items", []), ("total", True), ("total", 0), ("ok", False), ("domain", "other"),
+    ("errors", ["failed"]), ("pagination", {}),
+    ("success", False), ("status", "failed"),
+    ("pagination", {"limit": 1, "offset": 0, "next_offset": 1, "total": 2, "has_more": False}),
+])
+def test_factor_metrics_semantics_reject_empty_or_contradictory_envelope(field: str, value: Any) -> None:
+    payload = _metrics_payload()
+    payload[field] = value
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
+
+
+def test_factor_metrics_semantics_reject_duplicate_persisted_rows() -> None:
+    payload = _metrics_payload()
+    payload["items"] *= 2
+    payload["total"] = 2
+    payload["pagination"].update(limit=2, next_offset=2, total=2)
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE.replace("limit=1", "limit=2"))[0] == "failed"
+
+
 def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
     _schema, semantic = workflow._evaluate_business_smoke_semantics(
         f"http://127.0.0.1:8001/api/v1/advisory/programs/{program_id}/entry-price/status",
