@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "prepare validates asset hashes and candidate metadata without importing or constructing LightGBM predictors; predict still requires real predictors",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1636-entry-price-metadata-prepare-unnecessarily-loads-inference-boosters.json",
       "backend/services/advisory_model_first/entry_price_confirmation.py",
       "backend/tests/advisory_model_first/test_entry_price_confirmation.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1636-entry-price-metadata-prepare-unnecessarily-loads-inference-boosters.json",
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/entry_price_confirmation.py",
@@ -98,11 +104,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/entry-price/status",
+    "fresh_process_evidence": [
+      "Fresh Python CLI prepare loaded BUG-1636 tracked metadata-only loaders without LightGBM and failed closed with ADVISORY_ENTRY_PRICE_INPUT_IDENTITY_MISMATCH on original historical universe provenance; no inference, DB writes or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

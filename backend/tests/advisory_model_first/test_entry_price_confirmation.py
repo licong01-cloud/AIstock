@@ -117,13 +117,43 @@ def test_input_verifier_reads_only_original_validation_labels_and_bound_candidat
         frame = pd.DataFrame({"instrument": day["candidate_symbols"]})
         day["candidate_source_sha256"] = _frame_sha256(frame)
         prepared[day["target_trade_date"]] = SimpleNamespace(decision_date=day["decision_as_of_trade_date"], candidates=frame)
-    monkeypatch.setattr(module, "_cached_day_service", lambda: SimpleNamespace(prepare_day=lambda **kw: prepared[kw["target_trade_date"]]))
+    def metadata_reader(*, metadata_only=False):
+        assert metadata_only, "input verification must not load inference predictors"
+        return SimpleNamespace(prepare_day=lambda **kw: prepared[kw["target_trade_date"]])
+    monkeypatch.setattr(module, "_cached_day_service", metadata_reader)
     request = build_entry_price_confirmation_request(**values)
     if violation:
         with pytest.raises(AdvisoryModelFirstError, match="control"):
             module.verify_confirmation_inputs(request, model_root=tmp_path)
     else:
         module.verify_confirmation_inputs(request, model_root=tmp_path)
+
+
+@pytest.mark.parametrize("metadata_only", [True, False])
+def test_day_loader_metadata_mode_does_not_hide_inference_dependency_errors(monkeypatch, metadata_only):
+    from types import SimpleNamespace
+    from backend.services.advisory_model_first.entry_price_confirmation import _cached_day_service
+    from backend.services.advisory_model_first import model_bundle, price_range_runtime_bundle, entry_price_service
+    from backend.services import advisory_program
+
+    calls = []
+    def loader(*, booster_factory=None, **kwargs):
+        if booster_factory is None:
+            raise AdvisoryModelFirstError("real inference dependency unavailable", reason_code="ADVISORY_MODEL_BUNDLE_INVALID")
+        calls.append(kwargs["bundle_id"])
+        return SimpleNamespace(booster=booster_factory("unused-model-path"))
+    monkeypatch.setattr(model_bundle, "load_frozen_research_bundle", loader)
+    monkeypatch.setattr(price_range_runtime_bundle, "load_frozen_price_range_bundle", loader)
+    monkeypatch.setattr(advisory_program, "AdvisoryProgramService", lambda **kwargs: object())
+    monkeypatch.setattr(entry_price_service, "AdvisoryEntryPriceService", lambda **kwargs: SimpleNamespace(**kwargs))
+    reader = _cached_day_service(metadata_only=metadata_only)
+    for kind, factory in (("parent", reader.parent_loader), ("price", reader.price_loader)):
+        if metadata_only:
+            assert factory(bundle_id=kind).booster is None
+        else:
+            with pytest.raises(AdvisoryModelFirstError, match="real inference dependency"):
+                factory(bundle_id=kind)
+    assert calls == (["parent", "price"] if metadata_only else [])
 
 
 def test_continuous_projection_and_calibration_cannot_diverge_from_displayed_prices(tmp_path):
