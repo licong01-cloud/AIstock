@@ -22,8 +22,10 @@
   "created_at": "2026-09-30T05:42:58.604675Z",
   "data_repair_state": {
     "dev_validation": "passed",
-    "production_apply": "not_performed",
-    "production_authorization": "pending_exact_keys"
+    "production_apply": "passed: 48 exact symbol-days, 11520 zero-turnover fully suspended provider placeholders deleted; exact-content CAS",
+    "production_authorization": "granted by user 2026-09-30 for previously proposed exact keys",
+    "production_readback": "passed: independent plan targets=0/unresolved=0; traded SH/SZ minute missing=0/non240=0/missing1130=0/1300=0 over four completed dates",
+    "receipt": "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/production_readback.json"
   },
   "description": "Sep23-29: 12 daily fully suspended zero-volume symbols persist13:00 bars without11:30. Validate sessions; suppress only independently proven whole-day suspension and all-zero turnover placeholders. Bounded exact-key cleanup DEV first, production separately authorized. Do not fabricate11:30 or touch real bars/candidates.",
   "events": [
