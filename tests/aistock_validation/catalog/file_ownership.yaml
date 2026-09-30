@@ -1217,6 +1217,8 @@ rules:
       - backend/routers/ingestion.py
       - scripts/ingest_tushare_adj_factor.py
       - scripts/validate_etf_share_size_source.py
+      - scripts/prepare_etf_share_size_deployment.py
+      - backend/tests/scripts/test_prepare_etf_share_size_deployment.py
       - backend/tests/ingestion/test_tdx_scheduler_adj_factor.py
       - backend/tests/services/test_adj_factor_history_reconciler.py
       - backend/tests/test_tushare_sync_engine.py
@@ -1322,6 +1324,12 @@ rules:
       - frontend/src/app/local-data/**
       - frontend/src/app/qlib/**
       - scripts/repair_minute_via_minute_api.py
+      - scripts/repair_suspended_minute_placeholders.py
+      - scripts/ingest_incremental.py
+      - scripts/ingest_full_minute.py
+      - backend/services/minute_data_session_contract.py
+      - backend/tests/ingestion/test_minute_data_session_contract.py
+      - backend/tests/ingestion/test_ingest_incremental_minute.py
       - scripts/repair_suspend_688766.py
       - backend/tests/scripts/test_repair_suspend_688766.py
       - backend/services/suspend_d_coverage.py
