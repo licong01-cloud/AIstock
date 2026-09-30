@@ -272,7 +272,7 @@ def train_repeat(request: Mapping[str, Any]) -> dict[str, Any]:
                     source = raw_series[code]
                     values, projection = projected[code]
                     try:
-                        result = fit_entry(values, source["train_dates"], seed)
+                        result = fit_entry(values, source["train_dates"], seed, calendar=request["train_calendar"])
                     except Exception as exc:
                         # Failure is durable and ineligible; every declared entry is still attempted.
                         result = receipt(
@@ -364,6 +364,7 @@ def finalize(request: Mapping[str, Any], first: Mapping[str, Any], second: Mappi
                     entry,
                     projected[code][0],
                     series[code]["train_dates"],
+                    calendar=request["train_calendar"],
                 )
         selection = select_restart(group["candidates"], request["sector_codes"][level])
         selections[key] = selection
@@ -531,7 +532,7 @@ def selected_model_set(
                 or semantic["evidence_status"] != "accepted"
             ):
                 raise FormalStateError("hmm_risk_model_receipt_invalid", "blocked model/semantic cannot publish")
-            _, projection = project_training(
+            values, projection = project_training(
                 np.asarray(request["series"][key][code]["train_values"]),
                 groups[key]["preprocess"],
                 family=family,
@@ -543,6 +544,9 @@ def selected_model_set(
                 raise FormalStateError(
                     "hmm_risk_model_inactive_dimension_contract_invalid", "selected projection shape differs"
                 )
+            validate_fit_entry(
+                entry, values, request["series"][key][code]["train_dates"], calendar=request["train_calendar"]
+            )
             model = restore_model(entry["model"])
             if model.means_.shape != (3, projection["likelihood_feature_count"]):
                 raise FormalStateError(

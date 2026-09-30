@@ -22,7 +22,7 @@
 不修改共享数据集、active profile、其他模块、数据库或服务进程。
 不搜索参数、不扩 seed、不改训练/验证窗口、不使用 validation 重选 seed。
 数值/语义模型验收不等于样本外轮动预测有效性，不自动生成或发布产品 READY。
-源码 PR 合入需要用户另行确认。
+源码提交与合入已在 2026-09-30/2026-10-01 后续授权内；仍须完整实现、审核、F2 与 CI 通过。该授权不包含服务控制、数据写入或删除。
 
 ## Architecture
 
@@ -59,7 +59,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 
 一个实现任务包完成 F-001～F-004、聚焦测试和多轮修复；不是为每个小功能另建阶段。
 输入正式 preflight 和源码审核通过后执行已获批准的 5184 fits，形成 F-005 的真实结果。
-只创建一个源码 PR；本文件不把未实现项标为完成，也不授权自行合入。
+只创建一个完整源码 PR；本文件不把未实现项标为完成。源码合入与后续正式模型验收是不同结果，不以源码通过推导模型成功。
 
 ## Verification Plan
 
@@ -113,6 +113,19 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 非 allowlist 常量维不得中断正常 restart schedule；不把这些代码测试写作正式 fit/D5/D6 的结果。
 
 ## Rollout / Rollback
+
+### 2026-10-01 当前长任务增量
+
+完整 file-only C-010/A5 constructor 与 `prepare` CLI 已实现，复用现有 shared reader、alias/PIT resolver、stock-fact 聚合和严格 receipt validator。
+没有用九维产品 bundle、count-only contributor receipt 或模型私有行业编号替代正式输入。真实源构造仍在执行，完成前 F-001 不报告通过。
+
+- 第一轮真实构造在 0 fits 处发现 shared security schema 的 HMM consumer 缺陷：BUG-1644 / Issue #5170；独立源码 PR #5171 已合入，merge=`46f17a242852e2a6d7132157e7d2a7efb9513002`。共享 v15 文件 SHA 保持不变，不是数据缺失，也不需要修改数据集。
+- BUG-1644 actual runtime 分类为 backend-main；fresh-process import/file smoke 已通过，运行态仍等待用户重启。close-sync PR #5172 保持 OPEN，不提前合入或关闭 Issue。
+- 第二轮真实 file-only prepare 使用新输出 `F:/Dev/AIstock_runtime/hmm_formal_state/20261001-file-construction-v2/request.json`，明确 socket connection poison，未训练，未写数据库或数据集。输入构造通过与否以其实际终态为准。
+- 本轮复审修复非法输出目录拒绝后仍可能写 failure receipt、price denominator 失败前未检查的股票被误记 complete、训练日期缺口未进入 occupancy receipt、selected artifact 仅回读 semantic 未再验证 D3/D4 数值/结构，以及初始化参数可重新哈希但未按批准公式回读等问题。
+- 训练 run 继续按实际 observation rows 定义；完整日期/缺口 hash 显式保留，不私自把自然日或缺失交易日构造为 state transition。D6 仍使用完整 182 日 calendar 与 T/O/U/E。
+- 固定单线程定向矩阵 75 passed；后续初始化参数漂移 fix-point 5 passed。全 grid 的 2592/5184 失败控制流使用 mock fit 检查，不是正式训练证据。此前一次未设单线程的测试浮点不一致已按固定环境复验通过，没有增加容差或更改合同。
+- 正式 fits=0/5184；未选择真实 seed、未执行正式 D6，未生成 model/READY。F2 仍须实际 source/request 闭合和最终审核，不把此增量状态当作完成声明。
 
 所有变更保留在独立 task worktree。未通过 F2/源码审核前不报 ready-for-PR。
 没有部署、runtime activation 或数据库迁移，因此当前无需运行态 rollback。

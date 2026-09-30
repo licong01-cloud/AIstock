@@ -420,9 +420,49 @@ def hard_structure(posterior: np.ndarray, dates: Sequence[str], positions: Seque
     return result
 
 
-def train_structure(posterior: np.ndarray, dates: Sequence[str]) -> dict[str, Any]:
+def train_date_receipt(dates: Sequence[str], calendar: Sequence[str] | None = None) -> dict[str, Any]:
+    ordered = list(dates)
+    canonical = ordered if calendar is None else list(calendar)
+    if (
+        not ordered
+        or ordered != sorted(set(ordered))
+        or canonical != sorted(set(canonical))
+        or any(date.fromisoformat(day).isoformat() != day for day in canonical)
+        or not set(ordered) <= set(canonical)
+    ):
+        raise FormalStateError("hmm_risk_model_train_date_sequence_invalid", "immutable train dates/calendar invalid")
+    missing = sorted(set(canonical) - set(ordered))
+    return receipt(
+        {
+            "ordered_dates": ordered,
+            "ordered_date_sha256": canonical_sha256(ordered),
+            "canonical_calendar_dates": canonical,
+            "canonical_calendar_sha256": canonical_sha256(canonical),
+            "missing_dates": missing,
+            "missing_date_count": len(missing),
+            "missing_date_sha256": canonical_sha256(missing),
+            "invalid_dates": [],
+            "invalid_date_count": 0,
+            "invalid_date_sha256": canonical_sha256([]),
+            "N_train": len(ordered),
+            "run_basis": "immutable_observation_rows_not_calendar_contiguity",
+        }
+    )
+
+
+def train_structure(
+    posterior: np.ndarray, dates: Sequence[str], calendar: Sequence[str] | None = None
+) -> dict[str, Any]:
+    date_identity = train_date_receipt(dates, calendar)
     states = hard_structure(posterior, dates, list(range(len(dates))))
     reasons = []
+    reason_by_common = {
+        "count": "hmm_risk_model_train_state_count_insufficient",
+        "occupancy": "hmm_risk_model_train_occupancy_insufficient",
+        "months": "hmm_risk_model_train_month_coverage_insufficient",
+        "incoming": "hmm_risk_model_train_transition_coverage_insufficient",
+        "outgoing": "hmm_risk_model_train_transition_coverage_insufficient",
+    }
     for state in states:
         common = {
             "count": state["count"] >= max(5, math.ceil(0.01 * len(dates))),
@@ -444,24 +484,51 @@ def train_structure(posterior: np.ndarray, dates: Sequence[str]) -> dict[str, An
         )
         state.update(
             common_comparisons=common,
+            common_thresholds={
+                "count": max(5, math.ceil(0.01 * len(dates))),
+                "occupancy": 0.01,
+                "months": 3,
+                "incoming": 2,
+                "outgoing": 2,
+            },
             path_comparisons=path,
+            path_thresholds=(
+                {"count": max(30, math.ceil(0.10 * len(dates))), "occupancy": 0.10, "months": 6, "runs": 2}
+                if persistent
+                else {"runs": 3, "share": 0.8}
+            ),
+            recurrent_eligible=all(common.values()) and not persistent,
+            persistent_eligible=all(common.values()) and persistent,
+            recurrent_result=all(common.values()) and not persistent and all(path.values()),
+            persistent_result=all(common.values()) and persistent and all(path.values()),
             evidence_path=("persistent" if persistent else "recurrent") if all(common.values()) else "none",
         )
-        if not all(common.values()):
-            reasons.append("hmm_risk_model_train_common_gate_unsatisfied")
-        elif not all(path.values()):
-            reasons.append("hmm_risk_model_train_regime_path_unsatisfied")
+        state_reasons = list(dict.fromkeys(reason_by_common[name] for name, passed in common.items() if not passed))
+        if all(common.values()) and not all(path.values()):
+            state_reasons.append("hmm_risk_model_train_regime_path_unsatisfied")
+        state["reasons"] = state_reasons
+        reasons.extend(state_reasons)
+    reason_order = [*dict.fromkeys(reason_by_common.values()), "hmm_risk_model_train_regime_path_unsatisfied"]
+    ordered_reasons = [reason for reason in reason_order if reason in reasons]
     return receipt(
         {
             "contract_version": CONTRACTS["structure"],
             "states": states,
+            "date_receipt": date_identity,
+            "validation_accessed": False,
+            "future_utility_accessed": False,
             "train_occupancy_valid": not reasons,
-            "reasons": sorted(set(reasons)),
+            "reasons": ordered_reasons,
+            "primary_reason": ordered_reasons[0] if ordered_reasons else None,
+            "train_occupancy_status": "failed" if reasons else "accepted",
         }
     )
 
 
-def fit_entry(values: np.ndarray, dates: Sequence[str], seed: int) -> dict[str, Any]:
+def fit_entry(
+    values: np.ndarray, dates: Sequence[str], seed: int, *, calendar: Sequence[str] | None = None
+) -> dict[str, Any]:
+    train_date_receipt(dates, calendar)
     model, initialization = initialize(values, seed)
     reference = np.asarray(initialization["reference"])
     history: list[dict[str, Any]] = []
@@ -513,7 +580,7 @@ def fit_entry(values: np.ndarray, dates: Sequence[str], seed: int) -> dict[str, 
         model._check()
     history[-1]["terminal"] = True
     posterior = causal_filter(model, list(range(len(values))), values, len(values))
-    structure = train_structure(posterior, dates)
+    structure = train_structure(posterior, dates, calendar)
     return receipt(
         {
             "initialization": initialization,
@@ -548,7 +615,9 @@ def fit_entry(values: np.ndarray, dates: Sequence[str], seed: int) -> dict[str, 
     )
 
 
-def validate_fit_entry(entry: Mapping[str, Any], values: np.ndarray, dates: Sequence[str]) -> None:
+def validate_fit_entry(
+    entry: Mapping[str, Any], values: np.ndarray, dates: Sequence[str], *, calendar: Sequence[str] | None = None
+) -> None:
     """Semantic readback of successful numerical fits, including failed structure.
 
     Self-hashing a changed success flag never establishes acceptance.  This
@@ -572,6 +641,53 @@ def validate_fit_entry(entry: Mapping[str, Any], values: np.ndarray, dates: Sequ
         or entry["feature_count"] != values.shape[1]
     ):
         raise FormalStateError("hmm_risk_model_receipt_invalid", "input/reference identity differs")
+    seed = initialization["kmeans_parameters"]["random_state"]
+    expected_kmeans = dict(
+        n_clusters=3,
+        init="k-means++",
+        n_init=1,
+        random_state=seed,
+        max_iter=300,
+        tol=1e-4,
+        algorithm="lloyd",
+        copy_x=True,
+    )
+    expected_parameters = {
+        k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in parameter_profile(seed, reference).items()
+    }
+    labels = initialization["labels"]
+    if (
+        not isinstance(labels, list)
+        or len(labels) != len(values)
+        or any(type(k) is not int or k not in (0, 1, 2) for k in labels)
+    ):
+        raise FormalStateError("hmm_risk_model_receipt_invalid", "initial cluster labels invalid")
+    labels_array = np.asarray(labels)
+    counts = np.bincount(labels_array, minlength=3)
+    if np.any(counts < 2):
+        raise FormalStateError("hmm_risk_model_receipt_invalid", "initial cluster sample count invalid")
+    variance = np.asarray([values[labels_array == k].var(axis=0, ddof=0) for k in range(3)])
+    initial_covariance = (counts[:, None] * variance + reference) / (counts[:, None] + 1.0)
+    transitions = np.zeros((3, 3))
+    np.add.at(transitions, (labels_array[:-1], labels_array[1:]), 1)
+    transitions += 0.1
+    transitions /= transitions.sum(axis=1, keepdims=True)
+    np.fill_diagonal(transitions, np.maximum(np.diag(transitions), 0.3))
+    transitions /= transitions.sum(axis=1, keepdims=True)
+    array(initialization["initial_means"], (3, values.shape[1]), "initial means")
+    if (
+        initialization["contract_version"] != CONTRACTS["d3"]
+        or initialization["nu"] != 1.0
+        or initialization["kmeans_parameters"] != expected_kmeans
+        or initialization["parameters"] != expected_parameters
+        or initialization["counts"] != counts.tolist()
+        or initialization["cluster_variance"] != variance.tolist()
+        or initialization["initial_covariance"] != initial_covariance.tolist()
+        or initialization["initial_transmat"] != transitions.tolist()
+        or initialization["initial_startprob"] != [1 / 3] * 3
+        or initialization["projection_performed"] is not False
+    ):
+        raise FormalStateError("hmm_risk_model_receipt_invalid", "initialization formula/profile authority differs")
     history = entry["history"]
     if not 2 <= len(history) <= 300:
         raise FormalStateError("hmm_risk_model_receipt_invalid", "MAP history length differs")
@@ -605,7 +721,7 @@ def validate_fit_entry(entry: Mapping[str, Any], values: np.ndarray, dates: Sequ
     final = history[-1]
     audit = covariance_audit(model, values, reference)
     posterior = causal_filter(model, list(range(len(values))), values, len(values))
-    structure = train_structure(posterior, dates)
+    structure = train_structure(posterior, dates, calendar)
     if (
         audit != entry["covariance"]
         or audit != final["covariance_evidence"]

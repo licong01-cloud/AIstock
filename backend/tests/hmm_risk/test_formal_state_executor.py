@@ -56,6 +56,23 @@ def test_rehashed_candidate_cannot_forge_acceptance(fitted, field):
         subject.validate_fit_entry(entry, values, dates)
 
 
+@pytest.mark.parametrize("field", ["nu", "parameters", "initial_covariance", "initial_transmat"])
+def test_rehashed_initialization_cannot_change_approved_profile(fitted, field):
+    values, dates, entry = fitted
+    changed = copy.deepcopy(entry)
+    initial = changed["initialization"]
+    if field == "nu":
+        initial[field] = 2.0
+    elif field == "parameters":
+        initial[field]["tol"] = 1.0
+    else:
+        initial[field][0][0] += 0.01
+    changed["initialization"] = subject.receipt({k: v for k, v in initial.items() if k != "receipt_sha256"})
+    changed = subject.receipt({k: v for k, v in changed.items() if k != "receipt_sha256"})
+    with pytest.raises(subject.FormalStateError, match="initialization formula/profile"):
+        subject.validate_fit_entry(changed, values, dates)
+
+
 def test_d3_sector_reference_prior_no_projection(fitted):
     values, _, _ = fitted
     model, initialization = subject.initialize(values, 42)
@@ -221,16 +238,20 @@ def test_parent_rejects_rehashed_child_projection_before_d5(monkeypatch, field):
             "groups": groups,
         }
     )
-    monkeypatch.setattr(executor, "validate_fit_entry", lambda *_: None)
+    monkeypatch.setattr(executor, "validate_fit_entry", lambda *_, **__: None)
     monkeypatch.setattr(executor, "select_restart", lambda *_: pytest.fail("D5 accessed before projection closure"))
     with pytest.raises(subject.FormalStateError, match="projection authority differs"):
         executor.finalize(
-            {"receipt_sha256": "c" * 64, "sector_codes": {"L2": codes}, "series": {key: series}}, repeat, repeat
+            {"receipt_sha256": "c" * 64, "sector_codes": {"L2": codes}, "series": {key: series}, "train_calendar": []},
+            repeat,
+            repeat,
         )
 
 
 def test_selected_artifact_preserves_mixed_shape_and_zero_refit(monkeypatch):
     # Synthetic serialization only, not a source/D3-D6 acceptance claim.
+    validated = []
+    monkeypatch.setattr(executor, "validate_fit_entry", lambda *args, **kwargs: validated.append((args, kwargs)))
     codes = {
         "L1": [f"801{i:03}.SI" for i in range(31)],
         "L2": sorted([f"802{i:03}.SI" for i in range(130)] + ["801207.SI"]),
@@ -242,6 +263,7 @@ def test_selected_artifact_preserves_mixed_shape_and_zero_refit(monkeypatch):
         "source_identity": {},
         "industry_authority": {},
         "policy": {},
+        "train_calendar": ["2022-01-03", "2022-01-04", "2022-01-05", "2022-01-06"],
     }
     groups, selections, semantic = {}, {}, {}
     rng = np.random.RandomState(44)
@@ -273,7 +295,11 @@ def test_selected_artifact_preserves_mixed_shape_and_zero_refit(monkeypatch):
                         },
                     }
                 )
-                source[code] = {"train_values": values.tolist(), "source_receipt_sha256": "b" * 64}
+                source[code] = {
+                    "train_values": values.tolist(),
+                    "train_dates": request["train_calendar"],
+                    "source_receipt_sha256": "b" * 64,
+                }
                 meanings[code] = {"assignment_status": "accepted", "evidence_status": "accepted"}
             request["series"][key] = source
             groups[key] = {"preprocess": preprocess, "candidates": [{"seed": 42, "entries": entries}]}
@@ -288,6 +314,8 @@ def test_selected_artifact_preserves_mixed_shape_and_zero_refit(monkeypatch):
         }
     )
     payload = executor.selected_model_set(final, request, groups)
+    assert len(validated) == 324
+    assert all(kwargs["calendar"] == request["train_calendar"] for _, kwargs in validated)
     mixed = payload["selected_models"][f"{subject.FAMILIES[1]}:L2"]
     assert mixed["likelihood_feature_count_histogram"] == {"19": 1, "20": 130}
     assert np.asarray(mixed["models"]["801207.SI"]["model"]["means"]).shape == (3, 19)
@@ -302,6 +330,62 @@ def test_selected_artifact_preserves_mixed_shape_and_zero_refit(monkeypatch):
     changed = subject.receipt({k: v for k, v in changed.items() if k != "receipt_sha256"})
     with pytest.raises(subject.FormalStateError, match="source/readback differs"):
         executor.validate_selected_model_set(changed, final, request, groups)
+
+
+def test_train_date_receipt_preserves_calendar_gaps_without_inventing_states():
+    calendar = ["2022-01-03", "2022-01-04", "2022-01-05", "2022-01-06"]
+    observed = [calendar[0], calendar[2], calendar[3]]
+    value = subject.train_structure(np.eye(3), observed, calendar)
+    dates = value["date_receipt"]
+    assert dates["missing_dates"] == [calendar[1]] and dates["missing_date_count"] == 1
+    assert dates["N_train"] == 3 and dates["run_basis"] == "immutable_observation_rows_not_calendar_contiguity"
+    assert sum(state["incoming"] for state in value["states"]) == 2
+    for invalid in ([calendar[0]] * 2, ["2021-12-31"], []):
+        with pytest.raises(subject.FormalStateError, match="train dates"):
+            subject.train_date_receipt(invalid, calendar)
+
+
+def test_full_grid_failures_remain_complete_and_never_access_d6(monkeypatch):
+    # Control-flow budget test: mocked fits are not formal training evidence.
+    codes = {
+        "L1": [f"801{i:03}.SI" for i in range(31)],
+        "L2": sorted([f"802{i:03}.SI" for i in range(130)] + ["801207.SI"]),
+    }
+    dates = [(date(2022, 1, 3) + timedelta(days=i)).isoformat() for i in range(120)]
+    request = {"receipt_sha256": "c" * 64, "sector_codes": codes, "train_calendar": dates, "series": {}}
+    rng = np.random.RandomState(42)
+    for family in subject.FAMILIES:
+        raw = rng.normal(size=(120, 7 if family == subject.FAMILIES[0] else 20))
+        for level in ("L1", "L2"):
+            series = {}
+            for code in codes[level]:
+                values = raw.copy()
+                if (family, level, code) == (subject.FAMILIES[1], "L2", "801207.SI"):
+                    values[:, 19] = 0
+                series[code] = {
+                    "train_values": values.tolist(),
+                    "train_dates": dates,
+                    "source_receipt_sha256": "a" * 64,
+                }
+            request["series"][f"{family}:{level}"] = series
+    attempts = []
+
+    def failed_fit(values, observed, seed, *, calendar):
+        attempts.append((seed, values.shape[1]))
+        assert calendar == observed == dates
+        raise subject.FormalStateError("hmm_risk_model_initialization_failed", "synthetic test failure")
+
+    monkeypatch.setattr(executor, "fit_entry", failed_fit)
+    monkeypatch.setattr(executor, "numeric_environment", lambda: {"test_only": True})
+    monkeypatch.setattr(executor, "evaluate_calendar_evidence", lambda *_, **__: pytest.fail("D6 accessed"))
+    repeat = executor.train_repeat(request)
+    assert len(attempts) == repeat["fit_attempts"] == 2592
+    assert all(sum(seed == s for s, _ in attempts) == 324 for seed in subject.SEEDS)
+    assert sum(d == 19 for _, d in attempts) == 8
+    result = executor.finalize(request, repeat, copy.deepcopy(repeat))
+    assert result["fit_attempts"] == 5184 and not result["d3_d6_accepted"]
+    assert not result["semantic"] and all(not item["accepted"] for item in result["selection"].values())
+    assert result["ready"] is result["phase2_ready"] is False
 
 
 def test_train_persistent_path_and_singleton_fail():
