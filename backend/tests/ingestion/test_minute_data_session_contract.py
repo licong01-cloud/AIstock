@@ -1,4 +1,7 @@
 import datetime as dt
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -89,3 +92,11 @@ def test_repair_plan_drift_never_deletes(monkeypatch):
     monkeypatch.setattr(repair, "build_plan", lambda *args: {**plan, "unresolved": []})
     with pytest.raises(ValueError, match="plan drift"):
         repair.apply_dev(Dev([]), plan)
+
+
+@pytest.mark.parametrize("script", ["ingest_full_minute.py", "ingest_incremental.py", "repair_suspended_minute_placeholders.py"])
+def test_cli_fresh_process_without_repository_cwd(script, tmp_path):
+    root = Path(__file__).resolve().parents[3]
+    result = subprocess.run([sys.executable, str(root / "scripts" / script), "--help"],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
