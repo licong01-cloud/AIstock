@@ -175,7 +175,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/BUG-1634-post-restart.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -220,7 +220,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=a3ee2c62fafcb1f0 commit=7db2377388903f4970de24ed9211cc89de34b968 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
-    "validation-receipt: id=deca89455b8badfa commit=7db2377388903f4970de24ed9211cc89de34b968 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/test_local_data_management_facade.py -q` result=`passed 22 tests`"
+    "validation-receipt: id=deca89455b8badfa commit=7db2377388903f4970de24ed9211cc89de34b968 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/test_local_data_management_facade.py -q` result=`passed 22 tests`",
+    "post-restart-verify exact identity and local-data freshness semantics -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
