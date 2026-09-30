@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1392",
-  "closed_at": null,
+  "closed_at": "2026-09-30T08:00:43.207263Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -134,10 +134,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_state\\local_data_aftercare\\20260930-legacy-audit\\BUG-1392-post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1392",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "43da59bead214315a418974d46d010f34a5bfd04d70e284bc47347637b3218a2",
+      "expected_identity": "137973a4fa0ecc404cb02e1b9c6a015fbd16752f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-30T07:53:46.200757Z",
+      "mode": "read_only",
+      "observed_identity": "361c3c8de4d3c2badd80642365657973eb396ec7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e416571acc6c6eaf554f897e24110fa834a8ff5474333f56d808b95ae1c70a98",
+      "receipt_sha256": "49f6c0b567c753417a2568df736eb792d4ae79c9588db7772f47c878ca42a7ca",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ed0dc43bac11988c50a45981a56bbf9e24be2e7745348b64f30fb9ace336c543",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -170,7 +192,7 @@
     ],
     "validation_evidence_digest": "9c9c67efad644895add23e3b881f5996ee005ee03ee81ac0e34ab9f211aeda91"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -182,7 +204,8 @@
   "validation_evidence": [
     "validation-receipt: id=fd37cd1e56cb5457 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_tushare_sync_engine.py -q -p no:cacheprovider` result=`PASS (54 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
     "validation-receipt: id=73a24a8de6532e63 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`PASS (8 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
-    "validation-receipt: id=c2465796b4007f55 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=data_sync_autonomy_backend status=passed command=`rtk nox -s data_sync_autonomy_backend` result=`PASS (323 passed, 1 skipped) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`"
+    "validation-receipt: id=c2465796b4007f55 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=data_sync_autonomy_backend status=passed command=`rtk nox -s data_sync_autonomy_backend` result=`PASS (323 passed, 1 skipped) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
+    "2026-09-30 official read-only source-bound post-restart probes passed; no process control"
   ],
   "verification_budget": {
     "budget": "standard",
