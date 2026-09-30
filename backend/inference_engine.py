@@ -7,6 +7,7 @@ and the requirements in 模型权重文件定位方案_v2.md.
 """
 
 import inspect
+import io
 import hashlib
 import json
 import logging
@@ -84,8 +85,15 @@ def _load_admitted_strategy_package_pickle(path: Path) -> Any:
     manifest before reaching this loader.
     """
 
+    class CpuStorageUnpickler(pickle.Unpickler):
+        def find_class(self, module: str, name: str) -> Any:
+            if module == "torch.storage" and name == "_load_from_bytes":
+                import torch
+                return lambda data: torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
+            return super().find_class(module, name)
+
     with path.open("rb") as stream:
-        return pickle.Unpickler(stream).load()
+        return CpuStorageUnpickler(stream).load()
 
 
 def _fetch_inference_fundamental_data(
@@ -294,6 +302,8 @@ def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
         import torch
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        if hasattr(model, "device"):
+            model.device = torch.device(device)
 
         if hasattr(model, "dnn_model") and hasattr(model.dnn_model, "parameters"):
             try:
@@ -422,6 +432,8 @@ def predict_scores(
     inner_model: Any,
     model_kind: str,
     X: pd.DataFrame,
+    *,
+    sequence_data: np.ndarray | None = None,
 ) -> np.ndarray:
     """模型预测三分支: lgb / pytorch / qlib_generic → 返回 1-D scores 数组."""
     # 确保数值类型
@@ -455,12 +467,17 @@ def predict_scores(
 
         inner_model.eval()
         with torch.no_grad():
-            x_values = X.values.astype("float32")
+            x_values = (sequence_data if sequence_data is not None else X.values).astype("float32")
+            if sequence_data is not None:
+                if x_values.ndim != 3 or x_values.shape[0] != len(X) or x_values.shape[2] != X.shape[1]:
+                    raise ValueError("frozen QE sequence input does not match the scored feature schema")
+                if not np.isfinite(x_values).all():
+                    raise ValueError("frozen QE sequence input contains non-finite values")
             x_tensor = torch.tensor(x_values, dtype=torch.float32)
 
             model_type_name = type(inner_model).__name__
             is_seq = any(kw in model_type_name for kw in ["GRU", "LSTM", "RNN", "Sequence", "Recurrent"])
-            if is_seq:
+            if is_seq and sequence_data is None:
                 x_tensor = x_tensor.unsqueeze(1)
 
             if torch.cuda.is_available():
@@ -523,7 +540,12 @@ def _apply_saved_qe_infer_processors(
         return X
 
     original_columns = list(X.columns)
-    processed = X.copy()
+    fitted_columns = _saved_qe_feature_order(processors)
+    if fitted_columns is not None:
+        if len(fitted_columns) != len(original_columns) or set(fitted_columns) != set(original_columns):
+            raise ValueError("saved QE fitted feature schema does not match inference inputs")
+        original_columns = fitted_columns
+    processed = X[original_columns].copy()
     if not isinstance(processed.columns, pd.MultiIndex):
         processed.columns = pd.MultiIndex.from_product([["feature"], original_columns])
     for processor in processors:
@@ -538,6 +560,52 @@ def _apply_saved_qe_infer_processors(
         [type(processor).__name__ for processor in processors],
     )
     return processed
+
+
+def _saved_qe_feature_order(processors: list[Any]) -> list[str] | None:
+    """Recover the feature order persisted by the fitted Qlib normalizer, never sort anew."""
+    for processor in processors:
+        columns = getattr(processor, "cols", None)
+        if columns is None or getattr(processor, "fields_group", "feature") != "feature":
+            continue
+        names = [str(col[1]) for col in columns if isinstance(col, tuple) and len(col) == 2 and col[0] == "feature"]
+        if names:
+            if len(names) != len(set(names)):
+                raise ValueError("saved QE fitted feature schema contains duplicate columns")
+            return names
+    return None
+
+
+def _saved_qe_step_len(task_dir: Path, primary_assets: dict[str, Any]) -> int:
+    relpath = primary_assets.get("dataset_processor_relpath") or primary_assets.get("dataset_relpath")
+    if not relpath:
+        return 1
+    dataset = _load_admitted_strategy_package_pickle(task_dir / str(relpath))
+    step_len = int(getattr(dataset, "step_len", 1))
+    if step_len < 1:
+        raise ValueError("saved QE dataset has an invalid sequence length")
+    return step_len
+
+
+def _qe_sequence_inputs(
+    features: pd.DataFrame, *, trade_date: pd.Timestamp, step_len: int,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Use the same causal TSDataSampler and fill policy as GeneralPTNN.predict."""
+    from qlib.data.dataset import TSDataSampler
+    dates = features.index.get_level_values("datetime")
+    history = features.loc[dates <= trade_date].sort_index()
+    if history.index.get_level_values("datetime").nunique() < step_len:
+        raise ValueError("frozen QE sequence history is shorter than its trained step_len")
+    # TSDataSampler consumes/clears its input frame; preserve the scored schema separately.
+    sampler = TSDataSampler(history.copy(), start=trade_date, end=trade_date, step_len=step_len, dtype=np.float32)
+    sampler.config(fillna_type="ffill+bfill")
+    index = sampler.get_index()
+    if len(index) == 0:
+        raise ValueError("frozen QE sequence has no samples on the exact target date")
+    batch = sampler[np.arange(len(index))]
+    if not np.isfinite(batch).all():
+        raise ValueError("frozen QE sequence contains unavailable historical features")
+    return history.loc[index], batch
 
 
 def save_signals_to_db(
@@ -1508,6 +1576,7 @@ class InferenceEngine:
 
         # 使用提取的模块级函数加载模型
         model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
+        sequence_length = _saved_qe_step_len(task_dir, primary) if model_kind == "pytorch" else 1
         
         # 4. 获取数据（支持内存缓存，同一交易日多次选股复用）
         universe = self._get_default_universe_excluding_st(
@@ -1518,7 +1587,7 @@ class InferenceEngine:
 
         # 4.1 检查因子所需的数据窗口
         # factor_order 已在步骤2中通过 _infer_expected_features 获取
-        required_window = get_required_data_window(factor_order)
+        required_window = get_required_data_window(factor_order) + sequence_length - 1
         start_date, start_date_source = self._resolve_inference_start_date(
             actual_date, required_window, buffer_days=5
         )
@@ -1855,7 +1924,10 @@ class InferenceEngine:
                 
                 # 只保留最后一天的因子值（优化：选股只需要当天值）
                 if last_date in sota_dates:
-                    df_factors = df_factors_raw.loc[last_date]
+                    df_factors = (
+                        df_factors_raw.loc[sota_dates <= last_date].copy()
+                        if sequence_length > 1 else df_factors_raw.loc[last_date]
+                    )
                     logger.info(f"SOTA因子优化：使用目标日期 {last_date.date()} 的因子值")
                 else:
                     if _strict_inference_enabled():
@@ -1903,7 +1975,15 @@ class InferenceEngine:
         if alpha158_feats:
             logger.info(f"开始计算 Alpha158 基线因子，请求的因子数量: {len(alpha158_feats)}")
             logger.info(f"请求的Alpha158因子列表: {alpha158_feats}")
-            alpha_subset = self._compute_alpha158_subset(df_history, alpha158_feats)
+            if sequence_length > 1:
+                history_dates = _safe_get_datetime_level(df_history)
+                sequence_dates = sorted(history_dates.unique())[-sequence_length:]
+                alpha_subset = pd.concat([
+                    self._compute_alpha158_subset(df_history.loc[history_dates <= day], alpha158_feats)
+                    for day in sequence_dates
+                ])
+            else:
+                alpha_subset = self._compute_alpha158_subset(df_history, alpha158_feats)
             
             # 关键诊断：检查实际返回的列数
             logger.info(f"⚠️ Alpha158计算完成，实际返回列数: {len(alpha_subset.columns)}")
@@ -1997,15 +2077,19 @@ class InferenceEngine:
 
         # 7. 模型预测（使用提取的模块级函数）
         df_today = _apply_saved_qe_infer_processors(
-            df_today,
+            df_factors_combined if sequence_length > 1 else df_today,
             task_dir=task_dir,
             primary_assets=primary,
         )
 
-        X = _drop_invalid_feature_rows_for_strict(df_today)
+        sequence_data = None
+        if sequence_length > 1:
+            X, sequence_data = _qe_sequence_inputs(df_today, trade_date=actual_date, step_len=sequence_length)
+        else:
+            X = _drop_invalid_feature_rows_for_strict(df_today)
         logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
 
-        scores = predict_scores(model, inner_model, model_kind, X)
+        scores = predict_scores(model, inner_model, model_kind, X, sequence_data=sequence_data)
 
         df_scores = _build_score_frame_for_scored_features(X, scores)
 

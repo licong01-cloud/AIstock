@@ -239,6 +239,8 @@ def _model_code_contract(manifest: StrategyPackageManifest) -> list[dict[str, An
                 }
                 for asset in sorted(model.model_code_assets, key=lambda item: (item.relative_path, item.module_name))
             ],
+            **({"preprocessor_asset": model.preprocessor_asset.model_dump(mode="json")}
+               if model.preprocessor_asset is not None else {}),
         }
         for model in sorted(model_assets, key=lambda item: item.model_id)
     ]
@@ -255,6 +257,15 @@ class FrozenRuntimeModelProbeResult:
     expected_features: int
     backend: str
     metadata: dict[str, Any]
+
+
+def _validate_fitted_feature_schema(probe: FrozenRuntimeModelProbeResult, factor_order: list[str]) -> None:
+    columns = probe.metadata.get("probe_payload", {}).get("fitted_feature_order")
+    if columns is not None and (len(columns) != len(factor_order) or set(columns) != set(factor_order)):
+        raise StrategyPackageValidationError(
+            "frozen fitted feature schema differs from the package factor schema",
+            context={"reason_code": "strategy_package_fitted_feature_schema_mismatch"},
+        )
 
 
 class WslFrozenRuntimeModelProbe:
@@ -287,7 +298,7 @@ class WslFrozenRuntimeModelProbe:
                 f"source {self.conda_sh} && "
                 f"conda activate {self.conda_env} && "
                 f"cd {win_to_wsl_path(str(self.repo_root))} && "
-                "PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1 AISTOCK_STRICT_INFERENCE=1 "
+                "CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2 PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1 AISTOCK_STRICT_INFERENCE=1 "
                 + "python "
                 + " ".join(_shell_quote(arg) for arg in args)
             )
@@ -411,6 +422,7 @@ class FrozenRuntimeSelfCheckService:
         dynamic_count = len(prepared.dynamic_factors)
         alpha_count = len(prepared.alpha158_factors)
         factor_order_count = len(prepared.factor_order)
+        _validate_fitted_feature_schema(probe, prepared.factor_order)
         delta = int(expected_features or 0) - factor_order_count
         context = {
             "reason_code": "strategy_package_frozen_self_check_feature_count_mismatch",
@@ -493,6 +505,7 @@ class FrozenRuntimeSelfCheckService:
                 probe = self._probe_model(prepared.model_params_path)
                 expected_features = int(probe.expected_features or 0)
                 factor_order_count = len(prepared.factor_order)
+                _validate_fitted_feature_schema(probe, prepared.factor_order)
                 delta = expected_features - factor_order_count
                 context = {
                     "reason_code": "multi_alpha_parent_leg_feature_count_mismatch",

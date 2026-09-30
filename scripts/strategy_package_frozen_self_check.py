@@ -37,6 +37,28 @@ def main() -> int:
         "model_expected_features": int(expected_features or 0),
         "inner_model_type": type(inner_model).__name__ if inner_model is not None else None,
     }
+    dataset_path = model_path.parent / "dataset"
+    if dataset_path.is_file():
+        # Model loading has installed the admitted package's local code search paths.
+        dataset = inference_engine._load_admitted_strategy_package_pickle(dataset_path)
+        processors = list(getattr(getattr(dataset, "handler", None), "infer_processors", []) or [])
+        if not processors:
+            raise ValueError("frozen fitted dataset declares no inference processors")
+        columns = inference_engine._saved_qe_feature_order(processors)
+        if columns:
+            import pandas as pd
+            probe_frame = pd.DataFrame(0.0, index=range(2), columns=columns)
+            processed = inference_engine._apply_saved_qe_infer_processors(
+                probe_frame, task_dir=model_path.parent,
+                primary_assets={"dataset_processor_relpath": "dataset"},
+            )
+            if processed.shape != probe_frame.shape or list(processed.columns) != columns:
+                raise ValueError("frozen fitted preprocessor changed the admitted feature schema")
+            payload["fitted_feature_order"] = columns
+        payload["fitted_preprocessor_count"] = len(processors)
+        payload["sequence_length"] = inference_engine._saved_qe_step_len(
+            model_path.parent, {"dataset_processor_relpath": "dataset"},
+        )
     output = Path(args.output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")

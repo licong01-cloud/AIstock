@@ -1,6 +1,9 @@
 {
-  "actual": "Frozen runtime has params.pkl but no fitted DatasetH; inference returns raw X when processor reference is absent.",
+  "actual": "Frozen runtime omits fitted DatasetH and trained feature order/20-session temporal input; CUDA-backed weights cannot load on CPU consumers.",
   "allowed_write_scope": [
+    "backend/inference_engine.py",
+    "scripts/strategy_package_frozen_self_check.py",
+    "backend/services/strategy_package/manifest.py",
     "backend/services/strategy_package/models.py",
     "backend/services/strategy_package/package_asset_freeze.py",
     "backend/services/strategy_package/live_inference.py",
@@ -18,8 +21,26 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-30T07:15:20.934041Z",
-  "description": "Frozen runtime has params.pkl but no fitted DatasetH; inference returns raw X when processor reference is absent.",
+  "description": "Package asset closure omits the fitted dataset, training feature order and temporal input contract; repair consumer fidelity without refitting or changing QE research inputs.",
   "events": [
+    {
+      "action": "asset_closure_scope_review",
+      "actor": "Codex",
+      "note": "Scope expanded before implementation to backend/inference_engine.py and the existing frozen-self-check script: preserve fitted normalization, original feature order, TSDatasetH step_len=20 and CPU deserialization. No Advisory/Simulation business code changes.",
+      "timestamp": "2026-09-30T08:40:00Z"
+    },
+    {
+      "action": "real_lstm_frozen_replay_verified",
+      "actor": "Codex",
+      "note": "WSL fresh CPU-only process froze 18 assets from qe_20260929_200405_d638_L1: 14 factors, original weight, fitted dataset and model.py/qe_custom_loaders.py. Dataset SHA c73d454125dc37669209915672eb6f9774ae2c48270aa7404bd43fce76300722. Normalization, native Qlib 20-session sampler tensors and final LSTM scores match exactly on the diagnostic panel; refit=0, DB writes=0, service control=false. Temporary verification CAS was not a persisted StrategyPackage.",
+      "timestamp": "2026-09-30T08:41:00Z"
+    },
+    {
+      "action": "design_compliance_multi_round_review",
+      "actor": "Codex",
+      "note": "Three self-review rounds repaired missing fitted state, trained-order drift, CPU deserialization, temporal-input truncation and TSDataSampler frame consumption. DESIGN-COMPLIANCE-001: complete consumer closure, missing/hash/recorder/schema errors remain explicit, original model/factors/seed/normalization/20-session Qlib policy unchanged, no added approval or statistical gate. Legacy no-processor manifest hashes retained. Broader strategy_package/paper_v2 regression delegated to CI/nightly.",
+      "timestamp": "2026-09-30T08:42:00Z"
+    },
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
@@ -182,7 +203,10 @@
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
