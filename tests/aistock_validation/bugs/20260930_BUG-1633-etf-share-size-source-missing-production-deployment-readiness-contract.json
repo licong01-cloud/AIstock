@@ -19,9 +19,10 @@
   "created_at": "2026-09-30T05:40:30.507027Z",
   "data_repair_state": {
     "dev_validation": "passed",
-    "production_apply": "not_performed",
-    "production_authorization": "pending_exact_target",
-    "production_readback": "deployment_missing"
+    "production_apply": "passed: reviewed migration, two targeted schedules, 6745 share-size rows and 1829 current observation snapshots",
+    "production_authorization": "granted by user 2026-09-30: exact previously proposed production DDL and data backfill",
+    "production_readback": "passed: schemas/comments/hypertables, four-day audit success/ok, DEV/production content SHA256 parity, four old targets and alerts recovered automatically",
+    "receipt": "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/production_readback.json"
   },
   "description": "Recent read-only audit: production market.etf_share_size and ETF schedules absent while health checker creates retry-exhausted readiness targets. Reuse existing reviewed migration, add bounded deployment preflight/DEV validation and targeted schedule enrollment; distinguish missing deployment from upstream failure. Production apply requires separate exact-target authorization.",
   "events": [
@@ -126,7 +127,7 @@
   "fix_branch": null,
   "fix_commit": "8737e3a03f962f037d13eda4f62d305c48b06287",
   "fixed_at": null,
-  "source_delivery_state": "merged_production_data_repair_pending",
+  "source_delivery_state": "merged_production_data_repair_verified",
   "github_issue_number": 5128,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5128",
   "last_seen_at": "2026-09-30T05:40:30.507027Z",
@@ -136,7 +137,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5135",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending_exact_target_authorization",
+  "production_ddl_gate": "passed",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
