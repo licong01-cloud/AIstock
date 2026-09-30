@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1635",
-  "closed_at": null,
+  "closed_at": "2026-09-30T07:07:56.811367Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -22,8 +22,10 @@
   "created_at": "2026-09-30T05:42:58.604675Z",
   "data_repair_state": {
     "dev_validation": "passed",
-    "production_apply": "not_performed",
-    "production_authorization": "pending_exact_keys"
+    "production_apply": "passed: 48 exact symbol-days, 11520 zero-turnover fully suspended provider placeholders deleted; exact-content CAS",
+    "production_authorization": "granted by user 2026-09-30 for previously proposed exact keys",
+    "production_readback": "passed: independent plan targets=0/unresolved=0; traded SH/SZ minute missing=0/non240=0/missing1130=0/1300=0 over four completed dates",
+    "receipt": "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/production_readback.json"
   },
   "description": "Sep23-29: 12 daily fully suspended zero-volume symbols persist13:00 bars without11:30. Validate sessions; suppress only independently proven whole-day suspension and all-zero turnover placeholders. Bounded exact-key cleanup DEV first, production separately authorized. Do not fabricate11:30 or touch real bars/candidates.",
   "events": [
@@ -171,8 +173,8 @@
   },
   "first_seen_at": "2026-09-30T05:42:58.604675Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7f005837ffd060b5d169b40975b44b5aa956f9d9",
+  "fixed_at": "2026-09-30T06:18:29Z",
   "github_issue_number": 5129,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5129",
   "last_seen_at": "2026-09-30T05:42:58.604675Z",
@@ -180,6 +182,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5134",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -208,9 +211,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/BUG-1635-merge-bound-post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1635",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "4f65e0ff5a69945d3ea8188e2713d1383ae4d098a33b2af0d787c9a83a222f26",
+      "expected_identity": "7f005837ffd060b5d169b40975b44b5aa956f9d9",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-30T07:07:22.277049Z",
+      "mode": "read_only",
+      "observed_identity": "361c3c8de4d3c2badd80642365657973eb396ec7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "1da0c59ffdd4794c6e8f0faeb3a33e5ef9ec75a90c8f4be447b18cf8dcca6e9a",
+      "receipt_sha256": "f953ac986138653fd39f0be7e1f6312d5ecefd8b52e521660804d71c3b406913",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "2e34ba099a41f7bdd186194f60a43a9b64363713e1cd6b9ac5e1e7209b1a4122",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -220,7 +246,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1635",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "baa88f6a128d3c2e",
+    "recorded_at": "2026-09-30T06:20:03.246106Z",
+    "runtime_contract_digest": "4f65e0ff5a69945d3ea8188e2713d1383ae4d098a33b2af0d787c9a83a222f26",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4",
+    "source_merge_commit": "7f005837ffd060b5d169b40975b44b5aa956f9d9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5134",
+    "validation_evidence": [
+      "validation-receipt: id=bd6b715854066cc6 commit=4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 data_sync_autonomy_backend` result=`passed 8 ownership and 432 sync tests,1 skipped`",
+      "validation-receipt: id=152292aa2953e37d commit=4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 16 tests`",
+      "validation-receipt: id=689f63ebce666332 commit=4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=b8c6e01c1761e202 commit=4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_minute_data_session_contract.py -q` result=`passed 19 tests including independent CLI fresh processes`"
+    ],
+    "validation_evidence_digest": "d869bbbbaba39a9ac92d9eee9d7e33fc8316cd5f7fe1079bfde06d94b49531fa"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -229,6 +279,13 @@
     "fingerprint": "49e398d6177d000630d45ba9",
     "source_event_id": "FE-20260930-49e398d6177d"
   },
+  "validation_evidence": [
+    "validation-receipt: id=bd6b715854066cc6 commit=4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 data_sync_autonomy_backend` result=`passed 8 ownership and 432 sync tests,1 skipped`",
+    "validation-receipt: id=152292aa2953e37d commit=4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 16 tests`",
+    "validation-receipt: id=689f63ebce666332 commit=4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=b8c6e01c1761e202 commit=4172eb9fa33aeaa9dbf6d2bdab1978b87ae6bfd4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_minute_data_session_contract.py -q` result=`passed 19 tests including independent CLI fresh processes`",
+    "Production 48 symbol-day placeholder exact-CAS cleanup passed; 11520 rows removed, fresh readback targets=0, traded minute shape preserved; restart identity/semantic contract passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
