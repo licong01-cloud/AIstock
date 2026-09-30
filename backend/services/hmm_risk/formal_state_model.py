@@ -235,7 +235,7 @@ def restore_model(payload: Mapping[str, Any]) -> Any:
 
 
 def causal_filter(model: Any, positions: Sequence[int], values: np.ndarray, total: int) -> np.ndarray:
-    if list(positions) != sorted(set(positions)) or any(p < 0 or p >= total for p in positions):
+    if list(positions) != sorted(set(positions)) or any(type(p) is not int or p < 0 or p >= total for p in positions):
         raise FormalStateError("hmm_risk_semantic_calendar_invalid", "observation positions invalid")
     values = array(values, (len(positions), model.means_.shape[1]), "compact observations")
     emission = model._compute_log_likelihood(values) if len(positions) else np.empty((0, 3))
@@ -591,7 +591,7 @@ def semantic_evidence(
     utility_positions = set(range(len(dates)))
     for component in components.values():
         p = component["positions"]
-        if p != sorted(set(p)) or any(i < 0 or i >= len(dates) for i in p):
+        if p != sorted(set(p)) or any(type(i) is not int or i < 0 or i >= len(dates) for i in p):
             raise FormalStateError("hmm_risk_semantic_calendar_invalid", "utility positions invalid")
         try:
             array(component["values"], (len(p),), "utility component")
@@ -601,13 +601,26 @@ def semantic_evidence(
             ) from exc
         utility_positions &= set(p)
     evidence_positions = sorted(set(positions) & utility_positions)
+    ordered_posterior = np.sort(posterior, axis=1)
+    diagnostic_positions = np.flatnonzero(ordered_posterior[:, -1] - ordered_posterior[:, -2] > 1e-12).tolist()
     hard = posterior.argmax(axis=1)
-    validate_posterior(posterior[evidence_positions], len(evidence_positions), require_margin=True)
+    try:
+        validate_posterior(posterior[evidence_positions], len(evidence_positions), require_margin=True)
+    except FormalStateError as exc:
+        evidence = {
+            "assignment_status": "failed",
+            "posterior": posterior.tolist(),
+            "diagnostic_hard_assignment_positions": diagnostic_positions,
+            "diagnostic_hard_assignment_values": hard[diagnostic_positions].tolist(),
+            "diagnostic_tie_positions": [p for p in range(len(dates)) if p not in diagnostic_positions],
+        }
+        raise FormalStateError("hmm_risk_semantic_validation_posterior_tie", str(exc), evidence=evidence) from exc
     utility = np.zeros(len(dates))
     for name, weight in (("excess_return_5d", 0.35), ("excess_return_10d", 0.35), ("excess_return_20d", 0.30)):
         component = components[name]
         utility[component["positions"]] += weight * np.asarray(component["values"])
-    states = hard_structure(posterior, dates, evidence_positions)
+    # The existing evidence-row gate runs before any ratio/state statistics.
+    states = hard_structure(posterior, dates, evidence_positions) if len(evidence_positions) >= 30 else []
     failures = []
     if len(evidence_positions) < 30:
         failures.append("hmm_risk_semantic_validation_evidence_rows_insufficient")
@@ -634,9 +647,21 @@ def semantic_evidence(
         )
         for name, passed in comparisons.items():
             if not passed:
-                failures.append(f"hmm_risk_semantic_validation_{name}_insufficient")
+                failures.append(
+                    {
+                        "count": "hmm_risk_semantic_validation_state_count_insufficient",
+                        "occupancy": "hmm_risk_semantic_validation_occupancy_insufficient",
+                        "months": "hmm_risk_semantic_validation_month_coverage_insufficient",
+                        "runs": "hmm_risk_semantic_validation_run_coverage_insufficient",
+                        "incoming": "hmm_risk_semantic_validation_transition_coverage_insufficient",
+                        "outgoing": "hmm_risk_semantic_validation_transition_coverage_insufficient",
+                        "share": "hmm_risk_semantic_validation_run_concentration_exceeded",
+                    }[name]
+                )
+        if state["count"] == 0:
+            failures.append("hmm_risk_semantic_hard_state_missing")
         if mean is None or variance is None or not np.isfinite([mean, variance]).all():
-            failures.append("hmm_risk_semantic_utility_variance_non_finite")
+            failures.append("hmm_risk_semantic_validation_utility_variance_non_finite")
     ordered = (
         sorted(states, key=lambda s: s["utility_mean"]) if all(s["utility_mean"] is not None for s in states) else []
     )
@@ -647,14 +672,34 @@ def semantic_evidence(
         gaps.append({"gap": gap, "tolerance": tolerance, "passed": gap > tolerance})
         if gap <= tolerance:
             failures.append("hmm_risk_semantic_utility_tie")
+            failures.append("hmm_risk_semantic_validation_utility_gap_insufficient")
+    reason_priority = [
+        "hmm_risk_semantic_validation_evidence_rows_insufficient",
+        "hmm_risk_semantic_hard_state_missing",
+        "hmm_risk_semantic_validation_state_count_insufficient",
+        "hmm_risk_semantic_validation_occupancy_insufficient",
+        "hmm_risk_semantic_validation_month_coverage_insufficient",
+        "hmm_risk_semantic_validation_run_coverage_insufficient",
+        "hmm_risk_semantic_validation_transition_coverage_insufficient",
+        "hmm_risk_semantic_validation_run_concentration_exceeded",
+        "hmm_risk_semantic_validation_utility_variance_non_finite",
+        "hmm_risk_semantic_utility_tie",
+        "hmm_risk_semantic_validation_utility_gap_insufficient",
+    ]
+    reasons = sorted(set(failures), key=reason_priority.index)
     return receipt(
         {
             "contract_version": CONTRACTS["semantic"],
+            "base_contract_version": "hmm_risk_c008_b3_d6_01_b_v1",
+            "availability_contract_version": "hmm_risk_c008_b3_d6_na_a_v1",
             "dates": list(dates),
             "observation_positions": list(positions),
             "utility_positions": sorted(utility_positions),
             "evidence_positions": evidence_positions,
             "posterior": posterior.tolist(),
+            "diagnostic_hard_assignment_positions": diagnostic_positions,
+            "diagnostic_hard_assignment_values": hard[diagnostic_positions].tolist(),
+            "diagnostic_tie_positions": [p for p in range(len(dates)) if p not in diagnostic_positions],
             "evidence_hard_assignments": hard[evidence_positions].tolist(),
             "components": components,
             "utility_on_evidence": utility[evidence_positions].tolist(),
@@ -662,7 +707,10 @@ def semantic_evidence(
             "gaps": gaps,
             "assignment_status": "accepted",
             "evidence_status": "failed" if failures else "accepted",
-            "reasons": sorted(set(failures)),
+            "semantic_assignment_valid": True,
+            "semantic_evidence_valid": not failures,
+            "reasons": reasons,
+            "primary_reason": reasons[0] if reasons else None,
             "mapping": {str(s["state"]): label for s, label in zip(ordered, ("fading", "neutral", "trending"))}
             if not failures
             else None,

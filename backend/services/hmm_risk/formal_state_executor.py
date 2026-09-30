@@ -14,6 +14,11 @@ from typing import Any, Mapping
 import numpy as np
 
 from backend.services.hmm_risk.contracts import ALL_CORE_FEATURES, BASE_FEATURES, canonical_json_bytes, canonical_sha256
+from backend.services.hmm_risk.formal_state_calendar import (
+    evaluate_calendar_evidence,
+    validate_calendar_carrier,
+    validate_calendar_evidence,
+)
 from backend.services.hmm_risk.formal_state_model import (
     CONTRACTS,
     FAMILIES,
@@ -27,7 +32,6 @@ from backend.services.hmm_risk.formal_state_model import (
     receipt,
     restore_model,
     select_restart,
-    semantic_evidence,
     validate_fit_entry,
 )
 from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
@@ -167,6 +171,15 @@ def load_request(path: Path) -> dict[str, Any]:
         or validation_calendar[-1] != "2025-03-31"
     ):
         raise FormalStateError("hmm_risk_formal_request_invalid", "182-day validation calendar differs")
+    from backend.services.hmm_risk.rotation_l1_input_bundle import _load_qlib_calendar
+
+    frozen_dates = [
+        d.isoformat() for d in _load_qlib_calendar(root / "components/daily_bin_candidate/calendars/day.txt")
+    ]
+    if train_calendar != [d for d in frozen_dates if "2022-01-01" <= d <= "2024-06-30"] or validation_calendar != [
+        d for d in frozen_dates if "2024-07-01" <= d <= "2025-03-31"
+    ]:
+        raise FormalStateError("hmm_risk_semantic_calendar_invalid", "request is not the complete frozen file calendar")
     expected_keys = {f"{family}:{level}" for family in FAMILIES for level in ("L1", "L2")}
     if set(request["series"]) != expected_keys:
         raise FormalStateError("hmm_risk_formal_request_invalid", "four family/level inputs required")
@@ -191,25 +204,13 @@ def load_request(path: Path) -> dict[str, Any]:
             ):
                 raise FormalStateError("hmm_risk_model_train_coverage_insufficient", f"{key}/{code}")
             array(entry["train_values"], (len(dates), len(features)), "training observations")
-            carrier = entry["validation"]
-            if set(carrier) != {"observation_positions", "observation_values", "components", "source_cutoff"}:
-                raise FormalStateError("hmm_risk_formal_request_invalid", "validation carrier fields differ")
-            if carrier["source_cutoff"] != "2025-04-30":
-                raise FormalStateError("hmm_risk_formal_request_invalid", "utility watermark differs")
-            positions = carrier["observation_positions"]
-            if positions != sorted(set(positions)) or any(p < 0 or p >= 182 for p in positions):
-                raise FormalStateError("hmm_risk_formal_request_invalid", "validation positions differ")
-            array(carrier["observation_values"], (len(positions), len(features)), "validation compact values")
-            components = carrier["components"]
-            if set(components) != {"excess_return_5d", "excess_return_10d", "excess_return_20d"}:
-                raise FormalStateError("hmm_risk_semantic_utility_non_finite", "all three utility components required")
-            for component in components.values():
-                if set(component) != {"positions", "values"}:
-                    raise FormalStateError("hmm_risk_formal_request_invalid", "utility carrier fields differ")
-                p = component["positions"]
-                if p != sorted(set(p)) or any(type(i) is not int or not 0 <= i < 182 for i in p):
-                    raise FormalStateError("hmm_risk_semantic_calendar_invalid", "utility positions differ")
-                array(component["values"], (len(p),), "utility component")
+            validate_calendar_carrier(
+                entry["validation"],
+                dates=validation_calendar,
+                feature_names=features,
+                source_identity_sha256=canonical_sha256(source),
+                source_receipt_sha256=policy["receipt_sha256"],
+            )
     return request
 
 
@@ -319,18 +320,30 @@ def finalize(request: Mapping[str, Any], first: Mapping[str, Any], second: Mappi
             try:
                 values = preprocess_apply(
                     array(
-                        source["observation_values"],
-                        (len(source["observation_positions"]), fitted["feature_count"]),
+                        source["observation_values_f64"],
+                        (len(source["observation_available_positions"]), fitted["feature_count"]),
                         "validation values",
                     ),
                     group["preprocess"],
                 )
-                semantic[key][code] = semantic_evidence(
-                    restore_model(fitted["model"]),
+                arguments = dict(
+                    carrier=source,
+                    processed_values=values,
                     dates=request["validation_calendar"],
-                    positions=source["observation_positions"],
-                    values=values,
-                    components=source["components"],
+                    feature_names=request["series"][key][code]["feature_names"],
+                    source_identity_sha256=canonical_sha256(request["source_identity"]),
+                    source_receipt_sha256=request["policy"]["receipt_sha256"],
+                    selected_identity={
+                        "family": key.split(":")[0],
+                        "level": level,
+                        "sector": code,
+                        "seed": selected["seed"],
+                    },
+                )
+                model = restore_model(fitted["model"])
+                semantic[key][code] = evaluate_calendar_evidence(
+                    model,
+                    **arguments,
                 )
             except Exception as exc:
                 known = getattr(exc, "evidence", None)
@@ -373,6 +386,49 @@ def finalize(request: Mapping[str, Any], first: Mapping[str, Any], second: Mappi
     )
 
 
+def validate_semantic_readback(
+    final: Mapping[str, Any],
+    request: Mapping[str, Any],
+    groups: Mapping[str, Any],
+) -> None:
+    """Validate durable D6 results against selected parameters, with no fitting."""
+    verify_hash(final)
+    expected_keys = {key for key, selection in final["selection"].items() if selection["accepted"]}
+    if set(final["semantic"]) != expected_keys:
+        raise FormalStateError("hmm_risk_semantic_validation_availability_receipt_mismatch", "D6 group closure differs")
+    for key in expected_keys:
+        family, level = key.split(":")
+        features = list(BASE_FEATURES if family == FAMILIES[0] else ALL_CORE_FEATURES)
+        codes = request["sector_codes"][level]
+        if sorted(final["semantic"][key]) != codes:
+            raise FormalStateError(
+                "hmm_risk_semantic_validation_availability_receipt_mismatch", "D6 sector closure differs"
+            )
+        group = groups[key]
+        selected = next(c for c in group["candidates"] if c["seed"] == final["selection"][key]["selected_seed"])
+        for code in codes:
+            source = request["series"][key][code]["validation"]
+            values = preprocess_apply(
+                array(
+                    source["observation_values_f64"],
+                    (len(source["observation_available_positions"]), len(features)),
+                    "validation compact values",
+                ),
+                group["preprocess"],
+            )
+            validate_calendar_evidence(
+                final["semantic"][key][code],
+                restore_model(selected["entries"][code]["model"]),
+                carrier=source,
+                processed_values=values,
+                dates=request["validation_calendar"],
+                feature_names=features,
+                source_identity_sha256=canonical_sha256(request["source_identity"]),
+                source_receipt_sha256=request["policy"]["receipt_sha256"],
+                selected_identity={"family": family, "level": level, "sector": code, "seed": selected["seed"]},
+            )
+
+
 def run_two_processes(request_path: Path, output: Path, child_script: Path) -> Path:
     if output.exists():
         raise FormalStateError("hmm_risk_formal_output_collision", "output must be a new directory")
@@ -404,9 +460,10 @@ def run_two_processes(request_path: Path, output: Path, child_script: Path) -> P
             repeat_paths.append(result_path)
         final = finalize(request, *(read_json(path) for path in repeat_paths))
         write_once(output / "acceptance.json", final)
+        groups = read_json(repeat_paths[0])["groups"]
+        validate_semantic_readback(read_json(output / "acceptance.json"), request, groups)
         if final["d3_d6_accepted"]:
             # Numerical/semantic acceptance is not predictive-product READY.
-            groups = read_json(repeat_paths[0])["groups"]
             selected_models = {}
             for key, selection in final["selection"].items():
                 selected = next(c for c in groups[key]["candidates"] if c["seed"] == selection["selected_seed"])

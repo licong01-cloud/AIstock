@@ -72,10 +72,10 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | formal_state_authority.py; formal_state_input.py; formal_state_executor.py | test_formal_state_authority.py：9 passed；官方 DB 只读目录 freeze + adapter readback 成功；历史 stable-taxonomy-backcast 训练视图覆盖 131/131；BUG-1641 修复后 v15 file-only source preflight PASS | PARTIAL | 31/131 正式文本代码投影已闭合；完整 C-010/A5 file-only source constructor 尚未完成 |
+| F-001 | formal_state_authority.py; formal_state_domains.py; formal_state_input.py; formal_state_executor.py | test_formal_state_authority.py：9 passed；官方 DB 只读目录 freeze + adapter readback 成功；历史 stable-taxonomy-backcast 训练视图覆盖 131/131；A5 full-key partition/opportunity/eligibility 定向测试通过 | PARTIAL | 31/131 文本投影、A5 逐键构造及严格 v3 mapping manifest 读取已补齐；完整文件 source constructor 尚未接通。真实 source preflight 仍须使用已审核的 BUG-1641 reader |
 | F-002 | formal_state_model.py | pytest backend/tests/hmm_risk/test_formal_state_executor.py -q -p no:cacheprovider；25 passed | PARTIAL | 定向数值/结构测试通过，不代表全部合同审核完成 |
 | F-003 | formal_state_executor.py; run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py；signed-zero mismatch 与 CLI durable failure 测试 | PARTIAL | 未运行正式 fresh-process grid；仍需 parent/selected artifact 全链审核 |
-| F-004 | formal_state_input.py; formal_state_model.py | backend/tests/hmm_risk/test_formal_state_executor.py；transition-only、E-only tie、utility NA/status 定向测试 | PARTIAL | 完整 carrier schema/masks/typed source ledger/readback 尚需闭合，不得以简化 carrier 启动正式实验 |
+| F-004 | formal_state_calendar.py; formal_state_input.py; formal_state_model.py; formal_state_executor.py | test_formal_state_calendar.py；完整 182 日、compact finite payload、mask/source/hash 漂移、空 sentinel、diagnostic tie、失败 ledger 和零-refit 回读 | PARTIAL | carrier/manifest、逐日 ledger、T/O/U/E 和共享语义回读已实现；须在完整文件构造接通后完成真实 source 与 selected artifact 全链验证，不以单元测试推导正式验收 |
 | F-005 | run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py；仅合成测试，正式 fits=0/5184 | BLOCKED | 仅在 F-001～F-004 真正完成后执行，不把合成单元测试写为正式训练 |
 
 2026-09-30 当前准备回执：官方数据库目录在只读 repeatable-read 事务中提取并冻结到
@@ -83,9 +83,19 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 文件 SHA256=`1a0e5f492e8d87c7732c36303495ca7e06efb5a052651f343ff72004dc7c569f`。
 目录投影与 executor 定向矩阵在批准的单线程 Conda base 中合计 34 passed；其中目录测试 9 passed。
 H5 reader 修复为 [BUG-1641 PR #5153](https://github.com/licong01-cloud/AIstock/pull/5153)，
-最终 HEAD=`80fc1088d14bed52e9155c30c9dffb90dd1e7b09`，当前 OPEN、CI 排队，未合入。
+最终 HEAD=`80fc1088d14bed52e9155c30c9dffb90dd1e7b09`，2026-10-01 只读核验 OPEN、CI 全绿，未合入。
 真实 v15 source preflight 在该独立修复 worktree 执行，不代表本 feature 的旧基线 reader 已包含修复。
 后续先闭合 reader 修复，再完成完整 C-010/A5 文件构造与 D6 carrier/readback；不需要数据窗口创建私有行业编号或改写 v15。
+
+2026-10-01 增量实现仍属于上述同一个源码任务包，没有新建研究阶段或模型合同：
+
+- D6 正式有限 compact carrier、manifest v2、逐日 source/missing ledger、T/O/U/E 与 durable semantic readback 已接入当前 executor。
+- A5 builder 保存完整 P_all/P_in/P_out、O_sector 和逐股票 eligibility；复用已有严格校验器，不用 count-only 回执替代逐键依据。
+- C-010 消费端显式接受并检查当前 v3 mapping manifest；未知 schema、缺失 projection/hash、错误 research basis、歧义 predicate 仍拒绝。
+- 第一轮复审修复 source receipt 核对、真实文件日历逐日闭合、N_evidence<30 先行失败；第二轮复审补齐失败时已知 posterior/ledger 保留、v3 basis/backcast 身份一致性、正式 D6 状态/reason 优先级及 selected identity/model hash。
+- 聚焦回归 58 passed；后续相关 fix-point 分别 13、35、11 passed（最后一组含 task-code fresh-process import/DB poison）。Ruff、py_compile、diff、14/14 ownership、module registry 8 passed 和 L0 blocking=0。上述为工作树实现验证，未伪写成正式训练或 PR 最终 HEAD 全量验收。
+- 尚未完成完整 file-only source constructor、实际 source-to-request 和 selected model-set 全链审核，因此 F2 不报告 PASS、不创建实现 PR。
+- 正式训练仍为 0/5184；没有 selection、正式 D6、model/READY、数据集/数据库写入或进程操作。单元测试只使用合成数据。
 
 ## Rollout / Rollback
 
@@ -95,7 +105,7 @@ H5 reader 修复为 [BUG-1641 PR #5153](https://github.com/licong01-cloud/AIstoc
 
 ## Risks
 
-输入正式目录投影已由数据库只读冻结解决；A5 源构造、完整 D6 carrier/readback 仍未完成。
+输入正式目录投影已由数据库只读冻结解决；A5 完整文件源构造及 D6 真实 source/selected artifact 全链验证仍未完成。
 真实 v15 moneyflow H5 物理行乱序被旧 HMM reader 误判为无效，已登记独立 BUG-1641 / Issue #5147；
 仅对 table H5 在内存中排序，保留重复键、日期、schema 的 fail-closed，不重写数据文件。
 原始 full-v3 as-published classification 的 resolved identity 只观察到 126 个 L2，

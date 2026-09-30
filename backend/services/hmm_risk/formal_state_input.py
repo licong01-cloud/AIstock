@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from backend.services.hmm_risk.contracts import ALL_CORE_FEATURES, BASE_FEATURES, canonical_sha256
+from backend.services.hmm_risk.formal_state_calendar import build_calendar_carrier
 from backend.services.hmm_risk.formal_state_executor import ACTIVE_GENERATION, ACTIVE_MANIFEST, TRAIN_CALENDAR_HASH
 from backend.services.hmm_risk.formal_state_model import CONTRACTS, FAMILIES, VERSION, FormalStateError, receipt
 from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
@@ -80,8 +81,6 @@ def prepare_request(
                 if len(train) < 120:
                     insufficient.append({"family": family, "level": level, "sector": code, "rows": len(train)})
                 validation = frame.reindex(pd.to_datetime(validation_calendar))[features].to_numpy(dtype=np.float64)
-                mask = np.isfinite(validation).all(axis=1)
-                positions = np.flatnonzero(mask).tolist()
                 daily = frame["daily_return"].to_numpy(dtype=np.float64)
                 benchmark = frame["benchmark_return"].to_numpy(dtype=np.float64)
                 calendar_position = {day: index for index, day in enumerate(calendar)}
@@ -108,12 +107,14 @@ def prepare_request(
                     "feature_names": features,
                     "train_dates": [d.date().isoformat() for d in train.index],
                     "train_values": train.to_numpy(dtype=np.float64).tolist(),
-                    "validation": {
-                        "observation_positions": positions,
-                        "observation_values": validation[mask].tolist(),
-                        "components": components,
-                        "source_cutoff": "2025-04-30",
-                    },
+                    "validation": build_calendar_carrier(
+                        dates=validation_calendar,
+                        feature_names=features,
+                        observations=validation,
+                        components=components,
+                        source_identity_sha256=canonical_sha256(source_identity),
+                        source_receipt_sha256=policy["receipt_sha256"],
+                    ),
                 }
                 series[key][code] = {**body, "source_receipt_sha256": canonical_sha256(body)}
     if insufficient:
