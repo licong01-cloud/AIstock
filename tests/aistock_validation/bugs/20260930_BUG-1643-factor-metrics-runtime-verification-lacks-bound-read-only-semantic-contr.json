@@ -1,22 +1,5 @@
 {
   "actual": "The endpoint is unregistered; nine source-loaded BUGs cannot complete formal read-only verification.",
-  "business_smoke_probe_contract": {
-    "contract_id": "factor_metrics_results",
-    "acceptance_scope": "bound_metrics_readback_only",
-    "required_query_values": ["factor_name", "calc_batch_id", "eval_window", "expected_snapshot_date", "expected_universe", "expected_return_horizon", "limit"],
-    "owner_followup": "After this workflow PR merges, factor owner selects a batch tied to the relevant existing acceptance evidence, updates only its own BUG probe, reruns formal verifier, then close-sync. Never reuse an unrelated recent metric row as proof of all nine algorithms. No restart is required for this CLI-only workflow fix."
-  },
-  "related_bug_acceptance_review": {
-    "BUG-1381": "Same direct-v2 factor/Qlib/PIT identity, complete available-factor five-window metrics and same-source correlation; preserve source-bound candidate/coverage receipts. Metrics readback alone does not prove completeness or correlation.",
-    "BUG-1437": "Requested/actual full, annual, recent and monthly windows, explicit gaps and old-run compatibility; retain the existing full-evaluation coverage report.",
-    "BUG-1440": "Preserved multiple instrument spans and interval filtering, explicit missing-bin counts; retain the existing reader/span evidence.",
-    "BUG-1442": "Custom windows/horizons and order-invariant pair submatrix, dates/support/gap reasons and no DB writes; retain the existing engine/correlation acceptance evidence.",
-    "BUG-1448": "All explicitly requested PIT instruments remain in denominator; physically missing prices stay NaN; retain the request/count/NaN evidence.",
-    "BUG-1453": "Dedicated official value-column loader and strict candidate-column behavior; retain the official-artifact loader evidence.",
-    "BUG-1455": "Official reference infinities become explicit missing observations with per-factor counts; strict candidate rejection and no cache rewrite; retain finite-value/count evidence.",
-    "BUG-1456": "Daily Spearman computed once, old/new aggregate equality and bounded runtime/resource evidence; retain source-bound parity/performance evidence.",
-    "BUG-1567": "Full-universe Windows-safe salvage transport and complete candidate row/instrument counts; retain the existing 5144-instrument/7970157-row salvage receipt, not a metrics row as its substitute."
-  },
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
@@ -24,6 +7,20 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1643",
+  "business_smoke_probe_contract": {
+    "acceptance_scope": "bound_metrics_readback_only",
+    "contract_id": "factor_metrics_results",
+    "owner_followup": "After this workflow PR merges, factor owner selects a batch tied to the relevant existing acceptance evidence, updates only its own BUG probe, reruns formal verifier, then close-sync. Never reuse an unrelated recent metric row as proof of all nine algorithms. No restart is required for this CLI-only workflow fix.",
+    "required_query_values": [
+      "factor_name",
+      "calc_batch_id",
+      "eval_window",
+      "expected_snapshot_date",
+      "expected_universe",
+      "expected_return_horizon",
+      "limit"
+    ]
+  },
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -45,12 +42,18 @@
   ],
   "expected": "An explicitly bound metrics results probe is semantically verified; unbound/empty/malformed/contradictory responses stay blocked. Owners retain per-BUG acceptance responsibility.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -116,6 +119,17 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "related_bug_acceptance_review": {
+    "BUG-1381": "Same direct-v2 factor/Qlib/PIT identity, complete available-factor five-window metrics and same-source correlation; preserve source-bound candidate/coverage receipts. Metrics readback alone does not prove completeness or correlation.",
+    "BUG-1437": "Requested/actual full, annual, recent and monthly windows, explicit gaps and old-run compatibility; retain the existing full-evaluation coverage report.",
+    "BUG-1440": "Preserved multiple instrument spans and interval filtering, explicit missing-bin counts; retain the existing reader/span evidence.",
+    "BUG-1442": "Custom windows/horizons and order-invariant pair submatrix, dates/support/gap reasons and no DB writes; retain the existing engine/correlation acceptance evidence.",
+    "BUG-1448": "All explicitly requested PIT instruments remain in denominator; physically missing prices stay NaN; retain the request/count/NaN evidence.",
+    "BUG-1453": "Dedicated official value-column loader and strict candidate-column behavior; retain the official-artifact loader evidence.",
+    "BUG-1455": "Official reference infinities become explicit missing observations with per-factor counts; strict candidate rejection and no cache rewrite; retain finite-value/count evidence.",
+    "BUG-1456": "Daily Spearman computed once, old/new aggregate equality and bounded runtime/resource evidence; retain source-bound parity/performance evidence.",
+    "BUG-1567": "Full-universe Windows-safe salvage transport and complete candidate row/instrument counts; retain the existing 5144-instrument/7970157-row salvage receipt, not a metrics row as its substitute."
+  },
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -126,10 +140,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
