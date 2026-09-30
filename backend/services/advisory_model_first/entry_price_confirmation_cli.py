@@ -23,7 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
         if name in {"prepare", "predict", "settle"}:
             command.add_argument("--env-file", type=Path, required=True)
         if name in {"predict", "settle", "evaluate"}:
-            command.add_argument("--qe-exclusive-slot", type=Path, required=True)
+            command.add_argument("--qe-exclusive-slot", type=Path,
+                                 help="Optional legacy coordination evidence; concurrent replay uses local capacity checks")
     return parser
 
 
@@ -43,7 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "inspect":
             payload = inspect_entry_price_confirmation(request_path=args.request, output_root=args.output_root)
         else:
-            slot = json.loads(args.qe_exclusive_slot.read_text(encoding="utf-8"))
+            slot = json.loads(args.qe_exclusive_slot.read_text(encoding="utf-8")) if args.qe_exclusive_slot else None
             payload = getattr(service, args.command)(request_path=args.request, model_root=args.model_root,
                                                    output_root=args.output_root, exclusive_slot=slot)
         print(json.dumps({"command": args.command, **payload}, ensure_ascii=False, sort_keys=True, allow_nan=False))

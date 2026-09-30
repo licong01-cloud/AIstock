@@ -33,7 +33,13 @@ class AdvisoryEntryPriceConfirmationService:
         self._day_service = day_service
         self._outcomes = outcome_source
         self._verify = input_verifier or verify_confirmation_inputs
-        self._guard = execution_guard or require_entry_exclusive_execution
+        self._guard = execution_guard
+
+    def _check_execution(self, request, slot, output_root):
+        if self._guard is not None:
+            self._guard(request, slot)
+        else:
+            require_entry_replay_execution(request, slot, output_root=output_root)
 
     def prepare(self, *, spec: dict, model_root, output_root) -> Path:
         request = build_entry_price_confirmation_request(**spec)
@@ -47,9 +53,13 @@ class AdvisoryEntryPriceConfirmationService:
 
     def predict(self, *, request_path, model_root, output_root, exclusive_slot=None) -> dict:
         request, root = _read_request(request_path, output_root)
-        self._guard(request, exclusive_slot)
+        self._check_execution(request, exclusive_slot, root)
         self._verify(request, model_root=model_root)
-        with _exclusive_file_lock(root / "stage.lock"):
+        if self._day_service is None:
+            from .entry_price_replay_runtime import validate_replay_dependencies
+            validate_replay_dependencies()  # Dependency failure must precede window consumption.
+        from .entry_price_replay_runtime import replay_thread_budget
+        with _exclusive_file_lock(root / "stage.lock"), replay_thread_budget():
             access = _window_access(request)
             authorization = _authorize_or_resume(request, access)
             _immutable_json(root / "consuming.json", {
@@ -60,7 +70,7 @@ class AdvisoryEntryPriceConfirmationService:
             service = self._day_service or _cached_day_service()
             predictions = []
             for day in request.days:
-                self._guard(request, exclusive_slot)
+                self._check_execution(request, exclusive_slot, root)
                 result = service.evaluate_day(
                     model_root=model_root, program_id=request.program_id, binding_version_id=request.binding_version_id,
                     target_trade_date=day.target_trade_date, scope=request.scope,
@@ -68,7 +78,7 @@ class AdvisoryEntryPriceConfirmationService:
                     frozen_input_ids={key: getattr(day, key) for key in ("list_version_id", "review_run_id", "selection_run_id")},
                 )
                 predictions.append(_prediction_day(request, result))
-                self._guard(request, exclusive_slot)
+                self._check_execution(request, exclusive_slot, root)
             validate_prediction_plan(request, predictions)
             payload = _stage_payload(request, "PREDICTED", days=[row.model_dump(mode="json") for row in predictions], execution_slot=_slot_payload(exclusive_slot))
             _immutable_json(root / "prediction" / "all.json", payload)
@@ -77,7 +87,7 @@ class AdvisoryEntryPriceConfirmationService:
     def settle(self, *, request_path, model_root, output_root, exclusive_slot=None) -> dict:
         del model_root  # Outcomes may not reload/recompute model predictions.
         request, root = _read_request(request_path, output_root)
-        self._guard(request, exclusive_slot)
+        self._check_execution(request, exclusive_slot, root)
         with _exclusive_file_lock(root / "stage.lock"):
             frozen = _read_stage(root, "prediction/all.json", request.request_sha256)
             predictions = tuple(EntryPriceConfirmationPredictionDay.model_validate(day) for day in frozen["days"])
@@ -88,9 +98,9 @@ class AdvisoryEntryPriceConfirmationService:
             source = self._outcomes or PostgresEntryPriceConfirmationOutcomeSource()
             days = []
             for day in request.days:
-                self._guard(request, exclusive_slot)
+                self._check_execution(request, exclusive_slot, root)
                 days.append(source.load(symbols=day.candidate_symbols, target_trade_date=day.target_trade_date))
-                self._guard(request, exclusive_slot)
+                self._check_execution(request, exclusive_slot, root)
             payload = _stage_payload(
                 request, "SETTLED", days=[row.model_dump(mode="json") for row in days],
                 parent_sha256=frozen["stage_sha256"],
@@ -106,7 +116,7 @@ class AdvisoryEntryPriceConfirmationService:
     def evaluate(self, *, request_path, model_root, output_root, exclusive_slot=None) -> dict:
         del model_root
         request, root = _read_request(request_path, output_root)
-        self._guard(request, exclusive_slot)
+        self._check_execution(request, exclusive_slot, root)
         with _exclusive_file_lock(root / "stage.lock"):
             _verify_existing_consumption(request, root)
             prediction = _read_stage(root, "prediction/all.json", request.request_sha256)
@@ -116,7 +126,7 @@ class AdvisoryEntryPriceConfirmationService:
                 [EntryPriceConfirmationPredictionDay.model_validate(row) for row in prediction["days"]],
                 [EntryPriceConfirmationSettlementDay.model_validate(row) for row in settlement["days"]],
             )
-            self._guard(request, exclusive_slot)
+            self._check_execution(request, exclusive_slot, root)
             payload = _stage_payload(request, "CONSUMED", evaluation=result, parent_sha256=settlement["stage_sha256"], execution_slot=_slot_payload(exclusive_slot))
             if (root / "evaluation.json").exists():
                 payload = _read_stage(root, "evaluation.json", request.request_sha256, parent_sha256=settlement["stage_sha256"])
@@ -158,19 +168,20 @@ class AdvisoryEntryPriceConfirmationService:
         AdvisoryResearchTrialRegistryV1(request.registry_path).append_batch((record,))
 
 
-def require_entry_exclusive_execution(request, slot, *, now=None, resource_guard=None):
+def require_entry_replay_execution(request, slot=None, *, now=None, capacity_probe=None, output_root=None):
     from datetime import datetime, timezone
     from .entry_price_confirmation_contracts import EntryPriceExclusiveSlot
-    from .entry_price_daily_service import QEEntryResourceGuard, EntryWorkBudget
-    if slot is None:
-        raise AdvisoryModelFirstError("QE-confirmed exclusive slot is required", reason_code="ADVISORY_ENTRY_RESOURCE_WAITING")
-    slot = EntryPriceExclusiveSlot.model_validate(slot)
-    clock = now or datetime.now(timezone.utc)
-    if slot.request_sha256 != request.request_sha256 or not slot.starts_at <= clock < slot.expires_at:
-        raise AdvisoryModelFirstError("QE exclusive slot is expired or belongs to another request", reason_code="ADVISORY_ENTRY_RESOURCE_WAITING")
-    state = (resource_guard or QEEntryResourceGuard()).check(EntryWorkBudget(seconds=min(10, (slot.expires_at - clock).total_seconds())))
-    if state["status"] != "READ_SNAPSHOT_IDLE" or (now or datetime.now(timezone.utc)) >= slot.expires_at:
-        raise AdvisoryModelFirstError("QE activity is nonterminal or unknown", reason_code="ADVISORY_ENTRY_RESOURCE_WAITING", context=state)
+    from .entry_price_replay_runtime import probe_replay_capacity
+    # Existing explicit coordination files remain validated, but are optional.
+    # This path runs frozen historical inference, never QE training or dispatch.
+    if slot is not None:
+        slot = EntryPriceExclusiveSlot.model_validate(slot)
+        clock = now or datetime.now(timezone.utc)
+        if slot.request_sha256 != request.request_sha256 or not slot.starts_at <= clock < slot.expires_at:
+            raise AdvisoryModelFirstError("supplied replay slot is expired or belongs to another request", reason_code="ADVISORY_ENTRY_RESOURCE_WAITING")
+    state = (capacity_probe or probe_replay_capacity)(output_root if output_root is not None else Path(request.registry_path).parent)
+    if state["status"] != "REPLAY_CAPACITY_AVAILABLE":
+        raise AdvisoryModelFirstError("local replay capacity unavailable", reason_code="ADVISORY_ENTRY_RESOURCE_WAITING", context=state)
 
 
 def _slot_payload(slot):
@@ -205,13 +216,16 @@ def _cached_day_service(*, metadata_only=False):
     from .model_bundle import load_frozen_research_bundle
     from .price_range_runtime_bundle import load_frozen_price_range_bundle
     from .entry_price_daily_service import EntryReadOnlyCalendar
+    from .entry_price_replay_runtime import load_replay_booster
+    from .realtime_feature_source import PostgresRealtimeFeatureSource
     from backend.services.advisory_program import AdvisoryProgramService
 
     # Preparing frozen input metadata still verifies bundle assets, but must not
     # construct predictors. Prediction callers retain the real loader default.
-    loader_options = {"booster_factory": lambda _path: None} if metadata_only else {}
+    loader_options = {"booster_factory": (lambda _path: None) if metadata_only else load_replay_booster}
     return AdvisoryEntryPriceService(
         program_service=AdvisoryProgramService(calendar_provider=EntryReadOnlyCalendar(_historical_calendar_connection)),
+        feature_source=PostgresRealtimeFeatureSource(statement_timeout_ms=30_000),
         parent_loader=lru_cache(maxsize=1)(partial(load_frozen_research_bundle, **loader_options)),
         price_loader=lru_cache(maxsize=1)(partial(load_frozen_price_range_bundle, **loader_options)),
     )
@@ -223,6 +237,8 @@ def _historical_calendar_connection():
     with get_conn(autocommit=False, manage_transaction=False) as conn:
         try:
             conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+            with conn.cursor() as cursor:
+                cursor.execute("SET LOCAL statement_timeout = %s", (30_000,))
             yield conn
         finally:
             conn.rollback()
@@ -351,6 +367,7 @@ class PostgresEntryPriceConfirmationOutcomeSource:
             cursor = conn.cursor()
             try:
                 conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+                cursor.execute("SET LOCAL statement_timeout = %s", (30_000,))
                 audits = PostgresAdvisoryPriceOutcomeSource._read_audits(cursor, target_trade_date=target_trade_date)
                 cursor.execute("SELECT ts_code, open_li FROM market.kline_daily_raw WHERE trade_date=%s AND ts_code=ANY(%s) ORDER BY ts_code", (target_trade_date, list(symbols)))
                 open_rows = cursor.fetchall()

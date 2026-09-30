@@ -1,7 +1,7 @@
-# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.3
+# Advisory ENTRY_PRICE 一次性历史确认 F2 详细设计 v1.4
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Advisory。
-> 状态：SOURCE_MERGED_COORDINATE_V2_PASS_CONFIRMATION_INPUT_AND_RESOURCE_BLOCKED（2026-09-30）。PR #5099已合入四阶段源码及v2坐标，用户重启后语义验证通过；仍缺合格连续窗口、QE已确认独占时段及正式运行结果。
+> 状态：SOURCE_LOCAL_VERIFIED_EXPLORATORY_REPLAY_COMPLETED（2026-09-30）。PR #5099已合入四阶段源码及v2坐标，BUG-1632/1636已完成用户重启验证；BUG-1640按最新授权移除纯历史回放的QE独占依赖，实施本机容量检查，完成8日/160候选的真实探索回放。正式确认仍缺合格连续窗口；新修复尚未合入，不宣称后端激活。
 > 配套：[独立价格角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)。
 
 ## 1. Background / 为什么需要新入口
@@ -20,7 +20,7 @@
 
 ## 3. Non-goals / 所有权与证据
 
-不改QE代码、profile、数据release、候选库或历史Program；不提交QE训练，不重建父策略候选，不写数据库。需要上游资产时只消费QE/Selection已有正式只读输出；缺失交由其所属窗口。本设计不升级旧historical/prospective receipt，不把重建历史冒充盘前发布，不启动进程或安装依赖。
+不改QE代码、profile、数据release、候选库或历史Program；不提交QE训练，不重建父策略候选，不写数据库。需要上游资产时只消费QE/Selection已有正式只读输出；缺失交由其所属窗口。本设计不升级旧historical/prospective receipt，不把重建历史冒充盘前发布，不控制服务进程或安装依赖。离线回放使用显式选定的现有AIstock解释器，与后端/QE进程环境隔离；缺依赖返回typed错误，不自动安装或切换环境。
 
 ## 4. Architecture / 窗口资格与分区
 
@@ -93,7 +93,11 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 已实现CLI `python -m backend.services.advisory_model_first.entry_price_confirmation_cli`，子命令prepare/predict/settle/evaluate/inspect。prepare显式接收 `--spec --model-root --output-root --env-file`；其余接受`--request --model-root --output-root`，仅需要DB的阶段额外`--env-file`。全部写入仅artifact；返回0表示阶段成功（经济结果仍必须读status），2表示合同/输入错误，3表示未成熟/资源依赖waiting；禁止把0自动解读为模型确认。
 
-资源执行合同细化：predict/settle/evaluate额外显式传`--qe-exclusive-slot`，消费由QE窗口已确认的只读JSON授权说明（authorization_ref、request_sha256、starts_at、expires_at，时间含时区），缺失/过期/其他请求不执行。消费者不能自行生成独占授权；此文件记录外部协调事实，不是QE原子锁或新审批平台。每个日块前后复查时窗和QE公开只读完整任务快照；非终态/未知立即WAITING，保留已消费事实，只能同request恢复。续约可以换slot，但不改变研究假设/窗口/预测；prepare/inspect仅元数据读回不要求占用时段。
+资源执行合同（用户2026-09-30调整）：冻结模型的纯历史回放允许与QE实验并行，不提交训练、不扫描QE历史、不要求QE空闲或独占授权。predict/settle/evaluate每个阶段及日块检查实际执行主机可用内存和artifact磁盘空间，读不到指标或不足工作预算时返回WAITING并保留同request恢复。默认预算为512 MiB可用内存、128 MiB磁盘余量；它们是工作缓冲预算，不是模型效果门槛。CPU繁忙不直接拒绝，LightGBM及本回放进程内BLAS/OpenMP限制为2线程；只读特征SQL限时30秒，不占用QE GPU训练或队列。`--qe-exclusive-slot`保留为可选兼容字段：提供时仍校验请求hash及有效时窗，缺省不制造slot。自然每日通道和其他训练协调不随此次变更放宽。prepare/inspect不运行模型。
+
+现有Windows base解释器缺LightGBM，但`C:/Users/lc999/miniconda3/envs/AIstock/python.exe`已具备LightGBM 4.6.0及相关库。回放运行前用`entry_price_replay_runtime.validate_replay_dependencies()`和`probe_replay_capacity(output_root)`做消费者侧预检，再显式调用该解释器的confirmation CLI。环境名称不构成模型/PIT证据，所有冻结资产hash仍由原loader核验。
+
+股票池输入修复不修改receipt语义：只从现有原生名单中选择身份完整的连续日期，在未读取结果前登记独立EXPLORATORY_SCREEN请求；不得把之前请求事后缩窗后宣称确认通过。无原生身份的旧日继续明确INPUT_UNAVAILABLE，并向Selection/数据窗口请求既存只读来源，不补写历史记录。正式确认的20日/300行、PIT及未消费约束不变。
 
 实施顺序：用旧已消费样本完成合同与同核parity → 窗口资格spike → 冻结spec/control → 一次完整推理 → 目标结果揭示与评价 → 向delivery交付结论。实现无可用新窗口时继续完成源码与历史功能验证，报告确认阻塞；不通过改名伪造sealed，不默认依赖QE新训练。
 
@@ -101,7 +105,7 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 新测试：`backend/tests/advisory_model_first/test_entry_price_confirmation.py`、`test_entry_price_confirmation_contracts.py`、`test_entry_price_confirmation_cli.py`。覆盖窗口污染/非vintage降级、日期越界、训练时钟、同股票重复、目标毒化、先全量预测后结算、阶段恢复、未知缺行保留、统计边界、0退出码负结论、跨合同不混算。
 
-复用旧`test_historical_price_replay.py`验证旧证据合同不变。统计测试使用小型可手算的IS例子、固定bootstrap确定性和按日分组；不写只断言实现常量的测试。真实批量仅在代码审核与输入就绪后运行，不与QE实验并行。
+复用旧`test_historical_price_replay.py`验证旧证据合同不变。统计测试使用小型可手算的IS例子、固定bootstrap确定性和按日分组；不写只断言实现常量的测试。真实批量仅在代码审核与输入就绪后运行；纯回放可与QE并行，容量不足暂缓。验证还覆盖不调用QE历史API、低内存/低磁盘/指标缺失、依赖缺失先于消费、线程限制及可选旧slot身份拒绝。
 
 ## 9. Design Acceptance Index
 
@@ -118,7 +122,7 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 ## 10. Design Acceptance Matrix
 
-本矩阵验收四阶段源码及定向测试，不验收模型效果。SOURCE_VERIFIED不等于合格窗口存在、实际推理已运行或价格确认通过；这些仍待真实输入审核及外部QE独占时段，生产binding保持未发布。源码先行遵循已批准方案，不降低§4与§6条件。
+本矩阵验收四阶段源码及定向测试，不验收模型效果。SOURCE_VERIFIED不等于合格窗口存在或价格确认通过。BUG-1640的现存原生名单探索请求 `advepc_fda8f36ceae1ffe0e77db23c` 已完成prepare→predict→settle→evaluate，T=`2026-09-15..2026-09-24`共8个连续交易日/160候选，模型和市场160/160可用，未知缺失/停牌/crossing均0；预测阶段约167.98秒，平均21秒/日。连续coverage=0.6125，业务tick coverage=0.64375，业务宽度/control=2.104502；相对control的interval-score差=-0.020045，95%区间[-0.021884,-0.013075]。支持度不足且coverage/宽度不满足确认标准，最终INCONCLUSIVE/NAVIGATION_ONLY，不能以单项IS改善推导确认或收益。相关小矩阵62 passed，Ruff/L0及真实模型线程限制parity通过。模型文件hash不变；零QE任务、零数据库写入、零新binding；生产binding保持未发布。原始缺身份名单未被修复或伪造，此次8日选择在结果揭示前冻结；源码先行不降低§4与§6条件。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -129,11 +133,11 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 | F-524 | §6 | backend/tests/advisory_model_first/test_entry_price_confirmation.py | SOURCE_VERIFIED | none |
 | F-525 | §4.2、§5.4 | backend/tests/advisory_model_first/test_entry_price_confirmation.py | SOURCE_VERIFIED | none |
 | F-526 | §5.4、§7 | backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py | SOURCE_VERIFIED | none |
-| F-527 | §3、§7 | backend/tests/advisory_model_first/test_entry_price_confirmation.py；test_entry_price_confirmation_cli.py | SOURCE_VERIFIED | none |
+| F-527 | §3、§7；entry_price_replay_runtime.py | backend/tests/advisory_model_first/test_entry_price_confirmation.py；test_entry_price_confirmation_cli.py；test_entry_price_replay_runtime.py | SOURCE_VERIFIED | none |
 
 ## 11. Rollout / Rollback
 
-离线源码合入不需后端重启；运行失败只停止本次阶段，保留预测/消费记录供exact恢复。CONFIRMED只允许交给delivery绑定同scope的shadow角色；INCONCLUSIVE/NOT_CONFIRMED不绑定，模型改进须新lineage。若没有独立历史窗口，自然前向是可选补充，功能开发、代码审核和旧窗口回归继续进行。
+离线CLI读取最新源码可用新的独立进程验证，不依赖后端重启；backend-main目标的激活/BUG关闭仍遵守runtime catalog，由用户重启后独立验证，不能用CLI验证冒充后端激活。运行失败只结束本次阶段，保留预测/消费记录供exact恢复。CONFIRMED只允许交给delivery绑定同scope的shadow角色；INCONCLUSIVE/NOT_CONFIRMED不绑定，模型改进须新lineage。若没有独立历史窗口，自然前向是可选补充，功能开发、代码审核和旧窗口回归继续进行。
 
 ## 12. Risks / 不确定性处理
 
@@ -147,9 +151,9 @@ vintage审核文件必须包含 `entry_coordinate_review`：schema=`advisory_ent
 
 ## 14. 实施审核状态
 
-已修复/复审：control仅从原v3训练run的validation标签读取，检查实际T标签成熟时钟；预测冻结先于结果查询；每行重新核对校准量和tick/法规投影；crossing统计覆盖全部已输出预测，不能被后续停牌掩盖；重试绑定原消费收据；QE外部时段续约不改已有评价artifact。测试使用合成/已消费数据，不产生正式效果证据。
+已修复/复审：control仅从原v3训练run的validation标签读取，检查实际T标签成熟时钟；预测冻结先于结果查询；每行重新核对校准量和tick/法规投影；crossing统计覆盖全部已输出预测，不能被后续停牌掩盖；重试绑定原消费收据；旧可选slot续约不改已有评价artifact。测试使用合成/已消费数据，不产生正式效果证据。
 
-当前只读资源前检仍返回`WAITING_RESOURCE / QE_TASK_NONTERMINAL_OR_UNKNOWN`，完整资格材料尚未获得，因此没有prepare正式请求或提交实验。现有DB特征adapter保持D晚于父bundle continuation_cutoff的边界，不能借新入口绕回旧训练期。新日期还须满足本设计全部vintage/消费条件，不把日期后移当成自动OOS。
+旧资源前检曾返回`WAITING_RESOURCE / QE_TASK_NONTERMINAL_OR_UNKNOWN`；正式资格材料尚未获得，尚无正式确认结果。现有DB特征adapter保持D晚于父bundle continuation_cutoff的边界，不能借新入口绕回旧训练期。新日期还须满足本设计全部vintage/消费条件，不把日期后移当成自动OOS。
 
 已消费validation的1,000行经v2生产器复核：检查1,000、不可用0、最大绝对gap差`1.1347649842008423e-7`，满足固定`1e-6`容差；3行公司行动全部保留。坐标前置项可签PASS，身份=`advisory_entry_price_core_v2`，标签SHA=`c4fc72b94e9e112bcc05405e8c7f6ec28bc2890b16c4ff978e3b7dfe0ee2b148`。该审计没有运行模型、写DB或消费新窗口。
 
@@ -157,4 +161,4 @@ vintage审核文件必须包含 `entry_coordinate_review`：schema=`advisory_ent
 
 2026-09-30重新读回元数据：31个PUBLISHED目标日（新增09-30）及1个REPLAY；仅11个PUBLISHED日带原生advisory_universe_receipt（09-15～09-30），尚低于最低20日支持要求，且receipt存在本身仍不证明完整PIT/lineage资格。新增日期不自动解决历史缺口。现有exploratory输入材料明确pit_visibility_verified=false，不能改签为ELIGIBLE_LOCKED_HISTORICAL_OOT；本轮没有读取目标效果或产生新的确认请求。
 
-资源审核发现消费者误用了include_children=true：该视图按父实验分页却展开子行，不能用返回行数推进父offset。BUG-1632改用公开平铺include_children=false，逐行覆盖父实验和子运行，保留分页完整性/身份/状态检查。三项公开QE task详情仍paused（qe_20260716_042842_fd61、qe_20260810_221723_14ab、qe_20260824_101005_ce66）；legacy canonical_status缺失同样不推断idle。只有QE窗口解决状态可判定性并确认独占时段后才能执行，不能由Advisory终止任务或自造时段。已消费v4功能回放亦不绕过不并行要求。
+历史资源审核发现消费者误用了include_children=true；BUG-1632修复分页并已完成重启验证。随后完整1610条记录没有running/queued，但已completed的子项`qe_20260921_181440_81c5_L2`因canonical_status缺失被拒绝，其对应task也completed；三个旧paused记录不是当前首个阻点。BUG-1640按最新用户授权仅对历史confirmation回放改用本机容量检查，不修改QE公共代码或要求QE补账。自然每日通道保留原协调合同；本次不宣称QE原子独占或其任务状态已改变。

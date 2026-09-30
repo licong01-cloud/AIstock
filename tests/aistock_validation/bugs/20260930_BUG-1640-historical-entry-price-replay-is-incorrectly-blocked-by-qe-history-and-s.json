@@ -31,24 +31,43 @@
       "timestamp": "2026-09-30T07:23:42.711563Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Historical replay uses local capacity checks with bounded CPU and read-only DB access, no QE history scans or required exclusive slot; valid legacy full-market provenance can be resolved for exploratory replay without inventing native receipt; formal and natural paths retain strict identity.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_native_concurrent/entry_price_confirmations/advepc_fda8f36ceae1ffe0e77db23c/manifest.json",
+    "F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_native_concurrent/entry_price_confirmations/advepc_fda8f36ceae1ffe0e77db23c/evaluation.json"
+  ],
+  "expected": "Historical replay uses local capacity checks with bounded CPU and read-only DB access, no QE history scans or required exclusive slot. Use an explicitly selected existing predictor environment and existing identity-complete historical lists for a separately registered exploratory replay; legacy lists without native universe identity remain unavailable and require owner-supplied PIT evidence. Formal and natural paths retain strict identity.",
+  "external_owner_requirements": [
+    "Selection/data owner: supply existing immutable historical candidate export with actual package manifest, selection runtime/review policy and universe-as-of receipt for missing dates. Never backfill current binding as historical truth. No Advisory candidate rebuild or DB write.",
+    "Data owner: a formal locked historical OOT requires a complete PIT/vintage input window after every upstream/model/transform/calibration fit boundary; existing non-vintage 8-day functional replay is NAVIGATION_ONLY and cannot activate a binding."
+  ],
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1640-historical-entry-price-replay-is-incorrectly-blocked-by-qe-history-and-s.json",
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+      "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+      "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
+    ],
     "added_files": [
       "backend/services/advisory_model_first/entry_price_replay_runtime.py",
       "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1640-historical-entry-price-replay-is-incorrectly-blocked-by-qe-history-and-s.json",
       "backend/services/advisory_model_first/entry_price_confirmation.py",
       "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
-      "backend/services/advisory_model_first/entry_price_service.py",
       "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
       "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
-      "backend/tests/advisory_model_first/test_entry_price_service.py",
       "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
-      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+      "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+      "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/entry_price_confirmation.py",
@@ -196,6 +215,11 @@
   "github_issue_number": 5146,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5146",
   "last_seen_at": "2026-09-30T07:23:42.711580Z",
+  "local_review_rounds": [
+    "Round 1: replay/QE boundary and dependency-before-consumption review. Preserve native universe validation, formal support, frozen labels, and daily resource contract; no external-module edits.",
+    "Round 2: real LightGBM smoke found restored models ignore constructor thread params. Fixed per-prediction num_threads=2 adapter and proved exact prediction parity and unchanged model SHA256; failure node passed.",
+    "Round 3: capacity probe bound to actual output volume rather than registry-only volume; readonly historical calendar/outcome SQL limited to 30 seconds. Updated exact tests and verified PIT, missing/suspension preservation, immutable full prediction before settlement, and retry invariants. Final related matrix 62 passed; Ruff, L0 and F2 design validation passed. No unresolved local review finding. CI premerge plan remains advisory_modeling_backend."
+  ],
   "module": "advisory",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -212,11 +236,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/entry-price/status",
+    "fresh_process_evidence": [
+      "2026-09-30 isolated existing AIstock Python (LightGBM 4.6.0): native-list prepare and predict/settle/evaluate succeeded without QE-exclusive slot; request advepc_fda8f36ceae1ffe0e77db23c, 8 days/160 candidates. prediction SHA256 62b9ee71e0f21298fc1c01d0dc9cfc8086ceb28c464ec6639289f7dc68f864c7; latest-source fresh-process predict exact retry returned the same digest. No backend control or database writes.",
+      "2026-09-30 real frozen entry_gap_q10 model: bounded predictor and reference prediction exactly equal; model file SHA256 unchanged. Native OpenMP/OpenBLAS pools observed 2 threads. Existing environment only; no dependency installation.",
+      "Existing AIstock Python loaded latest Advisory source; request advepc_fda8f36ceae1ffe0e77db23c exact retry preserved prediction digest 62b9ee71e0f21298fc1c01d0dc9cfc8086ceb28c464ec6639289f7dc68f864c7; no backend restart"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
