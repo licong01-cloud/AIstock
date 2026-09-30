@@ -498,6 +498,57 @@ def test_gate6_frozen_artifact_is_deterministic_and_traceable(tmp_path):
     }
 
 
+def test_gate6_frozen_builder_can_pin_explicit_selection_universe(tmp_path):
+    provider_dir = tmp_path / "bin"
+    pins = _write_frozen_bin_tree(
+        provider_dir,
+        spans=[("000001.SZ", "2018-08-01", "2026-06-30")],
+        calendar_dates=["2021-01-04", "2021-01-05"],
+    )
+    selection = provider_dir / "instruments" / "stock_universe.txt"
+    selection.write_text("000002.SZ\t2018-08-01\t2026-06-30\n", encoding="utf-8")
+    pins.update(
+        {
+            "instruments_file": "stock_universe.txt",
+            "instruments_sha256": _sha256(selection),
+        }
+    )
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _write_spec(workspace, provider_dir, pins)
+
+    artifact = frozen_builder.ensure_frozen_risk_policy_artifact(
+        cwd=workspace, print_fn=lambda *_a, **_k: None
+    )
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+
+    assert payload["source"] == "frozen:qlib_bin/instruments/stock_universe.txt"
+    assert payload["span_count"] == 1
+    assert payload["active_spans"][0]["ts_code"] == "000002.SZ"
+    assert payload["state"]["source_fingerprint_sha256"] == pins["instruments_sha256"]
+
+
+def test_gate6_frozen_builder_rejects_unbound_instruments_filename(tmp_path):
+    provider_dir = tmp_path / "bin"
+    pins = _write_frozen_bin_tree(
+        provider_dir,
+        spans=[("000001.SZ", "2018-08-01", "2026-06-30")],
+        calendar_dates=["2021-01-04"],
+    )
+    pins["instruments_file"] = "../outside.txt"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _write_spec(workspace, provider_dir, pins)
+
+    with pytest.raises(
+        frozen_builder.FrozenRiskPolicyBuildError,
+        match="qe_frozen_build_spec_invalid",
+    ):
+        frozen_builder.ensure_frozen_risk_policy_artifact(
+            cwd=workspace, print_fn=lambda *_a, **_k: None
+        )
+
+
 def test_gate6_composer_spec_pins_full_traceability_triplet():
     spec = json.loads(
         ConfigComposer()._build_qe_frozen_risk_policy_spec(

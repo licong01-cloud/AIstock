@@ -1,28 +1,51 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date
 import json
 
 import pandas as pd
 import pytest
+from scripts import update_backtest_dataset_monthly as cli
+from scripts.qlib_authoritative_smoke_backtest import minute_contract_failures
 
 from backend.services.dataset_release.direct_monthly import (
     DIRECT_COMPONENTS,
+    DIRECT_FACTOR_SCHEMA,
+    DIRECT_INDEX_CODES,
+    DIRECT_MONTHLY_STATE_SCHEMA,
+    DIRECT_REUSABLE_COMPONENT_DIRS,
+    DIRECT_REUSABLE_REPORT_FILES,
+    DIRECT_SECTOR_AUTHORITY,
+    DIRECT_SUSPEND_SCHEMA,
+    DIRECT_SW_L1_SCHEMA,
     DIRECT_TERMINAL_STATUS,
+    LEGACY_DIRECT_MONTHLY_STATE_SCHEMA,
+    PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA,
     DirectMonthlyError,
     DirectMonthlyLayout,
     DirectMonthlyRunner,
+    cleanup_terminal_candidate,
+    build_suspend_d_component,
+    build_sw_l1_index_component,
     compact_status,
     component_plan,
     default_candidate_path,
     discover_latest_existing_direct_candidate,
     discover_latest_validated_baseline,
     initial_state,
+    hardlink_baseline_components,
     read_state,
+    validate_direct_candidate_with_smoke,
+    _validate_sw_l1_index_frame,
     write_state,
     _run_qlib_component,
     _date_chunks,
+    _build_sector_frame_from_classification,
+    _ClassificationInterval,
     _filter_frame_to_pit,
+    _read_classification_intervals,
+    _load_sw_l2_projection,
 )
 
 
@@ -39,17 +62,313 @@ def _layout(tmp_path) -> DirectMonthlyLayout:
     )
 
 
-def test_component_plan_rebuilds_minute_for_july_repair_without_expanding_components() -> None:
+def test_component_plan_includes_suspend_and_sw_l1_components() -> None:
     plan = component_plan(july_minute_repaired=True)
 
     assert tuple(item.component for item in plan) == DIRECT_COMPONENTS
     assert {item.action for item in plan} == {"COMPONENT_REBUILD"}
-    assert next(item for item in plan if item.component == "minute_bin").reason == (
-        "july_repair_plus_august_tail"
-    )
+    assert next(item for item in plan if item.component == "minute_bin").reason == ("july_repair_plus_august_tail")
     assert next(item for item in plan if item.component == "daily_bin").reason == (
         "canonical_v2_pool_and_target_cutoff"
     )
+    assert next(item for item in plan if item.component == "suspend_d").reason == (
+        "same_release_canonical_v2_suspend_history"
+    )
+    assert next(item for item in plan if item.component == "sw_l1_index").reason == (
+        "exact_31_published_sw2021_l1_close_series"
+    )
+
+
+def test_terminal_successor_state_accepts_one_pinned_sector_context_extension(tmp_path) -> None:
+    base = _layout(tmp_path)
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=base.candidate_parent,
+        candidate_root=(
+            base.candidate_parent
+            / "20260831-qe_hmm_full_v2-direct-20260920-r8-unified-candidate"
+        ),
+        baseline_root=base.baseline_root,
+        cutoff=base.cutoff,
+    )
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    state["components"]["sector_context"] = {
+        "action": "ADD_FROZEN_SHARED_SECTOR_CONTEXT",
+        "status": "PASS",
+        "receipt_sha256": "a" * 64,
+    }
+    state["components"]["sector_quote_hotfix"] = {
+        "action": "SELECTIVE_REBUILD",
+        "status": "PASS",
+    }
+
+    write_state(layout, state)
+
+    observed = read_state(layout)
+    assert observed is not None
+    assert observed["components"]["sector_context"]["status"] == "PASS"
+    assert compact_status(observed)["components"]["sector_context"] == "PASS"
+    assert compact_status(observed)["components"]["sector_quote_hotfix"] == "PASS"
+
+
+def test_legacy_four_component_state_resumes_only_new_components(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    legacy = initial_state(layout)
+    legacy["schema_version"] = LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
+    legacy["status"] = DIRECT_TERMINAL_STATUS
+    legacy["components"].pop("suspend_d")
+    legacy["components"].pop("sw_l1_index")
+    for component in legacy["components"]:
+        legacy["components"][component]["status"] = "PASS"
+        legacy["components"][component]["receipt"] = {
+            "status": "PASS",
+            "component": component,
+        }
+    layout.factor_root.mkdir(parents=True)
+    (layout.factor_root / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": DIRECT_FACTOR_SCHEMA,
+                "sector_authority": DIRECT_SECTOR_AUTHORITY,
+                "end": layout.cutoff.isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    layout.candidate_root.mkdir(parents=True, exist_ok=True)
+    layout.state_path.write_text(json.dumps(legacy), encoding="utf-8")
+    observed = read_state(layout)
+    assert observed is not None
+    assert observed["schema_version"] == DIRECT_MONTHLY_STATE_SCHEMA
+    assert observed["status"] == "PLANNING_DIRECT"
+    assert observed["components"]["suspend_d"]["status"] == "PENDING"
+    assert observed["components"]["sw_l1_index"]["status"] == "PENDING"
+    persisted_before_run = json.loads(layout.state_path.read_text(encoding="utf-8"))
+    assert persisted_before_run["schema_version"] == LEGACY_DIRECT_MONTHLY_STATE_SCHEMA
+    assert "suspend_d" not in persisted_before_run["components"]
+
+    calls: list[str] = []
+
+    def handler(component: str):
+        def run(_layout: DirectMonthlyLayout):
+            calls.append(component)
+            return {"status": "PASS", "component": component}
+
+        return run
+
+    result = DirectMonthlyRunner(
+        {component: handler(component) for component in DIRECT_COMPONENTS},
+        validator=lambda _layout: {"status": "PASS"},
+    ).run(layout)
+
+    assert result["status"] == DIRECT_TERMINAL_STATUS
+    assert result["schema_version"] == DIRECT_MONTHLY_STATE_SCHEMA
+    assert calls == ["suspend_d", "sw_l1_index"]
+
+
+def test_pre_sw_l1_terminal_state_reopens_only_sw_l1(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    legacy = initial_state(layout)
+    legacy["schema_version"] = PRE_SW_L1_DIRECT_MONTHLY_STATE_SCHEMA
+    legacy["status"] = DIRECT_TERMINAL_STATUS
+    legacy["components"].pop("sw_l1_index")
+    for record in legacy["components"].values():
+        record["status"] = "PASS"
+        record["receipt"] = {"status": "PASS", "component": "existing"}
+    layout.candidate_root.mkdir(parents=True, exist_ok=True)
+    layout.state_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    observed = read_state(layout)
+
+    assert observed is not None
+    assert observed["schema_version"] == DIRECT_MONTHLY_STATE_SCHEMA
+    assert observed["status"] == "PLANNING_DIRECT"
+    assert observed["components"]["sw_l1_index"]["status"] == "PENDING"
+
+
+def _sw_l1_frame(*, end: date = date(2020, 7, 31)) -> pd.DataFrame:
+    dates = pd.to_datetime([date(2020, 7, 30), end])
+    sectors = [f"{110000 + position * 10000:06d}" for position in range(31)]
+    index = pd.MultiIndex.from_product([dates, sectors], names=["datetime", "sector_code"])
+    return pd.DataFrame(
+        {
+            "index_code": [f"{801010 + position % 31:06d}.SI" for _day in dates for position in range(31)],
+            "close": [100.0 + position for _day in dates for position in range(31)],
+        },
+        index=index,
+    )
+
+
+def test_sw_l1_component_writes_compact_31_sector_close_without_hashes(tmp_path, monkeypatch) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20200731-qe_hmm_full_v2-direct-20200801-candidate",
+        baseline_root=None,
+        cutoff=date(2020, 7, 31),
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_published_sw_l1_close",
+        lambda _start, _end: _sw_l1_frame(),
+    )
+
+    receipt = build_sw_l1_index_component(layout)
+    meta = json.loads((layout.sw_l1_root / "meta.json").read_text(encoding="utf-8"))
+    readback = pd.read_hdf(layout.sw_l1_root / "sector_data.h5", key="data")
+
+    assert receipt["status"] == "PASS"
+    assert receipt["rows"] == 62
+    assert meta["schema_version"] == DIRECT_SW_L1_SCHEMA
+    assert meta["sector_count"] == 31
+    assert meta["full_history_content_hash"] is False
+    assert meta["source_freeze"] is False
+    assert list(readback.columns) == ["index_code", "close"]
+    assert _validate_sw_l1_index_frame(readback, cutoff=layout.cutoff)["open_days"] == 2
+
+
+def test_sw_l1_component_rejects_missing_sector_and_non_finite_close() -> None:
+    frame = _sw_l1_frame()
+    missing = frame.loc[frame.index.get_level_values("sector_code") != "110000"]
+    with pytest.raises(DirectMonthlyError, match="exactly 31"):
+        _validate_sw_l1_index_frame(missing, cutoff=date(2020, 7, 31))
+    invalid = frame.copy()
+    invalid.iloc[0, invalid.columns.get_loc("close")] = float("nan")
+    with pytest.raises(DirectMonthlyError, match="non-finite"):
+        _validate_sw_l1_index_frame(invalid, cutoff=date(2020, 7, 31))
+
+
+def test_hardlink_baseline_components_reuses_files_without_changing_baseline(tmp_path) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+    baseline = parent / "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+    baseline.mkdir()
+    (baseline / "direct_monthly_state.json").write_text(
+        json.dumps({"status": DIRECT_TERMINAL_STATUS, "cutoff": "2026-08-31"}),
+        encoding="utf-8",
+    )
+    for directory in DIRECT_REUSABLE_COMPONENT_DIRS:
+        component = baseline / "components" / directory
+        component.mkdir(parents=True)
+        (component / "payload.bin").write_bytes(directory.encode("utf-8"))
+    for filename in DIRECT_REUSABLE_REPORT_FILES:
+        report = baseline / "reports" / filename
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(filename, encoding="utf-8")
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20260831-qe_hmm_full_v2-direct-20260905-candidate",
+        baseline_root=baseline,
+        cutoff=date(2026, 8, 31),
+    )
+
+    result = hardlink_baseline_components(layout)
+
+    assert result["linked_files"] == len(DIRECT_REUSABLE_COMPONENT_DIRS) + len(DIRECT_REUSABLE_REPORT_FILES)
+    assert result["content_hash_performed"] is False
+    for directory in DIRECT_REUSABLE_COMPONENT_DIRS:
+        source = baseline / "components" / directory / "payload.bin"
+        linked = layout.components_root / directory / "payload.bin"
+        assert linked.read_bytes() == source.read_bytes()
+        assert linked.stat().st_ino == source.stat().st_ino
+    for filename in DIRECT_REUSABLE_REPORT_FILES:
+        source = baseline / "reports" / filename
+        linked = layout.reports_root / filename
+        assert linked.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+        assert linked.stat().st_ino == source.stat().st_ino
+
+
+def test_suspend_component_uses_daily_calendar_and_canonical_pit_without_hashes(tmp_path, monkeypatch) -> None:
+    layout = _layout(tmp_path)
+    calendar = layout.components_root / "daily_bin_candidate" / "calendars" / "day.txt"
+    calendar.parent.mkdir(parents=True)
+    calendar.write_text("2026-08-28\n2026-08-31\n", encoding="utf-8")
+    spans = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ", "600000.SH"],
+            "eligible_start": [pd.Timestamp("2018-08-01"), pd.Timestamp("2018-08-01")],
+            "eligible_end": [pd.Timestamp("2026-08-31"), pd.Timestamp("2026-08-28")],
+        }
+    )
+    source = pd.DataFrame(
+        {
+            "trade_date": [
+                "2026-08-31",
+                "2026-08-31",
+                "2026-08-31",
+                "2026-08-31",
+            ],
+            "ts_code": ["000001.SZ", "600000.SH", "430001.BJ", "000002.SZ"],
+            "suspend_type": ["S", "S", "S", "R"],
+            "suspend_timing": [None, None, None, None],
+        }
+    )
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_pit_spans",
+        lambda *_args: spans,
+    )
+    monkeypatch.setattr("backend.db.pg_pool.get_conn", lambda: Connection())
+    monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: source.copy())
+
+    receipt = build_suspend_d_component(layout)
+
+    written = pd.read_parquet(layout.suspend_root / "suspend_d.parquet")
+    meta = json.loads((layout.suspend_root / "meta.json").read_text(encoding="utf-8"))
+    assert receipt["status"] == "PASS"
+    assert written[["trade_date", "ts_code"]].to_dict("records") == [
+        {"trade_date": pd.Timestamp("2026-08-31"), "ts_code": "000001.SZ"}
+    ]
+    assert meta["schema_version"] == DIRECT_SUSPEND_SCHEMA
+    assert meta["end"] == "2026-08-31"
+    assert meta["daily_row_counts"] == {"2026-08-28": 0, "2026-08-31": 1}
+    assert meta["source_freeze"] is False
+    assert meta["full_history_content_hash"] is False
+    assert not any("sha256" in key for key in meta)
+
+
+def test_suspend_component_rejects_empty_full_history_source(tmp_path, monkeypatch) -> None:
+    layout = _layout(tmp_path)
+    calendar = layout.components_root / "daily_bin_candidate" / "calendars" / "day.txt"
+    calendar.parent.mkdir(parents=True)
+    calendar.write_text("2026-08-31\n", encoding="utf-8")
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_pit_spans",
+        lambda *_args: pd.DataFrame(
+            {
+                "ts_code": ["000001.SZ"],
+                "eligible_start": [pd.Timestamp("2018-08-01")],
+                "eligible_end": [pd.Timestamp("2026-08-31")],
+            }
+        ),
+    )
+    monkeypatch.setattr("backend.db.pg_pool.get_conn", lambda: Connection())
+    monkeypatch.setattr(
+        pd,
+        "read_sql",
+        lambda *_args, **_kwargs: pd.DataFrame(columns=["trade_date", "ts_code", "suspend_type", "suspend_timing"]),
+    )
+
+    with pytest.raises(DirectMonthlyError, match="source is empty"):
+        build_suspend_d_component(layout)
+    assert not layout.suspend_root.exists()
 
 
 def test_layout_rejects_escape_existing_file_and_baseline_alias(tmp_path) -> None:
@@ -131,6 +450,8 @@ def test_runner_resumes_only_non_passed_component(tmp_path) -> None:
             "minute_bin": minute,
             "factor_h5_static": pass_handler("factor_h5_static"),
             "index_context": pass_handler("index_context"),
+            "suspend_d": pass_handler("suspend_d"),
+            "sw_l1_index": pass_handler("sw_l1_index"),
         },
         validator=lambda _layout: {"status": "PASS"},
     )
@@ -150,11 +471,13 @@ def test_runner_resumes_only_non_passed_component(tmp_path) -> None:
     assert calls.count("minute_bin") == 2
     assert calls.count("factor_h5_static") == 1
     assert calls.count("index_context") == 1
+    assert calls.count("suspend_d") == 1
+    assert calls.count("sw_l1_index") == 1
 
 
 def test_runner_rejects_partial_registry_and_invalid_receipt(tmp_path) -> None:
     layout = _layout(tmp_path)
-    with pytest.raises(DirectMonthlyError, match="all four components"):
+    with pytest.raises(DirectMonthlyError, match="all components"):
         DirectMonthlyRunner({})
 
     def invalid(component: str):
@@ -221,9 +544,7 @@ def test_daily_component_always_uses_structural_csv_resume(tmp_path, monkeypatch
     assert "--resume-csv" in captured["command"]
 
 
-def test_minute_component_uses_index_friendly_resume_without_full_history_validation(
-    tmp_path, monkeypatch
-) -> None:
+def test_minute_component_uses_index_friendly_resume_without_full_history_validation(tmp_path, monkeypatch) -> None:
     layout = _layout(tmp_path)
     captured: dict[str, object] = {}
 
@@ -329,11 +650,147 @@ def test_baseline_discovery_uses_latest_earlier_validated_metadata_only(tmp_path
     selected = discover_latest_validated_baseline(parent, cutoff=date(2026, 8, 31))
 
     assert selected.name == "candidate-2026-07-31-final_validation_validated"
-    assert default_candidate_path(
-        parent,
+    assert (
+        default_candidate_path(
+            parent,
+            cutoff=date(2026, 8, 31),
+            observed_on=date(2026, 9, 2),
+        ).name
+        == "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+    )
+
+
+def test_baseline_is_optional_for_first_direct_candidate(tmp_path) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+
+    assert discover_latest_validated_baseline(parent, cutoff=date(2026, 8, 31)) is None
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20260831-qe_hmm_full_v2-direct-20260902-candidate",
+        baseline_root=None,
         cutoff=date(2026, 8, 31),
-        observed_on=date(2026, 9, 2),
-    ).name == "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+    )
+    assert initial_state(layout)["baseline_root"] is None
+
+
+def test_missing_legacy_baseline_does_not_hide_terminal_candidate(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    write_state(layout, state)
+    layout.baseline_root.rmdir()
+
+    restored = DirectMonthlyLayout.create(
+        candidate_parent=layout.candidate_parent,
+        candidate_root=layout.candidate_root,
+        baseline_root=layout.baseline_root,
+        cutoff=layout.cutoff,
+    )
+
+    assert read_state(restored)["status"] == DIRECT_TERMINAL_STATUS
+    assert (
+        discover_latest_existing_direct_candidate(
+            layout.candidate_parent,
+            cutoff=layout.cutoff,
+        )
+        == layout.candidate_root
+    )
+
+
+def test_cleanup_terminal_candidate_removes_only_disposable_paths_and_detaches_baseline(
+    tmp_path,
+) -> None:
+    layout = _layout(tmp_path)
+    layout.work_root.mkdir(parents=True)
+    (layout.work_root / "source.csv").write_text("temporary", encoding="utf-8")
+    legacy_factor = layout.components_root / "factor_h5_static_candidate"
+    legacy_factor.mkdir(parents=True)
+    (legacy_factor / "old.h5").write_text("old", encoding="utf-8")
+    layout.factor_root.mkdir(parents=True)
+    (layout.factor_root / "current.h5").write_text("current", encoding="utf-8")
+    daily = layout.components_root / "daily_bin_candidate"
+    daily.mkdir()
+    (daily / "keep.bin").write_text("keep", encoding="utf-8")
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    state["components"]["factor_h5_static"]["receipt"] = {
+        "path": str(layout.factor_root),
+    }
+    write_state(layout, state)
+
+    plan = cleanup_terminal_candidate(layout, apply=False)
+    assert plan["status"] == "PLAN_ONLY"
+    assert plan["targets"] == [
+        str(layout.work_root.relative_to(layout.candidate_root)),
+        str(legacy_factor.relative_to(layout.candidate_root)),
+    ]
+    assert plan["baseline_detach"] is True
+    assert layout.work_root.exists()
+
+    applied = cleanup_terminal_candidate(layout, apply=True)
+    assert applied["status"] == "APPLIED"
+    assert not layout.work_root.exists()
+    assert not legacy_factor.exists()
+    assert layout.factor_root.is_dir()
+    assert (daily / "keep.bin").is_file()
+
+    layout.baseline_root.rmdir()
+    detached = DirectMonthlyLayout.create(
+        candidate_parent=layout.candidate_parent,
+        candidate_root=layout.candidate_root,
+        baseline_root=None,
+        cutoff=layout.cutoff,
+    )
+    assert read_state(detached)["baseline_root"] is None
+
+
+def test_cleanup_refuses_legacy_factor_without_active_v2_receipt(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    legacy_factor = layout.components_root / "factor_h5_static_candidate"
+    legacy_factor.mkdir(parents=True)
+    layout.factor_root.mkdir(parents=True)
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    write_state(layout, state)
+
+    with pytest.raises(DirectMonthlyError, match="cannot prove the active v2 factor"):
+        cleanup_terminal_candidate(layout, apply=True)
+
+    assert legacy_factor.is_dir()
+
+
+def test_direct_cleanup_cli_plans_then_applies_without_touching_components(
+    tmp_path,
+    monkeypatch,
+    capsys,
+) -> None:
+    layout = _layout(tmp_path)
+    layout.work_root.mkdir(parents=True)
+    (layout.work_root / "source.csv").write_text("temporary", encoding="utf-8")
+    state = initial_state(layout)
+    state["status"] = DIRECT_TERMINAL_STATUS
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+    write_state(layout, state)
+    monkeypatch.setattr(cli, "DIRECT_CANDIDATE_PARENT", layout.candidate_parent)
+
+    assert cli.main(["--profile", "qe_hmm_full_v2", "cleanup", "--latest"]) == 0
+    planned = json.loads(capsys.readouterr().out)
+    assert planned["status"] == "PLAN_ONLY"
+    assert layout.work_root.is_dir()
+
+    assert cli.main(["--profile", "qe_hmm_full_v2", "cleanup", "--latest", "--apply"]) == 0
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["status"] == "APPLIED"
+    assert not layout.work_root.exists()
+    assert layout.candidate_root.is_dir()
 
 
 def test_monthly_candidate_discovery_resumes_same_cutoff_across_operator_dates(tmp_path) -> None:
@@ -351,3 +808,350 @@ def test_monthly_candidate_discovery_resumes_same_cutoff_across_operator_dates(t
         cutoff=date(2026, 8, 31),
         observed_on=date(2026, 9, 3),
     )
+
+
+def test_sector_projection_uses_classification_without_index_membership(monkeypatch) -> None:
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2026-08-03"), "000001.SZ"),
+            (pd.Timestamp("2026-08-04"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0, 10.1]}, index=index)
+    moneyflow = pd.DataFrame({"mf_net_amt": [2.0, 3.0]}, index=index)
+    published = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-08-03", "2026-08-04"]),
+            "index_l2_code": ["801780.SI", "801780.SI"],
+            "open": [100.0, 101.0],
+            "high": [102.0, 103.0],
+            "low": [99.0, 100.0],
+            "close": [101.0, 102.0],
+            "pct_change": [1.0, 0.99],
+            "vol": [10.0, 11.0],
+            "amount": [20.0, 21.0],
+            "pe": [12.0, 12.1],
+            "pb": [1.2, 1.3],
+            "total_mv": [1000.0, 1010.0],
+        }
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_sw_daily_for_projection",
+        lambda _codes, _start, _end: published,
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        moneyflow,
+        intervals_by_symbol={"000001.SZ": (_ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),)},
+        l2_projection={"480000": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+    )
+
+    assert list(result["l2_code_id"]) == [42, 42]
+    assert list(result["sw2_pct_change"]) == pytest.approx([1.0, 0.99])
+    assert list(result["sw2_mf_net_amt"]) == pytest.approx([2.0, 3.0])
+
+
+def test_sector_projection_accepts_exact_frozen_published_snapshot() -> None:
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0]}, index=index)
+    published = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-08-03"]),
+            "index_l2_code": ["801780.SI"],
+            "open": [100.0],
+            "high": [102.0],
+            "low": [99.0],
+            "close": [101.0],
+            "pct_change": [1.0],
+            "vol": [10.0],
+            "amount": [20.0],
+            "pe": [12.0],
+            "pb": [1.2],
+            "total_mv": [1000.0],
+        }
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        pd.DataFrame(),
+        intervals_by_symbol={
+            "000001.SZ": (
+                _ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),
+            )
+        },
+        l2_projection={"480000": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+        published_daily=published,
+    )
+
+    assert result.iloc[0]["sw2_pct_change"] == pytest.approx(1.0)
+
+
+def test_l2_projection_freezes_same_snapshot_shared_code_map(monkeypatch) -> None:
+    rows = pd.DataFrame(
+        {
+            "industry_code": [f"{100000 + index}" for index in range(131)],
+            "index_code": [f"801{index:03d}.SI" for index in range(131)],
+        }
+    )
+    code_map = {f"801{index:03d}.SI": index * 2 + 1 for index in range(131)}
+    monkeypatch.setattr("backend.db.pg_pool.get_conn", lambda: nullcontext(object()))
+    monkeypatch.setattr(pd, "read_sql", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr(
+        "backend.services.industry_code_map.load_sw_l2_code_map",
+        lambda _connection: code_map,
+    )
+
+    projection, loaded_map, payload = _load_sw_l2_projection()
+
+    assert len(projection) == 131
+    assert loaded_map == code_map
+    assert payload["entries"][-1] == {
+        "l2_code_id": 261,
+        "canonical_l2_code": "801130.SI",
+    }
+    assert payload["member_backed_codes"] == sorted(code_map)
+    assert payload["mapping_authority"]["authority_id"].startswith("market.sw_index_classify:SW2021:L2:")
+
+
+def test_classification_reader_merges_exact_identity_overlap_and_rejects_conflict(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    root = layout.industry_authority_root
+    root.mkdir(parents=True)
+    rows = [
+        {
+            "canonical_symbol": "000001.SZ",
+            "causal_use_from": "2021-08-02",
+            "causal_use_to_exclusive": None,
+            "eligible_from": "2018-08-01",
+            "eligible_to_exclusive": "2026-09-01",
+            "identity": {"l2_code": "480300"},
+            "unavailable_reason": None,
+        },
+        {
+            "canonical_symbol": "000001.SZ",
+            "causal_use_from": "2022-01-01",
+            "causal_use_to_exclusive": None,
+            "eligible_from": "2018-08-01",
+            "eligible_to_exclusive": "2026-09-01",
+            "identity": {"l2_code": "480300"},
+            "unavailable_reason": None,
+        },
+    ]
+    target = root / "classification_candidate.jsonl"
+    target.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    result = _read_classification_intervals(layout)
+
+    assert result["000001.SZ"] == (_ClassificationInterval(date(2021, 8, 2), date(2026, 9, 1), "480300"),)
+    rows[1]["identity"] = {"l2_code": "480200"}
+    target.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    with pytest.raises(DirectMonthlyError, match="intervals overlap"):
+        _read_classification_intervals(layout)
+
+
+def test_sector_published_fields_do_not_depend_on_moneyflow(monkeypatch) -> None:
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0]}, index=index)
+    published = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-08-03"]),
+            "index_l2_code": ["801780.SI"],
+            "open": [100.0],
+            "high": [102.0],
+            "low": [99.0],
+            "close": [101.0],
+            "pct_change": [1.0],
+            "vol": [10.0],
+            "amount": [20.0],
+            "pe": [12.0],
+            "pb": [1.2],
+            "total_mv": [1000.0],
+        }
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_sw_daily_for_projection",
+        lambda _codes, _start, _end: published,
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        pd.DataFrame(),
+        intervals_by_symbol={"000001.SZ": (_ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480000"),)},
+        l2_projection={"480000": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+    )
+
+    assert result.iloc[0]["sw2_pct_change"] == pytest.approx(1.0)
+    assert pd.isna(result.iloc[0]["sw2_mf_net_amt"])
+
+
+def test_sector_projection_preserves_classified_row_when_both_fact_sources_are_empty(
+    monkeypatch,
+) -> None:
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    daily = pd.DataFrame({"close": [10.0]}, index=index)
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly._load_sw_daily_for_projection",
+        lambda _codes, _start, _end: pd.DataFrame(),
+    )
+
+    result = _build_sector_frame_from_classification(
+        daily,
+        pd.DataFrame(),
+        intervals_by_symbol={"000001.SZ": (_ClassificationInterval(date(2021, 8, 2), date(2027, 1, 1), "480300"),)},
+        l2_projection={"480300": "801780.SI"},
+        l2_code_map={"801780.SI": 42},
+        start=date(2026, 8, 1),
+        end=date(2026, 8, 31),
+    )
+
+    assert len(result) == 1
+    assert result.iloc[0]["l2_code_id"] == 42
+    assert pd.isna(result.iloc[0]["sw2_pct_change"])
+    assert pd.isna(result.iloc[0]["sw2_mf_net_amt"])
+
+
+def test_resume_rebuilds_only_factor_when_factor_contract_changed(tmp_path) -> None:
+    layout = _layout(tmp_path)
+    state = initial_state(layout)
+    state["status"] = "FAILED"
+    for component in DIRECT_COMPONENTS:
+        state["components"][component]["status"] = "PASS"
+        state["components"][component]["receipt"] = {"status": "PASS", "component": component}
+    layout.suspend_root.mkdir(parents=True)
+    (layout.suspend_root / "suspend_d.parquet").write_bytes(b"present")
+    (layout.suspend_root / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": DIRECT_SUSPEND_SCHEMA,
+                "component": "suspend_d",
+                "end": layout.cutoff.isoformat(),
+                "universe_key": "aistock_equity_pit_canonical_v2",
+                "source_freeze": False,
+                "full_history_content_hash": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    layout.sw_l1_root.mkdir(parents=True)
+    _sw_l1_frame(end=layout.cutoff).to_hdf(layout.sw_l1_root / "sector_data.h5", key="data", mode="w", format="table")
+    (layout.sw_l1_root / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": DIRECT_SW_L1_SCHEMA,
+                "component": "sw_l1_index",
+                "end": layout.cutoff.isoformat(),
+                "sector_count": 31,
+                "source_freeze": False,
+                "full_history_content_hash": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_state(layout, state)
+    calls: list[str] = []
+
+    def handler(component: str):
+        def run(_layout: DirectMonthlyLayout):
+            calls.append(component)
+            if component == "factor_h5_static":
+                _layout.factor_root.mkdir(parents=True)
+                (_layout.factor_root / "meta.json").write_text(
+                    json.dumps(
+                        {
+                            "schema_version": DIRECT_FACTOR_SCHEMA,
+                            "sector_authority": DIRECT_SECTOR_AUTHORITY,
+                            "end": _layout.cutoff.isoformat(),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            return {"status": "PASS", "component": component}
+
+        return run
+
+    result = DirectMonthlyRunner(
+        {component: handler(component) for component in DIRECT_COMPONENTS},
+        validator=lambda _layout: {"status": "PASS"},
+    ).run(layout)
+
+    assert result["status"] == DIRECT_TERMINAL_STATUS
+    assert calls == ["factor_h5_static"]
+
+
+def test_direct_consumer_smoke_uses_contract_mode_without_strategy_thresholds(tmp_path, monkeypatch) -> None:
+    layout = _layout(tmp_path)
+    commands: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return Completed()
+
+    index_frame = pd.DataFrame(
+        {
+            "trade_date": [date(2026, 8, 31)] * len(DIRECT_INDEX_CODES),
+            "ts_code": list(DIRECT_INDEX_CODES),
+            "close": [1.0] * len(DIRECT_INDEX_CODES),
+        }
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly.validate_direct_candidate",
+        lambda _layout: {"status": "PASS"},
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.direct_monthly.subprocess.run",
+        fake_run,
+    )
+    monkeypatch.setattr(pd, "read_hdf", lambda *_args, **_kwargs: index_frame)
+
+    result = validate_direct_candidate_with_smoke(layout, project_root=tmp_path)
+
+    assert result["status"] == "PASS"
+    assert len(commands) == 2
+    qe_shell = commands[0][-1]
+    minute_shell = commands[1][-1]
+    assert "--contract-smoke-only" in qe_shell
+    assert "--require-nonempty-source sector_data" in qe_shell
+    assert "--min-feature-coverage" not in qe_shell
+    assert "--contract-smoke-only" in minute_shell
+
+
+def test_minute_contract_smoke_requires_field_presence_and_one_complete_stock_day() -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.date_range("2026-08-31 09:31:00", periods=240, freq="min"), ["000001.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    minute = pd.DataFrame({"close": 10.0, "factor": 1.0}, index=index)
+
+    failures, non_null = minute_contract_failures(minute)
+
+    assert failures == []
+    assert non_null == {"close": 240, "factor": 240}
+    minute["factor"] = float("nan")
+    failures, _ = minute_contract_failures(minute)
+    assert "minute field has no values: factor" in failures
+    duplicate = pd.concat([minute.iloc[:1], minute])
+    failures, _ = minute_contract_failures(duplicate)
+    assert "minute provider contains duplicate datetime/instrument keys" in failures

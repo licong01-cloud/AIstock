@@ -1,0 +1,795 @@
+{
+  "actual": "Historical source and CLI modules remain importable, four legacy test files remain collected, and current product code imports neutral helpers from the terminal state_model_set implementation.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/state_model_set.py",
+    "backend/services/hmm_risk/observation_eligibility.py",
+    "backend/services/hmm_risk/b3_acceptance.py",
+    "backend/services/hmm_risk/b3_blocker_diagnostic.py",
+    "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+    "backend/services/hmm_risk/b3_evidence_aggregation.py",
+    "backend/services/hmm_risk/b3_mixed_dimension.py",
+    "backend/services/hmm_risk/b3_remediation_diagnostic.py",
+    "backend/services/hmm_risk/b3_train_stability_diagnostic.py",
+    "backend/services/hmm_risk/b3_training.py",
+    "backend/services/hmm_risk/b3_transition_dwell.py",
+    "backend/services/hmm_risk/canonical_stock_fact_source.py",
+    "backend/services/hmm_risk/industry_pit_adapter.py",
+    "backend/services/hmm_risk/provider_absence.py",
+    "backend/services/hmm_risk/risk_l1_g2b.py",
+    "backend/services/hmm_risk/risk_l1_prediction.py",
+    "backend/services/hmm_risk/rotation_l1_gbdt.py",
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/services/hmm_risk/security_identity.py",
+    "backend/services/hmm_risk/stock_fact_observation.py",
+    "backend/services/hmm_risk/stock_fact_repository.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "scripts/hmm_risk/aggregate_transition_dwell_evidence.py",
+    "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+    "scripts/hmm_risk/run_risk_l1_g2b.py",
+    "scripts/hmm_risk/run_risk_l1_product.py",
+    "backend/tests/hmm_risk/test_b3_training.py",
+    "backend/tests/hmm_risk/test_state_model_set.py",
+    "backend/tests/hmm_risk/test_b3_transition_dwell.py",
+    "backend/tests/hmm_risk/test_observation_eligibility.py",
+    "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+    "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+    "backend/tests/hmm_risk/test_provider_absence.py",
+    "backend/tests/hmm_risk/test_risk_l1_g2b.py",
+    "backend/tests/hmm_risk/test_risk_l1_prediction.py",
+    "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_security_identity.py",
+    "backend/tests/hmm_risk/test_stock_fact_observation.py",
+    "backend/tests/hmm_risk/test_stock_fact_repository.py",
+    "backend/services/hmm_risk/contracts.py",
+    "backend/tests/hmm_risk/test_contracts.py",
+    "tests/aistock_validation/bugs/20260916_BUG-1549-hmm-terminal-b3-p6-d1-chain-remains-in-active-source-and-test-surface.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1549",
+  "closed_at": "2026-09-16T07:52:49.379222Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-16T05:26:08.270724Z",
+  "description": "Historical source and CLI modules remain importable, four legacy test files remain collected, and current product code imports neutral helpers from the terminal state_model_set implementation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260916-3ae31c4d8f95",
+      "timestamp": "2026-09-16T05:26:08.270704Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md"
+  ],
+  "expected": "Atomically retire the terminal B3/P6/D1 production and test chain, move only current V16/G2C-neutral contracts to a semantic-neutral module, preserve active PIT/schema/security/fail-closed behavior, and keep stock_fact_gap_repair unchanged.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/hmm_risk/contracts.py",
+      "backend/tests/hmm_risk/test_contracts.py"
+    ],
+    "changed_files": [
+      "backend/services/hmm_risk/state_model_set.py",
+      "backend/services/hmm_risk/observation_eligibility.py",
+      "backend/services/hmm_risk/b3_acceptance.py",
+      "backend/services/hmm_risk/b3_blocker_diagnostic.py",
+      "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+      "backend/services/hmm_risk/b3_evidence_aggregation.py",
+      "backend/services/hmm_risk/b3_mixed_dimension.py",
+      "backend/services/hmm_risk/b3_remediation_diagnostic.py",
+      "backend/services/hmm_risk/b3_train_stability_diagnostic.py",
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/services/hmm_risk/b3_transition_dwell.py",
+      "backend/services/hmm_risk/canonical_stock_fact_source.py",
+      "backend/services/hmm_risk/industry_pit_adapter.py",
+      "backend/services/hmm_risk/provider_absence.py",
+      "backend/services/hmm_risk/risk_l1_g2b.py",
+      "backend/services/hmm_risk/risk_l1_prediction.py",
+      "backend/services/hmm_risk/rotation_l1_gbdt.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "scripts/hmm_risk/aggregate_transition_dwell_evidence.py",
+      "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+      "scripts/hmm_risk/run_risk_l1_g2b.py",
+      "scripts/hmm_risk/run_risk_l1_product.py",
+      "backend/tests/hmm_risk/test_b3_training.py",
+      "backend/tests/hmm_risk/test_state_model_set.py",
+      "backend/tests/hmm_risk/test_b3_transition_dwell.py",
+      "backend/tests/hmm_risk/test_observation_eligibility.py",
+      "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+      "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+      "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_risk_l1_g2b.py",
+      "backend/tests/hmm_risk/test_risk_l1_prediction.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_security_identity.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/state_model_set.py",
+        "backend/services/hmm_risk/observation_eligibility.py",
+        "backend/services/hmm_risk/b3_acceptance.py",
+        "backend/services/hmm_risk/b3_blocker_diagnostic.py",
+        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+        "backend/services/hmm_risk/b3_evidence_aggregation.py",
+        "backend/services/hmm_risk/b3_mixed_dimension.py",
+        "backend/services/hmm_risk/b3_remediation_diagnostic.py",
+        "backend/services/hmm_risk/b3_train_stability_diagnostic.py",
+        "backend/services/hmm_risk/b3_training.py",
+        "backend/services/hmm_risk/b3_transition_dwell.py",
+        "backend/services/hmm_risk/canonical_stock_fact_source.py",
+        "backend/services/hmm_risk/industry_pit_adapter.py",
+        "backend/services/hmm_risk/provider_absence.py",
+        "backend/services/hmm_risk/risk_l1_g2b.py",
+        "backend/services/hmm_risk/risk_l1_prediction.py",
+        "backend/services/hmm_risk/rotation_l1_gbdt.py",
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/services/hmm_risk/security_identity.py",
+        "backend/services/hmm_risk/stock_fact_observation.py",
+        "backend/services/hmm_risk/stock_fact_repository.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "scripts/hmm_risk/aggregate_transition_dwell_evidence.py",
+        "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+        "scripts/hmm_risk/run_risk_l1_g2b.py",
+        "scripts/hmm_risk/run_risk_l1_product.py",
+        "backend/tests/hmm_risk/test_b3_training.py",
+        "backend/tests/hmm_risk/test_state_model_set.py",
+        "backend/tests/hmm_risk/test_b3_transition_dwell.py",
+        "backend/tests/hmm_risk/test_observation_eligibility.py",
+        "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+        "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+        "backend/tests/hmm_risk/test_provider_absence.py",
+        "backend/tests/hmm_risk/test_risk_l1_g2b.py",
+        "backend/tests/hmm_risk/test_risk_l1_prediction.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_security_identity.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py",
+        "backend/tests/hmm_risk/test_stock_fact_repository.py",
+        "backend/services/hmm_risk/contracts.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/observation_eligibility.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_acceptance.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_blocker_diagnostic.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_evidence_aggregation.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_mixed_dimension.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_remediation_diagnostic.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_train_stability_diagnostic.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_training.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/b3_transition_dwell.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/canonical_stock_fact_source.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/industry_pit_adapter.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/provider_absence.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/risk_l1_g2b.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/risk_l1_prediction.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/rotation_l1_gbdt.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/security_identity.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/stock_fact_observation.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/stock_fact_repository.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "scripts/hmm_risk/prepare_state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "scripts/hmm_risk/aggregate_transition_dwell_evidence.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "scripts/hmm_risk/run_risk_l1_g2b.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "scripts/hmm_risk/run_risk_l1_product.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_b3_training.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_state_model_set.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_b3_transition_dwell.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_observation_eligibility.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_provider_absence.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_risk_l1_g2b.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_risk_l1_prediction.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_security_identity.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_stock_fact_observation.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_stock_fact_repository.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/contracts.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/state_model_set.py",
+        "backend/services/hmm_risk/observation_eligibility.py",
+        "backend/services/hmm_risk/b3_acceptance.py",
+        "backend/services/hmm_risk/b3_blocker_diagnostic.py",
+        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+        "backend/services/hmm_risk/b3_evidence_aggregation.py",
+        "backend/services/hmm_risk/b3_mixed_dimension.py",
+        "backend/services/hmm_risk/b3_remediation_diagnostic.py",
+        "backend/services/hmm_risk/b3_train_stability_diagnostic.py",
+        "backend/services/hmm_risk/b3_training.py",
+        "backend/services/hmm_risk/b3_transition_dwell.py",
+        "backend/services/hmm_risk/canonical_stock_fact_source.py",
+        "backend/services/hmm_risk/industry_pit_adapter.py",
+        "backend/services/hmm_risk/provider_absence.py",
+        "backend/services/hmm_risk/risk_l1_g2b.py",
+        "backend/services/hmm_risk/risk_l1_prediction.py",
+        "backend/services/hmm_risk/rotation_l1_gbdt.py",
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/services/hmm_risk/security_identity.py",
+        "backend/services/hmm_risk/stock_fact_observation.py",
+        "backend/services/hmm_risk/stock_fact_repository.py",
+        "scripts/hmm_risk/prepare_state_model_set.py",
+        "scripts/hmm_risk/aggregate_transition_dwell_evidence.py",
+        "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+        "scripts/hmm_risk/run_risk_l1_g2b.py",
+        "scripts/hmm_risk/run_risk_l1_product.py",
+        "backend/tests/hmm_risk/test_b3_training.py",
+        "backend/tests/hmm_risk/test_state_model_set.py",
+        "backend/tests/hmm_risk/test_b3_transition_dwell.py",
+        "backend/tests/hmm_risk/test_observation_eligibility.py",
+        "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+        "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+        "backend/tests/hmm_risk/test_provider_absence.py",
+        "backend/tests/hmm_risk/test_risk_l1_g2b.py",
+        "backend/tests/hmm_risk/test_risk_l1_prediction.py",
+        "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+        "backend/tests/hmm_risk/test_security_identity.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py",
+        "backend/tests/hmm_risk/test_stock_fact_repository.py",
+        "backend/services/hmm_risk/contracts.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/state_model_set.py",
+      "backend/services/hmm_risk/observation_eligibility.py",
+      "backend/services/hmm_risk/b3_acceptance.py",
+      "backend/services/hmm_risk/b3_blocker_diagnostic.py",
+      "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+      "backend/services/hmm_risk/b3_evidence_aggregation.py",
+      "backend/services/hmm_risk/b3_mixed_dimension.py",
+      "backend/services/hmm_risk/b3_remediation_diagnostic.py",
+      "backend/services/hmm_risk/b3_train_stability_diagnostic.py",
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/services/hmm_risk/b3_transition_dwell.py",
+      "backend/services/hmm_risk/canonical_stock_fact_source.py",
+      "backend/services/hmm_risk/industry_pit_adapter.py",
+      "backend/services/hmm_risk/provider_absence.py",
+      "backend/services/hmm_risk/risk_l1_g2b.py",
+      "backend/services/hmm_risk/risk_l1_prediction.py",
+      "backend/services/hmm_risk/rotation_l1_gbdt.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "scripts/hmm_risk/aggregate_transition_dwell_evidence.py",
+      "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+      "scripts/hmm_risk/run_risk_l1_g2b.py",
+      "scripts/hmm_risk/run_risk_l1_product.py",
+      "backend/tests/hmm_risk/test_b3_training.py",
+      "backend/tests/hmm_risk/test_state_model_set.py",
+      "backend/tests/hmm_risk/test_b3_transition_dwell.py",
+      "backend/tests/hmm_risk/test_observation_eligibility.py",
+      "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+      "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+      "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_risk_l1_g2b.py",
+      "backend/tests/hmm_risk/test_risk_l1_prediction.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_security_identity.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/services/hmm_risk/contracts.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/state_model_set.py",
+      "backend/services/hmm_risk/observation_eligibility.py",
+      "backend/services/hmm_risk/b3_acceptance.py",
+      "backend/services/hmm_risk/b3_blocker_diagnostic.py",
+      "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
+      "backend/services/hmm_risk/b3_evidence_aggregation.py",
+      "backend/services/hmm_risk/b3_mixed_dimension.py",
+      "backend/services/hmm_risk/b3_remediation_diagnostic.py",
+      "backend/services/hmm_risk/b3_train_stability_diagnostic.py",
+      "backend/services/hmm_risk/b3_training.py",
+      "backend/services/hmm_risk/b3_transition_dwell.py",
+      "backend/services/hmm_risk/canonical_stock_fact_source.py",
+      "backend/services/hmm_risk/industry_pit_adapter.py",
+      "backend/services/hmm_risk/provider_absence.py",
+      "backend/services/hmm_risk/risk_l1_g2b.py",
+      "backend/services/hmm_risk/risk_l1_prediction.py",
+      "backend/services/hmm_risk/rotation_l1_gbdt.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "scripts/hmm_risk/prepare_state_model_set.py",
+      "scripts/hmm_risk/aggregate_transition_dwell_evidence.py",
+      "scripts/hmm_risk/build_rotation_l1_input_bundle.py",
+      "scripts/hmm_risk/run_risk_l1_g2b.py",
+      "scripts/hmm_risk/run_risk_l1_product.py",
+      "backend/tests/hmm_risk/test_b3_training.py",
+      "backend/tests/hmm_risk/test_state_model_set.py",
+      "backend/tests/hmm_risk/test_b3_transition_dwell.py",
+      "backend/tests/hmm_risk/test_observation_eligibility.py",
+      "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+      "backend/tests/hmm_risk/test_industry_pit_adapter.py",
+      "backend/tests/hmm_risk/test_provider_absence.py",
+      "backend/tests/hmm_risk/test_risk_l1_g2b.py",
+      "backend/tests/hmm_risk/test_risk_l1_prediction.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_security_identity.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/services/hmm_risk/contracts.py"
+    ]
+  },
+  "first_seen_at": "2026-09-16T05:26:08.270724Z",
+  "fix_branch": null,
+  "fix_commit": "aefbe421ff9979d7349e6a45ace925cbfb9a597d",
+  "fixed_at": "2026-09-16T07:06:28Z",
+  "github_issue_number": 4845,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4845",
+  "last_seen_at": "2026-09-16T05:26:08.270724Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4867",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "rg -n state_model_set|prepare_state_model_set|b3_training|b3_d1_inactive_dimension backend/services/hmm_risk scripts/hmm_risk backend/tests/hmm_risk",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process at HEAD 4b018c99a imported backend.routers.hmm_risk, backend.routers.health, and the active HMM dependency chain from the BUG-1549 worktree; retired state_model_set, b3_training, b3_d1_inactive_dimension, and b3_mixed_dimension imports were absent",
+      "fresh Python process at final HEAD fbe47f7412e0995c8f07d78c280e5b17caad95cd imported backend.routers.hmm_risk, backend.routers.health, and 11 active HMM services from the BUG-1549 worktree; four retired B3/P6/D1 modules were absent",
+      "fresh Python process at final implementation HEAD 02f6127210d77d289582372c7e1658288321a1b4 imported backend.routers.hmm_risk, backend.routers.health, and 11 active HMM services from the BUG-1549 worktree"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1549\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1549",
+      "business_smoke_semantic": {
+        "contract_id": "openapi_document",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "19aef19c1fac6fd14c39c1006a55f383b49776621d952b30facbb01b0f0dada3",
+      "expected_identity": "aefbe421ff9979d7349e6a45ace925cbfb9a597d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-16T07:51:56.150856Z",
+      "mode": "read_only",
+      "observed_identity": "4872f33c58547e46e4780c3e1c92113180f43f96",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "09a49567df923c34610211a891e4345fa27c1748e992e2bb1a7ea1559940fe75",
+      "receipt_sha256": "0e8b8be0236afcb24ef699ff74949820666eaa54389d768669306b1a52c2be17",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "03dfd0b74c387fc097ce6902736d32e9369530838982d7d5efe72bf43d235411",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": true,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1549",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a1d29b2a29538758",
+    "recorded_at": "2026-09-16T07:09:37.268803Z",
+    "runtime_contract_digest": "19aef19c1fac6fd14c39c1006a55f383b49776621d952b30facbb01b0f0dada3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2c3a0f81152eeb1fa8fc1ffa3297099108bf90f8",
+    "source_merge_commit": "aefbe421ff9979d7349e6a45ace925cbfb9a597d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4867",
+    "validation_evidence": [
+      "PR #4867 CI verdict -> passed",
+      "python -m nox -s hmm_risk_pr_slice with CI changed-file classifier -> passed (228 passed)",
+      "python -m nox -s l0 -> passed (0 blocking findings)"
+    ],
+    "validation_evidence_digest": "fe91e51906fe150ea5080b152b5764462dd168e95b7e9368836d5bbd757ed429"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM terminal B3 P6 D1 chain remains in active source and test surface",
+  "trigger_condition": {
+    "fingerprint": "3ae31c4d8f95fd41d197721d",
+    "source_event_id": "FE-20260916-3ae31c4d8f95"
+  },
+  "validation_evidence": [
+    "PR #4867 CI verdict -> passed",
+    "python -m nox -s hmm_risk_pr_slice with CI changed-file classifier -> passed (228 passed)",
+    "python -m nox -s l0 -> passed (0 blocking findings)",
+    "post-restart-verify BUG-1549 backend-main expected aefbe421ff9979d7349e6a45ace925cbfb9a597d -> verified"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

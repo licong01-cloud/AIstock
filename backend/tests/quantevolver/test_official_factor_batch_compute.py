@@ -51,6 +51,56 @@ def _base_df():
     return pd.DataFrame({"close": [1.0, 2.0, 3.0, 4.0]}, index=idx)
 
 
+def test_batch_compute_config_preserves_explicit_direct_v2_universe_key() -> None:
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+
+    config = service._coerce_config(
+        {
+            "factor_data_dir": "/data/direct-v2/factors",
+            "qlib_bin_path": "/data/direct-v2/day",
+            "start_date": "2018-08-01",
+            "end_date": "2026-08-31",
+            "universe_key": "aistock_equity_pit_canonical_v2",
+        }
+    )
+
+    assert config.universe_key == "aistock_equity_pit_canonical_v2"
+
+
+def test_batch_compute_checks_universe_before_loading_base_data(monkeypatch, tmp_path) -> None:
+    class _Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [{"factor_name": "factor_a", "code_text": "result = 1"}]
+
+    class _UnavailableUniverse:
+        def metadata(self, **_kwargs):
+            raise RuntimeError("canonical PIT window is unavailable")
+
+    service = OfficialFactorBatchComputeService()
+    service._eligibility_service = _Eligibility()
+    service._universe_service = _UnavailableUniverse()
+
+    monkeypatch.setattr(official_batch_svc, "assert_wsl_runtime", lambda _operation: None)
+    monkeypatch.setattr(official_batch_svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path)
+    monkeypatch.setattr(
+        official_batch_svc.BacktestBaseDataMemoryCache,
+        "load_once",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("base data must not load before the universe preflight")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="canonical PIT window is unavailable"):
+        service.compute(
+            {
+                "factor_data_dir": str(tmp_path),
+                "start_date": "2018-08-01",
+                "end_date": "2026-08-31",
+                "universe_key": "aistock_equity_pit_canonical_v2",
+            }
+        )
+
+
 def test_base_data_memory_cache_reads_allowed_files_once(tmp_path):
     data_dir = tmp_path / "factor_data"
     data_dir.mkdir()
@@ -72,6 +122,147 @@ def test_base_data_memory_cache_reads_allowed_files_once(tmp_path):
     assert counts == {"h5": 1, "parquet": 1}
     assert cache.read_counts["daily_pv.h5"] == 1
     assert cache.get("daily_pv.h5").shape == (4, 1)
+    assert "sha256_16" not in cache.manifest()["files"]["daily_pv.h5"]
+
+
+def test_base_data_memory_cache_projects_margin_detail_to_next_trading_day(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    dates = pd.to_datetime(["2026-04-02", "2026-04-03", "2026-04-07", "2026-04-08"])
+    instruments = ["000001.SZ", "000002.SZ"]
+    daily_index = pd.MultiIndex.from_product(
+        [dates, instruments], names=["datetime", "instrument"]
+    )
+    daily = pd.DataFrame({"close": range(1, len(daily_index) + 1)}, index=daily_index)
+    margin_index = pd.MultiIndex.from_tuples(
+        [
+            (dates[0], "000001.SZ"),
+            (dates[0], "000002.SZ"),
+            (dates[1], "000001.SZ"),
+            (dates[2], "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    margin = pd.DataFrame(
+        {"md_rzye": [10.0, 20.0, 999.0, 30.0]}, index=margin_index
+    )
+    static = pd.DataFrame(
+        {
+            "md_rzye": [1000.0 + i for i in range(len(daily_index))],
+            "db_pb": [2.0 + i for i in range(len(daily_index))],
+        },
+        index=daily_index,
+    )
+    daily.to_hdf(data_dir / "daily_pv.h5", key="data")
+    margin.to_hdf(data_dir / "margin_detail.h5", key="data")
+    static.to_parquet(data_dir / "static_factors.parquet")
+
+    cache = BacktestBaseDataMemoryCache.load_once(
+        data_dir, "2026-04-03", "2026-04-07"
+    )
+
+    expected_margin = pd.DataFrame(
+        {"md_rzye": [10.0, 20.0, 999.0]},
+        index=pd.MultiIndex.from_tuples(
+            [
+                (dates[1], "000001.SZ"),
+                (dates[1], "000002.SZ"),
+                (dates[2], "000001.SZ"),
+            ],
+            names=["datetime", "instrument"],
+        ),
+    )
+    pd.testing.assert_frame_equal(cache.get("margin_detail.h5"), expected_margin)
+
+    actual_static = cache.get("static_factors.parquet")
+    assert actual_static.loc[(dates[1], "000001.SZ"), "md_rzye"] == 10.0
+    assert actual_static.loc[(dates[1], "000002.SZ"), "md_rzye"] == 20.0
+    assert actual_static.loc[(dates[2], "000001.SZ"), "md_rzye"] == 999.0
+    assert pd.isna(actual_static.loc[(dates[2], "000002.SZ"), "md_rzye"])
+    pd.testing.assert_series_equal(
+        actual_static["db_pb"], static.loc[actual_static.index, "db_pb"]
+    )
+    pd.testing.assert_frame_equal(pd.read_hdf(data_dir / "margin_detail.h5"), margin)
+
+
+def test_offline_code_text_executor_observes_projected_margin_detail(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    dates = pd.to_datetime(["2026-04-03", "2026-04-07", "2026-04-08"])
+    daily_index = pd.MultiIndex.from_product(
+        [dates, ["000001.SZ"]], names=["datetime", "instrument"]
+    )
+    margin_index = pd.MultiIndex.from_tuples(
+        [(dates[0], "000001.SZ"), (dates[1], "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    pd.DataFrame({"close": [1.0, 2.0, 3.0]}, index=daily_index).to_hdf(
+        data_dir / "daily_pv.h5", key="data"
+    )
+    pd.DataFrame({"md_rzye": [10.0, 999.0]}, index=margin_index).to_hdf(
+        data_dir / "margin_detail.h5", key="data"
+    )
+    cache = BacktestBaseDataMemoryCache.load_once(
+        data_dir, "2026-04-03", "2026-04-07"
+    )
+    code_text = """
+import pandas as pd
+margin = pd.read_hdf('margin_detail.h5')
+result = margin[['md_rzye']].rename(columns={'md_rzye': 'value'})
+"""
+
+    result = OfflineCodeTextFactorExecutor(cache).compute_factor(
+        "factor_margin", code_text
+    )
+
+    assert result.success is True
+    expected_index = pd.MultiIndex.from_tuples(
+        [(dates[1], "000001.SZ")], names=["datetime", "instrument"]
+    )
+    pd.testing.assert_index_equal(result.dataframe.index, expected_index)
+    assert result.dataframe["value"].tolist() == [10.0]
+
+
+def test_margin_projection_requires_canonical_daily_calendar(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-04-03"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    pd.DataFrame({"md_rzye": [10.0]}, index=index).to_hdf(
+        data_dir / "margin_detail.h5", key="data"
+    )
+
+    with pytest.raises(RuntimeError, match="requires daily_pv.h5 trading calendar"):
+        BacktestBaseDataMemoryCache.load_once(
+            data_dir,
+            "2026-04-03",
+            "2026-04-07",
+            allowed_files=("margin_detail.h5",),
+        )
+
+
+def test_static_margin_columns_require_projected_margin_source(tmp_path):
+    data_dir = tmp_path / "factor_data"
+    data_dir.mkdir()
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-04-07"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    pd.DataFrame({"close": [1.0]}, index=index).to_hdf(
+        data_dir / "daily_pv.h5", key="data"
+    )
+    pd.DataFrame({"md_rzye": [999.0]}, index=index).to_parquet(
+        data_dir / "static_factors.parquet"
+    )
+
+    with pytest.raises(RuntimeError, match="require margin_detail.h5"):
+        BacktestBaseDataMemoryCache.load_once(
+            data_dir,
+            "2026-04-07",
+            "2026-04-07",
+        )
 
 
 def test_offline_code_text_executor_redirects_pandas_reads_to_memory(tmp_path):
@@ -862,6 +1053,7 @@ def test_drain_success_frames_keeps_factor_success_when_parent_metric_fails(monk
         end_date="2026-04-30",
         factor_ids={},
         batch_id="batch",
+        task_id="task",
     )
 
     assert success_delta == 1
@@ -875,6 +1067,7 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
     from backend.services.quantevolver import official_factor_batch_compute_service as svc
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
 
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path / "checkpoints")
     factors = [
         {"factor_name": "factor_a", "code_text": "result = 1"},
         {"factor_name": "factor_b", "code_text": "result = 1"},
@@ -934,7 +1127,13 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
         "_resource_snapshot",
         lambda *args, **kwargs: ResourceSnapshot(100.0, 80.0, 0.0, 70000.0, 90.0),
     )
-    monkeypatch.setattr(engine, "prepare_shared_context", lambda **kwargs: {"ctx": True})
+    shared_context_calls: list[dict[str, object]] = []
+
+    def _prepare_shared_context(**kwargs):
+        shared_context_calls.append(kwargs)
+        return {"ctx": True}
+
+    monkeypatch.setattr(engine, "prepare_shared_context", _prepare_shared_context)
     monkeypatch.setattr(engine, "compute_single_factor_metrics", lambda *args, **kwargs: {"metrics": {}})
     service._compute_batch_frames = _compute_batch_frames
 
@@ -947,9 +1146,18 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
         "workers": 2,
         "timeout_per_factor": 1800,
         "expected_factor_count": 4,
+        "universe_key": "aistock_equity_pit_canonical_v2",
     })
 
     assert compute_calls == [["factor_a", "factor_b"]]
+    assert shared_context_calls == [
+        {
+            "qlib_bin_path": None,
+            "start_date": "2018-08-01",
+            "end_date": "2026-04-30",
+            "universe_key": "aistock_equity_pit_canonical_v2",
+        }
+    ]
     assert result["success"] is False
     assert result["fail_count"] == 4
     assert result["runtime_validation"]["checks"]["resource_gate_ok"] is False
@@ -964,6 +1172,7 @@ def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
     from backend.services.quantevolver import qe_eval_v2_qlib_reader as qlib_reader
 
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path / "checkpoints")
     factors = [
         {"factor_name": "factor_a", "code_text": "result = 1"},
         {"factor_name": "factor_b", "code_text": "result = 1"},
@@ -1070,6 +1279,7 @@ def test_compute_reuses_worker_precomputed_metrics(monkeypatch, tmp_path):
     from backend.services.quantevolver import official_factor_batch_compute_service as svc
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
 
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path / "checkpoints")
     factors = [
         {"factor_name": "factor_a", "code_text": "result = 1"},
         {"factor_name": "factor_b", "code_text": "result = 1"},
@@ -1161,6 +1371,7 @@ def test_compute_records_explicit_metric_precompute_fallback(monkeypatch, tmp_pa
     from backend.services.quantevolver import official_factor_batch_compute_service as svc
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
 
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path / "checkpoints")
     factors = [{"factor_name": "factor_a", "code_text": "result = 1"}]
 
     class _Eligibility:

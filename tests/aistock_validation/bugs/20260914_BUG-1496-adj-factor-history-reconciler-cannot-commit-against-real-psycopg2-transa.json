@@ -1,0 +1,249 @@
+{
+  "actual": "BUG-1482 full-market reconciliation reaches apply_staged, but assigning connection.autocommit=False while a transaction is active raises psycopg2.ProgrammingError: set_session cannot be used inside a transaction. Reproduced in existing DEV with 000032.SZ after stable double-read; dry-run passes, write rolls back. Fix the transaction boundary without weakening stable-read, hash, coverage, atomic replace, or downstream invalidation contracts; add a real-shape regression test, validate DEV write and idempotency, then apply the already-authorized full-market production reconciliation. No QE dataset/profile changes.",
+  "allowed_write_scope": [
+    "backend/services/adj_factor_history_reconciler.py",
+    "backend/tests/services/test_adj_factor_history_reconciler.py",
+    "tests/aistock_validation/bugs/20260914_BUG-1496-adj-factor-history-reconciler-cannot-commit-against-real-psycopg2-transa.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1496",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-14T05:29:00.601090Z",
+  "description": "BUG-1482 full-market reconciliation reaches apply_staged, but assigning connection.autocommit=False while a transaction is active raises psycopg2.ProgrammingError: set_session cannot be used inside a transaction. Reproduced in existing DEV with 000032.SZ after stable double-read; dry-run passes, write rolls back. Fix the transaction boundary without weakening stable-read, hash, coverage, atomic replace, or downstream invalidation contracts; add a real-shape regression test, validate DEV write and idempotency, then apply the already-authorized full-market production reconciliation. No QE dataset/profile changes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260914-eb8b1c01f4b8",
+      "timestamp": "2026-09-14T05:29:00.601065Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py"
+    ],
+    "changed_files_source": "task_scope_expansion",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py"
+    ]
+  },
+  "first_seen_at": "2026-09-14T05:29:00.601090Z",
+  "fix_branch": null,
+  "fix_commit": "393ed9752e80d0b490cddb2508a42fd129466f6c",
+  "fixed_at": "2026-09-14T08:33:44Z",
+  "github_issue_number": 4694,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4694",
+  "last_seen_at": "2026-09-14T05:29:00.601090Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4710",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/health",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python -I fresh process imported backend.services.adj_factor_history_reconciler and asserted retry contract -> passed",
+      "python -I fresh import backend.services.adj_factor_history_reconciler -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1496",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ec60e5fe6448bf69",
+    "recorded_at": "2026-09-14T08:34:56.853109Z",
+    "runtime_contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "39b496f2c2ea38a946e453fb1831f5a09ad52417",
+    "source_merge_commit": "393ed9752e80d0b490cddb2508a42fd129466f6c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4710",
+    "validation_evidence": [
+      "validation-receipt: id=6e7291f1b9cd91d8 commit=39b496f2c2ea38a946e453fb1831f5a09ad52417 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -q` result=`19 passed`",
+      "validation-receipt: id=c4ef614c7fb8f6c7 commit=39b496f2c2ea38a946e453fb1831f5a09ad52417 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed-files` result=`passed with 0 findings`"
+    ],
+    "validation_evidence_digest": "444c12c0371faee06a77c0a0638d05caf0ba7ecce1bec882ba14de475168e463"
+  },
+  "status": "fixed_source_pending_user_restart",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Adj-factor history reconciler cannot commit against real psycopg2 transaction",
+  "trigger_condition": {
+    "fingerprint": "eb8b1c01f4b8b548a9b63100",
+    "source_event_id": "FE-20260914-eb8b1c01f4b8"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=6e7291f1b9cd91d8 commit=39b496f2c2ea38a946e453fb1831f5a09ad52417 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/services/test_adj_factor_history_reconciler.py backend/tests/ingestion/test_tdx_scheduler_adj_factor.py -q` result=`19 passed`",
+    "validation-receipt: id=c4ef614c7fb8f6c7 commit=39b496f2c2ea38a946e453fb1831f5a09ad52417 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- changed-files` result=`passed with 0 findings`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

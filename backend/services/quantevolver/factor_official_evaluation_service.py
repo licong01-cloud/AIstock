@@ -387,6 +387,7 @@ class FactorOfficialEvaluationService:
         node_id: str | None = None,
     ) -> Dict[str, Any]:
         from .config_composer import ConfigComposer
+        from ..canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
         from .official_factor_batch_compute_service import (
             OFFICIAL_FACTOR_WINDOW_END,
             OFFICIAL_FACTOR_WINDOW_START,
@@ -403,9 +404,18 @@ class FactorOfficialEvaluationService:
         if resolved_start > resolved_end:
             raise ValueError(f"invalid official factor window: {resolved_start} > {resolved_end}")
 
-        cfg = ConfigComposer()._fetch_workspace_config(node_id)
+        effective_node_id = node_id or _DEFAULT_DISPATCH_NODE_ID
+        from .qe_active_dataset_profile import resolve_active_dataset_node_binding
+
+        active_binding = resolve_active_dataset_node_binding(node_id=effective_node_id)
+        cfg = active_binding if active_binding is not None else ConfigComposer()._fetch_workspace_config(node_id)
         resolved_factor_data_dir = factor_data_dir or cfg.get("factor_data_dir")
         resolved_qlib_bin_path = qlib_bin_path or cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
+        resolved_universe_key = (
+            CANONICAL_PIT_UNIVERSE_KEY
+            if active_binding is not None
+            else str(cfg.get("universe_key") or "").strip() or None
+        )
         if not resolved_factor_data_dir:
             raise ValueError("failed to resolve QE factor_data_dir for official full compute")
 
@@ -421,7 +431,8 @@ class FactorOfficialEvaluationService:
             timeout_per_factor=timeout_per_factor,
             force=force,
             qlib_bin_path=str(resolved_qlib_bin_path) if resolved_qlib_bin_path else None,
-            node_id=node_id or _DEFAULT_DISPATCH_NODE_ID,
+            **({"universe_key": resolved_universe_key} if resolved_universe_key else {}),
+            node_id=effective_node_id,
         )
         ok = bool(result.get("ok", True))
         return {
@@ -436,6 +447,9 @@ class FactorOfficialEvaluationService:
             "as_of_date": resolved_end,
             "factor_data_dir": str(resolved_factor_data_dir),
             "qlib_bin_path": str(resolved_qlib_bin_path) if resolved_qlib_bin_path else None,
+            "universe_key": resolved_universe_key,
+            "active_profile_generation": (active_binding or {}).get("generation"),
+            "active_profile_sha256": (active_binding or {}).get("profile_sha256"),
             "cache_source": "official_offline_backtest_factor_data",
             "data_source_mode": "official_offline_backtest_factor_data",
             "code_source": "code_text",

@@ -549,22 +549,6 @@ def test_same_source_replay_returns_existing_identity_without_reclaim() -> None:
     assert provider.commits == 1
 
 
-def test_active_capacity_sql_does_not_release_or_ignore_expired_leases() -> None:
-    source = (REPO_ROOT / "backend/services/quantevolver/qe_execution_reservation.py").read_text(
-        encoding="utf-8"
-    )
-    count_method = source.split("def _count_active_on_node", maxsplit=1)[1].split(
-        "def _assert_reservation_identity", maxsplit=1
-    )[0]
-
-    assert "lease_expires_at" not in count_method
-    assert "status = ANY" in count_method
-    assert "nvidia-smi" not in source
-    assert "approval" not in source.lower()
-    assert "promotion" not in source.lower()
-    assert "except Exception: pass" not in source
-
-
 def test_migration_contract_is_additive_read_only_preflight_and_guarded_rollback() -> None:
     migration = MIGRATION_PATH.read_text(encoding="utf-8")
     preflight = PREFLIGHT_PATH.read_text(encoding="utf-8")

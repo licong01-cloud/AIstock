@@ -1,0 +1,294 @@
+{
+  "actual": "MemPalace cross-tool coordination is retired, and active standards and client routes no longer require it, but the May-2026 cross_tool_review_dispatch script, its dedicated tests, and current-path protocol documents remain discoverable as active assets. Retire only the dead dispatcher/test and clearly archive historical protocol material without changing the unrelated AIstock MCP validation server or historical BUG evidence.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260906_BUG-1379-retired-mempalace-cross-tool-dispatcher-remains-in-active-repository-pat.json",
+    "scripts/cross_tool_review_dispatch.py",
+    "backend/tests/test_cross_tool_review_dispatch.py",
+    "docs/process/cross_tool_communication_protocol_v2_20260511.md",
+    "docs/process/cross_tool_communication_protocol_v3_20260511.md",
+    "docs/process/cross_tool_review_protocol_20260510.md",
+    "docs/process/dual_party_verify_20260510.md",
+    "docs/discussion/cross_tool_channel_protocol_20260510.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/test_validation_module_ownership.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1379",
+  "closed_at": "2026-09-06T08:56:37Z",
+  "closure_requirements": [
+    "Remove the retired MemPalace-only dispatcher and its dedicated test from active code paths.",
+    "Mark the five primary legacy cross-tool protocol documents as RETIRED while preserving their historical content and paths.",
+    "Confirm current AIstock standards, client routes, and unrelated AIstock MCP validation behavior are unchanged.",
+    "Run the direct retirement contract smoke and validation_module_registry_l0.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-06T05:52:20.226542Z",
+  "description": "MemPalace cross-tool coordination is retired, and active standards and client routes no longer require it, but the May-2026 cross_tool_review_dispatch script, its dedicated tests, and current-path protocol documents remain discoverable as active assets. Retire only the dead dispatcher/test and clearly archive historical protocol material without changing the unrelated AIstock MCP validation server or historical BUG evidence.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260906-f35a2ebc42fe",
+      "timestamp": "2026-09-06T05:52:20.226542Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Retired MemPalace-only executable/test assets are absent from active code paths, legacy protocols are visibly historical, and current AIstock MCP validation behavior remains unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/test_cross_tool_review_dispatch.py",
+      "backend/tests/test_validation_module_ownership.py",
+      "docs/discussion/cross_tool_channel_protocol_20260510.md",
+      "docs/process/cross_tool_communication_protocol_v2_20260511.md",
+      "docs/process/cross_tool_communication_protocol_v3_20260511.md",
+      "docs/process/cross_tool_review_protocol_20260510.md",
+      "docs/process/dual_party_verify_20260510.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/cross_tool_review_dispatch.py",
+      "tests/aistock_validation/bugs/20260906_BUG-1379-retired-mempalace-cross-tool-dispatcher-remains-in-active-repository-pat.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/test_cross_tool_review_dispatch.py",
+      "backend/tests/test_validation_module_ownership.py",
+      "docs/discussion/cross_tool_channel_protocol_20260510.md",
+      "docs/process/cross_tool_communication_protocol_v2_20260511.md",
+      "docs/process/cross_tool_communication_protocol_v3_20260511.md",
+      "docs/process/cross_tool_review_protocol_20260510.md",
+      "docs/process/dual_party_verify_20260510.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/cross_tool_review_dispatch.py",
+      "tests/aistock_validation/bugs/20260906_BUG-1379-retired-mempalace-cross-tool-dispatcher-remains-in-active-repository-pat.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/cross_tool_review_dispatch.py",
+      "backend/tests/test_cross_tool_review_dispatch.py",
+      "docs/process/cross_tool_communication_protocol_v2_20260511.md",
+      "docs/process/cross_tool_communication_protocol_v3_20260511.md",
+      "docs/process/cross_tool_review_protocol_20260510.md",
+      "docs/process/dual_party_verify_20260510.md",
+      "docs/discussion/cross_tool_channel_protocol_20260510.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/test_validation_module_ownership.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/cross_tool_review_dispatch.py",
+      "backend/tests/test_cross_tool_review_dispatch.py",
+      "docs/process/cross_tool_communication_protocol_v2_20260511.md",
+      "docs/process/cross_tool_communication_protocol_v3_20260511.md",
+      "docs/process/cross_tool_review_protocol_20260510.md",
+      "docs/process/dual_party_verify_20260510.md",
+      "docs/discussion/cross_tool_channel_protocol_20260510.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/test_validation_module_ownership.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ]
+  },
+  "first_seen_at": "2026-09-06T05:52:20.226542Z",
+  "fix_branch": null,
+  "fix_commit": "f6f6e012a4afb701f77f9a3ef18bacf38d3a2045",
+  "fixed_at": "2026-09-06T08:56:37Z",
+  "github_issue_number": 4349,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4349",
+  "last_seen_at": "2026-09-06T05:52:20.226542Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4356",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -c \"from pathlib import Path; print(Path('scripts/cross_tool_review_dispatch.py').exists(), Path('backend/tests/test_cross_tool_review_dispatch.py').exists())\"",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1379",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7918af9bd226c8b2",
+    "recorded_at": "2026-09-06T09:00:05.258884Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "aa001d53dba5f9eb9008933fb7f15087d4db7e37",
+    "source_merge_commit": "f6f6e012a4afb701f77f9a3ef18bacf38d3a2045",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4356",
+    "validation_evidence": [
+      "rtk nox -s guardrail_changed_files -> passed; findings=1 blocking=0 mapped=3 unmapped=0 ambiguous=0",
+      "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14 mapped"
+    ],
+    "validation_evidence_digest": "b4980f3592dedf6f663f0fa1a3eefcfecc4b002ac8ca619367fbf8d9c7957265"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Retired MemPalace cross-tool dispatcher remains in active repository paths",
+  "trigger_condition": {
+    "fingerprint": "f35a2ebc42fe9004e4790246",
+    "source_event_id": "FE-20260906-f35a2ebc42fe"
+  },
+  "validation_evidence": [
+    "rtk nox -s guardrail_changed_files -> passed; findings=1 blocking=0 mapped=3 unmapped=0 ambiguous=0",
+    "rtk nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14 mapped"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

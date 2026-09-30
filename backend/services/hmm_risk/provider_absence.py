@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from .state_model_set import StateModelSetError, canonical_sha256
+from .contracts import StateModelSetError, canonical_sha256
 
 PROVIDER_ABSENCE_SCHEMA = "hmm_risk_provider_absence_manifest_v1"
 PROVIDER_AUDIT_SCHEMA = "hmm_risk_provider_absence_audit_receipt_v1"
