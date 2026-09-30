@@ -79,8 +79,8 @@
   },
   "first_seen_at": "2026-09-30T21:19:58.854559Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "46f17a242852e2a6d7132157e7d2a7efb9513002",
+  "fixed_at": "2026-09-30T21:38:05Z",
   "github_issue_number": 5170,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5170",
   "last_seen_at": "2026-09-30T21:19:58.854559Z",
@@ -88,6 +88,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5171",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -113,6 +114,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -124,7 +126,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1644",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "57e9b5f336f9d417",
+    "recorded_at": "2026-09-30T21:38:56.213006Z",
+    "runtime_contract_digest": "91ff56163aa0fb199586a35c8c363a30424f5258475d30b5f7381897fed714fa",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6bdf80bf848198eaa25776cc507e385f62c4bbd9",
+    "source_merge_commit": "46f17a242852e2a6d7132157e7d2a7efb9513002",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5171",
+    "validation_evidence": [
+      "validation-receipt: id=5166bf51470834a4 commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice` result=`passed; 29 passed`",
+      "validation-receipt: id=489723a00a9fa5ac commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+      "validation-receipt: id=9bd7fb32fea72a20 commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/security_identity.py backend/tests/hmm_risk/test_security_identity.py` result=`passed`",
+      "validation-receipt: id=6cf1649e8ab56b66 commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/security_identity.py backend/tests/hmm_risk/test_security_identity.py` result=`passed`",
+      "validation-receipt: id=a4ef42d7d848a1f0 commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "13c42025b8ba68087d73b0b204e42ab4cb03a651ddcc69d5ca9722916035e4c8"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -133,6 +160,13 @@
     "fingerprint": "979dbc386fe48aa385468a63",
     "source_event_id": "FE-20260930-979dbc386fe4"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5166bf51470834a4 commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice` result=`passed; 29 passed`",
+    "validation-receipt: id=489723a00a9fa5ac commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+    "validation-receipt: id=9bd7fb32fea72a20 commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/security_identity.py backend/tests/hmm_risk/test_security_identity.py` result=`passed`",
+    "validation-receipt: id=6cf1649e8ab56b66 commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/security_identity.py backend/tests/hmm_risk/test_security_identity.py` result=`passed`",
+    "validation-receipt: id=a4ef42d7d848a1f0 commit=6bdf80bf848198eaa25776cc507e385f62c4bbd9 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
