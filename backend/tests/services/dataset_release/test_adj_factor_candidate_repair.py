@@ -5,8 +5,102 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from backend.services.dataset_release import adj_factor_candidate_repair as repair
+from scripts import repair_qe_adj_factor_candidate as cli
+
+
+def test_plain_path_check_rejects_junction_before_resolution(tmp_path, monkeypatch):
+    linked = tmp_path / "linked"
+    monkeypatch.setattr(Path, "is_junction", lambda path: path == linked)
+    with pytest.raises(repair.AdjFactorCandidateRepairError, match="link or junction"):
+        repair._assert_plain_path_chain(linked, label="candidate")
+
+
+def test_resume_rejects_tampered_canonical_receipt(tmp_path):
+    path = tmp_path / "receipt.json"
+    repair.write_canonical_json_atomic(path, {"schema_version": "test", "canonical_sha256": "0" * 64})
+    with pytest.raises(repair.AdjFactorCandidateRepairError, match="canonical hash"):
+        cli._load_json(path)
+
+
+def test_cached_success_rejects_drift_and_outside_artifacts(tmp_path):
+    root = tmp_path / "candidate"
+    root.mkdir()
+    path = root / "data.bin"
+    path.write_bytes(b"old")
+    receipt = {"path": str(path), "size": 3, "sha256": repair.sha256_file(path)}
+    cli._verify_cached_files(receipt, candidate=root)
+    path.write_bytes(b"new")
+    with pytest.raises(repair.AdjFactorCandidateRepairError, match="identity drift"):
+        cli._verify_cached_files(receipt, candidate=root)
+    with pytest.raises(repair.AdjFactorCandidateRepairError, match="outside candidate"):
+        cli._verify_cached_files({**receipt, "sha256": repair.sha256_file(path)}, candidate=root / "other")
+
+
+def test_active_profile_binding_is_detected_in_nested_node_paths(tmp_path):
+    path = tmp_path / "candidate"
+    assert cli._references_candidate({"nodes": [{"root": str(path)}]}, path)
+    assert not cli._references_candidate({"nodes": [{"root": str(path / "different")}]}, path)
+
+
+def test_parallel_connections_import_one_readonly_repeatable_snapshot(monkeypatch):
+    calls = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return "aistock", "on"
+
+    class Connection:
+        def set_session(self, **kwargs):
+            calls.append(kwargs)
+
+        def cursor(self):
+            return Cursor()
+
+    connection = Connection()
+    monkeypatch.setattr(cli, "_db_config", lambda _: {})
+    monkeypatch.setattr(cli.psycopg2, "connect", lambda **_: connection)
+    assert cli._connect_readonly(Path("unused"), snapshot="0001-0002-1") is connection
+    assert calls[0] == {"isolation_level": "REPEATABLE READ", "readonly": True, "autocommit": False}
+    assert calls[1] == ("SET TRANSACTION SNAPSHOT %s", ("0001-0002-1",))
+
+
+def test_scan_uses_pit_strategy_pool_not_benchmark_provider(tmp_path, monkeypatch):
+    from datetime import date
+
+    baseline = tmp_path / "baseline"
+    for name, frequency in [("daily_bin_candidate", "day"), ("minute_bin_candidate", "1min")]:
+        root = baseline / "components" / name
+        calendar = root / "calendars" / f"{frequency}.txt"
+        calendar.parent.mkdir(parents=True)
+        calendar.write_text("2026-08-31\n" if frequency == "day" else "2026-08-31 09:31:00\n")
+        _make_feature(root, "000001.SZ", frequency, [1.0])
+        _make_feature(root, "000300.SH", frequency, [1.0])
+    pool = baseline / "components/daily_bin_candidate/instruments/stock_universe.txt"
+    pool.parent.mkdir()
+    pool.write_text("000001.SZ\t2026-08-31\t2026-08-31\n")
+
+    def query(_connection, symbols, *_args):
+        assert symbols == ("000001.SZ",)
+        return {"000001.SZ": [("2026-08-31", 1.0)]}
+
+    monkeypatch.setattr(repair, "_query_adj_rows", query)
+    receipt = repair.scan_inventory(connection=None, baseline_root=baseline,
+                                    start=date(2026, 8, 31), cutoff=date(2026, 8, 31),
+                                    production_job_id="job", production_job_snapshot_sha256="1" * 64)
+    assert receipt["baseline_daily_symbol_count"] == 1
+    assert receipt["affected_symbol_count"] == 0
 
 
 def _write_bin(path: Path, start: int, values: list[float]) -> None:
@@ -98,6 +192,9 @@ def test_copy_on_write_clone_links_unchanged_and_omits_mutable(tmp_path: Path) -
     mutable = baseline / "components" / "daily_bin_candidate" / "features" / "000001.sz" / "factor.day.bin"
     mutable.parent.mkdir(parents=True)
     mutable.write_bytes(b"factor")
+    stale_report = baseline / "reports" / "adj_factor_bin_repair_receipt.json"
+    stale_report.parent.mkdir()
+    stale_report.write_text("old repair")
     inventory_unsigned = {
         "schema_version": repair.INVENTORY_SCHEMA,
         "affected_symbol_count": 1,
@@ -117,6 +214,7 @@ def test_copy_on_write_clone_links_unchanged_and_omits_mutable(tmp_path: Path) -
     assert receipt["linked_file_count"] == 1
     assert os.path.samefile(unchanged, candidate / unchanged.relative_to(baseline))
     assert not (candidate / mutable.relative_to(baseline)).exists()
+    assert not (candidate / stale_report.relative_to(baseline)).exists()
 
 
 def test_rebuild_daily_h5_updates_only_affected_rows(tmp_path: Path) -> None:

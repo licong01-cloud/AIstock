@@ -21,6 +21,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from backend.services.dataset_release.adj_factor_candidate_repair import (  # noqa: E402
+    _assert_plain_path_chain,
     AdjFactorCandidateRepairError,
     build_repair_receipt,
     clone_baseline_copy_on_write,
@@ -50,7 +51,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", type=date.fromisoformat, default=date(2018, 8, 1))
     parser.add_argument("--cutoff", type=date.fromisoformat, default=date(2026, 8, 31))
     parser.add_argument("--env-file", type=Path, default=REPOSITORY_ROOT / ".env")
-    parser.add_argument("--max-workers", type=int, default=4)
+    parser.add_argument("--max-workers", type=int, choices=range(1, 17), default=4)
     parser.add_argument("--resume", action="store_true")
     return parser
 
@@ -74,10 +75,12 @@ def _db_config(path: Path) -> dict[str, Any]:
     }
 
 
-def _connect_readonly(path: Path):
+def _connect_readonly(path: Path, *, snapshot: str | None = None):
     connection = psycopg2.connect(**_db_config(path))
-    connection.set_session(readonly=True, autocommit=True)
+    connection.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
     with connection.cursor() as cursor:
+        if snapshot is not None:
+            cursor.execute("SET TRANSACTION SNAPSHOT %s", (snapshot,))
         cursor.execute("SELECT current_database(),current_setting('transaction_read_only')")
         database, read_only = cursor.fetchone()
     if database != "aistock" or read_only != "on":
@@ -117,12 +120,15 @@ def _verify_job(connection: Any, job_id: str, expected_snapshot: str) -> dict[st
 
 
 def _load_json(path: Path) -> Mapping[str, Any]:
+    _assert_plain_path_chain(path, label="JSON artifact")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AdjFactorCandidateRepairError(f"JSON artifact is unreadable: {path}") from exc
     if not isinstance(value, Mapping):
         raise AdjFactorCandidateRepairError(f"JSON artifact root differs: {path}")
+    if "canonical_sha256" in value and value["canonical_sha256"] != _canonical_payload(value)["canonical_sha256"]:
+        raise AdjFactorCandidateRepairError(f"JSON artifact canonical hash differs: {path}")
     return value
 
 
@@ -130,6 +136,34 @@ def _canonical_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     unsigned = dict(value)
     unsigned.pop("canonical_sha256", None)
     return {**unsigned, "canonical_sha256": sha256_bytes(canonical_json_bytes(unsigned))}
+
+
+def _verify_cached_files(value: Any, *, candidate: Path) -> None:
+    """Cached stage success never substitutes for the actual artifact readback."""
+    if isinstance(value, Mapping):
+        if {"path", "sha256", "size"}.issubset(value):
+            path = Path(str(value["path"]))
+            _assert_plain_path_chain(path, label="cached artifact")
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(candidate) or not resolved.is_file():
+                raise AdjFactorCandidateRepairError("cached artifact is outside candidate")
+            if resolved.stat().st_size != value["size"] or sha256_file(resolved) != value["sha256"]:
+                raise AdjFactorCandidateRepairError("cached artifact identity drift")
+        for item in value.values():
+            _verify_cached_files(item, candidate=candidate)
+    elif isinstance(value, list):
+        for item in value:
+            _verify_cached_files(item, candidate=candidate)
+
+
+def _references_candidate(value: Any, candidate: Path) -> bool:
+    if isinstance(value, str):
+        return value.replace("\\", "/").rstrip("/").casefold() == candidate.as_posix().casefold()
+    if isinstance(value, Mapping):
+        return any(_references_candidate(item, candidate) for item in value.values())
+    if isinstance(value, list):
+        return any(_references_candidate(item, candidate) for item in value)
+    return False
 
 
 def _write_state(path: Path, *, status: str, stages: Mapping[str, Any], error: str | None = None) -> None:
@@ -151,6 +185,7 @@ def _write_state(path: Path, *, status: str, stages: Mapping[str, Any], error: s
 
 
 def _require_new_or_resume(candidate: Path, *, resume: bool) -> Path:
+    _assert_plain_path_chain(candidate, label="candidate root")
     resolved = candidate.expanduser().resolve(strict=False)
     if resume:
         if not resolved.is_dir() or not (resolved / "reports" / "adj_factor_build_state.json").is_file():
@@ -164,11 +199,20 @@ def _require_new_or_resume(candidate: Path, *, resume: bool) -> Path:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    _assert_plain_path_chain(args.baseline_root, label="baseline root")
+    _assert_plain_path_chain(args.active_profile, label="active profile")
     baseline = args.baseline_root.expanduser().resolve(strict=True)
+    candidate_location = args.candidate_root.expanduser().resolve(strict=False)
+    if candidate_location.parent != baseline.parent or candidate_location == baseline:
+        raise AdjFactorCandidateRepairError("baseline and candidate must be different siblings")
+    if args.start > args.cutoff:
+        raise AdjFactorCandidateRepairError("repair date interval is inverted")
+    active_profile = args.active_profile.expanduser().resolve(strict=True)
+    if _references_candidate(_load_json(active_profile), candidate_location):
+        raise AdjFactorCandidateRepairError("candidate is referenced by active profile")
     candidate = _require_new_or_resume(args.candidate_root, resume=bool(args.resume))
     if candidate.parent != baseline.parent or candidate == baseline:
         raise AdjFactorCandidateRepairError("baseline and candidate must be different siblings on X drive")
-    active_profile = args.active_profile.expanduser().resolve(strict=True)
     active_profile_sha = sha256_file(active_profile)
     reports = candidate / "reports"
     reports.mkdir(parents=True, exist_ok=True)
@@ -183,6 +227,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     connection = _connect_readonly(args.env_file)
     try:
         job = _verify_job(connection, args.production_job_id, args.production_job_snapshot_sha256)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_export_snapshot()")
+            snapshot = cursor.fetchone()[0]
         job_path = reports / "adj_factor_production_job_authority.json"
         if not job_path.exists():
             write_canonical_json_atomic(job_path, _canonical_payload({"schema_version": "qe_adj_factor_production_job_authority_v1", **job}))
@@ -191,6 +238,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if inventory_path.exists():
             inventory = _load_json(inventory_path)
             validate_inventory(inventory)
+            if any(inventory.get(key) != expected for key, expected in {
+                "baseline_root": str(baseline), "start": args.start.isoformat(),
+                "cutoff": args.cutoff.isoformat(), "production_job_id": args.production_job_id,
+                "production_job_snapshot_sha256": args.production_job_snapshot_sha256,
+            }.items()):
+                raise AdjFactorCandidateRepairError("resume inventory request identity differs")
         else:
             inventory = scan_inventory(
                 connection=connection,
@@ -232,6 +285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         bin_path = reports / "adj_factor_bin_repair_receipt.json"
         if bin_path.exists():
             bins = _load_json(bin_path)
+            _verify_cached_files(bins, candidate=candidate)
         else:
             bins = _canonical_payload(
                 {
@@ -243,7 +297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         inventory=inventory,
                         start=args.start,
                         cutoff=args.cutoff,
-                        connection_factory=lambda: _connect_readonly(args.env_file),
+                        connection_factory=lambda: _connect_readonly(args.env_file, snapshot=snapshot),
                         max_workers=args.max_workers,
                     ),
                 }
@@ -263,6 +317,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         daily_h5_path = reports / "adj_factor_daily_h5_repair_receipt.json"
         daily_h5_target = candidate / "components" / "factor_h5_static_candidate_v2" / "daily_pv.h5"
         daily_h5 = _load_json(daily_h5_path) if daily_h5_path.exists() and daily_h5_target.is_file() else {}
+        _verify_cached_files(daily_h5, candidate=candidate)
         if daily_h5.get("correction_source") != "corrected_daily_qlib_bins":
             daily_h5 = _canonical_payload(
                 {
@@ -283,6 +338,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         static_path = reports / "adj_factor_static_repair_receipt.json"
         static_target = candidate / "components" / "factor_h5_static_candidate_v2" / "static_factors.parquet"
         static = _load_json(static_path) if static_path.exists() and static_target.is_file() else {}
+        _verify_cached_files(static, candidate=candidate)
         if static.get("source_daily_h5_sha256") != sha256_file(daily_h5_target):
             static = _canonical_payload(
                 {

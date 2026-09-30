@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
@@ -91,10 +92,22 @@ def _write_array_atomic(path: Path, value: np.ndarray) -> None:
 
 
 def _assert_plain_directory(path: Path, *, label: str) -> Path:
+    _assert_plain_path_chain(path, label=label)
     resolved = path.expanduser().resolve(strict=True)
     if not resolved.is_dir() or resolved.is_symlink():
         raise AdjFactorCandidateRepairError(f"{label} must be an existing plain directory")
     return resolved
+
+
+def _assert_plain_path_chain(path: Path, *, label: str) -> None:
+    """Reject links before resolve can hide their identity (including junctions)."""
+    absolute = path.expanduser().absolute()
+    for item in (absolute, *absolute.parents):
+        reparse = item.exists() and bool(
+            getattr(item.lstat(), "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        )
+        if item.is_symlink() or item.is_junction() or reparse:
+            raise AdjFactorCandidateRepairError(f"{label} contains a link or junction: {item}")
 
 
 def _read_calendar(path: Path) -> tuple[str, ...]:
@@ -152,7 +165,11 @@ def _query_adj_rows(connection: Any, codes: Sequence[str], start: date, end: dat
             numeric = float(factor)
             if not math.isfinite(numeric) or numeric <= 0:
                 raise AdjFactorCandidateRepairError(f"invalid production adj_factor: {symbol}/{trade_date}")
-            grouped.setdefault(str(symbol).upper(), []).append((trade_date.isoformat(), numeric))
+            values = grouped.setdefault(str(symbol).upper(), [])
+            day = trade_date.isoformat()
+            if values and day <= values[-1][0]:
+                raise AdjFactorCandidateRepairError(f"duplicate or unordered production factor: {symbol}/{day}")
+            values.append((day, numeric))
     return grouped
 
 
@@ -242,7 +259,20 @@ def scan_inventory(
     minute_spans = _calendar_day_spans(minute_calendar)
     if daily_calendar[-1][:10] != cutoff.isoformat() or minute_calendar[-1][:10] != cutoff.isoformat():
         raise AdjFactorCandidateRepairError("baseline calendars do not reach the requested cutoff")
-    daily_symbols = _feature_symbols(daily_root, frequency="day")
+    pool_path = daily_root / "instruments" / "stock_universe.txt"
+    _assert_plain_path_chain(pool_path, label="PIT strategy pool")
+    pool_symbols = set()
+    for line in pool_path.read_text(encoding="utf-8").splitlines():
+        symbol, begin, finish = line.split("\t")
+        if date.fromisoformat(begin) > date.fromisoformat(finish):
+            raise AdjFactorCandidateRepairError("PIT strategy pool interval is inverted")
+        pool_symbols.add(symbol.upper())
+    if not pool_symbols:
+        raise AdjFactorCandidateRepairError("PIT strategy pool is empty")
+    features = set(_feature_symbols(daily_root, frequency="day"))
+    if not pool_symbols.issubset(features):
+        raise AdjFactorCandidateRepairError("PIT strategy pool has missing daily factor bins")
+    daily_symbols = tuple(sorted(pool_symbols))
     minute_symbols = set(_feature_symbols(minute_root, frequency="1min"))
     records: list[dict[str, Any]] = []
     mismatch_cells = 0
@@ -272,6 +302,7 @@ def scan_inventory(
                 )
             record = {
                 "symbol": symbol,
+                "source_rows_sha256": sha256_bytes(canonical_json_bytes(grouped[symbol])),
                 "daily_mismatch_count": daily_cell_count,
                 "daily_start": dates[0],
                 "daily_end": dates[-1],
@@ -322,6 +353,13 @@ def mutable_relative_paths(inventory: Mapping[str, Any]) -> set[str]:
         "components/factor_h5_static_candidate_v2/daily_pv.h5",
         "components/factor_h5_static_candidate_v2/static_factors.parquet",
     }
+    mutable.update(f"reports/{name}" for name in (
+        "adj_factor_build_state.json", "adj_factor_production_job_authority.json",
+        "adj_factor_selective_repair_inventory.json", "adj_factor_clone_receipt.json",
+        "adj_factor_bin_repair_receipt.json", "adj_factor_daily_h5_repair_receipt.json",
+        "adj_factor_static_repair_receipt.json", "adj_factor_zero_drift_validation.json",
+        "adj_factor_candidate_repair_receipt.json",
+    ))
     for record in inventory["records"]:
         symbol = str(record["symbol"]).lower()
         for field in ADJUSTED_FIELDS:
@@ -342,6 +380,7 @@ def clone_baseline_copy_on_write(
 
     baseline = _assert_plain_directory(baseline_root, label="baseline root")
     candidate = candidate_root.expanduser().resolve(strict=False)
+    _assert_plain_path_chain(candidate_root, label="candidate root")
     if candidate == baseline or candidate in baseline.parents or baseline in candidate.parents:
         raise AdjFactorCandidateRepairError("candidate and baseline roots must be separate siblings")
     if candidate.parent != baseline.parent:
@@ -354,8 +393,8 @@ def clone_baseline_copy_on_write(
     for source in baseline.rglob("*"):
         relative = source.relative_to(baseline).as_posix()
         target = candidate / source.relative_to(baseline)
-        if source.is_symlink():
-            raise AdjFactorCandidateRepairError(f"baseline contains a symlink: {relative}")
+        if source.is_symlink() or source.is_junction():
+            raise AdjFactorCandidateRepairError(f"baseline contains a link or junction: {relative}")
         if source.is_dir():
             if relative == "work" or relative.startswith("work/"):
                 continue
@@ -593,8 +632,12 @@ def patch_qlib_bins(
     max_workers: int = 1,
 ) -> dict[str, Any]:
     validate_inventory(inventory)
+    if inventory.get("start") != start.isoformat() or inventory.get("cutoff") != cutoff.isoformat():
+        raise AdjFactorCandidateRepairError("repair inventory date identity differs")
     baseline = baseline_root.resolve(strict=True)
     candidate = candidate_root.resolve(strict=True)
+    if inventory.get("baseline_root") != str(baseline):
+        raise AdjFactorCandidateRepairError("repair inventory baseline identity differs")
     daily_baseline = baseline / "components" / "daily_bin_candidate"
     daily_candidate = candidate / "components" / "daily_bin_candidate"
     minute_baseline = baseline / "components" / "minute_bin_candidate"
@@ -613,7 +656,10 @@ def patch_qlib_bins(
         worker_connection = connection_factory() if connection_factory is not None else connection
         try:
             symbol = str(record["symbol"])
-            expected = _load_expected_for_symbols(worker_connection, [symbol], start, cutoff)[symbol]
+            rows = _query_adj_rows(worker_connection, [symbol], start, cutoff)[symbol]
+            if record.get("source_rows_sha256") != sha256_bytes(canonical_json_bytes(rows)):
+                raise AdjFactorCandidateRepairError(f"repair source history drift or missing authority: {symbol}")
+            expected = _expected_factors(rows)
             daily_existing = _existing_patch_receipt(
                 baseline_component=daily_baseline,
                 candidate_component=daily_candidate,
