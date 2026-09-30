@@ -41,7 +41,13 @@ def receipt(body: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def array(value: Any, shape: tuple[int, ...], label: str, *, positive: bool = False) -> np.ndarray:
-    result = np.asarray(value, dtype=np.float64)
+    original = np.asarray(value)
+    bool_in_json = isinstance(value, (list, tuple)) and any(
+        isinstance(item, (bool, np.bool_)) for item in np.asarray(value, dtype=object).flat
+    )
+    if original.dtype.kind not in "iuf" or bool_in_json:
+        raise FormalStateError("hmm_risk_model_numeric_contract_invalid", f"{label}: real numeric payload required")
+    result = np.asarray(original, dtype=np.float64)
     # JSON has no two-dimensional empty array; retain the declared carrier shape.
     if result.shape == (0,) and len(shape) == 2 and shape[0] == 0:
         result = result.reshape(shape)

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import copy
 from datetime import date, timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from backend.services.hmm_risk import formal_state_domains as subject
@@ -148,3 +151,126 @@ def test_unknown_or_incomplete_mapping_manifest_cannot_be_rehashed_into_acceptan
         with pytest.raises(StateModelSetError, match="authority"):
             validate_c010_provider_absence_domain_partition(value)
     assert canonical_sha256(authorities["sw_mapping_classify_identity"]["authority"]) != "a" * 64
+
+
+def test_file_a5_uses_raw_presence_not_numeric_completeness_and_closes_provider_keys(domain, monkeypatch):
+    from backend.services.hmm_risk import formal_state_input as inputs, rotation_l1_input_bundle as reader
+
+    days, authorities, entry = domain
+    raw = np.zeros(10, dtype=reader._QLIB_SOURCE_DTYPE)
+    raw["trade_date"] = [int(day.replace("-", "")) for day in days]
+    raw["symbol"] = b"000001.SZ"
+    for field in reader.QLIB_STOCK_FIELDS:
+        raw[field] = 1.0
+        raw[field][-1] = np.nan  # A legal empty sentinel is NOT a price row.
+    raw[reader.QLIB_STOCK_FIELDS[0]][1] = 0.0  # Row presence is not a positivity/feature-completeness test.
+    monkeypatch.setattr(reader, "_read_spooled_month", lambda path: raw)
+    projection = entry(days[0])["sw_l1_identity_valid"]["authority_receipt"]["candidates"][0]
+    projector = SimpleNamespace(
+        resolve=lambda symbol, day: SimpleNamespace(status="resolved", as_dict=lambda: projection)
+    )
+    security = SimpleNamespace(
+        resolve=lambda symbol, day, dataset: SimpleNamespace(
+            evidence=lambda: {"canonical_ts_code": symbol, "source_ts_code": symbol, "source_dataset": dataset}
+        )
+    )
+    provider = SimpleNamespace(
+        rows=[
+            SimpleNamespace(
+                canonical_ts_code="000001.SZ",
+                trade_date=date.fromisoformat(day),
+                source_dataset="market.moneyflow_ts",
+                evidence=lambda day=day: {
+                    "canonical_ts_code": "000001.SZ",
+                    "source_ts_code": "000001.SZ",
+                    "trade_date": day,
+                    "row_hash": "e" * 64,
+                },
+            )
+            for day in (days[0], days[-1])
+        ]
+    )
+    args = dict(
+        month_paths=[Path("unused.bin")],
+        spans={"000001.SZ": [(date(2022, 1, 1), date(2024, 6, 30))]},
+        security=security,
+        projection=projector,
+        provider=provider,
+        authorities=authorities,
+        calendar=[date.fromisoformat(day) for day in days],
+    )
+    partition, opportunity, eligibility = inputs._source_a5(**args)
+    assert opportunity["opportunity_key_count"] == 9
+    assert partition["p_in_entry_count"] == partition["p_out_entry_count"] == 1
+    assert eligibility["entries"][0]["provider_absence_count"] == 1
+    assert (
+        partition["entries"][-1]["sw_l1_identity_valid"]["authority_receipt"]["candidates"][0]["trade_date"] == days[-1]
+    )
+    # Physical order is irrelevant; canonical source reader independently rejects duplicates.
+    monkeypatch.setattr(reader, "_read_spooled_month", lambda path: raw[::-1])
+    assert inputs._source_a5(**args) == (partition, opportunity, eligibility)
+    with pytest.raises(FormalStateError, match="ambiguous PIT"):
+        inputs._source_a5(**{**args, "spans": {"000001.SZ": args["spans"]["000001.SZ"] * 2}})
+    with pytest.raises(FormalStateError, match="non-calendar"):
+        inputs._source_a5(**{**args, "calendar": args["calendar"][:-1]})
+    raw[reader.QLIB_STOCK_FIELDS[0]][1] = np.nan
+    with pytest.raises(reader.RotationL1InputBundleError, match="partially finite"):
+        inputs._source_a5(**args)
+
+
+def test_formal_circ_mv_allows_approved_cross_entry_but_rejects_future_or_broken_lineage():
+    from backend.services.hmm_risk import formal_state_input as inputs
+
+    calendar = [date(2021, 12, 31), date(2022, 1, 4)]
+    row = {
+        "symbol": "000001.SZ",
+        "is_suspended": False,
+        "circ_mv_fact_status": "available",
+        "circ_mv_source_date": calendar[0],
+        "circ_mv_pit_eligible_start": calendar[1],
+        "circ_mv_crossed_pit_entry_boundary": True,
+        "circ_mv_staleness_trading_days": 1,
+        "circ_mv_history_start": inputs.SOURCE_START,
+        "circ_mv_lookback_contract_version": "hmm_risk_causal_circ_mv_source_window_v1",
+    }
+    crossing = inputs._circ_mv_crossings(calendar[1], [row], calendar)
+    assert crossing[0]["source_date"] == "2021-12-31"
+    for mutation in (
+        {"circ_mv_source_date": calendar[1]},
+        {"circ_mv_staleness_trading_days": 0},
+        {"circ_mv_crossed_pit_entry_boundary": False},
+        {"circ_mv_history_start": calendar[1]},
+    ):
+        with pytest.raises(FormalStateError, match="lineage"):
+            inputs._circ_mv_crossings(calendar[1], [{**row, **mutation}], calendar)
+
+
+def test_file_collector_retains_independent_price_and_moneyflow_receipts():
+    from backend.services.hmm_risk import formal_state_input as inputs
+    from backend.tests.hmm_risk.test_stock_fact_observation import _stock_row
+
+    rows = [{**_stock_row(i), "l2_code": "801783.SI", "l2_name": "L2"} for i in range(10)]
+    eligibility = {row["symbol"]: True for row in rows}
+    eligibility[rows[-1]["symbol"]] = False
+    for field in ("net_mf_amount_cny", "buy_elg_amount_cny"):
+        rows[-1][field] = None  # The train-only exclusion does not delete its valid price row.
+    aggregates = {"L1": [], "L2": []}
+    evidence = {
+        f"{prefix}_{kind}": [] for prefix in ("l1", "l2") for kind in ("domain_receipts", "invalid_price_domain")
+    }
+    args = dict(eligibility=eligibility, aggregates=aggregates, evidence=evidence)
+    inputs._collect_domains(rows[0]["trade_date"], rows, **args)
+    for prefix in ("l1", "l2"):
+        item = evidence[f"{prefix}_domain_receipts"][0]
+        assert len(item["price_expected_symbols"]) == 10
+        assert len(item["moneyflow_expected_symbols"]) == 9
+        assert item["moneyflow_domain_status"] == "available"
+        assert item["moneyflow_contributor_amount"] == sum(row["amount_cny"] for row in rows[:-1])
+    broken = [{**row, "prev_circ_mv_cny": None} if i == 0 else row for i, row in enumerate(rows)]
+    inputs._collect_domains(rows[0]["trade_date"], broken, **args)
+    assert evidence["l2_invalid_price_domain"][0]["price_expected_weight"] is None
+    assert (
+        evidence["l2_invalid_price_domain"][0]["price_domain_reason_code"]
+        == "hmm_risk_c010_price_domain_weight_denominator_invalid"
+    )
+    assert evidence["l2_invalid_price_domain"][0]["missing_evidence"]

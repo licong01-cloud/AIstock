@@ -22,7 +22,7 @@ import unicodedata
 import uuid
 from bisect import bisect_right
 from collections import defaultdict, deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -2499,6 +2499,7 @@ def _build_stock_fact_aggregates(
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
     build_feature_domain_aggregates: bool = True,
+    day_rows_callback: Callable[[date, Sequence[Mapping[str, Any]]], None] | None = None,
 ) -> tuple[list[Any], list[Any], dict[tuple[date, str, str], str], dict[str, list[dict[str, Any]]]]:
     history: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     g2a_history: dict[str, deque[tuple[date, float]]] = defaultdict(lambda: deque(maxlen=20))
@@ -2812,6 +2813,8 @@ def _build_stock_fact_aggregates(
                 prices.append(qlib["close"])
                 g2a_history[symbol].append((day, qlib["close"]))
             advance_circ_state(through=day)
+            if day_rows_callback is not None:
+                day_rows_callback(day, day_rows)
             if build_feature_domain_aggregates:
                 _append_day_level_aggregates(
                     day_rows,

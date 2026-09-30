@@ -10,6 +10,8 @@
 
 ## Scope
 
+本任务还允许对 `backend/services/hmm_risk/rotation_l1_input_bundle.py` 的现有文件 stock-row 构造增加可选只读 callback；默认调用行为不变。用于复用已审查的 source/alias/PIT/circ_mv 构造，不复制实现，也不改产品公式、数据或其他模块。
+
 新增当前数值模块、输入桥接、离线 CLI 和 `backend/tests/hmm_risk` 定向测试。
 训练与验收只采用既有详细设计中的 D3-03-A、D4-01-MAP-A、D4-02-A、D4-03-PERSISTENT-A、D5-01-B、D6-01-B + D6-NA-A。
 对应权威：[Phase 2 详细设计](hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md)。

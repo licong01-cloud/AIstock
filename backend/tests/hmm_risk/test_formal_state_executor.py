@@ -77,6 +77,12 @@ def test_covariance_invalid_never_projected(fitted, bad):
     assert model._covars_[0, 0] == bad or np.isnan(model._covars_[0, 0])
 
 
+@pytest.mark.parametrize("bad", ([[True, False]], [[True, 2]], [["1", "2"]], [[None, 1]], [[1 + 2j, 1]]))
+def test_numerical_contract_rejects_coercible_non_numeric_payloads(bad):
+    with pytest.raises(subject.FormalStateError, match="real numeric"):
+        subject.array(bad, (1, 2), "request values")
+
+
 def test_preprocess_is_train_global_and_immutable():
     x = np.arange(240, dtype=float).reshape(120, 2)
     parameters = subject.preprocess_fit([x, x + 7], subject.FAMILIES[1])
