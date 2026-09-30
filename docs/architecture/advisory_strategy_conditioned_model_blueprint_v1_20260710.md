@@ -1919,7 +1919,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 坐标差异已由provider-compatible v2关闭：理论除权参考价先按0.01元tick作ROUND_HALF_UP，目标factor以供应商四位精度投影；只使用D可见公告、D raw close和D factor。原标签SHA=c4fc72b94e9e112bcc05405e8c7f6ec28bc2890b16c4ff978e3b7dfe0ee2b148，旧v1模型及artifact不变。当前业务阻断是合格历史输入和QE资源协调，不是等待新的20个交易日；数值PASS也不改变旧coverage或授权回选失败arm。
 
-2026-09-30元数据读回：匹配包的ENABLED Top20 Program有31个PUBLISHED目标日（2026-08-14～09-30），另有1个REPLAY。日期存在缺口且仅较晚日期具备原生universe receipt，不将31日拼接成连续合格窗口；未读取目标效果，也不声明全部成熟、PIT或未消费。已准备的v4 test回放advprhist_5135d6b0f6a53c706f0fc561（D=2025-11-07～2026-03-10）仅NAVIGATION_ONLY，资源未放行前不执行。新推理输入材料如无法证明PIT/lineage则仅探索性，不可绑定。
+2026-09-30元数据读回：匹配包的ENABLED Top20 Program有31个PUBLISHED目标日（2026-08-14～09-30），另有1个REPLAY。仅11日带原生universe receipt（09-15～09-30），低于最低20日支持要求；日期存在缺口，不能将31日拼接成连续合格窗口。未读取目标效果，也不声明全部成熟、PIT或未消费。已准备的v4 test回放advprhist_5135d6b0f6a53c706f0fc561（D=2025-11-07～2026-03-10）仅NAVIGATION_ONLY，资源未放行前不执行。新推理输入材料如无法证明PIT/lineage则仅探索性，不可绑定。
 
 执行顺序：①修复消费者分页并取得QE资源放行后完成已消费历史批量功能回放；②不读取目标效果的连续窗口资格审核；③合格时冻结全窗口预测再揭示结果，完成固定v4与validation control确认；④确认失败且定位到可改进缺口时进入新lineage模型改进，确认通过则发布同scope价格角色，欠功效不盲目调参；⑤完成API/UI及capture/settle业务闭环；⑥消费QE交付的新包和指数股票池。这里的“发布”必须先满足CONFIRMED_PRICE_DISTRIBUTION；无合格输入时保持明确阻塞，不重建候选或借自然等待替代历史验证。
 

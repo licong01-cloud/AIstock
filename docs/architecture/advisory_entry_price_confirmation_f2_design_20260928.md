@@ -155,6 +155,6 @@ vintage审核文件必须包含 `entry_coordinate_review`：schema=`advisory_ent
 
 同轮只读候选元数据spike：匹配冻结包的ENABLED Top20 Program=`advp_3126dd77f9774d94850f37ad012f640f`，当前binding=`advb_f860140caa314665ad60ac089ed84b3f`，全市场池；已有30个PUBLISHED目标日（2026-08-14至2026-09-29），另有1个2026-07-16 REPLAY。只读取日期/数量/身份，未读取目标收益或运行模型。现有30日包含缺口且只有较晚日期带原生universe receipt，不能拼接成最低20个连续合格日；不得重建候选、伪造receipt或降低门槛。冻结v4 test prediction历史回放可作为`NAVIGATION_ONLY`功能回归，但不能替代正式确认。
 
-2026-09-30重新读回元数据：31个PUBLISHED目标日（新增09-30）及1个REPLAY；新增日期不自动解决历史缺口、原生候选身份和PIT资格问题。现有exploratory输入材料明确pit_visibility_verified=false，不能改签为ELIGIBLE_LOCKED_HISTORICAL_OOT；本轮没有读取目标效果或产生新的确认请求。
+2026-09-30重新读回元数据：31个PUBLISHED目标日（新增09-30）及1个REPLAY；仅11个PUBLISHED日带原生advisory_universe_receipt（09-15～09-30），尚低于最低20日支持要求，且receipt存在本身仍不证明完整PIT/lineage资格。新增日期不自动解决历史缺口。现有exploratory输入材料明确pit_visibility_verified=false，不能改签为ELIGIBLE_LOCKED_HISTORICAL_OOT；本轮没有读取目标效果或产生新的确认请求。
 
 资源审核发现消费者误用了include_children=true：该视图按父实验分页却展开子行，不能用返回行数推进父offset。BUG-1632改用公开平铺include_children=false，逐行覆盖父实验和子运行，保留分页完整性/身份/状态检查。三项公开QE task详情仍paused（qe_20260716_042842_fd61、qe_20260810_221723_14ab、qe_20260824_101005_ce66）；legacy canonical_status缺失同样不推断idle。只有QE窗口解决状态可判定性并确认独占时段后才能执行，不能由Advisory终止任务或自造时段。已消费v4功能回放亦不绕过不并行要求。
