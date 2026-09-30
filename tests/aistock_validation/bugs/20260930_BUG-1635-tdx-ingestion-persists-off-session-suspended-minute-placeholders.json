@@ -1,6 +1,8 @@
 {
   "actual": "Sep23-29: 12 daily fully suspended zero-volume symbols persist13:00 bars without11:30. Validate sessions; suppress only independently proven whole-day suspension and all-zero turnover placeholders. Bounded exact-key cleanup DEV first, production separately authorized. Do not fabricate11:30 or touch real bars/candidates.",
   "allowed_write_scope": [
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "scripts/ingest_incremental.py",
     "scripts/ingest_full_minute.py",
     "backend/tests/ingestion/test_ingest_incremental_minute.py",
@@ -18,6 +20,11 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-30T05:42:58.604675Z",
+  "data_repair_state": {
+    "dev_validation": "passed",
+    "production_apply": "not_performed",
+    "production_authorization": "pending_exact_keys"
+  },
   "description": "Sep23-29: 12 daily fully suspended zero-volume symbols persist13:00 bars without11:30. Validate sessions; suppress only independently proven whole-day suspension and all-zero turnover placeholders. Bounded exact-key cleanup DEV first, production separately authorized. Do not fabricate11:30 or touch real bars/candidates.",
   "events": [
     {
@@ -27,20 +34,38 @@
       "timestamp": "2026-09-30T05:42:58.604656Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "Production read-only Sep23..Sep29 plan:48 symbol-days,11520 rows,unresolved=0; plan sha256=f39405ec43629333fb01f69c8206f41cc1bb31f3211074ba7062427ad6ad050c",
+    "DEV aistock_dev:5433 real 000016.SZ/2026-09-29 sample:240 rows staged/deleted,post-readback targets=0/unresolved=0,transaction rolled back;production_write=false"
+  ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1635-tdx-ingestion-persists-off-session-suspended-minute-placeholders.json",
+      "noxfile.py",
+      "scripts/ingest_full_minute.py",
+      "scripts/ingest_incremental.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/services/minute_data_session_contract.py",
+      "backend/tests/ingestion/test_minute_data_session_contract.py",
+      "scripts/repair_suspended_minute_placeholders.py"
+    ],
     "added_files": [
       "backend/services/minute_data_session_contract.py",
       "scripts/repair_suspended_minute_placeholders.py",
       "backend/tests/ingestion/test_minute_data_session_contract.py"
     ],
     "changed_files": [
-      "scripts/ingest_incremental.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1635-tdx-ingestion-persists-off-session-suspended-minute-placeholders.json",
+      "noxfile.py",
       "scripts/ingest_full_minute.py",
-      "backend/tests/ingestion/test_ingest_incremental_minute.py"
+      "scripts/ingest_incremental.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/services/minute_data_session_contract.py",
+      "backend/tests/ingestion/test_minute_data_session_contract.py",
+      "scripts/repair_suspended_minute_placeholders.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ingest_incremental.py",
@@ -164,14 +189,28 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    "contract: no13:00 to11:30 remapping, retain auction/real bars",
+    "safety: full-day suspend and zero daily/minute turnover, no conflicts",
+    "CAS/performance: bounded dates, plan digest/count/readback, partition timestamp predicates"
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/data-stats",
+    "fresh_process_evidence": [
+      "python -m nox -s data_sync_autonomy_backend fresh process imported all three ingestion entrypoints and guard -> passed 432 tests,1 skipped"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

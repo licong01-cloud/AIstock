@@ -418,6 +418,11 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
         )
     if not values:
         return 0, None
+    from backend.services.minute_data_session_contract import guard_minute_values
+
+    values = guard_minute_values(conn, ts_code, trade_date, values)
+    if not values:
+        return 0, None
     with conn.cursor() as cur:
         pgx.execute_values(cur, sql, values)
     return len(values), last_ts
