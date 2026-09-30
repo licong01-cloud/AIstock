@@ -30,16 +30,26 @@
   "evidence_uris": [],
   "expected": "Flat full-page resource snapshot; unknown or paused QE tasks still WAITING_RESOURCE",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1632-advisory-entry-price-qe-resource-guard-uses-expanded-child-pagination.json",
       "backend/services/advisory_model_first/entry_price_daily_service.py",
       "backend/tests/advisory_model_first/test_entry_price_daily_service.py",
-      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
-      "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
       "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
-      "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md"
+      "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1632-advisory-entry-price-qe-resource-guard-uses-expanded-child-pagination.json",
+      "backend/services/advisory_model_first/entry_price_daily_service.py",
+      "backend/tests/advisory_model_first/test_entry_price_daily_service.py",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_delivery_f2_design_20260928.md",
+      "docs/architecture/advisory_entry_price_independent_role_f2_design_20260928.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/entry_price_daily_service.py",
@@ -163,11 +173,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/entry-price/status",
+    "fresh_process_evidence": [
+      "Fresh Windows Python from BUG-1632 task worktree imported QEEntryResourceGuard and queried public API using flat include_children=false; returned WAITING_RESOURCE/QE_TASK_NONTERMINAL_OR_UNKNOWN without DB writes or process control",
+      "Fresh Python imports BUG-1632 tracked source and real flat QE API returns fail-closed WAITING_RESOURCE without writes"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
