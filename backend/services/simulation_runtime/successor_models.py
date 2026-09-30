@@ -14,6 +14,7 @@ from .models import canonical_json_sha256
 
 
 SIMULATION_ACCOUNT_SCHEMA = "simulation_account_v1"
+SIMULATION_LEDGER_SCOPE_SCHEMA = "simulation_ledger_scope_v1"
 LEGACY_LOCALSIM_LINEAGE_SCHEMA = "legacy_localsim_account_lineage_v1"
 LOCALSIM_REPLAY_JOB_SCHEMA = "localsim_replay_job_v1"
 LOCALSIM_DAILY_ENGINE_CONTRACT = "simulation_daily_engine_v1"
@@ -23,6 +24,11 @@ class SimulationAccountStatus(str, Enum):
     ACTIVE = "ACTIVE"
     PAUSED = "PAUSED"
     RETIRED = "RETIRED"
+
+
+class SimulationLedgerScopeKind(str, Enum):
+    LEGACY_PORTFOLIO = "LEGACY_PORTFOLIO"
+    SUCCESSOR_NATIVE = "SUCCESSOR_NATIVE"
 
 
 class LegacyLocalSimLineageStatus(str, Enum):
@@ -115,16 +121,17 @@ class LocalSimSafeBoundaryDecisionV1(BaseModel):
 
     @model_validator(mode="after")
     def _eligibility_is_consistent(self) -> "LocalSimSafeBoundaryDecisionV1":
+        if self.market_phase == "TRADING" and self.activation_trade_date <= self.current_trading_date:
+            raise ValueError("intraday catch-up cannot activate on the current trading date")
         technical_conditions = (
-            self.in_flight_economic_transactions == 0
+            self.market_phase == "PRE_OPEN"
+            and self.in_flight_economic_transactions == 0
             and self.writer_claim_available
             and self.historical_provider_closed
-            and self.activation_trade_date >= self.current_trading_date
+            and self.activation_trade_date == self.current_trading_date
         )
         if self.eligible != technical_conditions:
             raise ValueError("safe-boundary eligibility does not match technical conditions")
-        if self.market_phase == "TRADING" and self.activation_trade_date <= self.current_trading_date:
-            raise ValueError("intraday catch-up cannot activate on the current trading date")
         return self
 
 
@@ -220,6 +227,66 @@ class SimulationAccountV1(BaseModel):
             expected["lineage_source_legacy_account_id"] = self.lineage_source_legacy_account_id
         if self.account_config_json != expected:
             raise ValueError("account_config_json does not match immutable account fields")
+        return self
+
+
+class SimulationLedgerScopeV1(BaseModel):
+    """Immutable economic-ledger namespace; never an account or portfolio truth."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["simulation_ledger_scope_v1"] = SIMULATION_LEDGER_SCOPE_SCHEMA
+    ledger_scope_id: str
+    ledger_scope_hash: str
+    scope_kind: SimulationLedgerScopeKind
+    source_identity: str
+    native_account_id: str | None = None
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @field_validator("ledger_scope_id", "ledger_scope_hash", "source_identity", "created_by")
+    @classmethod
+    def _required_fields(cls, value: str) -> str:
+        return _required_text(value)
+
+    @field_validator("ledger_scope_hash")
+    @classmethod
+    def _hash_fields(cls, value: str) -> str:
+        return _sha256_text(value)
+
+    @field_validator("native_account_id")
+    @classmethod
+    def _optional_fields(cls, value: str | None) -> str | None:
+        return _optional_text(value)
+
+    @field_validator("created_at")
+    @classmethod
+    def _timestamps_are_utc(cls, value: datetime) -> datetime:
+        return _aware_utc(value)
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": SIMULATION_LEDGER_SCOPE_SCHEMA,
+            "ledger_scope_id": self.ledger_scope_id,
+            "scope_kind": self.scope_kind.value,
+            "source_identity": self.source_identity,
+            "native_account_id": self.native_account_id,
+        }
+
+    @model_validator(mode="after")
+    def _identity_is_canonical(self) -> "SimulationLedgerScopeV1":
+        expected_hash = canonical_json_sha256(self.identity_payload())
+        if self.ledger_scope_hash != expected_hash:
+            raise ValueError("ledger_scope_hash does not match ledger scope identity")
+        if self.scope_kind is SimulationLedgerScopeKind.LEGACY_PORTFOLIO:
+            if self.native_account_id is not None or self.ledger_scope_id != self.source_identity:
+                raise ValueError("legacy ledger scope must preserve its portfolio source identity")
+        elif (
+            self.native_account_id is None
+            or self.ledger_scope_id != self.native_account_id
+            or self.source_identity != self.native_account_id
+        ):
+            raise ValueError("native ledger scope identity must equal its SimulationAccountV1 identity")
         return self
 
 

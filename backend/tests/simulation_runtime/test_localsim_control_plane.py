@@ -12,6 +12,8 @@ from backend.services.simulation_runtime.successor_models import (
     LegacyLocalSimLineageStatus,
     LocalSimSafeBoundaryDecisionV1,
     SimulationAccountStatus,
+    SimulationLedgerScopeKind,
+    SimulationLedgerScopeV1,
 )
 from backend.services.simulation_runtime.successor_repository import InMemoryLocalSimSuccessorRepository
 from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_snapshot
@@ -77,16 +79,35 @@ def _seed_legacy_binding(
     legacy_binding = SimulationReleaseBinding.model_validate(values)
     repository.bindings[legacy_binding.binding_id] = legacy_binding
     repository.binding_hash_index[legacy_binding.binding_hash or ""] = legacy_binding.binding_id
+    scope_identity = {
+        "schema_version": "simulation_ledger_scope_v1",
+        "ledger_scope_id": legacy_account_id,
+        "scope_kind": "LEGACY_PORTFOLIO",
+        "source_identity": legacy_account_id,
+        "native_account_id": None,
+    }
+    repository.save_ledger_scope(
+        SimulationLedgerScopeV1(
+            ledger_scope_id=legacy_account_id,
+            ledger_scope_hash=canonical_json_sha256(scope_identity),
+            scope_kind=SimulationLedgerScopeKind.LEGACY_PORTFOLIO,
+            source_identity=legacy_account_id,
+            created_by="migration:test",
+            created_at=NOW,
+        )
+    )
     return legacy_binding
 
 
 def test_create_account_atomically_freezes_account_release_binding_and_twap_policy() -> None:
     service, repository = _service()
 
-    account, release, binding = _create_account(service)
+    account, ledger_scope, release, binding = _create_account(service)
 
     assert account.status is SimulationAccountStatus.ACTIVE
     assert binding.broker_account_id == account.account_id
+    assert ledger_scope.ledger_scope_id == account.account_id
+    assert ledger_scope.scope_kind is SimulationLedgerScopeKind.SUCCESSOR_NATIVE
     assert binding.binding_config_json["metadata"]["localsim_account_id"] == account.account_id
     assert release.release_config_json["execution_policy"]["policy_json"]["algo_code"] == "TWAP"
     assert release.release_config_json["metadata"]["requested_execution_policy_audit"] == {
@@ -94,36 +115,51 @@ def test_create_account_atomically_freezes_account_release_binding_and_twap_poli
         "consulted_for_execution": False,
     }
     assert set(repository.accounts) == {account.account_id}
+    assert set(repository.ledger_scopes) == {account.account_id}
     assert set(repository.releases) == {release.release_id}
     assert set(repository.bindings) == {binding.binding_id}
 
     duplicate = _create_account(service)
-    assert duplicate == (account, release, binding)
-    assert len(repository.accounts) == len(repository.releases) == len(repository.bindings) == 1
+    assert duplicate == (account, ledger_scope, release, binding)
+    assert (
+        len(repository.accounts)
+        == len(repository.ledger_scopes)
+        == len(repository.releases)
+        == len(repository.bindings)
+        == 1
+    )
 
 
 def test_create_account_identity_failure_leaves_zero_orphan_rows() -> None:
     service, repository = _service()
-    account, release, binding = _create_account(service)
+    account, ledger_scope, release, binding = _create_account(service)
     repository.accounts.clear()
     repository.account_hash_index.clear()
     repository.releases.clear()
     repository.release_hash_index.clear()
     repository.bindings.clear()
     repository.binding_hash_index.clear()
+    repository.ledger_scopes.clear()
+    repository.ledger_scope_hash_index.clear()
     tampered_binding = binding.model_copy(update={"broker_account_id": "another-account"})
 
     with pytest.raises(InvalidStateTransitionError, match="identities are inconsistent"):
-        repository.create_account_bundle(account=account, release=release, binding=tampered_binding)
+        repository.create_account_bundle(
+            account=account,
+            ledger_scope=ledger_scope,
+            release=release,
+            binding=tampered_binding,
+        )
 
     assert repository.accounts == {}
+    assert repository.ledger_scopes == {}
     assert repository.releases == {}
     assert repository.bindings == {}
 
 
 def test_account_lifecycle_is_explicit_cas_without_session_state_machine() -> None:
     service, _repository = _service()
-    account, _release, _binding = _create_account(service)
+    account, _scope, _release, _binding = _create_account(service)
 
     paused = service.pause_account(account_id=account.account_id, expected_version=1)
     assert paused.status is SimulationAccountStatus.PAUSED
@@ -141,7 +177,7 @@ def test_account_lifecycle_is_explicit_cas_without_session_state_machine() -> No
 
 def test_successor_release_closes_old_binding_window_in_the_same_cas_transaction() -> None:
     service, repository = _service()
-    account, base_release, base_binding = _create_account(service)
+    account, _scope, base_release, base_binding = _create_account(service)
     policy = local_sim_twap_only_policy_snapshot()
 
     release, binding = service.create_successor_release(
@@ -179,7 +215,7 @@ def test_successor_release_closes_old_binding_window_in_the_same_cas_transaction
 
 def test_legacy_lineage_is_unique_replayable_and_preserves_economic_identity() -> None:
     service, repository = _service()
-    _account, release, binding = _create_account(service, account_name="seed authority")
+    _account, _scope, release, binding = _create_account(service, account_name="seed authority")
     binding = _seed_legacy_binding(repository, binding, legacy_account_id="legacy_portfolio_keep")
     inventory = LegacyLocalSimAccountInventoryV1(
         legacy_account_id="legacy_portfolio_keep",
@@ -258,7 +294,7 @@ def test_legacy_lineage_fails_closed_for_unretained_terminal_or_inflight_invento
     update: dict[str, object], message: str
 ) -> None:
     service, repository = _service()
-    _account, release, binding = _create_account(service, account_name="seed authority")
+    _account, _scope, release, binding = _create_account(service, account_name="seed authority")
     binding = _seed_legacy_binding(repository, binding, legacy_account_id="legacy_bad")
     inventory = LegacyLocalSimAccountInventoryV1(
         legacy_account_id="legacy_bad",

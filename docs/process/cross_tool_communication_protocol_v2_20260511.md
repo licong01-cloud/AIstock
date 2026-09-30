@@ -1,5 +1,7 @@
 # Cross-Tool Communication Protocol v2 — 短 drawer + 文档详情
 
+> **RETIRED (2026-09-06):** MemPalace cross-tool communication is decommissioned. Do not use this protocol. Current coordination uses Git, GitHub Issue/PR, BUG JSON, durable validation receipts, and native client session/agent features. This document remains only as historical evidence.
+
 > **Author**: Claude Code 战略 session 2026-05-11
 > **Status**: PROPOSAL → adopted upon Codex ACK
 > **Replaces**: 2026-05-10 protocol where full content lived in drawers

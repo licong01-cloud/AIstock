@@ -391,7 +391,7 @@ def _commit_publish_for_worker_context(
     return spec
 
 
-def test_resource_wait_happens_before_any_build_lease_or_supervisor(tmp_path, dataset_profile) -> None:
+def test_low_memory_telemetry_does_not_wait_or_skip_build_attempt(tmp_path, dataset_profile) -> None:
     clock = Clock()
     store = ControlStore.initialize(tmp_path / "control")
     run = _run(store, "resource-wait")
@@ -409,10 +409,10 @@ def test_resource_wait_happens_before_any_build_lease_or_supervisor(tmp_path, da
 
     report = worker.run_once()
 
-    assert report.state == "WAITING_RESOURCE"
-    assert entered == []
+    assert report.state == "FAILED_RETRYABLE"
+    assert len(entered) == 1
     assert store.get_run(run["run_id"])["active_attempt_id"] is None
-    assert store._many("SELECT * FROM attempts WHERE run_id=?", (run["run_id"],)) == []
+    assert len(store._many("SELECT * FROM attempts WHERE run_id=?", (run["run_id"],))) == 1
     assert store._many("SELECT * FROM leases WHERE attempt_id IS NOT NULL", ()) == []
 
 
@@ -446,7 +446,7 @@ def test_production_supervisor_without_resource_gate_blocks_before_source_claim(
     assert store._many("SELECT * FROM leases WHERE attempt_id IS NOT NULL", ()) == []
 
 
-def test_source_resource_wait_deadline_never_becomes_terminal(tmp_path, dataset_profile) -> None:
+def test_low_memory_telemetry_never_creates_source_wait_or_resource_retry(tmp_path, dataset_profile) -> None:
     clock = Clock()
     store = ControlStore.initialize(tmp_path / "control")
     submission = _submission(store, "resource-timeout")
@@ -472,15 +472,11 @@ def test_source_resource_wait_deadline_never_becomes_terminal(tmp_path, dataset_
     second = worker.run_once()
 
     durable = store.get_submission(submission["submission_id"])
-    assert first.state == "WAITING_SOURCE"
-    assert second.state == "WAITING_SOURCE"
-    assert second.detail == "RESOURCE_OS_LOW_MEMORY_SIGNAL"
+    assert first.state == "FAILED_RETRYABLE"
+    assert second.state == "IDLE"
     assert durable["terminal_receipt_ref"] is None
     events = store.list_events(submission_id=submission["submission_id"])
-    receipt = worker.cas.get_json(events[-1]["payload_ref"])
-    assert receipt["error_code"] == "RESOURCE_OS_LOW_MEMORY_SIGNAL"
-    assert receipt["context"]["wait_deadline_observed"] is True
-    assert receipt["context"]["resource_admission_class"] == "full"
+    assert not any(event["type"] == "SUBMISSION_WAITING_SOURCE" for event in events)
 
 
 def test_context_exposes_only_supervised_launch_and_forwards_pressure_rung(tmp_path, dataset_profile) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/factor-library", tags=["factor-library"])
 REGISTER_FACTOR_CONFIRM = "REGISTER_FACTOR"
 DEPRECATE_FACTOR_CONFIRM = "DEPRECATE_FACTOR"
 CALC_ENGINE = "qe_eval_v2"
+PIT_CAUSALITY_QUARANTINE_PREFIX = "PIT_CAUSALITY_VIOLATION"
 
 SUMMARY_FIELDS = [
     "id", "factor_name", "source", "region", "tags", "description_cn", "freq", "align", "nan_policy",
@@ -302,13 +304,45 @@ def register_confirmed(req: FactorRegisterConfirmedRequest) -> dict[str, Any]:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
+                SELECT disable_reason
+                FROM aistock_factor_catalog
+                WHERE factor_name = %s AND source = %s
+                FOR UPDATE
+                """,
+                (req.factor_name, req.source),
+            )
+            existing = cur.fetchone()
+            existing_reason = (
+                existing.get("disable_reason")
+                if isinstance(existing, dict)
+                else existing[0] if existing else None
+            )
+            if str(existing_reason or "").startswith(PIT_CAUSALITY_QUARANTINE_PREFIX):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "pit_causality_quarantine_requires_new_factor_identity",
+                        "factor_name": req.factor_name,
+                        "source": req.source,
+                        "disable_reason": existing_reason,
+                    },
+                )
+            cur.execute(
+                """
                 INSERT INTO aistock_factor_catalog (
                     factor_name, source, catalog_version, generated_at_utc, catalog_source,
                     region, tags, description_cn, freq, is_available, raw_payload
                 ) VALUES (%s, %s, COALESCE(%s, 'mcp'), NOW()::text, 'mcp_factor_library', %s, %s, %s, %s, TRUE, %s)
                 ON CONFLICT (factor_name, source) DO UPDATE
-                SET is_available = TRUE, updated_at = NOW()
-                RETURNING factor_name, source, is_available, updated_at
+                SET is_available = TRUE,
+                    disable_reason = NULL,
+                    disable_batch_id = NULL,
+                    disable_at = NULL,
+                    rehab_candidate = FALSE,
+                    last_rehab_at = NOW()
+                WHERE COALESCE(aistock_factor_catalog.disable_reason, '') NOT LIKE %s
+                RETURNING factor_name, source, is_available,
+                          COALESCE(last_rehab_at, NOW()) AS updated_at
                 """,
                 (
                     req.factor_name,
@@ -319,9 +353,20 @@ def register_confirmed(req: FactorRegisterConfirmedRequest) -> dict[str, Any]:
                     metadata.get("description_cn"),
                     metadata.get("freq"),
                     Json(metadata),
+                    f"{PIT_CAUSALITY_QUARANTINE_PREFIX}%",
                 ),
             )
-            row = dict(cur.fetchone())
+            returned = cur.fetchone()
+            if returned is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "pit_causality_quarantine_requires_new_factor_identity",
+                        "factor_name": req.factor_name,
+                        "source": req.source,
+                    },
+                )
+            row = dict(returned)
         conn.commit()
     return {"ok": True, "registered": strip_forbidden_fields(row), "confirmation": REGISTER_FACTOR_CONFIRM}
 
@@ -349,9 +394,27 @@ def deprecate_confirmed(req: FactorDeprecateConfirmedRequest) -> dict[str, Any]:
     where, params = _where(source=req.source)
     suffix = " AND factor_name = %s" if where else "WHERE factor_name = %s"
     sql_where = (where + suffix).replace("c.", "")
+    batch_id = (
+        "factor_library_deprecate_"
+        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}"
+    )
     with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(f"UPDATE aistock_factor_catalog SET is_available=FALSE, updated_at=NOW() {sql_where} RETURNING factor_name, source, is_available, updated_at", tuple([*params, req.factor_name]))
+            cur.execute(
+                f"""
+                UPDATE aistock_factor_catalog
+                SET is_available = FALSE,
+                    disable_reason = %s,
+                    disable_batch_id = %s,
+                    disable_at = NOW(),
+                    rehab_candidate = FALSE
+                {sql_where}
+                RETURNING factor_name, source, is_available,
+                          disable_at AS updated_at,
+                          disable_reason, disable_batch_id
+                """,
+                tuple([req.reason, batch_id, *params, req.factor_name]),
+            )
             rows = [dict(row) for row in cur.fetchall()]
         conn.commit()
     return {"ok": True, "deprecated": strip_forbidden_fields(rows), "reason": req.reason, "confirmation": DEPRECATE_FACTOR_CONFIRM}

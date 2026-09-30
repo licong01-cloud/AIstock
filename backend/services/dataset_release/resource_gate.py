@@ -1,9 +1,9 @@
-"""Runtime resource admission/checkpoint contract for dataset stage children.
+"""Runtime resource telemetry contract for dataset stage children.
 
-The control Worker never owns a data panel.  It uses this gate to admit an
-attempt from host telemetry, then binds the task-owned Job/cgroup probe before
-launching a data-bearing child.  Pressure only changes physical chunk rungs;
-it never changes instruments, dates, fields, validators, or data scope.
+The control Worker never owns a data panel. It binds attempt-scoped Job/cgroup
+telemetry before launching a data-bearing child. Resource observations are
+receipts only: they never block, pause, retry, or alter instruments, dates,
+fields, validators, or data scope.
 """
 
 from __future__ import annotations
@@ -122,24 +122,9 @@ class DiskSpaceGuard:
         )
 
     def checkpoint(self, predicted_remaining_new_bytes: int | None = None) -> DiskSpaceSnapshot:
-        snapshot = self.sample(predicted_remaining_new_bytes)
-        if not snapshot.same_volume:
-            raise ResourceGateError(
-                "control/candidate roots are not on one storage volume",
-                code="BLOCKED_STORAGE_VOLUME_MISMATCH",
-            )
-        if snapshot.effective_free_bytes < snapshot.required_free_bytes:
-            raise ResourceCheckpointRequested(
-                "candidate storage reserve requires a safe chunk checkpoint",
-                context={
-                    "reason_code": "RESOURCE_DISK_RESERVE",
-                    "disk_free_bytes": snapshot.effective_free_bytes,
-                    "disk_required_free_bytes": snapshot.required_free_bytes,
-                    "predicted_remaining_new_bytes": (snapshot.predicted_remaining_new_bytes),
-                    "data_scope_changed": False,
-                },
-            )
-        return snapshot
+        # Prediction is telemetry only. Real filesystem write failures remain
+        # authoritative and propagate from the writer as operating-system errors.
+        return self.sample(predicted_remaining_new_bytes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,10 +147,7 @@ class WslRuntimeSnapshot:
         integers = (
             self.memory_current_bytes,
             self.memory_peak_bytes,
-            self.memory_high_bytes,
-            self.memory_max_bytes,
             self.swap_current_bytes,
-            self.swap_max_bytes,
             self.available_bytes,
             self.memory_oom_group,
             self.counter,
@@ -174,12 +156,15 @@ class WslRuntimeSnapshot:
         if any(type(value) is not int or value < 0 for value in integers):
             raise ResourceGateError("WSL runtime telemetry contains invalid counters")
         if (
-            self.memory_high_bytes <= 0
-            or self.memory_max_bytes <= 0
-            or self.memory_high_bytes >= self.memory_max_bytes
-            or self.memory_current_bytes > self.memory_max_bytes
-            or self.swap_current_bytes > self.swap_max_bytes
-            or self.memory_oom_group != 1
+            type(self.memory_high_bytes) is not int
+            or type(self.memory_max_bytes) is not int
+            or type(self.swap_max_bytes) is not int
+            or self.memory_high_bytes < 0
+            or self.memory_max_bytes < 0
+            or self.swap_max_bytes < 0
+            or (self.memory_max_bytes > 0 and self.memory_current_bytes > self.memory_max_bytes)
+            or (self.swap_max_bytes > 0 and self.swap_current_bytes > self.swap_max_bytes)
+            or self.memory_oom_group not in {0, 1}
             or len(self.memory_events) > 64
             or any(
                 not str(key).strip() or len(str(key)) > 100 or type(value) is not int or value < 0
@@ -229,7 +214,7 @@ class ResourceGateSample:
 
 
 class ResourceGate:
-    """One attempt-scoped gate with bounded telemetry and deterministic rungs."""
+    """One attempt-scoped, bounded telemetry collector."""
 
     def __init__(
         self,
@@ -283,17 +268,8 @@ class ResourceGate:
         wsl_required: bool,
         pressure_rung: int,
     ) -> ResourceGateSample:
-        """Require two ready samples; a non-ready sample returns immediately."""
+        """Collect one start sample without admission or retry semantics."""
 
-        first = self._sample(
-            stage,
-            wsl_required=wsl_required,
-            pressure_rung=pressure_rung,
-            predicted_remaining_new_bytes=self._predicted_new_bytes,
-        )
-        if first.decision.status != "READY":
-            return first
-        self._sleep(self.policy.enforcement_sample_seconds)
         return self._sample(
             stage,
             wsl_required=wsl_required,
@@ -326,28 +302,31 @@ class ResourceGate:
         if not _IDENTITY.fullmatch(str(stage)):
             raise ResourceGateError("resource stage identity is invalid")
         snapshot = self._probe(str(stage), bool(wsl_required))
-        decision = self._budget.classify(snapshot, pressure_rung=pressure_rung)
+        observed_decision = self._budget.classify(snapshot, pressure_rung=pressure_rung)
         try:
             disk = self._disk_probe(predicted_remaining_new_bytes)
-        except (ResourceTelemetryUnavailable, OSError, ValueError) as exc:
-            raise RequiredResourceTelemetryUnavailable("mandatory disk resource telemetry is unavailable") from exc
+        except (ResourceTelemetryUnavailable, OSError, ValueError):
+            disk = DiskSpaceSnapshot(0, 0, 0, 0, predicted_remaining_new_bytes, True)
+            disk_telemetry_unavailable = True
+        else:
+            disk_telemetry_unavailable = False
         if not isinstance(disk, DiskSpaceSnapshot):
             raise RequiredResourceTelemetryUnavailable("disk resource telemetry has an invalid type")
+        warnings = set(observed_decision.warning_codes)
+        if observed_decision.status != "READY":
+            warnings.add(observed_decision.reason_code)
         if not disk.same_volume:
-            decision = ResourceDecision(
-                "BLOCKED",
-                "BLOCKED_STORAGE_VOLUME_MISMATCH",
-                pressure_rung,
-                hard_failure=True,
-                warning_codes=decision.warning_codes,
-            )
-        elif disk.effective_free_bytes < disk.required_free_bytes:
-            decision = ResourceDecision(
-                "WAITING_RESOURCE",
-                "RESOURCE_DISK_RESERVE",
-                pressure_rung,
-                warning_codes=decision.warning_codes,
-            )
+            warnings.add("STORAGE_VOLUME_DIFFERENCE_OBSERVED")
+        if disk.effective_free_bytes < disk.required_free_bytes:
+            warnings.add("DISK_RESERVE_BELOW_PREDICTION_OBSERVED")
+        if disk_telemetry_unavailable:
+            warnings.add("DISK_TELEMETRY_UNAVAILABLE")
+        decision = ResourceDecision(
+            "READY",
+            "RESOURCE_TELEMETRY_ONLY",
+            pressure_rung,
+            warning_codes=tuple(sorted(warnings)),
+        )
         sample = ResourceGateSample(
             decision=decision,
             snapshot=snapshot,
@@ -401,7 +380,7 @@ class ResourceGate:
             ),
             "system_admission_thresholds_blocking": False,
             "system_warning_codes": warning_codes,
-            "checkpoint_requested": any(item.decision.status not in {"READY"} for item in self._samples),
+            "checkpoint_requested": False,
             "pressure_rung": final.decision.pressure_rung,
             "next_pressure_rung": next_pressure_rung,
             "pressure_settings": asdict(self.rung(next_pressure_rung)),
@@ -469,13 +448,16 @@ class ResourceGate:
     def _probe(self, stage: str, wsl_required: bool) -> ResourceSnapshot:
         try:
             host = self._host_probe()
+        except (ResourceTelemetryUnavailable, OSError, ValueError):
+            host = HostMemorySnapshot(0.0, 0, None, None, 0, 0, None, None)
+        try:
             owned = (
                 self._owned_probe(wsl_required)
                 if self._owned_probe is not None
                 else OwnedRuntimeSnapshot(0, 0, 0, 0, 0, None)
             )
         except (ResourceTelemetryUnavailable, OSError, ValueError) as exc:
-            raise RequiredResourceTelemetryUnavailable("mandatory resource telemetry is unavailable") from exc
+            raise RequiredResourceTelemetryUnavailable("task ownership telemetry is unavailable") from exc
         wsl = owned.wsl
         self._last_owned = owned
         return ResourceSnapshot(

@@ -5,6 +5,8 @@ import asyncio
 import uuid
 import threading
 import base64
+import hashlib
+import re
 import weakref
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +26,14 @@ from .long_trend_evaluation_contract import get_long_trend_profile
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .seed_contract import ensure_loop_fixed_seed
 from .payload_summary import compact_loop_row, compact_task_row
+from .qe_run_registry import (
+    QE_RUN_DEFAULT_CONSUMER,
+    QE_RUN_REGISTRATION_PARAM,
+    PlannedQELoop,
+    QERunRegistry,
+    attach_qe_planned_loop_registration,
+    normalize_qe_run_consumer_id,
+)
 from .qe_resource_phase_service import (
     GPU_LEASE_BUSY_REASON,
     RESOURCE_SCHEMA_REASON,
@@ -57,6 +67,11 @@ from ..strategy_package.workspace_policy import (
 logger = logging.getLogger(__name__)
 
 QE_RESOURCE_MONITORING_DISABLED_REASON = "QE_RESOURCE_MONITORING_DISABLED"
+
+
+def _consumer_id_from_registration(value: Any) -> str:
+    registration = value if isinstance(value, dict) else {}
+    return normalize_qe_run_consumer_id(registration.get("consumer_id"))
 
 
 def normalize_long_trend_profile_id(value: Any) -> str | None:
@@ -111,6 +126,7 @@ QE_EVOLUTION_LOG_TERMINAL_STATUSES = {
     "stopped",
 }
 QE_LOG_TAIL_DEFAULT_LINES = 500
+QE_PREDICTION_REPLAY_MAX_BYTES = 512 * 1024 * 1024
 
 QE_LOOP_RETRY_MODE_AUTO = "auto"
 QE_LOOP_RETRY_MODE_BACKTEST_ONLY = "backtest_only"
@@ -137,7 +153,6 @@ _QE_LOOP_RETRY_MODE_ALIASES = {
 }
 
 CUSTOM_EVO_STARTED_LOOP_STATUSES = {
-    "pending",
     "submitted",
     "running",
     "processing",
@@ -221,6 +236,7 @@ class AutoEvolutionScheduler:
         self._log_stream_stop_requested: set[str] = set()
         self._resource_session_wait_tasks: set[asyncio.Task] = set()
         self._retry_resume_tasks: dict[str, asyncio.Task] = {}
+        self._custom_evo_capacity_resume_tasks: dict[str, asyncio.Task] = {}
         self._zombie_resume_tasks: dict[str, asyncio.Task] = {}
         self._resource_schema_not_ready_logged = False
 
@@ -231,6 +247,10 @@ class AutoEvolutionScheduler:
     def _ensure_zombie_resume_state(self) -> None:
         if not hasattr(self, "_zombie_resume_tasks"):
             self._zombie_resume_tasks = {}
+
+    def _ensure_custom_evo_capacity_resume_state(self) -> None:
+        if not hasattr(self, "_custom_evo_capacity_resume_tasks"):
+            self._custom_evo_capacity_resume_tasks = {}
 
     @staticmethod
     def _retry_submission_metadata(config: Any) -> Dict[str, Any] | None:
@@ -334,6 +354,58 @@ class AutoEvolutionScheduler:
         self._track_zombie_resume_task(task_id, task)
         return True
 
+    def _track_custom_evo_capacity_resume_task(
+        self,
+        loop_db_id: str,
+        task: asyncio.Task,
+    ) -> None:
+        self._ensure_custom_evo_capacity_resume_state()
+        self._custom_evo_capacity_resume_tasks[loop_db_id] = task
+
+        def _done(completed: asyncio.Task) -> None:
+            if self._custom_evo_capacity_resume_tasks.get(loop_db_id) is completed:
+                self._custom_evo_capacity_resume_tasks.pop(loop_db_id, None)
+            if completed.cancelled():
+                logger.error(
+                    "QE custom-evo capacity resume was cancelled: loop=%s",
+                    loop_db_id,
+                )
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "QE custom-evo capacity resume failed: loop=%s error=%s",
+                    loop_db_id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+
+    def _schedule_custom_evo_capacity_recovery(
+        self,
+        *,
+        loop_db_id: str,
+        task_id: str,
+        loop_index: int,
+    ) -> bool:
+        """Schedule one exact-loop recovery pass for a persisted capacity wait."""
+
+        self._ensure_custom_evo_capacity_resume_state()
+        active = self._custom_evo_capacity_resume_tasks.get(loop_db_id)
+        if active is not None and not active.done():
+            return False
+        task = asyncio.create_task(
+            self._safe_resume_custom_evo_capacity_loop(
+                task_id=task_id,
+                loop_index=loop_index,
+                loop_db_id=loop_db_id,
+            ),
+            name=f"qe-custom-evo-capacity-resume-{loop_db_id}",
+        )
+        self._track_custom_evo_capacity_resume_task(loop_db_id, task)
+        return True
+
     @staticmethod
     def _set_retry_submission_state(
         loop_db_id: str,
@@ -375,13 +447,22 @@ class AutoEvolutionScheduler:
         return gate
 
     @staticmethod
-    def _resolve_model_gpu_training_policy(model_id: str | None) -> str:
+    def _resolve_model_gpu_training_contract(model_id: str | None) -> tuple[str, bool]:
         if not model_id:
-            return GPU_TRAINING_POLICY_PARALLEL
+            return GPU_TRAINING_POLICY_PARALLEL, False
         from .config_composer import ConfigComposer
 
         model_info = ConfigComposer()._get_model_info(model_id)
-        return resolve_gpu_training_policy(model_info or {"model_id": model_id})
+        if not model_info:
+            return resolve_gpu_training_policy({"model_id": model_id}), False
+        return resolve_gpu_training_policy(model_info), True
+
+    @staticmethod
+    def _resolve_model_gpu_training_policy(model_id: str | None) -> str:
+        policy, _catalog_resolved = (
+            AutoEvolutionScheduler._resolve_model_gpu_training_contract(model_id)
+        )
+        return policy
 
     def _resolve_gpu_execution_contract(
         self,
@@ -389,16 +470,26 @@ class AutoEvolutionScheduler:
         model_id: str | None,
         requested_phase_pipeline: bool,
         full_train: bool,
-    ) -> tuple[str, bool]:
+        allow_parallel_training: bool,
+    ) -> tuple[str, bool, bool]:
         policy = GPU_TRAINING_POLICY_PARALLEL
+        model_catalog_resolved = False
         if full_train:
-            policy = self._resolve_model_gpu_training_policy(model_id)
+            policy, model_catalog_resolved = self._resolve_model_gpu_training_contract(
+                model_id
+            )
         phase_pipeline_enabled = resolve_gpu_phase_pipeline_enabled(
             requested=requested_phase_pipeline,
             full_train=full_train,
             policy=policy,
         )
-        return policy, phase_pipeline_enabled
+        parallel_training_eligible = bool(
+            full_train
+            and allow_parallel_training
+            and model_catalog_resolved
+            and policy == GPU_TRAINING_POLICY_PARALLEL
+        )
+        return policy, phase_pipeline_enabled, parallel_training_eligible
 
     async def _acquire_gpu_phase_lease(self, node_id: str, policy: str) -> GPUPhaseLease:
         """Acquire the process-wide fair gate; DB reservation is performed separately."""
@@ -869,6 +960,179 @@ class AutoEvolutionScheduler:
         )
         return model_source, extra_experiment_files
 
+    def _get_prediction_replay_source_loop(
+        self,
+        source_task_id: str,
+        source_loop_index: int,
+    ) -> Dict[str, str]:
+        """Return a completed source loop and its persisted execution node."""
+
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT l.status, l.node_id AS loop_node_id, t.node_id AS task_node_id
+                    FROM qe_evolution_loops l
+                    JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                    WHERE l.task_id = %s AND l.loop_index = %s
+                    """,
+                    (source_task_id, source_loop_index),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_SOURCE_NOT_FOUND: "
+                f"{source_task_id}/Loop{source_loop_index}"
+            )
+        status = str(row.get("status") or "").strip().lower()
+        if status != "completed":
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_SOURCE_NOT_COMPLETED: "
+                f"{source_task_id}/Loop{source_loop_index} status={status or 'missing'}"
+            )
+        node_id = str(row.get("loop_node_id") or row.get("task_node_id") or "").strip()
+        if not node_id:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_SOURCE_NODE_MISSING: "
+                f"{source_task_id}/Loop{source_loop_index}"
+            )
+        return {"status": status, "node_id": node_id}
+
+    async def _build_prediction_replay_payload(
+        self,
+        source_client: QEWorkspaceClient,
+        source_task_id: str,
+        source_loop_index: int,
+        *,
+        source_node_id: str,
+        expected_sha256: str | None,
+    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        """Resolve and stage one immutable completed-loop prediction artifact."""
+
+        source_loop = f"Loop{source_loop_index}"
+        catalog = await source_client.list_workspace_files(source_task_id, source_loop)
+        if catalog.get("catalog_completeness") != "complete":
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_CATALOG_INCOMPLETE: "
+                f"{source_task_id}/{source_loop}"
+            )
+        rows = catalog.get("files")
+        if rows is None:
+            rows = catalog.get("assets")
+        if not isinstance(rows, list):
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_CATALOG_INVALID: files/assets must be a list"
+            )
+        matches: List[tuple[str, Dict[str, Any]]] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            raw_path = item.get("relative_path") or item.get("path") or item.get("filename")
+            normalized_path = str(raw_path or "").replace("\\", "/")
+            while normalized_path.startswith("./"):
+                normalized_path = normalized_path[2:]
+            if (
+                normalized_path == "artifacts/pred.pkl"
+                or normalized_path.endswith("/artifacts/pred.pkl")
+            ):
+                matches.append((normalized_path, item))
+        if len(matches) != 1:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_ARTIFACT_CARDINALITY: "
+                f"expected=1 actual={len(matches)} source={source_task_id}/{source_loop}"
+            )
+        catalog_path, entry = matches[0]
+        if catalog_path.startswith("/") or ".." in Path(catalog_path).parts:
+            raise ValueError("QE_PREDICTION_REPLAY_ARTIFACT_PATH_INVALID")
+        if bool(entry.get("is_symlink")) or str(entry.get("file_type") or "").lower() in {
+            "directory",
+            "symlink",
+            "junction",
+        }:
+            raise ValueError("QE_PREDICTION_REPLAY_ARTIFACT_NOT_REGULAR")
+        try:
+            declared_size = int(entry.get("size_bytes"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("QE_PREDICTION_REPLAY_ARTIFACT_SIZE_INVALID") from exc
+        if declared_size < 1 or declared_size > QE_PREDICTION_REPLAY_MAX_BYTES:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_ARTIFACT_SIZE_OUT_OF_RANGE: "
+                f"size_bytes={declared_size} max_bytes={QE_PREDICTION_REPLAY_MAX_BYTES}"
+            )
+        prediction_bytes = await source_client.download_workspace_file_bytes(
+            source_task_id,
+            source_loop,
+            catalog_path,
+        )
+        if len(prediction_bytes) != declared_size:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_ARTIFACT_SIZE_MISMATCH: "
+                f"declared={declared_size} observed={len(prediction_bytes)}"
+            )
+        observed_sha256 = hashlib.sha256(prediction_bytes).hexdigest()
+        if expected_sha256 and observed_sha256 != expected_sha256:
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_ARTIFACT_SHA256_MISMATCH: "
+                f"expected={expected_sha256} observed={observed_sha256}"
+            )
+        source_ref: Dict[str, Any] = {
+            "schema_version": "qe_prediction_replay_source_ref_v1",
+            "mode": "prediction_replay",
+            "source_task_id": source_task_id,
+            "source_loop_index": source_loop_index,
+            "source_node_id": source_node_id,
+            "catalog_path": catalog_path,
+            "sha256": observed_sha256,
+            "size_bytes": declared_size,
+        }
+        extra_experiment_files = {
+            "frozen_prediction.pkl.b64": base64.b64encode(prediction_bytes).decode("ascii"),
+            "qe_prediction_replay_source_ref.json": json.dumps(
+                source_ref,
+                ensure_ascii=False,
+                indent=2,
+            ),
+        }
+        return source_ref, extra_experiment_files
+
+    @staticmethod
+    def _validate_prediction_replay_result(
+        replay_result: Any,
+        *,
+        expected_source_sha256: str,
+    ) -> Dict[str, Any]:
+        """Validate the runner receipt before it becomes persisted loop evidence."""
+
+        if (
+            not isinstance(replay_result, dict)
+            or replay_result.get("schema_version") != "qe_prediction_replay_result_v1"
+        ):
+            raise ValueError("QE_PREDICTION_REPLAY_RESULT_INVALID")
+        if replay_result.get("source_prediction_sha256") != expected_source_sha256:
+            raise ValueError("QE_PREDICTION_REPLAY_RESULT_SOURCE_SHA256_MISMATCH")
+        executable_sha256 = replay_result.get("executable_prediction_panel_sha256")
+        if not isinstance(executable_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", executable_sha256
+        ):
+            raise ValueError("QE_PREDICTION_REPLAY_RESULT_EXECUTABLE_SHA256_INVALID")
+        counts: Dict[str, int] = {}
+        for field in (
+            "source_prediction_rows",
+            "executable_prediction_rows",
+            "excluded_prediction_rows",
+        ):
+            value = replay_result.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"QE_PREDICTION_REPLAY_RESULT_COUNT_INVALID: field={field}"
+                )
+            counts[field] = value
+        if counts["source_prediction_rows"] != (
+            counts["executable_prediction_rows"] + counts["excluded_prediction_rows"]
+        ):
+            raise ValueError("QE_PREDICTION_REPLAY_RESULT_COUNT_MISMATCH")
+        return dict(replay_result)
+
     async def _require_backtest_retry_isolation_passed(
         self,
         client: QEWorkspaceClient,
@@ -1022,6 +1286,9 @@ class AutoEvolutionScheduler:
         label_horizon: Optional[int] = None,
         random_seed: Optional[int] = None,
         long_trend_profile_id: Optional[str] = None,
+        created_by_type: str = "scheduler",
+        created_by_name: Optional[str] = None,
+        purpose: str = "research",
     ) -> str:
         """
         创建演进任务并写入数据库。
@@ -1142,7 +1409,19 @@ class AutoEvolutionScheduler:
                     ))
                 conn.commit()
             logger.info(f"Created evolution task {task_id}: start_loop={actual_start}, max_loops={actual_start + max_loops}")
-            
+
+        QERunRegistry(connection_factory=get_conn).reserve_task(
+            task_id=task_id,
+            base_experiment_id=root_experiment_id,
+            task_kind="auto_evolution",
+            planned_loops=[
+                PlannedQELoop(loop_index=index, node_id=node_id)
+                for index in range(actual_start + 1, actual_start + max_loops + 1)
+            ],
+            source_type=created_by_type,
+            created_by_name=created_by_name,
+            purpose=purpose,
+        )
         return task_id
 
     def _parse_json_field(self, value: Any, field_name: str) -> Dict[str, Any]:
@@ -1155,6 +1434,33 @@ class AutoEvolutionScheduler:
             if isinstance(parsed, dict):
                 return parsed
         raise ValueError(f"Invalid JSON field for {field_name}: {value}")
+
+    def _load_planned_loop_registration(
+        self,
+        task_id: str,
+        loop_index: int,
+    ) -> Dict[str, Any]:
+        """Read the pre-dispatch identity without inventing one for legacy loops."""
+
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT config_json
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s AND loop_index = %s
+                    """,
+                    (task_id, loop_index),
+                )
+                row = cur.fetchone()
+        if not row or row[0] in (None, ""):
+            return {}
+        config = self._parse_json_field(
+            row[0],
+            f"planned_loop[{task_id}/Loop{loop_index}].config_json",
+        )
+        registration = config.get(QE_RUN_REGISTRATION_PARAM)
+        return dict(registration) if isinstance(registration, dict) else {}
 
     def _extract_label_horizon_from_params(self, params: Any, *, context: str) -> int:
         parsed = self._parse_json_field(params, context) if params not in (None, "") else {}
@@ -2242,6 +2548,10 @@ class AutoEvolutionScheduler:
                 experiment_name=experiment_name,
             )
             config = dict(config)
+            planned_registration = self._load_planned_loop_registration(
+                task_id,
+                loop_index,
+            )
             loop_model_params = merge_qe_minute_runtime_contract(
                 cfg.build_custom_params(),
                 config=config,
@@ -2250,7 +2560,11 @@ class AutoEvolutionScheduler:
                 source="evolution_loop_config",
                 allow_default_execution_algo=True,
             )
+            if planned_registration:
+                loop_model_params[QE_RUN_REGISTRATION_PARAM] = planned_registration
             config["model_params"] = loop_model_params
+            if planned_registration:
+                config[QE_RUN_REGISTRATION_PARAM] = planned_registration
             runtime_contract = build_qe_minute_runtime_contract(
                 custom_params=loop_model_params,
                 execution_algo=cfg.execution_algo,
@@ -2437,6 +2751,19 @@ class AutoEvolutionScheduler:
                 td = self._compute_training_diagnostics(enhanced_data.get("training_curves", {}))
                 enhanced_data["training_diagnostics"] = td
             metrics["enhanced_metrics"] = enhanced_data
+            if bool(config.get("prediction_replay")):
+                replay_client = self._get_workspace_client_for_node_id(
+                    config.get("node_id") or config.get("execution_node_id")
+                )
+                replay_result = await replay_client.get_workspace_file(
+                    task_id,
+                    loop_id,
+                    "qe_prediction_replay_result.json",
+                )
+                metrics["prediction_replay_result"] = self._validate_prediction_replay_result(
+                    replay_result,
+                    expected_source_sha256=str(config.get("prediction_source_sha256") or ""),
+                )
 
             # S3: enhanced_metrics 先写入 DB，确保后续 _build_full_evolution_history 可读取
             with get_conn() as conn:
@@ -2873,6 +3200,12 @@ class AutoEvolutionScheduler:
                                 AND l3.status = 'pending'
                                 AND l3.config_json ? '_qe_retry_submission'
                           )
+                          AND NOT EXISTS (
+                              SELECT 1 FROM qe_evolution_loops l4
+                              WHERE l4.task_id = t.task_id
+                                AND l4.status = 'pending'
+                                AND l4.agent_analysis #>> '{_qe_execution_capacity,state}' = 'waiting_capacity'
+                          )
                     """)
                     zombie_tasks = cur.fetchall()
 
@@ -2886,6 +3219,19 @@ class AutoEvolutionScheduler:
                         ORDER BY l.updated_at, l.loop_id
                     """, (_QE_RETRY_SUBMISSION_KEY,))
                     pending_retry_loops = cur.fetchall()
+
+                    cur.execute("""
+                        SELECT l.loop_id, l.task_id, l.loop_index
+                        FROM qe_evolution_loops l
+                        JOIN qe_evolution_tasks t ON t.task_id = l.task_id
+                        WHERE l.status = 'pending'
+                          AND t.status = 'running'
+                          AND t.task_type = 'custom_evo'
+                          AND l.agent_analysis #>> '{_qe_execution_capacity,state}' = 'waiting_capacity'
+                          AND NOT COALESCE(l.config_json ? %s, false)
+                        ORDER BY l.updated_at, l.loop_id
+                    """, (_QE_RETRY_SUBMISSION_KEY,))
+                    pending_custom_evo_capacity_loops = cur.fetchall()
 
             # F4: 处理 processing 超时
             for row in stuck_processing:
@@ -2925,6 +3271,21 @@ class AutoEvolutionScheduler:
                     )
                 )
                 self._track_retry_resume_task(loop_db_id, task)
+
+            for row in pending_custom_evo_capacity_loops:
+                loop_db_id = str(row["loop_id"])
+                if self._schedule_custom_evo_capacity_recovery(
+                    loop_db_id=loop_db_id,
+                    task_id=str(row["task_id"]),
+                    loop_index=int(row["loop_index"]),
+                ):
+                    logger.info(
+                        "Persisted custom-evo capacity wait recovery scheduled: "
+                        "task=%s Loop%s loop=%s",
+                        row["task_id"],
+                        row["loop_index"],
+                        loop_db_id,
+                    )
 
             # 原有逻辑：检查 running 的 loop 在 RDAgent 侧的状态
             for loop_row in running_loops:
@@ -2998,6 +3359,52 @@ class AutoEvolutionScheduler:
                 "task=%s Loop%s error=%s",
                 task_id,
                 loop_index,
+                exc,
+                exc_info=True,
+            )
+
+    async def _safe_resume_custom_evo_capacity_loop(
+        self,
+        *,
+        task_id: str,
+        loop_index: int,
+        loop_db_id: str,
+    ) -> None:
+        """Retry one persisted custom-evo capacity wait without broad task replay.
+
+        The canonical reservation transaction remains the authority for capacity
+        and exactly-once submission.  A still-full node simply persists the same
+        waiting state and a later reconciliation pass retries it.
+        """
+
+        expected_loop_db_id = f"{task_id}_Loop{loop_index}"
+        if loop_db_id != expected_loop_db_id:
+            logger.error(
+                "Refusing custom-evo capacity resume with inconsistent loop identity: "
+                "task=%s Loop%s persisted_loop=%s expected_loop=%s",
+                task_id,
+                loop_index,
+                loop_db_id,
+                expected_loop_db_id,
+            )
+            return
+        try:
+            result = await self.submit_custom_evo_loop(task_id, loop_index)
+            logger.info(
+                "Custom-evo capacity resume pass completed: task=%s Loop%s "
+                "loop=%s result=%s",
+                task_id,
+                loop_index,
+                loop_db_id,
+                result,
+            )
+        except Exception as exc:
+            logger.error(
+                "Custom-evo capacity resume failed without broad task replay: "
+                "task=%s Loop%s loop=%s error=%s",
+                task_id,
+                loop_index,
+                loop_db_id,
                 exc,
                 exc_info=True,
             )
@@ -3136,15 +3543,15 @@ class AutoEvolutionScheduler:
             strategy_evo_config = task.get("strategy_evo_config") or {}
             if isinstance(strategy_evo_config, str):
                 strategy_evo_config = json.loads(strategy_evo_config)
-            backtest_only_loops = [
+            source_reuse_loops = [
                 loop.get("loop_index")
                 for loop in strategy_evo_config.get("loops", [])
-                if loop.get("backtest_only")
+                if loop.get("backtest_only") or loop.get("prediction_replay")
             ]
-            if backtest_only_loops:
+            if source_reuse_loops:
                 raise ValueError(
-                    "force_full_train=True would override backtest_only loop config "
-                    f"for custom_evo loops {backtest_only_loops}; refusing to silently "
+                    "force_full_train=True would override source-reuse loop config "
+                    f"for custom_evo loops {source_reuse_loops}; refusing to silently "
                     "change the UI-defined comparison. Resume with force_full_train=false."
                 )
 
@@ -3198,6 +3605,9 @@ class AutoEvolutionScheduler:
         label_horizon: Optional[int] = None,
         random_seed: Optional[int] = None,
         long_trend_profile_id: Optional[str] = None,
+        created_by_type: str = "scheduler",
+        created_by_name: Optional[str] = None,
+        purpose: str = "research",
     ) -> str:
         """
         从指定 task 的某个已完成 loop 分叉出新的演进任务。
@@ -3357,6 +3767,18 @@ class AutoEvolutionScheduler:
             f"Forked new task {new_task_id} from {source_task_id} Loop {from_loop_index}, "
             f"max_loops={max_loops}, inherit_history={inherit_history}"
         )
+        QERunRegistry(connection_factory=get_conn).reserve_task(
+            task_id=new_task_id,
+            base_experiment_id=base_exp_id,
+            task_kind="fork_evolution",
+            planned_loops=[
+                PlannedQELoop(loop_index=index, node_id=effective_node_id)
+                for index in range(1, max_loops + 1)
+            ],
+            source_type=created_by_type,
+            created_by_name=created_by_name,
+            purpose=purpose,
+        )
         return new_task_id
 
     async def get_task_detail(self, task_id: str, detail: str = "summary") -> Optional[Dict[str, Any]]:
@@ -3384,35 +3806,98 @@ class AutoEvolutionScheduler:
                 else:
                     cur.execute("""
                         SELECT loop_id, task_id, loop_index, action_type,
-                               config_json, metrics_json,
                                COALESCE(config_json->'factor_list', config_json->'factor_names', config_json->'factors') AS factor_list,
                                config_json->>'model_id' AS model_id,
                                config_json->>'strategy_id' AS strategy_id,
                                config_json->>'label_horizon' AS label_horizon,
                                config_json->>'execution_algo' AS execution_algo,
+                               config_json->>'stock_pool' AS stock_pool,
+                               config_json->'strategy_params' AS strategy_params,
+                               COALESCE(
+                                   config_json->>'enable_sector_hmm',
+                                   config_json#>>'{model_params,enable_sector_hmm}',
+                                   config_json#>>'{strategy_params,enable_sector_hmm}'
+                               ) AS enable_sector_hmm,
+                               COALESCE(
+                                   config_json->>'hmm_model_version_id',
+                                   config_json#>>'{model_params,hmm_model_version_id}',
+                                   config_json#>>'{strategy_params,hmm_model_version_id}'
+                               ) AS hmm_model_version_id,
+                               COALESCE(
+                                   config_json->>'hmm_signal_preset',
+                                   config_json#>>'{model_params,hmm_signal_preset}',
+                                   config_json#>>'{strategy_params,hmm_signal_preset}'
+                               ) AS hmm_signal_preset,
+                               COALESCE(
+                                   config_json->>'sector_blacklist_enabled',
+                                   config_json#>>'{custom_params,sector_blacklist_enabled}',
+                                   config_json#>>'{model_params,sector_blacklist_enabled}',
+                                   config_json#>>'{strategy_params,sector_blacklist_enabled}',
+                                   config_json#>>'{custom_params,_qe_sector_blacklist_policy,enabled}'
+                               ) AS sector_blacklist_enabled,
+                               COALESCE(
+                                   config_json->'sector_blacklist',
+                                   config_json#>'{custom_params,sector_blacklist}',
+                                   config_json#>'{model_params,sector_blacklist}',
+                                   config_json#>'{strategy_params,sector_blacklist}'
+                               ) AS sector_blacklist,
+                               COALESCE(
+                                   config_json#>'{custom_params,_qe_direct_v2_dataset_binding,selection_pins}',
+                                   config_json#>'{model_params,_qe_direct_v2_dataset_binding,selection_pins}',
+                                   config_json#>'{_qe_direct_v2_dataset_binding,selection_pins}',
+                                   config_json->'universe_selection'
+                               ) AS universe_selection,
                                COALESCE(metrics_json->>'ic', metrics_json->>'IC') AS ic,
                                COALESCE(metrics_json->>'icir', metrics_json->>'ICIR') AS icir,
                                COALESCE(metrics_json->>'rank_ic', metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
                                COALESCE(metrics_json->>'rank_icir', metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                               COALESCE(
-                                   metrics_json->>'cagr',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
-                               ) AS cagr,
+                               CASE
+                                   WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                                   THEN metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
+                                   ELSE metrics_json->>'cagr'
+                               END AS cagr,
+                               metrics_json#>>'{enhanced_metrics,absolute_returns,sharpe}' AS sharpe,
+                               (metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL) AS absolute_metrics_present,
                                COALESCE(
                                    metrics_json->>'annualized_return',
                                    metrics_json->>'1day.excess_return_with_cost.annualized_return'
                                ) AS annualized_return,
                                COALESCE(
-                                   metrics_json->>'max_drawdown',
-                                   metrics_json->>'1day.excess_return_with_cost.max_drawdown',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
-                               ) AS max_drawdown,
+                                   metrics_json->>'information_ratio',
+                                   metrics_json->>'1day.excess_return_with_cost.information_ratio'
+                               ) AS information_ratio,
                                COALESCE(
-                                   metrics_json->>'calmar',
-                                   metrics_json->>'calmar_ratio',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
-                               ) AS calmar,
+                                   metrics_json->>'benchmark_annualized_return',
+                                   metrics_json->>'benchmark_annual_return',
+                                   metrics_json#>>'{enhanced_metrics,benchmark_returns,annualized_return}'
+                               ) AS benchmark_annualized_return,
+                               CASE
+                                   WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                                   THEN metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
+                                   ELSE COALESCE(
+                                       metrics_json->>'max_drawdown',
+                                       metrics_json->>'1day.excess_return_with_cost.max_drawdown'
+                                   )
+                               END AS max_drawdown,
+                               CASE
+                                   WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                                   THEN COALESCE(
+                                       metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
+                                       metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
+                                   )
+                                   ELSE COALESCE(metrics_json->>'calmar', metrics_json->>'calmar_ratio')
+                               END AS calmar,
+                               COALESCE(
+                                   metrics_json->>'hmm_trigger_count',
+                                   metrics_json#>>'{enhanced_metrics,policy_diagnostics,hmm_trigger_count}'
+                               ) AS hmm_trigger_count,
+                               COALESCE(
+                                   metrics_json->>'blacklist_excluded_count',
+                                   metrics_json#>>'{enhanced_metrics,policy_diagnostics,blacklist_excluded_count}',
+                                   config_json#>>'{custom_params,_qe_sector_blacklist_policy,blacklist_excluded_count}',
+                                   config_json#>>'{model_params,_qe_sector_blacklist_policy,blacklist_excluded_count}',
+                                   config_json#>>'{_qe_sector_blacklist_policy,blacklist_excluded_count}'
+                               ) AS blacklist_excluded_count,
                                COALESCE(metrics_json->>'topk_return_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_20}') AS topk_return_20,
                                COALESCE(metrics_json->>'topk_return_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_50}') AS topk_return_50,
                                COALESCE(metrics_json->>'topk_hit_rate_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_20}') AS topk_hit_rate_20,
@@ -3433,100 +3918,9 @@ class AutoEvolutionScheduler:
                 result = dict(task)
                 result['loops'] = [dict(loop_row) for loop_row in loops]
 
-        # Live status 检查：对 running 状态的 loop 查询 RDAgent 侧真实状态
-        # 对于 custom_evo/strategy_evo 并行调度任务，不能直接修改 loop status（会破坏
-        # submit_custom_evo_all_loops 的 run_with_sem 调度循环），改为触发完整的
-        # process_completed_loop 流程。
-        task_type = result.get('task_type')
-        any_synced = False
-        for loop_data in result['loops']:
-            if loop_data.get('status') not in ('running', 'processing'):
-                continue
-            loop_id = loop_data['loop_id']
-            loop_index = loop_data['loop_index']
-            try:
-                client = self._get_workspace_client_for_loop(task_id, loop_id)
-                live = await client.get_loop_status(task_id, f"Loop{loop_index}")
-                rd_status = live.get("status")
-            except Exception as e:
-                logger.warning(f"[get_task_detail] live status check failed for {loop_id}: {e}")
-                loop_data["live_status_error"] = str(e)
-                continue
-
-            if task_type in ("custom_evo", "strategy_evo") and rd_status == "not_found":
-                logger.info(
-                    "[get_task_detail] Loop %s not visible on RD-Agent yet; "
-                    "keeping DB status=%s instead of treating it as terminal",
-                    loop_id,
-                    loop_data.get("status"),
-                )
-                continue
-
-            if rd_status in ("completed", "failed", "error", "not_found"):
-                if task_type in ("custom_evo", "strategy_evo"):
-                    if rd_status == "completed":
-                        try:
-                            logger.info(f"[get_task_detail] processing completed loop: {loop_id}")
-                            await self._safe_process_completed_loop(task_id, loop_id)
-                            with get_conn() as conn:
-                                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                                    cur.execute("SELECT * FROM qe_evolution_loops WHERE loop_id = %s", (loop_id,))
-                                    updated = cur.fetchone()
-                                    if updated:
-                                        for i, lp in enumerate(result['loops']):
-                                            if lp.get('loop_id') == loop_id:
-                                                result['loops'][i] = dict(updated)
-                                                break
-                            any_synced = True
-                        except Exception as e:
-                            logger.error(f"[get_task_detail] completed-loop processing failed for {loop_id}: {e}")
-                    else:
-                        new_status = "failed" if rd_status in ("failed", "error", "not_found") else rd_status
-                        with get_conn() as conn:
-                            with conn.cursor() as cur:
-                                cur.execute(
-                                    "UPDATE qe_evolution_loops SET status = %s, updated_at = NOW() "
-                                    "WHERE loop_id = %s AND status IN ('running', 'processing')",
-                                    (new_status, loop_id),
-                                )
-                            conn.commit()
-                        loop_data["status"] = new_status
-                        any_synced = True
-                        logger.info(f"[get_task_detail] synced loop {loop_id}: rd_status={rd_status} -> {new_status}")
-                else:
-                    # 标准演进任务：保留原有快速同步逻辑
-                    new_status = "failed" if rd_status in ("failed", "not_found") else "completed"
-                    with get_conn() as conn:
-                        with conn.cursor() as cur:
-                            cur.execute(
-                                "UPDATE qe_evolution_loops SET status = %s, updated_at = NOW() WHERE loop_id = %s AND status IN ('running', 'processing')",
-                                (new_status, loop_id),
-                            )
-                        conn.commit()
-                    loop_data['status'] = new_status
-                    any_synced = True
-                    logger.info(f"[get_task_detail] auto-synced loop {loop_id}: {rd_status} -> {new_status}")
-
-        # 仅对标准演进任务（非 custom_evo/strategy_evo）自动更新 task 状态。
-        # custom_evo/strategy_evo 的 task 状态由 process_strategy_evo_completed_loop 或
-        # submit_custom_evo_all_loops 的 final status check 管理。
-        if any_synced and task_type not in ("custom_evo", "strategy_evo"):
-            all_terminal = all(
-                lp.get('status') in ('completed', 'failed', 'cancelled')
-                for lp in result['loops']
-            )
-            if all_terminal and result.get('status') == 'running':
-                has_failed = any(lp.get('status') == 'failed' for lp in result['loops'])
-                new_task_status = 'failed' if has_failed else 'completed'
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() WHERE task_id = %s AND status = 'running'",
-                            (new_task_status, task_id),
-                        )
-                    conn.commit()
-                result['status'] = new_task_status
-                logger.info(f"[get_task_detail] auto-synced task {task_id} -> {new_task_status}")
+        # GET is a persisted-state projection only.  Remote readback and state
+        # transitions are owned by QEReconciliationCoordinator, which already
+        # enforces the per-object >=60 second contract.
 
         if detail == "full":
             try:
@@ -3571,25 +3965,33 @@ class AutoEvolutionScheduler:
                            COALESCE(metrics_json->>'icir', metrics_json->>'ICIR') AS icir,
                            COALESCE(metrics_json->>'rank_ic', metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
                            COALESCE(metrics_json->>'rank_icir', metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                           COALESCE(
-                               metrics_json->>'cagr',
-                               metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
-                           ) AS cagr,
+                           CASE
+                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                               THEN metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
+                               ELSE metrics_json->>'cagr'
+                           END AS cagr,
+                           metrics_json#>>'{enhanced_metrics,absolute_returns,sharpe}' AS sharpe,
+                           (metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL) AS absolute_metrics_present,
                            COALESCE(
                                metrics_json->>'annualized_return',
                                metrics_json->>'1day.excess_return_with_cost.annualized_return'
                            ) AS annualized_return,
-                           COALESCE(
-                               metrics_json->>'max_drawdown',
-                               metrics_json->>'1day.excess_return_with_cost.max_drawdown',
-                               metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
-                           ) AS max_drawdown,
-                           COALESCE(
-                               metrics_json->>'calmar',
-                               metrics_json->>'calmar_ratio',
-                               metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
-                               metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
-                           ) AS calmar,
+                           CASE
+                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                               THEN metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
+                               ELSE COALESCE(
+                                   metrics_json->>'max_drawdown',
+                                   metrics_json->>'1day.excess_return_with_cost.max_drawdown'
+                               )
+                           END AS max_drawdown,
+                           CASE
+                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
+                               THEN COALESCE(
+                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
+                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
+                               )
+                               ELSE COALESCE(metrics_json->>'calmar', metrics_json->>'calmar_ratio')
+                           END AS calmar,
                            COALESCE(metrics_json->>'topk_return_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_20}') AS topk_return_20,
                            COALESCE(metrics_json->>'topk_return_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_50}') AS topk_return_50,
                            COALESCE(metrics_json->>'topk_hit_rate_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_20}') AS topk_hit_rate_20,
@@ -4127,6 +4529,11 @@ class AutoEvolutionScheduler:
         if isinstance(config, str):
             config = json.loads(config)
         config = dict(config or {})
+        if bool(config.get("prediction_replay")):
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_GENERIC_RETRY_FORBIDDEN: create a new immutable "
+                "prediction-replay loop instead of inferring model or training fallback"
+            )
         retry_submission = self._retry_submission_metadata(config)
         if _capacity_resume:
             if loop_row["status"] != "pending" or not retry_submission:
@@ -4156,6 +4563,7 @@ class AutoEvolutionScheduler:
                 task = cur.fetchone()
         if not task:
             raise ValueError(f"任务不存在: {task_id}")
+        retry_slot = None
         if task.get("task_type") == "custom_evo":
             retry_slot = self._resolve_custom_evo_parallelism_slot(
                 dict(task),
@@ -4267,6 +4675,7 @@ class AutoEvolutionScheduler:
 
         # 4. Custom-evo retries queue until per-node node_parallelism capacity is free.
         retry_claim_statuses = ["pending"] if _capacity_resume else ["failed", "cancelled"]
+        slot = None
         if task.get("task_type") == "custom_evo":
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -4351,6 +4760,7 @@ class AutoEvolutionScheduler:
         retry_phase_pipeline_enabled = False
         retry_requested_phase_pipeline = False
         retry_gpu_training_policy = GPU_TRAINING_POLICY_PARALLEL
+        retry_parallel_training_eligible = False
         if task.get("task_type") == "custom_evo":
             retry_strategy_config = self._parse_custom_evo_strategy_config(
                 task.get("strategy_evo_config"),
@@ -4374,13 +4784,39 @@ class AutoEvolutionScheduler:
             task_for_retry["node_id"] = effective_node_id
             cfg = build_config_from_retry_loop(config, task_for_retry, experiment_name=f"{task_id}/{loop_id}")
             retry_full_train = retry_mode_name == QE_LOOP_RETRY_MODE_FULL_TRAIN
-            retry_gpu_training_policy, retry_phase_pipeline_enabled = (
-                self._resolve_gpu_execution_contract(
-                    model_id=cfg.model_id,
-                    requested_phase_pipeline=retry_requested_phase_pipeline,
-                    full_train=retry_full_train,
-                )
+            (
+                retry_gpu_training_policy,
+                retry_phase_pipeline_enabled,
+                retry_parallel_training_eligible,
+            ) = self._resolve_gpu_execution_contract(
+                model_id=cfg.model_id,
+                requested_phase_pipeline=retry_requested_phase_pipeline,
+                full_train=retry_full_train,
+                allow_parallel_training=(task.get("task_type") == "custom_evo"),
             )
+            config["gpu_training_policy"] = retry_gpu_training_policy
+            config["phase_pipeline_enabled"] = retry_phase_pipeline_enabled
+            config["parallel_training_eligible"] = retry_parallel_training_eligible
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE qe_evolution_loops
+                        SET config_json = %s, updated_at = NOW()
+                        WHERE loop_id = %s
+                          AND status = 'running'
+                        """,
+                        (
+                            json.dumps(config, ensure_ascii=False),
+                            evolution_loop_db_id,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise RuntimeError(
+                            "retry loop lost its running source row before capacity metadata persistence: "
+                            f"loop={evolution_loop_db_id}"
+                        )
+                conn.commit()
             if retry_phase_pipeline_enabled:
                 if not retry_requested_phase_pipeline:
                     logger.info(
@@ -4440,6 +4876,10 @@ class AutoEvolutionScheduler:
                 resource_source_run_key=retry_resource_session.source_run_key if retry_resource_session else None,
                 resource_session_token=retry_resource_session.token if retry_resource_session else None,
                 phase_pipeline_enabled=retry_phase_pipeline_enabled,
+                submission_node_capacity=(
+                    int(slot["limit"]) if slot is not None else None
+                ),
+                parallel_training_eligible=retry_parallel_training_eligible,
                 submission_source_kind="qe_evolution_loop",
                 submission_source_execution_id=retry_source_execution_id,
                 submission_source_claim_id=evolution_loop_db_id,
@@ -5067,6 +5507,9 @@ class AutoEvolutionScheduler:
         inherit_history: bool = False,
         node_id: Optional[str] = None,
         long_trend_profile_id: Optional[str] = None,
+        created_by_type: str = "scheduler",
+        created_by_name: Optional[str] = None,
+        purpose: str = "research",
     ) -> str:
         """
         从指定 task 的某个已完成 loop 创建策略演进任务。
@@ -5161,11 +5604,73 @@ class AutoEvolutionScheduler:
         # 5. 创建 base_experiment 记录
         base_exp_id = f"{new_task_id}_base"
         metrics = source_loop.get("metrics_json") or {}
+        from .qe_active_dataset_profile import (
+            QEActiveDatasetProfileError,
+            enforce_qe_universe_topk,
+            load_active_qe_profile,
+            resolve_and_apply_active_qe_dataset,
+        )
         if isinstance(metrics, str):
             metrics = json.loads(metrics)
 
         # node_id: 入参优先，否则继承源任务
-        effective_node_id = node_id if node_id is not None else source_task.get("node_id")
+        effective_node_id = (
+            node_id
+            if node_id is not None
+            else source_task.get("node_id") or resolve_default_qe_node_id()
+        )
+        active_profile = load_active_qe_profile()
+        if active_profile is None and any(
+            loop_cfg.get("universe_selection") is not None for loop_cfg in loops_config
+        ):
+            raise ValueError(
+                "reason_code=qe_active_dataset_profile_missing: "
+                "universe_selection requires an activated QE dataset profile"
+            )
+        if active_profile is not None:
+            for idx, loop_cfg in enumerate(loops_config, start=1):
+                if loop_cfg.get("stock_pool") and loop_cfg.get("universe_selection") is not None:
+                    raise ValueError(
+                        f"strategy_fork loop {idx}: stock_pool and universe_selection cannot be supplied together"
+                    )
+                resolved_split, resolved_params, resolved_summary = resolve_and_apply_active_qe_dataset(
+                    node_id=str(effective_node_id),
+                    data_split=base_data_split,
+                    universe_selection=loop_cfg.get("universe_selection"),
+                    custom_params=loop_cfg.get("custom_params"),
+                    label_horizon=source_label_horizon,
+                    profile=active_profile,
+                )
+                resolved_params.setdefault("execution_node_id", str(effective_node_id))
+                loop_cfg["data_split"] = resolved_split
+                loop_cfg["custom_params"] = resolved_params
+                loop_cfg["stock_pool"] = resolved_params.get("stock_pool")
+                loop_cfg["resolved_dataset"] = resolved_summary
+        for idx, loop_cfg in enumerate(loops_config, start=1):
+            try:
+                loop_cfg["strategy_params"] = enforce_qe_universe_topk(
+                    loop_cfg.get("strategy_params"),
+                    universe_selection=loop_cfg.get("universe_selection"),
+                    stock_pool=loop_cfg.get("stock_pool"),
+                )
+            except QEActiveDatasetProfileError as exc:
+                raise ValueError(
+                    f"strategy_fork loop {idx}: reason_code={exc.reason_code}: {exc}"
+                ) from exc
+        loops_config = [
+            attach_qe_planned_loop_registration(
+                loop_cfg,
+                run_kind="strategy_evolution_loop",
+                source_type=created_by_type,
+                created_by_name=created_by_name,
+                purpose=purpose,
+                node_id=str(loop_cfg.get("node_id") or effective_node_id),
+                parent_id=base_exp_id,
+                task_id=new_task_id,
+                loop_index=index,
+            )
+            for index, loop_cfg in enumerate(loops_config, start=1)
+        ]
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -5216,6 +5721,24 @@ class AutoEvolutionScheduler:
         logger.info(
             f"创建策略演进任务 {new_task_id} 从 {source_task_id} L{from_loop_index}, "
             f"共 {len(loops_config)} 个 Loop"
+        )
+
+        QERunRegistry(connection_factory=get_conn).reserve_task(
+            task_id=new_task_id,
+            base_experiment_id=base_exp_id,
+            task_kind="strategy_evolution",
+            planned_loops=[
+                PlannedQELoop(
+                    loop_index=index,
+                    node_id=str(loop_cfg.get("node_id") or effective_node_id),
+                    config=loop_cfg,
+                    action_type="strategy_backtest",
+                )
+                for index, loop_cfg in enumerate(loops_config, start=1)
+            ],
+            source_type=created_by_type,
+            created_by_name=created_by_name,
+            purpose=purpose,
         )
 
         # 7. 异步启动批量调度
@@ -5336,7 +5859,12 @@ class AutoEvolutionScheduler:
                 source="strategy_evo_loop_config",
                 allow_default_execution_algo=True,
             )
+            planned_registration = loop_config.get(QE_RUN_REGISTRATION_PARAM)
+            if isinstance(planned_registration, dict):
+                loop_model_params[QE_RUN_REGISTRATION_PARAM] = dict(planned_registration)
             base_config["model_params"] = loop_model_params
+            if isinstance(planned_registration, dict):
+                base_config[QE_RUN_REGISTRATION_PARAM] = dict(planned_registration)
             runtime_contract = build_qe_minute_runtime_contract(
                 custom_params=loop_model_params,
                 execution_algo=cfg.execution_algo,
@@ -5773,6 +6301,10 @@ class AutoEvolutionScheduler:
         clone_from_task_id: Optional[str] = None,
         auto_start: bool = True,
         long_trend_profile_id: Optional[str] = None,
+        consumer_id: str = QE_RUN_DEFAULT_CONSUMER,
+        created_by_type: str = "scheduler",
+        created_by_name: Optional[str] = None,
+        purpose: str = "research",
     ) -> str:
         """
         创建自定义演进任务。每个 Loop 都可以完全自定义因子、模型、策略配置，
@@ -5791,6 +6323,7 @@ class AutoEvolutionScheduler:
         effective_long_trend_profile_id = normalize_long_trend_profile_id(
             long_trend_profile_id
         )
+        effective_consumer_id = normalize_qe_run_consumer_id(consumer_id)
         if phase_pipeline_enabled:
             QEResourcePhaseService().ensure_schema_ready()
         loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
@@ -5837,7 +6370,26 @@ class AutoEvolutionScheduler:
         first_loop = loops_config[0]
         factor_names = [k.split("||")[0] for k in first_loop.get("factor_keys", [])]
         base_exp_id = f"{new_task_id}_base"
-        first_custom_params = dict(first_loop.get("strategy_params") or {})
+        loops_config = [
+            attach_qe_planned_loop_registration(
+                loop_cfg,
+                run_kind="custom_evolution_loop",
+                consumer_id=effective_consumer_id,
+                source_type=created_by_type,
+                created_by_name=created_by_name,
+                purpose=purpose,
+                node_id=str(loop_cfg.get("node_id") or node_id),
+                parent_id=base_exp_id,
+                task_id=new_task_id,
+                loop_index=index,
+            )
+            for index, loop_cfg in enumerate(loops_config, start=1)
+        ]
+        first_loop = loops_config[0]
+        # Preserve server-owned active dataset/universe bindings from the
+        # normalized Loop config. Strategy params extend rather than replace it.
+        first_custom_params = dict(first_loop.get("custom_params") or {})
+        first_custom_params.update(dict(first_loop.get("strategy_params") or {}))
         if first_loop.get("label_type"):
             first_custom_params["label_type"] = first_loop["label_type"]
         if bool(first_loop.get("disable_alpha158", False)):
@@ -5903,6 +6455,25 @@ class AutoEvolutionScheduler:
             f"共 {len(loops_config)} 个 Loop, node_parallelism={node_parallelism}"
         )
 
+        QERunRegistry(connection_factory=get_conn).reserve_task(
+            task_id=new_task_id,
+            base_experiment_id=base_exp_id,
+            task_kind="custom_evolution",
+            planned_loops=[
+                PlannedQELoop(
+                    loop_index=index,
+                    node_id=str(loop_cfg.get("node_id") or node_id),
+                    config=loop_cfg,
+                    action_type=str(loop_cfg.get("action_type") or "custom"),
+                )
+                for index, loop_cfg in enumerate(loops_config, start=1)
+            ],
+            consumer_id=effective_consumer_id,
+            source_type=created_by_type,
+            created_by_name=created_by_name,
+            purpose=purpose,
+        )
+
         # Template materialization can create the DB task without starting execution.
         if auto_start:
             bg_task = asyncio.create_task(self.submit_custom_evo_all_loops(new_task_id))
@@ -5941,11 +6512,41 @@ class AutoEvolutionScheduler:
         loop_rows: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         status = str(task.get("status") or "").lower()
-        submitted_loop_count = sum(
-            1
-            for row in loop_rows
-            if str(row.get("status") or "").lower() in CUSTOM_EVO_STARTED_LOOP_STATUSES
-        )
+        def _has_submission_evidence(row: Dict[str, Any]) -> bool:
+            row_status = str(row.get("status") or "").lower()
+            if row_status in CUSTOM_EVO_STARTED_LOOP_STATUSES:
+                return True
+            if row_status != "pending":
+                return False
+            if row.get("experiment_id"):
+                return True
+            raw_config = row.get("config_json")
+            if isinstance(raw_config, str):
+                try:
+                    raw_config = json.loads(raw_config)
+                except json.JSONDecodeError:
+                    # An unreadable pending config cannot be proven to be an
+                    # untouched registry reservation, so fail closed.
+                    return True
+            if not isinstance(raw_config, dict):
+                return True
+            registration = raw_config.get(QE_RUN_REGISTRATION_PARAM)
+            if not isinstance(registration, dict):
+                # Only a canonical registry reservation is allowed to keep a
+                # pending row editable/startable. Legacy or malformed pending
+                # rows remain nonstartable until explicitly reconciled.
+                return True
+            return any(
+                key in raw_config
+                for key in (
+                    "execution_manifest",
+                    "execution_manifest_sha256",
+                    _QE_RETRY_SUBMISSION_KEY,
+                    _QE_RERUN_SUBMISSION_KEY,
+                )
+            )
+
+        submitted_loop_count = sum(1 for row in loop_rows if _has_submission_evidence(row))
         startable = (
             task.get("task_type") == "custom_evo"
             and status == "pending"
@@ -5979,7 +6580,8 @@ class AutoEvolutionScheduler:
                     raise ValueError(f"custom_evo task not found: {task_id}")
                 cur.execute(
                     """
-                    SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
                     FROM qe_evolution_loops
                     WHERE task_id = %s
                     ORDER BY loop_index ASC
@@ -5988,6 +6590,71 @@ class AutoEvolutionScheduler:
                 )
                 loop_rows = [dict(row) for row in cur.fetchall()]
         return self._custom_evo_start_state_from_rows(dict(task), loop_rows)
+
+    def claim_custom_evo_start(self, task_id: str) -> Dict[str, Any]:
+        """Atomically claim one never-started materialized custom_evo task.
+
+        Registry reservations deliberately create pending loop rows before
+        execution.  The claim changes the task state before the FastAPI
+        background task is scheduled, making repeated/concurrent start calls
+        fail closed without treating those planned rows as prior submissions.
+        """
+
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM qe_evolution_tasks WHERE task_id = %s FOR UPDATE",
+                    (task_id,),
+                )
+                task = cur.fetchone()
+                if not task:
+                    raise ValueError(f"custom_evo task not found: {task_id}")
+                cur.execute(
+                    """
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
+                    FROM qe_evolution_loops
+                    WHERE task_id = %s
+                    ORDER BY loop_index ASC
+                    """,
+                    (task_id,),
+                )
+                loop_rows = [dict(row) for row in cur.fetchall()]
+                start_state = self._custom_evo_start_state_from_rows(dict(task), loop_rows)
+                if not start_state.get("startable"):
+                    conn.commit()
+                    return {**start_state, "claimed": False}
+                cur.execute(
+                    """
+                    UPDATE qe_evolution_tasks
+                    SET status = 'running', updated_at = NOW()
+                    WHERE task_id = %s
+                      AND task_type = 'custom_evo'
+                      AND status = 'pending'
+                      AND current_loop = 0
+                    RETURNING task_id
+                    """,
+                    (task_id,),
+                )
+                claimed = cur.fetchone() is not None
+            conn.commit()
+        if not claimed:
+            return {
+                **start_state,
+                "claimed": False,
+                "startable": False,
+                "editable": False,
+                "resume_allowed": True,
+                "start_reason": "custom_evo task start claim was lost to another request",
+            }
+        return {
+            **start_state,
+            "claimed": True,
+            "startable": False,
+            "editable": False,
+            "resume_allowed": True,
+            "start_reason": "custom_evo task start claimed",
+        }
 
     async def get_custom_evo_editable_config(self, task_id: str) -> Dict[str, Any]:
         with get_conn() as conn:
@@ -6000,7 +6667,8 @@ class AutoEvolutionScheduler:
                     raise ValueError(f"task {task_id} is not a custom_evo task")
                 cur.execute(
                     """
-                    SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                    SELECT loop_index, loop_id, status, node_id, experiment_id,
+                           config_json, updated_at
                     FROM qe_evolution_loops
                     WHERE task_id = %s
                     ORDER BY loop_index ASC
@@ -6087,7 +6755,8 @@ class AutoEvolutionScheduler:
                         raise ValueError(f"task {task_id} is not a custom_evo task")
                     cur.execute(
                         """
-                        SELECT loop_index, loop_id, status, node_id, experiment_id, updated_at
+                        SELECT loop_index, loop_id, status, node_id, experiment_id,
+                               config_json, updated_at
                         FROM qe_evolution_loops
                         WHERE task_id = %s
                         ORDER BY loop_index ASC
@@ -7062,6 +7731,11 @@ class AutoEvolutionScheduler:
         if not loop_config:
             logger.error(f"Loop {loop_index} 的配置未找到")
             raise ValueError(f"Loop configuration not found for loop_index={loop_index} in task {task_id}")
+        if force_full_train and bool(loop_config.get("prediction_replay")):
+            raise ValueError(
+                "QE_PREDICTION_REPLAY_FORCE_FULL_TRAIN_FORBIDDEN: "
+                "immutable prediction replay cannot be converted into model training"
+            )
 
         # The legacy custom-evolution executor has been retired; only the unified path may run.
         _engine_mode = custom_evo_config.get("engine_mode") or "unified"
@@ -7092,7 +7766,7 @@ class AutoEvolutionScheduler:
         """
         from .experiment_config_builders import build_config_from_custom_evo_loop
         from .executors.backtest import BacktestExecutor, BacktestMode
-        from .executors.base import ExecutionContext
+        from .executors.base import ExecutionContext, PredictionReplaySource
         from .config_composer import ConfigComposer
 
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
@@ -7140,22 +7814,36 @@ class AutoEvolutionScheduler:
             context=f"execute_custom_evo_loop:{task_id}:Loop{loop_index}",
         )
         requested_phase_pipeline = bool(strategy_config.get("phase_pipeline_enabled", False))
-        full_train_requested = not (bool(loop_config.get("backtest_only")) and not force_full_train)
+        full_train_requested = not (
+            bool(loop_config.get("prediction_replay"))
+            or (bool(loop_config.get("backtest_only")) and not force_full_train)
+        )
         phase_pipeline_enabled = False
 
         resource_service = QEResourcePhaseService()
         resource_session = None
         gpu_phase_lease = None
         gpu_training_policy = GPU_TRAINING_POLICY_PARALLEL
+        parallel_training_eligible = False
         resource_waiter_started = False
         try:
             loop_config = dict(loop_config)
             ensure_loop_fixed_seed(loop_config, context=f"custom_evo.task[{task_id}].Loop{loop_index}")
-            if loop_config.get("backtest_only") and "source_label_horizon" not in loop_config:
+            if (
+                loop_config.get("backtest_only") or loop_config.get("prediction_replay")
+            ) and "source_label_horizon" not in loop_config:
                 loop_config = dict(loop_config)
                 loop_config["source_label_horizon"] = self._get_source_loop_label_horizon(
-                    loop_config.get("model_source_task_id"),
-                    int(loop_config.get("model_source_loop_index")),
+                    (
+                        loop_config.get("model_source_task_id")
+                        if loop_config.get("backtest_only")
+                        else loop_config.get("prediction_source_task_id")
+                    ),
+                    int(
+                        loop_config.get("model_source_loop_index")
+                        if loop_config.get("backtest_only")
+                        else loop_config.get("prediction_source_loop_index")
+                    ),
                 )
             # 1. 构建 ExperimentConfig（配置层）
             experiment_name = f"{task_id}/{loop_id}"
@@ -7164,10 +7852,37 @@ class AutoEvolutionScheduler:
                 task=task,
                 experiment_name=experiment_name,
             )
-            gpu_training_policy, phase_pipeline_enabled = self._resolve_gpu_execution_contract(
+            prediction_replay_source: PredictionReplaySource | None = None
+            prediction_replay_files: Dict[str, str] | None = None
+            if cfg.prediction_replay:
+                if not cfg.prediction_source_task_id or cfg.prediction_source_loop_index is None:
+                    raise ValueError("QE_PREDICTION_REPLAY_SOURCE_IDENTITY_MISSING")
+                source_runtime = self._get_prediction_replay_source_loop(
+                    cfg.prediction_source_task_id,
+                    cfg.prediction_source_loop_index,
+                )
+                source_node_id = source_runtime["node_id"]
+                source_client = self._get_workspace_client_for_node_id(source_node_id)
+                source_ref, prediction_replay_files = await self._build_prediction_replay_payload(
+                    source_client,
+                    cfg.prediction_source_task_id,
+                    cfg.prediction_source_loop_index,
+                    source_node_id=source_node_id,
+                    expected_sha256=cfg.prediction_source_sha256,
+                )
+                prediction_replay_source = PredictionReplaySource.model_validate(source_ref)
+                cfg = cfg.model_copy(
+                    update={"prediction_source_sha256": prediction_replay_source.sha256}
+                )
+            (
+                gpu_training_policy,
+                phase_pipeline_enabled,
+                parallel_training_eligible,
+            ) = self._resolve_gpu_execution_contract(
                 model_id=cfg.model_id,
                 requested_phase_pipeline=requested_phase_pipeline,
                 full_train=full_train_requested,
+                allow_parallel_training=True,
             )
             if phase_pipeline_enabled:
                 if not requested_phase_pipeline:
@@ -7190,7 +7905,7 @@ class AutoEvolutionScheduler:
             # 2. 保存 config 记录到 loop
             runtime_flags = cfg.build_runtime_flags()
             requested_seed = runtime_flags.get("random_seed")
-            if requested_seed is None and not cfg.backtest_only:
+            if requested_seed is None and not (cfg.backtest_only or cfg.prediction_replay):
                 raise ValueError(f"Loop {loop_index}: runtime_flags.random_seed is required before config persistence")
             seed_ensemble = runtime_flags.get("ensemble") if isinstance(runtime_flags.get("ensemble"), dict) else None
             action_type = "ensemble_config" if seed_ensemble else "custom_config"
@@ -7210,6 +7925,15 @@ class AutoEvolutionScheduler:
                 "backtest_only": cfg.backtest_only,
                 "model_source_task_id": cfg.model_source_task_id,
                 "model_source_loop_index": cfg.model_source_loop_index,
+                "prediction_replay": cfg.prediction_replay,
+                "prediction_source_task_id": cfg.prediction_source_task_id,
+                "prediction_source_loop_index": cfg.prediction_source_loop_index,
+                "prediction_source_sha256": cfg.prediction_source_sha256,
+                "prediction_replay_source": (
+                    prediction_replay_source.model_dump(mode="json")
+                    if prediction_replay_source is not None
+                    else None
+                ),
                 "source_label_horizon": loop_config.get("source_label_horizon"),
                 "stock_pool": cfg.stock_pool,
                 "filter_suspended_on_signal": cfg.filter_suspended_on_signal,
@@ -7226,6 +7950,7 @@ class AutoEvolutionScheduler:
                 "phase_pipeline_requested": requested_phase_pipeline,
                 "resource_telemetry_enabled": resource_telemetry_enabled,
                 "gpu_training_policy": gpu_training_policy,
+                "parallel_training_eligible": parallel_training_eligible,
                 "resource_session_id": resource_session.session_id if resource_session else None,
             }
             rerun_submission = loop_config.get(_QE_RERUN_SUBMISSION_KEY)
@@ -7239,7 +7964,12 @@ class AutoEvolutionScheduler:
                 source="custom_evo_loop_config",
                 allow_default_execution_algo=True,
             )
+            planned_registration = loop_config.get(QE_RUN_REGISTRATION_PARAM)
+            if isinstance(planned_registration, dict):
+                loop_model_params[QE_RUN_REGISTRATION_PARAM] = dict(planned_registration)
             config_record["model_params"] = loop_model_params
+            if isinstance(planned_registration, dict):
+                config_record[QE_RUN_REGISTRATION_PARAM] = dict(planned_registration)
             runtime_contract = build_qe_minute_runtime_contract(
                 custom_params=loop_model_params,
                 execution_algo=cfg.execution_algo,
@@ -7269,6 +7999,12 @@ class AutoEvolutionScheduler:
                 "ensemble": seed_ensemble,
                 "node_id": effective_node_id,
                 "backtest_only": cfg.backtest_only,
+                "prediction_replay": cfg.prediction_replay,
+                "prediction_replay_source": (
+                    prediction_replay_source.model_dump(mode="json")
+                    if prediction_replay_source is not None
+                    else None
+                ),
             }
             config_record["execution_manifest_sha256"] = sha256_json(config_record["execution_manifest"])
             with get_conn() as conn:
@@ -7316,13 +8052,49 @@ class AutoEvolutionScheduler:
                 resource_source_run_key=resource_session.source_run_key if resource_session else None,
                 resource_session_token=resource_session.token if resource_session else None,
                 phase_pipeline_enabled=phase_pipeline_enabled,
+                submission_node_capacity=int(slot["limit"]),
+                parallel_training_eligible=parallel_training_eligible,
                 submission_source_kind="qe_evolution_loop",
                 submission_source_execution_id=submission_source_execution_id,
                 submission_source_claim_id=submission_source_claim_id,
+                submission_consumer_id=_consumer_id_from_registration(
+                    planned_registration
+                ),
             )
+            if cfg.prediction_replay:
+                if prediction_replay_source is None or prediction_replay_files is None:
+                    raise ValueError("QE_PREDICTION_REPLAY_RESOLVED_PAYLOAD_MISSING")
+                ctx = ExecutionContext(
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    experiment_name=experiment_name,
+                    node_id=effective_node_id,
+                    callback_url=self._get_callback_url_for_node(effective_node_id),
+                    prediction_replay_source=prediction_replay_source,
+                    extra_experiment_files=prediction_replay_files,
+                    require_fixed_seed=False,
+                    phase_pipeline_enabled=False,
+                    submission_node_capacity=int(slot["limit"]),
+                    parallel_training_eligible=False,
+                    submission_source_kind="qe_evolution_loop",
+                    submission_source_execution_id=submission_source_execution_id,
+                    submission_source_claim_id=submission_source_claim_id,
+                    submission_consumer_id=_consumer_id_from_registration(
+                        planned_registration
+                    ),
+                )
+                mode = BacktestMode.PREDICTION_REPLAY
+                logger.info(
+                    "[unified] custom evolution Loop %s uses immutable prediction replay "
+                    "source=%s/Loop%s sha256=%s",
+                    loop_index,
+                    prediction_replay_source.source_task_id,
+                    prediction_replay_source.source_loop_index,
+                    prediction_replay_source.sha256,
+                )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
-            if cfg.backtest_only and not force_full_train:
+            elif cfg.backtest_only and not force_full_train:
                 if not cfg.model_source_task_id or cfg.model_source_loop_index is None:
                     raise ValueError(
                         f"Loop {loop_index}: backtest_only=True 但未指定 model_source"
@@ -7359,9 +8131,14 @@ class AutoEvolutionScheduler:
                     resource_source_run_key=resource_session.source_run_key if resource_session else None,
                     resource_session_token=resource_session.token if resource_session else None,
                     phase_pipeline_enabled=False,
+                    submission_node_capacity=int(slot["limit"]),
+                    parallel_training_eligible=False,
                     submission_source_kind="qe_evolution_loop",
                     submission_source_execution_id=submission_source_execution_id,
                     submission_source_claim_id=submission_source_claim_id,
+                    submission_consumer_id=_consumer_id_from_registration(
+                        planned_registration
+                    ),
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(
@@ -7754,7 +8531,20 @@ class AutoEvolutionScheduler:
 
             from .multi_alpha_engine import MultiAlphaEngine
 
-            engine = MultiAlphaEngine(cfg)
+            planned_registration = self._load_planned_loop_registration(
+                task_id,
+                loop_index,
+            )
+            engine = MultiAlphaEngine(
+                cfg,
+                registration_context={
+                    "source_type": planned_registration.get("source_type", "scheduler"),
+                    "created_by_name": planned_registration.get("created_by_name"),
+                    "purpose": planned_registration.get("purpose", "research"),
+                },
+                parent_multi_alpha_id=base_exp_id,
+                parent_custom_params=custom_params_clean,
+            )
             result = engine.run()
 
             config_json = {
@@ -7765,6 +8555,8 @@ class AutoEvolutionScheduler:
                 "group_configs": result.get("group_configs"),
                 "meta_method": result.get("meta_method"),
             }
+            if planned_registration:
+                config_json[QE_RUN_REGISTRATION_PARAM] = planned_registration
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(

@@ -28,6 +28,16 @@ def _write_bug(
     )
 
 
+def _write_test_file(root: Path, relative_path: str) -> None:
+    path = root / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("def test_contract():\n    assert True\n", encoding="utf-8")
+
+
+def _write_noxfile(root: Path, body: str) -> None:
+    (root / "noxfile.py").write_text(body, encoding="utf-8")
+
+
 def test_close_sync_bug_json_skips_backend_matrix(tmp_path: Path) -> None:
     bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-example.json"
     _write_bug(bug, status="fixed")
@@ -75,6 +85,31 @@ def test_open_bug_registry_change_skips_unrelated_backend_matrix(tmp_path: Path)
     assert any("status=open" in reason for reason in payload["reasons"])
 
 
+def test_factor_research_docs_and_instruction_only_change_does_not_request_dev_db(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260911_BUG-1430-issue.json"
+    _write_bug(tmp_path / bug_rel, status="open", module="factor_library.research")
+
+    payload = classifier.classify_changed_files(
+        [
+            ".claude/commands/develop-factor.md",
+            ".claude/commands/factor-research.md",
+            ".codex/skills/develop-factor/SKILL.md",
+            ".codex/skills/factor-research/SKILL.md",
+            "docs/analysis/factor_research_methodology.md",
+            "docs/architecture/factor_research_comparison_supplement_20260909.md",
+            "docs/architecture/factor_research_evolution_blueprint_20260908.md",
+            bug_rel,
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["dev_db_required"] is False
+    assert payload["dev_db_plan_keys"] == []
+    assert payload["backend_required"] is False
+    assert "factor_research_backend" not in payload["selected_plan_keys"]
+    assert "factor_research_dev_db" not in payload["selected_plan_keys"]
+
+
 def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) -> None:
     bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260601_BUG-191-example.json"
     _write_bug(bug, status="fixed")
@@ -92,6 +127,36 @@ def test_workflow_change_with_bug_metadata_uses_workflow_lane(tmp_path: Path) ->
     assert payload["non_bug_registry_files"] == ["scripts/aistock_issue_workflow.py"]
     assert payload["backend_sessions"] == []
     assert payload["workflow_validation_required"] is True
+
+
+def test_deleted_code_and_test_paths_do_not_require_impossible_execution_mapping(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    workflow = tmp_path / "scripts" / "aistock_issue_workflow.py"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("# workflow fixture\n", encoding="utf-8")
+    bug = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260906_BUG-1379-retired.json"
+    _write_bug(bug, status="open")
+
+    payload = classifier.classify_changed_files(
+        [
+            bug.relative_to(tmp_path).as_posix(),
+            "scripts/aistock_issue_workflow.py",
+            "scripts/cross_tool_review_dispatch.py",
+            "backend/tests/test_cross_tool_review_dispatch.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["deleted_files"] == [
+        "scripts/cross_tool_review_dispatch.py",
+        "backend/tests/test_cross_tool_review_dispatch.py",
+    ]
+    assert payload["obsolete_surface_removal"] is True
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == []
+    assert payload["codeql_pr_languages"] == ["python"]
 
 
 def test_self_hosted_workspace_prepare_stays_in_workflow_lane(tmp_path: Path) -> None:
@@ -129,9 +194,8 @@ def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_pa
     assert payload["frontend_required"] is False
     assert payload["workflow_test_targets"] == [
         "backend/tests/test_aistock_guardrail_scan.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py",
-        "backend/tests/scripts/test_issue_flow.py",
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_issue_flow.py",
     ]
 
 
@@ -212,6 +276,146 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     assert alpha_audit_payload["dev_db_required"] is False
     assert alpha_audit_payload["unmapped_code_files"] == []
 
+    independent_alpha_audit_payload = classifier.classify_changed_files(
+        ["scripts/advisory_independent_package_alpha_audit.py"],
+        repo_root=tmp_path,
+    )
+    assert independent_alpha_audit_payload["classification"] == "targeted_ci_required"
+    assert independent_alpha_audit_payload["backend_required"] is True
+    assert independent_alpha_audit_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert independent_alpha_audit_payload["dev_db_required"] is False
+    assert independent_alpha_audit_payload["unmapped_code_files"] == []
+
+    entry_exit_audit_payload = classifier.classify_changed_files(
+        ["scripts/advisory_entry_exit_formal_audit.py"],
+        repo_root=tmp_path,
+    )
+    assert entry_exit_audit_payload["classification"] == "targeted_ci_required"
+    assert entry_exit_audit_payload["backend_required"] is True
+    assert entry_exit_audit_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert entry_exit_audit_payload["dev_db_required"] is False
+    assert entry_exit_audit_payload["unmapped_code_files"] == []
+
+    exit_learnability_payload = classifier.classify_changed_files(
+        ["scripts/advisory_exit_learnability_audit.py"],
+        repo_root=tmp_path,
+    )
+    assert exit_learnability_payload["classification"] == "targeted_ci_required"
+    assert exit_learnability_payload["backend_required"] is True
+    assert exit_learnability_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert exit_learnability_payload["dev_db_required"] is False
+    assert exit_learnability_payload["unmapped_code_files"] == []
+
+    qe_alpha_preparation_payload = classifier.classify_changed_files(
+        ["scripts/advisory_qe_alpha_mve_prepare.py"],
+        repo_root=tmp_path,
+    )
+    assert qe_alpha_preparation_payload["classification"] == "targeted_ci_required"
+    assert qe_alpha_preparation_payload["backend_required"] is True
+    assert qe_alpha_preparation_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert qe_alpha_preparation_payload["dev_db_required"] is False
+    assert qe_alpha_preparation_payload["unmapped_code_files"] == []
+
+    qe_alpha_mve_payload = classifier.classify_changed_files(
+        ["scripts/advisory_qe_alpha_mve_run.py"],
+        repo_root=tmp_path,
+    )
+    assert qe_alpha_mve_payload["classification"] == "targeted_ci_required"
+    assert qe_alpha_mve_payload["backend_required"] is True
+    assert qe_alpha_mve_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert qe_alpha_mve_payload["dev_db_required"] is False
+    assert qe_alpha_mve_payload["unmapped_code_files"] == []
+
+    qe_alpha_generator_payload = classifier.classify_changed_files(
+        ["scripts/advisory_qe_alpha_generator_mve_run.py"],
+        repo_root=tmp_path,
+    )
+    assert qe_alpha_generator_payload["classification"] == "targeted_ci_required"
+    assert qe_alpha_generator_payload["backend_required"] is True
+    assert qe_alpha_generator_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert qe_alpha_generator_payload["dev_db_required"] is False
+    assert qe_alpha_generator_payload["unmapped_code_files"] == []
+
+    parent_overlay_payload = classifier.classify_changed_files(
+        ["scripts/advisory_parent_incremental_overlay_run.py"],
+        repo_root=tmp_path,
+    )
+    assert parent_overlay_payload["classification"] == "targeted_ci_required"
+    assert parent_overlay_payload["backend_required"] is True
+    assert parent_overlay_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert parent_overlay_payload["dev_db_required"] is False
+    assert parent_overlay_payload["unmapped_code_files"] == []
+
+    leg_disagreement_payload = classifier.classify_changed_files(
+        ["scripts/advisory_leg_disagreement_mve_run.py"],
+        repo_root=tmp_path,
+    )
+    assert leg_disagreement_payload["classification"] == "targeted_ci_required"
+    assert leg_disagreement_payload["backend_required"] is True
+    assert leg_disagreement_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert leg_disagreement_payload["dev_db_required"] is False
+    assert leg_disagreement_payload["unmapped_code_files"] == []
+
+    minute_information_payload = classifier.classify_changed_files(
+        ["scripts/advisory_minute_information_set_mve_run.py"],
+        repo_root=tmp_path,
+    )
+    assert minute_information_payload["classification"] == "targeted_ci_required"
+    assert minute_information_payload["backend_required"] is True
+    assert minute_information_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert minute_information_payload["dev_db_required"] is False
+    assert minute_information_payload["unmapped_code_files"] == []
+
+    margin_information_payload = classifier.classify_changed_files(
+        ["scripts/advisory_margin_information_set_mve_run.py"],
+        repo_root=tmp_path,
+    )
+    assert margin_information_payload["classification"] == "targeted_ci_required"
+    assert margin_information_payload["backend_required"] is True
+    assert margin_information_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert margin_information_payload["dev_db_required"] is False
+    assert margin_information_payload["unmapped_code_files"] == []
+
+    financial_event_source_payload = classifier.classify_changed_files(
+        ["scripts/advisory_financial_event_source_readiness.py"],
+        repo_root=tmp_path,
+    )
+    assert financial_event_source_payload["classification"] == "targeted_ci_required"
+    assert financial_event_source_payload["backend_required"] is True
+    assert financial_event_source_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert financial_event_source_payload["dev_db_required"] is False
+    assert financial_event_source_payload["unmapped_code_files"] == []
+
+    financial_event_mve_payload = classifier.classify_changed_files(
+        ["scripts/advisory_financial_event_information_set_mve.py"],
+        repo_root=tmp_path,
+    )
+    assert financial_event_mve_payload["classification"] == "targeted_ci_required"
+    assert financial_event_mve_payload["backend_required"] is True
+    assert financial_event_mve_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert financial_event_mve_payload["dev_db_required"] is False
+    assert financial_event_mve_payload["unmapped_code_files"] == []
+
+    score_hmm_payload = classifier.classify_changed_files(
+        ["scripts/advisory_score_hmm_admission_mve.py"],
+        repo_root=tmp_path,
+    )
+    assert score_hmm_payload["classification"] == "targeted_ci_required"
+    assert score_hmm_payload["backend_required"] is True
+    assert score_hmm_payload["backend_sessions"] == ["advisory_modeling_backend"]
+
+    causal_admission_payload = classifier.classify_changed_files(
+        ["scripts/advisory_causal_admission_v2_mve.py"],
+        repo_root=tmp_path,
+    )
+    assert causal_admission_payload["classification"] == "targeted_ci_required"
+    assert causal_admission_payload["backend_required"] is True
+    assert causal_admission_payload["backend_sessions"] == ["advisory_modeling_backend"]
+    assert causal_admission_payload["dev_db_required"] is False
+    assert causal_admission_payload["unmapped_code_files"] == []
+    assert score_hmm_payload["dev_db_required"] is False
+    assert score_hmm_payload["unmapped_code_files"] == []
+
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
         repo_root=tmp_path,
@@ -252,6 +456,19 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     )
 
     assert qe_payload["backend_sessions"] == ["qe_read_backend"]
+
+    qe_comparison_truth_tests_payload = classifier.classify_changed_files(
+        [
+            "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py",
+            "backend/tests/quantevolver/test_payload_summary.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert qe_comparison_truth_tests_payload["classification"] == "targeted_ci_required"
+    assert qe_comparison_truth_tests_payload["backend_sessions"] == ["qe_read_backend"]
+    assert qe_comparison_truth_tests_payload["unmapped_code_files"] == []
+    assert qe_comparison_truth_tests_payload["unexecuted_test_files"] == []
 
     qe_candidate_payload = classifier.classify_changed_files(
         [
@@ -325,8 +542,9 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
         repo_root=tmp_path,
     )
 
-    assert qe_multi_alpha_frontend_payload["classification"] == "targeted_ci_required"
+    assert qe_multi_alpha_frontend_payload["classification"] == "frontend_ci_required"
     assert qe_multi_alpha_frontend_payload["frontend_required"] is True
+    assert qe_multi_alpha_frontend_payload["backend_required"] is False
     assert qe_multi_alpha_frontend_payload["unmapped_code_files"] == []
 
     hmm_payload = classifier.classify_changed_files(
@@ -546,6 +764,40 @@ def test_canonical_equity_pit_selects_qlib_data_backend(tmp_path: Path) -> None:
     assert payload["unmapped_code_files"] == []
 
 
+def test_unified_monthly_release_surfaces_select_qlib_data_backend(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/routers/monthly_dataset_releases.py",
+            "backend/tests/routers/test_monthly_dataset_releases.py",
+            "scripts/monthly_unified_dataset_release.py",
+            "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["qlib_data_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
+def test_unified_monthly_worker_selects_its_direct_qlib_data_test(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/monthly_unified_dataset_release_worker.py",
+            "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_sessions"] == ["qlib_data_backend"]
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == []
+
+
 def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_sessions(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
@@ -583,12 +835,40 @@ def test_frontend_change_selects_owning_module_tests(tmp_path: Path) -> None:
         repo_root=tmp_path,
     )
 
-    assert payload["classification"] == "targeted_ci_required"
+    assert payload["classification"] == "frontend_ci_required"
     assert payload["frontend_required"] is True
     assert payload["frontend_test_targets"] == ["tests/hmm-evolution"]
-    assert payload["backend_sessions"] == ["hmm_evolution_backend"]
+    assert payload["backend_sessions"] == []
     assert payload["catalog_impacted_modules"][0] == "hmm.evolution"
     assert payload["unmapped_code_files"] == []
+
+
+def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "frontend/src/app/paper-v2/advisory/page.tsx",
+            "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "frontend_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["frontend_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["frontend_test_targets"] == []
+    assert payload["unmapped_code_files"] == []
+
+
+def test_frontend_root_page_selects_shared_frontend_contract() -> None:
+    payload = classifier.classify_changed_files(["frontend/src/app/page.tsx"], repo_root=Path.cwd())
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["frontend_required"] is True
+    assert payload["backend_required"] is False
+    assert payload["frontend_test_targets"] == []
+    assert payload["unmapped_code_files"] == []
+    assert "frontend_type_lint" in payload["selected_plan_keys"]
 
 
 def test_unmapped_frontend_code_blocks_instead_of_receiving_type_lint_only(tmp_path: Path) -> None:
@@ -614,6 +894,30 @@ def test_deferred_catalog_plan_maps_data_quality_without_unrelated_pr_matrix(tmp
     assert payload["backend_required"] is False
     assert payload["backend_sessions"] == []
     assert "data_quality_deep" in payload["backend_plan_keys"]
+
+
+def test_selected_gateway_and_research_assistant_plans_have_windows_executors() -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/tests/research_assistant/test_service.py",
+            "tests/mcp/test_gateway_profiles.py",
+            "tests/mcp/test_mcp_inventory_diff.py",
+        ]
+    )
+
+    expected_sessions = {
+        "mcp_gateway_manifest_quality",
+        "research_assistant_backend",
+    }
+    assert set(payload["backend_sessions"]) == expected_sessions
+    assert payload["backend_required"] is True
+    assert payload["workflow_gate"] == "passed"
+    routing = {
+        item["plan_key"]: item["runner_kind"]
+        for item in payload["plan_routing"]
+        if item["plan_key"] in expected_sessions
+    }
+    assert routing == {session: "windows_ai_stock_ci" for session in expected_sessions}
 
 
 def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> None:
@@ -664,12 +968,29 @@ def test_workflow_fast_contract_test_has_direct_self_mapping(tmp_path: Path) -> 
     assert payload["workflow_test_targets"] == ["backend/tests/scripts/test_aistock_issue_workflow_fast.py"]
 
 
+def test_runtime_catalog_uses_compact_contract_targets(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["docs/standards/aistock_runtime_targets_v1.yaml"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is False
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/test_aistock_guardrail_scan.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    ]
+    assert "backend/tests/scripts/test_aistock_issue_workflow.py" not in payload["workflow_test_targets"]
+
+
 def test_ci_environment_and_policy_scripts_use_direct_workflow_tests(tmp_path: Path) -> None:
     expected = {
         "scripts/ci_environment_verify.py": "backend/tests/scripts/test_ci_environment_verify.py",
         "scripts/ci_workflow_policy_scan.py": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
         "scripts/aistock_runner_health.py": "backend/tests/scripts/test_aistock_runner_health.py",
         "scripts/configure_aistock_github_runner.ps1": "backend/tests/scripts/test_configure_aistock_github_runner.py",
+        "scripts/start_aistock_github_runner.ps1": "backend/tests/scripts/test_start_aistock_github_runner.py",
+        "scripts/supervise_aistock_github_runner.ps1": "backend/tests/scripts/test_start_aistock_github_runner.py",
     }
 
     for source, test_target in expected.items():
@@ -723,7 +1044,7 @@ def test_aistock_mcp_server_test_uses_direct_workflow_target(tmp_path: Path) -> 
     assert payload["unmapped_code_files"] == []
 
 
-def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
+def test_announcement_issuer_binding_tests_are_blocked_when_selected_plan_omits_them() -> None:
     payload = classifier.classify_changed_files(
         [
             "backend/services/event_signal/announcement_adapter.py",
@@ -739,10 +1060,17 @@ def test_announcement_issuer_binding_change_has_no_unmapped_code() -> None:
         ]
     )
 
-    assert payload["classification"] == "targeted_ci_required"
-    assert payload["workflow_gate"] == "passed"
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["workflow_gate"] == "blocked"
     assert payload["unmapped_code_files"] == []
     assert "data_sync_autonomy_backend" in payload["backend_sessions"]
+    assert payload["unexecuted_test_files"] == [
+        "backend/tests/event_signal/test_announcement_adapter.py",
+        "backend/tests/event_signal/test_announcement_issuer_binding.py",
+        "backend/tests/event_signal/test_st_announcement_adapter.py",
+        "backend/tests/scripts/test_repair_announcement_event_signal_issuer_binding.py",
+        "backend/tests/scripts/test_sync_stock_namechange.py",
+    ]
 
 
 def test_backend_sessions_come_from_validation_catalog_not_classifier_rules(tmp_path: Path) -> None:
@@ -772,6 +1100,257 @@ def test_qrun_mlflow_retry_test_uses_qe_sector_risk_overlay_lane(tmp_path: Path)
     assert payload["unmapped_code_files"] == []
 
 
+def test_changed_test_is_blocked_when_selected_nox_session_does_not_execute_it(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_sector_risk_overlay.py")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path, added_files=[test_path])
+
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == [test_path]
+    assert payload["changed_test_plan_coverage"]["coverage"] == {test_path: []}
+    assert "not executed by any selected CI plan" in payload["blocking"][0]
+
+
+def test_changed_test_passes_only_when_selected_nox_session_executes_exact_file(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        f"""
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "{test_path}", "-q")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path, added_files=[test_path])
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["unexecuted_test_files"] == []
+    assert payload["changed_test_plan_coverage"]["coverage"] == {
+        test_path: ["qe_sector_risk_overlay_backend"]
+    }
+
+
+def test_changed_test_directory_target_is_reachable_but_unselected_session_is_not(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver")
+
+def qe_read_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py")
+""",
+    )
+
+    reachable = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+    assert reachable["workflow_gate"] == "passed"
+    assert reachable["changed_test_plan_coverage"]["coverage"] == {
+        test_path: ["qe_sector_risk_overlay_backend"]
+    }
+
+    _write_noxfile(
+        tmp_path,
+        """
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_sector_risk_overlay.py")
+
+def qe_read_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py")
+""",
+    )
+    unreachable = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+    assert unreachable["workflow_gate"] == "blocked"
+    assert unreachable["unexecuted_test_files"] == [test_path]
+
+
+def test_nox_target_resolver_handles_dynamic_path_candidates(tmp_path: Path) -> None:
+    _write_noxfile(
+        tmp_path,
+        """
+def model_registry_backend(session):
+    tests_dir = ROOT / "backend" / "tests" / "model_registry"
+    pytest_targets = []
+    for candidate in ("test_governance.py", "test_registry.py"):
+        path = tests_dir / candidate
+        if path.exists():
+            pytest_targets.append(f"backend/tests/model_registry/{candidate}")
+    _run_pytest(session, *pytest_targets, "-q")
+""",
+    )
+
+    targets, error = classifier._selected_nox_test_targets(  # noqa: SLF001
+        repo_root=tmp_path,
+        sessions=["model_registry_backend"],
+    )
+
+    assert error is None
+    assert targets == {
+        "model_registry_backend": {
+            "backend/tests/model_registry/test_governance.py",
+            "backend/tests/model_registry/test_registry.py",
+        }
+    }
+
+
+def test_nox_target_resolver_accepts_direct_neighbor_explicit_fallback(tmp_path: Path) -> None:
+    _write_noxfile(
+        tmp_path,
+        """
+def position_timing_backend(session):
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=("backend/tests/position_timing/test_isolation.py",),
+        source_test_roots=(("backend/services/position_timing/", "backend/tests/position_timing/"),),
+        test_globs=("backend/tests/position_timing/test_*.py",),
+    )
+    _run_pytest(session, *(pr_targets or ["backend/tests/position_timing"]), "-q")
+""",
+    )
+
+    targets, error = classifier._selected_nox_test_targets(  # noqa: SLF001
+        repo_root=tmp_path,
+        sessions=["position_timing_backend"],
+    )
+
+    assert error is None
+    assert targets == {
+        "position_timing_backend": {
+            "direct-neighbor-glob:backend/tests/position_timing/test_*.py"
+        }
+    }
+
+
+def test_direct_neighbor_fallback_covers_changed_test(tmp_path: Path) -> None:
+    test_path = "backend/tests/position_timing/test_dynamic_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def position_timing_backend(session):
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=(),
+        source_test_roots=(("backend/services/position_timing/", "backend/tests/position_timing/"),),
+        test_globs=("backend/tests/position_timing/test_*.py",),
+    )
+    _run_pytest(session, *(pr_targets or ["backend/tests/position_timing"]), "-q")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["unexecuted_test_files"] == []
+    assert payload["changed_test_plan_coverage"]["coverage"] == {
+        test_path: ["position_timing_backend"]
+    }
+
+
+def test_arbitrary_dynamic_fallback_does_not_claim_test_coverage(tmp_path: Path) -> None:
+    test_path = "backend/tests/position_timing/test_dynamic_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def position_timing_backend(session):
+    runtime_targets = choose_runtime_targets()
+    _run_pytest(session, *(runtime_targets or ["backend/tests/position_timing"]), "-q")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["unexecuted_test_files"] == [test_path]
+
+
+def test_direct_neighbor_glob_does_not_cover_unmatched_nested_test(tmp_path: Path) -> None:
+    test_path = "backend/tests/position_timing/nested/test_dynamic_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def position_timing_backend(session):
+    pr_targets = _direct_neighbor_pr_targets(
+        smoke_tests=(),
+        source_test_roots=(("backend/services/position_timing/", "backend/tests/position_timing/"),),
+        test_globs=("backend/tests/position_timing/test_*.py",),
+    )
+    _run_pytest(session, *(pr_targets or ["backend/tests/position_timing"]), "-q")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["unexecuted_test_files"] == [test_path]
+
+
+def test_nox_wildcard_does_not_claim_changed_test_execution(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py"
+    _write_test_file(tmp_path, test_path)
+    _write_noxfile(
+        tmp_path,
+        """
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "backend/tests/quantevolver/test_qe_sector_risk_overlay_*.py")
+""",
+    )
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["classification"] == "unexecuted_test_blocked"
+    assert payload["unexecuted_test_files"] == [test_path]
+
+
+def test_deleted_test_path_does_not_require_execution_in_merge_tree(tmp_path: Path) -> None:
+    test_path = "backend/tests/quantevolver/test_qe_sector_risk_overlay_removed_contract.py"
+
+    payload = classifier.classify_changed_files([test_path], repo_root=tmp_path)
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["changed_test_plan_coverage"]["changed_test_files"] == []
+    assert payload["unexecuted_test_files"] == []
+
+
+def test_mixed_pr_keeps_workflow_tests_out_of_backend_collection_contract(tmp_path: Path) -> None:
+    backend_test = "backend/tests/quantevolver/test_qe_sector_risk_overlay_new_contract.py"
+    workflow_test = "backend/tests/scripts/test_ci_changed_files.py"
+    _write_test_file(tmp_path, backend_test)
+    _write_test_file(tmp_path, workflow_test)
+    _write_noxfile(
+        tmp_path,
+        f"""
+def qe_sector_risk_overlay_backend(session):
+    _run_pytest(session, "{backend_test}")
+""",
+    )
+
+    payload = classifier.classify_changed_files(
+        [backend_test, workflow_test],
+        repo_root=tmp_path,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_changed_test_files"] == [backend_test]
+    assert workflow_test in payload["workflow_test_targets"]
+
+
 def test_ci_changed_file_resolver_uses_its_direct_workflow_target(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["scripts/ci_changed_files.py"],
@@ -791,11 +1370,11 @@ def test_frontend_uses_module_tests_while_go_uses_its_language_gate(tmp_path: Pa
         ["frontend/src/app/watchlist/page.tsx"],
         repo_root=tmp_path,
     )
-    assert frontend["classification"] == "targeted_ci_required"
+    assert frontend["classification"] == "frontend_ci_required"
     assert frontend["frontend_required"] is True
     assert frontend["frontend_test_targets"] == ["tests/watchlist"]
-    assert frontend["backend_required"] is True
-    assert frontend["backend_sessions"] == ["watchlist_backend"]
+    assert frontend["backend_required"] is False
+    assert frontend["backend_sessions"] == []
     assert frontend["obsolete_surface_removal"] is False
 
     go = classifier.classify_changed_files(
@@ -824,6 +1403,45 @@ def test_hmm_tests_select_dedicated_backend_session(tmp_path: Path) -> None:
     assert payload["backend_sessions"] == ["hmm_data_source_backend"]
 
 
+def test_hmm_local_and_cross_contract_changes_use_pr_slice(tmp_path: Path) -> None:
+    local = classifier.classify_changed_files(
+        [
+            "backend/services/hmm_risk/rotation_l1_prediction.py",
+            "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+        ],
+        repo_root=Path.cwd(),
+    )
+    critical = classifier.classify_changed_files(
+        ["backend/services/hmm_risk/contracts.py"],
+        repo_root=Path.cwd(),
+    )
+
+    assert local["workflow_gate"] == "passed"
+    assert local["backend_sessions"] == ["hmm_risk_pr_slice"]
+    assert local["unexecuted_test_files"] == []
+    assert critical["workflow_gate"] == "passed"
+    assert critical["backend_sessions"] == ["hmm_risk_pr_slice"]
+
+
+def test_hmm_mixed_cross_contract_change_stays_on_pr_slice() -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/services/hmm_risk/state_model_set.py",
+            "backend/services/hmm_risk/rotation_l1_prediction.py",
+            "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+        ],
+        repo_root=Path.cwd(),
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_sessions"] == ["hmm_risk_pr_slice"]
+    assert payload["suppressed_plan_keys"] == {}
+    assert "hmm_risk_pr_slice" in payload["selected_plan_keys"]
+    assert payload["changed_test_plan_coverage"]["coverage"] == {
+        "backend/tests/hmm_risk/test_rotation_l1_prediction.py": ["hmm_risk_pr_slice"]
+    }
+
+
 def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
@@ -832,6 +1450,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
             ".github/requirements/pr-quality.txt",
             ".github/requirements/semgrep.txt",
             "scripts/ci_change_classifier.py",
+            "scripts/maintain_aistock_git_mirror.ps1",
             "scripts/validate_changed_requirements.py",
             "scripts/aistock_validation_catalog_integrity.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
@@ -849,6 +1468,28 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["prompt_evaluation_required"] is False
     assert payload["unmapped_code_files"] == []
     assert "backend/tests/scripts/test_validate_changed_requirements.py" in payload["workflow_test_targets"]
+    assert "backend/tests/scripts/test_ci_workflow_policy_scan.py" in payload["workflow_test_targets"]
+
+
+def test_dependency_changes_are_selected_once_for_unified_ci() -> None:
+    payload = classifier.classify_changed_files(
+        ["requirements.txt", ".github/requirements/semgrep.txt", "frontend/package-lock.json"],
+        repo_root=Path.cwd(),
+    )
+
+    assert payload["dependency_validation_required"] is True
+    assert payload["dependency_files"] == [
+        "requirements.txt",
+        ".github/requirements/semgrep.txt",
+        "frontend/package-lock.json",
+    ]
+
+
+def test_non_dependency_change_does_not_select_dependency_validation() -> None:
+    payload = classifier.classify_changed_files(["backend/main.py"], repo_root=Path.cwd())
+
+    assert payload["dependency_validation_required"] is False
+    assert payload["dependency_files"] == []
 
 
 def test_docs_fast_update_skips_code_validation(tmp_path: Path) -> None:
@@ -923,6 +1564,22 @@ def test_code_intelligence_nightly_workflow_change_uses_focused_fast_lane(tmp_pa
     assert payload["classification"] == "workflow_validation_only"
     assert payload["backend_required"] is False
     assert payload["workflow_validation_required"] is True
+    assert payload["unmapped_code_files"] == []
+
+
+def test_runner_queue_watchdog_uses_focused_runner_health_contracts(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [".github/workflows/runner-queue-watchdog.yml"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["workflow_test_targets"] == [
+        "backend/tests/scripts/test_aistock_runner_health.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    ]
     assert payload["unmapped_code_files"] == []
 
 
@@ -1177,14 +1834,21 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert set(jobs) == {"ci-verdict"}
     verdict = jobs["ci-verdict"]
     workflow_condition = (
-        "always() && steps.classify.outcome == 'success' && "
+        "always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && "
         "steps.classify.outputs.workflow_validation_required == 'true' && "
         "steps.classify.outputs.workflow_test_targets != '[]'"
     )
     workflow_validation = next(step for step in verdict["steps"] if step.get("id") == "workflow_validation")
     workflow_policy = next(step for step in verdict["steps"] if step.get("id") == "workflow_policy")
+    prerequisite_gate = next(step for step in verdict["steps"] if step.get("id") == "prerequisite_gate")
     assert workflow_validation["if"] == workflow_condition
     assert workflow_policy["if"] == workflow_condition
+    assert "heavy_lanes_allowed=false" in prerequisite_gate["run"]
+    final_verdict = next(
+        step for step in verdict["steps"] if step.get("name") == "Require every selected CI lane to pass"
+    )
+    assert final_verdict["env"]["CLOSE_SYNC_ONLY"] == "${{ steps.classify.outputs.close_sync_metadata_only }}"
+    assert '"${CLOSE_SYNC_ONLY}" != "true"' in final_verdict["run"]
     workflow_runs = "\n".join(str(step.get("run", "")) for step in verdict["steps"])
     assert "WORKFLOW_TEST_TARGETS" in workflow_runs
     assert 'python -m pytest "${workflow_test_targets[@]}"' in workflow_runs
@@ -1196,13 +1860,17 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert attach_step["id"] == "frontend_dependencies"
     assert attach_step["shell"] == "powershell"
     assert "--attach-frontend-only" in attach_step["run"]
-    assert '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in attach_step["run"]
+    assert (
+        '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in attach_step["run"]
+    )
     frontend_runs = str(next(step for step in verdict["steps"] if step.get("id") == "frontend_validation")["run"])
-    assert "node_modules/.bin/tsc" in frontend_runs
-    assert "npm run lint" in frontend_runs
+    assert "node node_modules/typescript/bin/tsc --noEmit --incremental false" in frontend_runs
+    assert "node node_modules/next/dist/bin/next lint" in frontend_runs
     assert "npx playwright install --with-deps chromium" not in frontend_runs
     assert "FRONTEND_TEST_TARGETS" in frontend_runs
-    assert 'npm run test:e2e -- "${module_test_targets[@]}"' in frontend_runs
+    assert 'node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"' in frontend_runs
+    assert "node_modules/.bin" not in frontend_runs
+    assert "npm run" not in frontend_runs
     go_runs = str(next(step for step in verdict["steps"] if step.get("id") == "go_validation")["run"])
     assert "go test ./..." in go_runs
     prompt_eval_run_steps = str(next(step for step in verdict["steps"] if step.get("id") == "prompt_validation")["run"])
@@ -1416,31 +2084,22 @@ def test_pr_quality_proves_merge_base_and_boundedly_deepens_exact_pr_refs() -> N
     assert run.index("--prepare-pr-merge-base-only") < run.index('git diff --name-only "${BASE_COMMIT}...HEAD"')
 
 
-def test_codeql_selects_only_changed_languages() -> None:
+def test_codeql_runs_one_daily_nightly_full_scan() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
-    assert list(jobs) == ["codeql-verdict"]
-    verdict = jobs["codeql-verdict"]
+    assert list(jobs) == ["security-runner-preflight", "codeql-nightly"]
+    verdict = jobs["codeql-nightly"]
     verdict_steps = verdict["steps"]
     prepare_steps = [
         step for step in verdict_steps if step.get("name") == "Prepare exact local workspace (no remote actions)"
     ]
 
-    assert verdict["name"] == "CodeQL verdict"
+    assert verdict["name"] == "CodeQL nightly full scan"
     assert verdict["runs-on"] == ["self-hosted", "Windows", "aistock-ci-security"]
-    assert "needs" not in verdict
+    assert verdict["needs"] == "security-runner-preflight"
     assert "strategy" not in verdict
-    detect_step = next(step for step in verdict_steps if step.get("name") == "Detect CodeQL fast lane")
-    assert detect_step["id"] == "fast_lane"
-    assert "scripts/ci_change_classifier.py" in detect_step["run"]
-    assert "close_sync_metadata_only" in detect_step["run"]
-    assert "codeql_pr_languages" in detect_step["run"]
-    assert "codeql_languages" in detect_step["run"]
-    assert detect_step["env"]["EVENT_NAME"] == "${{ github.event_name }}"
-    assert "pull_request_test_only" in detect_step["run"]
-    assert "PYTHON_CHANGED" not in detect_step["run"]
     assert len(prepare_steps) == 1
     assert all("--no-write-fetch-head" in step["run"] for step in prepare_steps)
     assert all("--depth=1" not in step["run"] for step in prepare_steps)
@@ -1448,17 +2107,18 @@ def test_codeql_selects_only_changed_languages() -> None:
     assert all("refs/aistock-ci/codeql-" in step["run"] for step in prepare_steps)
     assert all("update-ref -d $cacheRef" in step["run"] for step in prepare_steps)
     assert all('$env:GIT_CONFIG_KEY_0 = "core.longpaths"' in step["run"] for step in prepare_steps)
-    assert all("refs/pull/$env:PR_NUMBER/merge" in step["run"] for step in prepare_steps)
+    assert all("refs/heads/$env:REF_NAME" in step["run"] for step in prepare_steps)
+    assert all("refs/pull/" not in step["run"] for step in prepare_steps)
     assert all("exact workspace source fetch failed after 3 attempts" in step["run"] for step in prepare_steps)
     assert all("scripts/ci/prepare_self_hosted_workspace.py" in step["run"] for step in prepare_steps)
     assert not any("uses" in step for step in verdict_steps)
 
     direct_analysis = next(step for step in verdict_steps if step.get("name") == "Run CodeQL CLI analysis")
-    assert direct_analysis["if"] == "steps.fast_lane.outputs.has_languages == '1'"
-    assert direct_analysis["env"]["CODEQL_LANGUAGES"] == "${{ steps.fast_lane.outputs.languages }}"
+    assert "if" not in direct_analysis
+    assert direct_analysis["env"]["CODEQL_LANGUAGES"] == '["python","javascript-typescript"]'
     assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
     direct_run = direct_analysis["run"]
-    assert "$languages = @($env:CODEQL_LANGUAGES | ConvertFrom-Json)" in direct_run
+    assert "[string[]]$languages = ($env:CODEQL_LANGUAGES | ConvertFrom-Json)" in direct_run
     assert "foreach ($language in $languages)" in direct_run
     assert "database create" in direct_run
     assert '"--build-mode=none"' in direct_run
@@ -1472,7 +2132,6 @@ def test_codeql_selects_only_changed_languages() -> None:
 
     final_verdict = next(step for step in verdict_steps if step.get("name") == "Enforce CodeQL result")
     assert final_verdict["if"] == "always()"
-    assert final_verdict["env"]["CLASSIFIER_RESULT"] == "${{ steps.fast_lane.outcome }}"
     assert final_verdict["env"]["ANALYZE_RESULT"] == "${{ steps.codeql_analysis.outcome }}"
     assert "CodeQL analysis failed" in final_verdict["run"]
 
@@ -1517,7 +2176,7 @@ def test_codeql_pr_skips_frontend_test_only_language(tmp_path: Path) -> None:
     assert payload["codeql_pr_test_only"] is True
 
 
-def test_non_security_quality_workflows_do_not_repeat_on_merge_commit() -> None:
+def test_pr_quality_is_pr_only_and_codeql_is_nightly_only() -> None:
     import yaml
 
     ci_triggers = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))[True]
@@ -1529,8 +2188,8 @@ def test_non_security_quality_workflows_do_not_repeat_on_merge_commit() -> None:
         assert set(triggers) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))[True]
-    assert "pull_request" in codeql
-    assert codeql["push"]["branches"] == ["main"]
+    assert set(codeql) == {"schedule", "workflow_dispatch"}
+    assert codeql["schedule"] == [{"cron": "27 20 * * *"}]
 
 
 def test_pr_quality_and_semgrep_enforcement_share_ci_verdict_runner() -> None:
@@ -1580,7 +2239,6 @@ def test_classifier_uses_prebuilt_tooling_without_install_steps() -> None:
     workflows = {
         ".github/workflows/test.yml": ("ci-verdict", "Classify CI lane"),
         ".github/workflows/pr-quality.yml": ("pr-quality", "Detect PR quality lane"),
-        ".github/workflows/codeql.yml": ("codeql-verdict", "Detect CodeQL fast lane"),
         ".github/workflows/semgrep.yml": ("semgrep", "Detect Semgrep fast lane"),
     }
     for path, (job_name, detect_name) in workflows.items():
@@ -1593,7 +2251,7 @@ def test_classifier_uses_prebuilt_tooling_without_install_steps() -> None:
         assert any(step.get("name") == detect_name for step in steps)
 
 
-def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
+def test_pr_ci_has_no_failure_issue_writer_and_nightly_owns_failure_intake() -> None:
     import yaml
 
     ci = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
@@ -1603,11 +2261,10 @@ def test_issue_on_test_fail_is_the_only_failure_issue_writer() -> None:
     assert "pr-ci-failure-issue-context" not in registrar_text
     assert "actions/upload-artifact@" not in registrar_text
 
-    issue_writer = yaml.safe_load(Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8"))
-    issue_writer_text = Path(".github/workflows/issue-on-test-fail.yml").read_text(encoding="utf-8")
-    assert issue_writer["permissions"]["issues"] == "write"
-    assert "github.rest.issues.create" in issue_writer_text
-    assert "workflow_run:" in issue_writer_text
+    assert not Path(".github/workflows/issue-on-test-fail.yml").exists()
+    nightly_text = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
+    assert "Build Nightly failure issue context" in nightly_text
+    assert "Auto-register failure as actionable GitHub Issue" in nightly_text
 
     guardrail = yaml.safe_load(Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8"))
     guardrail_text = Path(".github/workflows/issue-on-guardrail-fail.yml").read_text(encoding="utf-8")
@@ -1634,17 +2291,17 @@ def test_javascript_actions_use_native_node24_major_versions() -> None:
 
 def test_merge_quality_workflows_do_not_duplicate_close_sync_runner_work() -> None:
     codeql_text = Path(".github/workflows/codeql.yml").read_text(encoding="utf-8")
-    assert "pull_request:" in codeql_text
-    pull_request_block = codeql_text.split("  pull_request:\n", 1)[1].split("\n  ", 1)[0]
-    assert "tests/aistock_validation/bugs/**" not in pull_request_block
+    assert "pull_request:" not in codeql_text
+    assert "\n  push:\n" not in codeql_text
+    assert "schedule:" in codeql_text
+    assert "workflow_dispatch:" in codeql_text
 
     for relative_path in (".github/workflows/semgrep.yml", ".github/workflows/pr-quality.yml"):
         text = Path(relative_path).read_text(encoding="utf-8")
         assert "pull_request:" not in text
         assert "workflow_dispatch:" in text
 
-    issue_link_text = Path(".github/workflows/issue-auto-link.yml").read_text(encoding="utf-8")
-    assert "- 'tests/aistock_validation/bugs/**'" in issue_link_text
+    assert not Path(".github/workflows/issue-auto-link.yml").exists()
 
 
 def test_allocator_change_skips_unrelated_backend_matrix(tmp_path: Path) -> None:

@@ -8,6 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 TRADING_CORE_MIGRATION = REPO_ROOT / "backend" / "migrations" / "trading_core_v2_schema.sql"
 ACCOUNT_SLOT_MIGRATION = REPO_ROOT / "backend" / "migrations" / "add_simulation_runtime_account_slots_20260604.sql"
 LOCALSIM_SUCCESSOR_MIGRATION = REPO_ROOT / "backend" / "migrations" / "localsim_successor_core_20260831.sql"
+LOCALSIM_CUTOVER_BRIDGE_MIGRATION = (
+    REPO_ROOT / "backend" / "migrations" / "localsim_product_cutover_bridge_20260831.sql"
+)
 
 
 def test_runtime_release_and_binding_schema_are_commented_in_migration_and_bootstrap() -> None:
@@ -98,6 +101,45 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
             "created_by",
             "created_at",
             "updated_at",
+        ],
+        "paper_v2.simulation_ledger_scope_v1": [
+            "ledger_scope_id",
+            "ledger_scope_hash",
+            "schema_version",
+            "scope_kind",
+            "source_identity",
+            "native_account_id",
+            "created_by",
+            "created_at",
+        ],
+        "paper_v2.localsim_runtime_profile_v1": [
+            "profile_id",
+            "profile_hash",
+            "schema_version",
+            "package_id",
+            "manifest_sha256",
+            "profile_name",
+            "status",
+            "version",
+            "created_by",
+            "created_at",
+            "updated_at",
+        ],
+        "paper_v2.localsim_runtime_profile_version_v1": [
+            "profile_version_id",
+            "profile_version_hash",
+            "schema_version",
+            "profile_id",
+            "package_id",
+            "manifest_sha256",
+            "version_no",
+            "config_json",
+            "config_sha256",
+            "daily_strategy_profile_version_id",
+            "validation_status",
+            "validation_evidence",
+            "created_by",
+            "created_at",
         ],
         "paper_v2.legacy_localsim_account_lineage_v1": [
             "lineage_id",
@@ -209,8 +251,9 @@ def test_runtime_release_and_binding_schema_are_commented_in_migration_and_boots
     migration_ddl = "\n".join(
         [
             TRADING_CORE_MIGRATION.read_text(encoding="utf-8"),
-            ACCOUNT_SLOT_MIGRATION.read_text(encoding="utf-8"),
-            LOCALSIM_SUCCESSOR_MIGRATION.read_text(encoding="utf-8"),
+                ACCOUNT_SLOT_MIGRATION.read_text(encoding="utf-8"),
+                LOCALSIM_SUCCESSOR_MIGRATION.read_text(encoding="utf-8"),
+                LOCALSIM_CUTOVER_BRIDGE_MIGRATION.read_text(encoding="utf-8"),
         ]
     )
     bootstrap_ddl = "\n".join(init_trading_core_v2_schema.iter_ddl())

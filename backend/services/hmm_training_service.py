@@ -88,6 +88,8 @@ class HMMTrainingService:
                 result[key] = config_json[key]
             else:
                 result[key] = defaults[key]
+        if "qe_frozen_input_bundle" in config_json:
+            result["qe_frozen_input_bundle"] = config_json["qe_frozen_input_bundle"]
         return result
 
     def _build_model_path(self, config_id: str, snapshot_date: str) -> str:
@@ -512,6 +514,23 @@ class HMMTrainingService:
             for chunk in iter(lambda: fh.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    @staticmethod
+    def _qe_frozen_coefficient_bundle(config_json: Any) -> Dict[str, Any]:
+        """Resolve the explicit frozen QE data binding for coefficient generation."""
+
+        config = config_json if isinstance(config_json, dict) else {}
+        bundle = config.get("qe_frozen_input_bundle")
+        if not isinstance(bundle, dict):
+            raise RuntimeError(
+                "HMM coefficient generation requires config_json.qe_frozen_input_bundle; "
+                "database-backed market data is not an allowed QE fallback"
+            )
+        if bundle.get("schema_version") != "qe_hmm_frozen_input_v1":
+            raise RuntimeError("invalid QE frozen HMM input bundle schema")
+        if not bundle.get("dataset_root") or not isinstance(bundle.get("files"), dict):
+            raise RuntimeError("incomplete QE frozen HMM input bundle")
+        return bundle
 
     @staticmethod
     def _normalise_config_json(config_json: Any) -> Dict[str, Any]:
@@ -940,8 +959,10 @@ class HMMTrainingService:
                 "precompute_hmm_coefficients.py",
             ))
         )
+        config_json = plan.get("config_json") or {}
         stdin_params = {
             "model_path": wsl_model_path,
+            "model_sha256": self._file_sha256(plan["model_path"]),
             "test_start": plan["as_of_trade_date"],
             "backtest_end": plan["as_of_trade_date"],
             "output_trade_date": plan["effective_trade_date"],
@@ -950,14 +971,10 @@ class HMMTrainingService:
             "snapshot_id": plan["snapshot_id"],
             "config_id": plan["config_id"],
             "input_data_max_dates": plan["input_data_max_dates"],
-            "config_json": plan.get("config_json") or {},
+            "config_json": config_json,
             "preset_coeffs": plan["preset_coeffs"],
             "preset_key": plan["signal_preset"],
-            "db_host": os.getenv("TDX_DB_HOST", "127.0.0.1"),
-            "db_port": int(os.getenv("TDX_DB_PORT", "5432")),
-            "db_name": os.getenv("TDX_DB_NAME", "aistock"),
-            "db_user": os.getenv("TDX_DB_USER", "postgres"),
-            "db_password": os.getenv("TDX_DB_PASSWORD", ""),
+            "frozen_input_bundle": self._qe_frozen_coefficient_bundle(config_json),
         }
         wsl_cmd = (
             "source ~/miniconda3/etc/profile.d/conda.sh && "
@@ -1684,8 +1701,9 @@ class HMMTrainingService:
             ))
         )
 
-        # DB 连接参数
-        db_password = os.environ["TDX_DB_PASSWORD"]
+        # Coefficient generation is bound to one frozen QE release.
+        frozen_input_bundle = self._qe_frozen_coefficient_bundle(cfg)
+        model_sha256 = self._file_sha256(model_path)
 
         generated_count = 0
         for preset_key, preset_coeffs in signal_presets.items():
@@ -1700,15 +1718,13 @@ class HMMTrainingService:
 
             stdin_params = {
                 "model_path": wsl_model_path,
+                "model_sha256": model_sha256,
                 "test_start": test_start,
                 "backtest_end": backtest_end,
                 "preset_coeffs": actual_coeffs,
                 "preset_key": preset_key,
-                "db_host": os.getenv("TDX_DB_HOST", "127.0.0.1"),
-                "db_port": int(os.getenv("TDX_DB_PORT", "5432")),
-                "db_name": os.getenv("TDX_DB_NAME", "aistock"),
-                "db_user": os.getenv("TDX_DB_USER", "postgres"),
-                "db_password": db_password,
+                "config_json": cfg,
+                "frozen_input_bundle": frozen_input_bundle,
             }
 
             wsl_cmd = (

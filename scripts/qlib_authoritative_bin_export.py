@@ -23,7 +23,7 @@ from backend.qlib_exporter.authoritative_bin_exporter import (  # noqa: E402
     MINUTE_FREQ_QLIB,
     export_stock_daily_csv,
     export_stock_minute_csv,
-    export_stock_minute_csv_chunked,
+    # The retired chunked minute exporter is intentionally not imported.
     normalize_stock_export_exchanges,
     rewrite_stock_all_txt_for_ipo_filter,
     rewrite_stock_all_txt_from_pit_spans,
@@ -156,17 +156,77 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wsl-conda-sh", default=os.getenv("QLIB_WSL_CONDA_SH", "/home/lc999/miniconda3/etc/profile.d/conda.sh"))
     parser.add_argument("--wsl-conda-env", default=os.getenv("QLIB_WSL_CONDA_ENV", "rdagent-gpu"))
     parser.add_argument("--rdagent-root-wsl", default=os.getenv("QLIB_RDAGENT_ROOT_WSL", "/mnt/f/Dev/RD-Agent-main"))
+    parser.add_argument(
+        "--isolated-dump-only",
+        action="store_true",
+        help=(
+            "Run only the existing Qlib dump implementation against an isolated CSV/bin root. "
+            "No DB read, PIT rewrite, metadata write, or target-candidate mutation is performed."
+        ),
+    )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip optional full-window DB/bin validation; export invariants and caller smoke still apply.",
+    )
     parser.add_argument("--validate-max-errors", type=int, default=50)
-    parser.add_argument("--minute-chunked-export", action="store_true", help="Use chunked SQL/CSV export for large stock_minute datasets.")
-    parser.add_argument("--minute-code-batch-size", type=int, default=20)
-    parser.add_argument("--minute-chunk-months", type=int, default=3)
     parser.add_argument("--overwrite-csv", action="store_true")
-    parser.add_argument("--resume-csv", action="store_true", help="Resume a chunked stock_minute CSV export by appending only rows after each file's last timestamp.")
+    parser.add_argument(
+        "--resume-csv",
+        action="store_true",
+        help=(
+            "Resume daily exports by reusing structurally complete atomic CSV files, or resume a "
+            "stock_minute export from each file's last timestamp."
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.isolated_dump_only:
+        if (
+            args.stage != "dump"
+            or args.dataset != "stock_daily"
+            or args.dump_subcmd != "dump_all"
+            or args.stock_universe_mode != "legacy_static"
+        ):
+            raise ValueError(
+                "--isolated-dump-only requires stock_daily, stage=dump, "
+                "dump_all and legacy_static"
+            )
+        csv_dir = Path(args.csv_root) / args.snapshot_id / "stock_daily"
+        bin_dir = Path(args.bin_root) / args.snapshot_id
+        dump = run_wsl_dump(
+            csv_dir=csv_dir,
+            bin_dir=bin_dir,
+            freq="day",
+            distro=args.wsl_distro,
+            conda_sh=args.wsl_conda_sh,
+            conda_env=args.wsl_conda_env,
+            rdagent_root_wsl=args.rdagent_root_wsl,
+            dump_subcmd="dump_all",
+            max_workers=args.dump_workers,
+        )
+        print(
+            json.dumps(
+                {
+                    "isolated_dump_only": True,
+                    "ok": dump["ok"],
+                    "returncode": dump["returncode"],
+                    "csv_dir": str(csv_dir),
+                    "bin_dir": str(bin_dir),
+                },
+                ensure_ascii=False,
+            )
+        )
+        if not dump["ok"]:
+            print(dump["stdout"])
+            print(dump["stderr"], file=sys.stderr)
+            return 2
+        return 0
+    if args.skip_validation and args.stage != "all":
+        raise ValueError("--skip-validation is only valid with --stage all")
     start = parse_date(args.start)
     end = parse_date(args.end)
     basis_start = parse_date(args.basis_start) if args.basis_start else start
@@ -179,15 +239,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     exchanges = normalize_stock_export_exchanges(parse_csv_list(args.exchanges))
     codes = parse_csv_list(args.codes)
     pit_universe_key = args.universe_key if args.stock_universe_mode == "pit_spans" else None
+    canonical_pit = pit_universe_key == CANONICAL_PIT_UNIVERSE_KEY
     pit_ensure = None
     if pit_universe_key:
-        pit_ensure = StockUniversePitService().ensure_st_pit_universe(
+        pit_ensure = require_readonly_pit_coverage(
+            StockUniversePitService(),
             universe_key=pit_universe_key,
-            start_date=min(start, DEFAULT_ST_PIT_START_DATE),
-            end_date=end,
-            rule_version=DEFAULT_ST_PIT_RULE_VERSION,
-            strict=True,
-            rebuild_if_stale=True,
+            start=min(start, DEFAULT_ST_PIT_START_DATE),
+            end=end,
         )
 
     result: dict = {
@@ -200,40 +259,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         "basis_end": basis_end.isoformat(),
         "stock_universe_mode": args.stock_universe_mode,
         "universe_key": pit_universe_key,
-        "rule_version": DEFAULT_ST_PIT_RULE_VERSION if pit_universe_key else None,
-        "authority_scope": "current_active_shsz_st_pit" if pit_universe_key else "legacy_static",
+        "rule_version": (pit_ensure["rule_version"] if pit_ensure else None),
+        "authority_scope": (
+            "canonical_pit_v2"
+            if canonical_pit
+            else "current_active_shsz_st_pit"
+            if pit_universe_key
+            else "legacy_static"
+        ),
         "st_pit": bool(pit_universe_key),
-        "delist_pit": False if pit_universe_key else None,
+        "delist_pit": canonical_pit if pit_universe_key else None,
         "pause_pit": False if pit_universe_key else None,
         "survivorship_bias": (
-            "current D/P stocks excluded by scope; delisting PIT not implemented"
-            if pit_universe_key else None
+            "canonical_lifecycle_pit"
+            if canonical_pit
+            else "current D/P stocks excluded by scope; delisting PIT not implemented"
+            if pit_universe_key
+            else None
         ),
         "pit_ensure": pit_ensure,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
     }
 
     if args.stage in {"export", "all"}:
-        if args.dataset == "stock_minute" and args.minute_chunked_export:
-            summary = export_stock_minute_csv_chunked(
-                snapshot_id=args.snapshot_id,
-                start=start,
-                end=end,
-                csv_root=csv_root,
-                exchanges=exchanges,
-                exclude_st=args.exclude_st,
-                exclude_delisted_or_paused=args.exclude_delisted_or_paused,
-                ts_codes=codes,
-                universe_key=pit_universe_key,
-                basis_start=basis_start,
-                basis_end=basis_end,
-                strict_limit=args.strict_limit,
-                code_batch_size=args.minute_code_batch_size,
-                chunk_months=args.minute_chunk_months,
-                overwrite_csv=args.overwrite_csv,
-                resume_csv=args.resume_csv,
-            )
-        elif args.dataset == "stock_minute":
+        if args.dataset == "stock_minute":
             summary = export_stock_minute_csv(
                 snapshot_id=args.snapshot_id,
                 start=start,
@@ -248,6 +297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 basis_end=basis_end,
                 strict_limit=args.strict_limit,
                 overwrite_csv=args.overwrite_csv,
+                resume_csv=args.resume_csv,
             )
         else:
             summary = export_stock_daily_csv(
@@ -264,6 +314,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 basis_end=basis_end,
                 strict_limit=args.strict_limit,
                 overwrite_csv=args.overwrite_csv,
+                resume_csv=args.resume_csv,
             )
         result["export_summary"] = summary.__dict__
         print(json.dumps({"export_summary": summary.__dict__}, ensure_ascii=False, indent=2))
@@ -331,14 +382,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "tool": "scripts/qlib_authoritative_bin_export.py",
                 "stock_universe_mode": args.stock_universe_mode,
                 "universe_key": pit_universe_key,
-                "rule_version": DEFAULT_ST_PIT_RULE_VERSION if pit_universe_key else None,
-                "authority_scope": "current_active_shsz_st_pit" if pit_universe_key else "legacy_static",
+                "rule_version": (pit_ensure["rule_version"] if pit_ensure else None),
+                "authority_scope": (
+                    "canonical_pit_v2"
+                    if canonical_pit
+                    else "current_active_shsz_st_pit"
+                    if pit_universe_key
+                    else "legacy_static"
+                ),
                 "st_pit": bool(pit_universe_key),
-                "delist_pit": False if pit_universe_key else None,
+                "delist_pit": canonical_pit if pit_universe_key else None,
                 "pause_pit": False if pit_universe_key else None,
                 "survivorship_bias": (
-                    "current D/P stocks excluded by scope; delisting PIT not implemented"
-                    if pit_universe_key else None
+                    "canonical_lifecycle_pit"
+                    if canonical_pit
+                    else "current D/P stocks excluded by scope; delisting PIT not implemented"
+                    if pit_universe_key
+                    else None
                 ),
                 "pit_ensure": pit_ensure,
                 "ipo_filter_mode": "pit_universe_spans" if pit_universe_key else "instruments_all_txt",
@@ -346,7 +406,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
         )
 
-    if args.stage in {"validate", "all"}:
+    if args.stage in {"validate", "all"} and not args.skip_validation:
         validator = validate_minute_bin_against_db if args.dataset == "stock_minute" else validate_daily_bin_against_db
         validation = validator(
             qlib_dir=bin_dir,
@@ -372,11 +432,68 @@ def main(argv: Sequence[str] | None = None) -> int:
                 encoding="utf-8",
             )
             return 3
+    elif args.stage == "all":
+        result["validation"] = {
+            "status": "SKIPPED",
+            "reason": "explicit_skip_validation",
+        }
 
     report_path = reports_dir / f"{args.snapshot_id}_{args.dataset}_{args.stage}.json"
     report_path.write_text(json.dumps(result, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
     print(f"[OK] wrote report: {report_path}")
     return 0
+
+
+from backend.services.canonical_equity_pit import (  # noqa: E402
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SCOPE,
+    CANONICAL_PIT_UNIVERSE_KEY,
+)
+
+
+def require_readonly_pit_coverage(
+    service: StockUniversePitService,
+    *,
+    universe_key: str,
+    start: date,
+    end: date,
+) -> dict[str, object]:
+    """Confirm PIT coverage without source scans or database writes."""
+
+    state = service.get_status_readonly(universe_key=universe_key)
+    try:
+        state_start = date.fromisoformat(str(state.get("start_date")))
+        state_end = date.fromisoformat(str(state.get("end_date")))
+    except ValueError as exc:
+        raise RuntimeError(f"PIT authority {universe_key} has invalid coverage dates") from exc
+    expected_rule = (
+        CANONICAL_PIT_RULE_VERSION
+        if universe_key == CANONICAL_PIT_UNIVERSE_KEY
+        else DEFAULT_ST_PIT_RULE_VERSION
+    )
+    expected_scope = CANONICAL_PIT_SCOPE if universe_key == CANONICAL_PIT_UNIVERSE_KEY else None
+    if (
+        state.get("status") != "ready"
+        or bool(state.get("dirty"))
+        or state.get("rule_version") != expected_rule
+        or (expected_scope is not None and state.get("scope") != expected_scope)
+        or state_start > start
+        or state_end < end
+    ):
+        raise RuntimeError(
+            f"PIT authority {universe_key} is not ready for {start.isoformat()}~{end.isoformat()}"
+        )
+    return {
+        "status": "ready",
+        "universe_key": universe_key,
+        "rule_version": expected_rule,
+        "scope": state.get("scope"),
+        "start_date": state_start.isoformat(),
+        "end_date": state_end.isoformat(),
+        "read_only": True,
+        "source_scan": False,
+        "database_writes": 0,
+    }
 
 
 if __name__ == "__main__":

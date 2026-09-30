@@ -23,6 +23,7 @@ from backend.services.advisory_program import (
     AdvisoryMarketMark,
     AdvisoryProgramService,
     InMemoryAdvisoryProgramRepository,
+    normalize_advisory_review_policy,
 )
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.trading_core.errors import DataUnavailableError, UnsupportedFeatureError
@@ -55,6 +56,30 @@ def _calendar_days(start_date: date, end_date: date) -> list[date]:
 def _service() -> tuple[AdvisoryProgramService, InMemoryAdvisoryProgramRepository]:
     repo = InMemoryAdvisoryProgramRepository()
     return AdvisoryProgramService(repository=repo, selection_service=None, calendar_provider=FakeTradingCalendar([])), repo
+
+
+def test_canonical_review_policy_normalizes_empty_and_partial_inputs() -> None:
+    empty = normalize_advisory_review_policy({}, target_count=5)
+    partial = normalize_advisory_review_policy(
+        {"daily_replacement_budget": 2, "take_profit_mode": "fixed"},
+        target_count=20,
+    )
+
+    assert empty == {
+        "rank_enter_threshold": 5,
+        "rank_exit_threshold": 10,
+        "rank_exit_confirm_days": 2,
+        "daily_replacement_budget": 5,
+        "stop_loss_bps": 800,
+        "take_profit_bps": 1800,
+        "trailing_stop_bps": 700,
+        "time_stop_days": 20,
+        "take_profit_mode": "trailing",
+    }
+    assert partial["rank_enter_threshold"] == 20
+    assert partial["rank_exit_threshold"] == 40
+    assert partial["daily_replacement_budget"] == 2
+    assert partial["take_profit_mode"] == "fixed"
 
 
 def _program(service: AdvisoryProgramService, *, target_count: int = 2, **policy_overrides):
@@ -857,6 +882,7 @@ def test_review_from_selection_accepts_target_date_with_explicit_data_cutoff() -
     }
     assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-08"
     assert runtime_config["selection_artifact_config"]["cutoff_policy"] == "FIXED_CUTOFF"
+    assert runtime_config["selection_price_mode"] == "DAILY_DB_ONLY"
     assert runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
     assert result.active_pool[0].effective_entry_date == date(2026, 6, 9)
     assert result.list_items[0].effective_trade_date == date(2026, 6, 9)

@@ -1,8 +1,8 @@
 schema_version: aistock_llm_triage_config_v1
-default_provider: github_models
+default_provider: deepseek_api
 providers:
   github_models:
-    enabled: true
+    enabled: false
     base_url: https://models.github.ai
     catalog_path: /catalog/models
     model_selector:
@@ -23,7 +23,7 @@ providers:
     enabled: true
     base_url_env: DEEPSEEK_BASE_URL
     default_base_url: https://api.deepseek.com
-    model: deepseek-v4-pro
+    model: deepseek-v4-flash
     auth:
       resolver: env_then_aistock_config
       env_api_key_names:
@@ -36,7 +36,7 @@ providers:
         - aistock_llm_api_configs provider/model config via backend.routers.rdagent_llm_config_v2
         - backend.services.quantevolver.llm_client provider fallback
       provider_id: deepseek
-      model_id: deepseek/deepseek-v4-pro
+      model_id: deepseek/deepseek-v4-flash
   deterministic:
     enabled: true
 limits:

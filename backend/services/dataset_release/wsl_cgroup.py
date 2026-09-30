@@ -10,7 +10,7 @@ from .profile import ResourcePolicy, validate_resource_policy
 
 
 class WslCgroupError(RuntimeError):
-    """Fail-closed WSL systemd/cgroup enforcement error."""
+    """Fail-closed WSL systemd/cgroup ownership error."""
 
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
@@ -67,14 +67,9 @@ class WslCgroupService:
         if not guardian_command or any("\x00" in str(part) for part in guardian_command):
             raise WslCgroupError("guardian command is invalid")
         properties = [
-            f"MemoryHigh={self.policy.wsl_memory_high_bytes}",
-            f"MemoryMax={self.policy.wsl_memory_max_bytes}",
-            f"MemorySwapMax={self.policy.wsl_swap_max_bytes}",
             "KillMode=control-group",
             "SendSIGKILL=yes",
             "CollectMode=inactive-or-failed",
-            # systemd maps OOMPolicy=kill to cgroup v2 memory.oom.group=1.
-            "OOMPolicy=kill",
         ]
         command = [
             "wsl.exe",
@@ -146,31 +141,26 @@ class WslCgroupService:
             readback = WslCgroupReadback(
                 main_pid=int(values["MainPID"]),
                 control_group=values["ControlGroup"],
-                memory_high_bytes=int(values["MemoryHigh"]),
-                memory_max_bytes=int(values["MemoryMax"]),
-                memory_swap_max_bytes=int(values["MemorySwapMax"]),
+                memory_high_bytes=_unlimited_as_zero(values["MemoryHigh"]),
+                memory_max_bytes=_unlimited_as_zero(values["MemoryMax"]),
+                memory_swap_max_bytes=_unlimited_as_zero(values["MemorySwapMax"]),
                 active_state=values["ActiveState"],
             )
         except ValueError as exc:
             raise WslCgroupError("systemd unit readback contains non-integer limits") from exc
         if readback.main_pid <= 0 or not readback.control_group.startswith("/"):
             raise WslCgroupError("systemd unit has no identity-bound MainPID/control group")
-        expected = (
-            self.policy.wsl_memory_high_bytes,
-            self.policy.wsl_memory_max_bytes,
-            self.policy.wsl_swap_max_bytes,
-        )
+        expected = (0, 0, 0)
         actual = (
             readback.memory_high_bytes,
             readback.memory_max_bytes,
             readback.memory_swap_max_bytes,
         )
         if actual != expected:
-            raise WslCgroupError(f"cgroup memory limit readback mismatch: expected={expected} actual={actual}")
+            raise WslCgroupError(f"cgroup unexpectedly has AIstock memory limits: expected={expected} actual={actual}")
         if readback.active_state not in {"activating", "active"}:
             raise WslCgroupError(f"systemd unit is not active: {readback.active_state}")
         return readback
-
     def read_memory_files_command(
         self,
         control_group: str,
@@ -200,6 +190,13 @@ class WslCgroupService:
             "--read-cgroup",
             control_group,
         ]
+
+
+def _unlimited_as_zero(value: str) -> int:
+    normalized = str(value).strip().casefold()
+    if normalized in {"infinity", "max"}:
+        return 0
+    return int(normalized)
 
 
 __all__ = [

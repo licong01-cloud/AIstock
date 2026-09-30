@@ -18,6 +18,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import psutil
 
+from backend.data_service.security_source_identity import MONEYFLOW_DATASET
+
 from .artifact_ready_build_source import ArtifactReadyBuildSource
 from .canonical import digest_named_fields, ensure_sha256, normalize_root_relative_path
 from .canonical_lineage import (
@@ -215,8 +217,6 @@ class StageResourceReceipt:
         process = psutil.Process()
         details = process.memory_full_info()
         owned = int(getattr(details, "uss", details.rss))
-        if owned > self.invocation.profile.resource_policy.aggregate_private_commit_bytes:
-            raise CandidateBuildStageError("build stage exceeded private-commit policy")
         self.peak = max(self.peak, owned)
         item: dict[str, Any] = {
             "sequence": len(self.checkpoints),
@@ -681,7 +681,12 @@ def _prepare(
                     staging_root=staging,
                     chunks=produced.chunks,
                     static_ordered_columns=invocation.profile.static_ordered_columns,
-                    row_group_rows=_rung(invocation.profile, "row_group_rows", invocation.pressure_rung),
+                    row_group_rows=_rung(
+                        invocation.profile,
+                        "row_group_rows",
+                        invocation.pressure_rung,
+                    ),
+                    security_source_identity_path=source.security_source_identity.source_path,
                 ),
                 checkpoint=checkpoint,
             )
@@ -1372,6 +1377,7 @@ def _patch_factor_component(
             ordered_columns=tuple(str(value) for value in raw["ordered_columns"]),
         )
     merge_receipts: list[Mapping[str, Any]] = []
+    selected_by_key = {partition.partition_key: partition for partition in selected}
     for key, (produced_root, chunk, instrument_filter) in produced_chunks.items():
         target = combined / key[0] / f"{key[1]}.parquet"
         target.parent.mkdir(exist_ok=True)
@@ -1381,13 +1387,26 @@ def _patch_factor_component(
             baseline_path = baseline_paths.get(key)
             if baseline_path is None:
                 raise CandidateBuildStageError("selective factor merge lacks baseline month")
+            merge_instruments = instrument_filter
+            if chunk.dataset == "moneyflow":
+                selected_partition = selected_by_key.get(chunk.partition_key)
+                if selected_partition is None:
+                    raise CandidateBuildStageError("moneyflow selective merge partition is unavailable")
+                merge_instruments = tuple(
+                    source.security_source_identity.query_source_codes(
+                        instrument_filter,
+                        selected_partition.start,
+                        selected_partition.end,
+                        MONEYFLOW_DATASET,
+                    )
+                )
             merged, merge_receipt = merge_factor_partition_by_instrument(
                 baseline_path=baseline_path,
                 replacement_path=source_path,
                 target_path=target,
                 dataset=chunk.dataset,
                 partition_key=chunk.partition_key,
-                affected_instruments=instrument_filter,
+                affected_instruments=merge_instruments,
                 row_group_rows=row_group_rows,
                 max_rows=max(
                     250_000,
@@ -1424,6 +1443,7 @@ def _patch_factor_component(
                 chunks=tuple(chunks[key] for key in sorted(chunks)),
                 static_ordered_columns=invocation.profile.static_ordered_columns,
                 row_group_rows=row_group_rows,
+                security_source_identity_path=source.security_source_identity.source_path,
             ),
             checkpoint=checkpoint,
         )

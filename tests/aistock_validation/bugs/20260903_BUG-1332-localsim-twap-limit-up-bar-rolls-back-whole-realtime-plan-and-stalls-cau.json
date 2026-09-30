@@ -1,0 +1,402 @@
+{
+  "actual": "One limit-up BUY raises RiskRuleError, rolls back the full 94-order batch, stalls every causal cursor, and causes repeated scheduler retries.",
+  "allowed_write_scope": [
+    "backend/execution_algos/twap_algo.py",
+    "backend/services/simulation_execution/localsim/runtime.py",
+    "backend/services/trading_core/minute_execution.py",
+    "backend/services/trading_core/risk.py",
+    "backend/tests/trading_core/test_minute_execution.py",
+    "backend/tests/trading_core/test_risk.py",
+    "backend/tests/simulation_execution/test_localsim_runtime.py",
+    "tests/aistock_validation/bugs/20260903_BUG-1332-localsim-twap-limit-up-bar-rolls-back-whole-realtime-plan-and-stalls-cau.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1332",
+  "closed_at": "2026-09-03T17:28:04.808416Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-03T03:19:01.777487Z",
+  "description": "One limit-up BUY raises RiskRuleError, rolls back the full 94-order batch, stalls every causal cursor, and causes repeated scheduler retries.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260903-86e2bb19aa3c",
+      "timestamp": "2026-09-03T03:19:01.777473Z"
+    },
+    {
+      "action": "scope_clarification",
+      "actor": "codex",
+      "note": "Expanded scope to LocalSim runtime so a typed TWAP market-state no-fill is persisted as WAITING_FOR_MARKET_STATE instead of delivering only exception suppression.",
+      "timestamp": "2026-09-03T03:25:00Z"
+    },
+    {
+      "action": "source_validation",
+      "actor": "codex",
+      "note": "Typed limit-state handling, per-symbol LocalSim isolation, fail-fast negatives and required module gates passed in fresh Python processes without backend process control.",
+      "timestamp": "2026-09-03T03:46:07Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-api:simrun_6cbb4ffec3534e7c@2026-09-03T11:06:25+08:00"
+  ],
+  "expected": "A limit-up BUY or limit-down SELL minute is a typed per-symbol no-fill market state. Its causal minute is durably consumed, the blocked order remains non-terminal for later bars, healthy symbols continue in the same plan, and missing or inconsistent authoritative limit data still fails loudly.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260903_BUG-1332-localsim-twap-limit-up-bar-rolls-back-whole-realtime-plan-and-stalls-cau.json",
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/trading_core/test_risk.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260903_BUG-1332-localsim-twap-limit-up-bar-rolls-back-whole-realtime-plan-and-stalls-cau.json",
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/trading_core/test_risk.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/execution_algos/twap_algo.py",
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/services/trading_core/minute_execution.py",
+        "backend/services/trading_core/risk.py",
+        "backend/tests/trading_core/test_minute_execution.py",
+        "backend/tests/trading_core/test_risk.py",
+        "backend/tests/simulation_execution/test_localsim_runtime.py"
+      ],
+      "impacted_modules": [
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "simulation_runtime",
+        "qe.core",
+        "strategy_package",
+        "simulation.layer_foundation",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/execution_algos/twap_algo.py",
+          "impact_modules": [
+            "miniqmt_execution_runtime",
+            "simulation_runtime",
+            "qe.core",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "execution_algos_runtime"
+        },
+        {
+          "file": "backend/services/simulation_execution/localsim/runtime.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation"
+        },
+        {
+          "file": "backend/tests/trading_core/test_minute_execution.py",
+          "impact_modules": [
+            "miniqmt_execution_runtime",
+            "qe.core",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "trading_core_minute_execution"
+        },
+        {
+          "file": "backend/tests/simulation_execution/test_localsim_runtime.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/execution_algos/twap_algo.py",
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/services/trading_core/minute_execution.py",
+        "backend/services/trading_core/risk.py",
+        "backend/tests/trading_core/test_minute_execution.py",
+        "backend/tests/trading_core/test_risk.py",
+        "backend/tests/simulation_execution/test_localsim_runtime.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/trading_core/test_risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/trading_core/test_risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py"
+    ]
+  },
+  "first_seen_at": "2026-09-03T03:19:01.777487Z",
+  "fix_branch": null,
+  "fix_commit": "8b03e8646b4e4cbc0ab5a6dcb0d1034331171bb0",
+  "fixed_at": "2026-09-03T06:26:41Z",
+  "github_issue_number": 4222,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4222",
+  "last_seen_at": "2026-09-03T03:19:01.777487Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4224",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_6cbb4ffec3534e7c",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "platform_api_backend",
+    "simulation_core_l2"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim changes and passed 107 direct trading-core plus LocalSim tests, including typed BUY/SELL limit states, later-bar recovery, healthy-peer isolation, historical residual and fail-fast negatives; no backend process control.",
+      "Fresh nox processes loaded the tracked source and passed validation_module_registry_l0 (8 passed), paper_v2_backend (1085 passed, 3 skipped, 2 xfailed), platform_api_backend (15 passed), and simulation_core_l2 (829 passed, 4 skipped); no backend process control.",
+      "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source and passed direct plus required module gates; no backend process control.",
+      "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source and passed direct plus all required module gates; no backend process control.",
+      "Fresh pytest and nox processes loaded the tracked TWAP/RiskEngine/MinuteExecutionEngine/LocalSim source at commit 81bbf0d75 and passed direct plus all required module gates; no backend process control.",
+      "Fresh mapped-nodeid pytest process at f90d47a5e passed BUY/SELL limit deferral, later-bar recovery, non-TWAP fail-fast and LocalSim healthy-peer isolation; CI classifier passed with zero unmapped files."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1332/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1332",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "482a415b14088acc5e1386ba087e4f2a791cb0a122626973cf9b64fdcad9e31b",
+      "contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+      "expected_identity": "8b03e8646b4e4cbc0ab5a6dcb0d1034331171bb0",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-03T17:25:28.239812Z",
+      "mode": "read_only",
+      "observed_identity": "20626f727ad1e9e5d3c73dffa7d680c10f2d5a17",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6c26a3aa3fa9bc607a716a1c66c40b27c9b7ff7522db932f68dab9282ea98479",
+      "receipt_sha256": "be70360134a3638fc3b208102021e7e051c6c9fb439f4ff49dbc1e4b9bd5088a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a3c550800189484ed53f06f81ffdce1ed0470bffcfae335749fba1beec560155",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1332",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "81b4455f5af0077a",
+    "recorded_at": "2026-09-03T06:28:39.076652Z",
+    "runtime_contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81",
+    "source_merge_commit": "8b03e8646b4e4cbc0ab5a6dcb0d1034331171bb0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4224",
+    "validation_evidence": [
+      "validation-receipt: id=4b56812ea5c406f3 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/trading_core/test_risk.py backend/tests/trading_core/test_minute_execution.py backend/tests/simulation_execution/test_localsim_runtime.py -q` result=`107 passed`",
+      "validation-receipt: id=e9fcd4583acf4c63 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; ownership mapped=14/14`",
+      "validation-receipt: id=f626e9eb36930a40 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=paper_v2_backend status=passed command=`python -m nox -s paper_v2_backend` result=`1085 passed, 3 skipped, 2 xfailed`",
+      "validation-receipt: id=f969f40bd9cc7d64 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
+      "validation-receipt: id=430ef2bb25fc2cb8 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`829 passed, 4 skipped`",
+      "validation-receipt: id=cc2f3afbc8f0dbdf commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=ruff plan=direct status=passed command=`rtk ruff check changed Python files; python -m py_compile changed Python files; git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "9277956fa4ed3f135e1b026dfeef159775d009910d772dd708955c8e082f7f8e"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM TWAP limit-up bar rolls back whole realtime plan and stalls causal cursor",
+  "trigger_condition": {
+    "fingerprint": "86e2bb19aa3caa0ac4651f65",
+    "source_event_id": "FE-20260903-86e2bb19aa3c"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=4b56812ea5c406f3 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/trading_core/test_risk.py backend/tests/trading_core/test_minute_execution.py backend/tests/simulation_execution/test_localsim_runtime.py -q` result=`107 passed`",
+    "validation-receipt: id=e9fcd4583acf4c63 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; ownership mapped=14/14`",
+    "validation-receipt: id=f626e9eb36930a40 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=paper_v2_backend status=passed command=`python -m nox -s paper_v2_backend` result=`1085 passed, 3 skipped, 2 xfailed`",
+    "validation-receipt: id=f969f40bd9cc7d64 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`15 passed`",
+    "validation-receipt: id=430ef2bb25fc2cb8 commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`829 passed, 4 skipped`",
+    "validation-receipt: id=cc2f3afbc8f0dbdf commit=49d226ee5a0a1eb61cb092a8bbc0e76d8ad12d81 kind=ruff plan=direct status=passed command=`rtk ruff check changed Python files; python -m py_compile changed Python files; git diff --check` result=`passed`",
+    "PR #4224 CI verdict and CodeQL verdict -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "simulation_core"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "paper_v2",
+          "simulation_core"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

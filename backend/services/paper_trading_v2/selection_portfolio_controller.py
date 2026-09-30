@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from backend.services.selection_center.models import SelectionPaperPortfolioLink
+from backend.services.selection_center.models import SelectionSimulationAccountLink
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.simulation_data.contracts import MinuteDataSource
 
@@ -39,7 +39,7 @@ class SelectionPaperPortfolioController:
         risk_policy: dict[str, Any] | None = None,
         execution_policy: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        prepared = self.selection_service.prepare_paper_portfolio_creation(run_id=run_id)
+        prepared = self.selection_service.prepare_localsim_account_creation(run_id=run_id)
         run = prepared["run"]
         package_id = str(prepared["package_id"])
         manifest_sha256 = str(prepared["manifest_sha256"])
@@ -71,10 +71,10 @@ class SelectionPaperPortfolioController:
             risk_policy=risk_policy,
             execution_policy=execution_policy,
         )
-        link = self.selection_service.repository.create_paper_portfolio_link(
-            SelectionPaperPortfolioLink(
+        link = self.selection_service.repository.create_simulation_account_link(
+            SelectionSimulationAccountLink(
                 run_id=run.run_id,
-                portfolio_id=portfolio.portfolio_id,
+                simulation_account_id=portfolio.portfolio_id,
                 package_id=package_id,
                 manifest_sha256=manifest_sha256,
                 trade_date=run.trade_date,
@@ -86,6 +86,6 @@ class SelectionPaperPortfolioController:
         )
         return {"portfolio": portfolio, "link": link, "paper_runtime_config": paper_runtime_config}
 
-    def list_links(self, run_id: str) -> list[SelectionPaperPortfolioLink]:
+    def list_links(self, run_id: str) -> list[SelectionSimulationAccountLink]:
         self.selection_service.repository.get_run(run_id)
-        return self.selection_service.repository.list_paper_portfolio_links(run_id)
+        return self.selection_service.repository.list_simulation_account_links(run_id)

@@ -9,10 +9,13 @@ import datetime as dt
 import importlib
 import json
 import logging
+import math
 import os
 import time
 import uuid
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 import psycopg2
@@ -42,7 +45,110 @@ ZERO_ROW_VALID_DATASETS = {
     "stock_st_events",
     *FINANCIAL_EVENT_RAW_DATASETS,
 }
+
+# BUG-1425: contract version for the daily_basic required-field coverage
+# receipt written into refresh-audit metadata. Must stay in sync with
+# audit_backed_data_health._status_from_audit validation.
+DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA = "daily_basic_required_field_coverage_v1"
+DAILY_BASIC_REQUIRED_FIELD = "turnover_rate_f"
+DAILY_BASIC_REQUIRED_RATIO = 0.95
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Return True when value is a real, finite number (not NaN/inf/None)."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            return not math.isnan(float(value)) and not math.isinf(float(value))
+        except (TypeError, ValueError, OverflowError):
+            return False
+    if isinstance(value, str):
+        text = value.strip()
+        if not text or text.lower() in {"nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}:
+            return False
+        try:
+            parsed = float(text)
+        except ValueError:
+            return False
+        return not math.isnan(parsed) and not math.isinf(parsed)
+    return False
+
+
+def _daily_basic_required_field_coverage_receipt(
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build the required-field coverage receipt for a daily_basic batch.
+
+    BUG-1425: the freshness gate in audit_backed_data_health requires this
+    receipt in the refresh-audit metadata for every successful daily_basic
+    sync. The receipt proves the ``turnover_rate_f`` field coverage so the
+    gate does not fall back to ``required_field_coverage_unproven``.
+    """
+    row_count = len(rows)
+    finite_count = sum(
+        1
+        for row in rows
+        if _is_finite_number(row.get(DAILY_BASIC_REQUIRED_FIELD))
+    )
+    ratio = finite_count / row_count if row_count > 0 else 0.0
+    return {
+        "schema_version": DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA,
+        "field": DAILY_BASIC_REQUIRED_FIELD,
+        "finite_count": finite_count,
+        "row_count": row_count,
+        "ratio": ratio,
+        "required_ratio": DAILY_BASIC_REQUIRED_RATIO,
+    }
+
+
+def _etf_share_size_publication_quality(
+    rows: List[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Detect the provider's shares-only intermediate publication stage.
+
+    Tushare can publish all ETF share rows before any daily size values are
+    available. Requiring a percentage would create an arbitrary universe-size
+    gate and would penalize legitimate late overseas ETFs. The narrow contract
+    here only rejects an entire source field being unavailable for the day.
+    """
+
+    row_count = len(rows)
+    share_count = sum(1 for row in rows if _is_finite_number(row.get("total_share")))
+    size_count = sum(1 for row in rows if _is_finite_number(row.get("total_size")))
+    receipt = {
+        "schema_version": "etf_share_size_publication_quality_v1",
+        "row_count": row_count,
+        "total_share_finite_count": share_count,
+        "total_size_finite_count": size_count,
+    }
+    if row_count > 0 and share_count > 0 and size_count > 0:
+        return receipt, {"quality_status": "ok"}
+    return receipt, {
+        "quality_status": "low_coverage",
+        "failure_category": "required_source_field_unpublished",
+    }
 _logger = logging.getLogger(__name__)
+
+_DIVIDEND_ECONOMIC_COLUMNS = (
+    "stk_div",
+    "stk_bo_rate",
+    "stk_co_rate",
+    "cash_div",
+    "cash_div_tax",
+)
+
+
+class DividendSourceVersionConflict(RuntimeError):
+    """Tushare returned irreconcilable dividend versions for one action."""
+
+    failure_category = "source_version_conflict"
+
+    def __init__(self, message: str, *, context: Dict[str, Any]):
+        super().__init__(message)
+        self.context = context
 
 
 @dataclass
@@ -54,6 +160,7 @@ class SyncResult:
     success_batches: int = 0
     failed_batches: int = 0
     inserted_rows: int = 0
+    canonicalized_source_revisions: int = 0
     error: Optional[str] = None
     periods: List[str] | None = None
 
@@ -70,6 +177,7 @@ class SyncResult:
             "success_batches": self.success_batches,
             "failed_batches": self.failed_batches,
             "inserted_rows": self.inserted_rows,
+            "canonicalized_source_revisions": self.canonicalized_source_revisions,
             "error": self.error,
             "periods": self.periods or [],
         }
@@ -175,9 +283,124 @@ def _parse_ymd(val) -> Optional[dt.date]:
             return dt.date(int(s[:4]), int(s[4:6]), int(s[6:]))
         return dt.date.fromisoformat(s)
     except Exception:
-        import logging
-        logging.getLogger(__name__).warning("_parse_ymd: failed to parse date value %r", val)
+        _logger.warning("_parse_ymd: failed to parse date value %r", val)
         return None
+
+
+def _canonical_numeric(value: Any) -> str:
+    """Return a stable key while treating provider null and zero as equivalent."""
+    if value is None or str(value).strip() == "":
+        return "0"
+    try:
+        normalized = Decimal(str(value)).normalize()
+    except (InvalidOperation, ValueError):
+        return f"invalid:{value!s}"
+    return "0" if normalized == 0 else str(normalized)
+
+
+def _canonical_date(value: Any) -> str:
+    parsed = _parse_ymd(value)
+    return parsed.isoformat() if parsed is not None else ""
+
+
+def _dividend_economic_key(row: Dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        _canonical_numeric(row.get(column))
+        for column in _DIVIDEND_ECONOMIC_COLUMNS
+    )
+
+
+def _dividend_revision_time_rank(row: Dict[str, Any]) -> tuple[str, str]:
+    return (
+        _canonical_date(row.get("imp_ann_date")),
+        _canonical_date(row.get("base_date")),
+    )
+
+
+def _dividend_revision_rank(row: Dict[str, Any]) -> tuple[Any, ...]:
+    """Choose one equivalent revision without relying on provider row order."""
+    completeness = sum(value not in (None, "") for value in row.values())
+    stable_row = json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+    return (
+        _canonical_date(row.get("imp_ann_date")),
+        _canonical_date(row.get("base_date")),
+        _canonical_date(row.get("record_date")),
+        _canonical_date(row.get("pay_date")),
+        _canonical_date(row.get("div_listdate")),
+        completeness,
+        stable_row,
+    )
+
+
+def _canonicalize_dividend_rows(
+    rows: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], int]:
+    """Collapse equivalent Tushare revisions and reject economic conflicts.
+
+    Tushare can publish several revisions with the same database identity.  A
+    single PostgreSQL ``INSERT .. ON CONFLICT`` statement cannot update the
+    same target row twice, so equivalent revisions are reduced before the
+    replace-date transaction.  A revision with a later implementation/base-date
+    rank may supersede an older one; economics that still conflict at the same
+    latest rank are never guessed.
+    """
+    by_identity: Dict[tuple[str, ...], List[Dict[str, Any]]] = {}
+    for source_row in rows:
+        row = dict(source_row)
+        ts_code = row.get("ts_code")
+        if isinstance(ts_code, str):
+            row["ts_code"] = ts_code.strip().upper()
+        div_proc = row.get("div_proc")
+        if isinstance(div_proc, str):
+            row["div_proc"] = div_proc.strip()
+        identity = (
+            str(row.get("ts_code") or ""),
+            _canonical_date(row.get("end_date")),
+            _canonical_date(row.get("ann_date")),
+            str(row.get("div_proc") or ""),
+        )
+        by_identity.setdefault(identity, []).append(row)
+
+    canonical: List[Dict[str, Any]] = []
+    removed = 0
+    for identity, versions in by_identity.items():
+        economics = {_dividend_economic_key(row) for row in versions}
+        candidates = versions
+        if len(economics) != 1:
+            latest_rank = max(_dividend_revision_time_rank(row) for row in versions)
+            candidates = [
+                row
+                for row in versions
+                if _dividend_revision_time_rank(row) == latest_rank
+            ]
+        candidate_economics = {_dividend_economic_key(row) for row in candidates}
+        if len(candidate_economics) != 1:
+            context = {
+                "scope": "primary_key",
+                "ts_code": identity[0],
+                "end_date": identity[1] or None,
+                "ann_date": identity[2] or None,
+                "div_proc": identity[3],
+                "version_count": len(versions),
+                "economic_action_count": len(candidate_economics),
+            }
+            raise DividendSourceVersionConflict(
+                "dividend source_version_conflict: one source identity has "
+                f"{len(candidate_economics)} economic variants",
+                context=context,
+            )
+        canonical.append(max(candidates, key=_dividend_revision_rank))
+        removed += len(versions) - 1
+
+    canonical.sort(
+        key=lambda row: (
+            str(row.get("ts_code") or ""),
+            _canonical_date(row.get("end_date")),
+            _canonical_date(row.get("ann_date")),
+            str(row.get("div_proc") or ""),
+        )
+    )
+    return canonical, removed
 
 
 def _date_range(d0: dt.date, d1: dt.date) -> List[dt.date]:
@@ -321,7 +544,12 @@ class TushareSyncEngine:
 
     def _fetch_from_tushare(self, spec: DatasetSpec, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Call Tushare API with rate limiting, retry, and optional pagination."""
-        col_names = list(spec.columns.keys())
+        provider_columns = [
+            column
+            for column in spec.columns
+            if column != spec.snapshot_date_column
+        ]
+        col_names = provider_columns
         db_to_api = {c: spec.api_field_map.get(c, c) for c in col_names}
         api_fields = [db_to_api[c] for c in col_names]
         api_to_db = {v: k for k, v in db_to_api.items()}
@@ -964,6 +1192,10 @@ class TushareSyncEngine:
                         f"{spec.name} {spec.date_param_name}={ymd} returned {len(rows)} rows; "
                         f"row_limit={spec.row_limit} may indicate truncated Tushare data"
                     )
+                canonicalized_source_revisions = 0
+                if spec.name == "dividend":
+                    rows, canonicalized_source_revisions = _canonicalize_dividend_rows(rows)
+                    self._validate_rows_for_date(spec, rows, d)
                 if spec.replace_existing_dates:
                     inserted = self._replace_date_batch(conn, spec, d, rows)
                 else:
@@ -977,13 +1209,32 @@ class TushareSyncEngine:
                 audit_quality: Dict[str, Any] = {"quality_status": quality_status}
                 if inserted > 0:
                     audit_quality = self._audit_quality_for_rows(spec, inserted)
+                audit_metadata = {
+                    "tushare_api": spec.tushare_api,
+                    "mode": spec.query_mode.value,
+                }
+                if spec.name == "etf_share_size":
+                    publication_quality, audit_quality = _etf_share_size_publication_quality(rows)
+                    audit_metadata["publication_quality"] = publication_quality
+                if spec.name == "daily_basic":
+                    # BUG-1425: persist the required-field coverage receipt so
+                    # the freshness gate can prove turnover_rate_f coverage
+                    # instead of failing closed with
+                    # required_field_coverage_unproven.
+                    audit_metadata["required_field_coverage"] = (
+                        _daily_basic_required_field_coverage_receipt(rows)
+                    )
+                if canonicalized_source_revisions:
+                    audit_metadata["canonicalized_source_revisions"] = (
+                        canonicalized_source_revisions
+                    )
                 self._refresh_audit.record_success(
                     dataset=spec.name,
                     trade_date=d,
                     row_count=inserted,
                     job_id=str(job_id),
                     data_source="tushare",
-                    metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
+                    metadata=audit_metadata,
                     written_rows=inserted,
                     conn=conn,
                     **audit_quality,
@@ -997,25 +1248,40 @@ class TushareSyncEngine:
                     context={"quality_status": audit_quality["quality_status"]},
                 )
                 result.inserted_rows += inserted
+                result.canonicalized_source_revisions += canonicalized_source_revisions
                 result.success_batches += 1
             except Exception as exc:
                 result.failed_batches += 1
                 self._log(conn, job_id, "error", f"{spec.name} {d} failed: {exc}")
                 try:
-                    failure_category = (
-                        "empty_invalid"
-                        if "0 rows" in str(exc)
-                        else "provider_contract_error"
-                        if "provider_contract_error" in str(exc)
-                        else "provider_or_persistence_error"
+                    failure_category = str(
+                        getattr(exc, "failure_category", None)
+                        or (
+                            "empty_invalid"
+                            if "0 rows" in str(exc)
+                            else "provider_contract_error"
+                            if "provider_contract_error" in str(exc)
+                            else "provider_or_persistence_error"
+                        )
                     )
+                    failure_metadata = {
+                        "tushare_api": spec.tushare_api,
+                        "mode": spec.query_mode.value,
+                    }
+                    failure_context = (
+                        exc.context
+                        if isinstance(exc, DividendSourceVersionConflict)
+                        else None
+                    )
+                    if isinstance(failure_context, dict):
+                        failure_metadata["failure_context"] = failure_context
                     self._refresh_audit.record_failure(
                         dataset=spec.name,
                         trade_date=d,
                         error_message=str(exc),
                         job_id=str(job_id),
                         data_source="tushare",
-                        metadata={"tushare_api": spec.tushare_api, "mode": spec.query_mode.value},
+                        metadata=failure_metadata,
                         quality_status="empty_invalid" if "0 rows" in str(exc) else "error",
                         failure_category=failure_category,
                         conn=conn,
@@ -1027,7 +1293,14 @@ class TushareSyncEngine:
                         rows_written=0,
                         rows_observed=0,
                         error_message=str(exc),
-                        context={"failure_category": failure_category},
+                        context={
+                            "failure_category": failure_category,
+                            **(
+                                {"failure_context": failure_context}
+                                if isinstance(failure_context, dict)
+                                else {}
+                            ),
+                        },
                     )
                 except Exception as audit_exc:
                     self._log(conn, job_id, "error", f"{spec.name} {d} refresh audit failed: {audit_exc}")
@@ -1161,6 +1434,12 @@ class TushareSyncEngine:
         for params in param_sets:
             try:
                 rows = self._fetch_from_tushare(spec, params)
+                if spec.snapshot_date_column:
+                    snapshot_date = dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()
+                    rows = [
+                        {**row, spec.snapshot_date_column: snapshot_date}
+                        for row in rows
+                    ]
                 if spec.row_limit > 0 and len(rows) >= spec.row_limit:
                     raise RuntimeError(
                         f"{spec.name} single_call params={params} returned {len(rows)} rows; "

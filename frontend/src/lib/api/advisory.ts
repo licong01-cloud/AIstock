@@ -8,6 +8,69 @@ export type AdvisoryPackageMode =
   | "intersection"
   | "sleeve_mode_future";
 
+export type AdvisoryUniverseSelection = {
+  mode: "stock_universe" | "single_index" | "index_union";
+  pool_ids: string[];
+};
+
+export type AdvisoryUniverseOptions = {
+  schema_version: string;
+  default_selection: AdvisoryUniverseSelection;
+  modes: AdvisoryUniverseSelection["mode"][];
+  pools: Array<{ pool_id: string; index_code: string; label: string; priority: string }>;
+};
+
+export type AdvisoryDeliveryPreflight = {
+  schema_version: "advisory_delivery_preflight_v1" | string;
+  overall_status: "READY_WITH_MODEL" | "READY_BASELINE_ONLY" | "BLOCKED";
+  package: {
+    package_id: string;
+    manifest_sha256: string;
+    package_status: string;
+    source_type: string;
+    source_id: string;
+    asset_eligible: boolean;
+    asset_blockers: string[];
+  };
+  universe_compatibility: {
+    status:
+      | "EXACT_UNIVERSE_MATCHED"
+      | "FILTER_ONLY_COMPATIBLE"
+      | "LEGACY_UNIVERSE_UNSPECIFIED"
+      | "PACKAGE_IDENTITY_MISMATCH"
+      | "DELIVERY_CONTRACT_INCOMPLETE";
+    requested: AdvisoryUniverseSelection;
+    source_declared?: AdvisoryUniverseSelection | null;
+    evidence_paths: string[];
+    evidence_errors: Array<{ path: string; reason_code: string }>;
+  };
+  policy_compatibility: {
+    status: "ACTIVE_POLICY_MATCH" | "NEW_POLICY_BINDING_REQUIRED";
+    requested_target_count: number;
+    active_target_count?: number | null;
+    package_backtest_topk?: number | null;
+    package_policy_authority: "DIAGNOSTIC_ONLY_NOT_ADVISORY_RUNTIME_AUTHORITY" | string;
+  };
+  model_compatibility: {
+    status:
+      | "DESCRIPTOR_FILE_PRESENT"
+      | "MODEL_DESCRIPTOR_UNAVAILABLE"
+      | "REQUIRED_AFTER_BINDING"
+      | "NOT_APPLICABLE";
+    validation_stage: "PRESENCE_ONLY" | "PUBLICATION_FULL_RESOLUTION" | "NOT_APPLICABLE";
+    binding_version_id?: string | null;
+  };
+  blockers: string[];
+  warnings: string[];
+};
+
+export type AdvisoryDeliveryPreflightPayload = {
+  package_id: string;
+  universe_selection: AdvisoryUniverseSelection;
+  target_count: number;
+  program_id?: string;
+};
+
 export type AdvisoryProgram = {
   program_id: string;
   program_name: string;
@@ -112,6 +175,7 @@ export type AdvisoryStrategyBindingVersion = {
   package_set_hash: string;
   fusion_policy_sha256?: string | null;
   runtime_config_json?: JsonObject | null;
+  universe_selection?: AdvisoryUniverseSelection;
   effective_from_trade_date?: string | null;
   effective_to_trade_date?: string | null;
   binding_interval_semantics?: "LEFT_CLOSED_RIGHT_OPEN" | string;
@@ -219,6 +283,7 @@ export type CreateAdvisoryProgramPayload = {
   entry_price_basis?: string;
   exit_price_basis?: string;
   review_schedule?: JsonObject;
+  universe_selection?: AdvisoryUniverseSelection;
   created_by?: string;
   status?: string;
 };
@@ -239,6 +304,7 @@ export type AdvisoryBindingPayload = {
   package_weights?: Record<string, number>;
   target_count?: number;
   runtime_config_json?: JsonObject;
+  universe_selection?: AdvisoryUniverseSelection;
 };
 
 export type AdvisoryBindingApplyPayload = {
@@ -358,16 +424,19 @@ export type AdvisoryPriceBand = {
 export type AdvisoryPriceRangeCandidate = {
   symbol: string;
   status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
-  projection_condition: "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID";
-  entry_executable_probability: number | null;
+  availability_status: "AVAILABLE" | "UNAVAILABLE";
+  projection_condition: "NEXT_TRADING_DAY_VALID_OPEN_AT_PREDICTED_ENTRY_MID";
   decision_reference_price: number | null;
+  decision_price_trade_date: string | null;
   target_raw_price_multiplier: number | null;
-  entry_price: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
-  calibrated_entry_price?: ({ condition: "ENTRY_EXECUTABLE"; mid: number } & AdvisoryPriceBand) | null;
-  entry_gap_calibration_state?: "CALIBRATED" | "UNCALIBRATED";
-  entry_gap_calibration_method?: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION" | null;
-  entry_gap_calibration_delta?: number | null;
-  entry_executable_calibration_state?: "UNCALIBRATED";
+  entry_price_range: ({ condition: "NEXT_TRADING_DAY_VALID_OPEN"; mid: number } & AdvisoryPriceBand) | null;
+  calibrated_entry_price_range: ({ condition: "NEXT_TRADING_DAY_VALID_OPEN"; mid: number } & AdvisoryPriceBand) | null;
+  entry_gap_calibration: {
+    state: "CALIBRATED" | "UNCALIBRATED";
+    method: string | null;
+    delta: number | null;
+    nominal_coverage: number;
+  } | null;
   take_profit_price: (AdvisoryPriceBand & { horizon_trade_days: 1 | 3 | 5 | 10 | 20 }) | null;
   protective_price: {
     status: "NOT_APPLICABLE" | "MODEL_BELOW_POLICY_ACTIVATION" | "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION";
@@ -398,14 +467,87 @@ export type AdvisoryPriceRangeCandidate = {
 };
 
 export type AdvisoryPriceRangeShadow = {
+  schema_version: "advisory_daily_price_envelope_v1";
+  objective_contract: "RISK_MANAGED_ADVISORY";
   status: "EXPERIMENTAL_SHADOW" | "PRICE_RANGE_UNAVAILABLE";
+  availability_status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+  decision_as_of_trade_date: string | null;
+  target_trade_date: string | null;
   calibration_state: "UNCALIBRATED" | "CALIBRATED_INTERVAL";
+  nominal_coverage: number | null;
+  package_id: string | null;
+  package_manifest_sha256: string | null;
+  style_profile_hash: string | null;
   price_range_bundle_id: string | null;
   parent_bundle_id: string | null;
   outcome_bundle_id: string | null;
   model_version: string | null;
   price_basis: "UNADJUSTED_CNY_DECISION_CLOSE";
+  review_policy_sha256: string | null;
+  source_bundle_schema_version: string | null;
+  entry_admission_model_status: "RETIRED_NON_IDENTIFIABLE";
   candidates: AdvisoryPriceRangeCandidate[];
+  reason_code: string | null;
+  message: string | null;
+};
+
+type AdvisoryEntryAuxiliary<T> = {
+  status: "AVAILABLE" | "UNAVAILABLE";
+  payload: T;
+  source_identity: { outcome_bundle_id: string; review_policy_sha256: string } | null;
+  reason_code: string | null;
+};
+
+export type AdvisoryEntryPriceCandidate = {
+  symbol: string;
+  decision_reference_price: number | null;
+  decision_price_trade_date: string | null;
+  target_raw_price_multiplier: number | null;
+  tick_size: number | null;
+  regulatory_price_range: AdvisoryPriceRangeCandidate["regulatory_price_range"];
+  entry_price: {
+    status: "AVAILABLE" | "UNAVAILABLE";
+    raw_range: AdvisoryPriceRangeCandidate["entry_price_range"];
+    calibrated_range: AdvisoryPriceRangeCandidate["calibrated_entry_price_range"];
+    calibration: AdvisoryPriceRangeCandidate["entry_gap_calibration"];
+    reason_code: string | null;
+    message: string | null;
+  };
+  take_profit: AdvisoryEntryAuxiliary<AdvisoryPriceRangeCandidate["take_profit_price"]>;
+  protective: AdvisoryEntryAuxiliary<AdvisoryPriceRangeCandidate["protective_price"]>;
+  stop_loss: AdvisoryEntryAuxiliary<AdvisoryPriceRangeCandidate["stop_loss_price"]>;
+};
+
+export type AdvisoryEntryPrice = {
+  schema_version: "advisory_entry_price_envelope_v2";
+  projection_producer_version: "advisory_entry_price_core_v1";
+  role: "ENTRY_PRICE";
+  objective_contract: "RISK_MANAGED_ADVISORY";
+  evidence_state: "EXPERIMENTAL" | "CONFIRMED_PRICE_DISTRIBUTION";
+  availability_status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+  auxiliary_availability: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+  program_id: string;
+  binding_version_id: string | null;
+  package_id: string | null;
+  package_manifest_sha256: string | null;
+  style_profile_hash: string | null;
+  review_policy_sha256: string | null;
+  universe_identity_sha256: string | null;
+  candidate_projection_sha256: string | null;
+  feature_schema_sha256: string | null;
+  training_lineage: { parent_bundle_id: string; outcome_bundle_id: string } | null;
+  role_binding_sha256: string | null;
+  price_range_bundle_id: string | null;
+  price_range_bundle_manifest_sha256: string | null;
+  decision_as_of_trade_date: string | null;
+  target_trade_date: string | null;
+  price_basis: "UNADJUSTED_CNY_DECISION_CLOSE";
+  nominal_coverage: number | null;
+  calibration_state: "UNCALIBRATED" | "CALIBRATED_INTERVAL";
+  candidate_count: number;
+  available_count: number;
+  unavailable_count: number;
+  candidates: AdvisoryEntryPriceCandidate[];
   reason_code: string | null;
   message: string | null;
 };
@@ -430,6 +572,14 @@ export type AdvisoryModelShadowResponse = {
   hmm_unavailable: JsonObject[];
   outcome: AdvisoryOutcomeShadow;
   price_range: AdvisoryPriceRangeShadow;
+  entry_price?: AdvisoryEntryPrice;
+  entry_price_collection?: {
+    configured_enabled: boolean;
+    last_run_at: string | null;
+    source: "SCHEDULER_MEMORY_NOT_DURABLE_EVIDENCE";
+    status: string;
+    attempts: Array<{ target_trade_date?: string | null; stage?: string; status: string; reason_code?: string }>;
+  };
   reason_code: string | null;
   message: string | null;
 };
@@ -590,6 +740,48 @@ export type HistoricalRangeMutationData = {
   exact_retry: boolean;
   dispatch_state: string;
   links: Record<string, string>;
+};
+export type HistoricalRangeComparisonMetricSide = {
+  status: "AVAILABLE" | "UNAVAILABLE" | "NOT_REPORTED";
+  value: string | null;
+  reason_code: string | null;
+  coverage: JsonObject;
+};
+export type HistoricalRangeComparison = {
+  schema_version: "advisory_historical_range_comparison_v1";
+  batch_id: string;
+  comparability: {
+    status: "COMPARABLE" | "INCOMPLETE_EVIDENCE" | "INCOMPATIBLE";
+    blockers: string[];
+    warnings: string[];
+    summary_policy_hash: string | null;
+    producer_code_hash: string | null;
+    decision_use: "BUSINESS_VALIDATION_ONLY";
+  };
+  baseline: HistoricalRangeRecord;
+  candidate: HistoricalRangeRecord;
+  day_support: {
+    baseline: HistoricalRangeRecord;
+    candidate: HistoricalRangeRecord;
+  };
+  omitted_diagnostics: {
+    reason: "HIGH_CARDINALITY_PER_DATE_RECALL_NOT_A_BUSINESS_AGGREGATE";
+    baseline: { available_daily_recall: number; unavailable_daily_recall: number };
+    candidate: { available_daily_recall: number; unavailable_daily_recall: number };
+  };
+  metrics: Array<{
+    metric_key: string;
+    group_key: string | null;
+    baseline: HistoricalRangeComparisonMetricSide;
+    candidate: HistoricalRangeComparisonMetricSide;
+    delta: string | null;
+    delta_semantics: "CANDIDATE_MINUS_BASELINE";
+  }>;
+  interpretation: {
+    delta_semantics: "CANDIDATE_MINUS_BASELINE";
+    winner_declared: false;
+    significance_claimed: false;
+  };
 };
 
 export class AdvisoryApiError extends Error {
@@ -820,6 +1012,138 @@ function requireHistoricalRangeMutation(value: unknown, path: string): Historica
   };
 }
 
+function requireHistoricalRangeComparison(value: unknown): HistoricalRangeComparison {
+  const comparison = requireHistoricalRangeFields(
+    requireHistoricalRangeRecord(value, "comparison"),
+    "comparison",
+    { schema_version: "string", batch_id: "string", comparability: "object", baseline: "object", candidate: "object", day_support: "object" },
+  );
+  if (comparison.schema_version !== "advisory_historical_range_comparison_v1") {
+    throw historicalRangeContractError("comparison.schema_version");
+  }
+  const comparability = requireHistoricalRangeRecord(comparison.comparability, "comparison.comparability");
+  if (!["COMPARABLE", "INCOMPLETE_EVIDENCE", "INCOMPATIBLE"].includes(String(comparability.status))
+    || comparability.decision_use !== "BUSINESS_VALIDATION_ONLY"
+    || !Array.isArray(comparability.blockers) || comparability.blockers.some((item) => typeof item !== "string")
+    || !Array.isArray(comparability.warnings) || comparability.warnings.some((item) => typeof item !== "string")
+    || (comparability.summary_policy_hash !== null && typeof comparability.summary_policy_hash !== "string")
+    || (comparability.producer_code_hash !== null && typeof comparability.producer_code_hash !== "string")) {
+    throw historicalRangeContractError("comparison.comparability");
+  }
+  if (comparability.status === "COMPARABLE"
+    && (![comparability.summary_policy_hash, comparability.producer_code_hash]
+      .every((item) => typeof item === "string" && /^[0-9a-f]{64}$/.test(item)))) {
+    throw historicalRangeContractError("comparison.comparability.identity");
+  }
+  for (const [side, rawIdentity] of [["baseline", comparison.baseline], ["candidate", comparison.candidate]] as const) {
+    const identity = requireHistoricalRangeRecord(rawIdentity, `comparison.${side}`);
+    if (typeof identity.range_run_id !== "string" || !identity.range_run_id
+      || typeof identity.package_id !== "string" || !identity.package_id) {
+      throw historicalRangeContractError(`comparison.${side}`);
+    }
+  }
+  const daySupport = requireHistoricalRangeRecord(comparison.day_support, "comparison.day_support");
+  for (const side of ["baseline", "candidate"] as const) {
+    const support = requireHistoricalRangeRecord(daySupport[side], `comparison.day_support.${side}`);
+    const counts = requireHistoricalRangeRecord(support.status_counts, `comparison.day_support.${side}.status_counts`);
+    if (![support.total_day_count, support.successful_day_count, support.valid_no_candidate_day_count]
+      .every((item) => Number.isInteger(item) && Number(item) >= 0)
+      || Object.values(counts).some((item) => !Number.isInteger(item) || Number(item) < 0)) {
+      throw historicalRangeContractError(`comparison.day_support.${side}`);
+    }
+  }
+  const omittedDiagnostics = requireHistoricalRangeRecord(
+    comparison.omitted_diagnostics,
+    "comparison.omitted_diagnostics",
+  );
+  if (omittedDiagnostics.reason !== "HIGH_CARDINALITY_PER_DATE_RECALL_NOT_A_BUSINESS_AGGREGATE") {
+    throw historicalRangeContractError("comparison.omitted_diagnostics.reason");
+  }
+  const parseOmittedCounts = (side: "baseline" | "candidate") => {
+    const counts = requireHistoricalRangeRecord(
+      omittedDiagnostics[side],
+      `comparison.omitted_diagnostics.${side}`,
+    );
+    if (![counts.available_daily_recall, counts.unavailable_daily_recall]
+      .every((item) => Number.isInteger(item) && Number(item) >= 0)) {
+      throw historicalRangeContractError(`comparison.omitted_diagnostics.${side}`);
+    }
+    return {
+      available_daily_recall: Number(counts.available_daily_recall),
+      unavailable_daily_recall: Number(counts.unavailable_daily_recall),
+    };
+  };
+  const omittedCounts: HistoricalRangeComparison["omitted_diagnostics"] = {
+    reason: "HIGH_CARDINALITY_PER_DATE_RECALL_NOT_A_BUSINESS_AGGREGATE",
+    baseline: parseOmittedCounts("baseline"),
+    candidate: parseOmittedCounts("candidate"),
+  };
+  if (!Array.isArray(comparison.metrics)) throw historicalRangeContractError("comparison.metrics");
+  const metrics = comparison.metrics.map((rawMetric, index) => {
+    const metric = requireHistoricalRangeRecord(rawMetric, `comparison.metrics[${index}]`);
+    if (typeof metric.metric_key !== "string" || !metric.metric_key
+      || (metric.group_key !== null && typeof metric.group_key !== "string")
+      || (metric.delta !== null && typeof metric.delta !== "string")
+      || metric.delta_semantics !== "CANDIDATE_MINUS_BASELINE") {
+      throw historicalRangeContractError(`comparison.metrics[${index}]`);
+    }
+    const parseSide = (raw: unknown, side: string): HistoricalRangeComparisonMetricSide => {
+      const item = requireHistoricalRangeRecord(raw, `comparison.metrics[${index}].${side}`);
+      if (!["AVAILABLE", "UNAVAILABLE", "NOT_REPORTED"].includes(String(item.status))
+        || (item.value !== null && typeof item.value !== "string")
+        || (item.reason_code !== null && typeof item.reason_code !== "string")
+        || (item.status === "AVAILABLE" && typeof item.value !== "string")
+        || (item.status !== "AVAILABLE" && item.value !== null)) {
+        throw historicalRangeContractError(`comparison.metrics[${index}].${side}`);
+      }
+      return {
+        status: item.status as HistoricalRangeComparisonMetricSide["status"],
+        value: item.value as string | null,
+        reason_code: item.reason_code as string | null,
+        coverage: requireHistoricalRangeRecord(item.coverage, `comparison.metrics[${index}].${side}.coverage`) as JsonObject,
+      };
+    };
+    return {
+      metric_key: metric.metric_key,
+      group_key: metric.group_key as string | null,
+      baseline: parseSide(metric.baseline, "baseline"),
+      candidate: parseSide(metric.candidate, "candidate"),
+      delta: metric.delta as string | null,
+      delta_semantics: "CANDIDATE_MINUS_BASELINE" as const,
+    };
+  });
+  const interpretation = requireHistoricalRangeRecord(comparison.interpretation, "comparison.interpretation");
+  if (interpretation.delta_semantics !== "CANDIDATE_MINUS_BASELINE"
+    || interpretation.winner_declared !== false || interpretation.significance_claimed !== false) {
+    throw historicalRangeContractError("comparison.interpretation");
+  }
+  return {
+    schema_version: "advisory_historical_range_comparison_v1",
+    batch_id: String(comparison.batch_id),
+    comparability: {
+      status: comparability.status as HistoricalRangeComparison["comparability"]["status"],
+      blockers: comparability.blockers as string[],
+      warnings: comparability.warnings as string[],
+      summary_policy_hash: comparability.summary_policy_hash as string | null,
+      producer_code_hash: comparability.producer_code_hash as string | null,
+      decision_use: "BUSINESS_VALIDATION_ONLY",
+    },
+    baseline: comparison.baseline as HistoricalRangeRecord,
+    candidate: comparison.candidate as HistoricalRangeRecord,
+    day_support: {
+      baseline: daySupport.baseline as HistoricalRangeRecord,
+      candidate: daySupport.candidate as HistoricalRangeRecord,
+    },
+    omitted_diagnostics: omittedCounts,
+    metrics,
+    interpretation: {
+      delta_semantics: "CANDIDATE_MINUS_BASELINE",
+      winner_declared: false,
+      significance_claimed: false,
+    },
+  };
+}
+
 function r5Body(payload: unknown, headers?: HeadersInit): RequestInit {
   return { method: "POST", body: JSON.stringify(payload), headers };
 }
@@ -846,6 +1170,17 @@ export const historicalRangeApi = {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
     const envelope = await historicalRangeFetch<{ runs: HistoricalRangeRecord[] }>(`/advisory/historical-range-batches/${encodeURIComponent(batchId)}/runs${query}`, { signal });
     return { rows: requireHistoricalRangeRows(envelope.data.runs, "runs", { range_run_id: "string", research_program_id: "string", status: "string", row_version: "number" }), page: requireHistoricalRangePage(envelope, "runs") };
+  },
+  async comparison(batchId: string, baselineRangeRunId: string, candidateRangeRunId: string, signal?: AbortSignal): Promise<HistoricalRangeComparison> {
+    const query = new URLSearchParams({
+      baseline_range_run_id: baselineRangeRunId,
+      candidate_range_run_id: candidateRangeRunId,
+    });
+    const envelope = await historicalRangeFetch<{ comparison: HistoricalRangeRecord }>(
+      `/advisory/historical-range-batches/${encodeURIComponent(batchId)}/comparison?${query.toString()}`,
+      { signal },
+    );
+    return requireHistoricalRangeComparison(envelope.data.comparison);
   },
   async operations(batchId: string, cursor?: string | null, signal?: AbortSignal): Promise<{ rows: HistoricalRangeRecord[]; page: HistoricalRangePage }> {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
@@ -896,6 +1231,12 @@ function body(payload: unknown, method = "POST"): RequestInit {
 }
 
 export const advisoryApi = {
+  async universeOptions(): Promise<AdvisoryUniverseOptions> {
+    return apiFetch<AdvisoryUniverseOptions>("/advisory/universe-options");
+  },
+  async deliveryPreflight(payload: AdvisoryDeliveryPreflightPayload): Promise<AdvisoryDeliveryPreflight> {
+    return apiFetch<AdvisoryDeliveryPreflight>("/advisory/delivery-preflight", body(payload));
+  },
   async programs(includeArchived = false): Promise<AdvisoryProgram[]> {
     const data = await apiFetch<{ programs: AdvisoryProgram[] }>(`/advisory/programs?include_archived=${includeArchived}`);
     return data.programs || [];
@@ -976,9 +1317,9 @@ export const advisoryApi = {
   async listVersionDetail(listVersionId: string): Promise<AdvisoryListVersionDetail> {
     return apiFetch<AdvisoryListVersionDetail>(`/advisory/list-versions/${encodeURIComponent(listVersionId)}`);
   },
-  async modelShadow(programId: string, targetTradeDate: string): Promise<AdvisoryModelShadowResponse> {
+  async modelShadow(programId: string, targetTradeDate: string, priceContract: "legacy-v1" | "entry-v2" = "legacy-v1", entryListVersionId?: string): Promise<AdvisoryModelShadowResponse> {
     return apiFetch<AdvisoryModelShadowResponse>(
-      `/advisory/programs/${encodeURIComponent(programId)}/model-shadow?target_trade_date=${encodeURIComponent(targetTradeDate)}`,
+      `/advisory/programs/${encodeURIComponent(programId)}/model-shadow?target_trade_date=${encodeURIComponent(targetTradeDate)}&price_contract=${priceContract}${entryListVersionId ? `&entry_list_version_id=${encodeURIComponent(entryListVersionId)}` : ""}`,
     );
   },
   async forwardRuns(programId: string, limit = 20): Promise<AdvisoryForwardRun[]> {

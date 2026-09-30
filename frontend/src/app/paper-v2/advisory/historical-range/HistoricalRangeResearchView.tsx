@@ -4,10 +4,22 @@ import { Database, Eye, Play, Plus, RefreshCw, RotateCcw, Square } from "lucide-
 import { useEffect, useMemo, useState } from "react";
 
 import type { HistoricalRangeCreatePayload, HistoricalRangeProgramSpec, HistoricalRangeRecord } from "@/lib/api/advisory";
+import { HistoricalRangeComparisonPanel } from "./HistoricalRangeComparisonPanel";
 import { useHistoricalRangeResearch } from "./useHistoricalRangeResearch";
 
 type Props = { prefillProgramId?: string };
 type ResearchRow = { id: string; name: string; packageId: string; targetCount: number };
+
+function researchRuntimeConfig(targetCount: number): Record<string, unknown> {
+  const topK = Math.max(1, Math.min(50, Number(targetCount || 20)));
+  return {
+    top_k: topK,
+    display_top_n: topK,
+    runtime_profile: {
+      selection: { top_k: topK },
+    },
+  };
+}
 
 function value(row: HistoricalRangeRecord | null, key: string, fallback = "-"): string {
   const result = row?.[key];
@@ -103,7 +115,7 @@ export function HistoricalRangeResearchView({ prefillProgramId }: Props) {
         package_id: row.packageId,
         target_count: row.targetCount,
         review_policy: {},
-        runtime_config: {},
+        runtime_config: researchRuntimeConfig(row.targetCount),
         entry_price_basis: "next_open_executable",
         exit_price_basis: "next_open_executable",
         style_profile_ref: null,
@@ -190,6 +202,12 @@ export function HistoricalRangeResearchView({ prefillProgramId }: Props) {
           <div><h3>Program runs</h3><div className="ahr-table-wrap"><table className="ahr-table"><thead><tr><th>Program / package</th><th>模式</th><th>状态</th><th>日进度</th><th></th></tr></thead><tbody>{model.runs.map((run) => <tr key={String(run.range_run_id)}><td><strong>{String(run.research_program_id)}</strong><small>{String(run.package_id)}@{String(run.package_version)}</small></td><td>{String(run.alpha_mode)}</td><td><span className={statusClass(run.status)}>{String(run.status)}</span></td><td>{String(run.completed_day_count || 0)} / {String(run.total_day_count || 0)}</td><td><button className="ahr-row-button" aria-label="查看 Program run" onClick={() => void model.selectRun(run)} type="button"><Eye size={16} /></button></td></tr>)}</tbody></table></div>{model.runPage.has_more ? <button className="pv2-button" onClick={() => void model.loadMoreRuns()} type="button">加载更多 Program</button> : null}</div>
           <div><h3>Operations</h3><div className="ahr-operation-list">{model.operations.map((operation) => <button className={model.activeOperation?.operation_id === operation.operation_id ? "is-selected" : ""} key={String(operation.operation_id)} onClick={() => void model.selectOperation(String(operation.operation_id))} type="button"><span>{String(operation.operation_type)}</span><strong className={statusClass(operation.status)}>{String(operation.status)}</strong><small>{String(operation.updated_at || operation.created_at)}</small></button>)}</div>{model.operationPage.has_more ? <button className="pv2-button" onClick={() => void model.loadMoreOperations()} type="button">加载更多 Operations</button> : null}</div>
         </div>
+        <HistoricalRangeComparisonPanel
+          runs={model.runs}
+          comparison={model.comparison}
+          comparing={model.comparing}
+          onCompare={model.compareRuns}
+        />
       </section> : null}
 
       {model.selectedRun ? <section className="ahr-section">

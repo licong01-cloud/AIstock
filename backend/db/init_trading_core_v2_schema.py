@@ -1320,6 +1320,23 @@ DDL.append(
     )
 )
 
+LOCALSIM_PRODUCT_CUTOVER_BRIDGE_MIGRATION = (
+    Path(__file__).resolve().parents[1] / "migrations" / "localsim_product_cutover_bridge_20260831.sql"
+)
+_localsim_cutover_bridge_sql = LOCALSIM_PRODUCT_CUTOVER_BRIDGE_MIGRATION.read_text(encoding="utf-8")
+_localsim_cutover_bridge_apply_transaction = _localsim_cutover_bridge_sql.partition("BEGIN;")[2].partition(
+    "COMMIT;"
+)[0]
+if not _localsim_cutover_bridge_apply_transaction.strip():
+    raise RuntimeError("LocalSIM product-cutover bridge migration lacks its authoritative apply transaction")
+DDL.append(
+    "\n".join(
+        line
+        for line in _localsim_cutover_bridge_apply_transaction.splitlines()
+        if not line.strip().startswith("SET LOCAL ")
+    )
+)
+
 
 def iter_ddl() -> Iterable[str]:
     return tuple(DDL)

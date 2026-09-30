@@ -12,6 +12,12 @@ def main() -> int:
     parser.add_argument("--request-wsl", required=True)
     parser.add_argument("--repository-root-wsl", required=True)
     parser.add_argument("--conda-env", default="rdagent-gpu")
+    parser.add_argument(
+        "--contract",
+        choices=("legacy-v1", "daily-envelope-v1"),
+        default="legacy-v1",
+        help="Select the frozen calibration request and output bundle contract.",
+    )
     args = parser.parse_args()
     request = Path(args.request_windows).resolve()
     if not request.is_file():
@@ -22,7 +28,9 @@ def main() -> int:
         "export MALLOC_ARENA_MAX=2",
         "export PYTHONUNBUFFERED=1",
         f"cd {shlex.quote(args.repository_root_wsl)}",
-        f"python scripts/wsl/advisory_price_range_calibration_train.py --request {shlex.quote(args.request_wsl)}",
+        "python scripts/wsl/advisory_price_range_calibration_train.py "
+        f"--request {shlex.quote(args.request_wsl)} "
+        f"--contract {shlex.quote(args.contract)}",
     ))
     return int(subprocess.run(["wsl", "bash", "-lc", command], check=False).returncode)
 

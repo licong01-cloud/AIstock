@@ -1,0 +1,326 @@
+{
+  "actual": "_source_commit reads the mutable checkout HEAD on every materialization, so card provenance can drift independently of loaded code.",
+  "allowed_write_scope": [
+    "backend/services/position_timing/service.py",
+    "backend/tests/position_timing/test_policy_snapshot.py",
+    "docs/architecture/position_timing_advice_first_release_implementation_plan_20260904.md",
+    "tests/aistock_validation/bugs/20260904_BUG-1365-position-timing-card-source-commit-drifts-after-main-advances-without-ba.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1365",
+  "closed_at": "2026-09-05T19:37:06.934844Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-04T21:23:39.148377Z",
+  "description": "_source_commit reads the mutable checkout HEAD on every materialization, so card provenance can drift independently of loaded code.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260904-78e9e69dce3e",
+      "timestamp": "2026-09-04T21:23:39.148363Z"
+    }
+  ],
+  "evidence_uris": [
+    "backend/services/position_timing/service.py:3188; live runtime 2026-09-05 start=05:00 commit=4506ea73, main advanced 05:12 to 4edd889a"
+  ],
+  "expected": "Freeze one valid source commit identity for the lifetime of the running position-timing process/service while preserving explicit AISTOCK_GIT_COMMIT authority.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/position_timing/service.py",
+      "backend/tests/position_timing/test_policy_snapshot.py",
+      "docs/architecture/position_timing_advice_first_release_implementation_plan_20260904.md"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/position_timing/service.py",
+        "backend/tests/position_timing/test_policy_snapshot.py",
+        "docs/architecture/position_timing_advice_first_release_implementation_plan_20260904.md"
+      ],
+      "impacted_modules": [
+        "position_timing",
+        "platform.api",
+        "portfolio_management",
+        "watchlist",
+        "frontend_common"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/position_timing/service.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_policy_snapshot.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "docs/architecture/position_timing_advice_first_release_implementation_plan_20260904.md",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/position_timing/service.py",
+        "backend/tests/position_timing/test_policy_snapshot.py",
+        "docs/architecture/position_timing_advice_first_release_implementation_plan_20260904.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/position_timing/service.py",
+      "backend/tests/position_timing/test_policy_snapshot.py",
+      "docs/architecture/position_timing_advice_first_release_implementation_plan_20260904.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/position_timing/service.py",
+      "backend/tests/position_timing/test_policy_snapshot.py",
+      "docs/architecture/position_timing_advice_first_release_implementation_plan_20260904.md"
+    ]
+  },
+  "first_seen_at": "2026-09-04T21:23:39.148377Z",
+  "fix_branch": null,
+  "fix_commit": "19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc",
+  "fixed_at": "2026-09-04T22:28:01Z",
+  "github_issue_number": 4301,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4301",
+  "last_seen_at": "2026-09-04T21:23:39.148377Z",
+  "module": "position_timing",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4306",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Start backend at commit A; fast-forward the same worktree to commit B without restart; call PositionTimingService.materialize for a new decision date; observed card source_repository_commit becomes B.",
+  "required_verification": [
+    "l0",
+    "position_timing_backend",
+    "position_timing_first_release"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/position-timing/intents",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "BUG1365_FRESH_PROCESS_PASS: fresh Python process loaded committed dfc9dcf997c7a33e11f7b03f5a6b47740797b1ce, captured the exact HEAD, and kept provider_stable=true after process environment mutation; no backend process control"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1365/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1365",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b17aa22d014be4e46c4b743cf58a33ea91ce5ca10d81ddfae34b3546b197abc2",
+      "contract_digest": "712a1ed3a5784c23b236b5ad6b294ee93156b2126ea241e7ffa8a0d394e92030",
+      "expected_identity": "19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-05T19:35:29.025035Z",
+      "mode": "read_only",
+      "observed_identity": "d942a1bcac82b3af008d3ad807dcf60d8e3be605",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "feebfbaee10a95c00bbb62c22f47f9d42e0a1229acaf7cad76cc18d328aafa66",
+      "receipt_sha256": "8f0555518c619c59867036e0c6ebb8468ff121768342a179e82277cdddc996d0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f46f4b7e523476f43ba50e13f682d6d6f2c8903e81b2e7c602a15d196919b6b1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1365",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "569a1a3e39fcb626",
+    "recorded_at": "2026-09-04T22:29:02.839960Z",
+    "runtime_contract_digest": "712a1ed3a5784c23b236b5ad6b294ee93156b2126ea241e7ffa8a0d394e92030",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "402fdfa5545760cbd98eb7736a26e6705af52c94",
+    "source_merge_commit": "19b45dbe38bfea40339bd9d2d9eadc9b1e005fcc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4306",
+    "validation_evidence": [
+      "validation-receipt: id=32a34f9268cae96e commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed: 8 tests, ownership 14/14 mapped`",
+      "validation-receipt: id=f9317d9ae8228854 commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=position_timing_backend status=passed command=`rtk nox -s position_timing_backend` result=`passed: 74 tests`",
+      "validation-receipt: id=fa0d83c555051273 commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=position_timing_first_release status=passed command=`rtk nox -s position_timing_first_release` result=`passed: 74 backend tests, TypeScript, lint, production build, Playwright 1 passed`"
+    ],
+    "validation_evidence_digest": "ac6d0b3040abea6327d0a2158e503acf6078f233943c39cf1a70b2c9db9614a4"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "position_timing"
+  ],
+  "title": "Position timing card source commit drifts after main advances without backend restart",
+  "trigger_condition": {
+    "fingerprint": "78e9e69dce3eaa52875b79c3",
+    "source_event_id": "FE-20260904-78e9e69dce3e"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=32a34f9268cae96e commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed: 8 tests, ownership 14/14 mapped`",
+    "validation-receipt: id=f9317d9ae8228854 commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=position_timing_backend status=passed command=`rtk nox -s position_timing_backend` result=`passed: 74 tests`",
+    "validation-receipt: id=fa0d83c555051273 commit=402fdfa5545760cbd98eb7736a26e6705af52c94 kind=nox plan=position_timing_first_release status=passed command=`rtk nox -s position_timing_first_release` result=`passed: 74 backend tests, TypeScript, lint, production build, Playwright 1 passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "position_timing",
+        "position_timing_first_release"
+      ],
+      "plans": [
+        "position_timing_backend",
+        "position_timing_first_release"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "position_timing",
+          "position_timing_first_release"
+        ],
+        "plans": [
+          "position_timing_backend",
+          "position_timing_first_release"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

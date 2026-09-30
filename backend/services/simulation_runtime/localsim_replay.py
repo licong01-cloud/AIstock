@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from backend.services.simulation_data.daily_context import SimulationBrokerBackend
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
@@ -92,6 +92,34 @@ class LocalSimReplayCoordinator:
         account = self.repository.get_account(simulation_account_id)
         release = self.repository.get_release(release_id)
         binding = self.repository.get_binding(binding_id)
+        job = self.build_job(
+            account=account,
+            release=release,
+            binding=binding,
+            start_trade_date=start_trade_date,
+            end_trade_date=end_trade_date,
+            historical_source_id=historical_source_id,
+            historical_source_sha256=historical_source_sha256,
+            trading_days=trading_days,
+            created_by=created_by,
+        )
+        return self.repository.save_replay_job(job)
+
+    def build_job(
+        self,
+        *,
+        account: Any,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        start_trade_date: date,
+        end_trade_date: date,
+        historical_source_id: str,
+        historical_source_sha256: str,
+        trading_days: Sequence[date],
+        created_by: str,
+    ) -> LocalSimReplayJobV1:
+        """Build one replay cursor without persistence for an atomic product bundle."""
+
         if (
             self.historical_day_runner.historical_source_id != str(historical_source_id).strip()
             or self.historical_day_runner.historical_source_sha256 != str(historical_source_sha256).strip().lower()
@@ -156,7 +184,7 @@ class LocalSimReplayCoordinator:
             created_at=now,
             updated_at=now,
         )
-        return self.repository.save_replay_job(job)
+        return job
 
     def run_next_batch(
         self,
@@ -304,6 +332,45 @@ class LocalSimReplayCoordinator:
                 context={"reason_code": "LOCALSIM_REPLAY_LIVE_RELEASE_LINEAGE_MISMATCH"},
             )
         _release, _binding, updated = self.repository.create_replay_live_successor(
+            replay_job_id=replay_job_id,
+            expected_version=expected_version,
+            account=account,
+            release=release,
+            binding=binding,
+            activation_trade_date=decision.activation_trade_date,
+            updated_at=self._now(),
+        )
+        return updated
+
+    def activate_live_successor_atomic(
+        self,
+        *,
+        replay_job_id: str,
+        expected_version: int,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        decision: LocalSimSafeBoundaryDecisionV1,
+    ) -> LocalSimReplayJobV1:
+        """Create and activate the live authority in one safe-boundary transaction."""
+
+        job = self.repository.get_replay_job(replay_job_id)
+        if job.version != expected_version or job.status is not LocalSimReplayStatus.READY_FOR_LIVE:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay is not ready for atomic live activation",
+                context={"reason_code": "LOCALSIM_REPLAY_LIVE_SUCCESSOR_STATE_INVALID"},
+            )
+        if not decision.eligible:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay live activation requires an eligible safe boundary",
+                context={"reason_code": decision.reason_code},
+            )
+        account = self.repository.get_account(job.simulation_account_id)
+        if release.base_release_id != job.release_id:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay live release must be a successor of the historical release",
+                context={"reason_code": "LOCALSIM_REPLAY_LIVE_RELEASE_LINEAGE_MISMATCH"},
+            )
+        _release, _binding, updated = self.repository.create_and_activate_replay_live_successor(
             replay_job_id=replay_job_id,
             expected_version=expected_version,
             account=account,

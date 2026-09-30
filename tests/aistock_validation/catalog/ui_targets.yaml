@@ -223,6 +223,24 @@ targets:
   - Review candidate registry and evaluation batch state
   - Inspect read-only QE experiment evidence and evaluation results
   coverage_status: partial
+- route_id: hmm.risk
+  href: /hmm-risk
+  label: HMM Risk Research
+  nav_group: HMM 研究工作台
+  primary_module: hmm.risk
+  impact_modules:
+  - hmm
+  - qe.archive
+  risk_level: high
+  required_test_plans:
+  - l0
+  - hmm_risk_backend
+  recommended_test_plans: []
+  business_operations:
+  - Open HMM Risk Research
+  - Review state-model evidence and retrospective reports
+  - Inspect advisory-only risk alerts without trading activation
+  coverage_status: partial
 - route_id: market_regime.timeline
   href: /market-regime
   label: Market Regime
@@ -741,6 +759,25 @@ targets:
   - Review Smart Monitor state
   - Validate Smart Monitor primary workflow
   coverage_status: planned
+- route_id: portfolio.position_timing
+  href: /position-timing
+  label: Position Timing Advice
+  nav_group: Investment Management
+  primary_module: position_timing
+  impact_modules:
+  - portfolio_management
+  - watchlist
+  risk_level: high
+  required_test_plans:
+  - l0
+  - position_timing_backend
+  - frontend_type_lint
+  recommended_test_plans: []
+  business_operations:
+  - Open Position Timing Advice
+  - Review immutable T+1 daily action cards
+  - Edit next-decision-day sizing intent
+  coverage_status: planned
 - route_id: portfolio.realtime_monitor
   href: /monitor
   label: Realtime Monitor
@@ -806,24 +843,27 @@ targets:
   - Review virtual strategy ledger summary
   - Validate QMT virtual strategy primary workflow
   coverage_status: planned
-- route_id: paper_v2.overview
-  href: /paper-v2
-  label: Paper v2 Overview
-  nav_group: Paper Trading v2
-  primary_module: paper_v2
+- route_id: simulation.localsim
+  href: /simulation/localsim
+  label: LocalSIM
+  nav_group: Strategy Package and Simulation Trading
+  primary_module: simulation.localsim_successor_core
   impact_modules:
-  - selection_center
+  - simulation_runtime
   - strategy_package
+  - selection_center
   risk_level: critical
   required_test_plans:
   - l0
-  - paper_v2_backend
+  - simulation_core_l2
+  - localsim_successor_core_dev_db
   recommended_test_plans:
-  - paper_v2_l3
+  - localsim_unattended_l3
+  - simulation_runtime_ops_ui
   business_operations:
-  - Open Paper v2 Overview
-  - Review Paper v2 Overview state
-  - Validate Paper v2 Overview primary workflow
+  - Open LocalSIM account and runtime profile control plane
+  - Review replay and live-transition state
+  - Validate LocalSIM account, ledger, and lifecycle contracts
   coverage_status: partial
 - route_id: paper_v2.packages
   href: /paper-v2/packages
@@ -863,25 +903,6 @@ targets:
   - Open Unified Selection Center
   - Review Unified Selection Center state
   - Validate Unified Selection Center primary workflow
-  coverage_status: partial
-- route_id: paper_v2.portfolios
-  href: /paper-v2/portfolios
-  label: Paper v2 Portfolios
-  nav_group: Paper Trading v2
-  primary_module: paper_v2
-  impact_modules:
-  - strategy_package
-  - selection_center
-  risk_level: critical
-  required_test_plans:
-  - l0
-  - paper_v2_backend
-  recommended_test_plans:
-  - paper_v2_l3
-  business_operations:
-  - Open Paper v2 Portfolios
-  - Review Paper v2 Portfolios state
-  - Validate Paper v2 Portfolios primary workflow
   coverage_status: partial
 - route_id: paper_v2.model_hmm
   href: /paper-v2/model-hmm

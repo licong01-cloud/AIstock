@@ -3542,6 +3542,46 @@ class QEArchiveRepository:
                 )
                 return self._fetch_dicts(cur)
 
+    def find_lifecycle_survivor(
+        self,
+        *,
+        business_identity_sha256: str,
+        result_digest_sha256: str,
+        exclude_run_id: str | None = None,
+    ) -> str | None:
+        """Find the canonical Archive survivor for an exact business result.
+
+        The lifecycle envelope is stored in the existing completion raw
+        payload, avoiding a schema migration.  Both full business identity and
+        authoritative result digest must match; config-only or prediction-only
+        similarity is intentionally insufficient.
+        """
+
+        params: list[Any] = [business_identity_sha256, result_digest_sha256]
+        exclude_sql = ""
+        if exclude_run_id:
+            exclude_sql = "AND p.run_id <> %s"
+            params.append(exclude_run_id)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT p.run_id
+                    FROM qe_archive.raw_payload AS p
+                    JOIN qe_archive.run AS r ON r.run_id = p.run_id
+                    WHERE p.payload_type = 'qe_completion_payload'
+                      AND p.payload_json->'_qe_asset_lifecycle'->>'business_identity_sha256' = %s
+                      AND p.payload_json->'_qe_asset_lifecycle'->>'result_digest_sha256' = %s
+                      AND p.payload_json->'_qe_asset_lifecycle'->>'value_class' IN ('A', 'B', 'C')
+                      {exclude_sql}
+                    ORDER BY r.archived_at ASC NULLS LAST, p.run_id ASC
+                    LIMIT 1
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+        return str(row[0]) if row else None
+
     def update_run_source_artifact_uri(self, run_id: str, artifact_uri: str) -> int:
         normalized_uri = str(artifact_uri or "").strip()
         if not normalized_uri:

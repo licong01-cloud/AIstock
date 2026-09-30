@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
+import pandas as pd
 import yaml
 
 from backend.services.dataset_release.cas_store import CASStore
@@ -18,11 +19,18 @@ from backend.services.dataset_release.control_store import (
     ControlStore,
 )
 from scripts import update_backtest_dataset_monthly as cli
+from scripts.qlib_multi_dataset_smoke_backtest import contract_source_failures
 from backend.services.dataset_release.errors import ProfileValidationError
 from backend.services.dataset_release.profile import (
     CANONICAL_INITIAL_MIGRATION_PLAN_ID,
     load_dataset_profile,
     load_initial_migration_plan,
+)
+from backend.services.dataset_release.direct_monthly import (
+    DIRECT_COMPONENTS,
+    DirectMonthlyLayout,
+    initial_state,
+    write_state,
 )
 
 
@@ -137,20 +145,219 @@ def test_monthly_explicit_idempotency_key_replays_exact_submission(tmp_path, cap
     assert store._many("SELECT * FROM runs", ()) == []
 
 
-def test_monthly_can_explicitly_select_canonical_v2_without_changing_legacy_default(tmp_path, capsys) -> None:
+def test_monthly_routes_v2_to_direct_builder_without_creating_legacy_submission(
+    tmp_path, capsys, monkeypatch
+) -> None:
     service, store = _dual_profile_service(tmp_path)
     observed = datetime(2026, 8, 11, tzinfo=UTC)
+    calls = []
+    monkeypatch.setattr(
+        cli,
+        "_direct_monthly",
+        lambda args, *, observed_at: calls.append((args.scope, observed_at))
+        or {
+            "ok": True,
+            "action": "monthly-direct",
+            "status": "CANDIDATE_READY",
+            "execution_started_by_cli": True,
+            "production_activation": "not_requested",
+        },
+    )
 
     assert (
         cli.main(["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"], service=service, observed_at=observed)
         == 0
     )
     canonical = _output(capsys)
-    request = store.get_submission(canonical["submission_id"])
-    assert request is not None
+    assert canonical["action"] == "monthly-direct"
+    assert canonical["execution_started_by_cli"] is True
+    assert calls == [("full", observed)]
+    assert store._many("SELECT * FROM submissions", ()) == []
     assert cli.main(["monthly", "--candidate-only"], service=service, observed_at=observed) == 0
     legacy = _output(capsys)
-    assert canonical["logical_request_key"] != legacy["logical_request_key"]
+    assert legacy["submission_id"]
+    assert len(store._many("SELECT * FROM submissions", ())) == 1
+
+
+def test_contract_smoke_requires_presence_not_arbitrary_coverage_threshold() -> None:
+    coverage = pd.DataFrame(
+        [
+            {"source": "sector_data", "feature": "sw2_pct_change", "non_null": 1, "coverage": 0.001},
+            {"source": "sector_data", "feature": "sw2_pe", "non_null": 3, "coverage": 0.003},
+        ]
+    )
+
+    assert contract_source_failures(coverage, ["sector_data"]) == []
+    coverage.loc[coverage["feature"] == "sw2_pe", "non_null"] = 0
+    assert contract_source_failures(coverage, ["sector_data"]) == [
+        "Required feature source has empty fields: sector_data=sw2_pe"
+    ]
+
+
+def test_v2_monthly_does_not_open_legacy_control_or_profile_gate(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        cli,
+        "build_control_service",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy control must not open")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_direct_monthly",
+        lambda args, *, observed_at: {
+            "ok": True,
+            "action": "monthly-direct",
+            "scope": args.scope,
+            "observed_at": observed_at.isoformat(),
+        },
+    )
+
+    assert (
+        cli.main(
+            ["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"],
+            observed_at=datetime(2026, 9, 3, tzinfo=UTC),
+        )
+        == 0
+    )
+    assert _output(capsys)["action"] == "monthly-direct"
+
+
+def test_v2_augment_sw_l1_routes_without_opening_legacy_control(tmp_path, capsys, monkeypatch) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+    baseline = parent / "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+    baseline.mkdir()
+    (baseline / "direct_monthly_state.json").write_text(
+        json.dumps({"status": "CANDIDATE_READY", "cutoff": "2026-08-31"}),
+        encoding="utf-8",
+    )
+    target = parent / "20260831-qe_hmm_full_v2-direct-20260905-candidate"
+    monkeypatch.setattr(cli, "DIRECT_CANDIDATE_PARENT", parent)
+    monkeypatch.setattr(
+        cli,
+        "build_control_service",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy control must not open")),
+    )
+    monkeypatch.setattr(
+        cli,
+        "hardlink_baseline_components",
+        lambda layout: {
+            "status": "PASS",
+            "candidate_root": str(layout.candidate_root),
+            "content_hash_performed": False,
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "production_handlers",
+        lambda **_kwargs: {
+            component: (lambda _layout, name=component: {"status": "PASS", "component": name})
+            for component in DIRECT_COMPONENTS
+        },
+    )
+    monkeypatch.setattr(cli, "validate_direct_candidate", lambda _layout: {"status": "PASS"})
+
+    assert (
+        cli.main(
+            [
+                "--profile",
+                "qe_hmm_full_v2",
+                "augment-sw-l1",
+                "--candidate-only",
+                "--baseline-candidate",
+                str(baseline),
+                "--candidate-root",
+                str(target),
+            ]
+        )
+        == 0
+    )
+    result = _output(capsys)
+    assert result["action"] == "augment-sw-l1-direct"
+    assert result["status"] == "CANDIDATE_READY"
+    assert result["baseline_reuse"]["content_hash_performed"] is False
+    assert result["production_activation"] == "not_requested"
+
+
+def test_direct_monthly_derives_new_candidate_instead_of_mutating_pre_sw_l1_terminal(
+    tmp_path, monkeypatch
+) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+    baseline = parent / "20260831-qe_hmm_full_v2-direct-20260902-candidate"
+    baseline.mkdir()
+    (baseline / "direct_monthly_state.json").write_text(
+        json.dumps(
+            {
+                "status": "CANDIDATE_READY",
+                "cutoff": "2026-08-31",
+                "baseline_root": None,
+                "components": {name: {} for name in DIRECT_COMPONENTS if name != "sw_l1_index"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    target = parent / "20260831-qe_hmm_full_v2-direct-20260905-candidate"
+    monkeypatch.setattr(cli, "DIRECT_CANDIDATE_PARENT", parent)
+    monkeypatch.setattr(cli, "resolve_previous_month_trading_cutoff", lambda _observed: date(2026, 8, 31))
+    monkeypatch.setattr(cli, "discover_latest_existing_direct_candidate", lambda *_args, **_kwargs: baseline)
+    monkeypatch.setattr(cli, "discover_latest_validated_baseline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "default_candidate_path", lambda *_args, **_kwargs: target)
+    monkeypatch.setattr(
+        cli,
+        "hardlink_baseline_components",
+        lambda layout: {"status": "PASS", "baseline_root": str(layout.baseline_root)},
+    )
+    monkeypatch.setattr(
+        cli,
+        "production_handlers",
+        lambda **_kwargs: {
+            component: (lambda _layout, name=component: {"status": "PASS", "component": name})
+            for component in DIRECT_COMPONENTS
+        },
+    )
+    monkeypatch.setattr(cli, "validate_direct_candidate_with_smoke", lambda *_args, **_kwargs: {"status": "PASS"})
+    args = cli._parser().parse_args(
+        ["--profile", "qe_hmm_full_v2", "monthly", "--candidate-only"]
+    )
+
+    result = cli._direct_monthly(args, observed_at=datetime(2026, 9, 5, tzinfo=UTC))
+
+    assert result["candidate_root"] == str(target)
+    assert result["baseline_reuse"]["baseline_root"] == str(baseline)
+    assert json.loads((baseline / "direct_monthly_state.json").read_text(encoding="utf-8"))[
+        "components"
+    ].get("sw_l1_index") is None
+
+
+def test_direct_status_reads_latest_candidate_local_state_without_control_submission(
+    tmp_path, monkeypatch
+) -> None:
+    parent = tmp_path / "candidates"
+    parent.mkdir()
+    baseline = parent / "baseline-candidate"
+    baseline.mkdir()
+    older = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20260731-qe_hmm_full_v2-direct-20260801-candidate",
+        baseline_root=baseline,
+        cutoff=date(2026, 7, 31),
+    )
+    latest = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=parent / "20260831-qe_hmm_full_v2-direct-20260902-candidate",
+        baseline_root=baseline,
+        cutoff=date(2026, 8, 31),
+    )
+    for layout in (older, latest):
+        write_state(layout, initial_state(layout))
+    monkeypatch.setattr(cli, "DIRECT_CANDIDATE_PARENT", parent)
+
+    result = cli._direct_status()
+
+    assert result["action"] == "status-direct"
+    assert result["cutoff"] == "2026-08-31"
+    assert result["candidate_root"] == str(latest.candidate_root)
+    assert result["bounded_read"] is True
 
 
 def test_initial_migration_cli_submits_fixed_plan_once_without_execution(tmp_path, capsys) -> None:
@@ -193,11 +400,12 @@ def test_initial_migration_plan_is_fixed_allowlisted_and_digest_bound() -> None:
     assert first.sample_instruments == (
         "000001.SZ",
         "300379.SZ",
+        "300741.SZ",
         "600462.SH",
         "600930.SH",
         "688981.SH",
     )
-    assert len(first.event_windows) == 10
+    assert len(first.event_windows) == 11
     assert len(first.index_windows) == 2
     assert first.plan_digest == second.plan_digest
     assert len(first.plan_digest) == 64

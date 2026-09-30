@@ -20,12 +20,15 @@ from .service import StrategyRuntimeReleaseService
 from .successor_models import (
     LEGACY_LOCALSIM_LINEAGE_SCHEMA,
     SIMULATION_ACCOUNT_SCHEMA,
+    SIMULATION_LEDGER_SCOPE_SCHEMA,
     LegacyLocalSimAccountInventoryV1,
     LegacyLocalSimAccountLineageV1,
     LegacyLocalSimLineageStatus,
     LocalSimSafeBoundaryDecisionV1,
     SimulationAccountStatus,
     SimulationAccountV1,
+    SimulationLedgerScopeKind,
+    SimulationLedgerScopeV1,
 )
 from .successor_repository import LocalSimSuccessorRepositoryProtocol
 
@@ -68,13 +71,71 @@ class LocalSimControlPlaneService:
         execution_policy_json: dict[str, Any],
         tail_policy_version_id: str,
         tail_policy_sha256: str,
+        release_validation_evidence: dict[str, Any] | None = None,
         release_metadata: dict[str, Any] | None = None,
         requested_execution_policy_audit: dict[str, Any] | None = None,
         effective_from: date | None = None,
         effective_to: date | None = None,
         created_by: str,
         created_reason: str | None = None,
-    ) -> tuple[SimulationAccountV1, StrategyRuntimeRelease, SimulationReleaseBinding]:
+    ) -> tuple[SimulationAccountV1, SimulationLedgerScopeV1, StrategyRuntimeRelease, SimulationReleaseBinding]:
+        account, ledger_scope, release, binding = self.build_account_bundle(
+            account_name=account_name,
+            package_id=package_id,
+            manifest_sha256=manifest_sha256,
+            admission_receipt_id=admission_receipt_id,
+            initial_capital=initial_capital,
+            runtime_profile_id=runtime_profile_id,
+            runtime_profile_version_id=runtime_profile_version_id,
+            runtime_profile_sha256=runtime_profile_sha256,
+            daily_strategy_profile_version_id=daily_strategy_profile_version_id,
+            execution_policy_version_id=execution_policy_version_id,
+            execution_policy_sha256=execution_policy_sha256,
+            execution_policy_json=execution_policy_json,
+            tail_policy_version_id=tail_policy_version_id,
+            tail_policy_sha256=tail_policy_sha256,
+            release_validation_evidence=release_validation_evidence,
+            release_metadata=release_metadata,
+            requested_execution_policy_audit=requested_execution_policy_audit,
+            effective_from=effective_from,
+            effective_to=effective_to,
+            created_by=created_by,
+            created_reason=created_reason,
+        )
+        return self.repository.create_account_bundle(
+            account=account,
+            ledger_scope=ledger_scope,
+            release=release,
+            binding=binding,
+        )
+
+    def build_account_bundle(
+        self,
+        *,
+        account_name: str,
+        package_id: str,
+        manifest_sha256: str,
+        admission_receipt_id: str,
+        initial_capital: float,
+        runtime_profile_id: str,
+        runtime_profile_version_id: str,
+        runtime_profile_sha256: str,
+        daily_strategy_profile_version_id: str,
+        execution_policy_version_id: str,
+        execution_policy_sha256: str,
+        execution_policy_json: dict[str, Any],
+        tail_policy_version_id: str,
+        tail_policy_sha256: str,
+        release_validation_evidence: dict[str, Any] | None = None,
+        release_metadata: dict[str, Any] | None = None,
+        requested_execution_policy_audit: dict[str, Any] | None = None,
+        effective_from: date | None = None,
+        effective_to: date | None = None,
+        created_by: str,
+        created_reason: str | None = None,
+    ) -> tuple[SimulationAccountV1, SimulationLedgerScopeV1, StrategyRuntimeRelease, SimulationReleaseBinding]:
+        """Build one canonical bundle without persistence for larger atomic commands."""
+
         now = self._now()
         account = self._build_account(
             account_name=account_name,
@@ -87,6 +148,7 @@ class LocalSimControlPlaneService:
             created_by=created_by,
             now=now,
         )
+        ledger_scope = self._build_native_ledger_scope(account=account, created_by=created_by, now=now)
         audit = dict(requested_execution_policy_audit or {})
         if audit:
             audit["consulted_for_execution"] = False
@@ -105,13 +167,14 @@ class LocalSimControlPlaneService:
             execution_policy_json=execution_policy_json,
             tail_policy_version_id=tail_policy_version_id,
             tail_policy_sha256=tail_policy_sha256,
+            release_validation_evidence=dict(release_validation_evidence or {}),
             release_metadata=metadata,
             effective_from=effective_from,
             effective_to=effective_to,
             created_by=created_by,
             created_reason=created_reason,
         )
-        return self.repository.create_account_bundle(account=account, release=release, binding=binding)
+        return account, ledger_scope, release, binding
 
     def get_account(self, account_id: str) -> SimulationAccountV1:
         return self.repository.get_account(account_id)
@@ -131,12 +194,74 @@ class LocalSimControlPlaneService:
         execution_policy_json: dict[str, Any],
         tail_policy_version_id: str,
         tail_policy_sha256: str,
+        release_validation_evidence: dict[str, Any] | None = None,
         release_metadata: dict[str, Any] | None = None,
         requested_execution_policy_audit: dict[str, Any] | None = None,
         effective_from: date,
         created_by: str,
         created_reason: str | None = None,
     ) -> tuple[StrategyRuntimeRelease, SimulationReleaseBinding]:
+        account, base_binding, release, binding = self.build_successor_release_bundle(
+            account_id=account_id,
+            base_release_id=base_release_id,
+            base_binding_id=base_binding_id,
+            runtime_profile_id=runtime_profile_id,
+            runtime_profile_version_id=runtime_profile_version_id,
+            runtime_profile_sha256=runtime_profile_sha256,
+            daily_strategy_profile_version_id=daily_strategy_profile_version_id,
+            execution_policy_version_id=execution_policy_version_id,
+            execution_policy_sha256=execution_policy_sha256,
+            execution_policy_json=execution_policy_json,
+            tail_policy_version_id=tail_policy_version_id,
+            tail_policy_sha256=tail_policy_sha256,
+            release_validation_evidence=release_validation_evidence,
+            release_metadata=release_metadata,
+            requested_execution_policy_audit=requested_execution_policy_audit,
+            effective_from=effective_from,
+            created_by=created_by,
+            created_reason=created_reason,
+        )
+        return self.repository.create_successor_binding(
+            account=account,
+            source_binding_id=base_binding.binding_id,
+            expected_source_binding_hash=base_binding.binding_hash,
+            source_effective_to=effective_from - timedelta(days=1),
+            release=release,
+            binding=binding,
+        )
+
+    def build_successor_release_bundle(
+        self,
+        *,
+        account_id: str,
+        base_release_id: str,
+        base_binding_id: str,
+        runtime_profile_id: str,
+        runtime_profile_version_id: str,
+        runtime_profile_sha256: str,
+        daily_strategy_profile_version_id: str,
+        execution_policy_version_id: str,
+        execution_policy_sha256: str,
+        execution_policy_json: dict[str, Any],
+        tail_policy_version_id: str,
+        tail_policy_sha256: str,
+        release_validation_evidence: dict[str, Any] | None = None,
+        release_metadata: dict[str, Any] | None = None,
+        requested_execution_policy_audit: dict[str, Any] | None = None,
+        effective_from: date,
+        created_by: str,
+        created_reason: str | None = None,
+    ) -> tuple[
+        SimulationAccountV1,
+        SimulationReleaseBinding,
+        StrategyRuntimeRelease,
+        SimulationReleaseBinding,
+    ]:
+        """Build and validate one successor bundle without persistence.
+
+        Larger atomic workflows, including replay-to-live transition, persist the
+        returned release and binding in their own repository transaction.
+        """
         account = self.repository.get_account(account_id)
         if account.status is SimulationAccountStatus.RETIRED:
             raise InvalidStateTransitionError(
@@ -173,20 +298,14 @@ class LocalSimControlPlaneService:
             execution_policy_json=execution_policy_json,
             tail_policy_version_id=tail_policy_version_id,
             tail_policy_sha256=tail_policy_sha256,
+            release_validation_evidence=dict(release_validation_evidence or {}),
             release_metadata=metadata,
             effective_from=effective_from,
             effective_to=None,
             created_by=created_by,
             created_reason=created_reason,
         )
-        return self.repository.create_successor_binding(
-            account=account,
-            source_binding_id=base_binding.binding_id,
-            expected_source_binding_hash=base_binding.binding_hash,
-            source_effective_to=effective_from - timedelta(days=1),
-            release=release,
-            binding=binding,
-        )
+        return account, base_binding, release, binding
 
     def pause_account(self, *, account_id: str, expected_version: int) -> SimulationAccountV1:
         return self._transition_account(
@@ -210,6 +329,30 @@ class LocalSimControlPlaneService:
             expected_version=expected_version,
             allowed_from={SimulationAccountStatus.ACTIVE, SimulationAccountStatus.PAUSED},
             target_status=SimulationAccountStatus.RETIRED,
+        )
+
+    def transition_accounts_bulk(
+        self,
+        *,
+        action: str,
+        expected_versions: dict[str, int],
+    ) -> list[SimulationAccountV1]:
+        targets = {
+            "pause": SimulationAccountStatus.PAUSED,
+            "resume": SimulationAccountStatus.ACTIVE,
+            "retire": SimulationAccountStatus.RETIRED,
+        }
+        try:
+            target = targets[action]
+        except KeyError as exc:
+            raise InvalidStateTransitionError(
+                "LocalSIM bulk lifecycle action is invalid",
+                context={"reason_code": "LOCALSIM_BULK_LIFECYCLE_ACTION_INVALID"},
+            ) from exc
+        return self.repository.transition_accounts_bulk(
+            expected_versions=expected_versions,
+            target_status=target,
+            updated_at=self._now(),
         )
 
     def prepare_legacy_lineage(
@@ -423,6 +566,7 @@ class LocalSimControlPlaneService:
         execution_policy_json: dict[str, Any],
         tail_policy_version_id: str,
         tail_policy_sha256: str,
+        release_validation_evidence: dict[str, Any],
         release_metadata: dict[str, Any],
         effective_from: date | None,
         effective_to: date | None,
@@ -448,6 +592,7 @@ class LocalSimControlPlaneService:
             execution_policy_json=execution_policy_json,
             base_release_id=base_release_id,
             validation_state=RuntimeReleaseValidationState.SIM_VALIDATING,
+            validation_evidence=release_validation_evidence,
             release_metadata=release_metadata,
             effective_from=effective_from,
             effective_to=effective_to,
@@ -512,6 +657,27 @@ class LocalSimControlPlaneService:
             created_by=created_by,
             created_at=now,
             updated_at=now,
+        )
+
+    @staticmethod
+    def _build_native_ledger_scope(
+        *, account: SimulationAccountV1, created_by: str, now: datetime
+    ) -> SimulationLedgerScopeV1:
+        identity = {
+            "schema_version": SIMULATION_LEDGER_SCOPE_SCHEMA,
+            "ledger_scope_id": account.account_id,
+            "scope_kind": SimulationLedgerScopeKind.SUCCESSOR_NATIVE.value,
+            "source_identity": account.account_id,
+            "native_account_id": account.account_id,
+        }
+        return SimulationLedgerScopeV1(
+            ledger_scope_id=account.account_id,
+            ledger_scope_hash=canonical_json_sha256(identity),
+            scope_kind=SimulationLedgerScopeKind.SUCCESSOR_NATIVE,
+            source_identity=account.account_id,
+            native_account_id=account.account_id,
+            created_by=created_by,
+            created_at=now,
         )
 
     def _now(self) -> datetime:

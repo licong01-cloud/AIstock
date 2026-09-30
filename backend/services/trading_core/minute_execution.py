@@ -7,11 +7,19 @@ from typing import Any
 
 from backend.execution_algos.board_lot import round_to_board_lot
 
-from .errors import DataUnavailableError, ExecutionAlgoError
+from .errors import DataUnavailableError, ExecutionAlgoError, RiskRuleError
 from .execution_algo_adapter import ExecutionAlgoAdapter
 from .models import Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderStatus
 from .oms import OMS
 from .risk import RiskEngine
+
+
+_DEFERRED_LIMIT_STATE_REASONS = frozenset(
+    {
+        "LIMIT_UP_BUY_BLOCKED",
+        "LIMIT_DOWN_SELL_BLOCKED",
+    }
+)
 
 
 class MinuteExecutionEngine:
@@ -49,6 +57,7 @@ class MinuteExecutionEngine:
         config = dict(algo_config or {})
         algo, state = self.adapter.create_state(order, algo_code, config)
         market_state_aware = bool(getattr(algo, "HANDLES_MARKET_STATE", False))
+        limit_state_aware = bool(getattr(algo, "HANDLES_LIMIT_STATE", False))
         if not minute_bars:
             raise DataUnavailableError(
                 "minute bars are required for paper trading",
@@ -56,10 +65,14 @@ class MinuteExecutionEngine:
             )
         self._validate_bars(order, minute_bars, require_executable=not market_state_aware)
         if not market_state_aware:
-            self.risk_engine.validate_order_execution_context(
-                order=order,
-                minute_bars=minute_bars,
-            )
+            try:
+                self.risk_engine.validate_order_execution_context(
+                    order=order,
+                    minute_bars=minute_bars,
+                )
+            except RiskRuleError as exc:
+                if not self._can_defer_limit_state(algo=algo, exc=exc):
+                    raise
         max_participation_rate = config.get("max_participation_rate")
         if max_participation_rate is not None:
             max_participation_rate = float(max_participation_rate)
@@ -77,6 +90,17 @@ class MinuteExecutionEngine:
         for bar in sorted(minute_bars, key=lambda item: item.bar_time):
             if current_order.status == OrderStatus.FILLED:
                 break
+            if not market_state_aware and not bar.is_suspended and bar.volume > 0:
+                try:
+                    self.risk_engine.validate_order_execution_context(
+                        order=current_order,
+                        minute_bars=[bar],
+                    )
+                except RiskRuleError as exc:
+                    if not self._apply_deferred_limit_state(algo=algo, state=state, exc=exc):
+                        raise
+                    events.append(self._no_fill_event(current_order, algo, bar.bar_time))
+                    continue
             step_fill = self.adapter.compute_step(
                 algo=algo,
                 state=state,
@@ -144,7 +168,7 @@ class MinuteExecutionEngine:
             fills.append(fill)
             events.append(event)
 
-        if not fills and market_state_aware and events:
+        if not fills and (market_state_aware or limit_state_aware) and events:
             return current_order, fills, events
         if not fills and market_state_aware and getattr(algo, "_last_no_fill_reason", None):
             events.append(self._no_fill_event(current_order, algo, minute_bars[-1].bar_time))
@@ -239,10 +263,28 @@ class MinuteExecutionEngine:
                 processed_time = bar.bar_time
                 continue
             if not market_state_aware:
-                self.risk_engine.validate_order_execution_context(
-                    order=current_order,
-                    minute_bars=[bar],
-                )
+                try:
+                    self.risk_engine.validate_order_execution_context(
+                        order=current_order,
+                        minute_bars=[bar],
+                    )
+                except RiskRuleError as exc:
+                    if not self._apply_deferred_limit_state(algo=algo, state=state, exc=exc):
+                        raise
+                    processed_time = bar.bar_time
+                    events.append(
+                        self._no_fill_event(
+                            current_order,
+                            algo,
+                            bar.bar_time,
+                            event_id=self._incremental_event_id(
+                                current_order.order_id,
+                                bar.bar_time,
+                                suffix="NOFILL",
+                            ),
+                        )
+                    )
+                    continue
             step_fill = self.adapter.compute_step(
                 algo=algo,
                 state=state,
@@ -373,6 +415,33 @@ class MinuteExecutionEngine:
         state.executed_quantity = int(payload.get("executed_quantity", execution_state.filled_quantity))
         state.step = int(payload.get("step", 0))
         state.is_complete = bool(payload.get("is_complete", execution_state.remaining_quantity <= 0))
+
+    @staticmethod
+    def _can_defer_limit_state(*, algo: Any, exc: RiskRuleError) -> bool:
+        reason_code = str((exc.context or {}).get("reason_code") or "").strip().upper()
+        return (
+            reason_code in _DEFERRED_LIMIT_STATE_REASONS
+            and bool(getattr(algo, "HANDLES_LIMIT_STATE", False))
+            and callable(getattr(algo, "handle_limit_state_no_fill", None))
+        )
+
+    @classmethod
+    def _apply_deferred_limit_state(cls, *, algo: Any, state: Any, exc: RiskRuleError) -> bool:
+        if not cls._can_defer_limit_state(algo=algo, exc=exc):
+            return False
+        reason_code = str(exc.context["reason_code"]).strip().upper()
+        handler = getattr(algo, "handle_limit_state_no_fill")
+        handler(state, reason=reason_code, context=dict(exc.context or {}))
+        if str(getattr(algo, "_last_no_fill_reason", "")).strip().upper() != reason_code:
+            raise ExecutionAlgoError(
+                "execution algorithm did not preserve the deferred limit-state reason",
+                context={
+                    "reason_code": "EXECUTION_LIMIT_STATE_HANDLER_INVALID",
+                    "algo_code": getattr(algo, "ALGO_CODE", None),
+                    "market_state_reason_code": reason_code,
+                },
+            )
+        return True
 
     @staticmethod
     def _dump_algo_state(state: Any) -> dict[str, Any]:

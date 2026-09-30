@@ -1,121 +1,164 @@
 ---
 name: update-backtest-dataset
-description: Operate the durable, candidate-only AIstock monthly QE backtest dataset release workflow. Use for 每月更新/补齐回测数据集, one-click monthly update, Qlib daily/minute and H5/static/index context refresh, same-cutoff NO_OP, existing-candidate re-attestation, catalog/status/resume interpretation, dataset signoff, or investigating resource/provider/source blockers. Keeps PIT, moneyflow, TDX-first minute, 12-index/HMM and immutable release contracts; never activates or overwrites production without separate explicit authorization.
+description: Operate the unified AIstock monthly QE/HMM dataset release workflow through the single durable backend API. Use for monthly PIT refresh, source completeness, incremental Qlib/H5/sector builds, three-node validation, status, resume, and separately authorized activation or rollback.
 ---
 
-# 月度更新 AIstock QE 回测数据集
+# 共享月更 v2（当前唯一新月份入口）
 
-把 Skill 当作薄编排层。durable authority 是版本化 profile、SQLite control catalog、immutable CAS、release/attestation receipt 和独立 Worker；聊天、Skill 文本、日志摘要都不是运行状态 authority。
+新月份统一使用 `scripts/monthly_unified_dataset_release.py`，它只调用后端
+`/api/v1/qlib/monthly-releases`，不在 Skill、CLI、MCP 或 UI 中复制编排逻辑。
+旧的 `update_backtest_dataset_monthly.py` 仅用于读取和复现历史 direct-v2
+候选，不得用于创建新的月度权威 release。
 
-## 先选动作
+开始前必须读取实时 active profile；目标 cutoff 必须是后端解析的上一完整月
+最后交易日。普通数据窗口先提交 `prepare_only`：
 
-| 用户目标 | 动作 |
-|---|---|
-| 查看最新状态、判断是否需要更新 | 运行 `status --latest`；不提交任务 |
-| 普通月更或推进到指定 cutoff | 只提交一次 `monthly --candidate-only` |
-| 同 cutoff 已有 release | 仍走 `monthly`；让 fresh source probe 决定 `NO_OP_VERIFIED`，不要重导 |
-| 复核旧的不可变 candidate | 先 catalog，再走 `reattest-existing`；只写独立 attestation |
-| 查看复用、增量或失效原因 | 读取 decision/component actions、fingerprints 和 receipt |
-| 修代码、做 fixture 验证 | 使用 feature/BUG lane；不得把测试变成真实导出 |
-| 首次 PIT v2 迁移 | 只使用仓库白名单 `initial-migration` plan；先 sample、验收后再由独立授权运行 full |
-| 激活生产、同步 node1、启动/注册 Worker 或 scheduler | 这是独立授权，不由本 Skill 推导 |
+```powershell
+$env:DATASET_RELEASE_OPERATOR_TOKEN_FILE = '<runtime-owner配置的绝对plain-file路径>'
+python scripts/monthly_unified_dataset_release.py plan --cutoff YYYY-MM-DD --idempotency-key monthly-YYYYMM-plan
+python scripts/monthly_unified_dataset_release.py run --cutoff YYYY-MM-DD --idempotency-key monthly-YYYYMM-run
+python scripts/monthly_unified_dataset_release.py status --operation-id dmr_<32hex>
+python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_<32hex>
+```
 
-普通 operator 入口：
+规则：
+
+- 同一 cutoff 只有一个 durable operation、一个 successor、一个 manifest/profile 身份；
+- SOURCE 必须在一个只读一致性 snapshot 中完成九个 gate，并固化本轮实际消费的有界输入；
+- BUILD 只能读取 sealed baseline 和 SOURCE 输入，不得重新查询运行时数据库；
+- 组件动作只能是 `REUSE / INCREMENTAL / SELECTIVE_REBUILD / COMPONENT_REBUILD`；
+- QE、HMM、因子、荐股、择时、统一回测均由同一 consumer registry 验证；
+- 任一未解释缺口、跨 release 混用、哈希漂移或消费者不完整都保持 blocked；
+- 激活与 rollback 需要独立 `dsauth_<32hex>`，不得由 prepare 授权推断；
+- RD-Agent 节点必须一次性配置稳定的 `QE_DATASET_RELEASE_REGISTRY_ROOTS=<release-parent>/.aistock-release-registry`；每月 DEPLOY 只新增 create-exclusive manifest 登记，不修改 API 环境变量、不重启节点；
+- 源码合入、数据库修复、candidate 部署、profile 激活、运行态读回分别报告；
+- 不启动训练、实验或服务，不把 `status=completed` 当作数据验收成功。
+- worker 的 HMM 派生 authority 只能由 `scripts/dataset_release_hmm_authority.py` 从已批准、已绑定精确
+  dataset manifest 的完整窗口系数产物 create-exclusive 封存；不得从数据库运行态选择模型或手填 preset。
+  固定模型未变时复用同一 authority，模型或 preset 变更时重新封存并更新一次稳定环境路径。
+- Advisory 与 position_timing 的新建离线准备必须使用各自的
+  `/dataset-preparations` 入口和稳定 `Idempotency-Key` 冻结 active binding；重试不得重新解析 active，
+  profile 切换只影响新的业务键，且不得改写既有 CAS/request。
+
+详细合同见：
+
+- `docs/architecture/monthly_unified_dataset_release_v2_f2_design_20260921.md`
+- `docs/architecture/monthly_unified_dataset_release_v2_acceptance_20260921.md`
+- `docs/operations/monthly_unified_dataset_release_v2_runbook.md`
+
+# 历史 direct-v2 复现参考（不得用于新月份）
+
+## 唯一目标
+
+每月把唯一权威 PIT 股票池和所需市场数据更新到“上一个月最后一个已完成交易日”，生成新的独立 candidate，完成一次结构/抽样/QE-HMM smoke 后停止。
+
+同一个 cutoff 只允许交付一个 release identity、一个 candidate root 和一个待激活 profile。QE 与 HMM
+不得各自派生 sector candidate、私有行业编号或独立数据路径；任何消费者新增的数据要求都必须先进入共享
+release component，再由同一 manifest 和 profile 固定。
+
+## 单一 release 闭环（强制）
+
+月更必须按以下顺序在同一个 candidate 内闭环，任一步失败都保持 `NOT_READY`，不得另建 QE/HMM 分支候选：
+
+1. 冻结 calendar、PIT stock universe、申万 L2 code map、PIT membership 和 published quote source identity。
+2. 生成全 PIT membership，覆盖 stock_universe 与五个指数池在政策窗口内的可执行区间。
+3. 用共享 quote-availability authority 区分“正式可发布行情”和“正式停发”；停发不等于 membership 消失。
+4. 对每个 quote-available 的 `(trade_date, l2_code_id)` 验证 sector quote 三字段有限；缺行只能从同 cutoff
+   的冻结权威 source snapshot 补建，禁止补零、前填、插值或运行时数据库 fallback。
+5. 构建一次共享 sector context，manifest、component receipt 和 profile 同时固定 code map、membership、
+   market context、quote availability 与 sector data SHA256。
+6. 使用同一个 candidate root 执行 QE P10/P11 smoke、HMM file-only preflight、六池 membership/gap gate 和
+   dataset-identity；任何一个失败都不得激活。
+7. Windows、WSL、node1 完成字节哈希一致性后，只原子切换一次全局 profile。历史 release 仅用于复现，
+   不再被任何当前模块单独配置为 active。
+
+性能优化采用“复用未变化组件 + 只重建受影响组件”；这不允许产生多个终端候选。临时 staging 不是 release，
+不得写入消费者 profile，也不得作为业务窗口输入。
+
+本 Skill 不再使用或恢复：
+
+- source-freeze；
+- 全历史源数据内容哈希；
+- publish 前全历史 source recheck；
+- source-drift waiting/re-attestation；
+- revision ledger、fingerprint、Merkle root 或 checksum 形式的等价全量扫描；
+- 资源准入、pressure ladder、重复真实 sample 或新增人工审批点。
+
+## 当前 2026-08-31 更新合同
+
+7 月分钟线在旧候选导出后完成过数据库补录，因此：
+
+- 现有 2026-07-31 数据集只读保留；
+- 新候选必须重新导出分钟组件并追加 8 月数据；
+- 有完整补录影响清单时只重建受影响股票/日期；
+- 没有完整清单时重建整个分钟组件；
+- 其他组件只追加 8 月尾部或选择性重建真实失效分区；
+- 不得因为分钟组件重建而全量重导所有无关组件。
+
+本轮已生成一个失败但可恢复的 canonical v2 candidate，其中 daily/minute/index 已 PASS。不得为了重新证明流程
+而重导这三个组件；只在新目录重建 BUG-1336 改变合同的 factor/static/sector。完成首个 v2 candidate 后再评估
+按月尾部追加，不得为增量复用重新引入冻结、哈希或复杂 lineage。
+
+## 每月固定顺序
+
+远端节点地址必须使用直接的 `user@hostname` 或 `user@IP`；正式 worker 通过 `ssh -F NUL` 隔离个人 SSH
+config，不得把个人 alias 当作可复现的发布依赖。
+
+正式月更环境完成一次性路径和 authority 配置后，AIstock 后端通过
+`AISTOCK_MONTHLY_RELEASE_WORKER_ENABLED=true` 自动监督 code-owned worker；后续月份不得要求业务窗口
+手工启动 worker 或分别切换 QE/HMM/荐股路径。显式启用但 preflight 失败时保持 fail closed。
+
+1. `status`：确认没有活动的旧构建；只读查看当前候选状态。
+2. PIT：更新/readback `aistock_equity_pit_canonical_v2` 到目标 cutoff。
+3. 数据：确认数据库补数和目标月数据已可用；分钟缺口优先 TDX，其次 Tushare。
+4. 行业：复用或生成同 cutoff 的股票行业分类 PIT candidate。月更 sector 字段按分类 PIT 映射申万 L2
+   published 日线；申万指数成员进出 authority 仅供成分研究，不是股票 sector 字段或月更发布前置。
+5. 计划：基于 cutoff、PIT、补录影响范围和旧候选组件选择 `REUSE / INCREMENTAL / SELECTIVE_REBUILD / COMPONENT_REBUILD`。
+6. 构建：只写新的 repo-external candidate 目录，不覆盖旧候选或 production。
+7. 验收：一次全量结构检查、分层数值抽样和 QE/HMM producer smoke。
+8. 停止：报告 candidate 路径和未解决真实缺口；不进入训练、消费者迁移或生产激活。
+
+普通入口保持：
 
 ```powershell
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only
-rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 initial-migration --plan pit_v2_initial_20260731_v1 --scope sample --candidate-only
 rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 status --latest
-rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v1 reattest-existing --latest
-rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --run-id <run_id> --limit 50
-rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 receipt --run-id <run_id>
 ```
 
-`qe_hmm_full_v2` 是 future canonical candidate profile；`qe_hmm_full_v1` 只保留既有 release 的复现与只读重验。
-提交 v2 monthly/initial-migration 前，必须先按目标 cutoff 构建并 readback 对应的 P3A sector candidate；正式 full 路径固定为
-`<candidate_root>/.sector_data_authority/qe_hmm_full_v2/<cutoff>/full`，sample 路径使用排序股票集 digest。缺失、scope/denominator/hash
-不一致时 source freeze fail closed；不得回退 `market.sector_data`、默认行业或手工复制临时文件。具体顺序见
-`references/monthly-workflow.md`。
-源码交付不等于 runtime activation，未完成 v2 全量验证和独立激活授权前不得把 production 默认值切到 v2。
-`initial-migration` 不是普通月更参数化捷径：plan id、canonical plan digest、固定 `2026-07-31` cutoff、
-sample instruments/event windows 和 candidate-only safety 必须同时由 control service、Worker resolution reader 与
-build receipt 复验。`sample` binding 不得进入 QE/训练；源码或 fixture 验证不得执行该真实提交命令。
+BUG-1322 已永久禁用旧 v2 source-freeze 提交路径。BUG-1323 合入后，上述 `monthly --candidate-only` 命令在当前进程中直接顺序执行 daily、minute、factor/static/sector 和 12-index 四个组件，状态写入新 candidate 自身的 `direct_monthly_state.json`；它不依赖 backend 或 worker-scheduler 重启。
 
-`monthly` 成功响应返回随机 `idempotency_key`；只在重试同一次调用时显式复用。未显式给 key 的下一次人工
-调用必须形成新 submission/fresh probe，resolution 再按 source identity 复用既有 run/release。
+BUG-1336 起，v2 的 `monthly/status` 不再打开旧 control store 或加载旧 profile 的 resource/source-freeze
+合同，也不要求更早 validated baseline。恢复失败候选时只根据小型 component metadata 重新打开合同已改变的
+组件；2026-08-31 现有候选因此复用已 PASS 的 daily/minute/index，只重建新的
+`factor_h5_static_candidate_v2`。
 
-RTK 首次 wrapper 失败、不支持或需要精确原始输出时可直接运行等价 `python` 命令并记录原因。不要把 RTK 可用性当作数据发布门禁。
+同一天对同一 cutoff 重复执行会读取该状态，只跳过已经 `PASS` 的组件。没有状态文件的非空目录默认拒绝采用；仅允许采用由本轮已授权直接分钟导出产生、且只含 `components/logs/reports/work` 标准子目录的精确候选路径。
 
-## 每次执行
+## 不可突破边界
 
-1. 新月更读取 `configs/datasets/qe_backtest_monthly_v2.yaml`；历史复现读取 v1。不要复用聊天中的 cutoff、路径、资源值或旧 schema 路径。
-2. 确认请求是只读状态、candidate 月更、re-attest，还是独立 production/runtime 动作。授权不得跨类别继承。
-3. 对月更只提交一次 durable intent。默认 profile、cutoff policy、reuse/resume 和 sample policy 由 profile/control plane 决定。
-4. 用 `status --latest` 或受保护 API 查询 submission/run/events。Worker 未运行时是
-   `submission_state=QUEUED_RESOLUTION` 与 `worker_health.state=unavailable|stale|blocked`；执行中公开状态是
-   `run_state=EXECUTING|VALIDATING|PREPARING_PUBLISH|PUBLISHING`。不得在 CLI、API 或 Skill 内代跑重任务。
-5. 按 typed outcome 处理：
-   - `NO_OP_VERIFIED`：fresh probe 证明 source/PIT/validation 未变；没有重导。
-   - `REATTESTED`：旧 candidate 未改写；新 attestation 位于 control catalog/CAS。
-   - `CANDIDATE_VALIDATED`：读取逐组件 `REUSE/INCREMENTAL/SELECTIVE_REBUILD/FULL_REBUILD`，不得笼统称全量或增量。
-   - `WAITING_*`：保留任务、lease 和 checkpoint，等待条件恢复。
-   - `BLOCKED_*`/`FAILED_*`：按 error code 报告；不要换 provider、补零、减范围或调用旧 exporter 绕过。
-6. 只有 terminal receipt 与 catalog readback 一致、全部 required validation PASS，才报告 candidate signoff。production/node1/runtime 状态始终另列。
+- 始终 candidate-only；不覆盖、不原地追加现有 candidate，不切 production pointer/symlink。
+- 月更读取数据库和 provider；数据库修复、DDL/DML、生产激活、node1、依赖安装和后端重启仍是独立动作。
+- PIT 固定使用 `aistock_equity_pit_canonical_v2 / shsz_a_252td_st_delist_asof_v2`，保留252交易日IPO暖机和历史退市生命周期。
+- moneyflow 固定股/元单位；static 固定121列和 `l2_code_id int16/-1`；指数固定12只；HMM benchmark 固定 `000300.SH`。
+- sector published 日线与 sector moneyflow 分别生成：资金流缺失不得清空同日已有的 `sw2_pct_change/pe/pb`；
+  股票缺少官方行业指数成员进出记录不得阻断分类 PIT 到 published L2 指数的投影。
+- `stk_limit` 缺失使用既有版本化A股规则计算器，不填零、不填 NaN、不直接标记不可交易。
+- 分钟缺口固定 TDX 优先、Tushare 次级，只补真实缺键；无法补齐时报告精确股票/日期。
+- 不保留八年全市场 DataFrame；SQL、写入和验证按股票/月流式分批。
+- CPU、内存、commit headroom、swap、预测磁盘和其他模块负载只记录 telemetry，不参与任务 admission、等待、取消或终态判断。
+- 只有 OS/DB/WSL/文件系统实际失败、必要数据缺失、PIT/唯一键/数值错误或候选写入失败可以结束 attempt。
 
-## 不可突破的边界
+## 验收
 
-- 默认始终 `candidate-only`。不得覆盖或原地追加现有 candidate；不得切 production pointer/symlink。
-- 不自动初始化/迁移真实 control root，不启动、停止、重启或注册 backend、Worker、scheduler、QE、RDAgent、WSL task 或 node1。
-- planner/source acquisition 只读 DB。provider 只进入 candidate-local immutable CAS/overlay，不写 DB；DB repair 是独立动作。
-- 历史 D/P 日线缺口使用 candidate-local Tushare `pro_bar` missing-only overlay；价格转厘、成交量转手、amount 千元转厘，DB/provider 重叠必须完全一致。若 Tushare 仍无数据，只允许最后权威 bar 后的严格 terminal PIT 连续尾段作为 non-trading coverage；内部断点或活跃证券尾部仍阻断。分钟缺口固定 TDX 优先、Tushare 次级；只补 missing keys。
-- canonical PIT v2 内缺失或不完整 `stk_limit` 不填 NaN、不补零、也不直接标记不可交易：使用唯一版本化 A 股规则计算器，按沪深主板/创业板/科创板、交易日和 PIT ST 状态，以 `previous_raw_close × adj_prev / adj_current` 计算 raw 前收，再按 0.01 元和 `ROUND_HALF_UP` 生成 candidate CAS overlay。完整 DB 行永远优先且不得覆盖；不完整行仅在全部既有非空字段分币一致时补全。未知板块、无涨跌幅日、参考价/复权缺失、非空冲突、重复或 unresolved 键全部 fail closed。首次历史稀疏 overlay 必须携带精确 affected instruments，只允许对应股票的 `SELECTIVE_REBUILD`，不得扩大为全市场导出。
-- 股票 universe 使用冻结 PIT spans；candidate 保存 canonical snapshot/hash。不得用当前 ST 列表、实验黑名单或 max-date/count 代替。
-- v2 PIT 仅接受 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`：252 个交易所交易日 IPO 暖机、历史退市股生命周期、公告 as-of 终止风险与 ST snapshot gap 闭环必须同时满足；rolling 与 frozen snapshot 必须同 rule/digest。
-- DB 外 moneyflow 固定 `tushare_moneyflow_shares_yuan_v1`：量=股、额=元；`mf_total_net_*` 来自 canonical `net_mf_*`。
-- static 固定 121 数据列、`l2_code_id int16`、unknown=`-1`。12 指数和 HMM `000300.SH` benchmark 不得运行时扩张或替换。
-- 不提高任务自身 hard cap、不扩大并发。全局 available/commit headroom、paging/pagefile、WSL host available 与性能退化只写 warning，不阻断月更；pressure ladder 只能由本任务 aggregate owned commit 触发，且不能减少股票、日期、字段、指数或验证。
-- mixed/COW 只承诺候选物化按失效范围重写。在没有可信 DB revision ledger 时，初次 source freeze 与
-  publish 前 DB-only recheck 仍可能各做一次 cutoff 内全值扫描；不得把它表述为整条链只读新增月。
-- MVCC/provenance watermark 不作为内容复用证明。未来 revision ledger 需要独立 F2、DEV 验证和明确的
-  production DDL/DML 授权；本 Skill 不创建或推导该授权。
-- profile 冻结的 Ubuntu/conda/Qlib dump script/repo guardian-runner 路径和 SHA 是 hard gate；缺失或漂移
-  fail closed，不 fallback、不临时安装依赖。
-- re-attest、cancel、resume、publish recovery 都必须使用 durable identity/lease/fence；不要删除 lock、staging、receipt、candidate 或失败证据来“恢复”。
-- 被 QE、训练、审计、正式发布或 production 引用的历史 release 必须保留完整不可变数据集；`all.txt` 只是索引证据，不能替代 daily/minute、H5/static、指数、PIT 和 receipts。未引用失败候选也只可登记为 cleanup candidate，Skill 不自动删除。
-- 真实数据导出、生产激活、DB DDL/DML、进程控制和 cleanup 各自需要明确授权。
+不执行全量数据内容哈希或全量逐值比较。必须确认：
 
-## 阻断设计治理
+- cutoff、PIT、股票生命周期、唯一键和分母闭合；
+- daily/minute/H5/static/index/sector 文件与日期范围；
+- 7 月补录和 8 月新增分钟数据的物理覆盖；
+- ST、涨跌停、复权、QFQ、moneyflow、12指数和行业数据分层抽样；
+- 股票池、PIT、Qlib instruments、H5/static一致；
+- QE/HMM producer contract smoke PASS：验证 Qlib/H5/index 可读取且 sector 代表字段非空；不得用 85% 覆盖率、
+  IC、信号日期数或回测收益作为数据发布门禁。
+- production writes、pointer changes和旧候选覆盖为零。
 
-- 自动处理：登记的合法 sparse 空日（含 `bak_basic`）、精确指数候选补齐、`stk_limit` 规则补全、合规 terminal daily 尾段。
-- 可重试：provider 限流/网络/尚未发布；保留 durable intent/checkpoint，不把暂态失败升级为永久合同阻断。
-- 仅以下类别可硬阻断：权威值冲突；PIT/日期/identity 损坏；内部 required gap；必要推导输入缺失；越权覆盖/激活；无依据扩大重建范围；资源或安全合同违反。
-- 不得自行新增或扩大硬阻断。任何新阻断设计必须先向用户报告触发条件、发生概率、误阻代价、准确性风险与替代方案，获得明确批准后才实施。
-- DEV 只验证 DML 机制：`validate-dml` 单行 upsert/readback 后强制 rollback；不得要求 DEV 复制八年生产历史。生产仍需全范围只读 plan、目标明确的 DML 授权及 readback。
-
-## 按需读取 references
-
-- 普通月更、catalog、NO_OP、re-attest、status/resume：读 [monthly-workflow.md](references/monthly-workflow.md)。
-- fingerprint、source revision、component reuse/invalidation、COW：读 [fingerprint-and-reuse.md](references/fingerprint-and-reuse.md)。
-- Worker、lease、hard caps、pressure ladder、WAITING/orphan recovery：读 [resource-and-worker.md](references/resource-and-worker.md)。
-- terminal outcome、receipt、attestation、signoff 和 production gates：读 [release-receipt.md](references/release-receipt.md)。
-- 12 指数、单位、provider parity 与 HMM consumer 边界：读 [index-hmm-contract.md](references/index-hmm-contract.md)。
-- `stk_limit` 规则派生、missing-only 身份和选择性失效：读 [fingerprint-and-reuse.md](references/fingerprint-and-reuse.md) 及 `docs/architecture/qe_stk_limit_rule_derived_overlay_f2_design_20260823.md`。
-
-人类 operator 步骤见 `docs/operations/qe_backtest_dataset_monthly_update_runbook.md`。低层 exporter 与历史 moneyflow/PIT 细节见 `docs/analysis/qlib_backtest_dataset_export_guide_20260712.md`；它不是普通月更入口。
-
-一次性 control-store init/status/migrate、零执行 `--preflight`、独立 Worker 启动授权、events/receipt/log 分页
-命令都只以 runbook 为准；不要从聊天或旧日志拼装命令。
-
-## 汇报
-
-至少分别报告：
-
-- profile、requested/effective cutoff、submission/logical request/run/release/attestation identity；
-- run outcome 与每个 component/partition action；
-- candidate/catalog/receipt 路径或 CAS ref、artifact/source/PIT/validation digest；
-- PIT、moneyflow、daily/minute、12-index/HMM、QE/consumer smoke 结果；
-- peak resource、wait/compute/provider time、query/read/write规模；
-- retryable/waiting/blocked/terminal 状态与下一安全动作；
-- `production_activation`、`node1_distribution`、`DB repair`、`runtime restart`、`cleanup` 的独立状态。
-
-没有真实 full receipt 时明确写 `runtime_real_data_evidence=not_run_not_authorized`；fixture 或源码验证不得冒充真实数据完成。
+详细步骤见 `references/monthly-workflow.md` 和 `docs/operations/qe_backtest_dataset_monthly_update_runbook.md`。

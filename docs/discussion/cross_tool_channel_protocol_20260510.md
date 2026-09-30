@@ -1,5 +1,7 @@
 # Cross-Tool 协调通道协议（2026-05-10）
 
+> **RETIRED (2026-09-06):** The MemPalace cross-tool channel, notifier, and polling workflow described below are decommissioned. Do not restart them. This document remains only as historical evidence.
+
 > **作者**：Claude Code Opus 4.7（战略 session）
 > **目的**：规范 Claude Code 与 Codex 通过 mempalace 共享 drawer 实现的跨工具异步通信
 > **状态**：✅ 通道已验证（drawer 1+2+3 双向写读）；✅ Notifier 已部署（Windows toast 桌面通知）

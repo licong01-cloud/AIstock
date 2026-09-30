@@ -98,6 +98,10 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert hmm_frontend.ownership_status == "mapped"
     assert hmm_frontend.primary_module == "hmm.evolution"
 
+    root_page = catalog.match_path("frontend/src/app/page.tsx")
+    assert root_page.ownership_status == "mapped"
+    assert root_page.primary_module == "frontend_common"
+
     platform_router = catalog.match_path("backend/routers/health.py")
     assert platform_router.ownership_status == "mapped"
     assert platform_router.primary_module == "platform.api"
@@ -109,6 +113,20 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert platform_test.ownership_status == "mapped"
     assert platform_test.primary_module == "platform.api"
 
+    core_index_service = catalog.match_path("backend/services/core_index_membership.py")
+    assert core_index_service.ownership_status == "mapped"
+    assert core_index_service.primary_module == "qlib_data"
+
+    core_index_operator_test = catalog.match_path(
+        "backend/tests/scripts/test_prepare_core_index_membership_pit.py"
+    )
+    assert core_index_operator_test.ownership_status == "mapped"
+    assert core_index_operator_test.primary_module == "qlib_data"
+
+    qe_stock_pool_transport = catalog.match_path("backend/tests/quantevolver/test_stock_pool_sync.py")
+    assert qe_stock_pool_transport.ownership_status == "mapped"
+    assert qe_stock_pool_transport.primary_module == "qe.core"
+
     client_instruction = catalog.match_path("CLAUDE.md")
     assert client_instruction.ownership_status == "mapped"
     assert client_instruction.primary_module == "docs.standards"
@@ -116,6 +134,14 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     process_doc = catalog.match_path("docs/process/research_assistant_blueprint_execution_runbook_20260531.md")
     assert process_doc.ownership_status == "mapped"
     assert process_doc.primary_module == "docs.standards"
+
+    legacy_process_doc = catalog.match_path("docs/process/cross_tool_review_protocol_20260510.md")
+    assert legacy_process_doc.ownership_status == "mapped"
+    assert legacy_process_doc.primary_module == "docs"
+
+    discussion_doc = catalog.match_path("docs/discussion/cross_tool_channel_protocol_20260510.md")
+    assert discussion_doc.ownership_status == "mapped"
+    assert discussion_doc.primary_module == "docs"
 
     assert registry.get_module("qmt").test_plans_required == ("l0", "qmt_client_contract")
     assert registry.get_module("qlib_data").test_plans_required == ("l0", "qlib_data_backend")

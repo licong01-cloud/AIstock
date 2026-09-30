@@ -169,12 +169,12 @@ class SelectionRun(BaseModel):
     completed_at: datetime | None = None
 
 
-class SelectionPaperPortfolioLink(BaseModel):
+class SelectionSimulationAccountLink(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     link_id: int | None = None
     run_id: str
-    portfolio_id: str
+    simulation_account_id: str
     package_id: str
     manifest_sha256: str
     trade_date: date

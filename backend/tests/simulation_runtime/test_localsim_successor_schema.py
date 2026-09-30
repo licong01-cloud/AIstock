@@ -25,8 +25,8 @@ def test_successor_migration_and_bootstrap_share_exact_additive_schema_body() ->
         assert f"CREATE TABLE IF NOT EXISTS {table}" in bootstrap
         assert f"COMMENT ON TABLE {table}" in bootstrap
     assert "SIM-LR-B successor schema post-commit readback is incomplete" not in bootstrap
-    assert "COMMIT;" not in init_trading_core_v2_schema.DDL[-1]
-    assert "SET LOCAL" not in init_trading_core_v2_schema.DDL[-1]
+    assert "COMMIT;" not in init_trading_core_v2_schema.DDL[-2]
+    assert "SET LOCAL" not in init_trading_core_v2_schema.DDL[-2]
     assert "uq_localsim_successor_open_binding" in apply_sql
     assert "binding_config_json->'metadata'->>'localsim_account_id'" in apply_sql
 
@@ -53,10 +53,11 @@ def test_successor_rollback_is_guarded_by_exact_empty_table_readback() -> None:
     )
 
 
-def test_b2_source_does_not_register_a_product_router_or_scheduler_mutation() -> None:
-    router_sources = "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted((ROOT / "backend/routers").glob("*.py"))
-    )
+def test_c_source_registers_only_the_unified_product_and_no_scheduler_mutation() -> None:
+    source = (ROOT / "backend/routers/simulation_runtime.py").read_text(encoding="utf-8")
 
-    assert "localsim_control" not in router_sources
-    assert "localsim_replay" not in router_sources
+    assert '@router.post("/localsim/accounts",' in source
+    assert '@router.post("/localsim/replays",' in source
+    assert '@router.post("/scheduler/start")' not in source
+    assert '@router.post("/scheduler/stop")' not in source
+    assert '@router.post("/scheduler/tick")' not in source

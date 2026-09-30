@@ -1,0 +1,277 @@
+{
+  "actual": "qe_hmm_full_v2 月更被 AIstock 自设的 host/commit/WSL/disk 资源准入、Job/cgroup 内存限额和 resource checkpoint 转入 WAITING_RESOURCE；resolution 又把该状态映射为 WAITING_SOURCE 并按固定间隔重跑完整 source freeze，造成重复耗时且仍可能被同一资源条件再次终止。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260901_BUG-1297-dataset-release-resource-wait-retries-full-source-freeze-without-recover.json",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/references/monthly-workflow.md",
+    ".codex/skills/update-backtest-dataset/references/release-receipt.md",
+    ".codex/skills/update-backtest-dataset/references/resource-and-worker.md",
+    "backend/services/dataset_release/build_processor.py",
+    "backend/services/dataset_release/build_stage.py",
+    "backend/services/dataset_release/resolution_processor.py",
+    "backend/services/dataset_release/resource_gate.py",
+    "backend/services/dataset_release/resource_supervisor.py",
+    "backend/services/dataset_release/windows_job.py",
+    "backend/services/dataset_release/wsl_cgroup.py",
+    "backend/services/dataset_release/wsl_resource_guardian.py",
+    "backend/tests/dataset_release/test_build_processor.py",
+    "backend/tests/dataset_release/test_build_stage.py",
+    "backend/tests/dataset_release/test_resolution_processor.py",
+    "backend/tests/dataset_release/test_resource_gate.py",
+    "backend/tests/dataset_release/test_resource_supervisor.py",
+    "backend/tests/dataset_release/test_windows_job.py",
+    "backend/tests/dataset_release/test_worker.py",
+    "backend/tests/dataset_release/test_wsl_cgroup.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md",
+    "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "docs/standards/aistock_runtime_targets_v1.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1297",
+  "closed_at": "2026-09-01T04:56:26.419106Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-01T02:23:00.237453Z",
+  "description": "移除月度数据集发布中的 AIstock 资源准入、内存限额、resource checkpoint、pressure-rung 恢复和资源等待自动重试。保留固定流式分块、进程归属、心跳、取消、超时与真实 OS/DB/filesystem 错误传播。资源观测只写 telemetry，不改变任务状态或数据范围。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260901-0082e8ef9225",
+      "timestamp": "2026-09-01T02:23:00.237415Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "月更只执行一次完整 candidate-only lineage；host/commit/WSL/paging/预测磁盘等资源观测仅写 telemetry，不阻断、暂停、降档或自动重试。Windows Job 与 WSL cgroup 只管理 task-owned 进程，不安装 AIstock memory/commit/swap 限额。只有实际 OOM/termination、DB/WSL/Docker 失败、超时或 ENOSPC 结束当前 attempt。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-09-01T02:23:00.237453Z",
+  "fix_branch": null,
+  "fix_commit": "63ed8ef82e7ca791cddc8d9cca49c346e82e2f4f",
+  "fixed_at": "2026-09-01T04:29:38Z",
+  "github_issue_number": 4108,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4108",
+  "last_seen_at": "2026-09-01T02:23:00.237453Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4116",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "BUG1297_FRESH_PROCESS_UNLIMITED_RESOURCE_CONTRACT_OK: isolated Python imported the changed worker closure and verified the WSL launch command contains no AIstock MemoryHigh/MemoryMax/MemorySwapMax/OOMPolicy limits",
+      "BUG1297_FRESH_PROCESS_UNLIMITED_RESOURCE_CONTRACT_OK"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1297\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1297",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "941c074b8cf55bb547e3961fdd4665afcbb584d1ec108208a4d774dca0304e5e",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "63ed8ef82e7ca791cddc8d9cca49c346e82e2f4f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-01T04:54:52.934851Z",
+      "mode": "read_only",
+      "observed_identity": "61b5d4a47794853efff20e5fdfd41e0fde81dae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6edfaf26f301e0751272a97cf2fc947575c6ea3ca7e19a04bc369e70173c6fef",
+      "receipt_sha256": "582a5d5ada6d04e2ae863f8072349c1d516a81b882cb44e1c08fa0cbd083d1b7",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "dd09c0466449a1c0efcb220b5e4f0b4bd0b89332953ffe0bf96a3e9f07d43369",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1297",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2ab5ed36f57d219a",
+    "recorded_at": "2026-09-01T04:48:47.762802Z",
+    "runtime_contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b8b113194c13179b3619b11fa81ca64a4694ce9e",
+    "source_merge_commit": "63ed8ef82e7ca791cddc8d9cca49c346e82e2f4f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4116",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_module_registry_l0 -> passed",
+      "python -m nox -s qlib_data_backend -> passed",
+      "BUG-1297 targeted matrix -> 109 passed"
+    ],
+    "validation_evidence_digest": "e908cb76f40d53f5fd9be2ec02c103e6ed383ae251c5aad74a516accc63d3c8f"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Dataset release resource wait retries full source freeze without recovery",
+  "trigger_condition": {
+    "fingerprint": "0082e8ef9225ab7619914a70",
+    "source_event_id": "FE-20260901-0082e8ef9225"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s qlib_data_backend -> passed",
+    "BUG-1297 targeted matrix -> 109 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

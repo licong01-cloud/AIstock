@@ -66,8 +66,8 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
         "aistock-qe",
         "aistock-factor",
         "aistock-trading-ops",
-        "aistock-paper-v2-monitor",
-        "aistock-paper-v2-stable",
+        "aistock-simulation-runtime-monitor",
+        "aistock-simulation-stable",
         "aistock-external-research",
         "aistock-stock-analysis",
     }
@@ -82,10 +82,10 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     assert "因子独立指标" in servers["aistock-factor"]["health_json"]["business_aliases_zh"]
     assert servers["aistock-trading-ops"]["health_json"]["display_name_zh"] == "策略与执行治理"
     assert "执行策略" in servers["aistock-trading-ops"]["health_json"]["business_aliases_zh"]
-    assert servers["aistock-paper-v2-monitor"]["health_json"]["display_name_zh"] == "模拟盘监控"
-    assert "MiniQMT监控" in servers["aistock-paper-v2-monitor"]["health_json"]["business_aliases_zh"]
-    assert servers["aistock-paper-v2-stable"]["health_json"]["display_name_zh"] == "模拟盘稳定能力"
-    assert "策略包管理" in servers["aistock-paper-v2-stable"]["health_json"]["business_aliases_zh"]
+    assert servers["aistock-simulation-runtime-monitor"]["health_json"]["display_name_zh"] == "模拟盘监控"
+    assert "MiniQMT监控" in servers["aistock-simulation-runtime-monitor"]["health_json"]["business_aliases_zh"]
+    assert servers["aistock-simulation-stable"]["health_json"]["display_name_zh"] == "模拟盘稳定能力"
+    assert "策略包管理" in servers["aistock-simulation-stable"]["health_json"]["business_aliases_zh"]
     assert servers["aistock-external-research"]["health_json"]["display_name_zh"] == "External Research"
     assert servers["aistock-stock-analysis"]["health_json"]["domain"] == "stock_analysis"
 
@@ -114,11 +114,11 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     assert len(factor_tools) == 25
     assert any(tool["tool_name"] == "factor_library_list" for tool in factor_tools)
     assert any(tool["tool_name"] == "factor_corr_plan" for tool in factor_tools)
-    paper_monitor_tools = [tool for tool in tools if tool["server_key"] == "aistock-paper-v2-monitor"]
-    assert len(paper_monitor_tools) == 42
-    assert any(tool["tool_name"] == "paper_v2_monitoring_running_summary" for tool in paper_monitor_tools)
+    paper_monitor_tools = [tool for tool in tools if tool["server_key"] == "aistock-simulation-runtime-monitor"]
+    assert len(paper_monitor_tools) == 22
+    assert any(tool["tool_name"] == "simulation_runtime_monitoring_list_accounts" for tool in paper_monitor_tools)
     assert any(tool["tool_name"] == "qmt_broker_monitoring_get_snapshot" for tool in paper_monitor_tools)
-    paper_stable_tools = [tool for tool in tools if tool["server_key"] == "aistock-paper-v2-stable"]
+    paper_stable_tools = [tool for tool in tools if tool["server_key"] == "aistock-simulation-stable"]
     assert len(paper_stable_tools) == len(MODULE_TOOL_NAMES['strategy_packages']) + len(MODULE_TOOL_NAMES['selection_center']) + len(MODULE_TOOL_NAMES['advisory'])
     assert any(tool["tool_name"] == "strategy_packages_list" for tool in paper_stable_tools)
     assert any(tool["tool_name"] == "selection_center_run_confirmed" for tool in paper_stable_tools)
@@ -180,8 +180,8 @@ def test_seed_catalogs_registers_manifest_cache_and_capability_reply_is_humanize
     assert any(tool["server_key"] == "aistock-qlib-data" and tool["tool_name"] == "qlib_export_list_snapshots" for tool in tools)
     assert any(tool["server_key"] == "aistock-qe" and tool["tool_name"] == "qe_archive_query_seed_robustness" for tool in tools)
     assert any(tool["server_key"] == "aistock-trading-ops" and tool["tool_name"] == "execution_policy_bind_confirmed" for tool in tools)
-    assert any(tool["server_key"] == "aistock-paper-v2-monitor" and tool["tool_name"] == "paper_v2_monitoring_running_summary" for tool in tools)
-    assert any(tool["server_key"] == "aistock-paper-v2-stable" and tool["tool_name"] == "strategy_packages_list" for tool in tools)
+    assert any(tool["server_key"] == "aistock-simulation-runtime-monitor" and tool["tool_name"] == "simulation_runtime_monitoring_list_accounts" for tool in tools)
+    assert any(tool["server_key"] == "aistock-simulation-stable" and tool["tool_name"] == "strategy_packages_list" for tool in tools)
     assert any(tool["server_key"] == "aistock-external-research" and tool["tool_name"] == "external_research_search_web" for tool in tools)
     assert any(tool["server_key"] == "aistock-stock-analysis" and tool["tool_name"] == "stock_analysis_get_quote" for tool in tools)
     assert not any(tool["server_key"] == "aistock-qe-archive" for tool in tools)

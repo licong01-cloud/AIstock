@@ -116,6 +116,7 @@ from .lifecycle import (
     scheduler_now,
     scheduler_time,
 )
+from .localsim_dependencies import build_localsim_replay_lifecycle_owner
 from .models import (
     ExecutionPlan,
     LocalSimEconomicReceiptV1,
@@ -133,7 +134,11 @@ from .models import (
     canonical_json_sha256,
     miniqmt_kernel_runtime_id,
 )
-from backend.services.simulation_data.daily_context import SimulationBrokerBackend
+from backend.services.simulation_data.daily_context import (
+    DailyTradingSymbolFactV1,
+    DailyTradingSymbolFactV2,
+    SimulationBrokerBackend,
+)
 from backend.services.simulation_signal.contracts import DailySelectionEvidence
 from .miniqmt_quote_activation import (
     MiniQMTKernelProductSyncError,
@@ -199,6 +204,8 @@ _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS = (
     "local_sim_projection_terminal_failure",
     "local_sim_projection_readback_terminal_failure",
     "localsim_historical_legacy_plan_terminalization_v1",
+    "localsim_historical_failed_retryable_active_recovery_v1",
+    "localsim_historical_failed_terminal_active_recovery_v1",
 )
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
@@ -2789,7 +2796,11 @@ def build_simulation_lifecycle_scheduler_from_env(
         )
     else:
         provider = FailFastSimulationRunContextProvider()
-    quote_ingress_activation = build_miniqmt_quote_ingress_activation_from_env()
+    quote_ingress_activation = (
+        build_miniqmt_quote_ingress_activation_from_env()
+        if _env_flag("MINIQMT_ENABLED", default=False)
+        else None
+    )
     return SimulationLifecycleScheduler(
         repository=resolved_repository,
         context_provider=provider,
@@ -3041,7 +3052,7 @@ class SimulationLifecycleScheduler:
             "default_submit": False,
             "approval_states": [state.value for state in DEFAULT_SCHEDULER_SIM_BINDING_STATES],
             "sim_binding_selection_policy": "all_non_retired",
-            "manual_tick_endpoint_enabled": True,
+            "manual_tick_endpoint_enabled": False,
             "scheduler_control_api_enabled": False,
             "context_provider": provider_status,
             "context_provider_mode": provider_status.get("provider_mode"),
@@ -4035,8 +4046,13 @@ class SimulationLifecycleScheduler:
             raise ValueError("limit must be positive")
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         as_of_time = self._scheduler_time(as_of_time)
-        self._refresh_miniqmt_quote_context_lifecycle()
-        kernel_product_tick_failures = self._advance_miniqmt_quote_ingress_lifecycle()
+        normalized_backend = self._normalized_backend(broker_backend) if broker_backend is not None else None
+        miniqmt_in_scope = normalized_backend in {None, SimulationBrokerBackend.MINIQMT_SIM}
+        if miniqmt_in_scope:
+            self._refresh_miniqmt_quote_context_lifecycle()
+            kernel_product_tick_failures = self._advance_miniqmt_quote_ingress_lifecycle()
+        else:
+            kernel_product_tick_failures = []
         stale_run_results = self._run_recovery_stage_isolated(
             stage="STALE_MINIQMT_TERMINALIZATION",
             raise_on_error=raise_on_error,
@@ -6493,6 +6509,7 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         data_source: str,
         limit: int = 100,
+        broker_backend: SimulationBrokerBackend | str | None = None,
         strategy_id: str | None = None,
         as_of_time: datetime | None = None,
     ) -> SimulationSchedulerRunOnceResult:
@@ -6501,23 +6518,33 @@ class SimulationLifecycleScheduler:
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         if as_of_time is not None:
             as_of_time = self._scheduler_time(as_of_time)
-        kernel_product_tick_failures = self._advance_miniqmt_quote_ingress_lifecycle()
-        terminalized = self._terminalize_post_close_miniqmt_runs(
-            trade_date=trade_date,
-            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
-            strategy_id=strategy_id,
-            limit=limit,
-            as_of_time=as_of_time,
+        normalized_backend = self._normalized_backend(broker_backend) if broker_backend is not None else None
+        miniqmt_in_scope = normalized_backend in {None, SimulationBrokerBackend.MINIQMT_SIM}
+        localsim_in_scope = normalized_backend in {None, SimulationBrokerBackend.LOCAL_SIM}
+        kernel_product_tick_failures = (
+            self._advance_miniqmt_quote_ingress_lifecycle() if miniqmt_in_scope else []
         )
-        terminalized.extend(
-            self._terminalize_post_close_localsim_runs(
-                trade_date=trade_date,
-                broker_backend=SimulationBrokerBackend.LOCAL_SIM,
-                strategy_id=strategy_id,
-                limit=limit,
-                as_of_time=as_of_time,
+        terminalized: list[dict[str, Any]] = []
+        if miniqmt_in_scope:
+            terminalized.extend(
+                self._terminalize_post_close_miniqmt_runs(
+                    trade_date=trade_date,
+                    broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+                    strategy_id=strategy_id,
+                    limit=limit,
+                    as_of_time=as_of_time,
+                )
             )
-        )
+        if localsim_in_scope:
+            terminalized.extend(
+                self._terminalize_post_close_localsim_runs(
+                    trade_date=trade_date,
+                    broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+                    strategy_id=strategy_id,
+                    limit=limit,
+                    as_of_time=as_of_time,
+                )
+            )
         unmatched_failure_result = self._unmatched_kernel_product_failure_result(
             failures=kernel_product_tick_failures,
             data_source=data_source,
@@ -7162,29 +7189,115 @@ class SimulationLifecycleScheduler:
             as_of_time=recovery_as_of,
             context=context,
         )
-        driven = self._run_local_sim_binding_single_flight(
-            binding=binding,
-            trade_date=run.trade_date,
-            context={
-                "stage": f"STALE_LOCALSIM_FAILED_{evidence_suffix.upper()}_ACTIVE_RECOVERY",
-                "run_id": run.run_id,
-                "binding_id": binding.binding_id,
-                "trade_date": run.trade_date.isoformat(),
-                "scheduler_trade_date": scheduler_trade_date.isoformat(),
-            },
-            func=lambda: self._drive_existing_local_sim(
+        paper_repository = self._paper_repository_for_local_sim(binding=binding, run=run, context=context)
+        persisted_orders = tuple(paper_repository.list_orders_for_run(run.run_id))
+        historical_residual = self._local_sim_historical_residual_payload(
+            run=run,
+            orders=persisted_orders,
+        )
+        if historical_residual is None:
+            raise DataUnavailableError(
+                "Historical failed LocalSim active generation has no matching persisted residual order",
+                context={
+                    "reason_code": f"{reason_prefix}_RESIDUAL_MISSING",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            )
+        active_intent_ids = {state.intent_id for state in states if not state.is_terminal}
+        classifications = {
+            str(item["intent_id"]): str(item["classification"])
+            for item in historical_residual["residual_orders"]
+            if str(item["intent_id"]) in active_intent_ids
+        }
+        broker = context.local_broker
+        configure = getattr(broker, "configure_execution_runtime", None)
+        terminalize = getattr(broker, "terminalize_historical_residuals", None)
+        clear_terminalization_scope = getattr(broker, "clear_historical_terminalization_scope", None)
+        exporter = getattr(broker, "export_execution_snapshot", None)
+        if (
+            not callable(configure)
+            or not callable(terminalize)
+            or not callable(clear_terminalization_scope)
+            or not callable(exporter)
+        ):
+            raise RuntimeConfigInvalidError(
+                "LocalSim broker cannot terminalize a historical durable residual generation",
+                context={
+                    "reason_code": f"{reason_prefix}_TERMINALIZATION_UNSUPPORTED",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            )
+        configure(run_id=run.run_id, binding_id=binding.binding_id)
+        try:
+            handles = tuple(
+                terminalize(
+                    plan_id=plan.plan_id,
+                    orders=persisted_orders,
+                    states=states,
+                    residual_classifications=classifications,
+                    as_of_time=recovery_as_of,
+                )
+            )
+            raw_snapshot = exporter(handles=handles)
+            snapshot = LocalSimExecutionSnapshot(
+                orders=tuple(raw_snapshot.get("orders") or ()),
+                fills=tuple(raw_snapshot.get("fills") or ()),
+                events=tuple(raw_snapshot.get("events") or ()),
+                cash_entries=tuple(raw_snapshot.get("cash_entries") or ()),
+                positions=dict(raw_snapshot.get("positions") or {}),
+                account=raw_snapshot.get("account"),
+                handle_statuses=tuple(raw_snapshot.get("handle_statuses") or ()),
+            )
+            execution = SimulationExecutionResult(
+                run=run,
+                execution_plan=plan,
+                broker_backend=binding.broker_backend,
+                status="SUBMITTED",
+                intent_count=len(plan.intents),
+                broker_result=LocalSimPlanSubmitResult(
+                    order_intents=tuple(LocalSimExecutionBridge().build_order_intents(plan)),
+                    handles=handles,
+                    execution_snapshot=snapshot,
+                ),
+            )
+            predecessor_marks = self._previous_local_sim_mark_records(run)
+            local_persistence = self._persist_local_sim_execution_result(
                 binding=binding,
                 run=run,
-                plan=plan,
-                runtime_release=runtime_release,
-                trade_date=run.trade_date,
-                data_source=recovery_data_source,
-                as_of_time=recovery_as_of,
+                execution=execution,
                 context=context,
-            ),
-        )
+            )
+        finally:
+            clear_terminalization_scope(plan_id=plan.plan_id)
+        if local_persistence is None or not bool(local_persistence.payload.get("terminal")):
+            raise DataUnavailableError(
+                "Historical failed LocalSim residual generation did not persist as terminal",
+                context={
+                    "reason_code": f"{reason_prefix}_PERSISTENCE_INCOMPLETE",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                },
+            )
         latest = self.repository.get_simulation_daily_run(run.run_id)
         latest_states = tuple(self.repository.list_local_sim_execution_states(run.run_id, authoritative=True))
+        terminal_marks = self._previous_local_sim_mark_records(latest)
+        if terminal_marks != predecessor_marks:
+            raise DataUnavailableError(
+                "Historical failed LocalSim terminalization changed the predecessor valuation marks",
+                context={
+                    "reason_code": f"{reason_prefix}_VALUATION_MARKS_CHANGED",
+                    "run_id": run.run_id,
+                    "binding_id": run.binding_id,
+                    "plan_id": plan.plan_id,
+                    "predecessor_mark_set_sha256": canonical_json_sha256(predecessor_marks),
+                    "terminal_mark_set_sha256": canonical_json_sha256(terminal_marks),
+                },
+            )
         self._validate_local_sim_post_close_state_closure(latest)
         latest_persistence = latest.run_payload_json.get("local_sim_persistence")
         remaining_active = tuple(state for state in latest_states if not state.is_terminal)
@@ -7251,7 +7364,14 @@ class SimulationLifecycleScheduler:
             ),
             "parent_resubmitted": False,
             "predecessor_projection_replayed": False,
-            "durable_minute_loop_advanced": True,
+            "durable_minute_loop_advanced": False,
+            "historical_realtime_market_data_requested": False,
+            "broker_execution_replayed": False,
+            "valuation_marks_preserved": True,
+            "valuation_mark_set_sha256": canonical_json_sha256(predecessor_marks),
+            "residual_order_count": historical_residual["residual_order_count"],
+            "capital_residual_count": historical_residual["capital_residual_count"],
+            "schedule_residual_count": historical_residual["schedule_residual_count"],
             "recovery_as_of": recovery_as_of.isoformat(),
             "verified_at": (
                 self._scheduler_time(as_of_time) if as_of_time is not None else self._scheduler_now()
@@ -7276,7 +7396,7 @@ class SimulationLifecycleScheduler:
             "reason_code": recovery_evidence["reason_code"],
             f"historical_failed_{evidence_suffix}_active_recovery": True,
             "scheduler_trade_date": scheduler_trade_date.isoformat(),
-            "driven_status": driven.status,
+            "driven_status": "HISTORICAL_RESIDUAL_TERMINALIZED",
         }
 
     def _terminalize_historical_localsim_legacy_plan_run(
@@ -9794,14 +9914,18 @@ class SimulationLifecycleScheduler:
         if projection_recovery is not None:
             return projection_recovery
         try:
-            durable_runtime_recovery = self._recover_failed_local_sim_durable_runtime_if_safe(
-                binding=binding,
-                run=run,
-                plan=plan,
-                runtime_release=runtime_release,
-                trade_date=trade_date,
-                data_source=data_source,
-                as_of_time=as_of_time,
+            durable_runtime_recovery = (
+                self._recover_failed_local_sim_durable_runtime_if_safe(
+                    binding=binding,
+                    run=run,
+                    plan=plan,
+                    runtime_release=runtime_release,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    as_of_time=as_of_time,
+                )
+                if submit
+                else None
             )
         except Exception as exc:
             return self._record_local_sim_durable_runtime_recovery_failure(
@@ -9813,7 +9937,11 @@ class SimulationLifecycleScheduler:
                 exc=exc,
             )
         if durable_runtime_recovery is not None:
-            return durable_runtime_recovery
+            # Recovery proves that the persisted execution and projection
+            # planes can be restored; it is not itself causal progress.  Keep
+            # driving the recovered run in this tick so status cannot become
+            # temporarily healthy while every execution state remains stale.
+            run = durable_runtime_recovery.run
         local_failure_error = self._local_sim_broker_called_failure_error(binding=binding, run=run)
         if local_failure_error is not None:
             return SimulationSchedulerBindingResult(
@@ -12185,13 +12313,34 @@ class SimulationLifecycleScheduler:
                     "plan_id": execution.execution_plan.plan_id,
                 },
             )
+        historical_terminalization_plan_id = getattr(
+            context.local_broker,
+            "historical_terminalization_plan_id",
+            None,
+        )
+        historical_terminalization = historical_terminalization_plan_id is not None
+        if historical_terminalization and (
+            not isinstance(historical_terminalization_plan_id, str)
+            or historical_terminalization_plan_id.strip() != execution.execution_plan.plan_id
+        ):
+            raise DataUnavailableError(
+                "LocalSim historical market-mark scope does not match the execution plan",
+                context={
+                    "reason_code": "LOCALSIM_HISTORICAL_MARK_SCOPE_CONFLICT",
+                    "plan_id": execution.execution_plan.plan_id,
+                    "historical_terminalization_plan_id": historical_terminalization_plan_id,
+                },
+            )
+        previous_mark_records = (
+            SimulationLifecycleScheduler._previous_local_sim_mark_records(execution.run) if positions else {}
+        )
         raw_records = (
             loader(
                 symbols=tuple(positions),
                 trade_date=execution.run.trade_date,
                 as_of_time=snapshot_time,
                 pre_trade_tradability=context.pre_trade_tradability,
-                previous_marks=SimulationLifecycleScheduler._previous_local_sim_mark_records(execution.run),
+                previous_marks=previous_mark_records,
             )
             if positions
             else {}
@@ -12235,6 +12384,29 @@ class SimulationLifecycleScheduler:
                         "mark_symbol": record.symbol,
                     },
                 )
+            if historical_terminalization:
+                try:
+                    predecessor_record = LocalSimMarketMarkV1.model_validate(previous_mark_records[symbol])
+                except Exception as exc:
+                    raise DataUnavailableError(
+                        "LocalSim historical terminalization predecessor mark is missing or invalid",
+                        context={
+                            "reason_code": "LOCALSIM_HISTORICAL_MARK_PREDECESSOR_INVALID",
+                            "symbol": symbol,
+                            "plan_id": execution.execution_plan.plan_id,
+                        },
+                    ) from exc
+                if record != predecessor_record:
+                    raise DataUnavailableError(
+                        "LocalSim historical terminalization changed a predecessor valuation mark",
+                        context={
+                            "reason_code": "LOCALSIM_HISTORICAL_MARK_CHANGED",
+                            "symbol": symbol,
+                            "plan_id": execution.execution_plan.plan_id,
+                            "predecessor_mark_hash": predecessor_record.mark_hash,
+                            "terminal_mark_hash": record.mark_hash,
+                        },
+                    )
             if record.as_of_time.replace(tzinfo=None) > snapshot_time.replace(tzinfo=None):
                 raise DataUnavailableError(
                     "LocalSim authoritative market mark is later than the account snapshot",
@@ -12245,14 +12417,44 @@ class SimulationLifecycleScheduler:
                         "snapshot_time": snapshot_time.isoformat(),
                     },
                 )
-            suspended = pre_trade_tradability_is_suspended(
-                context.pre_trade_tradability.get(symbol),
-                symbol=symbol,
-            )
+            tradability = context.pre_trade_tradability.get(symbol)
+            suspended = pre_trade_tradability_is_suspended(tradability, symbol=symbol)
             if suspended:
+                daily_reference = tradability.get("daily_trading_context") if isinstance(tradability, Mapping) else None
+                raw_fact = daily_reference.get("symbol_fact") if isinstance(daily_reference, Mapping) else None
+                schema_version = daily_reference.get("schema_version") if isinstance(daily_reference, Mapping) else None
+                try:
+                    if schema_version == "daily_trading_context_reference_v1":
+                        fact = DailyTradingSymbolFactV1.model_validate(dict(raw_fact))
+                    elif schema_version == "daily_trading_context_reference_v2":
+                        fact = DailyTradingSymbolFactV2.model_validate(dict(raw_fact))
+                    else:
+                        raise ValueError("unsupported frozen daily trading reference schema")
+                except Exception as exc:
+                    raise DataUnavailableError(
+                        "LocalSim suspended market mark requires a valid frozen daily trading fact",
+                        context={
+                            "reason_code": "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID",
+                            "symbol": symbol,
+                            "trade_date": execution.run.trade_date.isoformat(),
+                        },
+                    ) from exc
+                expected_source = (
+                    f"{fact.pre_close_source}:frozen_daily_trading_context_v1"
+                    if isinstance(fact, DailyTradingSymbolFactV1)
+                    else f"{fact.limit_authority.value}:frozen_daily_trading_context_v2"
+                )
                 if (
-                    record.provenance != LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
-                    or record.as_of_time.date() >= execution.run.trade_date
+                    fact.symbol != symbol
+                    or fact.trade_date != execution.run.trade_date
+                    or fact.pre_close is None
+                    or record.provenance != LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+                    or float(record.price) != float(fact.pre_close)
+                    or record.source != expected_source
+                    or (
+                        not historical_terminalization
+                        and record.as_of_time.replace(tzinfo=None) != snapshot_time.replace(tzinfo=None)
+                    )
                 ):
                     raise DataUnavailableError(
                         "LocalSim suspended mark is not proven by the previous trading-day close",
@@ -12260,7 +12462,11 @@ class SimulationLifecycleScheduler:
                             "reason_code": "LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN",
                             "symbol": symbol,
                             "mark_as_of_time": record.as_of_time.isoformat(),
+                            "snapshot_time": snapshot_time.isoformat(),
                             "source": record.source,
+                            "expected_source": expected_source,
+                            "mark_price": float(record.price),
+                            "expected_pre_close": float(fact.pre_close) if fact.pre_close is not None else None,
                         },
                     )
             else:
@@ -15359,11 +15565,15 @@ class SimulationLifecycleBackgroundScheduler:
         trading_calendar_service: Any | None = None,
         tca_eod_observation_hook: TcaEodObservationHook | None = None,
         tca_observation_metrics_emitter: TcaObservationMetricsEmitter | None = None,
+        localsim_replay_lifecycle_owner: Any | None = None,
+        miniqmt_enabled: bool = True,
     ) -> None:
         self.lifecycle_scheduler = lifecycle_scheduler or SimulationLifecycleScheduler()
         self._trading_calendar_service = trading_calendar_service or TradingCalendarStatusService()
         self._tca_eod_observation_hook = tca_eod_observation_hook or TcaEodObservationHook()
         self._tca_observation_metrics_emitter = tca_observation_metrics_emitter or TcaObservationMetricsEmitter()
+        self._localsim_replay_lifecycle_owner = localsim_replay_lifecycle_owner
+        self._miniqmt_enabled = bool(miniqmt_enabled)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
@@ -15456,18 +15666,25 @@ class SimulationLifecycleBackgroundScheduler:
             "autostart": running,
             "running": running,
             "thread_alive": thread_alive,
-            "scheduler_control_api_enabled": True,
-            "manual_tick_endpoint_enabled": True,
+            "scheduler_control_api_enabled": False,
+            "manual_tick_endpoint_enabled": False,
             "interval_seconds": self._interval_seconds,
             "default_submit": self._default_submit,
             "data_source": self._data_source,
             "data_source_policy": self._data_source_policy(),
+            "miniqmt_enabled": self._miniqmt_enabled,
+            "scheduled_broker_backends": (
+                [SimulationBrokerBackend.LOCAL_SIM.value, SimulationBrokerBackend.MINIQMT_SIM.value]
+                if self._miniqmt_enabled
+                else [SimulationBrokerBackend.LOCAL_SIM.value]
+            ),
             "limit": self._limit,
             "last_run_at": last_run_at.isoformat() if last_run_at else None,
             "last_result": last_result,
             "last_blocking_result": last_blocking_result,
             "scheduler_loop_health": scheduler_loop_health,
             "trading_calendar_policy": self._trading_calendar_policy(),
+            "localsim_replay_lifecycle_owner_enabled": self._localsim_replay_lifecycle_owner is not None,
         }
 
     def run_once(self, *, as_of_time: datetime | None = None) -> dict[str, Any]:
@@ -15489,6 +15706,20 @@ class SimulationLifecycleBackgroundScheduler:
             "errors": [],
             "alerts": [],
         }
+        if self._localsim_replay_lifecycle_owner is not None:
+            try:
+                result["localsim_replay_lifecycle"] = self._localsim_replay_lifecycle_owner.tick(
+                    as_of_time=now
+                )
+            except Exception as exc:
+                payload = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "context": getattr(exc, "context", None),
+                    "stage": "LOCALSIM_REPLAY_LIFECYCLE",
+                }
+                result["errors"].append(payload)
+                logger.warning("LocalSIM replay lifecycle tick failed: %s", payload)
         try:
             calendar_status = self._trading_day_status(trade_date=trade_date)
         except DataUnavailableError as exc:
@@ -15517,6 +15748,9 @@ class SimulationLifecycleBackgroundScheduler:
                         trade_date=trade_date,
                         data_source=self._data_source,
                         limit=self._limit,
+                        broker_backend=(
+                            None if self._miniqmt_enabled else SimulationBrokerBackend.LOCAL_SIM
+                        ),
                         as_of_time=now,
                     )
                 else:
@@ -15524,6 +15758,9 @@ class SimulationLifecycleBackgroundScheduler:
                         trade_date=trade_date,
                         data_source=self._data_source,
                         limit=self._limit,
+                        broker_backend=(
+                            None if self._miniqmt_enabled else SimulationBrokerBackend.LOCAL_SIM
+                        ),
                         submit=bool(decision["submit"]),
                         as_of_time=now,
                     )
@@ -16069,6 +16306,13 @@ class SimulationLifecycleBackgroundScheduler:
         return raw in {"1", "true", "yes", "y", "on"}
 
 
+_background_trading_calendar_service = TradingCalendarStatusService()
 simulation_lifecycle_background_scheduler = SimulationLifecycleBackgroundScheduler(
-    lifecycle_scheduler=simulation_lifecycle_scheduler
+    lifecycle_scheduler=simulation_lifecycle_scheduler,
+    trading_calendar_service=_background_trading_calendar_service,
+    miniqmt_enabled=SimulationLifecycleBackgroundScheduler._env_flag("MINIQMT_ENABLED", default=False),
+    localsim_replay_lifecycle_owner=build_localsim_replay_lifecycle_owner(
+        lifecycle_scheduler=simulation_lifecycle_scheduler,
+        trading_calendar_service=_background_trading_calendar_service,
+    ),
 )

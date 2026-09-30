@@ -56,7 +56,7 @@ def _account_bundle(
 ):
     policy = local_sim_twap_only_policy_snapshot()
     service = LocalSimControlPlaneService(repository=repository, clock=lambda: NOW)
-    return service.create_account(
+    account, _ledger_scope, release, binding = service.create_account(
         account_name=account_name,
         package_id="pkg_current_alpha",
         manifest_sha256="a" * 64,
@@ -74,6 +74,7 @@ def _account_bundle(
         effective_to=effective_to,
         created_by="test",
     )
+    return account, release, binding
 
 
 def _successor_release_binding(
