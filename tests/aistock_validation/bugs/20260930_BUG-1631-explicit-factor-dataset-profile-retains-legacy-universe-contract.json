@@ -28,12 +28,18 @@
   ],
   "expected": "An explicit canonical R8 profile must bind the canonical_v2 PIT universe authority and preserve that authority through retry; non-profile behavior remains unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1631-explicit-factor-dataset-profile-retains-legacy-universe-contract.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
-      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+      "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1631-explicit-factor-dataset-profile-retains-legacy-universe-contract.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/official_factor_full_compute_dispatch_service.py",
@@ -122,11 +128,15 @@
       "Windows Python -I loaded the task-worktree official factor dispatch service without database, dataset, or runtime mutation"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
