@@ -1,6 +1,7 @@
 {
   "actual": "First completed legacy child with canonical_status null blocks; original full-market historical list lacks native universe receipt; shared Windows Python lacks LightGBM.",
   "allowed_write_scope": [
+    "backend/tests/watchlist/test_advisory_api.py",
     "backend/services/selection_center/advisory_input_archive.py",
     "backend/tests/selection_center/test_advisory_input_archive.py",
     "backend/services/selection_center/service.py",
