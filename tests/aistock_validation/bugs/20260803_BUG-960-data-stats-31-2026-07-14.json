@@ -106,13 +106,13 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/data-stats",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/data-stats",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "fresh Python process loaded backend/routers/ingestion.py by file path and verified _refresh_data_stats_backend per-dataset isolation, _refresh_one_data_stats SET statement_timeout, and _record_data_stats_refresh_failure marker -> PASS"
     ],
-    "identity_ref": "http://127.0.0.1:8001/openapi.json",
-    "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "post_restart_receipt_ref": null,
