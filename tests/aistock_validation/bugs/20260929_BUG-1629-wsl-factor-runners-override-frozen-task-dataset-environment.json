@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1629",
-  "closed_at": null,
+  "closed_at": "2026-09-30T05:17:03.815966Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -168,10 +168,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1629-close-sync-20260929\\tmp\\issue_workflow\\BUG-1629\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1629",
+      "business_smoke_semantic": {
+        "contract_id": "correlation_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "5cd8c9ae96524148aee2be03664422f95c2064bab88ef9ec8b92880f0f6b7803",
+      "expected_identity": "7afb3c62e9eba2ba8958dcc4ff261f3f7c78cd48",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-30T05:15:11.457535Z",
+      "mode": "read_only",
+      "observed_identity": "300b7ef8bc59815c1fe08dc92c2401207bd7abe6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "5d131c78c85daca0f4359d2f8adef012921661a6572ca25ccd5b3fe65b67a159",
+      "receipt_sha256": "b1fdeee0e766ab69abcdbecbb8260170b6544fcf678f821c153e431658807ff3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "30502e8fe1e9cdabfbece390c2f32ecacc3e102721a64c5f98b756518dbeb1a0",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -204,7 +226,7 @@
     ],
     "validation_evidence_digest": "5617286cf969804b8e3a38d5b28d1319530842ecb01a145d18fbbed5b2d6001a"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.core"
   ],
@@ -216,7 +238,8 @@
   "validation_evidence": [
     "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 33 passed",
     "python -m nox -s validation_module_registry_l0 -> 8 passed; ownership 14/14",
-    "python -m nox -s l0 -> passed; blocking=0"
+    "python -m nox -s l0 -> passed; blocking=0",
+    "R8 target task 869cb226-696a-4cf1-9b61-372745adb3d6 succeeded; five official metrics windows; formal post-restart verified"
   ],
   "verification_budget": {
     "budget": "standard",
