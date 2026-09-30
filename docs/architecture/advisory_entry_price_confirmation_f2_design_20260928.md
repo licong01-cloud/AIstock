@@ -51,7 +51,7 @@
 
 ### 5.1 prepare
 
-枚举目标日期、合法候选及来源，验证候选生成在当时可见，不读取目标开盘结果。已有候选如不是精确Top20或策略模式不同，按其真实scope登记，禁止截断、补第21名或调用Selection重建来凑数。当前首个v4确认范围固定为原exact包Top20；指数/新包另做范围确认。
+枚举目标日期、合法候选及来源；正式路径验证候选生成在当时可见，探索路径按真实证据等级保留未知限制，不读取目标开盘结果。已有候选如不是精确Top20或策略模式不同，按其真实scope登记，禁止截断、补第21名或调用Selection重建来凑数。当前首个v4确认范围固定为原exact包Top20；指数/新包另做范围确认。
 
 资格字段不得只由调用者填写一个“合格”字符串。复用请求中的三个只读证据引用：vintage元数据须匹配scope hash、profile/release/node root/dataset及四项fit截止，并明确PIT可见性已核查；candidate provenance须匹配完整days计划的hash；consumption review须覆盖请求的全部parent lineage，携带已消费日期区间并与目标窗口无交集。缺少完整性声明、内容不匹配或来源不可证明时只能降级开发回归。此最小JSON协议仅表达本次输入审计，不新建审批或归档平台。
 
@@ -108,7 +108,7 @@ open_li转CNY一次。连续目标与独立角色设计§5.3一致，最终价�
 
 现有可复用：`load_frozen_price_range_bundle`、`build_advisory_feature_matrix`、旧回放的数据/投影内核、prospective严格读回和原子发布模式。旧CLI和旧aggregate固定activation=false，不修改其证据语义。
 
-已实现：`backend/services/advisory_model_first/entry_price_confirmation_contracts.py`、`entry_price_confirmation.py`、`entry_price_confirmation_cli.py`。必要数据adapter限制在新confirmation文件内，通过已有公开只读来源消费，不改外部模块。
+已实现：`backend/services/advisory_model_first/entry_price_confirmation_contracts.py`、`entry_price_confirmation.py`、`entry_price_confirmation_cli.py`。确认消费adapter保留在Advisory文件内，通过已有公开只读来源消费；§5.1.2的未来留档另按用户2026-10-01授权登记Selection生产链精确范围，不扩大到QE、数据准备或交易执行模块。
 
 已实现CLI `python -m backend.services.advisory_model_first.entry_price_confirmation_cli`，子命令prepare/predict/settle/evaluate/inspect。prepare显式接收 `--spec --model-root --output-root --env-file`；其余接受`--request --model-root --output-root`，仅需要DB的阶段额外`--env-file`。全部写入仅artifact；返回0表示阶段成功（经济结果仍必须读status），2表示合同/输入错误，3表示未成熟/资源依赖waiting；禁止把0自动解读为模型确认。
 
