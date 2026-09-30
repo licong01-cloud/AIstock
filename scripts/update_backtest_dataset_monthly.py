@@ -3,8 +3,9 @@
 
 The canonical v2 profile executes the direct component builders in-process.
 Legacy v1 and catalog commands retain the bounded control-client behavior.
-Neither path performs database repair, activation, cleanup, or production data
-mutation.
+Neither path performs database repair, activation, or production data mutation.
+The direct cleanup action is limited to disposable files inside one terminal
+candidate and never touches production or shared CAS storage.
 """
 
 from __future__ import annotations
@@ -17,8 +18,11 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from dotenv import load_dotenv
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(REPOSITORY_ROOT / ".env", override=False)
 LEGACY_PROFILE_PATH = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v1.yaml").resolve()
 CANONICAL_PROFILE_PATH = (REPOSITORY_ROOT / "configs" / "datasets" / "qe_backtest_monthly_v2.yaml").resolve()
 PROFILE_PATH = LEGACY_PROFILE_PATH
@@ -35,6 +39,7 @@ from backend.services.dataset_release.cas_store import CASStoreError  # noqa: E4
 from backend.services.dataset_release.control_service import (  # noqa: E402
     DatasetReleaseControlService,
     DatasetReleaseProfileBinding,
+    resolve_previous_month_trading_cutoff,
 )
 from backend.services.dataset_release.control_store import (  # noqa: E402
     ControlStoreError,
@@ -53,13 +58,18 @@ from backend.services.dataset_release.profile import (  # noqa: E402
     load_dataset_profile,
 )
 from backend.services.dataset_release.direct_monthly import (  # noqa: E402
+    DIRECT_CANDIDATE_PARENT,
     DirectMonthlyLayout,
     DirectMonthlyRunner,
+    cleanup_terminal_candidate,
     compact_status,
     default_candidate_path,
+    discover_latest_existing_direct_candidate,
     discover_latest_validated_baseline,
+    hardlink_baseline_components,
     production_handlers,
     read_state,
+    validate_direct_candidate,
     validate_direct_candidate_with_smoke,
 )
 
@@ -98,6 +108,21 @@ def _parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="read bounded durable status")
     status.add_argument("--latest", action="store_true", help="select newest submission")
+
+    cleanup = subparsers.add_parser(
+        "cleanup",
+        help="plan or apply terminal direct-candidate intermediate cleanup",
+    )
+    cleanup.add_argument("--latest", action="store_true", help="select newest direct candidate")
+    cleanup.add_argument("--apply", action="store_true", help="remove the exact planned targets")
+
+    augment = subparsers.add_parser(
+        "augment-sw-l1",
+        help="derive a new direct candidate by hardlinking completed components and building only SW L1",
+    )
+    augment.add_argument("--candidate-only", action="store_true", help="required safety declaration")
+    augment.add_argument("--baseline-candidate", type=Path, required=True)
+    augment.add_argument("--candidate-root", type=Path, required=True)
 
     events = subparsers.add_parser("events", help="read one bounded event page")
     event_target = events.add_mutually_exclusive_group(required=True)
@@ -176,11 +201,7 @@ def _monthly(
         raise ValueError("monthly requires --candidate-only")
     profile_id = _selected_profile_id(service, args)
     if profile_id == "qe_hmm_full_v2":
-        return _direct_monthly(
-            service,
-            args,
-            observed_at=observed_at,
-        )
+        raise ValueError("qe_hmm_full_v2 must use the direct monthly path")
     preview = service.preview_monthly(
         profile_id=profile_id,
         cutoff_policy="auto-previous-month",
@@ -218,34 +239,52 @@ def _monthly(
 
 
 def _direct_monthly(
-    service: DatasetReleaseControlService,
     args: argparse.Namespace,
     *,
     observed_at: datetime,
 ) -> Mapping[str, Any]:
-    preview = service.preview_monthly(
-        profile_id="qe_hmm_full_v2",
-        cutoff_policy="auto-previous-month",
-        scope=args.scope,
-        candidate_only=True,
-        now=observed_at,
-    )
+    if not args.candidate_only:
+        raise ValueError("monthly requires --candidate-only")
     if args.scope != "full":
         raise ValueError("direct qe_hmm_full_v2 monthly supports the full candidate only")
-    cutoff = date.fromisoformat(str(preview["resolved_cutoff"]))
-    profile = load_dataset_profile(CANONICAL_PROFILE_PATH)
-    candidate_parent = Path(str(profile.candidate_root)).resolve(strict=True)
-    candidate_root = default_candidate_path(
+    cutoff = resolve_previous_month_trading_cutoff(observed_at)
+    candidate_parent = DIRECT_CANDIDATE_PARENT.resolve(strict=True)
+    existing_root = discover_latest_existing_direct_candidate(
+        candidate_parent,
+        cutoff=cutoff,
+    )
+    candidate_root = existing_root or default_candidate_path(
         candidate_parent,
         cutoff=cutoff,
         observed_on=observed_at.date(),
     )
+    baseline_root = discover_latest_validated_baseline(candidate_parent, cutoff=cutoff)
+    baseline_reuse: Mapping[str, Any] | None = None
+    if existing_root is not None:
+        raw_state = json.loads((existing_root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+        raw_components = raw_state.get("components")
+        if (
+            raw_state.get("status") == "CANDIDATE_READY"
+            and isinstance(raw_components, Mapping)
+            and "sw_l1_index" not in raw_components
+        ):
+            baseline_root = existing_root
+            candidate_root = default_candidate_path(
+                candidate_parent,
+                cutoff=cutoff,
+                observed_on=observed_at.date(),
+            )
+        else:
+            raw_baseline = raw_state.get("baseline_root")
+            baseline_root = Path(str(raw_baseline)) if raw_baseline is not None else None
     layout = DirectMonthlyLayout.create(
         candidate_parent=candidate_parent,
         candidate_root=candidate_root,
-        baseline_root=discover_latest_validated_baseline(candidate_parent, cutoff=cutoff),
+        baseline_root=baseline_root,
         cutoff=cutoff,
     )
+    if baseline_root == existing_root and candidate_root != existing_root:
+        baseline_reuse = hardlink_baseline_components(layout)
     state = DirectMonthlyRunner(
         production_handlers(project_root=REPOSITORY_ROOT),
         validator=lambda current_layout: validate_direct_candidate_with_smoke(
@@ -256,13 +295,16 @@ def _direct_monthly(
         layout,
         adopt_known_direct_work=True,
     )
-    return {
+    result = {
         "ok": True,
         "action": "monthly-direct",
         **compact_status(state),
         "execution_started_by_cli": True,
         "production_activation": "not_requested",
     }
+    if baseline_reuse is not None:
+        result["baseline_reuse"] = baseline_reuse
+    return result
 
 
 def _status(
@@ -293,8 +335,7 @@ def _status(
 
 
 def _direct_status() -> Mapping[str, Any]:
-    profile = load_dataset_profile(CANONICAL_PROFILE_PATH)
-    parent = Path(str(profile.candidate_root)).resolve(strict=True)
+    parent = DIRECT_CANDIDATE_PARENT.resolve(strict=True)
     states: list[tuple[date, datetime, Mapping[str, Any]]] = []
     for candidate in parent.glob("*-qe_hmm_full_v2-direct-*-candidate"):
         state_path = candidate / "direct_monthly_state.json"
@@ -307,11 +348,20 @@ def _direct_status() -> Mapping[str, Any]:
             layout = DirectMonthlyLayout.create(
                 candidate_parent=parent,
                 candidate_root=candidate,
-                baseline_root=Path(str(raw["baseline_root"])),
+                baseline_root=(
+                    Path(str(raw["baseline_root"])) if raw.get("baseline_root") is not None else None
+                ),
                 cutoff=cutoff,
             )
             state = read_state(layout)
-        except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        except (
+            DatasetReleaseError,
+            KeyError,
+            OSError,
+            UnicodeDecodeError,
+            ValueError,
+            json.JSONDecodeError,
+        ):
             continue
         if state is not None:
             states.append((cutoff, updated, state))
@@ -324,6 +374,65 @@ def _direct_status() -> Mapping[str, Any]:
         **compact_status(states[-1][2]),
         "bounded_read": True,
         "execution_started_by_cli": False,
+        "production_activation": "not_requested",
+    }
+
+
+def _direct_cleanup(args: argparse.Namespace) -> Mapping[str, Any]:
+    if not args.latest:
+        raise ValueError("cleanup requires --latest")
+    status = _direct_status()
+    candidate = Path(str(status["candidate_root"]))
+    raw = json.loads((candidate / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    cutoff = date.fromisoformat(str(raw["cutoff"]))
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=DIRECT_CANDIDATE_PARENT.resolve(strict=True),
+        candidate_root=candidate,
+        baseline_root=(
+            Path(str(raw["baseline_root"])) if raw.get("baseline_root") is not None else None
+        ),
+        cutoff=cutoff,
+    )
+    result = cleanup_terminal_candidate(layout, apply=bool(args.apply))
+    return {
+        "ok": True,
+        **result,
+        "execution_started_by_cli": False,
+        "production_activation": "not_requested",
+    }
+
+
+def _direct_augment_sw_l1(args: argparse.Namespace) -> Mapping[str, Any]:
+    if not args.candidate_only:
+        raise ValueError("augment-sw-l1 requires --candidate-only")
+    parent = DIRECT_CANDIDATE_PARENT.resolve(strict=True)
+    baseline = args.baseline_candidate.expanduser().resolve(strict=True)
+    if baseline.parent != parent:
+        raise ValueError("baseline-candidate must be a direct child of the candidate parent")
+    try:
+        baseline_state = json.loads(
+            (baseline / "direct_monthly_state.json").read_text(encoding="utf-8")
+        )
+        cutoff = date.fromisoformat(str(baseline_state["cutoff"]))
+    except (KeyError, OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("baseline-candidate has no readable direct monthly cutoff") from exc
+    layout = DirectMonthlyLayout.create(
+        candidate_parent=parent,
+        candidate_root=args.candidate_root,
+        baseline_root=baseline,
+        cutoff=cutoff,
+    )
+    reuse = hardlink_baseline_components(layout)
+    state = DirectMonthlyRunner(
+        production_handlers(project_root=REPOSITORY_ROOT),
+        validator=validate_direct_candidate,
+    ).run(layout, adopt_known_direct_work=True)
+    return {
+        "ok": True,
+        "action": "augment-sw-l1-direct",
+        **compact_status(state),
+        "baseline_reuse": reuse,
+        "execution_started_by_cli": True,
         "production_activation": "not_requested",
     }
 
@@ -547,26 +656,43 @@ def main(
 ) -> int:
     args = _parser().parse_args(argv)
     try:
+        observed = observed_at or datetime.now(UTC)
+        if args.profile == "qe_hmm_full_v2" and args.action == "monthly":
+            result = _direct_monthly(args, observed_at=observed)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.profile == "qe_hmm_full_v2" and args.action == "status":
+            result = _direct_status()
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.profile == "qe_hmm_full_v2" and args.action == "cleanup":
+            result = _direct_cleanup(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.profile == "qe_hmm_full_v2" and args.action == "augment-sw-l1":
+            result = _direct_augment_sw_l1(args)
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            return 0
+        if args.action == "cleanup":
+            raise ValueError("cleanup is available only for qe_hmm_full_v2")
+        if args.action == "augment-sw-l1":
+            raise ValueError("augment-sw-l1 is available only for qe_hmm_full_v2")
         control = service or build_control_service()
         _selected_profile_id(control, args)
         if args.action == "monthly":
             result = _monthly(
                 control,
                 args,
-                observed_at=observed_at or datetime.now(UTC),
+                observed_at=observed,
             )
         elif args.action == "initial-migration":
             result = _initial_migration(
                 control,
                 args,
-                observed_at=observed_at or datetime.now(UTC),
+                observed_at=observed,
             )
         elif args.action == "status":
-            result = (
-                _direct_status()
-                if _selected_profile_id(control, args) == "qe_hmm_full_v2"
-                else _status(control, args)
-            )
+            result = _status(control, args)
         elif args.action == "events":
             result = _events(control, args)
         elif args.action == "receipt":
@@ -577,7 +703,7 @@ def main(
             result = _reattest(
                 control,
                 args,
-                observed_at=observed_at or datetime.now(UTC),
+                observed_at=observed,
             )
         elif args.action == "catalog-existing":
             selected_cataloger = cataloger

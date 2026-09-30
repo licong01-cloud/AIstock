@@ -166,7 +166,7 @@ class _FakeDeleteCursor:
             rows = self.state.get("child_rows", [])
             self._rows = [tuple(row.get(col) for col in cols) for row in rows]
         elif "SELECT task_id, status, node_id, base_experiment_id" in self.sql:
-            cols = ["task_id", "status", "node_id", "base_experiment_id"]
+            cols = ["task_id", "status", "node_id", "base_experiment_id", "strategy_evo_config"]
             self.description = [(col,) for col in cols]
             rows = self.state.get("task_rows", [])
             self._rows = [tuple(row.get(col) for col in cols) for row in rows]
@@ -267,6 +267,88 @@ def test_qe_experiment_delete_cleans_local_assets_without_worker_workspace(tmp_p
     assert not sota_dir.exists()
     assert not (optuna_dir / f"{experiment_id}_study.db").exists()
     assert any(sql.startswith("DELETE FROM qe_experiments") for sql in db_state["sql"])
+
+
+def test_registered_qe_cleanup_preserves_level_zero_history(tmp_path, monkeypatch) -> None:
+    import asyncio
+
+    from backend.services.quantevolver import config_composer
+    import backend.services.quantevolver.qe_workspace_client as workspace_client_module
+
+    experiment_id = "qe_registered_cleanup"
+    experiments_root = tmp_path / "qe_experiments"
+    sota_root = tmp_path / "qe_sota_assets"
+    (experiments_root / experiment_id).mkdir(parents=True)
+    (sota_root / experiment_id).mkdir(parents=True)
+    monkeypatch.setenv("QE_SOTA_ASSETS_DIR", str(sota_root))
+    monkeypatch.setattr(config_composer, "QE_EXPERIMENTS_ROOT", experiments_root)
+    monkeypatch.setattr(qe_router, "resolve_default_qe_node_id", lambda: "wsl2-5080")
+
+    db_state = {
+        "sql": [],
+        "params": [],
+        "commits": 0,
+        "experiment_row": {
+            "experiment_id": experiment_id,
+            "status": "completed",
+            "qe_task_id": experiment_id,
+            "qe_loop_id": None,
+            "loop_index": None,
+            "parent_experiment_id": None,
+            "is_evolution_loop": False,
+            "custom_params": {},
+        },
+        "task_rows": [{
+            "task_id": experiment_id,
+            "status": "completed",
+            "node_id": "wsl2-5080",
+            "base_experiment_id": experiment_id,
+            "strategy_evo_config": {
+                "_qe_run_registration": {
+                    "schema_version": "qe_run_registration_v1",
+                    "source_type": "mcp",
+                    "purpose": "research",
+                }
+            },
+        }],
+        "group_rows": [],
+    }
+    monkeypatch.setattr(qe_router, "get_conn", lambda: _FakeDeleteConn(db_state))
+
+    cleanup_calls = []
+
+    class FakeWorkspaceClient:
+        @classmethod
+        def for_node(cls, node_id):
+            instance = cls()
+            instance.node_id = node_id
+            return instance
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+        async def cleanup_task_workspace(self, task_id):
+            cleanup_calls.append((self.node_id, task_id))
+
+        async def cleanup_loop_workspace(self, *_args):
+            raise AssertionError("parent cleanup must not use loop cleanup")
+
+    monkeypatch.setattr(workspace_client_module, "QEWorkspaceClient", FakeWorkspaceClient)
+
+    result = asyncio.run(qe_router.delete_experiment(experiment_id))
+
+    assert result["ok"] is True
+    assert result["history_retained"] is True
+    assert result["artifact_retention"]["status"] == "cleaned"
+    assert result["deleted_experiment_ids"] == []
+    assert cleanup_calls == [("wsl2-5080", experiment_id)]
+    assert any(sql.startswith("UPDATE qe_experiments") for sql in db_state["sql"])
+    assert not any(sql.startswith("DELETE FROM qe_experiments") for sql in db_state["sql"])
+    assert not (experiments_root / experiment_id).exists()
+    assert not (sota_root / experiment_id).exists()
 
 
 def test_qe_experiment_delete_uses_qe_task_id_for_worker_workspace(tmp_path, monkeypatch) -> None:

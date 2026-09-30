@@ -1,5 +1,7 @@
 # QE SOTA 殿堂、StrategyPackage 资产治理、Seed 可复现性与模型库设计
 
+> **2026-09-22 资产生命周期补充**：QE Archive准入、A/B/C/X保留、X盘CAS、StrategyPackage资产引用和workspace清理以 `docs/architecture/qe_experiment_asset_warehouse_lifecycle_f2_detailed_design_20260922.md` 为准。技术有效、身份完整、可评价、非精确重复的A/B/C正负结果自动进入QE Archive；失败、噪声、validation和精确重复X禁止入仓。本文附录中的旧盘符/目录示例不是当前资产根权威配置。
+>
 > **2026-07-15 作废/取代声明**：本文已不再作为 LocalSIM / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。模拟盘平台唯一上位蓝图为 `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md`。本文仅保留 QE / SOTA / alpha core 治理方向；凡把执行、风控、HMM 或 runtime variant 作为 StrategyPackage 内容的描述，均已作废。
 > 若本文与唯一上位蓝图不一致，以上位蓝图为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
 
@@ -21,7 +23,7 @@ QE 不是为了复现旧结果而存在。复现能力是为了审计、验证�
 
 ```text
 QE                         = 大范围探索和自动演进
-QE 数仓                    = 永久保存所有研究事实和分析数据
+QE 数仓                    = 永久保存全部技术有效且唯一的A/B/C研究事实；X不入仓
 SOTA 殿堂                  = 人工评审、晋级、复测、治理工作台
 StrategyPackage            = Selection/Paper/未来实盘候选可复用的标准策略资产
 ```
@@ -1222,7 +1224,7 @@ retry/debug state
 
 ### 9.2 QE 数仓
 
-QE 数仓永久保存研究事实：
+QE 数仓永久保存技术有效、身份完整、可评价、非精确重复的 A/B/C 正负研究事实。失败、无有效结果、validation/fixture噪声和精确重复 X 不进入数仓；它们只在控制面或 BUG/Issue 中保留必要诊断和聚合计数：
 
 ```text
 configs
@@ -1234,10 +1236,10 @@ factor stats
 raw payload snapshots
 artifact manifests
 reproducibility manifests
-failure reasons
+validity scope / negative-result interpretation
 ```
 
-数仓主要用于分析、排序、学习和审计，不应承担所有大模型权重的永久保全，除非该 artifact 被晋级。
+数仓主要用于分析、排序、学习和审计，不应承担所有大模型权重的永久保全。A/B/C 均自动进入结构化 Level-0；档位只决定深层结构和二进制资产 retention，不决定数仓准入。被晋级或仍有下游引用的 artifact 进入受控资产库保护。
 
 ### 9.3 StrategyPackage 资产库
 
@@ -1253,7 +1255,7 @@ execution / risk policy manifests
 validation reports
 ```
 
-这些资产不能因为 QE 实验或 workspace 清理而删除。
+这些资产不能因为 QE 实验或 workspace 清理而删除。当前单机条件下，QE Archive artifact manifest 与 StrategyPackage manifest 各持有独立逻辑引用，但相同 SHA256 只在 X 盘内容寻址资产根保存一份物理 blob；同盘复制不是备份。runtime 节点缓存可重建，也不算权威副本。
 
 ### 9.4 模型库
 
@@ -1476,7 +1478,7 @@ capital / capacity assumptions
 2. 原始配置复测通过后，`PAPER_CANDIDATE` 应采用哪些指标阈值？
 3. latest-data validation 是 Paper 必选项，还是只作为 future live-candidate 门槛？
 4. runtime variant 成功后是否自动成为默认 Paper runtime，还是必须人工批准？
-5. 非晋级 QE artifact 在数仓归档后保留多久？
+5. 非晋级 QE artifact 的保留合同已由 2026-09-22 资产生命周期设计确定：A关键资产长期，B深层资产至少180天且被引用即保护，C大资产默认180天后可清理，结构化事实永久；X不入仓。
 6. 哪些模型类型必须支持严格 deterministic training，哪些只能支持 logged-random reproducibility？
 
 ## 16. 最终目标架构
@@ -1484,10 +1486,11 @@ capital / capacity assumptions
 ```text
 QE Experiment / QE Evolution Loop
   -> 自动标识 task-level best / candidate，不自动加入 SOTA 殿堂
-  -> QE 数仓归档所有研究事实
+  -> 技术有效且唯一的A/B/C正负事实自动进入QE数仓，X不入仓
+  -> 必要大资产按SHA发布到X盘单一CAS，workspace仅短期保留
   -> 用户手工加入 SOTA 殿堂
   -> SOTA review 批准或拒绝
-  -> StrategyPackage 冻结模型/因子 core 和 baseline config
+  -> StrategyPackage 以独立逻辑引用冻结同一CAS中的模型/因子 core 和 baseline config
   -> 原始配置复测验证资产完整性
   -> runtime variants 探索 strategy / execution / HMM / risk
   -> Paper v2 只选择 Paper-ready StrategyPackage

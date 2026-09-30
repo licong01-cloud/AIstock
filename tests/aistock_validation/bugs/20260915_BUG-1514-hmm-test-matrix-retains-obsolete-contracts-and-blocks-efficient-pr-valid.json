@@ -1,0 +1,310 @@
+{
+  "actual": "Core HMM source changes escalated to the complete 862-test coverage matrix, while a manual PR-slice invocation without classifier context also defaulted to the complete package. The full suite took about 18 minutes even when changed-test and direct-neighbor coverage was sufficient.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "noxfile.py",
+    "backend/services/hmm_risk/canonical_stock_fact_source.py",
+    "backend/services/hmm_risk/state_model_set.py",
+    "scripts/hmm_risk/prepare_state_model_set.py",
+    "backend/tests/test_noxfile_validation_env.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_issue_flow.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/tests/hmm_risk/test_canonical_stock_fact_source.py",
+    "backend/tests/hmm_risk/test_state_model_set.py",
+    "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
+    "tests/aistock_validation/bugs/20260915_BUG-1514-hmm-test-matrix-retains-obsolete-contracts-and-blocks-efficient-pr-valid.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1514",
+  "closed_at": "2026-09-15T05:10:18Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-15T04:39:47.350874Z",
+  "description": "Keep the complete HMM coverage matrix as Nightly or explicit diagnostic coverage, and make every PR use stable smoke tests plus changed tests and direct neighbors. A deeper reachability review must prevent test-count reduction from deleting contracts still used by V14/V15/V16, P6 or D1 code paths.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260915-f6cfcabd6750",
+      "timestamp": "2026-09-15T04:39:47.350854Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Add exact HMM dead-source retirement and CI/Nightly routing contract files after live reachability and plan-selection audit.",
+      "timestamp": "2026-09-15T04:55:00Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "Codex",
+      "note": "Withdrew runtime source and business-test deletion after direct import/runtime-catalog review showed active contracts; retained only CI and Nightly routing changes.",
+      "timestamp": "2026-09-15T05:20:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Ordinary HMM PRs execute only stable smoke tests plus exact changed tests and direct neighbors; the complete package remains available to Nightly and explicit diagnostics without blocking PR merge.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_issue_flow.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1514-hmm-test-matrix-retains-obsolete-contracts-and-blocks-efficient-pr-valid.json",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_issue_flow.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20260915_BUG-1514-hmm-test-matrix-retains-obsolete-contracts-and-blocks-efficient-pr-valid.json",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "noxfile.py"
+      ],
+      "impacted_modules": [
+        "validation.runner",
+        "validation.center",
+        "tests.validation_history",
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/aistock_validation/catalog/test_plans.yaml",
+          "impact_modules": [
+            "validation.center",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_test_plans"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "tests/aistock_validation/catalog/test_plans.yaml",
+        "noxfile.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "noxfile.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "noxfile.py"
+    ]
+  },
+  "first_seen_at": "2026-09-15T04:39:47.350874Z",
+  "fix_branch": null,
+  "fix_commit": "52063a04e7c106a2c66c2083903b3370127dab12",
+  "fixed_at": "2026-09-15T05:10:18Z",
+  "github_issue_number": 4749,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4749",
+  "last_seen_at": "2026-09-15T04:39:47.350874Z",
+  "module": "hmm_risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4752",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1514",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7ae7e7d2460c74a7",
+    "recorded_at": "2026-09-15T05:12:27.681886Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a579f4938bc7aa47005b7ea10b704c353fe4637a",
+    "source_merge_commit": "52063a04e7c106a2c66c2083903b3370127dab12",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4752",
+    "validation_evidence": [
+      "validation-receipt: id=c8d42eeff7248eee commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=hmm_risk_pr_slice status=passed command=`rtk nox -s hmm_risk_pr_slice` result=`19 passed`",
+      "validation-receipt: id=60c9a4bd0f59e4e0 commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=validation_catalog_integrity status=passed command=`rtk nox -s validation_catalog_integrity` result=`7 passed and findings=0`",
+      "validation-receipt: id=cf758f3378c5334e commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed and 14/14 mapped`",
+      "validation-receipt: id=7cdf04df04e9d015 commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=l0 status=passed command=`rtk nox -s l0 -- --changed-only` result=`passed, blocking=0`",
+      "validation-receipt: id=89b960619f6fac85 commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files` result=`passed, mapped=3, blocking=0`"
+    ],
+    "validation_evidence_digest": "636b6439d20314dd64e961d812d1461563b6809095b88d8045639e7440a08da9"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm_risk"
+  ],
+  "title": "HMM test matrix retains obsolete contracts and blocks efficient PR validation",
+  "trigger_condition": {
+    "fingerprint": "f6cfcabd67505fac1e6a6fa6",
+    "source_event_id": "FE-20260915-f6cfcabd6750"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=c8d42eeff7248eee commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=hmm_risk_pr_slice status=passed command=`rtk nox -s hmm_risk_pr_slice` result=`19 passed`",
+    "validation-receipt: id=60c9a4bd0f59e4e0 commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=validation_catalog_integrity status=passed command=`rtk nox -s validation_catalog_integrity` result=`7 passed and findings=0`",
+    "validation-receipt: id=cf758f3378c5334e commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`8 passed and 14/14 mapped`",
+    "validation-receipt: id=7cdf04df04e9d015 commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=l0 status=passed command=`rtk nox -s l0 -- --changed-only` result=`passed, blocking=0`",
+    "validation-receipt: id=89b960619f6fac85 commit=a579f4938bc7aa47005b7ea10b704c353fe4637a kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files` result=`passed, mapped=3, blocking=0`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

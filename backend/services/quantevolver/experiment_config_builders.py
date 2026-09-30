@@ -586,8 +586,8 @@ def build_config_from_strategy_evo_loop(
         factor_names=base_config.get("factor_list") or [],
         model_id=base_config.get("model_id") or "",
         strategy_id=base_config.get("strategy_id"),
-        data_split=base_config.get("data_split"),
-        stock_pool=task.get("stock_pool"),
+        data_split=loop_config.get("data_split") or base_config.get("data_split"),
+        stock_pool=loop_config.get("stock_pool") or task.get("stock_pool"),
         label_type=task.get("label_type"),
         label_horizon=label_horizon,
         sector_blacklist=sector_blacklist,
@@ -601,7 +601,8 @@ def build_config_from_strategy_evo_loop(
         strategy_params=strategy_params or None,
         long_trend_profile_id=task.get("long_trend_profile_id"),
         model_params_base=model_params_base or None,
-        node_id=task.get("node_id"),
+        extra_params=loop_config.get("custom_params") or None,
+        node_id=loop_config.get("node_id") or task.get("node_id"),
         experiment_name=experiment_name,
         alpha_mode=alpha_mode,
         multi_alpha_config=multi_alpha_cfg,
@@ -677,11 +678,28 @@ def build_config_from_custom_evo_loop(
     enable_sector_hmm: bool = bool(loop_config.get("enable_sector_hmm", False))
     hmm_model_version_id: str | None = loop_config.get("hmm_model_version_id")
     hmm_signal_preset: str | None = loop_config.get("hmm_signal_preset")
+    artifact_bound_hmm_path: str | None = None
+    artifact_bound_hmm_config: dict[str, Any] | None = None
+    if enable_sector_hmm:
+        from backend.services.hmm_risk.qe_assistance_transport import (
+            BINDING_PARAM,
+            normalize_artifact_binding,
+        )
+
+        artifact_binding = strategy_params.get(BINDING_PARAM)
+        if artifact_binding is not None:
+            normalized_binding = normalize_artifact_binding(
+                artifact_binding,
+                verify_local_file=False,
+            )
+            artifact_bound_hmm_path = normalized_binding["remote_path"]
+            artifact_bound_hmm_config = {}
     hmm = _build_hmm_config(
         enable_sector_hmm=enable_sector_hmm,
         hmm_model_version_id=hmm_model_version_id,
-        sector_hmm_model_path=None,  # always resolve from version_id
+        sector_hmm_model_path=artifact_bound_hmm_path,
         hmm_signal_preset=hmm_signal_preset,
+        hmm_config_json=artifact_bound_hmm_config,
     )
 
     sector_blacklist: list[str] | None = loop_config.get("sector_blacklist") or None
@@ -696,14 +714,22 @@ def build_config_from_custom_evo_loop(
     backtest_only: bool = bool(loop_config.get("backtest_only", False))
     model_source_task_id: str | None = loop_config.get("model_source_task_id")
     model_source_loop_index: int | None = loop_config.get("model_source_loop_index")
-    if backtest_only and "source_label_horizon" not in loop_config:
+    prediction_replay: bool = bool(loop_config.get("prediction_replay", False))
+    prediction_source_task_id: str | None = loop_config.get("prediction_source_task_id")
+    prediction_source_loop_index: int | None = loop_config.get("prediction_source_loop_index")
+    prediction_source_sha256: str | None = loop_config.get("prediction_source_sha256")
+    if (backtest_only or prediction_replay) and "source_label_horizon" not in loop_config:
         raise ValueError(
-            "custom_evo_loop: backtest-only requires source_label_horizon; "
+            "custom_evo_loop: model or prediction reuse requires source_label_horizon; "
             "cannot prove training-label compatibility"
         )
     label_horizon = _resolve_label_horizon(
         authoritative=loop_config.get("label_horizon"),
-        inherited=loop_config.get("source_label_horizon") if backtest_only else None,
+        inherited=(
+            loop_config.get("source_label_horizon")
+            if backtest_only or prediction_replay
+            else None
+        ),
         context="custom_evo_loop",
     )
 
@@ -747,9 +773,16 @@ def build_config_from_custom_evo_loop(
         backtest_only=backtest_only,
         model_source_task_id=model_source_task_id,
         model_source_loop_index=model_source_loop_index,
-        node_id=task.get("node_id"),
+        prediction_replay=prediction_replay,
+        prediction_source_task_id=prediction_source_task_id,
+        prediction_source_loop_index=prediction_source_loop_index,
+        prediction_source_sha256=prediction_source_sha256,
+        node_id=loop_config.get("node_id") or task.get("node_id"),
         experiment_name=experiment_name,
-        extra_params={"disable_alpha158": True} if disable_alpha158 else None,
+        extra_params={
+            **legacy_custom_params,
+            **({"disable_alpha158": True} if disable_alpha158 else {}),
+        } or None,
         alpha_mode=alpha_mode,
         multi_alpha_config=multi_alpha_cfg,
     )

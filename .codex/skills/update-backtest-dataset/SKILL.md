@@ -1,13 +1,79 @@
 ---
 name: update-backtest-dataset
-description: Operate the direct, candidate-only AIstock monthly QE/HMM dataset update workflow. Use for monthly PIT refresh, database gap completion, Qlib daily/minute and H5/static/index/sector candidate rebuild, status, validation and signoff. Never overwrites or activates production without separate explicit authorization.
+description: Operate the unified AIstock monthly QE/HMM dataset release workflow through the single durable backend API. Use for monthly PIT refresh, source completeness, incremental Qlib/H5/sector builds, three-node validation, status, resume, and separately authorized activation or rollback.
 ---
 
-# AIstock QE/HMM 月度数据集直接更新
+# 共享月更 v2（当前唯一新月份入口）
+
+新月份统一使用 `scripts/monthly_unified_dataset_release.py`，它只调用后端
+`/api/v1/qlib/monthly-releases`，不在 Skill、CLI、MCP 或 UI 中复制编排逻辑。
+旧的 `update_backtest_dataset_monthly.py` 仅用于读取和复现历史 direct-v2
+候选，不得用于创建新的月度权威 release。
+
+开始前必须读取实时 active profile；目标 cutoff 必须是后端解析的上一完整月
+最后交易日。普通数据窗口先提交 `prepare_only`：
+
+```powershell
+$env:DATASET_RELEASE_OPERATOR_TOKEN_FILE = '<runtime-owner配置的绝对plain-file路径>'
+python scripts/monthly_unified_dataset_release.py plan --cutoff YYYY-MM-DD --idempotency-key monthly-YYYYMM-plan
+python scripts/monthly_unified_dataset_release.py run --cutoff YYYY-MM-DD --idempotency-key monthly-YYYYMM-run
+python scripts/monthly_unified_dataset_release.py status --operation-id dmr_<32hex>
+python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_<32hex>
+```
+
+规则：
+
+- 同一 cutoff 只有一个 durable operation、一个 successor、一个 manifest/profile 身份；
+- SOURCE 必须在一个只读一致性 snapshot 中完成九个 gate，并固化本轮实际消费的有界输入；
+- BUILD 只能读取 sealed baseline 和 SOURCE 输入，不得重新查询运行时数据库；
+- 组件动作只能是 `REUSE / INCREMENTAL / SELECTIVE_REBUILD / COMPONENT_REBUILD`；
+- QE、HMM、因子、荐股、择时、统一回测均由同一 consumer registry 验证；
+- 任一未解释缺口、跨 release 混用、哈希漂移或消费者不完整都保持 blocked；
+- 激活与 rollback 需要独立 `dsauth_<32hex>`，不得由 prepare 授权推断；
+- RD-Agent 节点必须一次性配置稳定的 `QE_DATASET_RELEASE_REGISTRY_ROOTS=<release-parent>/.aistock-release-registry`；每月 DEPLOY 只新增 create-exclusive manifest 登记，不修改 API 环境变量、不重启节点；
+- 源码合入、数据库修复、candidate 部署、profile 激活、运行态读回分别报告；
+- 不启动训练、实验或服务，不把 `status=completed` 当作数据验收成功。
+- worker 的 HMM 派生 authority 只能由 `scripts/dataset_release_hmm_authority.py` 从已批准、已绑定精确
+  dataset manifest 的完整窗口系数产物 create-exclusive 封存；不得从数据库运行态选择模型或手填 preset。
+  固定模型未变时复用同一 authority，模型或 preset 变更时重新封存并更新一次稳定环境路径。
+- Advisory 与 position_timing 的新建离线准备必须使用各自的
+  `/dataset-preparations` 入口和稳定 `Idempotency-Key` 冻结 active binding；重试不得重新解析 active，
+  profile 切换只影响新的业务键，且不得改写既有 CAS/request。
+
+详细合同见：
+
+- `docs/architecture/monthly_unified_dataset_release_v2_f2_design_20260921.md`
+- `docs/architecture/monthly_unified_dataset_release_v2_acceptance_20260921.md`
+- `docs/operations/monthly_unified_dataset_release_v2_runbook.md`
+
+# 历史 direct-v2 复现参考（不得用于新月份）
 
 ## 唯一目标
 
 每月把唯一权威 PIT 股票池和所需市场数据更新到“上一个月最后一个已完成交易日”，生成新的独立 candidate，完成一次结构/抽样/QE-HMM smoke 后停止。
+
+同一个 cutoff 只允许交付一个 release identity、一个 candidate root 和一个待激活 profile。QE 与 HMM
+不得各自派生 sector candidate、私有行业编号或独立数据路径；任何消费者新增的数据要求都必须先进入共享
+release component，再由同一 manifest 和 profile 固定。
+
+## 单一 release 闭环（强制）
+
+月更必须按以下顺序在同一个 candidate 内闭环，任一步失败都保持 `NOT_READY`，不得另建 QE/HMM 分支候选：
+
+1. 冻结 calendar、PIT stock universe、申万 L2 code map、PIT membership 和 published quote source identity。
+2. 生成全 PIT membership，覆盖 stock_universe 与五个指数池在政策窗口内的可执行区间。
+3. 用共享 quote-availability authority 区分“正式可发布行情”和“正式停发”；停发不等于 membership 消失。
+4. 对每个 quote-available 的 `(trade_date, l2_code_id)` 验证 sector quote 三字段有限；缺行只能从同 cutoff
+   的冻结权威 source snapshot 补建，禁止补零、前填、插值或运行时数据库 fallback。
+5. 构建一次共享 sector context，manifest、component receipt 和 profile 同时固定 code map、membership、
+   market context、quote availability 与 sector data SHA256。
+6. 使用同一个 candidate root 执行 QE P10/P11 smoke、HMM file-only preflight、六池 membership/gap gate 和
+   dataset-identity；任何一个失败都不得激活。
+7. Windows、WSL、node1 完成字节哈希一致性后，只原子切换一次全局 profile。历史 release 仅用于复现，
+   不再被任何当前模块单独配置为 active。
+
+性能优化采用“复用未变化组件 + 只重建受影响组件”；这不允许产生多个终端候选。临时 staging 不是 release，
+不得写入消费者 profile，也不得作为业务窗口输入。
 
 本 Skill 不再使用或恢复：
 
@@ -29,14 +95,24 @@ description: Operate the direct, candidate-only AIstock monthly QE/HMM dataset u
 - 其他组件只追加 8 月尾部或选择性重建真实失效分区；
 - 不得因为分钟组件重建而全量重导所有无关组件。
 
-本轮是第一个完整 canonical v2 candidate，旧的 7 月基线仍是 v1 股票池，因此四个组件都执行一次 `COMPONENT_REBUILD`；这不是由分钟重建扩散，而是 v1→v2 authority 迁移所需。完成首个 v2 基线后再评估按月尾部追加，不得在本轮为增量复用重新引入冻结、哈希或复杂 lineage。
+本轮已生成一个失败但可恢复的 canonical v2 candidate，其中 daily/minute/index 已 PASS。不得为了重新证明流程
+而重导这三个组件；只在新目录重建 BUG-1336 改变合同的 factor/static/sector。完成首个 v2 candidate 后再评估
+按月尾部追加，不得为增量复用重新引入冻结、哈希或复杂 lineage。
 
 ## 每月固定顺序
+
+远端节点地址必须使用直接的 `user@hostname` 或 `user@IP`；正式 worker 通过 `ssh -F NUL` 隔离个人 SSH
+config，不得把个人 alias 当作可复现的发布依赖。
+
+正式月更环境完成一次性路径和 authority 配置后，AIstock 后端通过
+`AISTOCK_MONTHLY_RELEASE_WORKER_ENABLED=true` 自动监督 code-owned worker；后续月份不得要求业务窗口
+手工启动 worker 或分别切换 QE/HMM/荐股路径。显式启用但 preflight 失败时保持 fail closed。
 
 1. `status`：确认没有活动的旧构建；只读查看当前候选状态。
 2. PIT：更新/readback `aistock_equity_pit_canonical_v2` 到目标 cutoff。
 3. 数据：确认数据库补数和目标月数据已可用；分钟缺口优先 TDX，其次 Tushare。
-4. 行业：复用或生成同 cutoff 的 industry/P3A full authority。
+4. 行业：复用或生成同 cutoff 的股票行业分类 PIT candidate。月更 sector 字段按分类 PIT 映射申万 L2
+   published 日线；申万指数成员进出 authority 仅供成分研究，不是股票 sector 字段或月更发布前置。
 5. 计划：基于 cutoff、PIT、补录影响范围和旧候选组件选择 `REUSE / INCREMENTAL / SELECTIVE_REBUILD / COMPONENT_REBUILD`。
 6. 构建：只写新的 repo-external candidate 目录，不覆盖旧候选或 production。
 7. 验收：一次全量结构检查、分层数值抽样和 QE/HMM producer smoke。
@@ -51,6 +127,11 @@ rtk python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 s
 
 BUG-1322 已永久禁用旧 v2 source-freeze 提交路径。BUG-1323 合入后，上述 `monthly --candidate-only` 命令在当前进程中直接顺序执行 daily、minute、factor/static/sector 和 12-index 四个组件，状态写入新 candidate 自身的 `direct_monthly_state.json`；它不依赖 backend 或 worker-scheduler 重启。
 
+BUG-1336 起，v2 的 `monthly/status` 不再打开旧 control store 或加载旧 profile 的 resource/source-freeze
+合同，也不要求更早 validated baseline。恢复失败候选时只根据小型 component metadata 重新打开合同已改变的
+组件；2026-08-31 现有候选因此复用已 PASS 的 daily/minute/index，只重建新的
+`factor_h5_static_candidate_v2`。
+
 同一天对同一 cutoff 重复执行会读取该状态，只跳过已经 `PASS` 的组件。没有状态文件的非空目录默认拒绝采用；仅允许采用由本轮已授权直接分钟导出产生、且只含 `components/logs/reports/work` 标准子目录的精确候选路径。
 
 ## 不可突破边界
@@ -59,6 +140,8 @@ BUG-1322 已永久禁用旧 v2 source-freeze 提交路径。BUG-1323 合入后�
 - 月更读取数据库和 provider；数据库修复、DDL/DML、生产激活、node1、依赖安装和后端重启仍是独立动作。
 - PIT 固定使用 `aistock_equity_pit_canonical_v2 / shsz_a_252td_st_delist_asof_v2`，保留252交易日IPO暖机和历史退市生命周期。
 - moneyflow 固定股/元单位；static 固定121列和 `l2_code_id int16/-1`；指数固定12只；HMM benchmark 固定 `000300.SH`。
+- sector published 日线与 sector moneyflow 分别生成：资金流缺失不得清空同日已有的 `sw2_pct_change/pe/pb`；
+  股票缺少官方行业指数成员进出记录不得阻断分类 PIT 到 published L2 指数的投影。
 - `stk_limit` 缺失使用既有版本化A股规则计算器，不填零、不填 NaN、不直接标记不可交易。
 - 分钟缺口固定 TDX 优先、Tushare 次级，只补真实缺键；无法补齐时报告精确股票/日期。
 - 不保留八年全市场 DataFrame；SQL、写入和验证按股票/月流式分批。
@@ -74,7 +157,8 @@ BUG-1322 已永久禁用旧 v2 source-freeze 提交路径。BUG-1323 合入后�
 - 7 月补录和 8 月新增分钟数据的物理覆盖；
 - ST、涨跌停、复权、QFQ、moneyflow、12指数和行业数据分层抽样；
 - 股票池、PIT、Qlib instruments、H5/static一致；
-- QE/HMM producer smoke PASS；
+- QE/HMM producer contract smoke PASS：验证 Qlib/H5/index 可读取且 sector 代表字段非空；不得用 85% 覆盖率、
+  IC、信号日期数或回测收益作为数据发布门禁。
 - production writes、pointer changes和旧候选覆盖为零。
 
 详细步骤见 `references/monthly-workflow.md` 和 `docs/operations/qe_backtest_dataset_monthly_update_runbook.md`。

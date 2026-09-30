@@ -585,6 +585,10 @@ const OverviewContent = React.memo(function OverviewContent({
   const modelInfo = diagnostics.model;
 
   const cfg = activeLoopData.config_json;
+  const replaySource = cfg?.prediction_replay_source || {};
+  const replayResult = activeLoopData.metrics_json?.prediction_replay_result || {};
+  const replaySourceTaskId = replaySource.source_task_id || cfg?.prediction_source_task_id;
+  const replaySourceLoopIndex = replaySource.source_loop_index || cfg?.prediction_source_loop_index;
   const actionType = cfg?.action_type || "initial";
   const actionColors: Record<string, { bg: string; text: string }> = {
     factor_adjust: { bg: "#dbeafe", text: "#1d4ed8" },
@@ -750,6 +754,53 @@ const OverviewContent = React.memo(function OverviewContent({
             : "历史 Loop 尚未回填 positions 摘要时，最小/平均/最大持仓显示为 “-”；结束现金、股票市值可继续从 absolute_returns 展示。",
         )}
       </div>
+
+      {cfg?.prediction_replay && renderSummaryCard(
+        "冻结预测回放",
+        "#7c3aed",
+        [
+          {
+            label: "来源 Loop",
+            value: replaySourceTaskId && replaySourceLoopIndex
+              ? `${replaySourceTaskId}/Loop${replaySourceLoopIndex}`
+              : "-",
+            title: replaySourceTaskId && replaySourceLoopIndex
+              ? `${replaySourceTaskId}/Loop${replaySourceLoopIndex}`
+              : "",
+          },
+          {
+            label: "来源节点",
+            value: replaySource.source_node_id || "-",
+          },
+          {
+            label: "源预测 SHA256",
+            value: formatShortText(
+              replaySource.sha256 || cfg?.prediction_source_sha256,
+              20,
+            ),
+            title: replaySource.sha256 || cfg?.prediction_source_sha256 || "",
+          },
+          {
+            label: "可执行面板 SHA256",
+            value: formatShortText(
+              replayResult.executable_prediction_panel_sha256,
+              20,
+            ),
+            title: replayResult.executable_prediction_panel_sha256 || "",
+          },
+          {
+            label: "源预测行数",
+            value: formatCount(replayResult.source_prediction_rows),
+          },
+          {
+            label: "可执行 / 排除行数",
+            value: replayResult.executable_prediction_rows === undefined
+              ? "-"
+              : `${formatCount(replayResult.executable_prediction_rows)} / ${formatCount(replayResult.excluded_prediction_rows)}`,
+          },
+        ],
+        "源文件字节身份与目标数据集交集后的可执行预测面板分别钉住；该模式不训练、不推理，只运行分钟线回测。",
+      )}
 
       {/* 回测表现指标 */}
       <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
