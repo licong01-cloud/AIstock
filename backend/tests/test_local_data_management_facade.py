@@ -201,6 +201,24 @@ def test_overview_returns_human_summary_and_business_impact() -> None:
     assert result["trace"]["source_endpoint"] == "local-data composite"
 
 
+def test_overview_separates_cache_staleness_unknown_readiness_and_quality():
+    class Source(FakeSource):
+        def list_data_stats(self):
+            return {"items": [
+                {"data_kind": "daily_basic", "cache_state": "stale", "readiness_status": "audit_success"},
+                {"data_kind": "stock_basic", "cache_state": "audit_missing", "readiness_status": "unknown"},
+                {"data_kind": "etf_share_size", "cache_state": "fresh", "readiness_status": "quality_blocked"},
+            ]}
+    result = LocalDataManagementService(connection_provider=EmptyConnection, source=Source()).overview()
+    assert result["data"]["stale_dataset_count"] == 1
+    assert result["data"]["stale_stats_cache_count"] == 1
+    assert result["data"]["readiness_unknown_count"] == 1
+    assert result["data"]["quality_blocked_dataset_count"] == 1
+    assert result["data"]["status"] == "red"
+    assert "不等于真实数据缺失" in result["summary"]
+    assert "仅缓存滞后时不要重新抓取" in result["data"]["next_actions"][0]
+
+
 def test_overview_counts_active_jobs_and_targets_independently_from_preview_limits() -> None:
     class VisibilitySource(FakeSource):
         def list_ingestion_jobs(self, limit=50, active_only=False):

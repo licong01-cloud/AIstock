@@ -1,7 +1,7 @@
-# Advisory ENTRY_PRICE 独立价格角色 F2 详细设计 v1.2
+# Advisory ENTRY_PRICE 独立价格角色 F2 详细设计 v1.3
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Selection Center / Advisory。
-> 状态：SOURCE_IMPLEMENTED_COORDINATE_V2_LOCAL_VERIFIED_CI_PENDING（2026-09-29）。provider-compatible v2 坐标源码及定向回归已完成；尚未合入、确认模型或激活生产角色。文中的生产验收条件继续有效。
+> 状态：SOURCE_MERGED_RUNTIME_VERIFIED_MODEL_UNCONFIRMED（2026-09-30）。PR #5099已合入provider-compatible v2及独立entry源码，用户重启及BUG-1623语义读回通过；模型未确认、生产价格角色未配置。文中的最终验收条件继续有效。
 > 父级：[策略条件化模型蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) §5.3.1、§5.6、§16。
 > 配套：[一次性历史确认](advisory_entry_price_confirmation_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)。
 
@@ -11,7 +11,7 @@
 
 2026-09-28只读核查发现：自然价格预测和结算目录仍仅有2026-09-15一日/20行；日常 P0-D 的22条 observation 属于另一模型，不能计作价格确认。已有 API 返回 PRICE_RANGE_UNAVAILABLE。未核验的其他节点不能被算入样本总量。
 
-代码根因有三层：`model_inference.py::_model_shadow` 在 meta-label 分支直接返回价格 unavailable；`_price_range_shadow` 要求 M3 成功；`price_range_inference.py::_project_candidate` 算出entry后仍因缺 holding/path 整行失败。V1候选合同也要求 TP/protective/SL 全部存在。只改UI或只调用旧binding发布函数都不能交付独立买入区间。
+旧通道的代码根因有三层：`model_inference.py::_model_shadow` 在 meta-label 分支直接返回价格 unavailable；`_price_range_shadow` 要求 M3 成功；`price_range_inference.py::_project_candidate` 算出entry后仍因缺 holding/path 整行失败。V1候选合同也要求 TP/protective/SL 全部存在。PR #5099已通过独立entry-v2通道解除这些运行耦合，默认V1保持兼容；只改UI或调用旧binding发布函数不是本方案。
 
 目标：在同一Program的合法候选和D截止特征具备时，独立提供T日开盘参考区间；M3或Ranking模型不可用不能抹去已算出的entry。价格coverage不等于收益胜率，区间上界不是自动拒买阈值，中位数不命名为最佳买价。
 
@@ -94,7 +94,7 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 
 ## 9. Design Acceptance Matrix
 
-本矩阵保持稳定验收ID；SOURCE_VERIFIED只表示源码合同和定向回归通过，不等于模型确认或生产完成。UI类型检查与隔离浏览器用例均通过，CI仍需最终通过。真实开发数据坐标审计已由 v2 生产器闭合；窗口资格、正式确认、生产binding与运行读回仍未完成。已批准源码/历史回归先行，不豁免这些生产条件。
+本矩阵保持稳定验收ID；SOURCE_VERIFIED只表示源码合同和定向回归通过，不等于模型确认或生产完成。UI类型检查、隔离浏览器用例及PR #5099 CI/合入已完成，用户重启后NOT_CONFIGURED语义读回通过。v2坐标审计闭合；窗口资格、正式确认、生产binding及真实价格prediction/settlement仍未完成。源码/历史回归先行不豁免这些生产条件。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -127,3 +127,5 @@ D为决策交易日，T为下一交易日；特征行和可见时间均≤D截�
 只在已消费validation的1,000行执行v2坐标审计：可用1,000、缺失0，最大绝对gap差`1.1347649842008423e-7`，低于预注册`1e-6`；3个公司行动行的差分别为`5.6567e-8`、`4.2966e-9`、`4.8889e-9`。该PASS只关闭数值坐标前置项，不是模型效果或收益证据，未读取sealed holdout。新回放请求必须显式绑定v2生产器身份；旧请求仅允许读取已完成artifact，不能以新语义重新计算。
 
 v2现在可以进入历史功能回归及正式确认的输入审核，但正式执行仍受QE不并行、连续合格窗口、完整vintage/消费材料约束；未满足时不得发布ENTRY_PRICE binding。
+
+2026-09-30更新：PR #5099 merge=ad6d73e591a1666490cffae84f6518d8c2694efd；用户重启及BUG-1623语义验收已完成，PR #5102完成close-sync。此前的源码审核记录是历史过程，不再表示当前未合入。实时只读价格状态configured=false、status=NOT_CONFIGURED、database_written=false；没有新增价格模型结果或角色绑定。消费者资源分页缺陷由BUG-1632处理，不修改QE公共代码。

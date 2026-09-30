@@ -1,51 +1,57 @@
 {
-  "actual": "Duplicate source revisions reach INSERT ON CONFLICT in one VALUES batch, PostgreSQL reports cardinality violation, and the entire ex-date batch fails as a generic provider_or_persistence_error.",
+  "actual": "Read-only Sep23-29 audit: core physical data and refresh audits current but data_stats cache Aug11; API labels cached max as physical_max_date and overview counts unknown/audit_missing as stale data. Separate cache identity from physical/readiness evidence without full table scans or synthetic stats.",
   "allowed_write_scope": [
-    "backend/services/tushare_sync_engine.py",
-    "backend/tests/test_tushare_sync_engine.py",
-    "tests/aistock_validation/bugs/20260907_BUG-1392-dividend-source-revisions-collide-on-primary-key-and-fail-an-entire-ex-d.json"
+    "backend/routers/ingestion.py",
+    "backend/services/local_data_management.py",
+    "backend/tests/test_ingestion_data_stats_readiness_api.py",
+    "backend/tests/test_local_data_management_facade.py",
+    "tests/aistock_validation/bugs/20260930_BUG-1634-local-data-overview-confuses-stale-statistics-cache-with-physical-data-f.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1392",
-  "closed_at": "2026-09-30T08:00:43.207263Z",
+  "bug_id": "BUG-1634",
+  "closed_at": "2026-09-30T07:07:27.486444Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-09-07T10:06:30.451267Z",
-  "description": "Tushare dividend can return several revisions for one database identity. The BY_DATE path previously sent all revisions to one INSERT ON CONFLICT statement, causing PostgreSQL cardinality violations and whole-date failure. The fix remains inside the existing sync engine: normalize dividend identity fields, select the latest observable implementation/base-date revision, deterministically collapse equivalent latest revisions, and reject irreconcilable latest-rank economics before database mutation as source_version_conflict. It adds no monitor, scheduler, table, DDL, or new alert channel.",
+  "created_at": "2026-09-30T05:47:40.834287Z",
+  "description": "Read-only Sep23-29 audit: core physical data and refresh audits current but data_stats cache Aug11; API labels cached max as physical_max_date and overview counts unknown/audit_missing as stale data. Separate cache identity from physical/readiness evidence without full table scans or synthetic stats.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260907-40abc74fc6ca",
-      "timestamp": "2026-09-07T10:06:30.451250Z"
-    },
-    {
-      "action": "design_compliance_review",
-      "actor": "Codex",
-      "note": "DESIGN-COMPLIANCE-001: complete BUG scope delivered without POC/placeholder; errors remain typed and visible; behavior changes only dividend pre-write source revision handling; no new approval, monitor, scheduler, DDL, or release gate added.",
-      "timestamp": "2026-09-07T10:33:59.732950Z"
+      "note": "Promoted from IC-20260930-bf4813b7423d",
+      "timestamp": "2026-09-30T05:47:40.834265Z"
     }
   ],
   "evidence_uris": [
-    "bulk job 674e3066-4ad0-467a-80a3-5b7bebe056a4: 22 dividend dates failed on duplicate primary keys; manual canonical repair removed 24 equivalent source revisions",
-    "read-only Tushare replay of the same 22 ex-dates: 614 raw rows, 590 canonical rows, 24 revisions removed, 0 irreconcilable conflicts",
-    "existing DEV 127.0.0.1:5433/aistock_dev rollback smoke on 2024-06-27: 92 raw rows, 91 canonical rows, 91 inserted in transaction, 0 duplicate keys, rollback restored original state"
+    "Fresh-process readiness/facade direct tests22 passed;no database mutation/full physical scans"
   ],
-  "expected": "Known equivalent source revisions are canonicalized deterministically before replace-date write; conflicting economics are rejected before DB mutation and recorded as source_version_conflict through existing audit/retry/alert paths.",
+  "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1634-local-data-overview-confuses-stale-statistics-cache-with-physical-data-f.json",
+      "backend/routers/ingestion.py",
+      "backend/services/local_data_management.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py",
+      "backend/tests/test_local_data_management_facade.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "tests/aistock_validation/bugs/20260930_BUG-1634-local-data-overview-confuses-stale-statistics-cache-with-physical-data-f.json",
+      "backend/routers/ingestion.py",
+      "backend/services/local_data_management.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py",
+      "backend/tests/test_local_data_management_facade.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "backend/services/tushare_sync_engine.py",
-        "backend/tests/test_tushare_sync_engine.py"
+        "backend/routers/ingestion.py",
+        "backend/services/local_data_management.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py",
+        "backend/tests/test_local_data_management_facade.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -56,7 +62,7 @@
       ],
       "matched_rules": [
         {
-          "file": "backend/services/tushare_sync_engine.py",
+          "file": "backend/routers/ingestion.py",
           "impact_modules": [
             "qlib_data",
             "qe.core",
@@ -68,7 +74,29 @@
           "rule_id": "local_data_tushare_sync_engine"
         },
         {
-          "file": "backend/tests/test_tushare_sync_engine.py",
+          "file": "backend/services/local_data_management.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_ingestion_data_stats_readiness_api.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/test_local_data_management_facade.py",
           "impact_modules": [
             "qlib_data",
             "qe.core",
@@ -84,77 +112,89 @@
         "high"
       ],
       "suggested_scope": [
-        "backend/services/tushare_sync_engine.py",
-        "backend/tests/test_tushare_sync_engine.py"
+        "backend/routers/ingestion.py",
+        "backend/services/local_data_management.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py",
+        "backend/tests/test_local_data_management_facade.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/routers/ingestion.py",
+      "backend/services/local_data_management.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py",
+      "backend/tests/test_local_data_management_facade.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/routers/ingestion.py",
+      "backend/services/local_data_management.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py",
+      "backend/tests/test_local_data_management_facade.py"
     ]
   },
-  "first_seen_at": "2026-09-07T10:06:30.451267Z",
+  "first_seen_at": "2026-09-30T05:47:40.834287Z",
   "fix_branch": null,
-  "fix_commit": "137973a4fa0ecc404cb02e1b9c6a015fbd16752f",
-  "fixed_at": "2026-09-07T10:44:48Z",
-  "github_issue_number": 4389,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4389",
-  "last_seen_at": "2026-09-07T10:06:30.451267Z",
+  "fix_commit": "853f89d383bc75eb6c6fc1536679ad08c24a4143",
+  "fixed_at": "2026-09-30T06:16:12Z",
+  "github_issue_number": 5130,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5130",
+  "last_seen_at": "2026-09-30T05:47:40.834287Z",
   "module": "local_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4393",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5133",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "python -m pytest backend/tests/test_tushare_sync_engine.py -q -p no:cacheprovider",
+  "reproduce_command": "n/a",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    "contract: cached MAX not physical MAX; batch readback separately labeled",
+    "semantic: cache/unknown/quality counts independent,no backfill for cache lag",
+    "compliance: preserve quality failures and dataset/business identities"
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
-    "database_readback_ref": "not_required",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "fresh_process_evidence": [
-      "Fresh task-worktree Python process after the origin/main rebase imported backend.services.tushare_sync_engine and replayed the 22 previously failed Tushare ex-dates through _canonicalize_dividend_rows; no user backend process control."
+      "python -m pytest fresh process imported worktree backend/routers/ingestion.py and backend/services/local_data_management.py -> passed 22 contract tests",
+      "python fresh process imported ingestion and facade with READ ONLY production connections -> passed: stale_cache=18,unknown=12,physical_cache_mislabel=0,production_write=false"
     ],
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "F:\\Dev\\AIstock_state\\local_data_aftercare\\20260930-legacy-audit\\BUG-1392-post-restart.json",
+    "post_restart_receipt_ref": "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/BUG-1634-merge-bound-post-restart.json",
     "post_restart_receipt_summary": {
-      "bug_id": "BUG-1392",
+      "bug_id": "BUG-1634",
       "business_smoke_semantic": {
-        "contract_id": "collection",
+        "contract_id": "local_data_freshness",
         "reason": null,
         "verdict": "passed"
       },
       "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
-      "contract_digest": "43da59bead214315a418974d46d010f34a5bfd04d70e284bc47347637b3218a2",
-      "expected_identity": "137973a4fa0ecc404cb02e1b9c6a015fbd16752f",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "853f89d383bc75eb6c6fc1536679ad08c24a4143",
       "expected_terminal_outcome_digest": null,
-      "generated_at": "2026-09-30T07:53:46.200757Z",
+      "generated_at": "2026-09-30T07:07:21.074645Z",
       "mode": "read_only",
       "observed_identity": "361c3c8de4d3c2badd80642365657973eb396ec7",
       "post_restart_effective_gate": "passed",
-      "probe_evidence_digest": "e416571acc6c6eaf554f897e24110fa834a8ff5474333f56d808b95ae1c70a98",
-      "receipt_sha256": "49f6c0b567c753417a2568df736eb792d4ae79c9588db7772f47c878ca42a7ca",
+      "probe_evidence_digest": "a04411a076334fdf5a1083e528a5ea11ea509d65a0940948502e8a68712bc2fd",
+      "receipt_sha256": "06950820dd343d16959e48dd89db28aa1869abd171a3f44605cf1cab28cb88d7",
       "response_content_persisted": false,
-      "runtime_identity_proof_digest": "ed0dc43bac11988c50a45981a56bbf9e24be2e7745348b64f30fb9ace336c543",
+      "runtime_identity_proof_digest": "2fc27e4cb36585fc73c21aa2c1a6ce7322a7504bb118dedb1ffcff167decce08",
       "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
       "target_id": "backend-main"
     },
@@ -170,45 +210,45 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1392",
+    "bug_id": "BUG-1634",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "ffeebb525e261f68",
-    "recorded_at": "2026-09-07T10:45:47.158350Z",
-    "runtime_contract_digest": "43da59bead214315a418974d46d010f34a5bfd04d70e284bc47347637b3218a2",
+    "receipt_id": "1e29f1445eb12487",
+    "recorded_at": "2026-09-30T06:17:17.767403Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
     "runtime_identity_match": "pending",
     "runtime_verification": "pending_user_restart",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "faaced094dc769ac76fb16c69d347e45c4915bb3",
-    "source_merge_commit": "137973a4fa0ecc404cb02e1b9c6a015fbd16752f",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4393",
+    "source_head_oid": "7db2377388903f4970de24ed9211cc89de34b968",
+    "source_merge_commit": "853f89d383bc75eb6c6fc1536679ad08c24a4143",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5133",
     "validation_evidence": [
-      "validation-receipt: id=fd37cd1e56cb5457 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_tushare_sync_engine.py -q -p no:cacheprovider` result=`PASS (54 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
-      "validation-receipt: id=73a24a8de6532e63 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`PASS (8 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
-      "validation-receipt: id=c2465796b4007f55 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=data_sync_autonomy_backend status=passed command=`rtk nox -s data_sync_autonomy_backend` result=`PASS (323 passed, 1 skipped) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`"
+      "validation-receipt: id=a3ee2c62fafcb1f0 commit=7db2377388903f4970de24ed9211cc89de34b968 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=deca89455b8badfa commit=7db2377388903f4970de24ed9211cc89de34b968 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/test_local_data_management_facade.py -q` result=`passed 22 tests`"
     ],
-    "validation_evidence_digest": "9c9c67efad644895add23e3b881f5996ee005ee03ee81ac0e34ab9f211aeda91"
+    "validation_evidence_digest": "3506b2741127dcd889304d98ac069971d63ee13849683422328bf3a473ea8b0d"
   },
   "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
-  "title": "Dividend source revisions collide on primary key and fail an entire ex-date batch",
+  "title": "Local data overview confuses stale statistics cache with physical data freshness",
   "trigger_condition": {
-    "fingerprint": "40abc74fc6ca9807d1658cef",
-    "source_event_id": "FE-20260907-40abc74fc6ca"
+    "fingerprint": "bf4813b7423d48caecb02dae",
+    "source_event_id": "FE-20260930-bf4813b7423d"
   },
   "validation_evidence": [
-    "validation-receipt: id=fd37cd1e56cb5457 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_tushare_sync_engine.py -q -p no:cacheprovider` result=`PASS (54 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
-    "validation-receipt: id=73a24a8de6532e63 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`PASS (8 passed) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
-    "validation-receipt: id=c2465796b4007f55 commit=faaced094dc769ac76fb16c69d347e45c4915bb3 kind=nox plan=data_sync_autonomy_backend status=passed command=`rtk nox -s data_sync_autonomy_backend` result=`PASS (323 passed, 1 skipped) at HEAD faaced094dc769ac76fb16c69d347e45c4915bb3`",
-    "2026-09-30 official read-only source-bound post-restart probes passed; no process control"
+    "validation-receipt: id=a3ee2c62fafcb1f0 commit=7db2377388903f4970de24ed9211cc89de34b968 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=deca89455b8badfa commit=7db2377388903f4970de24ed9211cc89de34b968 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/test_local_data_management_facade.py -q` result=`passed 22 tests`",
+    "post-restart-verify exact identity and local-data freshness semantics -> passed",
+    "post-restart identity source-merge descendant and business freshness contract passed"
   ],
   "verification_budget": {
     "budget": "standard",
+    "ci_premerge_plans": [],
     "deferred_nightly_verification": {
       "modules": [
         "local_data",
@@ -225,6 +265,7 @@
       "skill": "aistock-validation-delegation",
       "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
     },
+    "external_premerge_plans": [],
     "local_loop_policy": {
       "delegate_when": [
         "local validation or exploration exceeds 30 minutes",
@@ -267,6 +308,7 @@
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
       "budget": "standard",
+      "ci_premerge_plans": [],
       "deferred_nightly_verification": {
         "modules": [
           "local_data",
@@ -283,6 +325,7 @@
         "skill": "aistock-validation-delegation",
         "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
       },
+      "external_premerge_plans": [],
       "local_loop_policy": {
         "delegate_when": [
           "local validation or exploration exceeds 30 minutes",

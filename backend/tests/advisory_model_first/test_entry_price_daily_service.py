@@ -69,6 +69,9 @@ def test_qe_guard_checks_all_pages_and_resolves_finished_evolution_template():
         calls.append((path, params))
         if "/evolution/tasks/" in path:
             return dict(status="success", data={"task_id": "qe_task", "status": "completed"})
+        # QE's expanded-child view paginates parents, not returned rows. Use
+        # the flat public view, which includes both parents and child runs.
+        assert params["include_children"] == "false"
         if params["offset"] == 0:
             row = dict(experiment_id="template", status="created", canonical_status="planned", qe_task_id="qe_task",
                        progress_summary={"kind": "evolution", "task_id": "qe_task", "status": "completed"})
@@ -79,7 +82,7 @@ def test_qe_guard_checks_all_pages_and_resolves_finished_evolution_template():
     assert len(calls) == 3
 
 
-@pytest.mark.parametrize("violation", ["pending", "unknown", "missing_page", "parent_running"])
+@pytest.mark.parametrize("violation", ["pending", "unknown", "missing_page", "parent_running", "paused", "legacy_unknown"])
 def test_qe_guard_never_turns_uncertain_activity_into_idle(violation):
     from backend.services.advisory_model_first.entry_price_daily_service import QEEntryResourceGuard
     def get(path, params):
@@ -90,6 +93,10 @@ def test_qe_guard_never_turns_uncertain_activity_into_idle(violation):
             row["canonical_status"] = "pending"
         if violation == "unknown":
             row["canonical_status"] = "unrecognized"
+        if violation == "paused":
+            row["progress_summary"] = {"status": "paused"}
+        if violation == "legacy_unknown":
+            row["canonical_status"] = None
         if violation == "parent_running":
             row.update(status="created", canonical_status="planned", qe_task_id="qe_task",
                        progress_summary={"kind": "evolution", "task_id": "qe_task", "status": "completed"})

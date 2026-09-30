@@ -199,18 +199,21 @@ def _prediction_day(request, result):
     )
 
 
-def _cached_day_service():
-    from functools import lru_cache
+def _cached_day_service(*, metadata_only=False):
+    from functools import lru_cache, partial
     from .entry_price_service import AdvisoryEntryPriceService
     from .model_bundle import load_frozen_research_bundle
     from .price_range_runtime_bundle import load_frozen_price_range_bundle
     from .entry_price_daily_service import EntryReadOnlyCalendar
     from backend.services.advisory_program import AdvisoryProgramService
 
+    # Preparing frozen input metadata still verifies bundle assets, but must not
+    # construct predictors. Prediction callers retain the real loader default.
+    loader_options = {"booster_factory": lambda _path: None} if metadata_only else {}
     return AdvisoryEntryPriceService(
         program_service=AdvisoryProgramService(calendar_provider=EntryReadOnlyCalendar(_historical_calendar_connection)),
-        parent_loader=lru_cache(maxsize=1)(load_frozen_research_bundle),
-        price_loader=lru_cache(maxsize=1)(load_frozen_price_range_bundle),
+        parent_loader=lru_cache(maxsize=1)(partial(load_frozen_research_bundle, **loader_options)),
+        price_loader=lru_cache(maxsize=1)(partial(load_frozen_price_range_bundle, **loader_options)),
     )
 
 
@@ -288,7 +291,7 @@ def verify_confirmation_inputs(request, *, model_root):
             _invalid("declared fit boundaries precede actual validation/HMM training evidence")
         _verify_qualification_review(request, validation_rows=len(usable))
     from .entry_price_service import _frame_sha256
-    reader = _cached_day_service()
+    reader = _cached_day_service(metadata_only=True)
     for day in request.days:
         prepared = reader.prepare_day(
             model_root=model_root, program_id=request.program_id, binding_version_id=request.binding_version_id,

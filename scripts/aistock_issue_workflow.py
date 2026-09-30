@@ -4246,7 +4246,94 @@ def _validate_localsim_cutover_readiness(payload: Any) -> tuple[str, str | None,
     return "passed", None, facts
 
 
+def _validate_local_data_freshness(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Verify freshness evidence, not overall health or a cached physical MAX.
+
+    Overview collections are capped by the producer; counters cover all rows.
+    Unknown audit evidence and unrelated red alerts are legitimate readback,
+    not proof of missing prices and not grounds to fabricate a green result.
+    """
+    path = urllib.parse.urlsplit(url).path
+    overview = path.endswith('/overview')
+    operation = 'local_data_health_overview' if overview else 'local_data_list_data_stats'
+    if not isinstance(payload, dict) or payload.get('success') is not True:
+        return 'failed', 'local-data requires success=true', {}
+    if payload.get('operation') != operation or payload.get('risk_level') != 'read_only':
+        return 'failed', 'local-data operation/read-only identity differs', {}
+    data = payload.get('data')
+    if not isinstance(data, dict):
+        return 'failed', 'local-data data object missing', {}
+    rows = data.get('datasets' if overview else 'items')
+    if not isinstance(rows, list) or not rows:
+        return 'failed', 'local-data dataset evidence missing', {}
+    seen: set[str] = set()
+    counts = {'stale': 0, 'unknown': 0, 'quality_blocked': 0}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get('data_kind'), str) or not row['data_kind']:
+            return 'failed', 'local-data dataset identity missing', {}
+        if row['data_kind'] in seen:
+            return 'failed', 'local-data duplicate dataset identity', {}
+        seen.add(row['data_kind'])
+        required = ('stats_max_date', 'audit_ready_date', 'ready_date', 'physical_max_date',
+                    'physical_max_date_source', 'stats_date_source', 'readiness_source',
+                    'cache_state', 'readiness_status', 'operator_action_required')
+        if any(key not in row for key in required):
+            return 'failed', 'local-data freshness fields missing', {}
+        if (row['stats_date_source'] != 'data_stats_cache'
+                or row['readiness_source'] != 'dataset_date_refresh_audit'
+                or row['physical_max_date_source'] != 'not_probed'
+                or row['physical_max_date'] is not None):
+            return 'failed', 'local-data cache/audit was misrepresented as physical evidence', {}
+        for key in ('stats_max_date', 'audit_ready_date'):
+            value = row[key]
+            if value is not None:
+                try:
+                    if not isinstance(value, str) or datetime.strptime(value, '%Y-%m-%d').strftime('%Y-%m-%d') != value:
+                        raise ValueError('non-canonical date')
+                except ValueError:
+                    return 'failed', 'local-data date evidence invalid', {}
+        ready, cached = row['audit_ready_date'], row['stats_max_date']
+        quality = row.get('audit_quality_status')
+        if quality is not None and not isinstance(quality, str):
+            return 'failed', 'local-data audit quality evidence invalid', {}
+        expected_readiness = ('unknown' if not ready else 'quality_blocked'
+                              if quality in {'error', 'empty_invalid', 'low_coverage', 'unproven'} else 'audit_success')
+        expected_cache = ('fresh' if cached >= ready else 'stale') if ready and cached else (
+            'stale' if ready else 'audit_missing' if cached else 'unknown')
+        if (row['ready_date'] != ready or row['cache_state'] != expected_cache
+                or row['readiness_status'] != expected_readiness
+                or type(row['operator_action_required']) is not bool):
+            return 'failed', 'local-data cache/readiness semantics differ', {}
+        counts['stale'] += expected_cache == 'stale'
+        counts['unknown'] += expected_readiness == 'unknown'
+        counts['quality_blocked'] += expected_readiness == 'quality_blocked'
+    facts: dict[str, Any] = {'dataset_evidence_count': len(rows), **counts}
+    if overview:
+        fields = ('dataset_count', 'stale_dataset_count', 'stale_stats_cache_count',
+                  'readiness_unknown_count', 'quality_blocked_dataset_count',
+                  'running_job_count', 'active_alert_count', 'blocked_target_count', 'retry_target_count')
+        if any(type(data.get(k)) is not int or data[k] < 0 for k in fields):
+            return 'failed', 'local-data overview counters invalid', {}
+        if (data['dataset_count'] < len(rows)
+                or data['stale_dataset_count'] != data['stale_stats_cache_count']):
+            return 'failed', 'local-data overview cache counters differ', {}
+        for name, key in [('stale', 'stale_stats_cache_count'), ('unknown', 'readiness_unknown_count'),
+                          ('quality_blocked', 'quality_blocked_dataset_count')]:
+            if not counts[name] <= data[key] <= data['dataset_count'] or (
+                    len(rows) == data['dataset_count'] and counts[name] != data[key]):
+                return 'failed', 'local-data overview counters contradict dataset evidence', {}
+        status = data.get('status')
+        if not isinstance(status, str) or status not in {'green', 'yellow', 'red'} or (
+                (data['blocked_target_count'] or data['quality_blocked_dataset_count']) and status != 'red') or (
+                status == 'green' and any(data[k] for k in fields if k not in {'dataset_count', 'running_job_count'})):
+            return 'failed', 'local-data overview health status contradicts blockers', {}
+        facts.update({key: data[key] for key in fields})
+        facts['health_status'] = status
+    return 'passed', None, facts
+
+
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/local-data/(?:overview|data-stats)$"), "local_data_freshness", _validate_local_data_freshness),
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/simulation-runtime/scheduler/status$"), "scheduler_status", _validate_scheduler_status),
@@ -4404,6 +4491,7 @@ def _evaluate_business_smoke_semantics(
         "factor_lifecycle_detail",
         "hmm_rotation_l2_overview",
         "advisory_entry_price_status",
+        "local_data_freshness",
     }:
         verdict, reason, facts = validator(payload, url=url)
     else:
