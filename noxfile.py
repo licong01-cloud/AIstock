@@ -689,6 +689,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/core_index_membership",
         "backend/tests/dataset_release/test_index_pool_sidecar.py",
         "backend/tests/dataset_release/test_direct_monthly.py",
+        "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
         "backend/tests/dataset_release/test_release_successor.py",
         "backend/tests/dataset_release/test_shared_sector_context.py",
         "backend/tests/dataset_release/test_monthly_repair_journal.py",
@@ -764,6 +765,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         test_globs=(
             "backend/tests/qlib_exporter/test_*.py",
             "backend/tests/dataset_release/test_*.py",
+            "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
             "backend/tests/routers/test_managed_dataset_preparations.py",
             "backend/tests/core_index_membership/test_*.py",
             "backend/tests/scripts/test_*qlib*.py",
@@ -773,6 +775,8 @@ def qlib_data_backend(session: nox.Session) -> None:
         ),
         overrides={
             "scripts/build_dataset_release_successor.py": "backend/tests/dataset_release/test_release_successor.py",
+            "scripts/repair_qe_adj_factor_candidate.py": "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
+            "backend/services/dataset_release/adj_factor_candidate_repair.py": "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
             "scripts/build_shared_sector_context_component.py": "backend/tests/dataset_release/test_shared_sector_context.py",
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
             "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",

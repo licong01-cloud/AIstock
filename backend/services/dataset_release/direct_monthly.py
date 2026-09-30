@@ -1053,9 +1053,25 @@ def _daily_benchmark_complete(layout: DirectMonthlyLayout) -> bool:
         benchmark_line = f"{DIRECT_BENCHMARK_CODE}\t{DIRECT_START_DATE.isoformat()}\t{layout.cutoff.isoformat()}"
         all_lines = all_path.read_text(encoding="utf-8").splitlines()
         stock_lines = stocks_path.read_text(encoding="utf-8").splitlines()
+        stock_codes = [line.split("\t", 1)[0].upper() for line in stock_lines]
+        provider_spans: dict[str, list[tuple[date, date]]] = {}
+        for line in all_lines:
+            code, start, end = line.split("\t")
+            begin, finish = date.fromisoformat(start), date.fromisoformat(end)
+            if finish < begin:
+                return False
+            provider_spans.setdefault(code.upper(), []).append((begin, finish))
+        for line in stock_lines:
+            code, start, end = line.split("\t")
+            begin, finish = date.fromisoformat(start), date.fromisoformat(end)
+            if finish < begin or not any(
+                left <= begin <= finish <= right
+                for left, right in provider_spans.get(code.upper(), [])
+            ):
+                return False
         if (
             all_lines.count(benchmark_line) != 1
-            or [line for line in all_lines if line != benchmark_line] != stock_lines
+            or DIRECT_BENCHMARK_CODE in stock_codes
         ):
             return False
         if benchmark_path.read_text(encoding="utf-8").splitlines() != [benchmark_line]:
