@@ -152,8 +152,8 @@
   },
   "first_seen_at": "2026-09-30T05:19:06.689870Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "261dd599f42addcb631b7e771de93594d7786406",
+  "fixed_at": "2026-09-30T05:47:28Z",
   "github_issue_number": 5124,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5124",
   "last_seen_at": "2026-09-30T05:19:06.689870Z",
@@ -161,6 +161,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5127",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -188,6 +189,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -199,7 +201,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1632",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "204d9058c5ef5397",
+    "recorded_at": "2026-09-30T05:48:16.814117Z",
+    "runtime_contract_digest": "3973a330bce9906bf4edde3744ef812ca7462b035601fae31d6784df1ad86533",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2756994e095ab1ce4e56268de13650c7c3a9ef09",
+    "source_merge_commit": "261dd599f42addcb631b7e771de93594d7786406",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5127",
+    "validation_evidence": [
+      "validation-receipt: id=6d4abd35f4f785c0 commit=2756994e095ab1ce4e56268de13650c7c3a9ef09 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_model_first/test_entry_price_daily_service.py backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py -q` result=`passed`",
+      "validation-receipt: id=994aceb4b303ce39 commit=2756994e095ab1ce4e56268de13650c7c3a9ef09 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed`",
+      "validation-receipt: id=e2acb4e74d5bdbf3 commit=2756994e095ab1ce4e56268de13650c7c3a9ef09 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "55c85ddd692e7f6835e6aec11231f9cc9bef6fe7bc8a517be556cf1975bc0465"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -208,6 +233,11 @@
     "fingerprint": "7051b99a524bb3c8719d4dec",
     "source_event_id": "FE-20260930-7051b99a524b"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6d4abd35f4f785c0 commit=2756994e095ab1ce4e56268de13650c7c3a9ef09 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_model_first/test_entry_price_daily_service.py backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py -q` result=`passed`",
+    "validation-receipt: id=994aceb4b303ce39 commit=2756994e095ab1ce4e56268de13650c7c3a9ef09 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed`",
+    "validation-receipt: id=e2acb4e74d5bdbf3 commit=2756994e095ab1ce4e56268de13650c7c3a9ef09 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
