@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1633",
-  "closed_at": null,
+  "closed_at": "2026-09-30T06:18:45Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -19,9 +19,10 @@
   "created_at": "2026-09-30T05:40:30.507027Z",
   "data_repair_state": {
     "dev_validation": "passed",
-    "production_apply": "not_performed",
-    "production_authorization": "pending_exact_target",
-    "production_readback": "deployment_missing"
+    "production_apply": "passed: reviewed migration, two targeted schedules, 6745 share-size rows and 1829 current observation snapshots",
+    "production_authorization": "granted by user 2026-09-30: exact previously proposed production DDL and data backfill",
+    "production_readback": "passed: schemas/comments/hypertables, four-day audit success/ok, DEV/production content SHA256 parity, four old targets and alerts recovered automatically",
+    "receipt": "F:/Dev/AIstock_state/local_data_repairs/20260930-bugs1633-1635/production_readback.json"
   },
   "description": "Recent read-only audit: production market.etf_share_size and ETF schedules absent while health checker creates retry-exhausted readiness targets. Reuse existing reviewed migration, add bounded deployment preflight/DEV validation and targeted schedule enrollment; distinguish missing deployment from upstream failure. Production apply requires separate exact-target authorization.",
   "events": [
@@ -124,8 +125,8 @@
   },
   "first_seen_at": "2026-09-30T05:40:30.507027Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8737e3a03f962f037d13eda4f62d305c48b06287",
+  "fixed_at": "2026-09-30T06:18:45Z",
   "github_issue_number": 5128,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5128",
   "last_seen_at": "2026-09-30T05:40:30.507027Z",
@@ -133,8 +134,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5135",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "passed",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -157,6 +159,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -166,7 +169,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_delivery_state": "merged_production_data_repair_verified",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1633",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cfc5fbfd7d83e628",
+    "recorded_at": "2026-09-30T06:19:56.254216Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "118dba2d42d285b84c1a8fdf258569242a8cfbc4",
+    "source_merge_commit": "8737e3a03f962f037d13eda4f62d305c48b06287",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5135",
+    "validation_evidence": [
+      "validation-receipt: id=f0a6e6107245a250 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 data_sync_autonomy_backend` result=`passed 8 ownership and 411 sync tests,1 skipped`",
+      "validation-receipt: id=fbb123f561a1e3f9 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 16 tests`",
+      "validation-receipt: id=7365a5ac4c1384f0 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=5626715a80dffa3f commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_prepare_etf_share_size_deployment.py -q` result=`passed 5 tests including isolated CLI; DEV passed;production apply pending`"
+    ],
+    "validation_evidence_digest": "481a4f883911683e755b340f33778898ec3486dc1fd87bf863612aefb1aeb696"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -175,6 +203,13 @@
     "fingerprint": "a6bb25dcc21ef7d70dfc541f",
     "source_event_id": "FE-20260930-a6bb25dcc21e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f0a6e6107245a250 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 data_sync_autonomy_backend` result=`passed 8 ownership and 411 sync tests,1 skipped`",
+    "validation-receipt: id=fbb123f561a1e3f9 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 16 tests`",
+    "validation-receipt: id=7365a5ac4c1384f0 commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=5626715a80dffa3f commit=118dba2d42d285b84c1a8fdf258569242a8cfbc4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_prepare_etf_share_size_deployment.py -q` result=`passed 5 tests including isolated CLI; DEV passed;production apply pending`",
+    "Production DEV readback passed: 6745 share-size and 1829 snapshot rows, canonical content parity; 4 blocked targets/alerts recovered; production_readback.json"
+  ],
   "verification_budget": {
     "budget": "deep",
     "ci_premerge_plans": [],
