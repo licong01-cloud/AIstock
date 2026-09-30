@@ -1407,7 +1407,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 |---|---|---|---|
 | P0-0 | 蓝图同步与最小发起前核对 | 现有 source config、预测 SHA、active binding、节点健康及全局占用；只修真实阻断 | MA-E32 来源已回读，文档更新中；不宣称所有历史已盘点或 UI/运行态全验收 |
 | P0-1 / 阶段 A | 三种子×四交易配置一次登记 12 Loops | 全市场 Top20、CSI300 Top50、CSI500 Top50、STAR50 Top20；全部复用 MA-E32 L1～L3，不训练、不推理 | **MA-E33 running**，task与初次失败/恢复详见2.5.6；12逻辑比较/16attempt行，已有全市场Top50基准不重跑 |
-| P0-2 / 阶段 B | 黑名单×尾盘处理直接回测 | 同 seed/prediction/pool/TopK 的 2×2：两者关闭、仅名单、仅尾盘、两者；复用精确相同 P00，不重复提交 | **条件待核对**：只用批准名单及既有 TAIL_SUBSTITUTE 语义；输入未闭合只阻断该阶段，HMM 本批关闭 |
+| P0-2 / 阶段 B | 黑名单×尾盘处理直接回测 | 固定全市场Top50，同三seed/prediction的2×2：名单关闭/开启 × 既有TAIL_BOOST/TAIL_SUBSTITUTE；复用MA-E32三条P00默认基准，只追加9条非重复政策臂 | 名单沿用 `801125.SI/801181.SI/801183.SI`；resolver已通过。替补沿用既有触发235/深度15，不调阈值；执行配置未闭合仅阻断该阶段，HMM关闭 |
 | P0-3 / 阶段 C | full/2026H1/7月/8月同口径比较 | CAGR、实际区间累计/主动收益、Sharpe/MDD/IR、成熟样本 IC/RankIC、成本/换手/资金利用；保存准确正负结果 | **待阶段结果**；低样本月度不凭年化率或最优 seed 判稳健，无法计算列明原因 |
 | P1-1 | 最有价值交易池的训练池配对 | 全市场训练→池U vs 池U训练→同池U，同特征/label/seed/费用/策略；标签边界修复生效后才新训受影响模型 | 条件待前序证据，本轮不预设池内训练更优 |
 | P1-2 | 新 Alpha/目标与条件组合 | 板块选择弱→soft top-down/lead-lag；右尾弱→LTR/quantile/trend-survival；陈旧→因果 refit；互补→OOF gate | 按真实瓶颈选最小批次，不追加无依据搜索 |
@@ -1425,6 +1425,8 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 **训练与复用。**旧模型来源release与本次目标执行release分别记录；本次各输入组件统一目标release，旧模型兼容时补推理无需重训，不因追加日期改变文件hash就判必须重训，也不隐去历史数据修订。全市场训练可以在指数PIT选股池回测，不强制重训；但prediction必须覆盖全目标日期/股票，拟合预处理器和数据/模型身份一致。训练/推理/选股/持仓报价域分别冻结。只改执行政策/选股域用既有pred-backtest，改变训练池/特征/label/fit窗口才新增训练。训练池比较固定同一交易池/TopK/费用/策略与切分；小池训练样本更少可能过拟合，不能由池回测收益较高就判池内训练更好。不能在test重新fit处理器、用当前成分回填历史或缺prediction填零。
 
 **HMM与黑名单。**基准P00关闭两者，P10/P01/P11分别打开HMM/名单/两者；原始预测相同，冻结有效政策类型、版本、因果可见日期与应用顺序，记录requested/enabled/effective/trigger_count。score调整、entry-only保护TopK与仓位/退出并非同一政策。HMM必须为因果forward/filter，名单不得从当前配置重构成历史生效事实；未生效/未触发/未知三者不同。若保护Top30覆盖全部科创50Top20候选，明确no-action，先预注册有作用的政策再试验，不看收益调参；黑名单也报告匹配数量。缺文件只阻断相关臂，不阻断P00；不在测试集选择阈值或全样本HMM fit/smoothing。
+
+**尾盘政策不是布尔开关。**本批阶段A及MA-E32未显式传 `unfilled_handler`，但 `TailTWAPWithLimitStrategy` 实际默认 `TAIL_BOOST`；不得标成尾盘处理OFF。阶段B固定全市场Top50与三种子，比较名单无/有及BOOST/SUBSTITUTE，后者使用程序既有 trigger_minute=235（14:55）、backup_depth=15，费用、TWAP和其余参数不变。归因是替补相对加仓再分配的差异，不是相对无尾盘处理的收益；trigger/action/ffr/cash利用按实际产物报告，无分支级证据不伪称每笔订单已验证。本版只复用已批准功能，不研发新执行算法。
 
 **完整指标。**trajectory列表的每个loop显示训练池/选股池/benchmark、目标和实际TopK、release/cutoff、requested与实际预测/成交/标签窗口、模型/seed/特征、HMM/黑名单请求及有效状态；绝对累计/CAGR/Sharpe/MDD/Calmar/波动率、benchmark同窗累计/年化、扣费主动收益/IR/TE/相对财富、IC/ICIR/RankIC/RankICIR、Top-K收益/命中/decay/dispersion/覆盖、换手/费用/成交率/耗时等所有已产出字段可通过正常列组展开或滚动查询，不只详情页。未产出或无法核验显示原因及样本数，不用0、Sharpe代IR、混义MDD或两个年化相减兜底。科创50Top50标签诊断标不适用，不改变执行Top20。经济收益分段与h20成熟标签样本分别列出。
 
