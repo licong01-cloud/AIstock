@@ -1,14 +1,14 @@
-# Advisory ENTRY_PRICE 绑定、每日发布与读回 F2 详细设计 v1.2
+# Advisory ENTRY_PRICE 绑定、每日发布与读回 F2 详细设计 v1.3
 
 > 日期：2026-09-28；Feature tier：F2；业务归属：Advisory。
-> 状态：SOURCE_IMPLEMENTED_COORDINATE_V2_LOCAL_VERIFIED_BINDING_AND_RUNTIME_PENDING（2026-09-29）。源码、v2坐标与定向回归已完成、尚未合入；生产ENTRY_PRICE未绑定，后端未操作。
+> 状态：SOURCE_MERGED_RUNTIME_VERIFIED_BINDING_PENDING（2026-09-30）。PR #5099已合入源码及v2坐标，用户重启及BUG-1623语义验证通过；ENTRY_PRICE未绑定、真实价格prediction/settlement未发布。本窗口没有操作后端进程。
 > 前置：[独立角色源码](advisory_entry_price_independent_role_f2_design_20260928.md)、[价格确认合同](advisory_entry_price_confirmation_f2_design_20260928.md)。
 
 ## 1. Background / 当前接入缺口
 
 旧 `publish_price_range_binding` 写包/manifest/style级指针，旧Program descriptor只有一个Ranking角色；将新v4直接写入旧指针既不能解决P0-D短路，也会影响同包其他Program。生产接入需要最小Program级ENTRY_PRICE指针，而非构建所有角色的通用管理平台。
 
-独立自然价格通道由CLI交付；`prospective_price_cli prepare/capture` 和 `prospective_price_evaluation_cli settle/aggregate` 并未接入每日scheduler。因此仅存在9月15日artifact不能解释为“调度会自动累计”。后续需实现明确的每日接入和故障状态。
+旧独立自然价格通道由CLI交付；`prospective_price_cli prepare/capture` 和 `prospective_price_evaluation_cli settle/aggregate` 不自行接入每日scheduler。PR #5099已实现本设计Program级角色及每日capture/settle接入，并由用户重启加载；当前角色未配置，因此9月15日旧CLI artifact仍不能解释为“当前角色正在自动累计”。
 
 ## 2. Scope / 交付结果
 
@@ -32,7 +32,7 @@
 
 ### 4.2 CAS、并发及回滚
 
-拟新增 `publish_entry_price_role(request, expected_current_role_sha256)` 和rollback操作；首次发布expected为空且active必须不存在，更新/回滚要求当前hash精确匹配。复用已有descriptor互斥锁与原子写模式，不用“最后写入胜出”。先写不可变version，再原子替换active；崩溃的孤立version不影响当前指针。同内容retry返回原receipt，冲突typed拒绝。
+已实现角色publish及rollback操作，使用expected_current_role_sha256执行CAS；首次发布expected为空且active必须不存在，更新/回滚要求当前hash精确匹配。复用已有descriptor互斥锁与原子写模式，不用“最后写入胜出”。先写不可变version，再原子替换active；崩溃的孤立version不影响当前指针。同内容retry返回原receipt，冲突typed拒绝。
 
 回滚仅指向本Program/binding既有版本或禁用entry，必须经过相同CAS和身份检查；被退役/失效bundle不能因为回滚绕过检查。保留历史文件，不清理其他worktree或artifact。一次运行开始时固定role版本、候选及数据身份；运行中指针改变不得混合两个版本，发布时再检scope，已发布预测保持不变。
 
@@ -44,11 +44,11 @@
 
 ## 5. Contracts / 管理、读回与UI
 
-拟新增只读 `GET /api/v1/advisory/programs/{program_id}/entry-price/status`：configured、role hash、bundle ID、confirmation scope/state、effective date、latest prediction/settlement D/T与状态、未完成阶段/reason。只读允许返回明确错误，不修改active或生成artifact。
+已实现只读 `GET /api/v1/advisory/programs/{program_id}/entry-price/status`：configured、role hash、bundle ID、confirmation scope/state、effective date、latest prediction/settlement D/T与状态、未完成阶段/reason。只读允许返回明确错误，不修改active或生成artifact。未配置分支返回NOT_CONFIGURED，不伪造角色身份或价格可用性。
 
-拟新增Advisory CLI `entry_price_delivery_cli`：`inspect`、`prepare-binding`、`apply-binding`、`rollback-binding`。所有命令显式model-root、program/binding/spec；prepare只生成待发布request，apply/rollback显式expected-current-hash、授权引用及有效日期。API不新增交易按钮，UI显示区间、目标日、价格基准、实验/已确认价格分布状态；高级详情展开完整identity。角色管理是本模块配置步骤，不另建审批UI。
+已实现Advisory CLI `entry_price_delivery_cli`：`inspect`、`prepare-binding`、`apply-binding`、`rollback-binding`。所有命令显式model-root、program/binding/spec；prepare只生成待发布request，apply/rollback显式expected-current-hash、授权引用及有效日期。API不新增交易按钮，UI显示区间、目标日、价格基准、实验/已确认价格分布状态；高级详情展开完整identity。角色管理是本模块配置步骤，不另建审批UI。
 
-`model-shadow?price_contract=entry-v2`来自独立角色设计，仍是无写GET。GET即时计算若已到T开盘之后必须返回与盘前持久化prediction一致的结果或标记HISTORICAL_READBACK/NOT_CAPTURED，不允许把事后计算写成PROSPECTIVE。尚未开盘且数据具备时可只读计算，只有下面的发布通道产生正式记录。
+`model-shadow?price_contract=entry-v2`来自独立角色设计，仍是无写GET。entry子信封只读盘前持久化prediction，未捕获则标记WAITING_CAPTURE/NOT_CAPTURED；不为GET即时推理或发布，不允许把事后计算写成PROSPECTIVE。只有下面的capture通道产生正式价格记录，旧Ranking GET计算语义不变。
 
 实施接口细化：默认`legacy-v1`响应字段完全不变；显式`entry-v2`新增独立`entry_price`子字段，保留原`price_range`及Ranking字段。页面主动请求V2，将entry卡片放在Ranking可用性条件之外；默认仅展示盘前冻结结果，未捕获显示WAITING_CAPTURE/NOT_CAPTURED，不为GET执行或写入预测。旧M3派生辅助价格只有身份与投影完全一致时可附加，各角色错误独立。
 
@@ -64,7 +64,9 @@
 
 定时自然影子收集遵守QE实验不并行约束：消费已有QE公开只读任务查询（`GET /api/v1/quantevolver/experiments`及其正式任务详情合同），完整分页核对非终态任务；pending/running及其他未确认终态均延后收集，响应不全、分页失败或状态未知也延后；不停止QE、不修改QE registry。该查询是消费者侧资源前检，不是跨模块原子锁：查询后QE仍可能开始。发现运行中冲突即在当前有界步骤结束后暂停本价格工作项、不控制QE；若要求严格零重叠，正式离线确认必须使用QE窗口已确认的独占时段，不能把轮询宣称为互斥保证。普通Advisory基线继续工作。重型历史确认同样先检查无QE并行。价格UI普通读取与实验任务执行分开，不为读取页面创建训练/实验。
 
-冻结bundle一次加载可在进程内按role hash缓存；输入和context按D/T隔离。捕获通过拟新增entry-only入口复用独立scorer，旧prospective v1请求依赖M1/M3且保持不变。新产物根为 `entry_price_daily_predictions/<role_sha256>/<T>/`，自然类型=PROSPECTIVE_OOS，真实published_at严格早于T开盘。身份/特征错误为FAILED，正常逐股不可用保留；系统失败不能记为无推荐。
+公开实验列表必须使用平铺模式include_children=false：它包含父实验与子运行，total/offset与行数一致。include_children=true按父实验分页但附带展开子行，不能用于本资源检查。legacy canonical_status缺失、paused或未知身份均继续WAITING_RESOURCE，不因为修正分页而放行。
+
+冻结bundle一次加载可在进程内按role hash缓存；输入和context按D/T隔离。捕获通过已实现entry-only入口复用独立scorer，旧prospective v1请求依赖M1/M3且保持不变。新产物根为 `entry_price_daily_predictions/<role_sha256>/<T>/`，自然类型=PROSPECTIVE_OOS，真实published_at严格早于T开盘。身份/特征错误为FAILED，正常逐股不可用保留；系统失败不能记为无推荐。
 
 资源状态读回细化：列表中的`planned`可能是已完成演进任务的模板实验，不能将模板状态误认为仍在训练。对于这类记录，只读查询所属QE task的公开summary，只有任务身份一致且明确终态才放行；确认未提交的无task draft可作为无资源占用处理。任何running/pending、身份冲突、未知状态或不完整分页仍WAITING_RESOURCE。该判别只消费QE公开合同，不修改或修复QE状态。
 
@@ -115,7 +117,7 @@ T日18:00且该日kline/suspend双审计ready后结算已存在的prediction。�
 
 ## 10. Design Acceptance Matrix
 
-本矩阵验收源码及定向回归；SOURCE_VERIFIED不表示生产交付。坐标前置项已由v2关闭，但确认窗口、模型效果、用户重启、精确binding发布和真实prediction/settlement仍未完成，按已批准方案分阶段报告，不降低§8最终验收条件。UI独立entry浏览器用例已由隔离临时前端验证通过，CI仍待最终通过。
+本矩阵验收源码及定向回归；SOURCE_VERIFIED不表示生产完整交付。坐标前置项由v2关闭，PR #5099 CI/合入、用户重启及未配置状态语义验收已完成；确认窗口、模型效果、精确binding发布和真实prediction/settlement仍未完成，不降低§8最终验收条件。UI独立entry浏览器用例已由隔离临时前端验证通过。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -153,4 +155,6 @@ T日18:00且该日kline/suspend双审计ready后结算已存在的prediction。�
 
 多轮审核修复包括：预算传播至连接/SQL/权威PIT校验/HMM循环；最旧未尝试工作项优先，耗尽预算的capture不饿死待settlement；逐Program错误隔离；禁用/历史binding预测可继续结算；历史list读回不错误重绑；原子发布用非阻塞角色锁，忙时DEFERRED；artifact完整scope与连续/tick价格重新核验。
 
-既有136项定向回归通过，BUG-1623最终Advisory模块门禁为1,029项通过、6项跳过；前端类型检查0诊断、独立entry浏览器用例1 passed（现有依赖、独立3312临时端口、无后端/DB）。未发布真实角色，未生成新自然样本或正式历史确认结果；测试fake clock不作为PROSPECTIVE_OOS证据。原有生产目录中的旧样本数量没有因本次测试增加。尚未合入或重启，不能报告生产调度已经自动收集。v2坐标已PASS，但confirmation尚未产生，因此仍不能执行binding apply。
+既有136项定向回归通过，BUG-1623最终Advisory模块门禁为1,029项通过、6项跳过；前端类型检查0诊断、独立entry浏览器用例1 passed（现有依赖、独立3312临时端口、无后端/DB）。本地审核阶段未发布真实角色、未生成新自然样本或正式历史确认结果；测试fake clock不作为PROSPECTIVE_OOS证据。原有生产目录中的旧样本数量没有因这些测试增加。v2坐标已PASS，但confirmation尚未产生，因此仍不能执行binding apply。
+
+2026-09-30状态更新：PR #5099已合入、用户已重启，BUG-1623运行语义验证及PR #5102 close-sync完成。只读status显示configured=false、NOT_CONFIGURED、database_written=false，collection来源标为SCHEDULER_MEMORY_NOT_DURABLE_EVIDENCE；可证明源码/状态读取正常，不能证明实际预测积累。BUG-1632消费者分页修复合入后，后端再次加载该修复仍由用户执行；离线新进程可验证源修复，不冒充后端生效。DB、角色发布及进程控制继续noop。

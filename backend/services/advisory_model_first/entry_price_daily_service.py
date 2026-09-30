@@ -239,7 +239,10 @@ class QEEntryResourceGuard:
 
                 offset, total, seen, task_states = 0, None, set(), {}
                 while True:
-                    response = get("/quantevolver/experiments", {"limit": 200, "offset": offset, "include_children": "true", "detail": "summary"})
+                    # The expanded view paginates parent experiments while
+                    # appending child rows. Flat mode includes both kinds and
+                    # keeps total/offset aligned with the returned row count.
+                    response = get("/quantevolver/experiments", {"limit": 200, "offset": offset, "include_children": "false", "detail": "summary"})
                     if (response.get("ok") is not True or not isinstance(response.get("items"), list)
                             or not isinstance(response.get("total"), int) or response["total"] < 0
                             or response.get("offset") != offset or not isinstance(response.get("has_more"), bool)):
