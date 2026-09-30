@@ -2388,7 +2388,8 @@ def list_data_stats() -> Dict[str, Any]:
                    trade_date AS audit_ready_date,
                    row_count AS audit_row_count,
                    refreshed_at AS audit_refreshed_at,
-                   quality_status AS audit_quality_status
+                   quality_status AS audit_quality_status,
+                   data_max_at AS audit_data_max_at
               FROM market.dataset_date_refresh_audit
              WHERE status = 'success'
              ORDER BY dataset, trade_date DESC, refreshed_at DESC
@@ -2406,7 +2407,8 @@ def list_data_stats() -> Dict[str, Any]:
                la.audit_ready_date,
                la.audit_row_count,
                la.audit_refreshed_at,
-               la.audit_quality_status
+               la.audit_quality_status,
+               la.audit_data_max_at
           FROM market.data_stats ds
           LEFT JOIN latest_audit la ON la.dataset = ds.data_kind
          ORDER BY ds.data_kind
@@ -2429,10 +2431,20 @@ def list_data_stats() -> Dict[str, Any]:
         row["ready_date"] = _date_iso(audit_ready_date)
         row["audit_ready_date"] = _date_iso(audit_ready_date)
         row["stats_max_date"] = _date_iso(stats_max_date)
-        row["physical_max_date"] = _date_iso(stats_max_date)
+        # A cached MAX is not a live physical probe. Batch readback is a
+        # separately named lower-bound observation, not full-table MAX either.
+        row["physical_max_date"] = None
+        row["physical_max_date_source"] = "not_probed"
+        row["audit_data_max_at"] = _isoformat(row.get("audit_data_max_at"))
+        row["stats_date_source"] = "data_stats_cache"
         row["cache_state"] = cache_state
         row["readiness_source"] = "dataset_date_refresh_audit"
         row["operator_action_required"] = False
+        row["readiness_status"] = (
+            "unknown" if not audit_ready_date else
+            "quality_blocked" if row.get("audit_quality_status") in {"error", "empty_invalid", "low_coverage", "unproven"}
+            else "audit_success"
+        )
         row["audit_refreshed_at"] = _isoformat(row.get("audit_refreshed_at"))
         row["stats_scope"] = extra_info.get("stats_scope") or "full_table"
         row["stats_window_months"] = extra_info.get("window_months")
