@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1282",
-  "closed_at": null,
+  "closed_at": "2026-09-30T07:57:56.183978Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -123,10 +123,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_state\\local_data_aftercare\\20260930-legacy-audit\\BUG-1282-post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1282",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+      "expected_identity": "358df206a59eaee4ce831a40d2aeaeb75a73ef46",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-30T07:53:37.411630Z",
+      "mode": "read_only",
+      "observed_identity": "361c3c8de4d3c2badd80642365657973eb396ec7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "56a66e327809812c09ef54a654fb86158a7a8d3e5df937c1a83141035b887277",
+      "receipt_sha256": "8dff9d9d76a787006d997ce473a1d12274584cf647f89c60b5283d8a3679cc2b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b1b87efc8086c643d3ed2bc9d0e73f42e6c3084813846cf05807b53405d2e7f4",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -160,7 +182,7 @@
     ],
     "validation_evidence_digest": "a82079936ebc1708d5809cbdc255c8bfda6ae5ddc3c08b6a0cbb37ea3126ce5d"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -177,7 +199,8 @@
     "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership 14/14)",
     "python -m nox -s qlib_data_backend -> passed (20 passed)",
     "python -m pytest backend/tests/dataset_release/test_resolution.py -q -> passed (15 passed)",
-    "python -m nox -s l0 -> passed (3 files, 0 findings)"
+    "python -m nox -s l0 -> passed (3 files, 0 findings)",
+    "2026-09-30 official read-only source-bound post-restart probes passed; no process control"
   ],
   "verification_budget": {
     "budget": "standard",
