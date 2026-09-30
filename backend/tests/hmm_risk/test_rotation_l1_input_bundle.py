@@ -1750,6 +1750,66 @@ def test_direct_v2_factor_table_layout_inventory_and_window_are_formally_readabl
     assert loaded.equals(frame.loc[pd.IndexSlice[pd.Timestamp("2026-08-31"), :], :])
 
 
+def test_table_h5_physical_row_order_is_not_industry_or_date_authority(tmp_path: Path) -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2024-06-28", "2024-07-01", "2026-08-31"]), ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"value": np.arange(6, dtype=np.float32)}, index=index)
+    path = tmp_path / "moneyflow.h5"
+    # A validated immutable release may append corrections/aliases out of order.
+    frame.iloc[[5, 0, 3, 1, 4, 2]].to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    before = subject._sha256_file(path)
+    inventory = subject._fixed_h5_inventory(path, expected_columns=("value",), expected_dtype="<f4")
+    assert (inventory["date_min"], inventory["date_max"], inventory["row_count"]) == (
+        "2024-06-28",
+        "2026-08-31",
+        6,
+    )
+    loaded = subject._load_fixed_h5_window(
+        path,
+        expected_columns=("value",),
+        expected_dtype="<f4",
+        start=date(2024, 6, 28),
+        end=date(2024, 7, 1),
+    )
+    assert loaded.equals(frame.loc[pd.IndexSlice[: pd.Timestamp("2024-07-01"), :], :])
+    assert subject._sha256_file(path) == before
+
+
+def test_unordered_table_h5_keeps_duplicate_and_invalid_date_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "moneyflow.h5"
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2024-07-01"), "000001.SZ"),
+            (pd.Timestamp("2024-06-28"), "000001.SZ"),
+            (pd.Timestamp("2024-07-01"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"value": np.ones(3, dtype=np.float32)}, index=index)
+    frame.to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    with pytest.raises(subject.RotationL1InputBundleError, match="duplicated"):
+        subject._load_fixed_h5_window(
+            path,
+            expected_columns=("value",),
+            expected_dtype="<f4",
+            start=date(2024, 6, 28),
+            end=date(2024, 7, 1),
+        )
+    frame.index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2024-07-01 12:00"), "000001.SZ"),
+            (pd.NaT, "000002.SZ"),
+            (pd.Timestamp("2024-06-28"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame.to_hdf(path, key="data", mode="w", format="table", data_columns=["datetime", "instrument"])
+    with pytest.raises(subject.RotationL1InputBundleError, match="date"):
+        subject._fixed_h5_inventory(path, expected_columns=("value",), expected_dtype="<f4")
+
+
 def _stub_direct_source_preflights(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subject, "_fixed_h5_inventory", _stub_direct_factor_inventory)
     monkeypatch.setattr(
