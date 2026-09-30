@@ -25,17 +25,27 @@
       "timestamp": "2026-09-30T05:47:40.834265Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "Fresh-process readiness/facade direct tests22 passed;no database mutation/full physical scans"
+  ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1634-local-data-overview-confuses-stale-statistics-cache-with-physical-data-f.json",
       "backend/routers/ingestion.py",
       "backend/services/local_data_management.py",
       "backend/tests/test_ingestion_data_stats_readiness_api.py",
       "backend/tests/test_local_data_management_facade.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1634-local-data-overview-confuses-stale-statistics-cache-with-physical-data-f.json",
+      "backend/routers/ingestion.py",
+      "backend/services/local_data_management.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py",
+      "backend/tests/test_local_data_management_facade.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/ingestion.py",
@@ -143,14 +153,29 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    "contract: cached MAX not physical MAX; batch readback separately labeled",
+    "semantic: cache/unknown/quality counts independent,no backfill for cache lag",
+    "compliance: preserve quality failures and dataset/business identities"
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "python -m pytest fresh process imported worktree backend/routers/ingestion.py and backend/services/local_data_management.py -> passed 22 contract tests",
+      "python fresh process imported ingestion and facade with READ ONLY production connections -> passed: stale_cache=18,unknown=12,physical_cache_mislabel=0,production_write=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
