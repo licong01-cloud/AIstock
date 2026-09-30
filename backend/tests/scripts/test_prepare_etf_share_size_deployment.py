@@ -1,6 +1,14 @@
 import pytest
+import subprocess
+import sys
 
 from scripts import prepare_etf_share_size_deployment as deploy
+
+
+def test_cli_loads_in_fresh_process_without_pythonpath(tmp_path):
+    result = subprocess.run([sys.executable, str(deploy.ROOT / "scripts/prepare_etf_share_size_deployment.py"), "--help"],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
 
 
 def test_exact_schedule_plan_preserves_existing_operator_configuration():

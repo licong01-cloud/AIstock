@@ -9,7 +9,11 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import psycopg2
 from dotenv import load_dotenv

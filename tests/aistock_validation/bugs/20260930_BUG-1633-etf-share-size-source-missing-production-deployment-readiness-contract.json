@@ -17,6 +17,12 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-09-30T05:40:30.507027Z",
+  "data_repair_state": {
+    "dev_validation": "passed",
+    "production_apply": "not_performed",
+    "production_authorization": "pending_exact_target",
+    "production_readback": "deployment_missing"
+  },
   "description": "Recent read-only audit: production market.etf_share_size and ETF schedules absent while health checker creates retry-exhausted readiness targets. Reuse existing reviewed migration, add bounded deployment preflight/DEV validation and targeted schedule enrollment; distinguish missing deployment from upstream failure. Production apply requires separate exact-target authorization.",
   "events": [
     {
@@ -26,19 +32,30 @@
       "timestamp": "2026-09-30T05:40:30.507005Z"
     }
   ],
-  "evidence_uris": ["DEV aistock_dev:5433 readback complete=true; migration sha256=c85da5df29af4546225e9f9399cebcfd91aa90318ac40d1cc5636e4c07bbcdc0; two targeted enabled schedules. Production preflight: both tables/configs/schedules absent; production_write=false."],
-  "data_repair_state": {"dev_validation": "passed", "production_authorization": "pending_exact_target", "production_apply": "not_performed", "production_readback": "deployment_missing"},
-  "review_rounds": ["contract: selective schedules, no operator options overwrite", "safety: explicit TDX_DB_DEV credentials; production apply forbidden", "compliance: no fabricated readiness, DEV/source/production states separate"],
+  "evidence_uris": [
+    "DEV aistock_dev:5433 readback complete=true; migration sha256=c85da5df29af4546225e9f9399cebcfd91aa90318ac40d1cc5636e4c07bbcdc0; two targeted enabled schedules. Production preflight: both tables/configs/schedules absent; production_write=false."
+  ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_prepare_etf_share_size_deployment.py",
+      "noxfile.py",
+      "scripts/prepare_etf_share_size_deployment.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1633-etf-share-size-source-missing-production-deployment-readiness-contract.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "scripts/prepare_etf_share_size_deployment.py",
       "backend/tests/scripts/test_prepare_etf_share_size_deployment.py"
     ],
     "changed_files": [
-      "backend/db/init_tushare_schedules.py"
+      "backend/tests/scripts/test_prepare_etf_share_size_deployment.py",
+      "noxfile.py",
+      "scripts/prepare_etf_share_size_deployment.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1633-etf-share-size-source-missing-production-deployment-readiness-contract.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/db/init_tushare_schedules.py",
@@ -125,20 +142,27 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    "contract: selective schedules, no operator options overwrite",
+    "safety: explicit TDX_DB_DEV credentials; production apply forbidden",
+    "compliance: no fabricated readiness, DEV/source/production states separate"
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "backend-main"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
