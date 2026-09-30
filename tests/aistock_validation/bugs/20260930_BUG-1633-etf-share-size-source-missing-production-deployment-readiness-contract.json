@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1633",
-  "closed_at": "2026-09-30T06:18:45Z",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -125,7 +125,8 @@
   "first_seen_at": "2026-09-30T05:40:30.507027Z",
   "fix_branch": null,
   "fix_commit": "8737e3a03f962f037d13eda4f62d305c48b06287",
-  "fixed_at": "2026-09-30T06:18:45Z",
+  "fixed_at": null,
+  "source_delivery_state": "merged_production_data_repair_pending",
   "github_issue_number": 5128,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5128",
   "last_seen_at": "2026-09-30T05:40:30.507027Z",
@@ -135,7 +136,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5135",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "pending_exact_target_authorization",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -192,7 +193,7 @@
     ],
     "validation_evidence_digest": "481a4f883911683e755b340f33778898ec3486dc1fd87bf863612aefb1aeb696"
   },
-  "status": "fixed",
+  "status": "open",
   "suspected_modules": [
     "local_data"
   ],
