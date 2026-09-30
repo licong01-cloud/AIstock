@@ -1,6 +1,8 @@
 {
   "actual": "Recent read-only audit: production market.etf_share_size and ETF schedules absent while health checker creates retry-exhausted readiness targets. Reuse existing reviewed migration, add bounded deployment preflight/DEV validation and targeted schedule enrollment; distinguish missing deployment from upstream failure. Production apply requires separate exact-target authorization.",
   "allowed_write_scope": [
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "backend/db/init_tushare_schedules.py",
     "scripts/prepare_etf_share_size_deployment.py",
     "backend/tests/scripts/test_prepare_etf_share_size_deployment.py",
@@ -24,7 +26,9 @@
       "timestamp": "2026-09-30T05:40:30.507005Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": ["DEV aistock_dev:5433 readback complete=true; migration sha256=c85da5df29af4546225e9f9399cebcfd91aa90318ac40d1cc5636e4c07bbcdc0; two targeted enabled schedules. Production preflight: both tables/configs/schedules absent; production_write=false."],
+  "data_repair_state": {"dev_validation": "passed", "production_authorization": "pending_exact_target", "production_apply": "not_performed", "production_readback": "deployment_missing"},
+  "review_rounds": ["contract: selective schedules, no operator options overwrite", "safety: explicit TDX_DB_DEV credentials; production apply forbidden", "compliance: no fabricated readiness, DEV/source/production states separate"],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [
