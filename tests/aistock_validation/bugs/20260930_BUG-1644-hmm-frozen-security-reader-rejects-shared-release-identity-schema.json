@@ -1,0 +1,244 @@
+{
+  "actual": "security source identity manifest must use hmm_risk_security_source_identity_manifest_v1; no fits started",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/security_identity.py",
+    "backend/tests/hmm_risk/test_security_identity.py",
+    "tests/aistock_validation/bugs/20260930_BUG-1644-hmm-frozen-security-reader-rejects-shared-release-identity-schema.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1644",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-30T21:19:58.854559Z",
+  "description": "security source identity manifest must use hmm_risk_security_source_identity_manifest_v1; no fits started",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260930-979dbc386fe4",
+      "timestamp": "2026-09-30T21:19:58.854544Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime/hmm_formal_state/20261001-file-construction/request.json.failure.json"
+  ],
+  "expected": "Shared v15 security identity binds with its unchanged hash and resolves the 302132.SZ to 300114.SZ historical moneyflow alias causally.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/tests/hmm_risk/test_security_identity.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/security_identity.py",
+        "backend/tests/hmm_risk/test_security_identity.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/security_identity.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_security_identity.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/security_identity.py",
+        "backend/tests/hmm_risk/test_security_identity.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/tests/hmm_risk/test_security_identity.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/security_identity.py",
+      "backend/tests/hmm_risk/test_security_identity.py"
+    ]
+  },
+  "first_seen_at": "2026-09-30T21:19:58.854559Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5170,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5170",
+  "last_seen_at": "2026-09-30T21:19:58.854559Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/hmm_risk/test_security_identity.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/overview",
+    "business_smoke_scope": "HMM API regression after user restart; shared alias semantics are separately verified by the file-only fresh-process reader smoke, not inferred from HTTP status.",
+    "fresh_process_evidence": [
+      "Conda base fresh process with socket.connect poisoned loaded the unchanged active v15 shared security file SHA256=9d52e8de9107aa300468850d2edde76609c4e15b1c14afd63110b5955f76e43a; canonical hash=21a47581be3aec0f6d7f41de4f863b549aa227f1a8026e4398ce4a5c20095a87; effective moneyflow alias before and after 2025-02-17 passed; database_access=false and dataset_write=false.",
+      "Conda AIstock isolated fresh process imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.security_identity from this task worktree with socket.connect poisoned; no network/database access. This is source import evidence, not runtime activation.",
+      "Conda AIstock own-worktree fresh process imported backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.security_identity with network/database connections poisoned; passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM frozen security reader rejects shared release identity schema",
+  "trigger_condition": {
+    "fingerprint": "979dbc386fe48aa385468a63",
+    "source_event_id": "FE-20260930-979dbc386fe4"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
