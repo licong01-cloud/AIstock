@@ -566,7 +566,7 @@ def _saved_qe_feature_order(processors: list[Any]) -> list[str] | None:
     """Recover the feature order persisted by the fitted Qlib normalizer, never sort anew."""
     for processor in processors:
         columns = getattr(processor, "cols", None)
-        if columns is None or getattr(processor, "fields_group", "feature") != "feature":
+        if columns is None or getattr(processor, "fields_group", "feature") not in (None, "feature"):
             continue
         names = [str(col[1]) for col in columns if isinstance(col, tuple) and len(col) == 2 and col[0] == "feature"]
         if names:
@@ -2089,7 +2089,10 @@ class InferenceEngine:
             X = _drop_invalid_feature_rows_for_strict(df_today)
         logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
 
-        scores = predict_scores(model, inner_model, model_kind, X, sequence_data=sequence_data)
+        scores = (
+            predict_scores(model, inner_model, model_kind, X, sequence_data=sequence_data)
+            if sequence_data is not None else predict_scores(model, inner_model, model_kind, X)
+        )
 
         df_scores = _build_score_frame_for_scored_features(X, scores)
 
