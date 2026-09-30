@@ -1,6 +1,7 @@
 """Explicit, non-native authority for an unchanged approved exploratory plan only."""
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,7 +9,6 @@ from pathlib import Path
 from .entry_price_confirmation_contracts import build_entry_price_confirmation_request
 from .errors import AdvisoryModelFirstError
 from .price_range_contracts import canonical_json_sha256
-from .research_control import evidence_reference_for_file
 
 
 def _fail(message):
@@ -16,10 +16,10 @@ def _fail(message):
 
 
 def _read_reference(reference):
-    actual = evidence_reference_for_file(reference.artifact_uri, role=reference.role)
-    if (actual.sha256, actual.size_bytes) != (reference.sha256, reference.size_bytes):
+    raw = Path(reference.artifact_uri).read_bytes()
+    if (hashlib.sha256(raw).hexdigest(), len(raw)) != (reference.sha256, reference.size_bytes):
         _fail("legacy evidence file/hash differs from the approved reference")
-    return json.loads(Path(reference.artifact_uri).read_text(encoding="utf-8"))
+    return json.loads(raw.decode("utf-8"))
 
 
 def _child(root, relative):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -129,13 +130,12 @@ class AdvisorySelectionInputArchive:
 
 def validate_archive_reference(ref, *, run, program_id, binding_version_id, review_policy_sha256):
     """Read-only publication guard. An old run is never captured retrospectively."""
-    from backend.services.advisory_model_first.research_control import evidence_reference_for_file
     reference = ref["reference"]
-    actual = evidence_reference_for_file(reference["artifact_uri"], role=reference["role"])
-    if (actual.sha256 != reference["sha256"] or actual.size_bytes != reference["size_bytes"]
+    raw = Path(reference["artifact_uri"]).read_bytes()
+    if (hashlib.sha256(raw).hexdigest() != reference["sha256"] or len(raw) != reference["size_bytes"]
             or ref.get("selection_run_id") != run.run_id):
         _invalid("Advisory publication input archive file/run hash differs")
-    payload = json.loads(Path(reference["artifact_uri"]).read_text(encoding="utf-8"))
+    payload = json.loads(raw.decode("utf-8"))
     expected = dict(selection_run_id=run.run_id, program_id=program_id, binding_version_id=binding_version_id,
                     review_policy_sha256=review_policy_sha256, target_trade_date=run.trade_date.isoformat(),
                     manifest_sha256_by_package=run.manifest_sha256_by_package,

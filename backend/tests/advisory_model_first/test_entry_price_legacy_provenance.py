@@ -169,3 +169,14 @@ def test_missing_authority_remains_blocked(tmp_path):
     _, service, args, _ = legacy_inputs(tmp_path)
     with pytest.raises(AdvisoryModelFirstError, match="universe"):
         service.prepare_day(**args)
+
+
+def test_authority_parses_the_exact_bytes_whose_digest_was_verified(tmp_path, monkeypatch):
+    from pathlib import Path
+    from backend.services.advisory_model_first.entry_price_legacy_provenance import _read_reference
+    request, *_ = legacy_inputs(tmp_path)
+    # A different version on a second read must not become the authorized plan.
+    monkeypatch.setattr(Path, "read_text", lambda *_args, **_kwargs: '{"foreign":true}')
+    plan = _read_reference(request.legacy_provenance.source_plan)
+    assert plan["program_id"] == request.program_id
+    assert "foreign" not in plan
