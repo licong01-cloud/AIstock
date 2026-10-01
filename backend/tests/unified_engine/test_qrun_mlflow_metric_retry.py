@@ -139,6 +139,93 @@ def test_qrun_minute_quote_universe_requires_day_minute_window_parity(tmp_path, 
         runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
 
 
+def test_qrun_minute_coverage_accepts_only_suspend_or_explicit_full_window_explanations(
+    tmp_path, monkeypatch
+) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    day_root = tmp_path / "day"
+    minute_root = tmp_path / "minute"
+    (day_root / "instruments").mkdir(parents=True)
+    (day_root / "calendars").mkdir(parents=True)
+    (minute_root / "instruments").mkdir(parents=True)
+    pool_name = "filtered_pool_20260630"
+    (day_root / "instruments" / f"{pool_name}.txt").write_text(
+        "000627.SZ\t2026-06-01\t2026-06-29\n"
+        "601989.SH\t2026-06-01\t2026-06-29\n",
+        encoding="utf-8",
+    )
+    (minute_root / "instruments" / f"{pool_name}.txt").write_text(
+        "000627.SZ\t2026-06-01 09:30:00\t2026-06-26 15:00:00\n"
+        "601989.SH\t2026-06-01 09:30:00\t2026-06-26 15:00:00\n",
+        encoding="utf-8",
+    )
+    (day_root / "calendars" / "day.txt").write_text(
+        "2026-06-26\n2026-06-27\n2026-06-28\n2026-06-29\n",
+        encoding="utf-8",
+    )
+    exclusions = [
+        {
+            "schema_version": "qe_execution_data_exclusion_v1",
+            "instrument": "601989.SH",
+            "scope": "full_backtest_window",
+            "start_date": "2026-06-01",
+            "end_date": "2026-06-29",
+            "reason_code": "minute_source_gap_confirmed_unfillable",
+            "evidence_sha256": "b" * 64,
+        }
+    ]
+    artifact = {
+        "enabled": True,
+        "suspended_by_date": {
+            "2026-06-26": [],
+            "2026-06-27": ["000627.SZ"],
+            "2026-06-28": ["000627.SZ"],
+            "2026-06-29": ["000627.SZ"],
+        },
+        "execution_data_exclusions": exclusions,
+        "execution_data_exclusion_contract_sha256": hashlib.sha256(
+            json.dumps(
+                exclusions,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+    (tmp_path / "qe_suspend_filter.json").write_text(
+        json.dumps(artifact), encoding="utf-8"
+    )
+    config = _minute_config(minute_root, day_root)
+
+    runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+    assert config["qe_minute_coverage_summary"] == {
+        "schema_version": "qe_minute_coverage_summary_v1",
+        "selection_market": pool_name,
+        "expected_spans": 2,
+        "suspension_explained_days": 3,
+        "execution_exclusion_explained_days": 3,
+        "execution_data_exclusion_count": 1,
+    }
+
+    artifact["execution_data_exclusions"] = []
+    artifact["execution_data_exclusion_contract_sha256"] = hashlib.sha256(b"[]").hexdigest()
+    (tmp_path / "qe_suspend_filter.json").write_text(
+        json.dumps(artifact), encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="601989.SH:2026-06-27"):
+        runner._validate_minute_instrument_coverage_contract(config, cwd=tmp_path)
+
+
+def test_qrun_builds_suspend_artifact_before_minute_coverage_validation() -> None:
+    run_main_source = RUNNER_PATH.read_text(encoding="utf-8").split(
+        "def _run_main(args):", 1
+    )[1]
+
+    assert run_main_source.index("ensure_frozen_suspend_filter_artifact(cwd=") < run_main_source.index(
+        "_validate_minute_instrument_coverage_contract(config, cwd="
+    )
+
+
 @pytest.mark.parametrize("binding_schema", ["qe_direct_v2_dataset_binding_v2", "qe_direct_v2_dataset_binding_v3"])
 def test_qrun_minute_quote_universe_excludes_day_only_benchmark_catalog_entry(
     tmp_path, monkeypatch, binding_schema

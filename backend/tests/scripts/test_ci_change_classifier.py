@@ -764,6 +764,40 @@ def test_canonical_equity_pit_selects_qlib_data_backend(tmp_path: Path) -> None:
     assert payload["unmapped_code_files"] == []
 
 
+def test_unified_monthly_release_surfaces_select_qlib_data_backend(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "backend/routers/monthly_dataset_releases.py",
+            "backend/tests/routers/test_monthly_dataset_releases.py",
+            "scripts/monthly_unified_dataset_release.py",
+            "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["qlib_data_backend"]
+    assert payload["unmapped_code_files"] == []
+
+
+def test_unified_monthly_worker_selects_its_direct_qlib_data_test(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "scripts/monthly_unified_dataset_release_worker.py",
+            "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "targeted_ci_required"
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_sessions"] == ["qlib_data_backend"]
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == []
+
+
 def test_qmt_strategy_ledger_and_vnpy_asset_changes_select_existing_execution_sessions(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         [
@@ -1224,6 +1258,23 @@ def position_timing_backend(session):
     }
 
 
+def test_qe_changed_test_with_unmapped_sources_retains_static_plan_coverage() -> None:
+    root = Path(__file__).resolve().parents[3]
+    test_path = "backend/tests/unified_engine/test_label_horizon.py"
+    payload = classifier.classify_changed_files(
+        [
+            "backend/services/quantevolver/config_composer.py",
+            "backend/services/quantevolver/qe_custom_loaders.py",
+            test_path,
+        ],
+        repo_root=root,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["changed_test_plan_coverage"]["coverage"][test_path] == ["qe_read_backend"]
+    assert payload["unexecuted_test_files"] == []
+
+
 def test_arbitrary_dynamic_fallback_does_not_claim_test_coverage(tmp_path: Path) -> None:
     test_path = "backend/tests/position_timing/test_dynamic_contract.py"
     _write_test_file(tmp_path, test_path)
@@ -1378,7 +1429,7 @@ def test_hmm_local_and_cross_contract_changes_use_pr_slice(tmp_path: Path) -> No
         repo_root=Path.cwd(),
     )
     critical = classifier.classify_changed_files(
-        ["backend/services/hmm_risk/state_model_set.py"],
+        ["backend/services/hmm_risk/contracts.py"],
         repo_root=Path.cwd(),
     )
 

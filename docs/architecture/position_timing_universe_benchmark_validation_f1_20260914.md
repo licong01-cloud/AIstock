@@ -1,13 +1,15 @@
 # 择时策略全市场与核心指数股票池基准验证设计
 
 > 版本：v1.1；日期：2026-09-15；Feature tier：F1（`position_timing` 单模块离线研究）  
-> 状态：`IMPLEMENTED_SOURCE_PREFLIGHT_BLOCKED`  
+> 状态：`HISTORICAL_V2_CONTRACT_SUPERSEDED_NOT_CURRENT_BLOCKER`  
 > 任务：`PT-NEXT-020 / PATTERN_UNIVERSE_BENCHMARK_V1`  
 > 所属蓝图：[持仓与自选池择时建议系统](position_timing_advice_f2_redesign_20260903.md)  
 > 父研究：[自选股与持仓股形态择时研究](position_timing_pattern_strategy_design_20260911.md)  
 > 权威规范：`docs/standards/aistock_development_standard_v1.5_20260523.md`
 
 ## 1. Background / 目标与研究问题
+
+**2026-09-18版本边界说明**：以下正文保留2026-09-15的旧v2真实账户/按pool独立回放设计与当时阻断，不能作为当前操作合同。BUG-1565 / PR #4891已将正式`pattern_universe_benchmark`切换为纯Qlib复权信号研究；用户随后批准的独立股票1,000万元/自然复投/收盘成交/事后PIT归组另建`pattern_close_cash_benchmark_v1`（源码PR#4906尚未合入，但历史实验已运行）。当前状态、结果和合同见[主蓝图§9.23](position_timing_advice_f2_redesign_20260903.md)，下一任务见[PT-NEXT-021计划](position_timing_strategy_evolution_plan_f1_20260918.md)。旧authority/DB快照/10 bps事件绑定要求不向当前模式继承；旧artifact不改写，不将新现金实验结果倒写为旧v2验收。
 
 终极目标仍是为用户已经选定的持仓股和显式自选股提供能够增加成本后收益、降低错误交易或改善风险收益比的明确择时建议。`PT-NEXT-018` 已在 64 只评价股上完成底部企稳、回踩确认和放量加速退出的冻结策略回放，但九项比较全部为 `INCONCLUSIVE`、`selected_trial_count=0`。在引入 QE 选股之前，本任务先回答该冻结策略在更广泛 A 股人口及不同市值/板块股票池中是否存在稳定的同股择时增量，避免把未来 QE 的选股收益误归因于择时。
 

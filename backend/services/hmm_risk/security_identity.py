@@ -12,6 +12,8 @@ from typing import Any
 from .contracts import StateModelSetError, canonical_sha256
 
 SECURITY_IDENTITY_SCHEMA = "hmm_risk_security_source_identity_manifest_v1"
+SHARED_SECURITY_IDENTITY_SCHEMA = "aistock_security_source_identity_v1"
+SUPPORTED_SECURITY_IDENTITY_SCHEMAS = frozenset({SECURITY_IDENTITY_SCHEMA, SHARED_SECURITY_IDENTITY_SCHEMA})
 DEFAULT_RESOLUTION = "canonical_same_code"
 SUPPORTED_SOURCE_DATASETS = frozenset(
     {
@@ -60,6 +62,7 @@ class SecuritySourceIdentityManifest:
     rows: tuple[SecuritySourceResolution, ...]
     manifest_sha256: str
     rows_sha256: str
+    schema_version: str = SECURITY_IDENTITY_SCHEMA
 
     def resolve(self, canonical_ts_code: str, trade_date: date, source_dataset: str) -> SecuritySourceResolution:
         _validate_ts_code(canonical_ts_code, "canonical_ts_code")
@@ -130,7 +133,7 @@ class SecuritySourceIdentityManifest:
 
     def evidence(self) -> dict[str, Any]:
         return {
-            "schema_version": SECURITY_IDENTITY_SCHEMA,
+            "schema_version": self.schema_version,
             "manifest_version": self.manifest_version,
             "default_resolution": self.default_resolution,
             "row_count": len(self.rows),
@@ -225,8 +228,9 @@ def load_security_source_identity_manifest(
         "rows",
     }:
         raise StateModelSetError("security source identity manifest schema is invalid")
-    if payload["schema_version"] != SECURITY_IDENTITY_SCHEMA:
-        raise StateModelSetError(f"security source identity manifest must use {SECURITY_IDENTITY_SCHEMA}")
+    schema_version = payload["schema_version"]
+    if not isinstance(schema_version, str) or schema_version not in SUPPORTED_SECURITY_IDENTITY_SCHEMAS:
+        raise StateModelSetError("security source identity manifest schema version is unsupported")
     manifest_version = str(payload["manifest_version"] or "").strip()
     if not manifest_version or payload["default_resolution"] != DEFAULT_RESOLUTION:
         raise StateModelSetError("security source identity manifest default contract is invalid")
@@ -258,4 +262,5 @@ def load_security_source_identity_manifest(
         rows=rows,
         manifest_sha256=actual_sha256,
         rows_sha256=canonical_sha256(rows_value),
+        schema_version=schema_version,
     )

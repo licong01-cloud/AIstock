@@ -19,7 +19,12 @@ from backend.services.quantevolver.qe_active_execution_capacity import (
     [
         ("wsl2-5080", None, False, False, 1),
         ("WSL2-5080", 8, False, False, 1),
-        ("wsl2-5080", 8, True, False, 2),
+        ("wsl2-5080", None, True, False, 2),
+        ("wsl2-5080", 1, True, False, 1),
+        ("wsl2-5080", 2, True, False, 2),
+        ("wsl2-5080", 3, True, False, 3),
+        ("wsl2-5080", 4, True, False, 4),
+        ("wsl2-5080", 8, True, False, 4),
         ("wsl2-5080", 8, False, True, 2),
         ("rdagent-node1", None, False, False, 4),
         ("rdagent-node1", 3, False, False, 3),

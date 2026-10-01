@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from functools import lru_cache
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, Literal, NoReturn
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.services.dataset_release.managed_consumer_task import (
+    ManagedDatasetTaskError,
+    ManagedDatasetTaskStore,
+)
 from backend.services.advisory_phase0a.historical_research import (
     HistoricalAdvisoryResearchRunner,
     HistoricalResearchBatchRequest,
@@ -31,6 +36,7 @@ from backend.services.advisory_program import (
 )
 from backend.services.advisory_delivery_preflight import AdvisoryDeliveryPreflightService
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
+from backend.services.advisory_model_first.entry_price_daily_service import AdvisoryEntryPriceDailyService
 from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
 from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
@@ -169,6 +175,63 @@ class AdvisoryQualityReportRequest(BaseModel):
     min_bucket_size: int = Field(default=30, ge=1)
 
 
+class ManagedDatasetPreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_date: date
+    end_date: date
+
+
+@lru_cache(maxsize=1)
+def get_managed_dataset_task_store() -> ManagedDatasetTaskStore:
+    try:
+        return ManagedDatasetTaskStore.from_env()
+    except ManagedDatasetTaskError as exc:
+        _raise_managed_dataset_task_http(exc)
+
+
+def _raise_managed_dataset_task_http(exc: ManagedDatasetTaskError) -> NoReturn:
+    if exc.code == "MANAGED_DATASET_TASK_IDEMPOTENCY_CONFLICT":
+        status_code = 409
+    elif exc.code in {
+        "MANAGED_DATASET_TASK_ROOT_UNAVAILABLE",
+        "MANAGED_DATASET_TASK_ACTIVE_BINDING_INVALID",
+    }:
+        status_code = 503
+    elif exc.code in {
+        "MANAGED_DATASET_TASK_ARTIFACT_INVALID",
+        "MANAGED_DATASET_TASK_ARTIFACT_WRITE_FAILED",
+        "MANAGED_DATASET_TASK_BINDING_INVALID",
+        "MANAGED_DATASET_TASK_CONTRACT_INVALID",
+        "MANAGED_DATASET_TASK_IDENTITY_INVALID",
+    }:
+        status_code = 500
+    else:
+        status_code = 422
+    raise HTTPException(
+        status_code=status_code,
+        detail={"error_code": exc.code, "message": str(exc)},
+    ) from exc
+
+
+@router.post("/dataset-preparations")
+def create_dataset_preparation(
+    request: ManagedDatasetPreparationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+    store: ManagedDatasetTaskStore = Depends(get_managed_dataset_task_store),
+) -> dict[str, Any]:
+    try:
+        artifact = store.create(
+            consumer_id="advisory",
+            business_task_key=idempotency_key,
+            start_date=request.start_date,
+            end_date=request.end_date,
+        )
+    except ManagedDatasetTaskError as exc:
+        _raise_managed_dataset_task_http(exc)
+    return {"ok": True, "data": artifact.as_dict()}
+
+
 def get_advisory_program_service() -> AdvisoryProgramService:
     return AdvisoryProgramService()
 
@@ -181,6 +244,10 @@ def get_advisory_delivery_preflight_service(
 
 def get_advisory_model_shadow_service() -> AdvisoryModelShadowService:
     return AdvisoryModelShadowService()
+
+
+def get_advisory_entry_price_service() -> AdvisoryEntryPriceDailyService:
+    return AdvisoryEntryPriceDailyService()
 
 
 def get_advisory_forward_service() -> AdvisoryForwardService:
@@ -934,8 +1001,41 @@ def model_shadow(
     program_id: str,
     target_trade_date: date = Query(...),
     service: AdvisoryModelShadowService = Depends(get_advisory_model_shadow_service),
+    price_contract: Literal["legacy-v1", "entry-v2"] = Query("legacy-v1"),
+    entry_list_version_id: str | None = Query(None, min_length=1, max_length=160),
+    entry_service: AdvisoryEntryPriceDailyService = Depends(get_advisory_entry_price_service),
 ) -> dict[str, Any]:
-    return {"ok": True, **service.model_shadow(program_id=program_id, target_trade_date=target_trade_date)}
+    result = {"ok": True, **service.model_shadow(program_id=program_id, target_trade_date=target_trade_date)}
+    if price_contract == "entry-v2":
+        from backend.services.advisory_model_first.entry_price_daily_service import _empty_envelope
+        from backend.services.advisory_model_first.entry_price_contracts import AdvisoryEntryPriceEnvelopeV2
+        from backend.services.advisory_model_first.entry_price_service import merge_auxiliary_prices
+        try:
+            entry = AdvisoryEntryPriceEnvelopeV2.model_validate(entry_service.read_price(
+                program_id=program_id, target_trade_date=target_trade_date, list_version_id=entry_list_version_id))
+            result["entry_price"] = merge_auxiliary_prices(entry, result.get("price_range")).as_payload()
+        except Exception as exc:
+            result["entry_price"] = _empty_envelope(program_id, target_trade_date,
+                getattr(exc, "reason_code", "ADVISORY_ENTRY_PRICE_INPUT_UNAVAILABLE"))
+        result["entry_price_collection"] = _entry_collection_status(program_id)
+    return result
+
+
+@router.get("/programs/{program_id}/entry-price/status")
+def entry_price_status(program_id: str, service: AdvisoryEntryPriceDailyService = Depends(get_advisory_entry_price_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.status(program_id=program_id), "collection": _entry_collection_status(program_id)}
+    except Exception as exc:
+        return {"ok": False, "program_id": program_id, "status": "INPUT_UNAVAILABLE",
+                "reason_code": getattr(exc, "reason_code", "ADVISORY_ENTRY_PRICE_INPUT_UNAVAILABLE")}
+
+
+def _entry_collection_status(program_id: str) -> dict[str, Any]:
+    snapshot = advisory_forward_scheduler.status()
+    price = (snapshot.get("last_result") or {}).get("entry_price") or {}
+    return {"configured_enabled": snapshot.get("configured_enabled", False), "last_run_at": snapshot.get("last_run_at"),
+            "source": "SCHEDULER_MEMORY_NOT_DURABLE_EVIDENCE", "status": price.get("status", "NOT_OBSERVED"),
+            "attempts": [row for row in price.get("results", []) if row.get("program_id") in {None, program_id}]}
 
 
 @router.get("/list-versions/{list_version_id}")

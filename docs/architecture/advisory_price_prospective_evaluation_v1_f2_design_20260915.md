@@ -1,15 +1,15 @@
-# AdvisoryPriceProspectiveEvaluationV1 F2 详细设计 v1.2
+# AdvisoryPriceProspectiveEvaluationV1 F2 详细设计 v1.3
 
-> 日期：2026-09-15
+> 日期：2026-09-28
 > Feature tier：F2
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.64
-> 当前阶段：`PROSPECTIVE_SETTLEMENT_WAITING_INDEPENDENT_HISTORICAL_REPLAY_VERIFIED`
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.66
+> 当前阶段：`FIRST_SETTLEMENT_AND_LEGACY_REPLAY_VERIFIED_AUTOMATION_PENDING`
 > 业务归属：Selection Center / Advisory
 > 运行边界：只读结算不可变自然前向价格预测；不训练、不调参、不激活、不修改数据库或生产推荐
 
 ## 1. Background / 事实与问题
 
-PR #4732 已交付 `AdvisoryPriceProspectivePredictionV1`，首个正式盘前 prediction bundle `631d5011...` 已在 T=`2026-09-15` 开盘前发布，20/20候选可用，且预测阶段未读取结果。当前缺少的是与预测通道物理分离的成熟结算：只有目标日行情完成并通过权威刷新审计后，才允许读取实际开盘价并评价中央80%开盘区间。
+PR #4732 已交付 `AdvisoryPriceProspectivePredictionV1`，首个正式盘前 prediction bundle `631d5011...` 已在 T=`2026-09-15` 开盘前发布，20/20候选可用，且预测阶段未读取结果。成熟结算源码已交付；9月15日20行结算已发布、coverage=0.70，仅一日，不能确认或激活。以下为已实现的结算约束：只有目标日行情完成并通过权威刷新审计后，才允许读取实际开盘价并评价中央80%开盘区间。
 
 v3/v4 的唯一学习目标是 `target_open / decision_close - 1`。止盈、保护、止损是条件于预测 entry mid 和冻结 review policy 的规则投影，不是本模型的监督标签；本切片不得把它们合并成一个“价格准确率”，也不得读取分钟线寻找最佳点位。
 
@@ -30,6 +30,10 @@ v3/v4 的唯一学习目标是 `target_open / decision_close - 1`。止盈、保
 - 批量历史回放：从冻结 v4 bundle 仅读取日期、股票及三分位预测列，先发布不可变 prediction snapshot，再查询历史数据库 D 日 PIT 价格/公司行为/ST 状态及 T 日开盘/停牌；固定为 `HISTORICAL_REPLAY/NAVIGATION_ONLY`。
 
 历史回放不读取 `entry_gap_return` 等结果列生成预测，不访问 sealed holdout，不发布 binding，也不替代自然前向确认；但它是功能与统计验证的主动首选，不得因等待实盘数据而停工。
+
+### 2.2 新窗口确认与旧入口隔离
+
+旧historical CLI仅读取冻结bundle内的calibrated_test_predictions.parquet，不能仅改变日期就生成新窗口预测。[一次性历史确认设计](advisory_entry_price_confirmation_f2_design_20260928.md)新增冻结模型的历史推理入口、窗口资格与固定评价合同；[每日交付设计](advisory_entry_price_delivery_f2_design_20260928.md)补齐独立entry调度。本文件的旧回放/aggregate语义保持不激活，历史验收矩阵不代表新入口已经实现。
 
 ## 3. Non-goals / 所有权边界
 
@@ -160,11 +164,11 @@ waiting不得伪装为失败，数据/身份错误不得伪装为waiting或无�
 - artifact：原子发布、exact retry、冲突不覆盖、receipt自hash。
 - aggregate：混合lineage/重复target拒绝，20日/300行/日期支持门，目标日cluster bootstrap确定性。
 - CLI：0/2/3退出码、显式路径、不控制进程、不import QE。
-- 真实readback：今天18:00前只允许得到 `OUTCOME_NOT_MATURE`，不得产生settlement目录。
+- 真实readback：对应T日18:00前只允许得到 `OUTCOME_NOT_MATURE`，不得产生settlement目录。
 
 ## 12. Rollout / Rollback
 
-源码与测试合入不需要后端重启，因为新增入口仅为离线CLI。2026-09-15 03:59 Asia/Shanghai 对首个正式request的真实readback返回 `ADVISORY_PRICE_PROSPECTIVE_OUTCOME_NOT_MATURE`/退出码3，且未创建settlement目录；这证明时钟门禁，不构成结果评价。首个真实settlement只能在T日18:00后且两项审计ready时另行执行；累计支持不足是正常状态。回滚仅停止CLI调用，不删除已发布预测或结算artifact，不改变数据库、binding、Program或推荐。
+源码与测试合入不需要后端重启，因为新增入口仅为离线CLI。2026-09-15 03:59 Asia/Shanghai 对首个正式request的真实readback返回 `ADVISORY_PRICE_PROSPECTIVE_OUTCOME_NOT_MATURE`/退出码3，且未创建settlement目录；这证明时钟门禁，不构成结果评价。该历史waiting检查之后，首日真实settlement已在合法时窗发布；截至2026-09-28本地核验仍仅一日，自动收集未实现。累计支持不足是正常状态，不能据此阻塞历史功能开发。回滚仅停止CLI调用，不删除已发布预测或结算artifact，不改变数据库、binding、Program或推荐。
 
 ## 13. Risks / 风险与处置
 
@@ -227,7 +231,7 @@ waiting不得伪装为失败，数据/身份错误不得伪装为waiting或无�
 | F-399 | `backend/services/advisory_model_first/prospective_price_confirmation.py` support gate | `backend/tests/advisory_model_first/test_price_range_prospective_confirmation.py` 20日/300行测试 | IMPLEMENTED_VERIFIED | approved_by_user: 自然样本按交易日积累，不回填 |
 | F-400 | `backend/services/advisory_model_first/prospective_price_confirmation.py::_cluster_bootstrap` | `backend/tests/advisory_model_first/test_price_range_prospective_confirmation.py`确定性bootstrap测试 | IMPLEMENTED_VERIFIED | none |
 | F-401 | `backend/services/advisory_model_first/prospective_price_evaluation_contracts.py::AdvisoryPriceProspectiveConfirmationV1` | `backend/tests/advisory_model_first/test_price_range_prospective_confirmation.py` activation=false测试 | IMPLEMENTED_VERIFIED | approved_by_user: binding保持独立后续门禁 |
-| F-402 | `backend/services/advisory_model_first/prospective_price_evaluation_cli.py` | `backend/tests/advisory_model_first/test_price_range_prospective_evaluation_cli.py`退出码/边界测试 | IMPLEMENTED_WAITING_VERIFIED | approved_by_user: 真实readback退出码3且零settlement |
+| F-402 | `backend/services/advisory_model_first/prospective_price_evaluation_cli.py` | `backend/tests/advisory_model_first/test_price_range_prospective_evaluation_cli.py`退出码/边界测试 | IMPLEMENTED_WAITING_VERIFIED | none |
 | F-403 | `backend/services/advisory_model_first/historical_price_replay_cli.py` | `backend/tests/advisory_model_first/test_historical_price_replay_cli.py`；artifact `F:/Dev/AIstock_model_artifacts/advisory_model_first/price_range_historical_replays/advprhist_23e8ce5a20b6a598bf129a6d/` | IMPLEMENTED_VERIFIED | none |
 | F-404 | `backend/services/advisory_model_first/historical_price_replay.py::_freeze_predictions`及两阶段目录 | `backend/tests/advisory_model_first/test_historical_price_replay.py`先落盘/禁止label测试 | IMPLEMENTED_VERIFIED | none |
 | F-405 | `backend/services/advisory_model_first/historical_price_replay_contracts.py` | `backend/tests/advisory_model_first/test_historical_price_replay_contracts.py`；真实receipt `advprhist_23e8ce5a...` | IMPLEMENTED_VERIFIED | none |

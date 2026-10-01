@@ -14,8 +14,29 @@ import pandas as pd
 from typing import Dict, Optional
 from qlib.contrib.strategy.signal_strategy import TopkDropoutStrategy
 from qlib.backtest.decision import Order, OrderDir, TradeDecisionWO
+try:
+    from hmm_qe_assistance_contract import (
+        apply_adjustment as apply_hmm_qe_assistance,
+        HMMQEAssistanceContractError,
+        json_object_without_duplicate_keys,
+        REASON_INPUT as HMM_QE_ASSISTANCE_INPUT_INVALID,
+        validate_payload_schema as validate_hmm_payload_schema,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "hmm_qe_assistance_contract":
+        raise
+    from scripts.hmm_qe_assistance_contract import (
+        apply_adjustment as apply_hmm_qe_assistance,
+        HMMQEAssistanceContractError,
+        json_object_without_duplicate_keys,
+        REASON_INPUT as HMM_QE_ASSISTANCE_INPUT_INVALID,
+        validate_payload_schema as validate_hmm_payload_schema,
+    )
 
 logger = logging.getLogger(__name__)
+
+L2_OVERLAY_UNAVAILABLE_POLICY = "explicit_no_l2_overlay_v1"
+L2_OVERLAY_UNAVAILABLE_REASON = "hmm_l2_quote_unavailable_no_overlay"
 
 
 class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
@@ -116,6 +137,7 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
         self.hmm_signal_presets = hmm_signal_presets or {}
         self._hmm_config: Optional[Dict] = None
         self._hmm_config_loaded = False
+        self._last_hmm_adjustment_trace = None
 
     # ── 辅助方法（复用 EnhancedTopkDropoutStrategy 模式）──
 
@@ -198,7 +220,13 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
         bounded_buys = list(proposed_buys)[:max_buy_slots]
         return eligible_sells, bounded_buys, blocked_sells
 
-    def _normalize_signal_scores(self, all_pred_scores, end_time):
+    def _normalize_signal_scores(
+        self,
+        all_pred_scores,
+        end_time,
+        *,
+        allow_latest_date_fallback=True,
+    ):
         """将 signal 输出归一化为单层 pd.Series(stock_id -> score)"""
         if all_pred_scores is None:
             return pd.Series(dtype=float)
@@ -225,6 +253,11 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             try:
                 scores_obj = scores_obj.xs(dt, level=dt_level)
             except KeyError:
+                if not allow_latest_date_fallback:
+                    raise HMMQEAssistanceContractError(
+                        HMM_QE_ASSISTANCE_INPUT_INVALID,
+                        f"QE-assistance signal date is missing: expected={dt}",
+                    )
                 # 目标日期不在 signal 中 → 使用最近一天（Qlib signal 日期对齐偏移时正常）
                 available_dts = scores_obj.index.get_level_values(dt_level).unique()
                 if len(available_dts) == 0:
@@ -326,13 +359,16 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             )
 
         with open(self.hmm_coefficients_file, "r", encoding="utf-8") as f:
-            self._hmm_config = json.load(f)
+            self._hmm_config = json.load(f, object_pairs_hook=json_object_without_duplicate_keys)
+
+        self._hmm_config = validate_hmm_payload_schema(self._hmm_config)
 
         if not self._hmm_config.get("daily_coefficients"):
             raise RuntimeError(
                 f"HMM 配置文件 {self.hmm_coefficients_file} 缺少 daily_coefficients 字段"
             )
         membership_fields = (
+            "stock_sector_applicability_by_date",
             "stock_sector_membership_spans",
             "stock_sector_map_by_date",
             "stock_sector_map",
@@ -341,6 +377,43 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             raise RuntimeError(
                 f"HMM config {self.hmm_coefficients_file} has no stock-sector membership"
             )
+
+        unavailable_by_date = self._hmm_config.get("quote_unavailable_sector_codes_by_date")
+        policy = self._hmm_config.get("l2_overlay_unavailable_policy")
+        if unavailable_by_date is not None or policy is not None:
+            authority = self._hmm_config.get("quote_availability_authority")
+            digest = self._hmm_config.get("quote_availability_digest")
+            authority_sha256 = str(
+                authority.get("authority_sha256") if isinstance(authority, dict) else ""
+            )
+            digest_sha256 = str(digest or "")
+            if policy != L2_OVERLAY_UNAVAILABLE_POLICY or not isinstance(
+                unavailable_by_date, dict
+            ):
+                raise RuntimeError("invalid explicit HMM L2 quote-unavailability policy")
+            if (
+                not isinstance(authority, dict)
+                or set(authority) != {"authority_id", "authority_sha256"}
+                or not str(authority["authority_id"]).strip()
+                or len(authority_sha256) != 64
+                or set(authority_sha256) - set("0123456789abcdef")
+                or len(digest_sha256) != 64
+                or set(digest_sha256) - set("0123456789abcdef")
+            ):
+                raise RuntimeError("invalid HMM quote-availability authority identity")
+            for trade_date, sectors in unavailable_by_date.items():
+                if (
+                    not isinstance(trade_date, str)
+                    or not isinstance(sectors, list)
+                    or sectors != sorted(set(sectors))
+                    or any(not isinstance(code, str) or not code.strip() for code in sectors)
+                ):
+                    raise RuntimeError("invalid HMM quote-unavailable sector projection")
+                day_coeffs = self._hmm_config["daily_coefficients"].get(trade_date)
+                if not isinstance(day_coeffs, dict) or set(sectors) & set(day_coeffs):
+                    raise RuntimeError(
+                        f"HMM quote availability overlaps coefficients: date={trade_date}"
+                    )
 
         self._hmm_config_loaded = True
         logger.info(
@@ -402,6 +475,10 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             return pred_score
 
         hmm_config = self._load_hmm_config()
+        if hmm_config.get("_detected_mapping_mode") == "qe_assistance_by_trade_date_v1":
+            adjusted, trace = apply_hmm_qe_assistance(hmm_config, pred_score, trade_date_str)
+            self._last_hmm_adjustment_trace = trace
+            return adjusted
         daily_coefficients = hmm_config["daily_coefficients"]
         stock_sector_map = self._stock_sector_map_for_date(hmm_config, trade_date_str)
 
@@ -413,8 +490,24 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
                 f"请检查预计算日期范围是否覆盖回测区间。"
             )
 
+        unavailable_by_date = hmm_config.get("quote_unavailable_sector_codes_by_date")
+        if unavailable_by_date is None:
+            unavailable_sectors = set()
+        else:
+            day_unavailable = unavailable_by_date.get(trade_date_str)
+            if not isinstance(day_unavailable, list):
+                raise RuntimeError(
+                    f"HMM quote-unavailability authority is missing trade date {trade_date_str}"
+                )
+            unavailable_sectors = set(day_unavailable)
+            if unavailable_sectors & set(day_coeffs):
+                raise RuntimeError(
+                    f"HMM quote availability overlaps coefficients: date={trade_date_str}"
+                )
+
         adjusted = pred_score.copy()
         n_adjusted = 0
+        no_overlay_rows = []
         strict_pit_membership = bool(
             hmm_config.get("stock_sector_membership_spans")
             or hmm_config.get("stock_sector_map_by_date")
@@ -427,6 +520,15 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
                 if abs(coeff - 1.0) > 1e-6:
                     adjusted[stock_id] *= coeff
                     n_adjusted += 1
+            elif sector_code and sector_code in unavailable_sectors:
+                no_overlay_rows.append(
+                    {
+                        "stock_id": str(stock_id),
+                        "sector_code": sector_code,
+                        "coefficient": None,
+                        "reason": L2_OVERLAY_UNAVAILABLE_REASON,
+                    }
+                )
             elif strict_pit_membership:
                 missing_membership.append(str(stock_id))
 
@@ -436,6 +538,12 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
                 f"date={trade_date_str} missing={len(missing_membership)} "
                 f"sample={missing_membership[:5]}"
             )
+
+        self._last_hmm_adjustment_trace = {
+            "date": trade_date_str,
+            "policy": hmm_config.get("l2_overlay_unavailable_policy"),
+            "no_l2_overlay_rows": no_overlay_rows,
+        }
 
         if n_adjusted > 0:
             logger.info(
@@ -526,7 +634,17 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
         pred_start_time, pred_end_time = self.trade_calendar.get_step_time(trade_step, shift=1)
         all_pred_scores = self.signal.get_signal(start_time=pred_start_time, end_time=pred_end_time)
 
-        scores = self._normalize_signal_scores(all_pred_scores, pred_end_time)
+        strict_qe_assistance_date = False
+        if self.enable_sector_hmm and all_pred_scores is not None:
+            hmm_config = self._load_hmm_config()
+            strict_qe_assistance_date = (
+                hmm_config.get("_detected_mapping_mode") == "qe_assistance_by_trade_date_v1"
+            )
+        scores = self._normalize_signal_scores(
+            all_pred_scores,
+            pred_end_time,
+            allow_latest_date_fallback=not strict_qe_assistance_date,
+        )
 
         if scores is None or scores.empty:
             return TradeDecisionWO([], self)

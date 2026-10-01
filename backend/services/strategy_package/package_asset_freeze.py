@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import sys
@@ -37,6 +38,7 @@ from .manifest import freeze_manifest
 from .models import (
     Alpha158SchemaAsset,
     FactorAsset,
+    FittedPreprocessorAsset,
     ModelAsset,
     ModelCodeAsset,
     RuntimeAssetManifest,
@@ -51,6 +53,8 @@ from .runtime_schema import (
     model_code_module_from_pt_uri,
     pt_model_uri_from_conf,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -822,6 +826,40 @@ class StrategyPackageAssetSource:
 
         return _run_async_blocking(_download)
 
+    def fitted_preprocessor_bytes(
+        self, manifest: StrategyPackageManifest, *, model_weight_sha256: str,
+    ) -> PackageAssetBytes:
+        """Recover only the dataset paired with these exact frozen model bytes."""
+        attempts: list[dict[str, Any]] = []
+        for locator in self._runtime_asset_locators(manifest, attempts=attempts):
+            if not (locator.node_id and locator.qe_task_id and locator.qe_loop_id):
+                continue
+
+            async def download(loc=locator):
+                async with self._workspace_client_factory(str(loc.node_id)) as client:
+                    return await client.download_mlruns_params(str(loc.qe_task_id), str(loc.qe_loop_id))
+
+            try:
+                data = _fitted_dataset_from_mlruns_archive(
+                    _run_async_blocking(download), locator=locator, model_weight_sha256=model_weight_sha256,
+                )
+                return PackageAssetBytes(
+                    data=data, locator=locator,
+                    source_uri=f"qe-workspace://node/{quote(str(locator.node_id), safe='')}/tasks/"
+                    f"{quote(str(locator.qe_task_id), safe='')}/loops/{quote(str(locator.qe_loop_id), safe='')}/fitted-dataset",
+                )
+            except (DataUnavailableError, ArtifactGenerationFailedError) as exc:
+                # Identity/ambiguity errors must not be hidden by another source.
+                if (exc.context or {}).get("reason_code") != "strategy_package_preprocessor_missing":
+                    raise
+                attempts.append({"locator": _locator_payload(locator), "error": str(exc)})
+            except Exception as exc:
+                attempts.append({"locator": _locator_payload(locator), "error": f"{type(exc).__name__}: {exc}"})
+        raise DataUnavailableError(
+            "original fitted dataset is unavailable; processors must not be refitted",
+            context={"reason_code": "strategy_package_preprocessor_missing", "attempts": attempts},
+        )
+
     def workspace_file_bytes(self, manifest: StrategyPackageManifest, rel_path: str) -> PackageAssetBytes:
         attempts: list[dict[str, Any]] = []
         rel_path = _remote_relpath(rel_path)
@@ -1085,10 +1123,12 @@ class PackageAssetFreezeService:
                 logical_name=logical_name,
                 source_uri=model.source_uri,
             )
+            frozen, processor_record, processor_data = self._freeze_fitted_preprocessor(frozen, manifest)
             code_required, code_assets, code_records = self._freeze_model_code_assets(
                 frozen,
                 manifest,
                 model_weight_data=data,
+                processor_data=processor_data,
             )
             return (
                 frozen.model_copy(
@@ -1097,7 +1137,7 @@ class PackageAssetFreezeService:
                         "model_code_assets": code_assets,
                     }
                 ),
-                [weight_record, *code_records],
+                [weight_record, *([processor_record] if processor_record else []), *code_records],
             )
 
         source = (
@@ -1124,10 +1164,12 @@ class PackageAssetFreezeService:
             logical_name=logical_name,
             source_uri=source.source_uri,
         )
+        frozen, processor_record, processor_data = self._freeze_fitted_preprocessor(frozen, manifest)
         code_required, code_assets, code_records = self._freeze_model_code_assets(
             frozen,
             manifest,
             model_weight_data=source.data,
+            processor_data=processor_data,
         )
         return (
             frozen.model_copy(
@@ -1136,8 +1178,45 @@ class PackageAssetFreezeService:
                     "model_code_assets": code_assets,
                 }
             ),
-            [weight_record, *code_records],
+            [weight_record, *([processor_record] if processor_record else []), *code_records],
         )
+
+    def _freeze_fitted_preprocessor(
+        self, model: ModelAsset, manifest: StrategyPackageManifest,
+    ) -> tuple[ModelAsset, StrategyPackageAssetRecord | None, bytes | None]:
+        existing = model.preprocessor_asset
+        if existing is not None:
+            data = self._read_existing_asset(
+                asset_ref=existing.asset_ref, expected_sha256=existing.sha256,
+                package_id=manifest.package_id, logical_name=str(model.model_id),
+                asset_type=StrategyPackageAssetType.PREPROCESSOR,
+            )
+            if len(data) != existing.size_bytes:
+                raise PackageAssetInvalidError(
+                    "fitted preprocessor size mismatch",
+                    context={"reason_code": "strategy_package_preprocessor_size_mismatch"},
+                )
+            asset = existing
+        else:
+            if _is_multi_alpha_parent_manifest(manifest):
+                return model, None, None
+            conf_source = self._conf_yaml_bytes(manifest)
+            conf = load_conf_yaml_bytes(conf_source.data, source_uri=conf_source.source_uri)
+            handler = conf.get("task", {}).get("dataset", {}).get("kwargs", {}).get("handler", {})
+            if not isinstance(handler, dict) or not handler.get("kwargs", {}).get("infer_processors"):
+                return model, None, None
+            source = self.source.fitted_preprocessor_bytes(manifest, model_weight_sha256=str(model.sha256))
+            data = source.data
+            blob = self.asset_store.put(data, kind=StrategyPackageAssetType.PREPROCESSOR.value)
+            asset = FittedPreprocessorAsset(
+                asset_ref=blob.uri, sha256=blob.sha256, size_bytes=blob.size_bytes, source_uri=source.source_uri,
+            )
+        record = self._asset_record(
+            manifest=manifest, asset_type=StrategyPackageAssetType.PREPROCESSOR,
+            asset_ref=asset.asset_ref, sha256=asset.sha256, size_bytes=asset.size_bytes,
+            logical_name=f"{model.model_id}:fitted_dataset", source_uri=asset.source_uri,
+        )
+        return model.model_copy(update={"preprocessor_asset": asset}), record, data
 
     def _freeze_model_code_assets(
         self,
@@ -1145,6 +1224,7 @@ class PackageAssetFreezeService:
         manifest: StrategyPackageManifest,
         *,
         model_weight_data: bytes,
+        processor_data: bytes | None = None,
     ) -> tuple[bool, list[ModelCodeAsset], list[StrategyPackageAssetRecord]]:
         existing = list(model.model_code_assets or [])
         conf_missing: DataUnavailableError | None = None
@@ -1163,6 +1243,8 @@ class PackageAssetFreezeService:
             model_weight_data,
             include_all_modules=True,
         )
+        if processor_data is not None:
+            pickle_refs.extend(pickled_model_code_references_from_params_bytes(processor_data, include_all_modules=True))
         for ref in pickle_refs:
             if (
                 ref.module_name not in module_names
@@ -1698,7 +1780,9 @@ def _expand_default_node_locators(locators: Iterable[QERuntimeAssetLocator]) -> 
 def _safe_default_qe_node_id() -> str | None:
     try:
         return _text_or_none(resolve_default_qe_node_id())
-    except Exception:
+    except Exception as exc:
+        # Optional locator only: package closure still fails if no exact asset source resolves.
+        logger.warning("optional QE default-node locator unavailable: %s", type(exc).__name__)
         return None
 
 
@@ -1867,8 +1951,11 @@ def _jsonish_mapping(value: Any) -> Mapping[str, Any]:
     if isinstance(value, str) and value.strip():
         try:
             parsed = json.loads(value)
-        except Exception:
-            return {}
+        except json.JSONDecodeError as exc:
+            raise DataUnavailableError(
+                "QE source metadata is not valid JSON",
+                context={"reason_code": "strategy_package_source_metadata_invalid"},
+            ) from exc
         return parsed if isinstance(parsed, Mapping) else {}
     return {}
 
@@ -1914,6 +2001,63 @@ def _params_from_mlruns_archive(payload: bytes, *, locator: QERuntimeAssetLocato
             reason_code="strategy_package_model_params_missing",
             context={"locator": _locator_payload(locator), "member": matches[0].name},
         )
+
+
+def _fitted_dataset_from_mlruns_archive(
+    payload: bytes, *, locator: QERuntimeAssetLocator, model_weight_sha256: str,
+) -> bytes:
+    """Bind fitted state to the same recorder and exact weight, never latest-by-mtime."""
+    try:
+        archive = tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz")
+    except tarfile.TarError as exc:
+        raise ArtifactGenerationFailedError(
+            "fitted dataset archive is invalid",
+            context={"reason_code": "strategy_package_mlruns_archive_invalid"},
+        ) from exc
+    datasets: dict[str, bytes] = {}
+    weight_matched = False
+    with archive:
+        members = {}
+        for member in archive.getmembers():
+            _validate_tar_member(member, locator=locator)
+            if member.isfile():
+                name = member.name.replace("\\", "/").lstrip("./")
+                if name in members:
+                    raise ArtifactGenerationFailedError(
+                        "duplicate fitted dataset archive member",
+                        context={"reason_code": "strategy_package_preprocessor_ambiguous"},
+                    )
+                members[name] = member
+        for name, member in members.items():
+            if not name.endswith("/artifacts/params.pkl"):
+                continue
+            handle = archive.extractfile(member)
+            if handle is None or hashlib.sha256(handle.read()).hexdigest() != model_weight_sha256:
+                continue
+            weight_matched = True
+            dataset_member = members.get(name.removesuffix("params.pkl") + "dataset")
+            if dataset_member is None:
+                continue
+            handle = archive.extractfile(dataset_member)
+            data = handle.read() if handle is not None else b""
+            if data:
+                datasets[hashlib.sha256(data).hexdigest()] = data
+    if not weight_matched:
+        raise ArtifactGenerationFailedError(
+            "fitted dataset recorder does not match frozen model weight",
+            context={"reason_code": "strategy_package_preprocessor_weight_mismatch"},
+        )
+    if len(datasets) > 1:
+        raise ArtifactGenerationFailedError(
+            "same model weight has conflicting fitted datasets",
+            context={"reason_code": "strategy_package_preprocessor_ambiguous"},
+        )
+    if not datasets:
+        raise DataUnavailableError(
+            "model recorder is missing its fitted dataset",
+            context={"reason_code": "strategy_package_preprocessor_missing"},
+        )
+    return next(iter(datasets.values()))
 
 
 _THIRD_PARTY_MODULE_PREFIXES = {

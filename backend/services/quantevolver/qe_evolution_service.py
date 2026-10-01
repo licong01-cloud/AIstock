@@ -4260,12 +4260,48 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
         try:
+            replay_result = None
+            if config.get("prediction_replay"):
+                receipt = await client.inspect_loop_submission(task_id, loop_id)
+                if (receipt.task_id, receipt.loop_id, receipt.status) != (task_id, loop_id, "completed"):
+                    raise ValueError("QE_PREDICTION_REPLAY_RESULTS_NOT_COMPLETED")
+                source_ref = await client.get_workspace_file(
+                    task_id, loop_id, "qe_prediction_replay_source_ref.json"
+                )
+                source_sha = config.get("prediction_source_sha256")
+                pinned_source = config.get("prediction_replay_source")
+                if (
+                    not isinstance(source_ref, dict)
+                    or source_ref.get("schema_version") != "qe_prediction_replay_source_ref_v1"
+                    or not isinstance(source_sha, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", source_sha)
+                    or source_ref.get("sha256") != source_sha
+                    or not isinstance(pinned_source, dict)
+                    or any(
+                        pinned_source.get(key) is None or source_ref.get(key) != pinned_source[key]
+                        for key in (
+                            "source_task_id", "source_loop_index", "source_node_id",
+                            "catalog_path", "sha256", "size_bytes",
+                        )
+                    )
+                ):
+                    raise ValueError("QE_PREDICTION_REPLAY_RESULTS_SOURCE_REF_MISMATCH")
+                replay_result = self._validate_prediction_replay_result(
+                    await client.get_workspace_file(task_id, loop_id, "qe_prediction_replay_result.json"),
+                    expected_source_sha256=str(config.get("prediction_source_sha256") or ""),
+                )
             artifacts = await collect_results_only_artifacts(
                 client=client,
                 task_id=task_id,
                 loop_id=loop_id,
                 node_id=effective_node_id,
+                **({
+                    "expected_prediction_panel_sha256": replay_result["executable_prediction_panel_sha256"],
+                    "expected_prediction_rows": replay_result["executable_prediction_rows"],
+                } if replay_result is not None else {}),
             )
+            if replay_result is not None:
+                artifacts.metrics["prediction_replay_result"] = replay_result
             manifest = upload_results_only_prediction_store(
                 artifacts=artifacts,
                 task_id=task_id,
@@ -4476,6 +4512,7 @@ class AutoEvolutionScheduler:
                         UPDATE qe_evolution_loops
                         SET status = 'failed', agent_analysis = %s, updated_at = NOW()
                         WHERE loop_id = %s
+                          AND status IN ('failed', 'cancelled', 'canceled')
                         """,
                         (error_detail, evolution_loop_db_id),
                     )
@@ -4529,7 +4566,7 @@ class AutoEvolutionScheduler:
         if isinstance(config, str):
             config = json.loads(config)
         config = dict(config or {})
-        if bool(config.get("prediction_replay")):
+        if bool(config.get("prediction_replay")) and requested_retry_mode != QE_LOOP_RETRY_MODE_RESULTS_ONLY:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_GENERIC_RETRY_FORBIDDEN: create a new immutable "
                 "prediction-replay loop instead of inferring model or training fallback"
@@ -7544,12 +7581,15 @@ class AutoEvolutionScheduler:
                 lock_cm.__exit__(None, None, None)
 
     async def _wait_and_process_custom_evo_loop(self, task_id: str, loop_index: int, loop_id: str) -> None:
-        max_wait = 14400
-        waited = 0
+        # This waiter owns neither the remote execution nor its terminal state.
+        # Capacity queues and early reconciliation wakeups are not failures.
+        # The shared coordinator reads the authoritative remote receipt at its
+        # existing >=60s cadence; only its persisted terminal state ends waiting.
         interval = 60
-        final_status = None
+        clock = asyncio.get_running_loop().time
+        next_warning = clock() + 14400
         wait_generation: int | None = None
-        while waited < max_wait:
+        while True:
             from .qe_reconciliation_coordinator import (
                 QEReconciliationScope,
                 qe_reconciliation_wakeup,
@@ -7562,20 +7602,16 @@ class AutoEvolutionScheduler:
                 timeout_seconds=interval,
                 observed_generation=wait_generation,
             )
-            waited += interval
             final_status = qe_reconciliation_wakeup.loop_state(loop_id)
-            if final_status is None or final_status in ("completed", "failed", "cancelled", "canceled"):
+            if final_status in ("completed", "failed", "cancelled", "canceled"):
                 break
-        if waited >= max_wait:
-            logger.error("Custom evolution Loop %s wait timed out (%ss); marking failed", loop_index, max_wait)
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE qe_evolution_loops SET status = 'failed', updated_at = NOW() WHERE loop_id = %s AND status = 'running'",
-                        (loop_id,),
-                    )
-                conn.commit()
-            return
+            now = clock()
+            if now >= next_warning:
+                logger.warning(
+                    "Custom evolution Loop %s still waiting for authoritative terminal state: task=%s state=%s",
+                    loop_index, task_id, final_status,
+                )
+                next_warning = now + 14400
         if final_status == "completed":
             await self._safe_process_completed_loop(task_id, loop_id)
         else:

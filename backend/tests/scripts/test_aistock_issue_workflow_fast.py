@@ -4,6 +4,7 @@ import argparse
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -12,8 +13,411 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+def test_pre_pr_gate_reuses_exact_ci_classifier_and_blocks_before_push(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow, "_git_status_paths", lambda _root: [])
+    monkeypatch.setattr(
+        workflow,
+        "_run_ci_changed_file_classifier",
+        lambda _paths, root: {
+            "workflow_gate": "blocked",
+            "classification": "unexecuted_test_blocked",
+            "blocking": ["changed test files are not executed by any selected CI plan: ['backend/tests/new_test.py']"],
+        },
+    )
+
+    gate = workflow._pre_pr_gate(
+        finish={
+            "changed_files": ["backend/tests/new_test.py"],
+            "scope_check": {"status": "passed"},
+            "fast_path": {"ownership": {}},
+            "closure_ready": True,
+        },
+        validation_evidence=["pytest backend/tests/new_test.py -> passed"],
+        root=Path.cwd(),
+        run_lint=False,
+    )
+
+    assert gate["workflow_gate"] == "blocked"
+    assert gate["ci_classifier"]["classification"] == "unexecuted_test_blocked"
+    assert any("local CI classifier" in item for item in gate["blocking"])
+
+
+def _local_data_payload(overview: bool = False) -> dict[str, Any]:
+    row = {'data_kind': 'adj_factor', 'stats_max_date': '2026-08-11',
+           'audit_ready_date': '2026-09-29', 'ready_date': '2026-09-29',
+           'audit_quality_status': 'ok', 'physical_max_date': None,
+           'physical_max_date_source': 'not_probed', 'stats_date_source': 'data_stats_cache',
+           'readiness_source': 'dataset_date_refresh_audit', 'cache_state': 'stale',
+           'readiness_status': 'audit_success', 'operator_action_required': False}
+    data: dict[str, Any] = {'items': [row]}
+    if overview:
+        data = {'datasets': [row], 'dataset_count': 1, 'stale_dataset_count': 1,
+                'stale_stats_cache_count': 1, 'readiness_unknown_count': 0,
+                'quality_blocked_dataset_count': 0, 'running_job_count': 0,
+                'active_alert_count': 0, 'blocked_target_count': 0,
+                'retry_target_count': 0, 'status': 'yellow'}
+    return {'success': True, 'operation': 'local_data_health_overview' if overview else 'local_data_list_data_stats',
+            'risk_level': 'read_only', 'data': data}
+
+
+@pytest.mark.parametrize('overview', [False, True])
+def test_local_data_freshness_separates_cache_and_readiness(overview: bool) -> None:
+    endpoint = 'overview' if overview else 'data-stats'
+    _, verdict = workflow._evaluate_business_smoke_semantics(
+        f'http://127.0.0.1:8001/api/v1/local-data/{endpoint}',
+        json.dumps(_local_data_payload(overview)), response_sha256='a'*64)
+    assert verdict['verdict'] == 'passed'
+    assert verdict['contract_id'] == 'local_data_freshness'
+    assert verdict['facts']['stale'] == 1
+
+
+@pytest.mark.parametrize(('key', 'value'), [
+    ('physical_max_date', '2026-09-29'), ('physical_max_date_source', 'cache'),
+    ('stats_date_source', 'live'), ('readiness_source', 'cache'),
+    ('ready_date', '2026-08-11'), ('cache_state', 'fresh'),
+    ('readiness_status', 'unknown'), ('operator_action_required', 0),
+    ('audit_ready_date', '2026-09-31'), ('stats_max_date', '2026-8-11'),
+    ('audit_quality_status', {}),
+])
+def test_local_data_freshness_rejects_conflated_evidence(key: str, value: Any) -> None:
+    payload = _local_data_payload()
+    payload['data']['items'][0][key] = value
+    status, _, _ = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
+    assert status == 'failed'
+
+
+@pytest.mark.parametrize('state', ['unknown', 'quality_blocked'])
+def test_local_data_freshness_preserves_non_ready_states(state: str) -> None:
+    payload = _local_data_payload()
+    row = payload['data']['items'][0]
+    row['readiness_status'] = state
+    if state == 'unknown':
+        row.update(audit_ready_date=None, ready_date=None, cache_state='audit_missing')
+    else:
+        row['audit_quality_status'] = 'low_coverage'
+    status, _, facts = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
+    assert status == 'passed' and facts[state] == 1
+
+
+@pytest.mark.parametrize(('key', 'value'), [('success', False), ('operation', 'wrong'), ('risk_level', 'write')])
+def test_local_data_freshness_requires_read_only_envelope(key: str, value: Any) -> None:
+    payload = _local_data_payload()
+    payload[key] = value
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
+
+
+def test_local_data_overview_validates_counters_without_hiding_real_alerts() -> None:
+    payload = _local_data_payload(True)
+    data = payload['data']
+    data.update(status='red', blocked_target_count=4, active_alert_count=4)
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'passed'
+    data['status'] = 'green'
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
+    data.update(status='red', dataset_count=2, readiness_unknown_count=1)
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'passed'
+    data['stale_stats_cache_count'] = 0
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
+
+
+def test_local_data_freshness_rejects_missing_and_duplicate_dataset_evidence() -> None:
+    payload = _local_data_payload()
+    payload['data']['items'].append(dict(payload['data']['items'][0]))
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
+    payload['data']['items'] = []
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
+
+
+@pytest.mark.parametrize(('key', 'value'), [('status', {}), ('dataset_count', True),
+                                         ('readiness_unknown_count', -1)])
+def test_local_data_overview_rejects_malformed_summary(key: str, value: Any) -> None:
+    payload = _local_data_payload(True)
+    payload['data'][key] = value
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
+
+
 def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: int = 0) -> dict[str, Any]:
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
+
+
+_METRICS_PROBE = (
+    "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=sample&calc_batch_id=batch1"
+    "&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=pit_v2"
+    "&expected_return_horizon=1d&limit=1"
+)
+
+
+def _metrics_payload() -> dict[str, Any]:
+    return {"ok": True, "domain": "factor_metrics.result", "summary_first": True, "total": 1,
+            "items": [{"id": 1, "factor_name": "sample", "calc_batch_id": "batch1", "eval_window": "full",
+                       "snapshot_date": "2026-08-31", "universe": "pit_v2", "return_horizon": "1d",
+                       "coverage": .9, "n_trading_days": 100, "ic_mean": -.1, "rank_ic_mean": -.2,
+                       "icir": -2., "rank_icir": -3., "ic_positive_ratio": .4,
+                       "calculated_at": "2026-09-30T13:04:21+08:00"}],
+            "pagination": {"limit": 1, "offset": 0, "next_offset": 1, "total": 1, "has_more": False}}
+
+
+def test_factor_metrics_semantics_bind_real_results_without_profitability_threshold() -> None:
+    _, verdict = workflow._evaluate_business_smoke_semantics(
+        _METRICS_PROBE, json.dumps(_metrics_payload()), response_sha256="a" * 64
+    )
+    assert verdict["verdict"] == "passed" and verdict["contract_id"] == "factor_metrics_results"
+    assert verdict["facts"]["calc_batch_id"] == "batch1"
+    assert verdict["facts"]["acceptance_scope"] == "bound_metrics_readback_only"
+    assert verdict["facts"]["offline_algorithm_acceptance"] == "requires_separate_bug_specific_evidence"
+
+
+@pytest.mark.parametrize("query", [
+    "limit=1", "", "factor_name=sample&limit=1",
+    _METRICS_PROBE.split("?", 1)[1] + "&calc_batch_id=other",
+    _METRICS_PROBE.split("?", 1)[1].replace("batch1", "other"),
+    _METRICS_PROBE.split("?", 1)[1].replace("2026-08-31", "2026-8-31"),
+    _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=0"),
+    _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=" + "9" * 5000),
+    _METRICS_PROBE.split("?", 1)[1] + "&offset=1",
+])
+def test_factor_metrics_semantics_reject_unbound_or_conflicting_probe(query: str) -> None:
+    assert workflow._validate_factor_metrics_results(
+        _metrics_payload(), url=_METRICS_PROBE.split("?", 1)[0] + "?" + query
+    )[0] == "failed"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("factor_name", "other"), ("calc_batch_id", "old_batch"), ("eval_window", "2024"),
+    ("snapshot_date", "2026-06-30"), ("universe", "old_pool"), ("return_horizon", "20d"),
+    ("id", True), ("n_trading_days", 0), ("coverage", float("nan")), ("ic_mean", float("inf")),
+    ("rank_ic_mean", 2), ("ic_positive_ratio", -1), ("icir", None), ("rank_icir", "1"),
+    ("h20_ic_mean", float("nan")), ("ic_mean", 10 ** 500),
+    ("calculated_at", "2026-09-30T13:04:21"), ("calculated_at", "2026-08-30T13:04:21+08:00"),
+])
+def test_factor_metrics_semantics_reject_invalid_business_rows(field: str, value: Any) -> None:
+    payload = _metrics_payload()
+    payload["items"][0][field] = value
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("items", []), ("total", True), ("total", 0), ("ok", False), ("domain", "other"),
+    ("errors", ["failed"]), ("pagination", {}),
+    ("success", False), ("status", "failed"),
+    ("pagination", {"limit": 1, "offset": 0, "next_offset": 1, "total": 2, "has_more": False}),
+])
+def test_factor_metrics_semantics_reject_empty_or_contradictory_envelope(field: str, value: Any) -> None:
+    payload = _metrics_payload()
+    payload[field] = value
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
+
+
+def test_factor_metrics_semantics_reject_duplicate_persisted_rows() -> None:
+    payload = _metrics_payload()
+    payload["items"] *= 2
+    payload["total"] = 2
+    payload["pagination"].update(limit=2, next_offset=2, total=2)
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE.replace("limit=1", "limit=2"))[0] == "failed"
+
+
+def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
+    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+        f"http://127.0.0.1:8001/api/v1/advisory/programs/{program_id}/entry-price/status",
+        json.dumps(payload),
+        response_sha256="e" * 64,
+    )
+    return semantic
+
+
+def test_entry_price_status_semantic_contract_accepts_safe_unconfigured_readback() -> None:
+    semantic = _entry_price_status_semantic(
+        {
+            "ok": True,
+            "schema_version": "advisory_entry_price_status_v1",
+            "configured": False,
+            "program_id": "advp_test",
+            "status": "NOT_CONFIGURED",
+            "database_written": False,
+        }
+    )
+
+    assert semantic["contract_id"] == "advisory_entry_price_status"
+    assert semantic["verdict"] == "passed"
+    assert semantic["facts"] == {
+        "program_id": "advp_test",
+        "configured": False,
+        "status": "NOT_CONFIGURED",
+        "database_written": False,
+    }
+
+
+def test_entry_price_status_semantic_contract_accepts_non_activating_configured_readback() -> None:
+    semantic = _entry_price_status_semantic(
+        {
+            "ok": True,
+            "schema_version": "advisory_entry_price_status_v1",
+            "configured": True,
+            "program_id": "advp_test",
+            "status": "QUALITY_REVIEW_REQUIRED",
+            "database_written": False,
+            "binding_activated": False,
+        }
+    )
+
+    assert semantic["verdict"] == "passed"
+    assert semantic["facts"]["status"] == "QUALITY_REVIEW_REQUIRED"
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"ok": False}, "ok=true"),
+        ({"errors": ["readback failed"]}, "without errors"),
+        ({"schema_version": "wrong"}, "schema_version"),
+        ({"program_id": "advp_other"}, "does not match"),
+        ({"configured": "false"}, "configured must be boolean"),
+        ({"status": "CONFIGURED"}, "must be NOT_CONFIGURED"),
+        ({"database_written": True}, "database_written=false"),
+        (
+            {"configured": True, "status": "CONFIGURED", "binding_activated": True},
+            "binding_activated=false",
+        ),
+    ],
+)
+def test_entry_price_status_semantic_contract_rejects_invalid_or_unsafe_readback(
+    override: dict[str, Any],
+    reason: str,
+) -> None:
+    payload = {
+        "ok": True,
+        "schema_version": "advisory_entry_price_status_v1",
+        "configured": False,
+        "program_id": "advp_test",
+        "status": "NOT_CONFIGURED",
+        "database_written": False,
+    }
+    payload.update(override)
+
+    semantic = _entry_price_status_semantic(payload)
+
+    assert semantic["verdict"] == "failed"
+    assert reason in semantic["reason"]
+
+
+def _rotation_l2_overview_payload(run_id: str = "a" * 64) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "data": {
+            "run_id": run_id,
+            "model_hash": "b" * 64,
+            "trade_date": "2026-09-26",
+            "as_of_date": "2026-09-25",
+            "sector_count": 131,
+            "available_count": 119,
+            "canonical_row_sha256": "c" * 64,
+        },
+    }
+
+
+def _rotation_l2_semantic(
+    payload: Any,
+    *,
+    query: str = "run_id=" + "a" * 64,
+) -> dict[str, Any]:
+    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+        f"http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?{query}",
+        json.dumps(payload),
+        response_sha256="d" * 64,
+    )
+    return semantic
+
+
+def test_rotation_l2_overview_semantic_contract_binds_complete_run() -> None:
+    semantic = _rotation_l2_semantic(_rotation_l2_overview_payload())
+
+    assert semantic["contract_id"] == "hmm_rotation_l2_overview"
+    assert semantic["verdict"] == "passed"
+    assert semantic["facts"] == {
+        "run_id": "a" * 64,
+        "model_hash": "b" * 64,
+        "canonical_row_sha256": "c" * 64,
+        "trade_date": "2026-09-26",
+        "as_of_date": "2026-09-25",
+        "sector_count": 131,
+        "available_count": 119,
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {**_rotation_l2_overview_payload(), "status": "failed"},
+        {**_rotation_l2_overview_payload(), "ok": False},
+        {**_rotation_l2_overview_payload(), "errors": ["readback failed"]},
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_conflicting_envelope(payload: dict[str, Any]) -> None:
+    semantic = _rotation_l2_semantic(payload)
+
+    assert semantic["verdict"] == "failed"
+    assert "status=ok" in semantic["reason"]
+
+
+@pytest.mark.parametrize(
+    ("query", "payload", "reason"),
+    [
+        ("", _rotation_l2_overview_payload(), "exactly one non-empty run_id"),
+        (
+            "run_id=" + "a" * 64 + "&run_id=" + "a" * 64,
+            _rotation_l2_overview_payload(),
+            "exactly one non-empty run_id",
+        ),
+        ("run_id=" + "A" * 64, _rotation_l2_overview_payload("A" * 64), "lowercase SHA-256"),
+        ("run_id=" + "a" * 64, _rotation_l2_overview_payload("e" * 64), "does not match"),
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_unbound_run(
+    query: str,
+    payload: dict[str, Any],
+    reason: str,
+) -> None:
+    semantic = _rotation_l2_semantic(payload, query=query)
+
+    assert semantic["verdict"] == "failed"
+    assert reason in semantic["reason"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("sector_count", 130, "complete 131-sector catalog"),
+        ("sector_count", True, "complete 131-sector catalog"),
+        ("available_count", 132, "outside the sector catalog"),
+        ("canonical_row_sha256", None, "lowercase SHA-256"),
+        ("trade_date", "2026-09-31", "ISO date"),
+        ("trade_date", "2026-9-26", "ISO date"),
+        ("as_of_date", "2026-09-26", "must precede"),
+    ],
+)
+def test_rotation_l2_overview_semantic_contract_rejects_invalid_business_data(
+    field: str,
+    value: Any,
+    reason: str,
+) -> None:
+    payload = _rotation_l2_overview_payload()
+    payload["data"][field] = value
+
+    semantic = _rotation_l2_semantic(payload)
+
+    assert semantic["verdict"] == "failed"
+    assert reason in semantic["reason"]
+
+
+def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
+    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+        "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/not-registered",
+        json.dumps({"status": "ok", "data": {}}),
+        response_sha256="f" * 64,
+    )
+
+    assert semantic["contract_id"] is None
+    assert semantic["verdict"] == "failed"
+    assert "no target-owned business-smoke semantic contract" in semantic["reason"]
 
 
 def test_ci_issue_classification_ignores_successful_runner_and_no_network_metadata() -> None:
@@ -145,6 +549,180 @@ def test_repository_runtime_catalog_preserves_representative_roles(
 
     assert payload["runtime_impact"] == expected_impact
     assert payload["target_ids"] == expected_targets
+
+
+def test_monthly_release_sources_select_supervised_process_probe() -> None:
+    catalog = workflow._load_runtime_target_catalog()
+    target = catalog["targets"]["worker-scheduler"]
+    monthly_sources = [
+        "backend/services/dataset_release/artifact_ready_build_source.py",
+        "backend/services/dataset_release/build_stage.py",
+        "backend/services/dataset_release/candidate_validator.py",
+        "backend/services/dataset_release/factor_materializer.py",
+        "backend/services/dataset_release/monthly_consumer_layout.py",
+        "backend/services/dataset_release/monthly_local_validation.py",
+        "backend/services/dataset_release/monthly_worker_nodes.py",
+        "backend/services/dataset_release/monthly_worker_runtime.py",
+    ]
+
+    selected, error = workflow._select_runtime_probe_route(target, runtime_files=monthly_sources)
+
+    assert error is None
+    assert selected["probe_route_id"] == "monthly_release_worker_process"
+    assert selected["probe_mode"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_MODE
+    assert selected["probes"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS
+    assert selected["probe_origins"] == ["http://127.0.0.1:8001", "http://localhost:8001"]
+
+
+def test_shared_release_source_without_monthly_anchor_keeps_generic_heartbeat_probe() -> None:
+    catalog = workflow._load_runtime_target_catalog()
+    target = catalog["targets"]["worker-scheduler"]
+
+    selected, error = workflow._select_runtime_probe_route(
+        target,
+        runtime_files=["backend/services/dataset_release/build_stage.py"],
+    )
+
+    assert error is None
+    assert selected["probe_route_id"] == "dataset_release_worker_heartbeat"
+    assert selected["probe_mode"] == workflow._DATASET_RELEASE_WORKER_HEARTBEAT_MODE
+
+
+def test_monthly_release_process_probes_do_not_consult_worker_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = {
+        "probe_origins": ["http://127.0.0.1:8001"],
+        "probes": workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS,
+    }
+    snapshot = {
+        "schema_version": "aistock_monthly_release_worker_process_snapshot_v1",
+        "backend_listener_count": 1,
+        "worker_count": 1,
+        "healthy": True,
+        "workers": [{"pid": 101, "ppid": 100}],
+    }
+    monkeypatch.setattr(workflow, "_monthly_release_worker_process_snapshot", lambda _target: snapshot)
+    monkeypatch.setattr(
+        workflow,
+        "_read_only_http_probe",
+        lambda name, url, **_kwargs: {
+            "name": name,
+            "url": url,
+            "status": "passed",
+            "_response_body": json.dumps({"commit": "a" * 40}),
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_read_dataset_release_worker_heartbeat_probes",
+        lambda *_args, **_kwargs: pytest.fail("monthly process probe must not read generic heartbeat"),
+    )
+
+    results = workflow._read_monthly_release_worker_process_probes(target, 3.0)
+
+    assert [item["name"] for item in results] == ["health_ref", "identity_ref", "business_smoke_ref"]
+    assert all(item["status"] == "passed" for item in results)
+    assert results[2]["semantic"]["contract_id"] == "monthly_release_worker_supervision"
+
+
+def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_port = 8_000 + 1
+    worker_path = tmp_path / "scripts" / "monthly_unified_dataset_release_worker.py"
+    worker_path.parent.mkdir(parents=True)
+    worker_path.write_text("# worker\n", encoding="utf-8")
+
+    class FakeChild:
+        pid = 102
+
+        @staticmethod
+        def ppid() -> int:
+            return 101
+
+        @staticmethod
+        def cmdline() -> list[str]:
+            return ["python", str(worker_path), "--serve", "--poll-seconds", "5.0"]
+
+        @staticmethod
+        def cwd() -> str:
+            return str(tmp_path)
+
+    class FakeParent:
+        pid = 101
+
+        @staticmethod
+        def cmdline() -> list[str]:
+            return ["python", "-m", "uvicorn", "backend.main:app", "--port", str(parent_port)]
+
+        @staticmethod
+        def cwd() -> str:
+            return str(tmp_path)
+
+        @staticmethod
+        def children(*, recursive: bool) -> list[FakeChild]:
+            assert recursive is False
+            return [FakeChild()]
+
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        workflow.psutil,
+        "net_connections",
+        lambda **_kwargs: [
+            SimpleNamespace(
+                pid=101,
+                status=workflow.psutil.CONN_LISTEN,
+                laddr=SimpleNamespace(port=parent_port),
+            )
+        ],
+    )
+    monkeypatch.setattr(workflow.psutil, "Process", lambda pid: FakeParent() if pid == 101 else pytest.fail())
+
+    snapshot = workflow._monthly_release_worker_process_snapshot(
+        {
+            "local_probe": {
+                "worker_script": "scripts/monthly_unified_dataset_release_worker.py",
+                "worker_mode": "--serve",
+                "parent_module": "backend.main:app",
+                "parent_port": parent_port,
+            }
+        }
+    )
+
+    assert snapshot["backend_listener_count"] == 1
+    assert snapshot["worker_count"] == 1
+    assert snapshot["healthy"] is True
+
+
+def test_monthly_release_process_probe_fails_closed_for_duplicate_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = {
+        "probe_origins": ["http://127.0.0.1:8001"],
+        "probes": workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS,
+    }
+    snapshot = {
+        "schema_version": "aistock_monthly_release_worker_process_snapshot_v1",
+        "backend_listener_count": 1,
+        "worker_count": 2,
+        "healthy": False,
+        "workers": [{"pid": 101, "ppid": 100}, {"pid": 102, "ppid": 100}],
+    }
+    monkeypatch.setattr(workflow, "_monthly_release_worker_process_snapshot", lambda _target: snapshot)
+    monkeypatch.setattr(
+        workflow,
+        "_read_only_http_probe",
+        lambda name, url, **_kwargs: {"name": name, "url": url, "status": "passed"},
+    )
+
+    results = workflow._read_monthly_release_worker_process_probes(target, 3.0)
+
+    assert results[0]["status"] == "failed"
+    assert results[2]["status"] == "failed"
+    assert results[2]["semantic"]["verdict"] == "failed"
+    assert "worker_count=2" in results[2]["error"]
 
 
 def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
@@ -399,6 +977,100 @@ def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch:
 
     assert workflow.cmd_close_sync(args) == 0
     assert emitted["close_sync_commit"]["workflow_gate"] == "deferred_runtime_verification"
+
+
+def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = tmp_path / "tests" / "aistock_validation" / "bugs" / "BUG-199.json"
+    issue.parent.mkdir(parents=True)
+    issue.write_text(
+        json.dumps(
+            {
+                "bug_id": "BUG-199",
+                "status": "fixed",
+                "fix_commit": "a" * 40,
+                "pr_url": "https://github.example/pull/199",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_dirty_files",
+        lambda _root: ["tests/aistock_validation/bugs/BUG-199.json"],
+    )
+
+    recovered = workflow._recoverable_close_sync_dirty_record(
+        tmp_path,
+        "BUG-199",
+        issue,
+        source_pr_url="https://github.example/pull/199",
+        merge_commit="a" * 40,
+    )
+
+    assert recovered is not None
+    assert recovered["path"] == "tests/aistock_validation/bugs/BUG-199.json"
+    assert (
+        workflow._recoverable_close_sync_dirty_record(
+            tmp_path,
+            "BUG-199",
+            issue,
+            source_pr_url="https://github.example/pull/200",
+            merge_commit="a" * 40,
+        )
+        is None
+    )
+    assert (
+        workflow._recoverable_close_sync_dirty_record(
+            tmp_path,
+            "BUG-199",
+            issue,
+            source_pr_url="https://github.example/pull/199",
+            merge_commit="b" * 40,
+        )
+        is None
+    )
+
+
+def test_close_sync_apply_guard_allows_only_the_exact_recoverable_dirty_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dirty_path = "tests/aistock_validation/bugs/BUG-199.json"
+    monkeypatch.setattr(
+        workflow,
+        "_validate_registry_apply_target",
+        lambda _root: {
+            "blocking": ["registry target is dirty (1 file(s)); start from a clean task worktree"],
+            "warnings": [],
+            "git": {"dirty": True, "dirty_count": 1},
+        },
+    )
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
+    recovery = {
+        "bug_id": "BUG-199",
+        "path": dirty_path,
+        "status": "fixed",
+        "fix_commit": "a" * 40,
+        "pr_url": "https://github.example/pull/199",
+    }
+
+    accepted = workflow._validate_close_sync_apply_target(
+        tmp_path,
+        recoverable_dirty_record=recovery,
+    )
+    rejected = workflow._validate_close_sync_apply_target(
+        tmp_path,
+        recoverable_dirty_record={**recovery, "path": "tests/aistock_validation/bugs/BUG-200.json"},
+    )
+
+    assert accepted["blocking"] == []
+    assert accepted["recoverable_dirty_record"] == recovery
+    assert rejected["blocking"] == [
+        "registry target is dirty (1 file(s)); start from a clean task worktree"
+    ]
 
 
 def test_windows_process_scan_builds_full_caller_ancestor_exclusion(

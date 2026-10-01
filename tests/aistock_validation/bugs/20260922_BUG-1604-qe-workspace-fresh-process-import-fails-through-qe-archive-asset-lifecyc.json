@@ -1,0 +1,329 @@
+{
+  "actual": "Fresh import raises ImportError for partially initialized QEWorkspaceClient; qe_long_trend_phase2_backend fails during collection.",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/__init__.py",
+    "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py",
+    "tests/aistock_validation/bugs/20260922_BUG-1604-qe-workspace-fresh-process-import-fails-through-qe-archive-asset-lifecyc.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1604",
+  "closed_at": "2026-09-22T19:05:54.414262Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-22T17:57:39.246479Z",
+  "description": "Fresh import raises ImportError for partially initialized QEWorkspaceClient; qe_long_trend_phase2_backend fails during collection.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260922-fab17467ff79",
+      "timestamp": "2026-09-22T17:57:39.246449Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/5046"
+  ],
+  "expected": "A fresh process can import QEWorkspaceClient and the QE Long Trend Phase 2 nox session completes without changing archive asset publication semantics.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260922_BUG-1604-qe-workspace-fresh-process-import-fails-through-qe-archive-asset-lifecyc.json",
+      "backend/services/strategy_package/__init__.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260922_BUG-1604-qe-workspace-fresh-process-import-fails-through-qe-archive-asset-lifecyc.json",
+      "backend/services/strategy_package/__init__.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/strategy_package/__init__.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py"
+      ],
+      "impacted_modules": [
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment",
+        "qe.long_trend_evaluation",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/strategy_package/__init__.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase2"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/strategy_package/__init__.py",
+        "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/strategy_package/__init__.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/strategy_package/__init__.py",
+      "backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py"
+    ]
+  },
+  "first_seen_at": "2026-09-22T17:57:39.246479Z",
+  "fix_branch": null,
+  "fix_commit": "14c37c771c268825a02b492d7dd7f6482374b8e0",
+  "fixed_at": "2026-09-22T18:15:08Z",
+  "github_issue_number": 5055,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5055",
+  "last_seen_at": "2026-09-22T17:57:39.246479Z",
+  "module": "qe.long_trend_evaluation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5056",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "qe_long_trend_phase2_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "fresh_process_evidence": [
+      "fresh Python import QEWorkspaceClient, QEArchiveAssetPublisher, StrategyPackageComponentService and HMMDataRepository -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1604\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1604",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+      "expected_identity": "14c37c771c268825a02b492d7dd7f6482374b8e0",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-22T19:04:02.170301Z",
+      "mode": "read_only",
+      "observed_identity": "4ec2c3b08f4bef229dd3dc6cf40474086155f436",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d20f710b3176acb2054cd1d424965191aaf1aaa77be047987af26cba19cabe7c",
+      "receipt_sha256": "84bfe73333d90dac66f441b80f36b15f7e9c4375858472a146114d46b3fb0b4c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "05321ce4515b0a816085213c35d3e77e99f0492520af6f6afb9d964c1db505b9",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1604",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "40797c79f7647125",
+    "recorded_at": "2026-09-22T18:16:16.478996Z",
+    "runtime_contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "41ebea13809921abdbb8ea2ea74c9288a1f99827",
+    "source_merge_commit": "14c37c771c268825a02b492d7dd7f6482374b8e0",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5056",
+    "validation_evidence": [
+      "validation-receipt: id=25d1ddc677e17045 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed`",
+      "validation-receipt: id=51d9bcbee0587da7 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=nox plan=qe_long_trend_phase2_backend status=passed command=`rtk nox -s qe_long_trend_phase2_backend` result=`126 passed`",
+      "validation-receipt: id=cf68b3af557effb0 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/strategy_package/test_qe_local_cas.py -q -p no:cacheprovider` result=`3 passed, 1 skipped`",
+      "validation-receipt: id=f3d98a53c358190a commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/strategy_package/__init__.py backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py` result=`passed`",
+      "validation-receipt: id=0ec8a6ecdde2e3af commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/strategy_package/__init__.py backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py` result=`passed`",
+      "validation-receipt: id=5177abdc7824ff46 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "e151daf637c4660253a83113f310d8a02d4de785dcbcbdabf3d273170d22f6f4"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qe.long_trend_evaluation"
+  ],
+  "title": "QE Workspace fresh-process import fails through QE archive asset lifecycle circular import",
+  "trigger_condition": {
+    "fingerprint": "fab17467ff79effcd68932d1",
+    "source_event_id": "FE-20260922-fab17467ff79"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=25d1ddc677e17045 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed`",
+    "validation-receipt: id=51d9bcbee0587da7 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=nox plan=qe_long_trend_phase2_backend status=passed command=`rtk nox -s qe_long_trend_phase2_backend` result=`126 passed`",
+    "validation-receipt: id=cf68b3af557effb0 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/strategy_package/test_qe_local_cas.py -q -p no:cacheprovider` result=`3 passed, 1 skipped`",
+    "validation-receipt: id=f3d98a53c358190a commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/strategy_package/__init__.py backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py` result=`passed`",
+    "validation-receipt: id=0ec8a6ecdde2e3af commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/strategy_package/__init__.py backend/tests/unified_engine/test_qe_long_trend_phase2_bundle_resolver.py` result=`passed`",
+    "validation-receipt: id=5177abdc7824ff46 commit=41ebea13809921abdbb8ea2ea74c9288a1f99827 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python -m nox -s hmm_data_source_backend -> 124 passed, 1 skipped, 5 deselected, coverage 76.40 percent",
+    "fresh Python import QEWorkspaceClient, QEArchiveAssetPublisher, StrategyPackageComponentService and HMMDataRepository -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.long_trend_evaluation",
+        "paper_v2",
+        "qe_long_trend_phase2"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "qe_long_trend_phase2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.long_trend_evaluation",
+          "paper_v2",
+          "qe_long_trend_phase2"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "qe_long_trend_phase2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
@@ -2229,8 +2230,22 @@ class AdvisoryProgramService:
                 selection_run_id=selection_run_id,
                 data_source=data_source,
                 runtime_config=effective_runtime_config,
+                advisory_archive_context=None if preview else {
+                    "artifact_root": os.getenv("AISTOCK_ADVISORY_MODEL_ROOT", "").strip(),
+                    "program_id": program.program_id, "binding_version_id": binding.binding_version_id,
+                    "review_policy_sha256": bound_program.review_policy_sha256,
+                    "decision_as_of_trade_date": (effective_runtime_config.get("advisory_date_context") or {}).get(
+                        "selection_as_of_trade_date"),
+                },
             )
             selection_run_ids = [run.run_id]
+            archive_ref = run.runtime_config.get("advisory_frozen_input_archive")
+            if archive_ref is not None:
+                from backend.services.selection_center.advisory_input_archive import validate_archive_reference
+                validate_archive_reference(archive_ref, run=run, program_id=program.program_id,
+                                           binding_version_id=binding.binding_version_id,
+                                           review_policy_sha256=bound_program.review_policy_sha256)
+                effective_runtime_config["advisory_frozen_input_archive"] = archive_ref
             normalized_candidates = candidates_from_selection_run(run)
         else:
             normalized_candidates = [_candidate_from_mapping(row) for row in candidates]
@@ -2371,6 +2386,7 @@ class AdvisoryProgramService:
             version_status=LIST_VERSION_STATUS_PREVIEW if preview else LIST_VERSION_STATUS_PUBLISHED,
             date_context=effective_runtime_config.get("advisory_date_context"),
             universe_receipt=effective_runtime_config.get("advisory_universe_receipt"),
+            frozen_input_archive=effective_runtime_config.get("advisory_frozen_input_archive"),
         )
         self.repository.create_list_version(list_version, list_items)
         enriched_decisions = [
@@ -2904,6 +2920,7 @@ class AdvisoryProgramService:
         version_status: str,
         date_context: Mapping[str, Any] | None = None,
         universe_receipt: Mapping[str, Any] | None = None,
+        frozen_input_archive: Mapping[str, Any] | None = None,
     ) -> tuple[AdvisoryRecommendationListVersion, list[AdvisoryRecommendationListItem], dict[str, Any]]:
         previous_by_symbol = {row.symbol: row for row in previous_items}
         episode_by_id = {row.episode_id: row for row in result.active_pool}
@@ -2993,6 +3010,8 @@ class AdvisoryProgramService:
             summary["advisory_date_context"] = _json_ready(dict(date_context))
         if universe_receipt:
             summary["advisory_universe_receipt"] = _json_ready(dict(universe_receipt))
+        if frozen_input_archive:
+            summary["advisory_frozen_input_archive"] = _json_ready(dict(frozen_input_archive))
         list_version = AdvisoryRecommendationListVersion(
             list_version_id=list_version_id,
             program_id=program.program_id,
@@ -3354,6 +3373,7 @@ class AdvisoryProgramService:
         selection_run_id: str | None,
         data_source: str,
         runtime_config: dict[str, Any],
+        advisory_archive_context: dict[str, Any] | None = None,
     ) -> SelectionRun:
         if selection_run_id:
             run = self.selection_service.get_run(selection_run_id)
@@ -3368,6 +3388,7 @@ class AdvisoryProgramService:
                 trade_date=trade_date,
                 data_source=data_source,
                 runtime_config=config,
+                **({"advisory_archive_context": advisory_archive_context} if advisory_archive_context is not None else {}),
             )
         if run.status != SelectionRunStatus.SUCCEEDED:
             raise InvalidStateTransitionError(

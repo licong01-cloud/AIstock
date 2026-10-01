@@ -859,7 +859,7 @@ function AdvisoryPageContent() {
     setModelShadowError(null);
     setModelShadowLoading(true);
     try {
-      const shadow = await advisoryApi.modelShadow(programId, targetDate);
+      const shadow = await advisoryApi.modelShadow(programId, targetDate, "entry-v2", version.list_version_id);
       if (requestSeq !== modelShadowSeqRef.current) return;
       setModelShadow(shadow);
     } catch (exc) {
@@ -2256,6 +2256,43 @@ function AdvisoryPageContent() {
             <span className="pv2-muted"> 点击“预览初始列表”可先检查候选，点击“生成初始列表”会发布第一版推荐列表；全程自动生成候选，无需填写内部编号。</span>
           </div>
         )}
+        <section className="mt-3 rounded-lg border bg-card p-4 text-card-foreground" data-testid="advisory-entry-price">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-semibold">独立买入价格区间</h3>
+            <span className="text-sm text-muted-foreground">{modelShadowLoading ? "LOADING" : modelShadow?.entry_price?.availability_status || "UNAVAILABLE"}</span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            目标日 {modelShadow?.entry_price?.target_trade_date || "-"} · RISK_MANAGED_ADVISORY · 不复权人民币。
+            预测对象为下一交易日有效开盘价分布，不是盘中最佳买点，不承诺收益或成交；不改变原荐股排序。
+          </p>
+          <p className="mt-1 text-sm" data-testid="advisory-entry-evidence">
+            {modelShadow?.entry_price?.evidence_state === "CONFIRMED_PRICE_DISTRIBUTION" ? "已确认价格分布（不代表收益验证通过）" : "价格模型尚未确认或配置"}
+          </p>
+          {modelShadow?.entry_price?.reason_code ? <p className="mt-2 text-sm" role="status">{modelShadow.entry_price.reason_code} · {modelShadow.entry_price.message}</p> : null}
+          {!modelShadowLoading && !modelShadow?.entry_price ? <p className="mt-2 text-sm" role="status">ENTRY_PRICE_RESPONSE_MISSING · 独立价格通道尚未返回结果。</p> : null}
+          {modelShadow?.entry_price_collection ? <div className="mt-2 text-xs text-muted-foreground" data-testid="advisory-entry-collection">
+            每日采集：{modelShadow.entry_price_collection.configured_enabled ? "调度已配置" : "调度未启用"} · 最近检查 {modelShadow.entry_price_collection.last_run_at || "尚无"}（状态检查不等于已发布预测）
+            {modelShadow.entry_price_collection.attempts.map((attempt, index) => <div key={`${attempt.stage}-${attempt.target_trade_date}-${index}`}>{attempt.target_trade_date || "-"} {attempt.stage || ""} {attempt.status} {attempt.reason_code || ""}</div>)}
+          </div> : null}
+          {modelShadow?.entry_price?.candidates.length ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-left text-sm" data-testid="advisory-entry-price-table">
+                <thead><tr className="border-b"><th className="p-2">股票</th><th className="p-2">参考收盘 / 日期</th><th className="p-2">开盘价格区间 / 中位</th><th className="p-2">止盈 / 止损</th><th className="p-2">状态</th></tr></thead>
+                <tbody>{modelShadow.entry_price.candidates.map((candidate) => {
+                  const band = candidate.entry_price.calibrated_range ?? candidate.entry_price.raw_range;
+                  return <tr key={candidate.symbol} className="border-b" data-testid="advisory-entry-price-row">
+                    <td className="p-2">{candidate.symbol}</td>
+                    <td className="p-2">{fmtPrice(candidate.decision_reference_price)} / {candidate.decision_price_trade_date || "-"}</td>
+                    <td className="p-2">{candidate.entry_price.status === "AVAILABLE" && band ? `${fmtPriceBand(band)} / ${fmtPrice(band.mid)}` : "不可用"}</td>
+                    <td className="p-2">{candidate.take_profit.status === "AVAILABLE" ? fmtPriceBand(candidate.take_profit.payload) : "止盈未验证"} / {candidate.stop_loss.status === "AVAILABLE" ? fmtPriceBand(candidate.stop_loss.payload) : "止损未验证"}</td>
+                    <td className="p-2">{candidate.entry_price.reason_code || candidate.entry_price.status}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
+          ) : null}
+          <details className="mt-3 text-xs text-muted-foreground"><summary>价格角色身份</summary><pre className="mt-2 overflow-auto">{JSON.stringify(modelShadow?.entry_price ?? {}, null, 2)}</pre></details>
+        </section>
         <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-model-shadow">
           <div className="pv2-card-head">
             <div>

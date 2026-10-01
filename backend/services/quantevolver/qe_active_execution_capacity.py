@@ -18,6 +18,7 @@ from psycopg2.extras import RealDictCursor
 from backend.db.pg_pool import get_conn
 from backend.services.qe_archive.models import normalize_json
 
+from .node_execution import MAX_QE_NODE_PARALLELISM
 from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     CapacityWaitRecorder,
@@ -41,12 +42,14 @@ from .qe_workspace_client import (
 
 DEFAULT_WSL_NODE_ID = "wsl2-5080"
 NONCANONICAL_LOCAL_WSL_NODE_ALIASES = frozenset({"wsl", "local"})
-# One local WSL slot is the fail-closed host-responsiveness baseline.  The
-# coordinator may raise one same-task cohort to two only for pure backtests or
-# catalog-resolved non-GAT training after the reservation repository proves
-# that every active WSL execution is compatible.
+# One local WSL slot is the fail-closed host-responsiveness baseline.  A
+# repository-proven same-task pure-backtest cohort may use the task's explicit
+# node_parallelism across the globally supported range.  Catalog-resolved
+# non-GAT training remains capped separately at two; unresolved, mixed-task,
+# and graph-model workloads retain the single-slot baseline.
 WSL_HARD_CAPACITY = 1
-WSL_BACKTEST_HARD_CAPACITY = 2
+WSL_BACKTEST_DEFAULT_CAPACITY = 2
+WSL_BACKTEST_HARD_CAPACITY = MAX_QE_NODE_PARALLELISM
 WSL_PARALLEL_TRAINING_HARD_CAPACITY = 2
 REMOTE_HARD_CAPACITY = 4
 # The coordinator starts immediately and performs a safety sweep at most every
@@ -157,6 +160,7 @@ class QEActiveExecutionCapacityService:
         *,
         wsl_node_id: str = DEFAULT_WSL_NODE_ID,
         wsl_hard_capacity: int = WSL_HARD_CAPACITY,
+        wsl_backtest_default_capacity: int = WSL_BACKTEST_DEFAULT_CAPACITY,
         wsl_backtest_hard_capacity: int = WSL_BACKTEST_HARD_CAPACITY,
         wsl_parallel_training_hard_capacity: int = WSL_PARALLEL_TRAINING_HARD_CAPACITY,
         remote_hard_capacity: int = REMOTE_HARD_CAPACITY,
@@ -168,16 +172,19 @@ class QEActiveExecutionCapacityService:
             )
         if (
             wsl_hard_capacity < 1
+            or wsl_backtest_default_capacity < wsl_hard_capacity
             or wsl_backtest_hard_capacity < wsl_hard_capacity
+            or wsl_backtest_default_capacity > wsl_backtest_hard_capacity
             or wsl_parallel_training_hard_capacity < wsl_hard_capacity
             or remote_hard_capacity < 1
         ):
             raise QEWorkspaceSubmissionCoordinatorError(
-                "QE node hard capacities must be positive",
+                "QE node capacity defaults and hard limits are inconsistent",
                 reason_code="qe_execution_capacity_contract_invalid",
             )
         self._wsl_node_id = str(wsl_node_id).strip().casefold()
         self._wsl_hard_capacity = int(wsl_hard_capacity)
+        self._wsl_backtest_default_capacity = int(wsl_backtest_default_capacity)
         self._wsl_backtest_hard_capacity = int(wsl_backtest_hard_capacity)
         self._wsl_parallel_training_hard_capacity = int(
             wsl_parallel_training_hard_capacity
@@ -220,6 +227,11 @@ class QEActiveExecutionCapacityService:
                 reason_code="qe_execution_capacity_contract_invalid",
                 context={"node_id": normalized_node_id},
             )
+        default_capacity = (
+            self._wsl_backtest_default_capacity
+            if normalized_node_id == self._wsl_node_id and backtest_only
+            else None
+        )
         hard_cap = (
             (
                 self._wsl_backtest_hard_capacity
@@ -234,7 +246,7 @@ class QEActiveExecutionCapacityService:
             else self._remote_hard_capacity
         )
         if requested_limit is None:
-            return hard_cap
+            return default_capacity if default_capacity is not None else hard_cap
         if isinstance(requested_limit, bool):
             normalized_limit = 0
         else:

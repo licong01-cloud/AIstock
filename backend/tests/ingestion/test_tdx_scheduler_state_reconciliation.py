@@ -51,11 +51,13 @@ def _complete_daily_basic_row(
     code: str,
     *,
     turnover_rate_f: object = 1.0,
+    volume_ratio: object = 1.0,
 ) -> dict[str, object]:
     return {
         "trade_date": trade_date,
         "ts_code": code,
         "turnover_rate_f": turnover_rate_f,
+        "volume_ratio": volume_ratio,
     }
 
 
@@ -125,9 +127,11 @@ def test_canonical_weekend_compensation_is_weekly_saturday_and_defaults_are_uniq
     _validate_default_schedules(_DEFAULT_SCHEDULES)
 
     weekend = next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "_weekend_compensation")
+    daily_basic = next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "daily_basic")
     assert weekend["frequency"] == "weekly"
     assert weekend["day_of_week"] == "saturday"
     assert weekend["at"] == "10:00"
+    assert daily_basic["at"] == "20:30"
 
     with pytest.raises(ValueError, match="mode-insensitive default dataset has multiple schedules"):
         _validate_default_schedules(
@@ -1211,6 +1215,38 @@ def test_daily_basic_required_turnover_coverage_fails_closed_before_upsert(monke
     assert upserts == []
 
 
+def test_daily_basic_required_volume_ratio_coverage_fails_closed_before_upsert(monkeypatch: Any) -> None:
+    trade_date = dt.date(2026, 9, 4)
+    rows = [
+        _complete_daily_basic_row(trade_date, f"{index:06d}.SZ", volume_ratio=None)
+        for index in range(100)
+    ]
+    upserts: list[object] = []
+    monkeypatch.setattr(daily_basic_ingestion, "_date_range", lambda *_args: [trade_date])
+    monkeypatch.setattr(daily_basic_ingestion, "_fetch_daily_basic_for_date", lambda *_args: rows)
+    monkeypatch.setattr(
+        daily_basic_ingestion,
+        "_upsert_daily_basic",
+        lambda *_args: upserts.append(object()) or len(rows),
+    )
+    monkeypatch.setattr(daily_basic_ingestion, "_update_job_progress", lambda *_args: None)
+    monkeypatch.setattr(daily_basic_ingestion, "_log", lambda *_args: None)
+
+    stats = daily_basic_ingestion.run_ingestion(
+        _DailyBasicConnection(),
+        object(),
+        "incremental",
+        trade_date,
+        trade_date,
+        uuid.UUID("00000000-0000-0000-0000-000000000003"),
+        0,
+    )
+
+    assert stats["failed_days"] == 1
+    assert stats["success_days"] == 0
+    assert upserts == []
+
+
 def test_daily_basic_required_turnover_coverage_allows_bounded_symbol_gaps() -> None:
     trade_date = dt.date(2026, 9, 4)
     rows = [
@@ -1218,6 +1254,7 @@ def test_daily_basic_required_turnover_coverage_allows_bounded_symbol_gaps() -> 
             trade_date,
             f"{index:06d}.SZ",
             turnover_rate_f=None if index < 5 else 1.0,
+            volume_ratio=None if index < 5 else 1.0,
         )
         for index in range(100)
     ]
@@ -1225,6 +1262,7 @@ def test_daily_basic_required_turnover_coverage_allows_bounded_symbol_gaps() -> 
     receipt = daily_basic_ingestion._validate_required_field_coverage(rows, trade_date)
 
     assert receipt["required_field_coverage"]["turnover_rate_f"]["finite_count"] == 95
+    assert receipt["required_field_coverage"]["volume_ratio"]["finite_count"] == 95
 
 
 def test_daily_basic_audit_with_required_field_receipt_is_ready():
@@ -1279,12 +1317,14 @@ def test_daily_basic_refresh_audit_records_required_field_low_coverage(monkeypat
     def fake_fetchall(sql, _params=()):
         if "FROM market.daily_basic" in sql:
             assert "required_turnover_rate_f_count" in sql
+            assert "required_volume_ratio_count" in sql
             return [
                 {
                     "trade_date": trade_date,
                     "row_count": 5548,
                     "data_max_at": trade_date,
-                    "required_turnover_rate_f_count": 0,
+                    "required_turnover_rate_f_count": 5548,
+                    "required_volume_ratio_count": 0,
                 }
             ]
         if "FROM market.trading_calendar" in sql:
@@ -1320,9 +1360,13 @@ def test_daily_basic_refresh_audit_records_required_field_low_coverage(monkeypat
     assert captured[0][0] == "failure"
     assert captured[0][1]["quality_status"] == "low_coverage"
     assert captured[0][1]["failure_category"] == "required_field_low_coverage"
+    assert "field=volume_ratio" in captured[0][1]["error_message"]
     coverage = captured[0][1]["metadata"]["required_field_coverage"]
-    assert coverage["finite_count"] == 0
+    assert coverage["finite_count"] == 5548
     assert coverage["row_count"] == 5548
+    coverages = captured[0][1]["metadata"]["required_field_coverages"]
+    assert coverages["schema_version"] == "daily_basic_required_field_coverages_v2"
+    assert coverages["fields"]["volume_ratio"]["finite_count"] == 0
 
 
 def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):

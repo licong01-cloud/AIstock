@@ -1,0 +1,323 @@
+{
+  "actual": "WSL_BACKTEST_HARD_CAPACITY=2 silently clamps explicit pure-backtest requests of 3 or 4 to 2.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_active_execution_capacity.py",
+    "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+    "tests/aistock_validation/bugs/20260917_BUG-1560-qe-wsl-pure-backtest-capacity-is-hard-clamped-below-the-supported-task-p.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1560",
+  "closed_at": "2026-09-17T13:08:10.310923Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-17T02:16:52.240781Z",
+  "description": "WSL_BACKTEST_HARD_CAPACITY=2 silently clamps explicit pure-backtest requests of 3 or 4 to 2.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260917-c1fe3ad6c717",
+      "timestamp": "2026-09-17T02:16:52.240761Z"
+    },
+    {
+      "action": "source_fix_validated",
+      "actor": "Codex",
+      "note": "WSL same-task pure-backtest capacity now honors explicit node_parallelism 1-4 while preserving default 2, baseline 1, non-GAT training 2, and remote 4; related matrix 73 passed/3 skipped.",
+      "timestamp": "2026-09-17T02:24:07Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-1534 verified qrun kernels=4 per Loop; live WSL reports 28 CPUs and 57.8GB available memory while idle"
+  ],
+  "expected": "A registered same-task all-backtest-only WSL cohort may explicitly request 1, 2, 3 or 4 slots and receive that exact capacity up to the existing QE supported maximum; all non-eligible workloads retain their current fail-closed limits.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_active_execution_capacity.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_qe_submission_coordinator.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_active_execution_capacity.py",
+        "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_active_execution_capacity.py",
+      "backend/tests/multi_alpha/test_qe_submission_coordinator.py"
+    ]
+  },
+  "first_seen_at": "2026-09-17T02:16:52.240781Z",
+  "fix_branch": null,
+  "fix_commit": "c71b7b6f5f18f809c0bddd1b56b9c5b2fcb41a9d",
+  "fixed_at": "2026-09-17T07:44:48Z",
+  "github_issue_number": 4880,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4880",
+  "last_seen_at": "2026-09-17T02:16:52.240781Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4881",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Call QEActiveExecutionCapacityService.resolve_node_capacity('wsl2-5080', 4, backtest_only=True); current main returns 2 instead of 4.",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded the task-worktree capacity service and read back WSL pure-backtest default=2 plus explicit 1/2/3/4 exactly; WSL baseline remained 1, non-GAT parallel training remained 2, and rdagent-node1 remained 4."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1560-close-sync-20260917\\tmp\\issue_workflow\\BUG-1560\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1560",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "c71b7b6f5f18f809c0bddd1b56b9c5b2fcb41a9d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-17T13:07:34.226627Z",
+      "mode": "read_only",
+      "observed_identity": "1881b01a04073bf512907097275c8b3d500397e3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "db38baa6c1fd441bf9a1c21c63a78adaaeae5dcc55a26ab03147fde23c4defc2",
+      "receipt_sha256": "4cd14a2e148247fa5d4d6f2288e9a734d8e6434c3cdfcb5dc30b50c3c2057671",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "5150864caaa6c338d71b212d169bac50228e50ddd063cf5fbccee8e329669103",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": true,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1560",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a7872d9194474d87",
+    "recorded_at": "2026-09-17T07:46:17.796320Z",
+    "runtime_contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "59d4493ffce94aaa9b491014b6603ddf475ae8dd",
+    "source_merge_commit": "c71b7b6f5f18f809c0bddd1b56b9c5b2fcb41a9d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4881",
+    "validation_evidence": [
+      "validation-receipt: id=6f132a83e843aecb commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/unified_engine/test_backtest_executor.py -q` result=`47 passed`",
+      "validation-receipt: id=e76ce93bb5be7c0e commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha -q` result=`142 passed, 13 skipped`",
+      "validation-receipt: id=1bd162ca9d0acf43 commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=nox plan=qe_read_backend status=passed command=`rtk nox -s qe_read_backend` result=`603 passed, 1 skipped`",
+      "validation-receipt: id=06ecf9343b2b8baa commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=nox plan=l0 status=passed command=`rtk nox -s l0; validation_module_registry_l0; guardrail_changed_files` result=`passed`"
+    ],
+    "validation_evidence_digest": "59a043724663dccc4bb19248a866907871c10f79a7be08b97cb06016f6699deb"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE WSL pure-backtest capacity is hard-clamped below the supported task parallelism",
+  "trigger_condition": {
+    "fingerprint": "c1fe3ad6c717bb71f29fe0b8",
+    "source_event_id": "FE-20260917-c1fe3ad6c717"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=6f132a83e843aecb commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py backend/tests/unified_engine/test_backtest_executor.py -q` result=`47 passed`",
+    "validation-receipt: id=e76ce93bb5be7c0e commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha -q` result=`142 passed, 13 skipped`",
+    "validation-receipt: id=1bd162ca9d0acf43 commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=nox plan=qe_read_backend status=passed command=`rtk nox -s qe_read_backend` result=`603 passed, 1 skipped`",
+    "validation-receipt: id=06ecf9343b2b8baa commit=59d4493ffce94aaa9b491014b6603ddf475ae8dd kind=nox plan=l0 status=passed command=`rtk nox -s l0; validation_module_registry_l0; guardrail_changed_files` result=`passed`",
+    "post-restart-verify BUG-1560 backend-main expected=c71b7b6f5 observed=1881b01a0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -1,8 +1,8 @@
-# AdvisoryDailyPriceEnvelopeV1 日级价格区间 F2 详细设计 v1.2
+# AdvisoryDailyPriceEnvelopeV1 日级价格区间 F2 详细设计 v1.3
 
-> 日期：2026-09-15
+> 日期：2026-09-28
 > Feature tier：F2
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.61
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.66
 > 当前阶段：`MODEL_RUN_COMPLETE_FRESH_CONFIRMATION_REQUIRED_NOT_ACTIVATED`
 > 业务归属：Selection Center / Advisory
 > 运行边界：日频 PIT 价格预测；不研发分钟择时或交易执行
@@ -24,6 +24,12 @@
 
 1. `entry_executable_probability` 从 `AdvisoryDailyPriceEnvelopeV1`、页面展示和任何业务动作中退役；旧 v1/v2 bundle 与模型文件保持不可变兼容，不删除、不改写历史结果。
 2. 新的正式价格模型只预测日级价格分布。买入准入由独立日频 Entry Guard/Admission 合同负责，价格模型不得以近单类概率代替准入判断。
+
+### 1.1 后续独立entry交付（2026-09-28）
+
+本设计保持legacy V1完整信封及历史训练合同不变；不把M3失败时全行不可用的旧语义静默放宽。后续实施按[独立角色](advisory_entry_price_independent_role_f2_design_20260928.md)、[一次性历史确认](advisory_entry_price_confirmation_f2_design_20260928.md)、[绑定及每日运行](advisory_entry_price_delivery_f2_design_20260928.md)执行。新entry-v2单独展示买入区间，其可用性不要求止盈/保护/止损成功。
+
+本地自然价格证据已核验9月15日一日20行、coverage=0.70，尚无自动每日收集；旧80日回放只作导航。新增设计验收项全部PLANNED，不能由下文V1的已完成矩阵推断V2已实现或已确认。
 
 ## 2. 范围
 
@@ -207,8 +213,8 @@ entry_gap_q90: LightGBM quantile alpha=0.90
 3. model-shadow 顶层身份、D/T、可用性与 policy 绑定。
 4. UI 类型、文案和错误态。
 5. v3 标签/三头训练、bundle、校准和开发窗口评价。
-6. 历史日频回放；合格时发布 shadow binding，失败时保持 typed unavailable/experimental。
-7. 源码合入后等待用户重启，再做 fresh-process API/UI readback；不执行 DDL。
+6. 旧历史回放只作功能/导航；新窗口按独立确认合同证明资格并一次性评价，通过后才允许精确entry角色binding。
+7. 独立角色源码合入后由用户重启；确认通过后发布精确binding，再做API/UI及日级读回。不执行DDL，不等待实盘更新才做历史回归。
 
 ## 13. 验证方案
 

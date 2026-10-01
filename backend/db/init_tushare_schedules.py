@@ -43,8 +43,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "kline_daily_raw",       "mode": "incremental", "frequency": "daily", "at": "16:10"},
     {"dataset": "kline_minute_raw",      "mode": "incremental", "frequency": "daily", "at": "16:20"},
 
-    # ── Phase 3 — Tushare 早期数据（16:00-16:30 更新 +10min 缓冲） ──
-    {"dataset": "daily_basic",           "mode": "incremental", "frequency": "daily", "at": "16:40"},
+    # ── Phase 3 — Tushare 日频数据；daily_basic 延后到 20:30 等待 volume_ratio 稳定发布 ──
+    {"dataset": "daily_basic",           "mode": "incremental", "frequency": "daily", "at": "20:30"},
     {"dataset": "adj_factor",            "mode": "incremental", "frequency": "daily", "at": "16:45"},
     {"dataset": "index_daily",           "mode": "incremental", "frequency": "daily", "at": "16:50"},
     {"dataset": "stock_basic",           "mode": "init",        "frequency": "daily", "at": "16:55"},
@@ -56,6 +56,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "tushare_forecast_raw",       "mode": "incremental", "frequency": "daily", "at": "20:45"},
     {"dataset": "tushare_express_raw",        "mode": "incremental", "frequency": "daily", "at": "20:50"},
     {"dataset": "tushare_fina_indicator_raw", "mode": "incremental", "frequency": "daily", "at": "21:00"},
+    {"dataset": "etf_share_size",             "mode": "incremental", "frequency": "daily", "at": "20:00"},
+    {"dataset": "etf_basic_snapshots",        "mode": "init",        "frequency": "daily", "at": "20:05"},
 
     # ── Phase 4 — Tushare 中期数据（16:30-17:00 更新 +10min 缓冲） ──
     {"dataset": "sw_sector",             "mode": "incremental", "frequency": "daily", "at": "17:10"},
@@ -76,8 +78,8 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
-DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v2"
-DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "a151d176ad6a6aa4a72d1fe11a590142ece7d7d0e3581f0b0773d64e706e443d"
+DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v4"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "a1d89a26e53c6d18e725baf9b95ada1c818b569d946340032d7afb30ba8d599c"
 _MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 

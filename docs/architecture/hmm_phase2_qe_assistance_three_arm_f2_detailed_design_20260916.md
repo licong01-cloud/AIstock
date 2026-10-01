@@ -1,9 +1,9 @@
 # HMM Evolution Phase 2：QE 场景三臂历史回放 F2 详细设计
 
 > **设计层级**：F2
-> **文档版本**：v1.5
+> **文档版本**：v1.6
 > **日期**：2026-09-17
-> **状态**：`PHASE1_CONSUMER_EFFECT_OBSERVED_FORMAL_REPLAY_NOT_AUTHORIZED`
+> **状态**：`CONSUMER_SOURCE_IMPLEMENTED_FORMAL_REPLAY_BLOCKED_STOCK_POOL_IDENTITY`
 > **父权威**：`docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md` v2.58
 > **唯一目标**：在一个冻结 QE 场景中比较无 HMM、历史旧 QE HMM 和一个新版 HMM 模块辅助，回答 HMM 辅助是否带来真实的成本后收益、回撤或换手增量；不建设通用平台，不替换旧版本，不把独立板块预测效果外推为 QE 增益。
 
@@ -15,7 +15,9 @@
 2. 该 authority 对 1,951,448 个 executable keys 明确返回 1,780,359 个 resolved 和 171,089 个 causal unavailable，而不是 100% resolved；
 3. 已批准 `explicit non-applicable`：权威显式 unavailable 行不适用 HMM、保持 raw score 并完整记账；不得自行补行业、删除股票、缩窗或把 unavailable 伪装为 neutral。
 
-当前授权允许分别实施 HMM adapter 与 RD-Agent consumer contract。HMM 侧无标签 consumer-effect 前检已完成并证明新版会改变正式 QE score/rank/Top50；这只解除 `NO_CONSUMER_EFFECT` 早停，不是收益结论。当前仍不授权启动 QE 回放、提交 tail、数据库、runtime 或进程动作，也不得声称新版已接入。
+当前授权允许分别实施 HMM adapter、QE workspace consumer 接线与 RD-Agent consumer contract。HMM 侧无标签 consumer-effect 前检已完成并证明新版会改变正式 QE score/rank/Top50；这只解除 `NO_CONSUMER_EFFECT` 早停，不是收益结论。正式 artifact 已部署到目标节点 content-addressed 只读路径，RD-Agent release symlink 已指向批准 consumer commit，但正在运行的 API 进程仍加载旧 release，未获得重启授权。当前仍不授权启动 QE 回放、提交 tail、数据库或进程动作，也不得声称新版已运行生效。
+
+2026-09-17 的真实 request preflight 发现 D1 场景存在一个尚未获批的执行合同冲突：源任务固定 `stock_pool=filtered_pool_20260502`，而正式共同窗口截止 `2026-03-31`。当前 PIT 安全合同正确返回 `QE_STOCK_POOL_DATE_OUT_OF_WINDOW`，三臂均未提交且没有请求文件写出。不得通过改名该 pool、关闭校验、改用当前股票列表、扩大窗口或缩短正式窗口绕过；在用户批准新的、能保持三臂同一 executable prediction panel 的历史股票池语义前，正式 replay 保持 blocked。
 
 ## 1. 目标、范围与非目标
 
@@ -174,7 +176,7 @@ Loop2 unique immutable raw pred.pkl + frozen QE scenario
 
 - HMM owner：新版 coefficient artifact schema、状态到系数公式、v1.6/mapping/source identity、HMM-owned builder/validator/CLI 和直接测试。
 - RD-Agent consumer owner：策略模板读取 `stock_sector_applicability_by_date`、按日显式分派 applied/not-applicable、对真正缺失/重复/未知/非有限 fail closed 和对应测试。
-- QE owner：只提供冻结场景的正式重放入口与结果；本 HMM 任务不修改 QE 平台源码。
+- QE owner：提供冻结场景的正式重放入口、workspace strategy 依赖打包与结果；本次仅增加 compact immutable artifact binding 和当前 score-weighted strategy 对批准 schema 的显式分派，不修改 Alpha、选股、权重、执行或成本业务逻辑。
 - consumer PR 与 HMM adapter PR 均通过后才可执行三臂回放；任一缺失不得以本地 monkeypatch、复制 workspace 或手改策略文件绕过。
 
 ## 4. D1：冻结场景与回放窗口（USER_APPROVED_20260916）
@@ -440,14 +442,14 @@ D1-D6 已获批，允许分别实施 HMM adapter 与 RD-Agent consumer 修复。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | proposed HMM three-arm request/validator; existing QE prediction replay | `backend/tests/unified_engine/test_qe_prediction_replay.py`; artifact:`qe_20260502_131502_9b54/Loop2/pred.pkl#sha256=0957ae8a6527fb28ba337a449ce0f72dfe9f43513003492329d7e770aa9da8e2` | design_ready_for_user_decision | - |
+| F-001 | `backend/services/hmm_risk/qe_assistance_three_arm.py`; `scripts/hmm_risk/prepare_qe_assistance_three_arm.py`; existing QE prediction replay | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py`; real prepare preflight: `QE_STOCK_POOL_DATE_OUT_OF_WINDOW`, `output_exists=false` | implemented_fail_closed_blocked | approved_by_user: 当前长任务只实施新增 consumer/transport 范围；D1 source pool date `2026-05-02` 晚于 formal window end `2026-03-31`，在另行批准股票池合同前不提交 replay |
 | F-002 | `backend/services/quantevolver/experiment_config_builders.py`; existing snapshot asset | `backend/tests/hmm_evolution/test_candidate_artifact.py`; artifact:`snapshot:bbec3863-fb67-445f-938e-66f092d18696` | design_ready_for_user_decision | - |
 | F-003 | `backend/services/hmm_risk/qe_assistance_adapter.py::apply_sign_safe_adjustment`、`apply_artifact_entry` | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_sign_safe_adjustment_handles_positive_negative_and_zero_scores`、`test_applied_entry_uses_sign_safe_formula_and_missing_entry_fails` | implemented_direct_test_passed | - |
 | F-004 | `backend/services/hmm_risk/qe_assistance_adapter.py::build_qe_assistance_artifact`；`scripts/hmm_risk/build_qe_assistance_artifact.py` | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_artifact_binds_model_mapping_source_window_and_formula_hashes`；artifact authority:`bundle=203effb6..., mapping=e478722f...` | source_implementation_passed | - |
-| F-005 | HMM side:`backend/services/hmm_risk/qe_assistance_adapter.py`；RD-Agent consumer owner boundary | `backend/tests/hmm_risk/test_qe_assistance_adapter.py::test_explicit_authority_unavailable_is_not_missing_or_neutral`、`test_unknown_unavailable_reason_fails_closed`；preflight:`1,780,359 resolved + 171,089 causal unavailable = 1,951,448 explicit outcomes` | source_implementation_passed | approved_by_user: D4 将 RD-Agent consumer 实施明确分配给独立 worktree/PR，不属于本 HMM-owned source commit |
+| F-005 | HMM producer:`backend/services/hmm_risk/qe_assistance_adapter.py`; QE packaged consumer:`scripts/hmm_qe_assistance_contract.py` + `scripts/score_weighted_strategy.py`; compact binding:`backend/services/hmm_risk/qe_assistance_transport.py`; RD-Agent consumer commit `b7206bcda69aba306e4a5cc3597ff065a8075b66` | `backend/tests/hmm_risk/test_qe_assistance_workspace_strategy.py`; full formal artifact fresh-process validation: 423 dates, 1,951,448 rows, canonical `de92f166...`; RD consumer 15 passed | source_implementation_passed_runtime_activation_pending | approved_by_user: restart/process control remains user-owned；RD release deployed and `current` symlink switched, but running API remains on old release until user restart |
 | F-006 | `backend/services/hmm_risk/qe_assistance_adapter.py::evaluate_consumer_effect`；`scripts/hmm_risk/evaluate_qe_assistance_consumer_effect.py` | `backend/tests/hmm_risk/test_qe_assistance_adapter.py`、`backend/tests/hmm_risk/test_evaluate_qe_assistance_consumer_effect.py`；§2.6 `consumer_effect_observed` compact result | source_implementation_passed | approved_by_user: 本次只完成无标签 score/rank/Top50 前检；forward outcome 与正式三臂回放须独立实验授权 |
-| F-007 | proposed three-arm result comparator | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_result_requires_all_three_arms_and_cost_after_metrics` | design_ready_for_user_decision | - |
-| F-008 | proposed result state machine | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_compounded_return_is_only_primary_comparison_and_does_not_auto_select` | design_ready_for_user_decision | - |
+| F-007 | `backend/services/hmm_risk/qe_assistance_three_arm.py::compare_three_arm_results` | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_result_requires_all_arms_and_does_not_auto_select` | implemented_direct_test_passed | approved_by_user: 正式 replay 是独立实验动作；当前因 request preflight blocked 尚无 arm results |
+| F-008 | typed primary new-vs-no-HMM result plus separate new-vs-legacy observation; no auto selection/activation | `backend/tests/hmm_risk/test_qe_assistance_three_arm.py::test_result_records_old_hmm_superiority_without_overriding_primary_state` | implemented_direct_test_passed | approved_by_user: 当前 source scope 不生成业务 outcome，正式 replay 前不声明成功 |
 | F-009 | §3 owner boundary and independent PRs | `backend/tests/hmm_risk/test_qe_assistance_adapter.py`; artifact:`owner-review-required-before-experiment` | design_ready_for_user_decision | - |
 | F-010 | §12 and §17 production gates | `backend/tests/hmm_risk/test_qe_assistance_adapter.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_phase2_qe_assistance_three_arm_f2_detailed_design_20260916.md --tier F2` | design_ready_for_user_decision | - |
 
@@ -463,7 +465,8 @@ D1-D6 已获批，允许分别实施 HMM adapter 与 RD-Agent consumer 修复。
 - **prediction artifact 歧义**：Loop1 有 5 个 `pred.pkl`；正式合同只使用 cardinality=1 的 Loop2 artifact 并固定 hash，禁止人工从 Loop1 选择。
 - **静态/PIT 口径差异**：旧版保留静态映射只作为历史 arm，新版使用 PIT；结果需明确这是版本差异的一部分，不声称只比较模型结构。
 - **负 score 方向反转**：新版禁止直接 multiplier，使用 D2 符号安全公式。
-- **consumer 缺口**：当前策略不读取 by-date mapping；未完成 owner PR、节点部署/readback 不一致或需要但未获授权重启时 fail closed，不做 workspace patch。
+- **consumer 激活边界**：QE workspace 不直接执行 RD-Agent repository 中的 app template，而是打包 AIstock catalog strategy 及其本地依赖；因此新版 schema consumer 必须同时存在于 AIstock 打包依赖和 RD-Agent release。两端源码/部署/readback 不一致或需要但未获授权重启时 fail closed，不做 workspace patch。
+- **历史股票池身份冲突**：源场景 `filtered_pool_20260502` 晚于正式窗口结束日，当前 request preflight 已 fail closed。未获批新的历史股票池解释前，不得提交三臂请求；不得用 current-universe、pool 改名或关闭 PIT 校验伪造可执行性。
 - **C-013 causal unavailable**：exact v1.6 `e478...` authority 已定位，171,089 个 executable keys 是正式 causal unavailable；已批准 D3-B 显式不适用语义。禁止用默认行业、index-membership、neutral/1.0、删股票或缩窗绕过。
 - **signal 日期回退风险**：当前 consumer 在目标 source date 缺失时会取最近 signal；new-PIT 必须拒绝该路径并持久化 calendar mismatch，避免重复使用旧预测。
 - **效果过小**：只有全部 adjusted score 与 raw score 相同才提前终止；TopK 不变但 score 已变时仍执行正式回放，避免漏掉权重效应。
@@ -477,17 +480,20 @@ D1-D6 已获批，允许分别实施 HMM adapter 与 RD-Agent consumer 修复。
 | production_dml_gate | `noop` | 不写数据库 |
 | backend_dependency_gate | `noop` | 复用现有依赖 |
 | frontend_dependency_gate | `noop` | 无前端范围 |
-| runtime_activation_gate | `noop` | 不切换默认配置或模型 identity |
-| service_restart_gate | `noop_user_owned` | 本任务不控制进程 |
+| runtime_activation_gate | `pending` | artifact/release 已部署但未启动实验；不切换默认模型 identity |
+| service_restart_gate | `pending_user_owned` | AIstock backend 与 RD-Agent API 源码生效均由用户在合入后独立重启并 readback |
 | tail_access_gate | `forbidden` | 截止 2026-03-31，不读取 2026-04-01 起 tail |
 
 ## 18. 当前状态
 
-- changed files：本设计文档、`backend/services/hmm_risk/qe_assistance_adapter.py`、`scripts/hmm_risk/build_qe_assistance_artifact.py`、`scripts/hmm_risk/evaluate_qe_assistance_consumer_effect.py`、对应三个 `backend/tests/hmm_risk` 定向测试文件；
+- changed files：本设计文档、three-arm request/comparator、compact transport、QE ConfigComposer/build/executor 接线、packaged score-weighted consumer/helper、prepare-only CLI 及对应 `backend/tests/hmm_risk` 定向测试；
 - approved decisions：D1、D2、D3-B、D4 及其澄清、D5、D6（2026-09-16）；
 - D3 preflight：exact `e478...` authority；1,780,359 resolved + 171,089 causal unavailable = 1,951,448 explicit outcomes；476 stocks；
 - adapter source：HMM-owned builder/validator 与无标签 consumer-effect CLI 已实施并通过直接测试；resolved classification 合法缺少 index-membership row lineage 的正式 C-013 路径已修复，未伪造 lineage；
 - Phase 1 consumer effect：`consumer_effect_observed`；704,872 score rows、1,671,103 rank rows、341/423 Top50 dates 发生变化；正式三臂回放仍 pending independent authorization；
+- formal artifact consumer readback：Windows fresh process 全量验证 `de92f166...`，423 dates、1,951,448 rows；1,780,359 applied + 171,089 explicit non-applicable；
+- RD-Agent deployment：consumer commit `b7206bcd...` 的 release 与 immutable artifact 已部署并 readback，running API 仍为旧 release，等待用户重启；
+- request preflight：三臂均因 `filtered_pool_20260502 > formal test_end 2026-03-31` 被 `QE_STOCK_POOL_DATE_OUT_OF_WINDOW` 阻断，未写请求、未提交任务；
 - QE replay：未执行；
 - training/fits：0；
 - tail accessed：false；
@@ -495,6 +501,6 @@ D1-D6 已获批，允许分别实施 HMM adapter 与 RD-Agent consumer 修复。
 - `production_ddl_gate=noop`；
 - `production_dml_gate=noop`；
 - dependency gates：noop；
-- runtime impact：none；
-- backend restart required：false；
+- runtime impact：`backend-main` + `rdagent-node1 API`（仅在源码合入/部署后生效）；
+- backend restart required：true，用户所有，未执行；
 - merge/cleanup：未执行。
