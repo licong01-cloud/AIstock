@@ -119,6 +119,30 @@ def test_unrelated_repairs_do_not_invalidate_snapshot() -> None:
         snapshot.assert_no_overlapping_repairs()
 
 
+def test_typed_source_block_retains_reason_and_invalidates_attempt() -> None:
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseSourceBlocked
+
+    connections: list[Connection] = []
+
+    def factory() -> Connection:
+        connection = Connection()
+        connections.append(connection)
+        return connection
+
+    error = MonthlyReleaseSourceBlocked('PIT cutoff unavailable', context={'state_end': '2026-08-31'})
+    with MonthlySnapshotCoordinator(
+        factory, repair_watermark_reader=lambda _connection: 'watermark',
+        overlapping_repair_reader=lambda _connection, _watermark: (),
+    ) as snapshot:
+        with pytest.raises(MonthlyReleaseSourceBlocked) as caught:
+            snapshot.read(lambda *_args: (_ for _ in ()).throw(error))
+        assert caught.value is error
+        assert caught.value.context == {'state_end': '2026-08-31'}
+        with pytest.raises(MonthlySnapshotError, match='not available'):
+            snapshot.read(lambda *_args: None)
+    assert all(connection.closed and connection.rollback_count == 1 for connection in connections)
+
+
 def test_production_factory_owns_managed_journal_callbacks() -> None:
     class Journal:
         def initial_watermark(self, _connection: Connection) -> str:
