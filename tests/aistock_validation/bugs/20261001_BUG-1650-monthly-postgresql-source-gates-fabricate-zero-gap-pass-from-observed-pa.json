@@ -74,8 +74,8 @@
   },
   "first_seen_at": "2026-10-01T08:37:35.838378Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "479d97d6e8ec586c1dc73587301278abebb4fdb2",
+  "fixed_at": "2026-10-01T15:37:51Z",
   "github_issue_number": 5186,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5186",
   "last_seen_at": "2026-10-01T08:37:35.838378Z",
@@ -83,6 +83,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5195",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -97,17 +98,18 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "database_readback_ref": "not_required",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "fresh_process_evidence": [
       "RED: new frozen source regressions failed on absent auditor. GREEN: 36 tests passed in fresh Python process across frozen auditor, PostgreSQL adapter, shared source contracts and official quote policy; missing keys and invalid fields have real BLOCKED counts and cannot build/seal.",
       "Review 1: independent frozen calendar/PIT keys, OHLCV finite/domain, exact 240 close-labelled bars, shared 1e-4 parity tolerances unchanged. Review 2: shared SecuritySourceResolution.source_ts_code, alias collision rejection, independent margin provider denominator and incremental publication floor, no all-equity margin assumption. Review 3: fully verified CAS streams, one-month residency and aggregate-only minute summaries, create-exclusive receipts, exact source/alias/quote pins, no database/provider/repair or runtime calls.",
       "DESIGN-COMPLIANCE-001: required nine SOURCE gates implemented with real counts, no partial/fake PASS; shared alias and publication semantics reused; no business/source repair semantic changes; no new human approval gate. September diagnostic is still BLOCKED, not claimed ready."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -119,7 +121,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1650",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c29fbf5fb79e75c4",
+    "recorded_at": "2026-10-01T15:39:11.121803Z",
+    "runtime_contract_digest": "986ad9dcb33f12aeefd7f3e233f59566a2e2c57a201478777cc60b89f7413e5f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cfd19525a9f2333ea5f844189e075c0bd2555d56",
+    "source_merge_commit": "479d97d6e8ec586c1dc73587301278abebb4fdb2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5195",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py -q -> 27 passed",
+      "python -m nox -s l0 --no-install -> passed"
+    ],
+    "validation_evidence_digest": "27fde291357701205cba9f12ebeea1e390641b2c80df909e978178af0d52efc8"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -128,6 +152,10 @@
     "fingerprint": "b87088095f8383c5d4443121",
     "source_event_id": "FE-20261001-b87088095f83"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py -q -> 27 passed",
+    "python -m nox -s l0 --no-install -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
