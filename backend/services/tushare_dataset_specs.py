@@ -46,6 +46,7 @@ class DatasetSpec:
     trading_day_only: bool = False              # BY_DATE datasets that should iterate market trading days only
     create_table_script: Optional[str] = None    # operator-run DDL helper; engine never creates tables implicitly
     nullable_identity_columns: List[str] = field(default_factory=list)  # source identity fields that may be NULL
+    snapshot_date_column: Optional[str] = None  # SINGLE_CALL local observation date; excluded from provider fields
     # Minimum plausible rows for one trading day. When set, a successful sync
     # that persists 0 < rows < min_expected_rows is audited as
     # quality_status="low_coverage" so the existing freshness-check ->
@@ -303,6 +304,65 @@ CYQ_PERF = DatasetSpec(
     # Full days observed at 5522-5543 rows (2026-08); partial same-day
     # publishes before the evening window landed at 49-3886 rows.
     min_expected_rows=5000,
+)
+
+ETF_SHARE_SIZE = DatasetSpec(
+    name="etf_share_size",
+    tushare_api="etf_share_size",
+    target_table="market.etf_share_size",
+    primary_keys=["trade_date", "ts_code"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "trade_date": "date",
+        "ts_code": "text",
+        "total_share": "numeric",
+        "total_size": "numeric",
+        "nav": "numeric",
+        "close": "numeric",
+    },
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    row_limit=5000,
+    incremental_cursor_from_audit=True,
+    trading_day_only=True,
+    create_table_script="backend/db/migrations/add_etf_share_sources_20260923.sql",
+)
+
+ETF_BASIC_SNAPSHOTS = DatasetSpec(
+    name="etf_basic_snapshots",
+    tushare_api="etf_basic",
+    target_table="market.etf_basic_snapshots",
+    primary_keys=["snapshot_date", "ts_code"],
+    query_mode=QueryMode.SINGLE_CALL,
+    columns={
+        "snapshot_date": "date",
+        "ts_code": "text",
+        "csname": "text",
+        "extname": "text",
+        "cname": "text",
+        "index_code": "text",
+        "index_name": "text",
+        "setup_date": "date",
+        "list_date": "date",
+        "list_status": "text",
+        "exchange": "text",
+        "mgr_name": "text",
+        "custod_name": "text",
+        "mgt_fee": "numeric",
+        "etf_type": "text",
+    },
+    single_call_param_sets=[
+        {"list_status": "L"},
+        {"list_status": "D"},
+        {"list_status": "P"},
+    ],
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    row_limit=5000,
+    supports_incremental=False,
+    date_column="snapshot_date",
+    snapshot_date_column="snapshot_date",
+    create_table_script="backend/db/migrations/add_etf_share_sources_20260923.sql",
 )
 
 STK_LIMIT = DatasetSpec(
@@ -568,6 +628,8 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         TUSHARE_FINA_INDICATOR_RAW,
         MARGIN_DETAIL,
         CYQ_PERF,
+        ETF_SHARE_SIZE,
+        ETF_BASIC_SNAPSHOTS,
         SW_INDEX_CLASSIFY,
         SW_INDEX_MEMBER,
         SW_DAILY,

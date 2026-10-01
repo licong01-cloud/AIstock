@@ -11,6 +11,14 @@ permissions:
   contents: read
   security-events: write
 
+env:
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
+  GIT_HTTP_LOW_SPEED_LIMIT: '1024'
+  GIT_HTTP_LOW_SPEED_TIME: '60'
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: http.version
+  GIT_CONFIG_VALUE_0: HTTP/1.1
+
 concurrency:
   group: codeql-nightly-main
   cancel-in-progress: true
@@ -43,7 +51,7 @@ jobs:
     runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 75
     env:
-      AISTOCK_CI_CODEQL_BUNDLE_PATH: 'F:\Dev\github-actions-runner\aistock\_work\_tool\CodeQL\2.26.3\x64\codeql'
+      AISTOCK_CI_CODEQL_BUNDLE_PATH: 'F:\Dev\github-actions-runner\prebuilt\CodeQL\2.26.3\x64\codeql'
       AISTOCK_CI_CODEQL_BUNDLE_SHA256: 504311cdee523aae41ae0ecc318f5d225ff051bbe9c50a94840d11cd35f2c38b
       AISTOCK_CI_CODEQL_BUNDLE_VERSION: 2.26.3
     steps:

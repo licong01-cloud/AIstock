@@ -1,0 +1,440 @@
+{
+  "actual": "Active profile and dispatch producers emit scalar paths; qe_long_trend_phase3_platform fails 2 tests because the resolver rejects the scalar as invalid JSON.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/active_task_binding.py",
+    "backend/services/dispatch_service.py",
+    "scripts/qe_active_dataset_profile.py",
+    "backend/tests/dataset_release/test_active_task_binding.py",
+    "backend/tests/test_dispatch_service_env.py",
+    "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+    "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+    "tests/aistock_validation/bugs/20260922_BUG-1606-qe-dataset-identity-roots-producers-emit-scalar-paths-incompatible-with.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1606",
+  "closed_at": "2026-09-22T19:07:07.500600Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-22T18:21:13.783180Z",
+  "description": "Active profile and dispatch producers emit scalar paths; qe_long_trend_phase3_platform fails 2 tests because the resolver rejects the scalar as invalid JSON.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260922-94da464aef1d",
+      "timestamp": "2026-09-22T18:21:13.783159Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/5046"
+  ],
+  "expected": "Every QE runtime binding emits a deterministic node-scoped JSON root map, Long Trend Phase 3 passes under the repository environment, and invalid scalar roots remain rejected.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260922_BUG-1606-qe-dataset-identity-roots-producers-emit-scalar-paths-incompatible-with.json",
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/test_dispatch_service_env.py",
+      "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+      "scripts/qe_active_dataset_profile.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260922_BUG-1606-qe-dataset-identity-roots-producers-emit-scalar-paths-incompatible-with.json",
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/test_dispatch_service_env.py",
+      "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+      "scripts/qe_active_dataset_profile.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/active_task_binding.py",
+        "backend/services/dispatch_service.py",
+        "scripts/qe_active_dataset_profile.py",
+        "backend/tests/dataset_release/test_active_task_binding.py",
+        "backend/tests/test_dispatch_service_env.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+        "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "platform.db",
+        "qe.active_dataset_universe",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.sector_risk_overlay",
+        "platform.mcp_gateway",
+        "qe.enhanced_metrics",
+        "qe.long_trend_evaluation",
+        "qe.archive"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/active_task_binding.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dispatch_service.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "scripts/qe_active_dataset_profile.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay",
+            "platform.mcp_gateway"
+          ],
+          "primary_module": "qe.active_dataset_universe",
+          "risk_level": "high",
+          "rule_id": "qe_active_dataset_universe_management"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_active_task_binding.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/test_dispatch_service_env.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay",
+            "platform.mcp_gateway"
+          ],
+          "primary_module": "qe.active_dataset_universe",
+          "risk_level": "high",
+          "rule_id": "qe_active_dataset_universe_management"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.archive",
+            "platform.mcp_gateway"
+          ],
+          "primary_module": "qe.long_trend_evaluation",
+          "risk_level": "high",
+          "rule_id": "qe_long_trend_evaluation_phase3"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/active_task_binding.py",
+        "backend/services/dispatch_service.py",
+        "scripts/qe_active_dataset_profile.py",
+        "backend/tests/dataset_release/test_active_task_binding.py",
+        "backend/tests/test_dispatch_service_env.py",
+        "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+        "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "scripts/qe_active_dataset_profile.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/test_dispatch_service_env.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/active_task_binding.py",
+      "backend/services/dispatch_service.py",
+      "scripts/qe_active_dataset_profile.py",
+      "backend/tests/dataset_release/test_active_task_binding.py",
+      "backend/tests/test_dispatch_service_env.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py"
+    ]
+  },
+  "first_seen_at": "2026-09-22T18:21:13.783180Z",
+  "fix_branch": null,
+  "fix_commit": "c39c126e5964d3f608bd5ff0240af44d56281123",
+  "fixed_at": "2026-09-22T18:32:43Z",
+  "github_issue_number": 5059,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5059",
+  "last_seen_at": "2026-09-22T18:21:13.783180Z",
+  "module": "qe.long_trend_evaluation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5061",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m nox -s qe_long_trend_phase3_platform",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "platform_api_backend",
+    "qe_read_backend",
+    "qe_long_trend_phase3_platform"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "fresh_process_evidence": [
+      "fresh Python encoded and parsed the strict node-scoped QE_DATASET_IDENTITY_ROOTS contract -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1606\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1606",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b56332ca0e711ecdcef657ac161a27ffeef70def7fdbd5ab53afc25686a6f6b7",
+      "contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+      "expected_identity": "c39c126e5964d3f608bd5ff0240af44d56281123",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-22T19:04:02.170480Z",
+      "mode": "read_only",
+      "observed_identity": "4ec2c3b08f4bef229dd3dc6cf40474086155f436",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d20f710b3176acb2054cd1d424965191aaf1aaa77be047987af26cba19cabe7c",
+      "receipt_sha256": "58187829a1ee35a0a36868a3d3c56a35a292577484c14679dfc6529ae8207184",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "89f6218b156ccebf275efb87eeddfff89ab71986027b313299db2b8f451af6b6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1606",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "798ba8dbc88d1cf4",
+    "recorded_at": "2026-09-22T18:34:24.353719Z",
+    "runtime_contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c21284eb712c1b9a01fc0b9a769cacd482a0e077",
+    "source_merge_commit": "c39c126e5964d3f608bd5ff0240af44d56281123",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5061",
+    "validation_evidence": [
+      "validation-receipt: id=59af09bea5fb0d70 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed`",
+      "validation-receipt: id=270aea12ac1df79d commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=nox plan=qe_long_trend_phase3_platform status=passed command=`rtk nox -s qe_long_trend_phase3_platform` result=`74 passed`",
+      "validation-receipt: id=d473ab2855d36733 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_active_task_binding.py backend/tests/test_dispatch_service_env.py backend/tests/quantevolver/test_qe_active_dataset_profile.py -q -p no:cacheprovider` result=`60 passed`",
+      "validation-receipt: id=32bc6e15d567bfd0 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=nox plan=qe_long_trend_phase2_backend status=passed command=`rtk nox -s qe_long_trend_phase2_backend` result=`126 passed`",
+      "validation-receipt: id=adbd39110963d53a commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/dataset_release/active_task_binding.py backend/services/dispatch_service.py scripts/qe_active_dataset_profile.py backend/tests/dataset_release/test_active_task_binding.py backend/tests/test_dispatch_service_env.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py` result=`passed`",
+      "validation-receipt: id=2d0ee6dcb1e12ad6 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/dataset_release/active_task_binding.py backend/services/dispatch_service.py scripts/qe_active_dataset_profile.py backend/tests/dataset_release/test_active_task_binding.py backend/tests/test_dispatch_service_env.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py` result=`passed`",
+      "validation-receipt: id=bd580e0e80773eb1 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "a8707df2636ce500a9c202bb7df6ae5abfa90c132cd6d96723d1a369924b3ed1"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qe.long_trend_evaluation"
+  ],
+  "title": "QE dataset identity roots producers emit scalar paths incompatible with Long Trend resolver",
+  "trigger_condition": {
+    "fingerprint": "94da464aef1d6a4ec4381ee4",
+    "source_event_id": "FE-20260922-94da464aef1d"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=59af09bea5fb0d70 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=nox plan=l0 status=passed command=`rtk nox -s l0` result=`passed`",
+    "validation-receipt: id=270aea12ac1df79d commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=nox plan=qe_long_trend_phase3_platform status=passed command=`rtk nox -s qe_long_trend_phase3_platform` result=`74 passed`",
+    "validation-receipt: id=d473ab2855d36733 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_active_task_binding.py backend/tests/test_dispatch_service_env.py backend/tests/quantevolver/test_qe_active_dataset_profile.py -q -p no:cacheprovider` result=`60 passed`",
+    "validation-receipt: id=32bc6e15d567bfd0 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=nox plan=qe_long_trend_phase2_backend status=passed command=`rtk nox -s qe_long_trend_phase2_backend` result=`126 passed`",
+    "validation-receipt: id=adbd39110963d53a commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/dataset_release/active_task_binding.py backend/services/dispatch_service.py scripts/qe_active_dataset_profile.py backend/tests/dataset_release/test_active_task_binding.py backend/tests/test_dispatch_service_env.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py` result=`passed`",
+    "validation-receipt: id=2d0ee6dcb1e12ad6 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/dataset_release/active_task_binding.py backend/services/dispatch_service.py scripts/qe_active_dataset_profile.py backend/tests/dataset_release/test_active_task_binding.py backend/tests/test_dispatch_service_env.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/unified_engine/test_qe_long_trend_snapshot_resolver.py` result=`passed`",
+    "validation-receipt: id=bd580e0e80773eb1 commit=c21284eb712c1b9a01fc0b9a769cacd482a0e077 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "post-restart-verify backend-main -> verified"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.long_trend_evaluation",
+        "qlib_data",
+        "platform_api",
+        "qe_read",
+        "qe_long_trend_phase3_platform"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "platform_api_backend",
+        "qe_read_backend",
+        "qe_long_trend_phase3_platform"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.long_trend_evaluation",
+          "qlib_data",
+          "platform_api",
+          "qe_read",
+          "qe_long_trend_phase3_platform"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "platform_api_backend",
+          "qe_read_backend",
+          "qe_long_trend_phase3_platform"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

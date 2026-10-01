@@ -9,19 +9,27 @@ import pytest
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.prediction_source import sha256_file
 from backend.services.advisory_model_first.price_range_calibration_bundle import (
+    publish_calibrated_daily_price_envelope_bundle,
     publish_calibrated_price_range_bundle,
+    validate_calibrated_daily_price_envelope_bundle,
     validate_calibrated_price_range_bundle,
 )
 from backend.services.advisory_model_first.price_range_calibration_contracts import (
     PriceRangeCalibrationArtifactV1,
+    build_frozen_daily_price_envelope_calibration_request,
     build_frozen_price_range_calibration_request,
 )
 from backend.tests.advisory_model_first.test_price_range_bundle import (
     _request as parent_request,
+    _request_v2 as parent_request_v2,
     _split,
     _training,
+    _training_v3,
 )
-from backend.services.advisory_model_first.price_range_bundle import publish_price_range_bundle
+from backend.services.advisory_model_first.price_range_bundle import (
+    publish_daily_price_envelope_bundle,
+    publish_price_range_bundle,
+)
 
 
 def _parent(tmp_path: Path) -> tuple[str, Path, dict]:
@@ -95,3 +103,124 @@ def test_m5c_bundle_is_atomic_exact_parent_model_preserving_and_tamper_evident(t
     with pytest.raises(AdvisoryModelFirstError) as tampered:
         validate_calibrated_price_range_bundle(bundle_path, expected_bundle_id=bundle_id)
     assert tampered.value.reason_code == "ADVISORY_PRICE_RANGE_CALIBRATION_BUNDLE_INVALID"
+
+
+def test_daily_price_envelope_calibrated_bundle_keeps_only_three_heads(
+    tmp_path: Path,
+) -> None:
+    split = _split()
+    parent_id, parent_path, parent_manifest = publish_daily_price_envelope_bundle(
+        model_root=tmp_path,
+        request=parent_request_v2(tmp_path),
+        split=split,
+        training=_training_v3(split),
+        environment_report={
+            "conda_environment": "rdagent-gpu",
+            "lightgbm_version": "4.0",
+            "pyarrow_version": "20.0",
+        },
+        resource_report={"peak_rss_bytes": 100, "limit_bytes": 8 * 1024**3},
+    )
+    artifact = PriceRangeCalibrationArtifactV1(
+        path=str(tmp_path / "input.parquet"),
+        sha256="b" * 64,
+        size_bytes=10,
+        row_count=20,
+        columns=("split", "instrument"),
+    )
+    request = build_frozen_daily_price_envelope_calibration_request(
+        output_root=str(tmp_path),
+        parent_price_range_request_id=parent_manifest["request_id"],
+        parent_price_range_request_sha256=parent_manifest["request_sha256"],
+        parent_price_range_bundle_id=parent_id,
+        parent_price_range_manifest_file_sha256=sha256_file(
+            parent_path / "manifest.json"
+        ),
+        package_id=parent_manifest["package_id"],
+        manifest_sha256=parent_manifest["manifest_sha256"],
+        style_profile_id=parent_manifest["style_profile_id"],
+        style_profile_hash=parent_manifest["style_profile_hash"],
+        feature_schema_version=parent_manifest["feature_schema_version"],
+        feature_schema_hash=parent_manifest["feature_schema_hash"],
+        split_sha256=sha256_file(parent_path / "split.json"),
+        parent_bundle_root=str(parent_path),
+        features_artifact=artifact,
+        price_range_labels_artifact=artifact,
+        repository_root="/repo",
+        repository_commit="3" * 40,
+        created_at="2026-09-14T00:00:00+00:00",
+    )
+    spec = {
+        "schema_version": "advisory_daily_price_envelope_calibration_spec_v1",
+        "request_id": request.request_id,
+        "request_sha256": request.request_sha256,
+        "calibration_policy_version": "advisory_price_range_calibration_policy_v1",
+        "state": "CALIBRATED",
+        "method": "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
+        "nominal_coverage": 0.8,
+        "fit_split": "validation",
+        "row_count": 10,
+        "finite_sample_rank": 9,
+        "delta": 0.01,
+        "validation_projection_hash": "4" * 64,
+        "validation_raw_quantile_crossing_count": 0,
+        "validation_metrics": {"row_count": 10},
+        "validation_feature_coverage": {
+            "eligible_row_count": 10,
+            "feature_covered_row_count": 10,
+            "feature_unavailable_row_count": 0,
+        },
+        "entry_admission_model_status": "RETIRED_NON_IDENTIFIABLE",
+    }
+    spec_path = tmp_path / "daily-spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+    predictions = pd.DataFrame(
+        {
+            "decision_as_of_trade_date": ["2026-01-02"],
+            "target_trade_date": ["2026-01-03"],
+            "instrument": ["000001.SZ"],
+            "entry_gap_return": [0.01],
+            "entry_gap_raw_q10": [-0.01],
+            "entry_gap_raw_q50": [0.01],
+            "entry_gap_raw_q90": [0.03],
+            "entry_gap_calibrated_q10": [-0.02],
+            "entry_gap_calibrated_q50": [0.01],
+            "entry_gap_calibrated_q90": [0.04],
+            "entry_gap_calibration_state": ["CALIBRATED"],
+        }
+    )
+
+    bundle_id, bundle_path, manifest = publish_calibrated_daily_price_envelope_bundle(
+        request=request,
+        calibration_spec_path=spec_path,
+        metrics={
+            "test": {"row_count": 1},
+            "activation_recommended": False,
+            "activation_decision_basis": "FRESH_CONFIRMATION_REQUIRED",
+        },
+        calibrated_test_predictions=predictions,
+        calibration_log={"environment": {"conda_environment": "rdagent-gpu"}},
+    )
+
+    assert manifest["schema_version"] == "advisory_price_range_bundle_v4"
+    assert set((bundle_path / "models").glob("*.txt")) == {
+        bundle_path / "models" / "entry_gap_q10.txt",
+        bundle_path / "models" / "entry_gap_q50.txt",
+        bundle_path / "models" / "entry_gap_q90.txt",
+    }
+    assert validate_calibrated_daily_price_envelope_bundle(
+        bundle_path, expected_bundle_id=bundle_id
+    ) == manifest
+
+    with pytest.raises(AdvisoryModelFirstError, match="activation boundary"):
+        publish_calibrated_daily_price_envelope_bundle(
+            request=request,
+            calibration_spec_path=spec_path,
+            metrics={
+                "test": {"row_count": 1},
+                "activation_recommended": True,
+                "activation_decision_basis": "DEVELOPMENT_TEST",
+            },
+            calibrated_test_predictions=predictions,
+            calibration_log={"environment": {"conda_environment": "rdagent-gpu"}},
+        )

@@ -3121,6 +3121,7 @@ def generate_config(req: GenerateConfigRequest):
         custom_params["qe_mcp_provenance"] = provenance
 
         from ..services.quantevolver.qe_active_dataset_profile import (
+            enforce_qe_universe_topk,
             load_active_qe_profile,
             resolve_and_apply_active_qe_dataset,
         )
@@ -3147,6 +3148,12 @@ def generate_config(req: GenerateConfigRequest):
                 label_horizon=int(custom_params.get("label_horizon") or 1),
                 profile=active_profile,
             )
+
+        custom_params = enforce_qe_universe_topk(
+            custom_params,
+            universe_selection=req.universe_selection,
+            stock_pool=custom_params.get("stock_pool"),
+        )
 
 
         cc = ConfigComposer()
@@ -3349,6 +3356,7 @@ def generate_config(req: GenerateConfigRequest):
             "qe_universe_mode_invalid",
             "qe_universe_pool_unknown",
             "qe_universe_window_coverage_incomplete",
+            "qe_star50_topk_required",
         }
         raise HTTPException(
             status_code=400 if e.reason_code in request_codes else 503,
@@ -4501,6 +4509,13 @@ class FactorCacheComputeRequest(BaseModel):
     force: bool = Field(False, description="强制重算（忽略已覆盖的缓存）")
     strict_backtest_data: bool = Field(True, description="严格使用 QE 默认历史 factor_data_dir 数据（用于全局因子值缓存）")
     auto_sync_remote: bool = Field(True, description="本地缓存计算成功后自动同步到远端执行节点")
+    dataset_profile_path: Optional[str] = Field(
+        None,
+        description=(
+            "Optional absolute canonical dataset profile selected by the control plane; "
+            "does not change the active profile pointer"
+        ),
+    )
 
 
 class FactorCacheRetryFailedRequest(BaseModel):
@@ -4547,9 +4562,13 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         node_id = exp_record.get("node_id") or None
 
     rdagent_cfg = cc._fetch_workspace_config(node_id)
-    factor_data_dir = rdagent_cfg.get("factor_data_dir")
-    qlib_bin_path = rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
-    if req.strict_backtest_data and not factor_data_dir:
+    factor_data_dir = None if req.dataset_profile_path else rdagent_cfg.get("factor_data_dir")
+    qlib_bin_path = (
+        None
+        if req.dataset_profile_path
+        else rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
+    )
+    if req.strict_backtest_data and not factor_data_dir and not req.dataset_profile_path:
         raise HTTPException(400, "failed to resolve QE factor_data_dir")
 
     if not resolved_start or not resolved_end:
@@ -4576,6 +4595,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
             qlib_bin_path=qlib_bin_path,
             node_id=node_id,
             task_id=task_id,
+            dataset_profile_path=req.dataset_profile_path,
         )
     except Exception as e:
         logger.exception("failed to submit official factor full-compute dispatch")
@@ -4598,8 +4618,12 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "data_source_mode": "official_offline_backtest_factor_data",
         "cache_source": "official_offline_backtest_factor_data",
         "code_source": "code_text",
-        "factor_data_dir": factor_data_dir,
-        "qlib_bin_path": qlib_bin_path,
+        "factor_data_dir": dispatch_result.get("payload", {}).get("factor_data_dir"),
+        "qlib_bin_path": dispatch_result.get("payload", {}).get("qlib_bin_path"),
+        "dataset_profile_path": req.dataset_profile_path,
+        "dataset_profile_sha256": dispatch_result.get("payload", {}).get(
+            "dataset_profile_sha256"
+        ),
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
         "cache_root": dispatch_result.get("cache_root"),
@@ -4616,8 +4640,12 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
         "include_disabled": bool(req.factor_names and req.include_disabled),
-        "factor_data_dir": factor_data_dir,
-        "qlib_bin_path": qlib_bin_path,
+        "factor_data_dir": dispatch_result.get("payload", {}).get("factor_data_dir"),
+        "qlib_bin_path": dispatch_result.get("payload", {}).get("qlib_bin_path"),
+        "dataset_profile_path": req.dataset_profile_path,
+        "dataset_profile_sha256": dispatch_result.get("payload", {}).get(
+            "dataset_profile_sha256"
+        ),
         "node_id": dispatch_result.get("node_id") or node_id,
         "cache_source": "official_offline_backtest_factor_data",
         "code_source": "code_text",
@@ -4688,6 +4716,8 @@ def factor_cache_retry_failed(task_id: str, req: FactorCacheRetryFailedRequest):
         node_id=str(task_detail.get("node_id") or "") or None,
         task_id=worker_task_id,
         resumed_from_task_id=task_id,
+        dataset_profile_path=payload.get("dataset_profile_path"),
+        expected_profile_sha256=payload.get("dataset_profile_sha256"),
     )
     dispatch_task_id = str(dispatch_result.get("dispatch_task_id") or dispatch_result.get("task_id") or worker_task_id)
     _active_cache_tasks[dispatch_task_id] = {
@@ -6401,16 +6431,17 @@ def _load_multi_alpha_status_payload(experiment_id: str, experiment_status: str)
 
 
 def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -> None:
-    """Persist artifact collection failure without downgrading runtime success.
+    """Persist artifact collection failure as an unsuccessful experiment.
 
-    RD-Agent has already reported every group loop as completed before this
-    helper is called.  The authoritative experiment status must therefore stay
-    completed while the artifact lifecycle records the collection failure.
+    A remote process exit is not an experiment success.  QE cannot report a
+    completed experiment until its required Qlib artifacts have been read and
+    validated locally.
     """
     lifecycle = {
         "multi_alpha_lifecycle": {
             "stage": "failed_artifact",
             "runtime_status": "completed",
+            "experiment_status": "failed",
             "collection_status": "failed",
             "artifact_status": "failed",
             "errors": [error_message],
@@ -6420,7 +6451,7 @@ def _mark_multi_alpha_artifact_failure(experiment_id: str, error_message: str) -
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE qe_experiments
-                   SET status = 'completed',
+                   SET status = 'failed',
                        result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
                        completed_at = NOW()
                    WHERE experiment_id = %s""",
@@ -6435,6 +6466,7 @@ def _mark_experiment_collection_failure(experiment_id: str, error_message: str) 
         "qe_completion_lifecycle": {
             "stage": "artifact_collection_failed",
             "runtime_status": "completed",
+            "experiment_status": "failed",
             "collection_status": "failed",
             "artifact_status": "failed",
             "errors": [error_message],
@@ -6444,7 +6476,7 @@ def _mark_experiment_collection_failure(experiment_id: str, error_message: str) 
         with conn.cursor() as cur:
             cur.execute(
                 """UPDATE qe_experiments
-                   SET status = 'completed',
+                   SET status = 'failed',
                        result_metrics = COALESCE(result_metrics, '{}'::jsonb) || %s::jsonb,
                        completed_at = NOW()
                    WHERE experiment_id = %s""",
@@ -7688,13 +7720,14 @@ async def reconcile_experiment_run_status(experiment_id: str):
                         error_msg = f"Multi-Alpha result collection failed: {me}"
                         logger.error(f"Multi-Alpha result collection failed: {experiment_id}: {me}", exc_info=True)
                         _mark_multi_alpha_artifact_failure(experiment_id, error_msg)
-                        result["status"] = "completed"
+                        result["status"] = "failed"
                         result["error"] = error_msg
                         result["multi_alpha_stage"] = "failed_artifact"
                         result["artifact_status"] = "failed"
                         if "multi_alpha" in result:
                             result["multi_alpha"]["stage"] = "failed_artifact"
                             result["multi_alpha"]["runtime_status"] = "completed"
+                            result["multi_alpha"]["experiment_status"] = "failed"
                             result["multi_alpha"]["collection_status"] = "failed"
                             result["multi_alpha"]["artifact_status"] = "failed"
                             result["multi_alpha"]["artifact_errors"] = [error_msg]
@@ -7732,7 +7765,7 @@ async def reconcile_experiment_run_status(experiment_id: str):
                             logger.error(f"Auto-sync metrics failed for {experiment_id}: {me}", exc_info=True)
                             error_msg = f"Auto-sync metrics failed: {me}"
                             _mark_experiment_collection_failure(experiment_id, error_msg)
-                            result["status"] = "completed"
+                            result["status"] = "failed"
                             result["artifact_status"] = "failed"
                             result["collection_status"] = "failed"
                             result["error"] = error_msg

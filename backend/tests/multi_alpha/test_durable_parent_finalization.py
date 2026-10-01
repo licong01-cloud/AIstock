@@ -153,7 +153,13 @@ def test_scheme_and_loo_business_rows_reuse_existing_metric_formulas(tmp_path: P
 
     assert assembler.assemble_child(run=run, child=children[1], children=children) is True
     scheme = repository.scheme_results[0]
+    assert scheme["cagr"] == pytest.approx(0.50)
+    assert scheme["max_drawdown"] == pytest.approx(-0.10)
     assert scheme["sharpe"] == 1.40
+    assert scheme["calmar"] == pytest.approx(3.00)
+    assert scheme["topk_return_20"] == pytest.approx(0.08)
+    assert scheme["topk_hit_rate_20"] == pytest.approx(0.60)
+    assert scheme["turnover"] == pytest.approx(1.20)
     assert scheme["vs_baseline_sharpe_delta"] == pytest.approx(0.40)
     assert scheme["vs_baseline_calmar_delta"] == pytest.approx(1.00)
     assert scheme["weights_json"] == {"leg_a": 0.6, "leg_b": 0.4}

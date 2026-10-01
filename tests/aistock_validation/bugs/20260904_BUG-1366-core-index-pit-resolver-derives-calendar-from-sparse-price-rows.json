@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1366",
-  "closed_at": null,
+  "closed_at": "2026-09-30T08:11:12.314327Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-09-04T21:28:36.636996Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7e7b3977da68963b4e999825f8a798b6794f5464",
+  "fixed_at": "2026-09-04T22:51:27Z",
   "github_issue_number": 4303,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4303",
   "last_seen_at": "2026-09-04T21:28:36.636996Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4305",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,9 +135,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_state\\local_data_aftercare\\20260930-legacy-audit\\BUG-1366-canonical-post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1366",
+      "business_smoke_semantic": {
+        "contract_id": "openapi_document",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "3bd1771dfd27621c8836771a2cfbcd66dff00fa4e1dfffefff11e16650a92cef",
+      "expected_identity": "7e7b3977da68963b4e999825f8a798b6794f5464",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-30T08:10:56.504023Z",
+      "mode": "read_only",
+      "observed_identity": "361c3c8de4d3c2badd80642365657973eb396ec7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2aeefa690e718324ca43e141f04e959f1ba3fe607d4785046dc736f2549046ee",
+      "receipt_sha256": "69fee913d7c7f06b2976d2dbacd4045b04e7ab06dd9e80e6e23daf6662ecb8ff",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "87a2721e58ce646fe3a0eb169fbf7f66a84939826ae5e55943f579ff8e029796",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -146,7 +170,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -155,6 +179,9 @@
     "fingerprint": "a0d4ecd595ffa953fcebf987",
     "source_event_id": "FE-20260904-a0d4ecd595ff"
   },
+  "validation_evidence": [
+    "2026-09-30 current-main targeted PIT/announcement matrix 56 passed; adj-factor matrix 23 passed; source merge independently verified; official read-only runtime identity/probes passed where required; no DB/data/process writes"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

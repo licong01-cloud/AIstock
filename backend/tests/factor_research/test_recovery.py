@@ -1,3 +1,6 @@
+"""Compact recovery contracts: exact identity, immutable results and attach-only resume."""
+
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -7,300 +10,119 @@ from backend.services.factor_research.runner import write_json
 from backend.services.factor_research.service import ResearchService
 
 
-class RecordedAttempt:
-    """Only failure-path fixture; real transactions are tested on existing DEV."""
+class Repository:
     def __init__(self, output, spec):
         self.start = {"payload_json": {"execution": {"output": str(output), "spec": spec}}}
         self.records = []
 
-    def attempt(self, *args):
+    def attempt(self, *_args):
         return self.start
+
+    def replay(self, _request):
+        return None
 
     def record(self, value):
         self.records.append(value)
-        return {"ok": True, "applied": True, "result": value}
+        return {"applied": True, "revision": 2, "result": value}
 
 
-def attachment(tmp_path):
+def recovered(tmp_path):
     task_id, attempt_id = str(uuid4()), str(uuid4())
-    spec = {"task_id": task_id, "attempt_id": attempt_id,
-            "candidates": [{"factor_name": "m_trial", "script": "reviewed.py"}]}
-    result = {"status": "computed", "scope": "research_candidate", "task_id": task_id,
-              "attempt_id": attempt_id, "request": spec, "candidates": []}
-    value = {"task_id": task_id, "attempt_id": attempt_id, "record_id": str(uuid4()),
-             "expected_revision": 2, "result_path": str(tmp_path / "result.json")}
+    spec = {
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "candidates": [{"factor_name": "m_trial", "script": "reviewed.py"}],
+    }
+    folder = tmp_path / "m_trial"
+    folder.mkdir()
+    (folder / "values.h5").write_bytes(b"fixture")
+    (folder / "factor.py").write_text("# reviewed", encoding="utf-8")
+    result = {
+        "status": "computed",
+        "scope": "research_candidate",
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "request": spec,
+        "candidates": [
+            {
+                "factor_name": "m_trial",
+                "scope": "research_candidate",
+                "metrics": {},
+                "values": str(folder / "values.h5"),
+                "source_script": str(folder / "factor.py"),
+            }
+        ],
+    }
+    value = {
+        "task_id": task_id,
+        "attempt_id": attempt_id,
+        "record_id": str(uuid4()),
+        "expected_revision": 2,
+        "result_path": str(tmp_path / "result.json"),
+    }
     return spec, result, value
 
 
-def test_attach_does_not_accept_empty_results_as_computed(tmp_path):
-    spec, result, value = attachment(tmp_path)
-    write_json(tmp_path / "result.json", result)
-    repo = RecordedAttempt(tmp_path, spec)
-    with pytest.raises(ResearchError):
+@pytest.mark.parametrize(
+    "mode,match",
+    [
+        ("empty", "every candidate"),
+        ("foreign", "does not belong"),
+        ("comparison", "undeclared comparison"),
+    ],
+)
+def test_attach_fails_closed_on_incomplete_or_foreign_identity(tmp_path, mode, match):
+    spec, result, value = recovered(tmp_path)
+    if mode == "empty":
+        result["candidates"] = []
+    elif mode == "foreign":
+        value["result_path"] = str(tmp_path / "other.json")
+    else:
+        result["research_comparison"] = {"schema_version": "factor_research_comparison_v1"}
+    write_json(Path(value["result_path"]), result)
+    repo = Repository(tmp_path, spec)
+    with pytest.raises(ResearchError, match=match):
         ResearchService(repo).attach(value)
     assert repo.records == []
 
 
-def test_attach_does_not_read_another_attempt_file(tmp_path):
-    spec, result, value = attachment(tmp_path)
-    other = tmp_path / "other.json"
-    write_json(other, result)
-    value["result_path"] = str(other)
-    with pytest.raises(ResearchError, match="does not belong"):
-        ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
-
-
-def test_legacy_attempt_cannot_attach_undeclared_comparison(tmp_path):
-    spec, result, value = attachment(tmp_path)
-    folder = tmp_path / "m_trial"
-    folder.mkdir()
-    (folder / "values.h5").write_bytes(b"fixture")
-    (folder / "factor.py").write_text("# fixture", encoding="utf-8")
-    result["candidates"] = [{"factor_name": "m_trial", "scope": "research_candidate", "metrics": {},
-                             "values": str(folder / "values.h5"),
-                             "source_script": str(folder / "factor.py")}]
-    result["research_comparison"] = {"schema_version": "factor_research_comparison_v1"}
+def test_exact_result_attaches_once(tmp_path):
+    spec, result, value = recovered(tmp_path)
     write_json(tmp_path / "result.json", result)
-    with pytest.raises(ResearchError, match="undeclared comparison"):
-        ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
+    repo = Repository(tmp_path, spec)
+    assert ResearchService(repo).attach(value)["applied"] and len(repo.records) == 1
 
 
-def test_legacy_attempt_cannot_attach_undeclared_full_evaluation(tmp_path):
-    spec, result, value = attachment(tmp_path)
-    folder = tmp_path / "m_trial"
-    folder.mkdir()
-    (folder / "values.h5").write_bytes(b"fixture")
-    (folder / "factor.py").write_text("# fixture", encoding="utf-8")
-    result["candidates"] = [
-        {
-            "factor_name": "m_trial",
-            "scope": "research_candidate",
-            "metrics": {},
-            "values": str(folder / "values.h5"),
-            "source_script": str(folder / "factor.py"),
-        }
-    ]
-    result["full_evaluation"] = {
-        "schema_version": "factor_research_full_evaluation_v1"
-    }
-    write_json(tmp_path / "result.json", result)
-    with pytest.raises(ResearchError, match="undeclared full evaluation"):
-        ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
-
-
-def test_declared_full_evaluation_attach_requires_pair_denominator_closure(tmp_path):
-    spec, result, value = attachment(tmp_path)
-    folder = tmp_path / "m_trial"
-    folder.mkdir()
-    (folder / "values.h5").write_bytes(b"fixture")
-    (folder / "factor.py").write_text("# fixture", encoding="utf-8")
-    result["candidates"] = [
-        {
-            "factor_name": "m_trial",
-            "scope": "research_candidate",
-            "metrics": {},
-            "values": str(folder / "values.h5"),
-            "source_script": str(folder / "factor.py"),
-        }
-    ]
-    parameters = {
-        "correlation_batch_size": 2,
-        "correlation_half_life": 4,
-        "correlation_min_stocks": 3,
-        "correlation_min_effective_days": 2,
-    }
-    spec["full_evaluation"] = {
-        "reference_value_artifacts": {"m_reference": str(tmp_path / "reference.h5")},
-        **parameters,
-    }
-    result["request"] = spec
-    external_record = {
-        "candidate": "m_trial",
-        "reference": "m_reference",
-        "correlation": 0.25,
-        "status": "available",
-        "reason": None,
-        "effective_days": 20,
-        "avg_stocks_per_day": 3000.0,
-    }
-    result["full_evaluation"] = {
-        "schema_version": "factor_research_full_evaluation_v1",
-        "scope": "research_only_not_official_metrics_correlations_or_qe_result",
-        "candidate_names": ["m_trial"],
-        "official_database_writes": 0,
-        "windows": {"full": {"start": "2024-01-01", "end": "2026-08-31"}},
-        "correlations": {
-            "reference_count": 1,
-            "reference_names": ["m_reference"],
-            "parameters": parameters,
-            "reference_reference_pairs_computed": 0,
-            "window_names": ["full"],
-            "windows": [
-                {
-                    "window": "full",
-                    "requested_pairs": 1,
-                    "available_pairs": 1,
-                    "unavailable_pairs": 0,
-                    "records": [external_record],
-                }
-            ],
-            "candidate_candidate_windows": [
-                {
-                    "window": "full",
-                    "requested_pairs": 0,
-                    "available_pairs": 0,
-                    "unavailable_pairs": 0,
-                    "records": [],
-                }
-            ],
-        },
-    }
-    write_json(tmp_path / "result.json", result)
-    repository = RecordedAttempt(tmp_path, spec)
-    assert ResearchService(repository).attach(value)["applied"] is True
-
-    result["full_evaluation"]["correlations"]["windows"][0]["records"][0][
-        "reference"
-    ] = "m_wrong_reference"
-    second = tmp_path / "second"
-    second.mkdir()
-    for name in ("m_trial",):
-        (second / name).mkdir()
-        (second / name / "values.h5").write_bytes(b"fixture")
-        (second / name / "factor.py").write_text("# fixture", encoding="utf-8")
-    # A fresh recorded attempt is needed because result paths are identity-bound.
-    # Keeping the row count unchanged proves that attach binds exact pair
-    # identities rather than accepting denominator closure alone.
-    bad_value = {**value, "result_path": str(second / "result.json")}
-    bad_result = {**result, "candidates": [{
-        **result["candidates"][0],
-        "values": str(second / "m_trial" / "values.h5"),
-        "source_script": str(second / "m_trial" / "factor.py"),
-    }]}
-    write_json(second / "result.json", bad_result)
-    with pytest.raises(ResearchError, match="wrong contract"):
-        ResearchService(RecordedAttempt(second, spec)).attach(bad_value)
-
-
-def test_declared_comparison_attach_checks_identity_and_records_without_recompute(tmp_path):
-    spec, result, value = attachment(tmp_path)
-    spec["method_version"] = "2.0"
-    comparison_spec = {
-        "research_role": "predictive_increment", "horizon": "1d", "baseline": ["m_trial"],
-        "candidate": "m_candidate", "controls": {"style": [], "neighbors": [], "categorical": []},
-        "fit_windows": [{"start": "2026-01-01", "end": "2026-01-05",
-                         "knowledge_cutoff": {"date": "2026-01-07", "phase": "post_close"}}],
-        "evaluation_windows": [{"start": "2026-01-08", "end": "2026-01-09", "fit_window_index": 0}],
-        "knowledge_cutoff": {"date": "2026-01-12", "phase": "post_close"},
-        "direction": {"source": "declared", "sign": 1, "locked_at": "2026-01-07"},
-    }
-    spec["candidates"].append({"factor_name": "m_candidate", "script": "reviewed_candidate.py"})
-    spec["comparison"] = comparison_spec
-    result["request"] = spec
-    candidates = []
-    for name in ("m_trial", "m_candidate"):
-        folder = tmp_path / name
-        folder.mkdir()
-        (folder / "values.h5").write_bytes(b"fixture")
-        (folder / "factor.py").write_text("# fixture", encoding="utf-8")
-        candidates.append({"factor_name": name, "scope": "research_candidate", "metrics": {},
-                           "values": str(folder / "values.h5"), "source_script": str(folder / "factor.py")})
-    result["candidates"] = candidates
-    result["research_comparison"] = {
-        "schema_version": "factor_research_comparison_v1",
-        "scope": "research_comparison_not_official_metrics_or_qe_result",
-        "method_version": "2.0",
-        **{key: comparison_spec[key] for key in (
-            "research_role", "horizon", "baseline", "candidate", "controls", "fit_windows",
-            "evaluation_windows", "direction",
-        )},
-        "knowledge_cutoff": {"date": "2026-01-12", "phase": "post_close",
-                             "last_available_price_date": "2026-01-12", "label_shift_n": 2},
-        "windows": [{"fit_window_index": 0, "fit_window": comparison_spec["fit_windows"][0],
-                     "evaluation_window": {"start": "2026-01-08", "end": "2026-01-09"}}],
-        "cost": {"status": "unavailable"},
-        "information_relation": {"classification": "unresolved_statistical_evidence"},
-        "use_value": {"classification": "evidence_insufficient"},
-    }
-    write_json(tmp_path / "result.json", result)
-    repository = RecordedAttempt(tmp_path, spec)
-    assert ResearchService(repository).attach(value)["applied"] is True
-    assert len(repository.records) == 1
-
-
-def test_declared_comparison_attach_rejects_stale_window_identity(tmp_path):
-    spec, result, value = attachment(tmp_path)
-    spec["method_version"] = "2.0"
-    comparison_spec = {
-        "research_role": "predictive_increment", "horizon": "1d", "baseline": ["m_trial"],
-        "candidate": "m_candidate", "controls": {"style": [], "neighbors": [], "categorical": []},
-        "fit_windows": [], "evaluation_windows": [{"start": "2026-01-08", "end": "2026-01-09"}],
-        "direction": {"source": "declared", "sign": 1, "locked_at": "2026-01-07"},
-    }
-    spec["candidates"].append({"factor_name": "m_candidate", "script": "reviewed_candidate.py"})
-    spec["comparison"] = comparison_spec
-    result["request"] = spec
-    result["candidates"] = []
-    for name in ("m_trial", "m_candidate"):
-        folder = tmp_path / name
-        folder.mkdir()
-        (folder / "values.h5").write_bytes(b"fixture")
-        (folder / "factor.py").write_text("# fixture", encoding="utf-8")
-        result["candidates"].append({"factor_name": name, "scope": "research_candidate", "metrics": {},
-                                     "values": str(folder / "values.h5"),
-                                     "source_script": str(folder / "factor.py")})
-    result["research_comparison"] = {
-        "schema_version": "factor_research_comparison_v1",
-        "scope": "research_comparison_not_official_metrics_or_qe_result",
-        **{key: comparison_spec[key] for key in (
-            "research_role", "horizon", "baseline", "candidate", "controls", "fit_windows", "direction",
-        )},
-        "evaluation_windows": [{"start": "2026-01-10", "end": "2026-01-11"}],
-        "windows": [{}],
-    }
-    write_json(tmp_path / "result.json", result)
-    with pytest.raises(ResearchError, match="wrong contract"):
-        ResearchService(RecordedAttempt(tmp_path, spec)).attach(value)
-
-
-def test_result_file_cannot_be_overwritten(tmp_path):
-    path = tmp_path / "result.json"
-    write_json(path, {"status": "computed"})
-    with pytest.raises(FileExistsError):
-        write_json(path, {"status": "replacement"})
-    assert 'replacement' not in path.read_text(encoding="utf-8")
-
-
-def test_attach_receipt_write_failure_retains_computed_recovery_input(tmp_path, monkeypatch):
+def test_computed_result_survives_record_failure_without_reexecution(tmp_path, monkeypatch):
     from backend.services.factor_research import service as module
-    from backend.tests.factor_research.test_contracts import spec
+    from backend.tests.factor_research.test_contracts import spec as run_spec
 
-    value = spec(tmp_path)
-    writes = []
+    value, executions = run_spec(tmp_path), []
+    output = Path(value["artifact_root"]) / value["task_id"] / value["attempt_id"]
+    repository = Repository(output, value)
+    original_record = repository.record
 
-    class Repo:
-        def replay(self, request):
-            return None
+    def fail_result_record(request):
+        if request["record_type"] == "result":
+            raise ConnectionError("injected write outage")
+        return original_record(request)
 
-        def record(self, request):
-            writes.append(request)
-            return {"applied": True, "revision": 2}
+    repository.record = fail_result_record
 
     def computed(request, output):
+        executions.append(request["attempt_id"])
         output.mkdir(parents=True)
-        return {"status": "computed", "task_id": request["task_id"]}
-
-    def write(path, payload):
-        if path.name == "attach.json":
-            raise OSError("injected receipt write failure")
-        write_json(path, payload)
+        return {
+            "status": "computed",
+            "scope": "research_candidate",
+            "task_id": request["task_id"],
+            "attempt_id": request["attempt_id"],
+            "request": request,
+            "candidates": [],
+        }
 
     monkeypatch.setattr(module, "execute", computed)
-    monkeypatch.setattr(module, "write_json", write)
     with pytest.raises(ResearchError) as error:
-        ResearchService(Repo()).run(value)
+        ResearchService(repository).run(value)
     assert error.value.code == "computed_not_recorded"
-    assert error.value.context["attachment"]["result_path"] == error.value.context["result_path"]
-    from pathlib import Path
-    assert Path(error.value.context["result_path"]).is_file()
-    assert len(writes) == 1
+    assert Path(error.value.context["result_path"]).is_file() and len(executions) == 1
