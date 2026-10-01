@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1440",
-  "closed_at": null,
+  "closed_at": "2026-10-01T14:14:11.512439Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -95,8 +95,8 @@
   },
   "first_seen_at": "2026-09-11T05:48:09.320240Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "505ed64f1d9b3511d54bc78875e2c51339866419",
+  "fixed_at": "2026-09-11T06:28:26Z",
   "github_issue_number": 4541,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4541",
   "last_seen_at": "2026-09-11T05:48:09.320240Z",
@@ -104,6 +104,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4544",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -117,7 +118,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
     "fresh_process_evidence": [
       "Windows fresh Python imported backend.services.quantevolver.qe_eval_v2_qlib_reader from the BUG-1440 task worktree",
@@ -131,9 +132,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\factor-aftercare-20261001\\verify-BUG-1440.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1440",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "f8d74f6857300455c2160c49057aa4f1d2fa7290acfc9ef3e17d5963d12edc7b",
+      "expected_identity": "505ed64f1d9b3511d54bc78875e2c51339866419",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-01T14:13:49.676788Z",
+      "mode": "read_only",
+      "observed_identity": "3626c1cf5f338a7e6678ca62d737ff06ab1cacb1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "41ca50ef2b028e2654a76ef495ae4b7286b054380c4fdd602dfbf71a4be3e619",
+      "receipt_sha256": "b3899d83bd3c252dd378fbf0940703a849dae7fad0ed01a4e8f52d2f379431b8",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "131bd30f91ef14515058e06ccfd4c1c9d55ce0a698e076e91299d37f3602c727",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -143,7 +167,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1440",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fe86f868721caa29",
+    "recorded_at": "2026-09-11T06:29:57.700564Z",
+    "runtime_contract_digest": "2dc046363c6ae19833808cf67bc781f73771558c1d6d2ab7265ebde7d998b5be",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "231cf0705c5ef8a290758ae83ec0e874ef449eca",
+    "source_merge_commit": "505ed64f1d9b3511d54bc78875e2c51339866419",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4544",
+    "validation_evidence": [
+      "targeted reader regression 2 passed; mapped QE plan 29 passed; CI verdict passed"
+    ],
+    "validation_evidence_digest": "161ced3a3c1cbb930c84060586f69f593d407131c77ab1824e0c00d7f6a20137"
+  },
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -152,6 +197,9 @@
     "fingerprint": "73ed877d9d28d9af361609f5",
     "source_event_id": "FE-20260911-73ed877d9d28"
   },
+  "validation_evidence": [
+    "targeted reader regression 2 passed; mapped QE plan 29 passed; CI verdict passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
