@@ -46,8 +46,8 @@
   },
   "first_seen_at": "2026-10-01T18:40:11.215739Z",
   "fix_branch": "bug/BUG-1662-official-margin-t-1-factor-cache-is-shifted-twic-20261001",
-  "fix_commit": "5c694a0d93d52aa01e1773dbeff77a4a8b9defd7",
-  "fixed_at": null,
+  "fix_commit": "3f50ac580b822fb81f04366061454e257ed59e91",
+  "fixed_at": "2026-10-01T20:47:52Z",
   "github_issue_number": 5217,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5217",
   "last_seen_at": "2026-10-01T18:40:11.215739Z",
@@ -57,6 +57,7 @@
     "未经 DEV 验证和用户精确授权，不修改生产因子 code_text 或任何生产数据。",
     "不修改 QE 实验、策略或数据集；后端重启由用户执行。"
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5236",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_dml_gate": "pending_user_authorization: existing factor ID 1545 code_text/cache and downstream official metrics only; DEV ID 21 readback passed",
@@ -79,7 +80,8 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart_and_authorized_production_factor_correction",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -91,7 +93,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1662",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4936e12462d6e498",
+    "recorded_at": "2026-10-01T20:48:26.331597Z",
+    "runtime_contract_digest": "8b628eb7fdf2a161ab20d55d1ac40cb3275258e6f6dacd3c93cb6c90a7b5fb3c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dce8598691206e0e788163f4bbc727a16968bb0e",
+    "source_merge_commit": "3f50ac580b822fb81f04366061454e257ed59e91",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5236",
+    "validation_evidence": [
+      "validation-receipt: id=94138f81ea0c45e9 commit=95b51e9bd938fcea5b8434814577cb304f3cbdff kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed findings=0 blocking=0`",
+      "validation-receipt: id=66ec162c44fc15b3 commit=95b51e9bd938fcea5b8434814577cb304f3cbdff kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q` result=`37 passed, 1 skipped`"
+    ],
+    "validation_evidence_digest": "1a84850a65df13b314b4912171e538ee7617a1d8e513c3dd663eb30c7ada8311"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -103,7 +127,9 @@
   "validation_evidence": [
     "2026-10-02：登记文件的 python -m nox -s l0 -> passed，findings=0，blocking=0；仅验证登记，不证明问题已修复。",
     "2026-10-02：changed-files classifier -> bug_registry_metadata_only，blocking=[]，backend_sessions=[]，dev_db_plan_keys=[]；runtime catalog -> none。",
-    "2026-10-02：BUG JSON 状态、Issue #5217 链接及精确两文件写入范围断言、git diff --check -> passed；BUG 仍为 open，fix_commit=null。"
+    "2026-10-02：BUG JSON 状态、Issue #5217 链接及精确两文件写入范围断言、git diff --check -> passed；BUG 仍为 open，fix_commit=null。",
+    "validation-receipt: id=94138f81ea0c45e9 commit=95b51e9bd938fcea5b8434814577cb304f3cbdff kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed findings=0 blocking=0`",
+    "validation-receipt: id=66ec162c44fc15b3 commit=95b51e9bd938fcea5b8434814577cb304f3cbdff kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q` result=`37 passed, 1 skipped`"
   ],
   "validation_receipts": [
     {
