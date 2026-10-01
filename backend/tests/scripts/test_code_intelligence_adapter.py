@@ -379,6 +379,49 @@ def test_codegraph_sync_bootstraps_missing_index_and_preserves_failed_state(tmp_
     assert payload["publish_ready"] is False
 
 
+def test_codegraph_oversized_critical_source_fails_before_wasted_reindex(tmp_path, monkeypatch):
+    critical = tmp_path / "scripts/aistock_issue_workflow.py"
+    critical.parent.mkdir()
+    critical.write_bytes(b"x" * (adapter.CODEGRAPH_MAX_SOURCE_BYTES + 1))
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(adapter, "_run_command", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not rebuild")))
+    payload = adapter.sync_codegraph_index(root=tmp_path)
+    assert payload["publish_ready"] is False
+    assert payload["failure_kind"] == "critical_source_size_limit"
+    assert payload["oversized_critical_files"] == [{
+        "file": "scripts/aistock_issue_workflow.py", "bytes": adapter.CODEGRAPH_MAX_SOURCE_BYTES + 1,
+        "limit": adapter.CODEGRAPH_MAX_SOURCE_BYTES,
+    }]
+    assert "split oversized source" in payload["command_result"]["stderr"]
+
+
+def test_graph_workflow_uses_lf_without_changing_global_git_and_retains_failures(tmp_path):
+    import os
+    import subprocess
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8"))
+    env = {**os.environ, **workflow["env"]}
+    assert env["GIT_CONFIG_KEY_0"] == "http.version" and env["GIT_CONFIG_VALUE_0"] == "HTTP/1.1"
+    assert env["GIT_CONFIG_KEY_1"] == "core.autocrlf" and env["GIT_CONFIG_VALUE_1"] == "false"
+    def git(*args, input=None):
+        return subprocess.run(["git", *args], cwd=tmp_path, env=env, input=input,
+                              capture_output=True, check=True, timeout=15).stdout
+    git("init", "--quiet")
+    git("config", "--local", "core.autocrlf", "true")
+    content = b"# line\n" * 140000  # LF fits; CRLF exceeds the provider's bound.
+    assert len(content) <= adapter.CODEGRAPH_MAX_SOURCE_BYTES < len(content.replace(b"\n", b"\r\n"))
+    oid = git("hash-object", "-w", "--stdin", input=content).decode().strip()
+    git("update-index", "--add", "--cacheinfo", "100644", oid, "source.py")
+    git("checkout-index", "--all", "--force")
+    assert (tmp_path / "source.py").read_bytes() == content
+    steps = workflow["jobs"]["refresh-after-main"]["steps"]
+    upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
+    assert upload["if"] == "failure()" and upload["with"]["if-no-files-found"] == "error"
+    assert "github.run_attempt" in upload["with"]["name"]
+    assert any("--require-publish-ready" in step.get("run", "") for step in steps)
+
+
 def test_graph_refresh_commands_fail_when_publish_ready_is_required(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         adapter,
@@ -479,7 +522,11 @@ def test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scop
     assert 'AISTOCK_RUN_PAID_UA_REFRESH' in refresh_workflow
     assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in refresh_workflow
     assert "scripts/code_intelligence_adapter.py ua-refresh" in refresh_workflow
-    assert "actions/upload-artifact@" not in refresh_workflow
+    # Successful graph state is kept locally; only failure diagnostics leave the runner.
+    import yaml
+    uploads = [step for step in yaml.safe_load(refresh_workflow)["jobs"]["refresh-after-main"]["steps"]
+               if step.get("uses", "").startswith("actions/upload-artifact@")]
+    assert uploads and all(step.get("if") == "failure()" for step in uploads)
     assert "actions/download-artifact@" not in refresh_workflow
     assert "code-intelligence-refresh-main" in nightly
     assert "cancel-in-progress: true" in nightly

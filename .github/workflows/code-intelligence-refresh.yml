@@ -24,9 +24,13 @@ env:
   GIT_ALTERNATE_OBJECT_DIRECTORIES: ''
   GIT_HTTP_LOW_SPEED_LIMIT: '1024'
   GIT_HTTP_LOW_SPEED_TIME: '60'
-  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_COUNT: '2'
   GIT_CONFIG_KEY_0: http.version
   GIT_CONFIG_VALUE_0: HTTP/1.1
+  # Index Git's LF bytes; CRLF expansion can exceed CodeGraph's 1 MiB limit.
+  # This applies only to this workflow's isolated workspace, not global Git.
+  GIT_CONFIG_KEY_1: core.autocrlf
+  GIT_CONFIG_VALUE_1: 'false'
   PYTHONIOENCODING: utf-8
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
@@ -177,4 +181,13 @@ jobs:
             "| Provider | Status | Policy |",
             "| --- | --- | --- |"
           ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Retain failed graph refresh diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: code-intelligence-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmp/validation/code-intelligence/${{ github.run_id }}/
+          if-no-files-found: error
+          retention-days: 14
 
