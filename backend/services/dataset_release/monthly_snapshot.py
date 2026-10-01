@@ -14,6 +14,7 @@ import re
 from typing import Any, Callable, Protocol, Sequence, TypeVar
 
 from .monthly_repair_journal import ManagedRepairImpactJournal
+from .monthly_unified import MonthlyReleaseSourceBlocked
 
 
 # PostgreSQL prints both the backend slot and local transaction counter in hex.
@@ -113,6 +114,11 @@ class MonthlySnapshotCoordinator(AbstractContextManager["MonthlySnapshotCoordina
             with connection.cursor() as cursor:
                 cursor.execute(f"SET TRANSACTION SNAPSHOT '{self.identity.snapshot_id}'")
             return reader(connection, self.identity)
+        except MonthlyReleaseSourceBlocked:
+            # Missing authority is not transport/snapshot loss. Preserve the
+            # registered reason and remediation, but never reuse partial inputs.
+            self._lost = True
+            raise
         except Exception as exc:
             self._lost = True
             raise MonthlySnapshotError("monthly snapshot reader failed; the input set is invalid") from exc
