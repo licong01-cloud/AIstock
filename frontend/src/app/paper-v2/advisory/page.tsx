@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import {
   advisoryApi,
   type AdvisoryBindingPayload,
+  type AdvisoryDeliveryPreflight,
   type AdvisoryEpisode,
   type AdvisoryForwardRun,
   type AdvisoryForwardRunDetail,
@@ -22,6 +23,8 @@ import {
   type AdvisoryReviewResult,
   type AdvisoryStrategyBindingVersion,
   type AdvisoryTradingDayDefaults,
+  type AdvisoryUniverseOptions,
+  type AdvisoryUniverseSelection,
 } from "@/lib/api/advisory";
 import { selectionCenterApi } from "@/lib/paper-v2/api";
 import { packageDisplayLabel, shortHash } from "@/lib/paper-v2/format";
@@ -51,6 +54,8 @@ type ProgramStrategyDraft = {
   packageMode: AdvisoryPackageMode;
   targetCount: string;
   rows: PackageWeightRow[];
+  universeMode: AdvisoryUniverseSelection["mode"];
+  universePoolIds: string[];
   activationReason: string;
   activeBindingVersionId?: string | null;
   applyResult: AdvisoryStrategyBindingVersion | null;
@@ -179,6 +184,28 @@ function short(value: unknown, len = 10): string {
 
 function packageIdsFromText(text: string): string[] {
   return text.split(/[,\n]/).map((item) => item.trim()).filter(Boolean);
+}
+
+const DEFAULT_UNIVERSE_SELECTION: AdvisoryUniverseSelection = { mode: "stock_universe", pool_ids: [] };
+
+function normalizeUniverseSelection(value?: AdvisoryUniverseSelection | null): AdvisoryUniverseSelection {
+  const mode = value?.mode || "stock_universe";
+  const poolIds = [...new Set(value?.pool_ids || [])].sort();
+  return { mode, pool_ids: mode === "stock_universe" ? [] : poolIds };
+}
+
+function requireUniverseSelection(
+  mode: AdvisoryUniverseSelection["mode"],
+  poolIds: string[],
+): AdvisoryUniverseSelection {
+  const selection = normalizeUniverseSelection({ mode, pool_ids: poolIds });
+  if (selection.mode === "single_index" && selection.pool_ids.length !== 1) {
+    throw new Error("单指数股票池必须选择一个核心指数");
+  }
+  if (selection.mode === "index_union" && selection.pool_ids.length < 1) {
+    throw new Error("多指数并集必须至少选择一个核心指数");
+  }
+  return selection;
 }
 
 function packageRowsFromText(text: string): PackageWeightRow[] {
@@ -543,10 +570,13 @@ function isLegacyManualMultiPackage(source: Pick<AdvisoryProgram, "package_mode"
 
 function strategyDraftFromProgram(program: AdvisoryProgram, binding?: AdvisoryStrategyBindingVersion | null): ProgramStrategyDraft {
   const source = binding || program;
+  const universeSelection = normalizeUniverseSelection(binding?.universe_selection);
   return {
     packageMode: source.package_mode,
     targetCount: String(program.target_count || 20),
     rows: packageRowsFromIds(source.package_ids, source.package_weights || {}),
+    universeMode: universeSelection.mode,
+    universePoolIds: universeSelection.pool_ids,
     activationReason: `替换荐股任务「${program.program_name}」策略包配置`,
     activeBindingVersionId: binding?.binding_version_id || null,
     applyResult: null,
@@ -565,6 +595,7 @@ function bindingPayloadFromDraft(draft: ProgramStrategyDraft): AdvisoryBindingPa
     package_ids: packageIds,
     package_weights: { [packageIds[0]]: 1 },
     target_count: Math.min(100, Math.max(1, Math.round(targetCount))),
+    universe_selection: requireUniverseSelection(draft.universeMode, draft.universePoolIds),
   };
 }
 
@@ -656,6 +687,35 @@ function loadingReviewState(hint: string) {
   };
 }
 
+function deliveryPreflightSummary(result: AdvisoryDeliveryPreflight): ReactNode {
+  const universeLabels: Record<AdvisoryDeliveryPreflight["universe_compatibility"]["status"], string> = {
+    EXACT_UNIVERSE_MATCHED: "策略包股票池与荐股股票池精确匹配",
+    FILTER_ONLY_COMPATIBLE: "可在 Selection 候选后执行荐股股票池过滤，但不等同于 QE 指数池内重新推理",
+    LEGACY_UNIVERSE_UNSPECIFIED: "旧策略包未声明冻结股票池身份，将保留基线兼容但不能标记为精确匹配",
+    PACKAGE_IDENTITY_MISMATCH: "策略包股票池不能覆盖目标荐股股票池",
+    DELIVERY_CONTRACT_INCOMPLETE: "策略包交付的股票池合同缺失一致性或格式不完整",
+  };
+  const modelLabels: Record<AdvisoryDeliveryPreflight["model_compatibility"]["status"], string> = {
+    DESCRIPTOR_FILE_PRESENT: "当前绑定的模型描述文件存在；完整身份仍在正式发布时校验",
+    MODEL_DESCRIPTOR_UNAVAILABLE: "Advisory 模型描述文件不可用，Selection 基线仍可运行",
+    REQUIRED_AFTER_BINDING: "新绑定生效后才能生成并完整校验对应模型描述文件",
+    NOT_APPLICABLE: "交付身份被阻断，暂不检查模型描述文件",
+  };
+  const policyLabel = result.policy_compatibility.status === "ACTIVE_POLICY_MATCH"
+    ? `目标数量 ${result.policy_compatibility.requested_target_count} 与当前策略合同一致`
+    : `目标数量 ${result.policy_compatibility.requested_target_count} 将形成新的策略绑定身份`;
+  return (
+    <>
+      <strong>{result.overall_status === "BLOCKED" ? "交付预检未通过" : result.overall_status === "READY_WITH_MODEL" ? "交付预检通过（模型文件已存在）" : "交付预检通过（基线可用）"}</strong>
+      <div>{universeLabels[result.universe_compatibility.status]}</div>
+      <div>{policyLabel}</div>
+      <div>{modelLabels[result.model_compatibility.status]}</div>
+      {result.blockers.length ? <div>阻断：{result.blockers.join("；")}</div> : null}
+      {result.warnings.length ? <div className="pv2-muted">提示：{result.warnings.join("；")}</div> : null}
+    </>
+  );
+}
+
 function AdvisoryPageContent() {
   const params = useSearchParams();
   const prefillPackages = params.get("package_ids") || "";
@@ -671,6 +731,9 @@ function AdvisoryPageContent() {
   const [packageRows, setPackageRows] = useState<PackageWeightRow[]>(() => packageRowsFromText(prefillPackages));
   const [selectablePackages, setSelectablePackages] = useState<SelectablePackage[]>([]);
   const [targetCount, setTargetCount] = useState(20);
+  const [universeOptions, setUniverseOptions] = useState<AdvisoryUniverseOptions | null>(null);
+  const [universeMode, setUniverseMode] = useState<AdvisoryUniverseSelection["mode"]>(DEFAULT_UNIVERSE_SELECTION.mode);
+  const [universePoolIds, setUniversePoolIds] = useState<string[]>(DEFAULT_UNIVERSE_SELECTION.pool_ids);
   const [reviewTradeDate, setReviewTradeDate] = useState("");
   const [reviewDateTouched, setReviewDateTouched] = useState(false);
   const [tradingDefaults, setTradingDefaults] = useState<AdvisoryTradingDayDefaults | null>(null);
@@ -700,6 +763,8 @@ function AdvisoryPageContent() {
   const [reviewResult, setReviewResult] = useState<AdvisoryReviewResult | null>(null);
   const [expandedStrategyProgramId, setExpandedStrategyProgramId] = useState("");
   const [programStrategyDrafts, setProgramStrategyDrafts] = useState<Record<string, ProgramStrategyDraft>>({});
+  const [createDeliveryPreflight, setCreateDeliveryPreflight] = useState<AdvisoryDeliveryPreflight | null>(null);
+  const [programDeliveryPreflights, setProgramDeliveryPreflights] = useState<Record<string, AdvisoryDeliveryPreflight>>({});
   const [strategyActionKey, setStrategyActionKey] = useState("");
   const [qualityRows, setQualityRows] = useState<QualityInputRow[]>(() => [{ ...newQualityRow(1), rowId: "quality-1" }]);
   const [qualityReport, setQualityReport] = useState<AdvisoryQualityReport | null>(null);
@@ -794,7 +859,7 @@ function AdvisoryPageContent() {
     setModelShadowError(null);
     setModelShadowLoading(true);
     try {
-      const shadow = await advisoryApi.modelShadow(programId, targetDate);
+      const shadow = await advisoryApi.modelShadow(programId, targetDate, "entry-v2", version.list_version_id);
       if (requestSeq !== modelShadowSeqRef.current) return;
       setModelShadow(shadow);
     } catch (exc) {
@@ -1015,6 +1080,17 @@ function AdvisoryPageContent() {
   }, []);
 
   useEffect(() => {
+    let alive = true;
+    advisoryApi.universeOptions().then((options) => {
+      if (!alive) return;
+      setUniverseOptions(options);
+    }).catch((exc) => {
+      if (alive) setError(exc instanceof Error ? exc.message : String(exc));
+    });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
     if (prefillPackages) {
       setPackageRows(packageRowsFromText(prefillPackages));
     }
@@ -1025,6 +1101,16 @@ function AdvisoryPageContent() {
     try {
       const packageIds = packageIdsFromRows(packageRows);
       if (packageIds.length !== 1) throw new Error("请选择一个单 Alpha 策略包或一个原生多 Alpha 父包");
+      const selectedUniverse = requireUniverseSelection(universeMode, universePoolIds);
+      const preflight = await advisoryApi.deliveryPreflight({
+        package_id: packageIds[0],
+        universe_selection: selectedUniverse,
+        target_count: targetCount,
+      });
+      setCreateDeliveryPreflight(preflight);
+      if (preflight.overall_status === "BLOCKED") {
+        throw new Error(`策略包交付预检未通过：${preflight.blockers.join("；") || preflight.universe_compatibility.status}`);
+      }
       const confirmed = window.confirm(`确认创建并启用荐股任务「${programName}」？启用后会进入每日复评与排行榜统计。`);
       if (!confirmed) return;
       const program = await advisoryApi.createProgram({
@@ -1033,6 +1119,7 @@ function AdvisoryPageContent() {
         package_ids: packageIds,
         target_count: targetCount,
         package_weights: { [packageIds[0]]: 1 },
+        universe_selection: selectedUniverse,
         status: "ENABLED",
       });
       await refreshAll(program.program_id);
@@ -1186,6 +1273,11 @@ function AdvisoryPageContent() {
   }
 
   function updateStrategyRow(programId: string, rowId: string, patch: Partial<PackageWeightRow>) {
+    setProgramDeliveryPreflights((rows) => {
+      const next = { ...rows };
+      delete next[programId];
+      return next;
+    });
     setProgramStrategyDraft(programId, (draft) => ({
       ...draft,
       rows: draft.rows.map((row) => row.rowId === rowId ? { ...row, ...patch } : row),
@@ -1199,6 +1291,17 @@ function AdvisoryPageContent() {
     setStrategyActionKey(`${program.program_id}:apply`);
     try {
       const binding = bindingPayloadFromDraft(draft);
+      const packageId = binding.package_ids[0];
+      const preflight = await advisoryApi.deliveryPreflight({
+        package_id: packageId,
+        universe_selection: binding.universe_selection || DEFAULT_UNIVERSE_SELECTION,
+        target_count: Number(binding.target_count ?? program.target_count),
+        program_id: program.program_id,
+      });
+      setProgramDeliveryPreflights((rows) => ({ ...rows, [program.program_id]: preflight }));
+      if (preflight.overall_status === "BLOCKED") {
+        throw new Error(`策略包交付预检未通过：${preflight.blockers.join("；") || preflight.universe_compatibility.status}`);
+      }
       const defaults = await advisoryApi.bindingDefaults(program.program_id);
       const result = await advisoryApi.applyBinding(program.program_id, {
         binding,
@@ -1253,6 +1356,7 @@ function AdvisoryPageContent() {
   }
 
   function updatePackageRow(rowId: string, patch: Partial<PackageWeightRow>) {
+    setCreateDeliveryPreflight(null);
     setPackageRows((rows) => rows.map((row) => row.rowId === rowId ? { ...row, ...patch } : row));
   }
 
@@ -1426,6 +1530,7 @@ function AdvisoryPageContent() {
     const draft = programStrategyDrafts[program.program_id] || strategyDraftFromProgram(program, activeBindingForProgram(program.program_id));
     const loadingBinding = strategyActionKey === `${program.program_id}:load-binding`;
     const applyRunning = strategyActionKey === `${program.program_id}:apply`;
+    const deliveryPreflight = programDeliveryPreflights[program.program_id];
     if (isLegacyManualMultiPackage(program)) {
       return (
         <div className="pv2-readable-panel" data-testid={`advisory-strategy-manager-${program.program_id}`}>
@@ -1470,7 +1575,14 @@ function AdvisoryPageContent() {
               max={100}
               type="number"
               value={draft.targetCount}
-              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, targetCount: event.target.value, applyResult: null }))}
+              onChange={(event) => {
+                setProgramDeliveryPreflights((rows) => {
+                  const next = { ...rows };
+                  delete next[program.program_id];
+                  return next;
+                });
+                setProgramStrategyDraft(program.program_id, (current) => ({ ...current, targetCount: event.target.value, applyResult: null }));
+              }}
             />
           </label>
           <label className="pv2-field">
@@ -1482,6 +1594,80 @@ function AdvisoryPageContent() {
               onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, activationReason: event.target.value }))}
             />
           </label>
+          <label className="pv2-field">
+            荐股股票池
+            <select
+              className="pv2-select"
+              data-testid={`advisory-strategy-universe-mode-${program.program_id}`}
+              value={draft.universeMode}
+              onChange={(event) => {
+                const mode = event.target.value as AdvisoryUniverseSelection["mode"];
+                setProgramDeliveryPreflights((rows) => {
+                  const next = { ...rows };
+                  delete next[program.program_id];
+                  return next;
+                });
+                setProgramStrategyDraft(program.program_id, (current) => ({
+                  ...current,
+                  universeMode: mode,
+                  universePoolIds: mode === "stock_universe" ? [] : current.universePoolIds.slice(0, 1),
+                  applyResult: null,
+                }));
+              }}
+            >
+              <option value="stock_universe">全市场股票池</option>
+              <option value="single_index">单个核心指数</option>
+              <option value="index_union">多个核心指数并集</option>
+            </select>
+          </label>
+          {draft.universeMode !== "stock_universe" ? (
+            <label className="pv2-field">
+              核心指数{draft.universeMode === "index_union" ? "（可多选）" : ""}
+              {draft.universeMode === "index_union" ? (
+                <select
+                  className="pv2-select"
+                  data-testid={`advisory-strategy-universe-pools-${program.program_id}`}
+                  multiple
+                  value={draft.universePoolIds}
+                  onChange={(event) => {
+                    setProgramDeliveryPreflights((rows) => {
+                      const next = { ...rows };
+                      delete next[program.program_id];
+                      return next;
+                    });
+                    setProgramStrategyDraft(program.program_id, (current) => ({
+                      ...current,
+                      universePoolIds: Array.from(event.target.selectedOptions, (option) => option.value),
+                      applyResult: null,
+                    }));
+                  }}
+                >
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              ) : (
+                <select
+                  className="pv2-select"
+                  data-testid={`advisory-strategy-universe-pools-${program.program_id}`}
+                  value={draft.universePoolIds[0] || ""}
+                  onChange={(event) => {
+                    setProgramDeliveryPreflights((rows) => {
+                      const next = { ...rows };
+                      delete next[program.program_id];
+                      return next;
+                    });
+                    setProgramStrategyDraft(program.program_id, (current) => ({
+                      ...current,
+                      universePoolIds: event.target.value ? [event.target.value] : [],
+                      applyResult: null,
+                    }));
+                  }}
+                >
+                  <option value="">选择核心指数</option>
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              )}
+            </label>
+          ) : null}
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
           <table className="pv2-table">
@@ -1536,9 +1722,14 @@ function AdvisoryPageContent() {
           </button>
           <span className="pv2-muted">历史验证是独立研究路径，不作为应用绑定的程序硬门禁；应用后仅替换本任务策略包配置。</span>
         </div>
+        {deliveryPreflight ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-delivery-preflight-${program.program_id}`}>
+            {deliveryPreflightSummary(deliveryPreflight)}
+          </div>
+        ) : null}
         {draft.applyResult ? (
           <div className="pv2-readable-panel" style={{ marginTop: 10 }} data-testid={`advisory-strategy-apply-result-${program.program_id}`}>
-            已应用新策略绑定：{draft.applyResult.package_mode} / {packageSummary(draft.applyResult.package_ids)}
+            已应用新策略绑定：{draft.applyResult.package_mode} / {packageSummary(draft.applyResult.package_ids)} / 股票池 {draft.applyResult.universe_selection?.mode || "stock_universe"}{draft.applyResult.universe_selection?.pool_ids.length ? ` (${draft.applyResult.universe_selection.pool_ids.join("+")})` : ""}
           </div>
         ) : null}
       </div>
@@ -1700,11 +1891,61 @@ function AdvisoryPageContent() {
             <h2>创建或管理独立荐股任务</h2>
             <p className="pv2-muted">每个任务绑定一个原生 StrategyPackage；单 Alpha 包和经过回测验证的多 Alpha 父包使用同一运行链路。</p>
           </div>
-          <button className="pv2-button-primary" onClick={createProgram} type="button">创建并启用</button>
+          <button className="pv2-button-primary" data-testid="advisory-create-program" onClick={createProgram} type="button">创建并启用</button>
         </div>
         <div className="pv2-form-grid">
           <label className="pv2-field">任务名称<input className="pv2-input" value={programName} onChange={(event) => setProgramName(event.target.value)} /></label>
-          <label className="pv2-field">目标数量<input className="pv2-input" type="number" min={1} max={100} value={targetCount} onChange={(event) => setTargetCount(Number(event.target.value))} /></label>
+          <label className="pv2-field">目标数量<input className="pv2-input" data-testid="advisory-target-count" type="number" min={1} max={100} value={targetCount} onChange={(event) => { setCreateDeliveryPreflight(null); setTargetCount(Number(event.target.value)); }} /></label>
+          <label className="pv2-field">
+            荐股股票池
+            <select
+              className="pv2-select"
+              data-testid="advisory-universe-mode"
+              value={universeMode}
+              onChange={(event) => {
+                const mode = event.target.value as AdvisoryUniverseSelection["mode"];
+                setCreateDeliveryPreflight(null);
+                setUniverseMode(mode);
+                setUniversePoolIds(mode === "stock_universe" ? [] : universePoolIds.slice(0, 1));
+              }}
+            >
+              <option value="stock_universe">全市场股票池</option>
+              <option value="single_index">单个核心指数</option>
+              <option value="index_union">多个核心指数并集</option>
+            </select>
+          </label>
+          {universeMode !== "stock_universe" ? (
+            <label className="pv2-field">
+              核心指数{universeMode === "index_union" ? "（可多选）" : ""}
+              {universeMode === "index_union" ? (
+                <select
+                  className="pv2-select"
+                  data-testid="advisory-universe-pools"
+                  multiple
+                  value={universePoolIds}
+                  onChange={(event) => {
+                    setCreateDeliveryPreflight(null);
+                    setUniversePoolIds(Array.from(event.target.selectedOptions, (option) => option.value));
+                  }}
+                >
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              ) : (
+                <select
+                  className="pv2-select"
+                  data-testid="advisory-universe-pools"
+                  value={universePoolIds[0] || ""}
+                  onChange={(event) => {
+                    setCreateDeliveryPreflight(null);
+                    setUniversePoolIds(event.target.value ? [event.target.value] : []);
+                  }}
+                >
+                  <option value="">选择核心指数</option>
+                  {(universeOptions?.pools || []).map((pool) => <option key={pool.pool_id} value={pool.pool_id}>{pool.label} / {pool.index_code}</option>)}
+                </select>
+              )}
+            </label>
+          ) : null}
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
           <table className="pv2-table">
@@ -1738,6 +1979,11 @@ function AdvisoryPageContent() {
             </tbody>
           </table>
         </div>
+        {createDeliveryPreflight ? (
+          <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-create-delivery-preflight">
+            {deliveryPreflightSummary(createDeliveryPreflight)}
+          </div>
+        ) : null}
         <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
           <table className="pv2-table">
             <thead><tr><th>名称</th><th>策略模式</th><th>状态</th><th>版本</th><th>操作</th></tr></thead>
@@ -1937,7 +2183,7 @@ function AdvisoryPageContent() {
                               <td><strong>{candidate.symbol}</strong></td>
                               <td>{outcomeCandidate ? `${outcomeCandidate.holding_period.range_low_days}-${outcomeCandidate.holding_period.range_high_days}日` : "-"}</td>
                               <td>{horizon ? `${fmtPct(horizon.excess_return_calibrated_q10 ?? horizon.excess_return_q10)} - ${fmtPct(horizon.excess_return_calibrated_q90 ?? horizon.excess_return_q90)}` : "-"}</td>
-                              <td>{fmtPriceBand(price?.calibrated_entry_price ?? price?.entry_price)}</td>
+                              <td>{fmtPriceBand(price?.calibrated_entry_price_range ?? price?.entry_price_range)}</td>
                               <td>{fmtPriceBand(price?.take_profit_price)}</td>
                               <td>{fmtPriceBand(price?.stop_loss_price)}</td>
                             </tr>
@@ -2010,6 +2256,43 @@ function AdvisoryPageContent() {
             <span className="pv2-muted"> 点击“预览初始列表”可先检查候选，点击“生成初始列表”会发布第一版推荐列表；全程自动生成候选，无需填写内部编号。</span>
           </div>
         )}
+        <section className="mt-3 rounded-lg border bg-card p-4 text-card-foreground" data-testid="advisory-entry-price">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-semibold">独立买入价格区间</h3>
+            <span className="text-sm text-muted-foreground">{modelShadowLoading ? "LOADING" : modelShadow?.entry_price?.availability_status || "UNAVAILABLE"}</span>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            目标日 {modelShadow?.entry_price?.target_trade_date || "-"} · RISK_MANAGED_ADVISORY · 不复权人民币。
+            预测对象为下一交易日有效开盘价分布，不是盘中最佳买点，不承诺收益或成交；不改变原荐股排序。
+          </p>
+          <p className="mt-1 text-sm" data-testid="advisory-entry-evidence">
+            {modelShadow?.entry_price?.evidence_state === "CONFIRMED_PRICE_DISTRIBUTION" ? "已确认价格分布（不代表收益验证通过）" : "价格模型尚未确认或配置"}
+          </p>
+          {modelShadow?.entry_price?.reason_code ? <p className="mt-2 text-sm" role="status">{modelShadow.entry_price.reason_code} · {modelShadow.entry_price.message}</p> : null}
+          {!modelShadowLoading && !modelShadow?.entry_price ? <p className="mt-2 text-sm" role="status">ENTRY_PRICE_RESPONSE_MISSING · 独立价格通道尚未返回结果。</p> : null}
+          {modelShadow?.entry_price_collection ? <div className="mt-2 text-xs text-muted-foreground" data-testid="advisory-entry-collection">
+            每日采集：{modelShadow.entry_price_collection.configured_enabled ? "调度已配置" : "调度未启用"} · 最近检查 {modelShadow.entry_price_collection.last_run_at || "尚无"}（状态检查不等于已发布预测）
+            {modelShadow.entry_price_collection.attempts.map((attempt, index) => <div key={`${attempt.stage}-${attempt.target_trade_date}-${index}`}>{attempt.target_trade_date || "-"} {attempt.stage || ""} {attempt.status} {attempt.reason_code || ""}</div>)}
+          </div> : null}
+          {modelShadow?.entry_price?.candidates.length ? (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-left text-sm" data-testid="advisory-entry-price-table">
+                <thead><tr className="border-b"><th className="p-2">股票</th><th className="p-2">参考收盘 / 日期</th><th className="p-2">开盘价格区间 / 中位</th><th className="p-2">止盈 / 止损</th><th className="p-2">状态</th></tr></thead>
+                <tbody>{modelShadow.entry_price.candidates.map((candidate) => {
+                  const band = candidate.entry_price.calibrated_range ?? candidate.entry_price.raw_range;
+                  return <tr key={candidate.symbol} className="border-b" data-testid="advisory-entry-price-row">
+                    <td className="p-2">{candidate.symbol}</td>
+                    <td className="p-2">{fmtPrice(candidate.decision_reference_price)} / {candidate.decision_price_trade_date || "-"}</td>
+                    <td className="p-2">{candidate.entry_price.status === "AVAILABLE" && band ? `${fmtPriceBand(band)} / ${fmtPrice(band.mid)}` : "不可用"}</td>
+                    <td className="p-2">{candidate.take_profit.status === "AVAILABLE" ? fmtPriceBand(candidate.take_profit.payload) : "止盈未验证"} / {candidate.stop_loss.status === "AVAILABLE" ? fmtPriceBand(candidate.stop_loss.payload) : "止损未验证"}</td>
+                    <td className="p-2">{candidate.entry_price.reason_code || candidate.entry_price.status}</td>
+                  </tr>;
+                })}</tbody>
+              </table>
+            </div>
+          ) : null}
+          <details className="mt-3 text-xs text-muted-foreground"><summary>价格角色身份</summary><pre className="mt-2 overflow-auto">{JSON.stringify(modelShadow?.entry_price ?? {}, null, 2)}</pre></details>
+        </section>
         <div className="pv2-readable-panel" style={{ marginTop: 12 }} data-testid="advisory-model-shadow">
           <div className="pv2-card-head">
             <div>
@@ -2131,8 +2414,8 @@ function AdvisoryPageContent() {
               <div style={{ marginTop: 16 }} data-testid="advisory-price-range-shadow">
                 <div className="pv2-card-head">
                   <div>
-                    <div className="pv2-kicker">价格范围（实验影子）</div>
-                    <h3>买入、止盈、保护与止损参考</h3>
+                    <div className="pv2-kicker">日级价格区间（实验影子）</div>
+                    <h3>次交易日进场、止盈、保护与止损参考</h3>
                   </div>
                   <div className="pv2-row-actions">
                     <span className={`pv2-badge ${modelShadow.price_range?.status === "EXPERIMENTAL_SHADOW" ? "pv2-badge-warning" : "pv2-badge-neutral"}`}>
@@ -2144,7 +2427,7 @@ function AdvisoryPageContent() {
                   </div>
                 </div>
                 <div className="pv2-muted" data-testid="advisory-price-range-basis">
-                  未复权 CNY；仅供学术研究。买入范围条件于下一交易日可执行，止盈、保护和止损进一步条件于按预测中位价建仓。
+                  未复权 CNY；决策日 {modelShadow.price_range?.decision_as_of_trade_date || "-"}，目标日 {modelShadow.price_range?.target_trade_date || "-"}。仅为日级价格预测，不表示最佳分钟、成交保证或交易指令；止盈、保护和止损条件于按预测进场中位价建仓。
                 </div>
                 <div className="pv2-muted" data-testid="advisory-price-range-source">
                   M4 {short(modelShadow.price_range?.price_range_bundle_id, 14)} · M2 {short(modelShadow.price_range?.parent_bundle_id, 14)} · M3 {short(modelShadow.price_range?.outcome_bundle_id, 14)} · {modelShadow.price_range?.price_basis || "UNADJUSTED_CNY_DECISION_CLOSE"}
@@ -2159,20 +2442,20 @@ function AdvisoryPageContent() {
                   <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
                     <table className="pv2-table" data-testid="advisory-price-range-table">
                       <thead>
-                        <tr><th>股票</th><th>可执行概率</th><th>决策参考价</th><th>条件买入范围</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
+                        <tr><th>股票</th><th>目标交易日</th><th>决策参考价</th><th>次日开盘区间</th><th>止盈参考</th><th>移动保护</th><th>止损参考 / 硬边界</th><th>法规范围</th><th>状态</th></tr>
                       </thead>
                       <tbody>
                         {modelShadow.price_range.candidates.map((candidate) => (
                           <tr key={candidate.symbol} data-testid="advisory-price-range-row">
                             <td>{candidate.symbol}</td>
-                            <td>{fmtPct(candidate.entry_executable_probability)}</td>
+                            <td>{modelShadow.price_range?.target_trade_date || "-"}</td>
                             <td>{fmtPrice(candidate.decision_reference_price)}</td>
-                            <td>{candidate.calibrated_entry_price ? <>{fmtPriceBand(candidate.calibrated_entry_price)}（中位 {fmtPrice(candidate.calibrated_entry_price.mid)}）<br /><span className="pv2-muted">原始 {candidate.entry_price ? fmtPriceBand(candidate.entry_price) : "-"}</span></> : candidate.entry_price ? `${fmtPriceBand(candidate.entry_price)}（中位 ${fmtPrice(candidate.entry_price.mid)}）` : "-"}</td>
+                            <td>{candidate.calibrated_entry_price_range ? <>{fmtPriceBand(candidate.calibrated_entry_price_range)}（中位 {fmtPrice(candidate.calibrated_entry_price_range.mid)}）<br /><span className="pv2-muted">原始 {candidate.entry_price_range ? fmtPriceBand(candidate.entry_price_range) : "-"}</span></> : candidate.entry_price_range ? `${fmtPriceBand(candidate.entry_price_range)}（中位 ${fmtPrice(candidate.entry_price_range.mid)}）` : "-"}</td>
                             <td>{candidate.take_profit_price ? `${fmtPriceBand(candidate.take_profit_price)} / ${candidate.take_profit_price.horizon_trade_days}日` : "-"}</td>
                             <td>{candidate.protective_price?.status === "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION" ? `${fmtPriceBand({ low: candidate.protective_price.floor_low!, high: candidate.protective_price.floor_high! })}（激活 ${fmtPrice(candidate.protective_price.policy_activation_price)}）` : candidate.protective_price?.status || "-"}</td>
                             <td>{candidate.stop_loss_price ? `${fmtPriceBand(candidate.stop_loss_price)} / ${fmtPrice(candidate.stop_loss_price.hard_stop_price)}` : "-"}</td>
                             <td>{candidate.regulatory_price_range?.status === "LIMITED" ? `${fmtPrice(candidate.regulatory_price_range.low)} - ${fmtPrice(candidate.regulatory_price_range.high)} (${candidate.regulatory_price_range.rule_id})` : candidate.regulatory_price_range ? `${candidate.regulatory_price_range.status} (${candidate.regulatory_price_range.rule_id})` : "-"}</td>
-                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? <>{candidate.entry_gap_calibration_state === "CALIBRATED" ? "校准区间" : "实验影子"}<br /><span className="pv2-muted">可执行概率 {candidate.entry_executable_calibration_state || "UNCALIBRATED"}</span></> : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
+                            <td>{candidate.status === "EXPERIMENTAL_SHADOW" ? <>{candidate.entry_gap_calibration?.state === "CALIBRATED" ? "校准区间" : "实验影子"}<br /><span className="pv2-muted">{candidate.availability_status}</span></> : <><strong>{candidate.reason_code || "PRICE_RANGE_UNAVAILABLE"}</strong><br /><span className="pv2-muted">{candidate.message || "-"}</span></>}</td>
                           </tr>
                         ))}
                       </tbody>

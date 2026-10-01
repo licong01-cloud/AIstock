@@ -240,6 +240,8 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     assert runtime_catalog["targets"]["backend-main"]["isolated_validation_ports"] == [8011, 8012]
     assert "start_all_ai_stock.bat" in runtime_catalog["targets"]["backend-main"]["source_globs"]
     assert {
+        "backend/services/validation/catalog_integrity.py",
+        "backend/services/validation/plan_catalog.py",
         "scripts/aistock_runner_health.py",
         "scripts/configure_aistock_github_runner.ps1",
         "scripts/start_aistock_github_runner.ps1",

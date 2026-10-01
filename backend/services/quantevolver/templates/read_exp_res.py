@@ -735,7 +735,17 @@ def _extract_return_curves(recorder) -> dict:
                 print(f"[WARN] excess metrics unavailable: {result['excess_unavailable_reason']}")
 
         if bench_ret is not None:
-            result["cumulative_benchmark"] = (1 + bench_ret).cumprod().tolist()
+            _benchmark_curve = (1 + bench_ret).cumprod()
+            result["cumulative_benchmark"] = _benchmark_curve.tolist()
+            _benchmark_gross = float(_benchmark_curve.iloc[-1])
+            _benchmark_days = int(len(bench_ret))
+            result["benchmark_n_trading_days"] = _benchmark_days
+            result["benchmark_total_return"] = round(_benchmark_gross - 1.0, 6)
+            if _benchmark_days > 0 and _benchmark_gross > 0:
+                result["benchmark_annualized_return"] = round(
+                    _benchmark_gross ** (252.0 / _benchmark_days) - 1.0,
+                    6,
+                )
             # 补算超额收益（当 Qlib 原生 excess_return 为 NaN 时）
             if "cumulative_excess_no_cost" not in result:
                 ret_cols_ex = [col_lower[k] for k in col_lower if k == "return"]
@@ -2077,7 +2087,16 @@ if latest_recorder is not None:
         _summary_dict["long_trend_registration_status"] = _long_trend_registration["status"]
         _enhanced["ic_diagnostics"] = _extract_ic_diagnostics(latest_recorder)
         _enhanced["training_diagnostics"] = _extract_training_diagnostics()
-        _enhanced["return_curves"] = _extract_return_curves(latest_recorder)
+        _return_curves = _extract_return_curves(latest_recorder)
+        _enhanced["return_curves"] = _return_curves
+        if _return_curves.get("benchmark_annualized_return") is not None:
+            _enhanced["benchmark_returns"] = {
+                "annualized_return": _return_curves["benchmark_annualized_return"],
+                "total_return": _return_curves.get("benchmark_total_return"),
+                "n_trading_days": _return_curves.get("benchmark_n_trading_days"),
+                "annualization_days": 252,
+                "source": "report_benchmark_same_window",
+            }
         _enhanced["trade_diagnostics"] = _extract_trade_diagnostics(latest_recorder, _summary_dict)
         _enhanced["prediction_diagnostics"] = _extract_prediction_diagnostics(latest_recorder)
         _enhanced.update(_extract_top_stocks(latest_recorder))

@@ -5,7 +5,10 @@ QE (QuantEvolver) 专用的自定义数据加载器
 RDAgent 使用 rdagent/scenarios/qlib/experiment/custom_loaders.py
 QE 使用这个独立的 qe_custom_loaders.py
 """
+from collections.abc import Mapping
 from typing import Optional
+
+import numpy as np
 import pandas as pd
 
 try:
@@ -147,8 +150,9 @@ class DynamicFactorsOnlyLoader:
     """仅加载动态因子 parquet 的数据加载器（QE 专用版本）。
     
     用于 disable_alpha158=True 时，仅使用自定义因子进行回测。
-    与 StaticDataLoader 不同，此类忽略 instruments 参数，
-    直接加载 parquet 中所有数据，避免 KeyError: 'all' 错误。
+    与 StaticDataLoader 不同，此类把 Qlib instruments 合同交给当前
+    provider 解析，并用返回的逐交易日标签索引过滤 parquet，避免把 market
+    名称当作单只股票索引，同时不得静默退化为全市场面板。
     
     同时从 QLib provider 按 label_type / label_horizon 加载 label 数据，
     确保返回的 DataFrame 包含 feature 和 label 列。
@@ -253,6 +257,43 @@ class DynamicFactorsOnlyLoader:
                 "Expected like '000001.SZ' or '600000.SH'. "
                 f"Examples: {bad}"
             )
+
+    @staticmethod
+    def _label_instruments(provider: object, instruments: object, df: pd.DataFrame) -> object:
+        """Normalize the DataLoader request for Qlib's authoritative PIT resolver."""
+
+        if instruments is None:
+            return df.index.get_level_values("instrument").unique().tolist()
+        if isinstance(instruments, str):
+            if not instruments.strip():
+                raise ValueError(
+                    "reason_code=qe_dynamic_loader_instrument_contract_invalid: "
+                    "market name is empty"
+                )
+            try:
+                return provider.instruments(instruments)
+            except Exception as exc:
+                raise RuntimeError(
+                    "reason_code=qe_dynamic_loader_instrument_resolution_failed: "
+                    f"market={instruments!r}"
+                ) from exc
+        if isinstance(instruments, Mapping):
+            if not instruments:
+                raise ValueError(
+                    "reason_code=qe_dynamic_loader_instrument_resolution_empty"
+                )
+            return instruments
+        if isinstance(instruments, (list, tuple, pd.Index, np.ndarray)):
+            normalized = [str(symbol).strip().upper() for symbol in instruments]
+            if not normalized or any(not symbol for symbol in normalized):
+                raise ValueError(
+                    "reason_code=qe_dynamic_loader_instrument_resolution_empty"
+                )
+            return normalized
+        raise ValueError(
+            "reason_code=qe_dynamic_loader_instrument_contract_invalid: "
+            f"unsupported instruments type={type(instruments).__name__}"
+        )
     
     def load(
         self,
@@ -262,9 +303,9 @@ class DynamicFactorsOnlyLoader:
     ) -> pd.DataFrame:
         """加载动态因子数据并添加label列。
         
-        注意：忽略 instruments 参数，直接加载 parquet 中所有数据。
-        这是为了避免 StaticDataLoader 的 KeyError: 'all' 问题。
-        同时从 QLib provider 加载 label 数据。
+        ``instruments`` 遵循 Qlib DataLoader 合同：market 名称通过当前
+        provider 解析为 PIT 生效区间，显式列表按静态成员过滤，``None``
+        才表示不做股票池过滤。解析或过滤失败时必须 fail closed。
         """
         # 1. 加载因子 parquet
         df = pd.read_parquet(self.dynamic_path)
@@ -298,62 +339,71 @@ class DynamicFactorsOnlyLoader:
                 mask = mask & (dt_level <= end_dt)
             df = df.loc[mask.values]
         
-        # 2. 从 QLib provider 加载 label 数据
-        # Label 定义: Ref($close, -2) / Ref($close, -1) - 1
+        # 2. 由 Qlib provider 权威解析股票池。market 名称不能静默退化为全市场。
         try:
             from qlib.data import D
-            
-            # 获取所有唯一的 instruments
-            unique_instruments = df.index.get_level_values("instrument").unique().tolist()
-            
-            # 使用 QLib 的 D.features 加载与配置一致的训练 label
-            label_expr = f"({self.label_expr})"
-            
+        except Exception as exc:
+            raise RuntimeError(
+                "reason_code=qe_dynamic_loader_provider_unavailable: "
+                "Qlib provider is required to resolve instruments"
+            ) from exc
+        label_instruments = self._label_instruments(D, instruments, df)
+
+        # 3. 从 QLib provider 加载 label 数据
+        # Label 定义: Ref($close, -2) / Ref($close, -1) - 1
+        # 使用 QLib 的 D.features 加载与配置一致的训练 label
+        label_expr = f"({self.label_expr})"
+        try:
             label_df = D.features(
-                instruments=unique_instruments,
+                instruments=label_instruments,
                 fields=[label_expr],
                 start_time=start_time,
                 end_time=end_time,
             )
-            
-            # 确保 label_df 的 datetime 索引格式与 df 一致
-            # QLib 返回的是 pd.Timestamp，需要统一为 pd.Timestamp
-            if isinstance(label_df.index, pd.MultiIndex):
-                # 确保 datetime 层级是 pd.Timestamp 类型
-                dt_level = label_df.index.get_level_values("datetime")
-                if not isinstance(dt_level, pd.DatetimeIndex):
-                    # 转换为 DatetimeIndex
-                    label_df = label_df.reset_index()
-                    label_df["datetime"] = pd.to_datetime(label_df["datetime"])
-                    label_df = label_df.set_index(["datetime", "instrument"])
-            
-            # 同样确保 df 的 datetime 索引是 pd.Timestamp 类型
-            if isinstance(df.index, pd.MultiIndex):
-                dt_level = df.index.get_level_values("datetime")
-                if not isinstance(dt_level, pd.DatetimeIndex):
-                    df = df.reset_index()
-                    df["datetime"] = pd.to_datetime(df["datetime"])
-                    df = df.set_index(["datetime", "instrument"])
-            
-            # 重命名列为 label
-            if isinstance(label_df.columns, pd.MultiIndex):
-                # 如果已经是 MultiIndex，修改第一层为 'label'
-                label_df.columns = pd.MultiIndex.from_product([["label"], ["LABEL0"]])
-            else:
-                # 否则创建 MultiIndex
-                label_df.columns = pd.MultiIndex.from_product([["label"], ["LABEL0"]])
-            
-            # 3. 合并 feature 和 label
-            # 关键修复：使用 DataFrame.join() 而不是 pd.concat()
-            # join() 方法会保持左侧 DataFrame 的索引结构不变，避免 MultiIndex 丢失
-            # 使用 how='left' 确保保留所有 factor 数据，label 数据按索引对齐
-            df = df.join(label_df, how='left')
-            
         except Exception as e:
             raise RuntimeError(
-                "Failed to load label data from QLib provider for "
+                "reason_code=qe_dynamic_loader_label_load_failed: "
+                "failed to load label data from QLib provider for "
                 f"label_type={self.label_type!r}, label_horizon={self.label_horizon}, "
                 f"label_expr={self.label_expr!r}"
             ) from e
+
+        if not isinstance(label_df.index, pd.MultiIndex) or set(label_df.index.names) != {
+            "datetime",
+            "instrument",
+        }:
+            raise ValueError(
+                "reason_code=qe_dynamic_loader_label_index_invalid: "
+                "Qlib label data must use MultiIndex(datetime, instrument)"
+            )
+        if list(label_df.index.names) != ["datetime", "instrument"]:
+            label_df = label_df.swaplevel("datetime", "instrument").sort_index()
+        label_dt = label_df.index.get_level_values("datetime")
+        if not isinstance(label_dt, pd.DatetimeIndex):
+            label_df = label_df.reset_index()
+            label_df["datetime"] = pd.to_datetime(label_df["datetime"])
+            label_df = label_df.set_index(["datetime", "instrument"])
+
+        df_dt = df.index.get_level_values("datetime")
+        if not isinstance(df_dt, pd.DatetimeIndex):
+            df = df.reset_index()
+            df["datetime"] = pd.to_datetime(df["datetime"])
+            df = df.set_index(["datetime", "instrument"])
+
+        if label_df.shape[1] != 1:
+            raise ValueError(
+                "reason_code=qe_dynamic_loader_label_shape_invalid: "
+                f"expected one label column, got {label_df.shape[1]}"
+            )
+        label_df.columns = pd.MultiIndex.from_product([["label"], ["LABEL0"]])
+
+        # 4. 以内连接同时对齐 label 和 Qlib 的 PIT 股票池成员索引。
+        # 对 instruments=None，label_instruments 来自 parquet 自身，保持旧无过滤语义。
+        df = df.join(label_df, how="inner")
+        if df.empty:
+            raise ValueError(
+                "reason_code=qe_dynamic_loader_instrument_filter_empty: "
+                f"instruments_type={type(instruments).__name__}"
+            )
         
         return df.sort_index()
