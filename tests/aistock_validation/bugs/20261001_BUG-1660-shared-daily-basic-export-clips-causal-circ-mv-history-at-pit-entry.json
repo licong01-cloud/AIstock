@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-01T18:29:57.586807Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1d713a539487f006415da7a078674ec5010147e3",
+  "fixed_at": "2026-10-01T20:09:52Z",
   "github_issue_number": 5216,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5216",
   "last_seen_at": "2026-10-01T18:29:57.586807Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5222",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -146,6 +147,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -170,7 +172,31 @@
     "status": "resolved_by_separate_bug",
     "unrelated_module_modified": false
   },
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1660",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3c135166bc3c5456",
+    "recorded_at": "2026-10-01T20:10:44.871339Z",
+    "runtime_contract_digest": "154bf8c81a9b44d225b306ca6f5d44a2b6a028bb420b884cddcd7ebfb469388b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "af1555558364f6722efe3d7b354bfbee4eb2789b",
+    "source_merge_commit": "1d713a539487f006415da7a078674ec5010147e3",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5222",
+    "validation_evidence": [
+      "validation-receipt: id=4c529f5c885cf030 commit=af1555558364f6722efe3d7b354bfbee4eb2789b kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=31277e9a710174a2 commit=af1555558364f6722efe3d7b354bfbee4eb2789b kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files -- --changed-only` result=`passed; files=12 blocking=0`",
+      "validation-receipt: id=f29757c90d30895b commit=af1555558364f6722efe3d7b354bfbee4eb2789b kind=nox plan=validation_catalog_integrity status=passed command=`rtk nox -s validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=b3af79dd6fc8e84d commit=af1555558364f6722efe3d7b354bfbee4eb2789b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_daily_basic_history_repair.py -q` result=`11 passed`"
+    ],
+    "validation_evidence_digest": "8524572e8021704e59b60e096201bc057dafae6e61596305b5e098ecb84d9dc4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -179,6 +205,12 @@
     "fingerprint": "861a2c431678cf72fd77f980",
     "source_event_id": "FE-20261001-861a2c431678"
   },
+  "validation_evidence": [
+    "validation-receipt: id=4c529f5c885cf030 commit=af1555558364f6722efe3d7b354bfbee4eb2789b kind=nox plan=validation_module_registry_l0 status=passed command=`rtk nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=31277e9a710174a2 commit=af1555558364f6722efe3d7b354bfbee4eb2789b kind=nox plan=guardrail_changed_files status=passed command=`rtk nox -s guardrail_changed_files -- --changed-only` result=`passed; files=12 blocking=0`",
+    "validation-receipt: id=f29757c90d30895b commit=af1555558364f6722efe3d7b354bfbee4eb2789b kind=nox plan=validation_catalog_integrity status=passed command=`rtk nox -s validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=b3af79dd6fc8e84d commit=af1555558364f6722efe3d7b354bfbee4eb2789b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_daily_basic_history_repair.py -q` result=`11 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
