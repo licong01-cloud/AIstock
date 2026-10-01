@@ -43,7 +43,7 @@ def test_job_temp_environment_reaches_fresh_python_and_pytest(tmp_path, monkeypa
         "import os, tempfile\nfrom pathlib import Path\n"
         "def test_temp(tmp_path):\n"
         "    assert Path(tempfile.gettempdir()) == Path(os.environ['TEMP'])\n"
-        "    assert tmp_path.is_relative_to(Path(os.environ['PYTEST_DEBUG_TEMPROOT']))\n",
+        "    assert tmp_path.is_relative_to(Path(os.environ['PYTEST_DEBUG_TEMPROOT'])) and tmp_path.is_relative_to(Path(tempfile.gettempdir()))\n",
         encoding="utf-8",
     )
     env = {**os.environ, **updates, "PYTEST_ADDOPTS": ""}
