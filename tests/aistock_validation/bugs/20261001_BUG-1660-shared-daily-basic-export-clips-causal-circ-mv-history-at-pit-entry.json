@@ -106,11 +106,19 @@
     "active_profile_write": false,
     "runtime_action": false,
     "delivery_receipt": "X:/AIstock_dataset_candidates/validation_receipts/BUG-1660-20261002/daily_basic_causal_history_delivery.json",
-    "delivery_receipt_sha256": "c4e3891987925c2a4ba821c3572625cbfa3cbc0d276ce5d37e5a45e070ea1d56"
+    "delivery_receipt_sha256": "c4e3891987925c2a4ba821c3572625cbfa3cbc0d276ce5d37e5a45e070ea1d56",
+    "latest_fact_audit_receipt": "X:/AIstock_dataset_candidates/validation_receipts/BUG-1660-20261002/daily_basic_causal_latest_fact_readback_v2.json",
+    "latest_fact_audit_receipt_sha256": "ada9f466a15bb29097877098d89b7b70e1d1186e865702e51ab3b68fe3ca2c3d",
+    "latest_invalid_fact_invalidation_checked": true,
+    "source_executable_audit_window": {"start": "2021-07-30", "end": "2025-04-30"},
+    "causal_fact_window": {"start": "2020-07-30", "end": "2025-04-30"},
+    "full_hmm_consumer_preflight": "not_passed_candidate_blocked",
+    "boundary_confirmation": "Official rotation_l1_input_bundle._daily_basic_lookup has zero strict-prior source-window updates for 000792.SZ/2021-08-10; pre-window 2020-04-29 fact cannot be used under the unchanged HMM contract."
   },
   "review_rounds": [
     {"round": 1, "kind": "local_self_review", "result": "passed", "scope": "raw source facts separated from PIT executable/static population; density contract and validator changed together"},
-    {"round": 2, "kind": "local_self_review_and_real_readback", "result": "passed", "scope": "readonly snapshot, create-exclusive clone, exact old value preservation, CLI factory regression and honest unresolved source boundary"}
+    {"round": 2, "kind": "local_self_review_and_real_readback", "result": "passed", "scope": "readonly snapshot, create-exclusive clone, exact old value preservation, CLI factory regression and honest unresolved source boundary"},
+    {"round": 3, "kind": "local_self_review_and_regression", "result": "passed", "scope": "latest invalid raw fact invalidates older positive cap; nan/inf/zero/negative RED-to-GREEN; strict candidate readback remains 155 resolved, train/validation zero, one honest source-boundary gap"}
   ],
   "source_delivery_blocker": {
     "plan": "validation_catalog_integrity",

@@ -47,14 +47,19 @@ def merge_missing_facts(old: pd.DataFrame, source: pd.DataFrame) -> tuple[pd.Dat
 
 
 def causal_coverage(spans: list[tuple[str, str, str]], calendar: list[str],
-                    facts: dict[str, list[int]], *, start: str, end: str) -> dict:
+                    facts: dict[str, list[tuple[int, bool]]], *, start: str, end: str) -> dict:
     days = pd.DatetimeIndex([day for day in calendar if start <= day <= end]).asi8
     expected = resolved = 0
     unresolved = []
     for symbol, begin, finish in spans:
         required = days[(days >= pd.Timestamp(begin).value) & (days <= pd.Timestamp(finish).value)]
-        prior = np.asarray(sorted(facts.get(symbol, [])), dtype=np.int64)
-        covered = np.searchsorted(prior, required, side="left") > 0
+        observations = sorted(facts.get(symbol, []))
+        prior = np.asarray([row[0] for row in observations], dtype=np.int64)
+        valid = np.asarray([row[1] for row in observations], dtype=bool)
+        positions = np.searchsorted(prior, required, side="left") - 1
+        covered = np.zeros(len(required), dtype=bool)
+        has_prior = positions >= 0
+        covered[has_prior] = valid[positions[has_prior]]
         expected += len(required)
         resolved += int(covered.sum())
         for day in required[~covered]:
@@ -63,12 +68,20 @@ def causal_coverage(spans: list[tuple[str, str, str]], calendar: list[str],
             "unresolved_count": len(unresolved), "unresolved": unresolved}
 
 
-def _collect_finite_facts(frame: pd.DataFrame, target: dict[str, list[int]], *, window_start: str) -> None:
+def _collect_circ_mv_facts(
+    frame: pd.DataFrame, target: dict[str, list[tuple[int, bool]]], *, window_start: str,
+) -> None:
+    # Preserve invalid observations: the latest record invalidates earlier cap,
+    # just as the official file consumer does. This is not forward filling.
     cap = frame["db_circ_mv"].to_numpy()
     dates = pd.DatetimeIndex(frame.index.get_level_values("datetime"))
-    finite = np.isfinite(cap) & (cap > 0) & (dates >= pd.Timestamp(window_start))
-    for symbol, group in frame.loc[finite].groupby(level="instrument", sort=False):
-        target.setdefault(symbol, []).extend(pd.DatetimeIndex(group.index.get_level_values("datetime")).asi8.tolist())
+    selected = dates >= pd.Timestamp(window_start)
+    observed = pd.DataFrame(
+        {"valid": np.isfinite(cap) & (cap > 0)}, index=frame.index,
+    ).loc[selected]
+    for symbol, group in observed.groupby(level="instrument", sort=False):
+        source_dates = pd.DatetimeIndex(group.index.get_level_values("datetime")).asi8
+        target.setdefault(symbol, []).extend(zip(source_dates.tolist(), group.valid.tolist(), strict=True))
 
 
 def _pin(root: Path, relative: str, **extra: Any) -> dict:
@@ -150,9 +163,9 @@ def repair_daily_basic_history(
     progress({"stage": "clone_complete", "reused_files": len(reused_stats)})
     new_h5 = candidate / FACTOR / "daily_basic.h5"
     new_h5.parent.mkdir(parents=True, exist_ok=True)
-    source_facts: dict[str, list[int]] = {}
-    old_facts: dict[str, list[int]] = {}
-    new_facts: dict[str, list[int]] = {}
+    source_facts: dict[str, list[tuple[int, bool]]] = {}
+    old_facts: dict[str, list[tuple[int, bool]]] = {}
+    new_facts: dict[str, list[tuple[int, bool]]] = {}
     source_digest = hashlib.sha256()
     added_digest = hashlib.sha256()
     output_digest = hashlib.sha256()
@@ -190,9 +203,9 @@ def repair_daily_basic_history(
                     merged.to_hdf(new_h5, key="data", format="table", append=new_h5.exists(),
                                   data_columns=["instrument", "datetime"], index=False,
                                   min_itemsize={"instrument": 16})
-                _collect_finite_facts(source, source_facts, window_start="2020-07-30")
-                _collect_finite_facts(old, old_facts, window_start="2020-07-30")
-                _collect_finite_facts(merged, new_facts, window_start="2020-07-30")
+                _collect_circ_mv_facts(source, source_facts, window_start="2020-07-30")
+                _collect_circ_mv_facts(old, old_facts, window_start="2020-07-30")
+                _collect_circ_mv_facts(merged, new_facts, window_start="2020-07-30")
                 added_digest.update(pd.util.hash_pandas_object(added, index=True).to_numpy().tobytes())
                 output_digest.update(pd.util.hash_pandas_object(merged, index=True).to_numpy().tobytes())
                 copied_rows += len(old)
@@ -226,9 +239,11 @@ def repair_daily_basic_history(
         targeted = []
         for key in diagnostic["keys"]:
             symbol, entry = key["symbol"], key["pit_entry_date"]
-            valid = [day for day in new_facts.get(symbol, []) if day < pd.Timestamp(entry).value]
-            targeted.append({"symbol": symbol, "pit_entry_date": entry, "resolved": bool(valid),
-                             "prior_fact_date": pd.Timestamp(max(valid)).date().isoformat() if valid else None})
+            prior = sorted(row for row in new_facts.get(symbol, []) if row[0] < pd.Timestamp(entry).value)
+            latest = prior[-1] if prior else None
+            targeted.append({"symbol": symbol, "pit_entry_date": entry,
+                             "resolved": latest is not None and latest[1],
+                             "prior_fact_date": pd.Timestamp(latest[0]).date().isoformat() if latest else None})
         unresolved = [key for key in targeted if not key["resolved"]]
         source_unexplained = sum(len(
             {(key['symbol'], key['trade_date']) for key in audit[name]['after']['unresolved']}
