@@ -203,7 +203,11 @@ class TailTWAPWithLimitStrategy(TWAPStrategy):
 
         # 4. 按 score 降序过滤可交易备选股，最多取 max_new 只
         selected = []
-        for sid, score in backup_candidates:
+        # ``unfilled_backup_depth`` is an execution contract, not merely UI
+        # metadata.  The outer strategy may retain a wider ranked reserve so
+        # different execution policies can share one frozen signal, but this
+        # handler must never inspect candidates beyond the configured bound.
+        for sid, score in backup_candidates[: self._backup_depth]:
             if len(selected) >= max_new:
                 break
             if sid in current_holdings or sid in already_added:

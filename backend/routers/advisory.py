@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from functools import lru_cache
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, Literal, NoReturn
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from backend.services.dataset_release.managed_consumer_task import (
+    ManagedDatasetTaskError,
+    ManagedDatasetTaskStore,
+)
 from backend.services.advisory_phase0a.historical_research import (
     HistoricalAdvisoryResearchRunner,
     HistoricalResearchBatchRequest,
@@ -29,7 +34,9 @@ from backend.services.advisory_program import (
     program_to_dict,
     review_result_to_dict,
 )
+from backend.services.advisory_delivery_preflight import AdvisoryDeliveryPreflightService
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
+from backend.services.advisory_model_first.entry_price_daily_service import AdvisoryEntryPriceDailyService
 from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
 from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
@@ -51,6 +58,10 @@ from backend.services.advisory_historical_range.service import (
     HistoricalRangeApplicationService,
     HistoricalRangeServiceError,
 )
+from backend.services.advisory_universe import (
+    AdvisoryUniverseContractError,
+    advisory_universe_catalog,
+)
 
 router = APIRouter(prefix="/advisory", tags=["advisory"])
 LOGGER = logging.getLogger(__name__)
@@ -66,8 +77,18 @@ class AdvisoryProgramCreateRequest(BaseModel):
     entry_price_basis: str = PRICE_BASIS_NEXT_OPEN
     exit_price_basis: str = PRICE_BASIS_NEXT_OPEN
     review_schedule: dict[str, Any] = Field(default_factory=lambda: {"frequency": "daily_after_close"})
+    universe_selection: dict[str, Any] = Field(default_factory=lambda: {"mode": "stock_universe", "pool_ids": []})
     created_by: str | None = None
     status: str = "DRAFT"
+
+
+class AdvisoryDeliveryPreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str = Field(min_length=1)
+    universe_selection: dict[str, Any]
+    target_count: int = Field(gt=0, le=100)
+    program_id: str | None = Field(default=None, min_length=1)
 
 
 class AdvisoryProgramUpdateRequest(BaseModel):
@@ -80,6 +101,7 @@ class AdvisoryProgramUpdateRequest(BaseModel):
     entry_price_basis: str | None = None
     exit_price_basis: str | None = None
     review_schedule: dict[str, Any] | None = None
+    universe_selection: dict[str, Any] | None = None
     status: str | None = None
     expected_program_version: int | None = Field(default=None, ge=1)
     expected_binding_version_id: str | None = Field(default=None, min_length=1)
@@ -112,6 +134,7 @@ class AdvisoryBindingPayload(BaseModel):
     package_weights: dict[str, float] | None = None
     target_count: int | None = Field(default=None, gt=0, le=100)
     runtime_config_json: dict[str, Any] | None = None
+    universe_selection: dict[str, Any] | None = None
 
 
 class AdvisoryBindingApplyRequest(BaseModel):
@@ -152,12 +175,79 @@ class AdvisoryQualityReportRequest(BaseModel):
     min_bucket_size: int = Field(default=30, ge=1)
 
 
+class ManagedDatasetPreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_date: date
+    end_date: date
+
+
+@lru_cache(maxsize=1)
+def get_managed_dataset_task_store() -> ManagedDatasetTaskStore:
+    try:
+        return ManagedDatasetTaskStore.from_env()
+    except ManagedDatasetTaskError as exc:
+        _raise_managed_dataset_task_http(exc)
+
+
+def _raise_managed_dataset_task_http(exc: ManagedDatasetTaskError) -> NoReturn:
+    if exc.code == "MANAGED_DATASET_TASK_IDEMPOTENCY_CONFLICT":
+        status_code = 409
+    elif exc.code in {
+        "MANAGED_DATASET_TASK_ROOT_UNAVAILABLE",
+        "MANAGED_DATASET_TASK_ACTIVE_BINDING_INVALID",
+    }:
+        status_code = 503
+    elif exc.code in {
+        "MANAGED_DATASET_TASK_ARTIFACT_INVALID",
+        "MANAGED_DATASET_TASK_ARTIFACT_WRITE_FAILED",
+        "MANAGED_DATASET_TASK_BINDING_INVALID",
+        "MANAGED_DATASET_TASK_CONTRACT_INVALID",
+        "MANAGED_DATASET_TASK_IDENTITY_INVALID",
+    }:
+        status_code = 500
+    else:
+        status_code = 422
+    raise HTTPException(
+        status_code=status_code,
+        detail={"error_code": exc.code, "message": str(exc)},
+    ) from exc
+
+
+@router.post("/dataset-preparations")
+def create_dataset_preparation(
+    request: ManagedDatasetPreparationRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
+    store: ManagedDatasetTaskStore = Depends(get_managed_dataset_task_store),
+) -> dict[str, Any]:
+    try:
+        artifact = store.create(
+            consumer_id="advisory",
+            business_task_key=idempotency_key,
+            start_date=request.start_date,
+            end_date=request.end_date,
+        )
+    except ManagedDatasetTaskError as exc:
+        _raise_managed_dataset_task_http(exc)
+    return {"ok": True, "data": artifact.as_dict()}
+
+
 def get_advisory_program_service() -> AdvisoryProgramService:
     return AdvisoryProgramService()
 
 
+def get_advisory_delivery_preflight_service(
+    program_service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> AdvisoryDeliveryPreflightService:
+    return AdvisoryDeliveryPreflightService(program_service=program_service)
+
+
 def get_advisory_model_shadow_service() -> AdvisoryModelShadowService:
     return AdvisoryModelShadowService()
+
+
+def get_advisory_entry_price_service() -> AdvisoryEntryPriceDailyService:
+    return AdvisoryEntryPriceDailyService()
 
 
 def get_advisory_forward_service() -> AdvisoryForwardService:
@@ -394,6 +484,23 @@ def list_historical_range_runs(
     return _page_envelope("runs", result)
 
 
+@router.get("/historical-range-batches/{batch_id}/comparison")
+def compare_historical_range_runs(
+    batch_id: str,
+    baseline_range_run_id: str = Query(min_length=1),
+    candidate_range_run_id: str = Query(min_length=1),
+    service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
+) -> dict[str, Any]:
+    comparison = _historical_range_call(
+        lambda: service.compare_runs(
+            batch_id=batch_id,
+            baseline_range_run_id=baseline_range_run_id,
+            candidate_range_run_id=candidate_range_run_id,
+        )
+    )
+    return {"ok": True, "data": {"comparison": comparison}}
+
+
 @router.get("/historical-range-batches/{batch_id}/operations")
 def list_historical_range_operations(
     batch_id: str,
@@ -423,9 +530,7 @@ def resume_historical_range_batch(
     response: Response,
     service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
 ) -> dict[str, Any]:
-    result = _historical_range_call(
-        lambda: service.resume_batch(batch_id, req, background_tasks=background_tasks)
-    )
+    result = _historical_range_call(lambda: service.resume_batch(batch_id, req, background_tasks=background_tasks))
     _set_mutation_status(response, result)
     return result
 
@@ -438,9 +543,7 @@ def cancel_historical_range_batch(
     response: Response,
     service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
 ) -> dict[str, Any]:
-    result = _historical_range_call(
-        lambda: service.cancel_batch(batch_id, req, background_tasks=background_tasks)
-    )
+    result = _historical_range_call(lambda: service.cancel_batch(batch_id, req, background_tasks=background_tasks))
     _set_mutation_status(response, result)
     return result
 
@@ -453,9 +556,7 @@ def refresh_historical_range_outcomes(
     response: Response,
     service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
 ) -> dict[str, Any]:
-    result = _historical_range_call(
-        lambda: service.refresh_outcomes(batch_id, req, background_tasks=background_tasks)
-    )
+    result = _historical_range_call(lambda: service.refresh_outcomes(batch_id, req, background_tasks=background_tasks))
     _set_mutation_status(response, result)
     return result
 
@@ -523,7 +624,11 @@ def get_historical_range_day(
             candidate_limit=candidate_limit,
         )
     )
-    return {"ok": True, "data": {"day": result["day"], "candidates": result["candidates"]}, "page": result["candidate_page"]}
+    return {
+        "ok": True,
+        "data": {"day": result["day"], "candidates": result["candidates"]},
+        "page": result["candidate_page"],
+    }
 
 
 @router.get("/historical-range-runs/{range_run_id}/lists/{trade_date}")
@@ -577,10 +682,29 @@ def list_historical_range_summaries(
     limit: int = Query(default=50, ge=1, le=500),
     service: HistoricalRangeApplicationService = Depends(get_historical_range_application_service),
 ) -> dict[str, Any]:
-    result = _historical_range_call(
-        lambda: service.list_summaries(range_run_id, cursor=cursor, limit=limit)
-    )
+    result = _historical_range_call(lambda: service.list_summaries(range_run_id, cursor=cursor, limit=limit))
     return _page_envelope("summaries", result)
+
+
+@router.get("/universe-options")
+def universe_options() -> dict[str, Any]:
+    return {"ok": True, **advisory_universe_catalog()}
+
+
+@router.post("/delivery-preflight")
+def delivery_preflight(
+    req: AdvisoryDeliveryPreflightRequest,
+    service: AdvisoryDeliveryPreflightService = Depends(get_advisory_delivery_preflight_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.preflight(**req.model_dump())}
+    except AdvisoryUniverseContractError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason_code": exc.reason_code, "message": str(exc), "context": exc.context},
+        ) from exc
+    except TradingCoreError as exc:
+        _raise_http(exc)
 
 
 @router.get("/programs")
@@ -589,7 +713,10 @@ def list_programs(
     service: AdvisoryProgramService = Depends(get_advisory_program_service),
 ) -> dict[str, Any]:
     try:
-        return {"ok": True, "programs": [program_to_dict(row) for row in service.list_programs(include_archived=include_archived)]}
+        return {
+            "ok": True,
+            "programs": [program_to_dict(row) for row in service.list_programs(include_archived=include_archived)],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -609,8 +736,7 @@ def forward_status(
 
 
 @router.post("/forward/run-once")
-def run_forward_once(
-) -> dict[str, Any]:
+def run_forward_once() -> dict[str, Any]:
     try:
         return {"ok": True, **advisory_forward_scheduler.run_once()}
     except TradingCoreError as exc:
@@ -777,7 +903,9 @@ def set_program_status(
 
 
 @router.post("/programs/{program_id}/enable")
-def enable_program(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def enable_program(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)
+) -> dict[str, Any]:
     try:
         return {"ok": True, "program": program_to_dict(service.change_status(program_id, "ENABLED"))}
     except TradingCoreError as exc:
@@ -785,7 +913,9 @@ def enable_program(program_id: str, service: AdvisoryProgramService = Depends(ge
 
 
 @router.post("/programs/{program_id}/pause")
-def pause_program(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def pause_program(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)
+) -> dict[str, Any]:
     try:
         return {"ok": True, "program": program_to_dict(service.change_status(program_id, "PAUSED"))}
     except TradingCoreError as exc:
@@ -793,7 +923,9 @@ def pause_program(program_id: str, service: AdvisoryProgramService = Depends(get
 
 
 @router.post("/programs/{program_id}/archive")
-def archive_program(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def archive_program(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)
+) -> dict[str, Any]:
     try:
         return {"ok": True, "program": program_to_dict(service.change_status(program_id, "ARCHIVED"))}
     except TradingCoreError as exc:
@@ -826,7 +958,9 @@ def leaderboard(
 
 
 @router.get("/programs/{program_id}/active-pool")
-def active_pool(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def active_pool(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)
+) -> dict[str, Any]:
     try:
         return {"ok": True, "active_pool": service.active_pool(program_id)}
     except TradingCoreError as exc:
@@ -854,7 +988,10 @@ def list_versions(
     service: AdvisoryProgramService = Depends(get_advisory_program_service),
 ) -> dict[str, Any]:
     try:
-        return {"ok": True, "list_versions": service.recommendation_list_versions(program_id, limit=limit, offset=offset)}
+        return {
+            "ok": True,
+            "list_versions": service.recommendation_list_versions(program_id, limit=limit, offset=offset),
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -864,8 +1001,41 @@ def model_shadow(
     program_id: str,
     target_trade_date: date = Query(...),
     service: AdvisoryModelShadowService = Depends(get_advisory_model_shadow_service),
+    price_contract: Literal["legacy-v1", "entry-v2"] = Query("legacy-v1"),
+    entry_list_version_id: str | None = Query(None, min_length=1, max_length=160),
+    entry_service: AdvisoryEntryPriceDailyService = Depends(get_advisory_entry_price_service),
 ) -> dict[str, Any]:
-    return {"ok": True, **service.model_shadow(program_id=program_id, target_trade_date=target_trade_date)}
+    result = {"ok": True, **service.model_shadow(program_id=program_id, target_trade_date=target_trade_date)}
+    if price_contract == "entry-v2":
+        from backend.services.advisory_model_first.entry_price_daily_service import _empty_envelope
+        from backend.services.advisory_model_first.entry_price_contracts import AdvisoryEntryPriceEnvelopeV2
+        from backend.services.advisory_model_first.entry_price_service import merge_auxiliary_prices
+        try:
+            entry = AdvisoryEntryPriceEnvelopeV2.model_validate(entry_service.read_price(
+                program_id=program_id, target_trade_date=target_trade_date, list_version_id=entry_list_version_id))
+            result["entry_price"] = merge_auxiliary_prices(entry, result.get("price_range")).as_payload()
+        except Exception as exc:
+            result["entry_price"] = _empty_envelope(program_id, target_trade_date,
+                getattr(exc, "reason_code", "ADVISORY_ENTRY_PRICE_INPUT_UNAVAILABLE"))
+        result["entry_price_collection"] = _entry_collection_status(program_id)
+    return result
+
+
+@router.get("/programs/{program_id}/entry-price/status")
+def entry_price_status(program_id: str, service: AdvisoryEntryPriceDailyService = Depends(get_advisory_entry_price_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.status(program_id=program_id), "collection": _entry_collection_status(program_id)}
+    except Exception as exc:
+        return {"ok": False, "program_id": program_id, "status": "INPUT_UNAVAILABLE",
+                "reason_code": getattr(exc, "reason_code", "ADVISORY_ENTRY_PRICE_INPUT_UNAVAILABLE")}
+
+
+def _entry_collection_status(program_id: str) -> dict[str, Any]:
+    snapshot = advisory_forward_scheduler.status()
+    price = (snapshot.get("last_result") or {}).get("entry_price") or {}
+    return {"configured_enabled": snapshot.get("configured_enabled", False), "last_run_at": snapshot.get("last_run_at"),
+            "source": "SCHEDULER_MEMORY_NOT_DURABLE_EVIDENCE", "status": price.get("status", "NOT_OBSERVED"),
+            "attempts": [row for row in price.get("results", []) if row.get("program_id") in {None, program_id}]}
 
 
 @router.get("/list-versions/{list_version_id}")
@@ -882,7 +1052,11 @@ def list_version_detail(
 @router.get("/programs/{program_id}/returns")
 def returns(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
     try:
-        return {"ok": True, "returns": service.return_history(program_id), "metrics": service.program_metrics(program_id)}
+        return {
+            "ok": True,
+            "returns": service.return_history(program_id),
+            "metrics": service.program_metrics(program_id),
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 

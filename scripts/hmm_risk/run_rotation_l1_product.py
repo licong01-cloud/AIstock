@@ -143,12 +143,17 @@ def _validated_authority(
     try:
         validate_v14_process_reference(v14_reference)
         input_bundle = read_input_bundle(args.input_root, forbidden_roots=(ROOT,))["bundle"]
-        recomputed = close_processes(
-            first,
-            second,
-            v14_reference=v14_reference,
-            input_bundle=input_bundle,
-        )
+        closure_kwargs = {
+            "v14_reference": v14_reference,
+            "input_bundle": input_bundle,
+        }
+        v14_input_root = getattr(args, "v14_input_root", None)
+        if v14_input_root is not None:
+            closure_kwargs["v14_input_bundle"] = read_input_bundle(
+                v14_input_root,
+                forbidden_roots=(ROOT,),
+            )["bundle"]
+        recomputed = close_processes(first, second, **closure_kwargs)
     except (KeyError, RotationL1G2AError) as exc:
         raise RotationL1ProductExecutorError(
             str(getattr(exc, "reason_code", REASON_EXECUTOR_AUTHORITY)),
@@ -372,6 +377,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--development-child-1", type=Path, required=True)
     parser.add_argument("--development-child-2", type=Path, required=True)
     parser.add_argument("--v14-process-file", type=Path, required=True)
+    parser.add_argument("--v14-input-root", type=Path)
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--direct-v2-candidate-root", type=Path, required=True)
     parser.add_argument("--security-identity-manifest", type=Path, required=True)

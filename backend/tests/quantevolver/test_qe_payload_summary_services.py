@@ -249,6 +249,11 @@ def test_get_task_detail_summary_compacts_loop_jsonb(monkeypatch):
     assert "config_json#>'{model_params,_qe_direct_v2_dataset_binding,selection_pins}'" in loop_sql
     assert "config_json#>>'{model_params,enable_sector_hmm}'" in loop_sql
     assert "config_json#>'{model_params,sector_blacklist}'" in loop_sql
+    assert "config_json#>>'{custom_params,_qe_sector_blacklist_policy,enabled}'" in loop_sql
+    assert (
+        "config_json#>>'{custom_params,_qe_sector_blacklist_policy,blacklist_excluded_count}'"
+        in loop_sql
+    )
     assert "AS absolute_metrics_present" in loop_sql
     assert "metrics_json#>>'{enhanced_metrics,absolute_returns,sharpe}' AS sharpe" in loop_sql
     assert "metrics_json->>'information_ratio'" in loop_sql

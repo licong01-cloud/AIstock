@@ -15,6 +15,7 @@ DEFAULT_REPO = "licong01-cloud/AIstock"
 DEFAULT_WORKFLOW = "nightly.yml"
 SCHEMA_VERSION = "aistock_runner_health_v1"
 GITHUB_API = "https://api.github.com"
+MAX_QUEUED_RUNS_TO_INSPECT = 5
 
 
 def _utc_now() -> str:
@@ -62,7 +63,7 @@ def resolve_github_token() -> tuple[str | None, str]:
     return None, "missing"
 
 
-def _github_get(path: str, *, token: str | None) -> Any:
+def _github_get(path: str, *, token: str | None, timeout_seconds: int = 30) -> Any:
     request = urllib.request.Request(f"{GITHUB_API}{path}")
     request.add_header("Accept", "application/vnd.github+json")
     request.add_header("X-GitHub-Api-Version", "2022-11-28")
@@ -70,8 +71,25 @@ def _github_get(path: str, *, token: str | None) -> Any:
     if token:
         request.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"GitHub API {path} failed: HTTP {exc.code}: {body}") from exc
+    except Exception as exc:  # pragma: no cover - network failures vary by host
+        raise RuntimeError(f"GitHub API {path} failed: {exc}") from exc
+
+
+def _github_post(path: str, *, token: str | None, timeout_seconds: int = 30) -> None:
+    request = urllib.request.Request(f"{GITHUB_API}{path}", data=b"", method="POST")
+    request.add_header("Accept", "application/vnd.github+json")
+    request.add_header("X-GitHub-Api-Version", "2022-11-28")
+    request.add_header("User-Agent", "AIstock-runner-health")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds):
+            return
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub API {path} failed: HTTP {exc.code}: {body}") from exc
@@ -81,6 +99,15 @@ def _github_get(path: str, *, token: str | None) -> Any:
 
 def _label_names(runner: dict[str, Any]) -> set[str]:
     return {str(item.get("name") or "").lower() for item in runner.get("labels") or []}
+
+
+def _job_label_names(job: dict[str, Any]) -> set[str]:
+    labels: set[str] = set()
+    for item in job.get("labels") or []:
+        value = item.get("name") if isinstance(item, dict) else item
+        if value:
+            labels.add(str(value).lower())
+    return labels
 
 
 def _runner_summary(runner: dict[str, Any]) -> dict[str, Any]:
@@ -133,9 +160,179 @@ def _stale_queued_runs(runs: list[dict[str, Any]], *, stale_minutes: int, now: d
                     "url": run.get("html_url") or run.get("url"),
                     "head_branch": run.get("head_branch") or run.get("headBranch"),
                     "head_sha": run.get("head_sha") or run.get("headSha"),
+                    "event": run.get("event"),
                 }
             )
     return stale
+
+
+def cancel_stale_scheduled_runs(
+    *,
+    repo: str,
+    workflow: str,
+    stale_queued_minutes: int,
+    current_run_id: int,
+    current_event: str,
+    expected_head_branch: str,
+    token: str | None,
+    now: datetime | None = None,
+    runs_payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Cancel only superseded scheduled runs which still have no active job."""
+    receipt: dict[str, Any] = {
+        "schema_version": "aistock_runner_queue_reconciliation_v1",
+        "workflow": workflow,
+        "current_run_id": current_run_id,
+        "current_event": current_event,
+        "expected_head_branch": expected_head_branch,
+        "stale_queued_minutes": stale_queued_minutes,
+        "cancelled_run_ids": [],
+        "skipped": [],
+        "errors": [],
+        "workflow_gate": "ready",
+    }
+    if current_event != "schedule":
+        receipt["action"] = "noop_non_scheduled_run"
+        return receipt
+    if not token:
+        receipt["errors"].append("GitHub Actions write token is unavailable")
+        receipt["workflow_gate"] = "blocked"
+        return receipt
+
+    try:
+        payload = runs_payload or _github_get(
+            f"/repos/{repo}/actions/workflows/{workflow}/runs?status=queued&per_page={MAX_QUEUED_RUNS_TO_INSPECT}",
+            token=token,
+        )
+    except Exception as exc:
+        receipt["errors"].append({"run_id": None, "error": str(exc)})
+        receipt["workflow_gate"] = "blocked"
+        receipt["action"] = "query_failed"
+        return receipt
+    stale_runs = _stale_queued_runs(
+        list(payload.get("workflow_runs") or payload.get("runs") or []),
+        stale_minutes=stale_queued_minutes,
+        now=now or datetime.now(timezone.utc),
+    )
+    for run in stale_runs:
+        run_id = run.get("run_id")
+        if not run_id or int(run_id) == int(current_run_id):
+            continue
+        if run.get("event") != "schedule" or run.get("head_branch") != expected_head_branch:
+            receipt["skipped"].append({"run_id": run_id, "reason": "identity_mismatch"})
+            continue
+        try:
+            exact = _github_get(f"/repos/{repo}/actions/runs/{run_id}", token=token)
+            if (
+                str(exact.get("status") or "").lower() != "queued"
+                or exact.get("event") != "schedule"
+                or exact.get("head_branch") != expected_head_branch
+            ):
+                receipt["skipped"].append({"run_id": run_id, "reason": "state_changed"})
+                continue
+            jobs = _github_get(f"/repos/{repo}/actions/runs/{run_id}/jobs?per_page=100", token=token)
+            active_jobs = [
+                job
+                for job in jobs.get("jobs") or []
+                if str(job.get("status") or "").lower() == "in_progress"
+            ]
+            if active_jobs:
+                receipt["skipped"].append({"run_id": run_id, "reason": "active_job"})
+                continue
+            _github_post(f"/repos/{repo}/actions/runs/{run_id}/cancel", token=token)
+            receipt["cancelled_run_ids"].append(int(run_id))
+        except Exception as exc:  # fail closed and retain the exact run
+            receipt["errors"].append({"run_id": run_id, "error": str(exc)})
+    if receipt["errors"]:
+        receipt["workflow_gate"] = "blocked"
+    receipt["action"] = "cancelled_stale_runs" if receipt["cancelled_run_ids"] else "noop"
+    return receipt
+
+
+def _queued_job_summaries(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    queued_statuses = {"queued", "waiting", "pending", "requested"}
+    summaries: list[dict[str, Any]] = []
+    for job in payload.get("jobs") or []:
+        status = str(job.get("status") or "").lower()
+        if status not in queued_statuses:
+            continue
+        summaries.append(
+            {
+                "job_id": job.get("id") or job.get("databaseId"),
+                "name": job.get("name"),
+                "status": status,
+                "labels": sorted(_job_label_names(job)),
+                "url": job.get("html_url") or job.get("url"),
+            }
+        )
+    return summaries
+
+
+def _job_payload_for_run(
+    run_id: int | str,
+    *,
+    repo: str,
+    token: str | None,
+    jobs_payloads: Mapping[int | str, Mapping[str, Any]] | None,
+    fetch_jobs: bool,
+) -> Mapping[str, Any]:
+    if jobs_payloads is not None:
+        return jobs_payloads.get(run_id) or jobs_payloads.get(str(run_id)) or {"jobs": []}
+    if not fetch_jobs:
+        return {"jobs": []}
+    return _github_get(
+        f"/repos/{repo}/actions/runs/{run_id}/jobs?filter=all&per_page=100",
+        token=token,
+        timeout_seconds=10,
+    )
+
+
+def _annotate_stale_runs_with_jobs(
+    stale_runs: list[dict[str, Any]],
+    *,
+    repo: str,
+    required_labels: list[str],
+    token: str | None,
+    jobs_payloads: Mapping[int | str, Mapping[str, Any]] | None,
+    fetch_jobs: bool,
+    errors: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    required = {label.lower() for label in required_labels}
+    matching: list[dict[str, Any]] = []
+    other_role: list[dict[str, Any]] = []
+    for run in stale_runs:
+        run_id = run.get("run_id")
+        try:
+            jobs_payload = _job_payload_for_run(
+                run_id,
+                repo=repo,
+                token=token,
+                jobs_payloads=jobs_payloads,
+                fetch_jobs=fetch_jobs,
+            )
+        except Exception as exc:
+            errors.append(str(exc))
+            run["queued_jobs"] = []
+            run["queue_role_match"] = "unknown"
+            matching.append(run)
+            continue
+        queued_jobs = _queued_job_summaries(jobs_payload)
+        run["queued_jobs"] = queued_jobs
+        jobs_with_labels = [job for job in queued_jobs if job.get("labels")]
+        matching_jobs = [job for job in jobs_with_labels if required.issubset(set(job["labels"]))]
+        if matching_jobs:
+            run["queue_role_match"] = "matching"
+            run["matching_queued_jobs"] = matching_jobs
+            matching.append(run)
+        elif jobs_with_labels:
+            run["queue_role_match"] = "other_role"
+            other_role.append(run)
+        else:
+            # A workflow can be queued by concurrency before GitHub creates a job.
+            # Preserve the old fail-closed behavior when no job labels exist.
+            run["queue_role_match"] = "unknown"
+            matching.append(run)
+    return matching, other_role
 
 
 def build_runner_health_report(
@@ -147,6 +344,7 @@ def build_runner_health_report(
     stale_queued_minutes: int = 10,
     runners_payload: dict[str, Any] | None = None,
     runs_payload: dict[str, Any] | None = None,
+    jobs_payloads: Mapping[int | str, Mapping[str, Any]] | None = None,
     token: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -159,10 +357,11 @@ def build_runner_health_report(
         except Exception as exc:
             runners_payload = {"total_count": None, "runners": []}
             errors.append(str(exc))
+    fetch_jobs = runs_payload is None
     if runs_payload is None:
         try:
             runs_payload = _github_get(
-                f"/repos/{repo}/actions/workflows/{workflow}/runs?status=queued&per_page=20",
+                f"/repos/{repo}/actions/workflows/{workflow}/runs?status=queued&per_page={MAX_QUEUED_RUNS_TO_INSPECT}",
                 token=token,
             )
         except Exception as exc:
@@ -174,8 +373,17 @@ def build_runner_health_report(
     role_matches = _runner_role_matches(runners, required_roles or {})
     queued_runs = list(runs_payload.get("workflow_runs") or runs_payload.get("runs") or [])
     stale_runs = _stale_queued_runs(queued_runs, stale_minutes=stale_queued_minutes, now=current_time)
+    matching_stale_runs, other_role_stale_runs = _annotate_stale_runs_with_jobs(
+        stale_runs,
+        repo=repo,
+        required_labels=required,
+        token=token,
+        jobs_payloads=jobs_payloads,
+        fetch_jobs=fetch_jobs,
+        errors=errors,
+    )
     idle_matching = [runner for runner in matching if not bool(runner.get("busy"))]
-    online_but_not_accepting_work = bool(stale_runs and idle_matching)
+    online_but_not_accepting_work = bool(matching_stale_runs and idle_matching)
     blocking: list[str] = []
     warnings: list[str] = []
     if errors:
@@ -206,6 +414,10 @@ def build_runner_health_report(
             blocking.append("runner roles do not provide distinct online capacity")
     if stale_runs:
         warnings.append(f"{len(stale_runs)} queued {workflow} run(s) exceed {stale_queued_minutes} minutes")
+    if other_role_stale_runs:
+        warnings.append(
+            f"{len(other_role_stale_runs)} stale queued {workflow} run(s) belong to other runner roles"
+        )
     if online_but_not_accepting_work:
         blocking.append(
             "online idle runner matches required labels but queued work exceeds "
@@ -228,6 +440,8 @@ def build_runner_health_report(
         "online_but_not_accepting_work": online_but_not_accepting_work,
         "runner_roles": role_matches,
         "stale_queued_runs": stale_runs,
+        "matching_stale_queued_runs": matching_stale_runs,
+        "other_role_stale_queued_runs": other_role_stale_runs,
         "next_actions": _next_actions(gate, required),
         "production_gates": {
             "production_ddl_gate": "noop",
@@ -327,14 +541,49 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--stale-queued-minutes", type=int, default=10)
     doctor.add_argument("--runners-json", help="Use a local runners API payload for tests/offline dry-runs.")
     doctor.add_argument("--runs-json", help="Use a local workflow-runs API payload for tests/offline dry-runs.")
+    doctor.add_argument(
+        "--jobs-json",
+        help="Use a run-id to jobs API payload mapping for deterministic role-aware queue checks.",
+    )
     doctor.add_argument("--output-json")
     doctor.add_argument("--output-md")
+    cancel = sub.add_parser(
+        "cancel-stale-queued",
+        help="Cancel stale scheduled runs after exact queued/no-active-job revalidation.",
+    )
+    cancel.add_argument("--repo", default=DEFAULT_REPO)
+    cancel.add_argument("--workflow", default=DEFAULT_WORKFLOW)
+    cancel.add_argument("--stale-queued-minutes", type=int, default=30)
+    cancel.add_argument("--current-run-id", type=int, required=True)
+    cancel.add_argument("--current-event", required=True)
+    cancel.add_argument("--expected-head-branch", default="main")
+    cancel.add_argument("--runs-json", help="Use a local workflow-runs payload for deterministic tests.")
+    cancel.add_argument("--output-json")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     token, token_source = resolve_github_token()
+    if args.command == "cancel-stale-queued":
+        receipt = cancel_stale_scheduled_runs(
+            repo=args.repo,
+            workflow=args.workflow,
+            stale_queued_minutes=args.stale_queued_minutes,
+            current_run_id=args.current_run_id,
+            current_event=args.current_event,
+            expected_head_branch=args.expected_head_branch,
+            token=token,
+            runs_payload=_read_json(args.runs_json) if args.runs_json else None,
+        )
+        receipt["token_source"] = token_source
+        if args.output_json:
+            path = Path(args.output_json)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(receipt, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+        print(json.dumps(receipt, indent=2, ensure_ascii=True))
+        return 0 if receipt["workflow_gate"] == "ready" else 2
+
     required = args.required_label or ["self-hosted", "windows"]
     required_roles: dict[str, list[str]] = {}
     for raw in args.required_role:
@@ -345,6 +594,7 @@ def main(argv: list[str] | None = None) -> int:
         required_roles[role.strip()] = labels
     runners_payload = _read_json(args.runners_json) if args.runners_json else None
     runs_payload = _read_json(args.runs_json) if args.runs_json else None
+    jobs_payloads = _read_json(args.jobs_json) if args.jobs_json else None
     report = build_runner_health_report(
         repo=args.repo,
         workflow=args.workflow,
@@ -353,6 +603,7 @@ def main(argv: list[str] | None = None) -> int:
         stale_queued_minutes=args.stale_queued_minutes,
         runners_payload=runners_payload,
         runs_payload=runs_payload,
+        jobs_payloads=jobs_payloads,
         token=token,
     )
     report["token_source"] = token_source

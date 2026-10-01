@@ -1,0 +1,396 @@
+{
+  "actual": "First completed legacy child with canonical_status null blocks; original full-market historical list lacks native universe receipt; shared Windows Python lacks LightGBM.",
+  "allowed_write_scope": [
+    "backend/tests/watchlist/test_advisory_api.py",
+    "backend/services/selection_center/advisory_input_archive.py",
+    "backend/tests/selection_center/test_advisory_input_archive.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/simulation_signal/strategy_package_selection.py",
+    "backend/services/advisory_program.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/watchlist/test_advisory_program.py",
+    "backend/services/advisory_model_first/entry_price_legacy_provenance.py",
+    "backend/tests/advisory_model_first/test_entry_price_legacy_provenance.py",
+    "backend/services/advisory_model_first/entry_price_confirmation_contracts.py",
+    "backend/tests/advisory_model_first/test_entry_price_confirmation_contracts.py",
+    "backend/services/advisory_model_first/entry_price_confirmation.py",
+    "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+    "backend/services/advisory_model_first/entry_price_service.py",
+    "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+    "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+    "backend/tests/advisory_model_first/test_entry_price_service.py",
+    "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+    "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+    "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+    "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py",
+    "tests/aistock_validation/bugs/20260930_BUG-1640-historical-entry-price-replay-is-incorrectly-blocked-by-qe-history-and-s.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1640",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-30T07:23:42.711580Z",
+  "description": "First completed legacy child with canonical_status null blocks; original full-market historical list lacks native universe receipt; shared Windows Python lacks LightGBM.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260930-fe10a7d2eb44",
+      "timestamp": "2026-09-30T07:23:42.711563Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_legacy_prepare_v1/entry_price_confirmations/advepc_4178fffbd9c93e0bd84216a5/input_review.json",
+    "F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_native_concurrent/entry_price_confirmations/advepc_fda8f36ceae1ffe0e77db23c/manifest.json",
+    "F:/Dev/AIstock_model_artifacts/advisory_model_first/entry_price_confirmations/bug1640_native_concurrent/entry_price_confirmations/advepc_fda8f36ceae1ffe0e77db23c/evaluation.json"
+  ],
+  "expected": "Historical replay uses local capacity and bounded inference with no QE exclusivity. Explicitly approved EXPLORATORY_SCREEN may read the entire original frozen plan through hash-bound legacy evidence, without promoting it to native identity. Run/list/package/policy/D-1/candidate/DSE hash contradictions fail closed. Formal and natural paths remain strict. Future new Advisory Selection runs atomically archive complete source members and frozen execution inputs with run/list/artifact hash references; never capture old runs retrospectively.",
+  "external_owner_requirements": [
+    "Selection/data owner: full original members remain unproven on 2026-08-14/17/18; genuinely retained historical sources only. All 20 recovered legacy days still lack native capture/run-artifact-member receipts. No fabrication, current-config backfill, candidate rebuild or DB write. These limitations do not block the user-approved frozen-candidate exploratory prepare, but do block native COMPLETE and formal/OOT claims.",
+    "Data owner: a formal locked historical OOT requires a complete PIT/vintage input window after every upstream/model/transform/calibration fit boundary; existing non-vintage 8-day functional replay is NAVIGATION_ONLY and cannot activate a binding."
+  ],
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1640-historical-entry-price-replay-is-incorrectly-blocked-by-qe-history-and-s.json",
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+      "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+      "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
+    ],
+    "added_files": [
+      "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+      "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260930_BUG-1640-historical-entry-price-replay-is-incorrectly-blocked-by-qe-history-and-s.json",
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+      "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+      "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/entry_price_confirmation.py",
+        "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+        "backend/services/advisory_model_first/entry_price_service.py",
+        "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+        "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+        "backend/tests/advisory_model_first/test_entry_price_service.py",
+        "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+        "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+        "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+        "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
+      ],
+      "impacted_modules": [
+        "advisory.model_first",
+        "docs.architecture",
+        "validation.module_quality",
+        "advisory.modeling",
+        "advisory.historical_range"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/entry_price_confirmation.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/services/advisory_model_first/entry_price_service.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_entry_price_service.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.modeling",
+          "risk_level": "high",
+          "rule_id": "advisory_short_rebound_modeling"
+        },
+        {
+          "file": "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/entry_price_confirmation.py",
+        "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+        "backend/services/advisory_model_first/entry_price_service.py",
+        "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+        "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+        "backend/tests/advisory_model_first/test_entry_price_service.py",
+        "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+        "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+        "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+        "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+      "backend/services/advisory_model_first/entry_price_service.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+      "backend/tests/advisory_model_first/test_entry_price_service.py",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+      "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+      "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/entry_price_confirmation.py",
+      "backend/services/advisory_model_first/entry_price_confirmation_cli.py",
+      "backend/services/advisory_model_first/entry_price_service.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation.py",
+      "backend/tests/advisory_model_first/test_entry_price_confirmation_cli.py",
+      "backend/tests/advisory_model_first/test_entry_price_service.py",
+      "docs/architecture/advisory_entry_price_confirmation_f2_design_20260928.md",
+      "docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md",
+      "backend/services/advisory_model_first/entry_price_replay_runtime.py",
+      "backend/tests/advisory_model_first/test_entry_price_replay_runtime.py"
+    ]
+  },
+  "first_seen_at": "2026-09-30T07:23:42.711580Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5146,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5146",
+  "last_seen_at": "2026-09-30T07:23:42.711580Z",
+  "local_review_rounds": [
+    "Round 1: replay/QE boundary and dependency-before-consumption review. Preserve native universe validation, formal support, frozen labels, and daily resource contract; no external-module edits.",
+    "Round 2: real LightGBM smoke found restored models ignore constructor thread params. Fixed per-prediction num_threads=2 adapter and proved exact prediction parity and unchanged model SHA256; failure node passed.",
+    "Round 3: capacity probe bound to actual output volume rather than registry-only volume; readonly historical calendar/outcome SQL limited to 30 seconds. Updated exact tests and verified PIT, missing/suspension preservation, immutable full prediction before settlement, and retry invariants. Final related matrix 62 passed; Ruff, L0 and F2 design validation passed. No unresolved local review finding. CI premerge plan remains advisory_modeling_backend."
+  ],
+  "module": "advisory",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/entry-price/status",
+    "fresh_process_evidence": [
+      "2026-09-30 isolated existing AIstock Python (LightGBM 4.6.0): native-list prepare and predict/settle/evaluate succeeded without QE-exclusive slot; request advepc_fda8f36ceae1ffe0e77db23c, 8 days/160 candidates. prediction SHA256 62b9ee71e0f21298fc1c01d0dc9cfc8086ceb28c464ec6639289f7dc68f864c7; latest-source fresh-process predict exact retry returned the same digest. No backend control or database writes.",
+      "2026-09-30 real frozen entry_gap_q10 model: bounded predictor and reference prediction exactly equal; model file SHA256 unchanged. Native OpenMP/OpenBLAS pools observed 2 threads. Existing environment only; no dependency installation.",
+      "Existing AIstock Python loaded latest Advisory source; request advepc_fda8f36ceae1ffe0e77db23c exact retry preserved prediction digest 62b9ee71e0f21298fc1c01d0dc9cfc8086ceb28c464ec6639289f7dc68f864c7; no backend restart",
+      "AIstock Python fresh CLI prepare advepc_4178fffbd9c93e0bd84216a5: 29 dates, no inference or target outcomes",
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m backend.services.advisory_model_first.entry_price_confirmation_cli prepare: advepc_4178fffbd9c93e0bd84216a5 -> passed, 29-day metadata only, no target outcomes or research run"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "Historical Entry Price replay is incorrectly blocked by QE history and strict native-only universe metadata",
+  "trigger_condition": {
+    "fingerprint": "fe10a7d2eb4474485cdbe970",
+    "source_event_id": "FE-20260930-fe10a7d2eb44"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory",
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory",
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

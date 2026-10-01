@@ -609,6 +609,53 @@ def test_nightly_single_group_uses_module_identity_and_preserves_one_time_legacy
     )
 
 
+def test_nightly_validation_runner_incident_dedupes_with_or_without_session_receipt() -> None:
+    invalid_plan_summary = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9012",
+            "nightly_session_results": [
+                {
+                    "session": "nightly_execution_plan",
+                    "result": "failure",
+                    "failure_kind": "invalid_plan",
+                    "error": "Nightly execution plan selected change-scoped sessions without changed_files: l0",
+                }
+            ],
+        }
+    )
+    missing_receipt_summary = summary.summarize_nightly_status(
+        {"statuses": {"nightlyL3": "failure"}, "run_id": "9013"}
+    )
+
+    invalid_plan_payload = summary.build_github_issue_payloads(invalid_plan_summary)[0]
+    missing_receipt_payload = summary.build_github_issue_payloads(missing_receipt_summary)[0]
+
+    assert invalid_plan_summary["nightly_failure_groups"][0]["failure_kinds"] == ["invalid_plan"]
+    assert missing_receipt_summary["nightly_failure_groups"][0]["failure_kinds"] == [
+        "missing_session_receipt"
+    ]
+    assert invalid_plan_payload["dedupe"]["nightly_marker"] == missing_receipt_payload["dedupe"]["nightly_marker"]
+    assert "change-scoped sessions without changed_files" in invalid_plan_payload["body"]
+    assert "missing_session_receipt" in missing_receipt_payload["title"]
+
+
+def test_nightly_missing_session_receipt_does_not_hide_other_failed_stages() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure", "drValidate": "failure"},
+            "run_id": "9014",
+        }
+    )
+
+    assert payload["nightly_failed_stages"] == ["dr_validate", "nightly_l3"]
+    assert payload["nightly_failure_groups"] == []
+    issue_payload = summary.build_github_issue_payloads(payload)[0]
+    assert "dr=failure/failure" not in issue_payload["title"]
+    assert "dr=unknown/failure" in issue_payload["title"]
+    assert "missing_session_receipt" not in issue_payload["body"]
+
+
 def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:
     sessions = [
         "factor_research_backend",
@@ -1345,7 +1392,8 @@ def test_nightly_status_cli_keeps_generic_stage_local_until_run_completes(
     assert payload["failed_jobs"][0]["error_signature"] == "Nightly failed: nightly_l3=failure"
     assert payload["failed_jobs"][0]["failed_tests"] == []
     assert payload["reproduce_command"] == "gh run view 28973219723 --repo licong01-cloud/AIstock"
-    assert "Nightly failed: nightly_l3=failure" in body
+    assert "Nightly L3 failed without a durable session result" in body
+    assert "[P1][validation.runner] Nightly failed: missing_session_receipt" == issue_payload["title"]
     assert "LIVE_INFERENCE_PREFLIGHT_FAILED" not in body
 
 
@@ -1594,6 +1642,48 @@ def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
     assert "BUG ID: not applicable for infra-only issue" in issue_payload["body"]
 
 
+def test_nightly_runner_outage_uses_role_specific_health_evidence() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {
+                "runnerPreflight": "failure",
+                "drSnapshot": "skipped",
+                "drValidate": "skipped",
+                "nightlyL3": "skipped",
+                "paperV2Live": "skipped",
+            },
+            "runner_health": {
+                "required_labels": ["self-hosted", "windows", "aistock-ci-security"],
+                "blocking": [
+                    "no online GitHub Actions runner matches required labels: "
+                    "self-hosted, windows, aistock-ci-security"
+                ],
+                "matching_stale_queued_runs": [
+                    {
+                        "run_id": 34532760217,
+                        "matching_queued_jobs": [
+                            {
+                                "name": "Code intelligence daily graph refresh and summary",
+                                "labels": ["aistock-ci-security", "self-hosted", "windows"],
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+        run_id="9002",
+        run_url="https://github.com/licong01-cloud/AIstock/actions/runs/9002",
+    )
+
+    assert "aistock-ci-security" in payload["issue_title"]
+    assert "aistock-ci-security" in payload["failed_jobs"][0]["error_signature"]
+    assert any(
+        "Code intelligence daily graph refresh and summary" in line
+        for line in payload["failed_jobs"][0]["key_log_excerpt"]
+    )
+    assert payload["agent_handoff"]["handoff_mode"] == "infra_action_only"
+
+
 def test_nightly_runner_outage_context_pack_omits_bug_promotion() -> None:
     payload = summary.summarize_nightly_status(
         {
@@ -1628,11 +1718,15 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["full-summary"]["steps"]
     build_step = next(step for step in steps if step.get("name") == "Build Nightly failure issue context")
+    runner_health_step = next(step for step in steps if step.get("name") == "Download runner health evidence")
     script = next(step for step in steps if step.get("name") == "Auto-register failure as actionable GitHub Issue")[
         "with"
     ]["script"]
 
     assert build_step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert runner_health_step["with"]["name"] == "runner-health-${{ github.run_id }}"
+    assert runner_health_step["continue-on-error"] is True
+    assert 'payload["runner_health"]' in build_step["run"]
     assert workflow["jobs"]["full-summary"]["permissions"]["actions"] == "read"
     assert "const issuePayloadPath = 'tmp/validation/nightly_failure_issue/github-issue-payload.json';" in script
     assert "if (!fs.existsSync(issuePayloadPath))" in script
@@ -1644,6 +1738,10 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "fs.unlinkSync(singleIssueNumberPath)" in script
     assert "existing.body = updateParams.body" in script
     assert "payloads.length === 1 ? payload.dedupe.legacy_nightly_marker : null" in script
+    assert "promotedBugLink" in script
+    assert "existingBugDraft" in script
+    assert "promotion_status: promotedBugLink ? 'already_linked' : 'pending'" in script
+    assert "issueRecords.find((item) => item.promotion_status === 'pending')" in script
     assert "github-issue-number.txt" in script
     assert "github-issue-numbers.json" in script
 
@@ -1669,7 +1767,8 @@ def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
     assert "REGISTRY_PR_STATUS" in run
     assert "PROMOTION_WORKFLOW_GATE" in run
     assert "deferred_registry_pr_capability" in run
-    assert "deferred_multi_issue_promotion" in run
+    assert "deferred_multi_issue_promotion" not in run
+    assert "no_unlinked_nightly_issue_pending" in run
     assert "workflow_gate=manual_registry_pr_required" in run
     assert "GitHub Actions could not create the registry PR" in run
     assert "Registry PR status" in run
@@ -1682,15 +1781,20 @@ def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
     assert "bug-registry-pr-body.md" in upload_step["with"]["path"]
 
 
-def test_nightly_workflow_closes_stale_failure_issues_after_recovery() -> None:
+def test_nightly_workflow_closes_only_recovered_runner_issues() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["full-summary"]["steps"]
-    step = next(step for step in steps if step.get("name") == "Close stale Nightly failure issues after recovery")
+    step = next(
+        step
+        for step in steps
+        if step.get("name") == "Close recovered Nightly runner issues and stale superseded issues"
+    )
 
-    assert step["if"] == "success()"
-    assert "ci-issue-janitor --superseded-only --apply --stdout-format compact" in step["run"]
+    assert step["if"] == "always() && needs.runner-preflight.result == 'success'"
+    assert "ci-issue-janitor --runner-recovered-only --apply --stdout-format compact" in step["run"]
+    assert "--superseded-only" not in step["run"]
 
 
 def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:

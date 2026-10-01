@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from backend.services.advisory_model_first.price_range_calibration_contracts import (
     PriceRangeCalibrationArtifactV1,
+    build_frozen_daily_price_envelope_calibration_request,
     build_frozen_price_range_calibration_request,
 )
 
@@ -84,3 +85,26 @@ def test_price_range_calibration_request_rejects_artifact_outside_root(
     )
     with pytest.raises(ValidationError, match="escapes the explicit artifact root"):
         request.model_validate(request.model_copy(update={"features_artifact": escaped}).model_dump())
+
+
+def test_daily_price_envelope_calibration_request_freezes_v2_parent_contract(
+    tmp_path: Path,
+) -> None:
+    legacy = _request(tmp_path)
+    values = legacy.model_dump(
+        exclude={
+            "schema_version",
+            "request_id",
+            "request_sha256",
+            "created_at",
+            "label_policy_version",
+        }
+    )
+    request = build_frozen_daily_price_envelope_calibration_request(
+        **values,
+        created_at="2026-09-14T00:00:00+00:00",
+    )
+
+    assert request.schema_version == "frozen_advisory_price_range_calibration_request_v2"
+    assert request.label_policy_version == "advisory_price_range_label_policy_v2"
+    assert request.request_id.startswith("advprcal_")

@@ -9,6 +9,7 @@ from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.feature_schema_v1 import MODEL_FEATURE_COLUMNS
 from backend.services.advisory_model_first.price_range_training import (
     _require_probabilities,
+    train_daily_price_envelope_models,
     train_price_range_models,
 )
 
@@ -179,3 +180,35 @@ def test_price_range_training_rejects_malformed_label_contract(
     with pytest.raises(AdvisoryModelFirstError) as error:
         train_price_range_models(features=features, labels=labels, seed=7)
     assert error.value.reason_code == "ADVISORY_PRICE_RANGE_LABEL_INPUT_UNAVAILABLE"
+
+
+def test_daily_price_envelope_training_builds_only_three_quantile_heads(monkeypatch) -> None:
+    features, legacy_labels = _matrix()
+    labels = legacy_labels.loc[
+        legacy_labels["entry_executable"].eq(1),
+        ["decision_as_of_trade_date", "target_trade_date", "instrument", "split", "entry_gap_return"],
+    ].copy()
+    labels["entry_gap_label_status"] = "AVAILABLE"
+    labels["entry_gap_label_reason"] = "target_open_observed"
+    labels["gap_modelable"] = labels["split"].isin(["train", "validation", "test"])
+    features = features.merge(
+        labels[["decision_as_of_trade_date", "target_trade_date", "instrument"]],
+        on=["decision_as_of_trade_date", "target_trade_date", "instrument"],
+        how="inner",
+    )
+    monkeypatch.setattr(
+        price_range_training,
+        "_train_booster",
+        lambda **kwargs: (_FakeModel(str(kwargs["head"])), {"validation": {"metric": [1.0]}}),
+    )
+
+    result = train_daily_price_envelope_models(features=features, labels=labels, seed=7)
+
+    assert set(result.models) == {"entry_gap_q10", "entry_gap_q50", "entry_gap_q90"}
+    assert result.metrics["model_count"] == 3
+    assert result.metrics["test_date_count"] == 80
+    assert result.metrics["entry_gap_distribution"]["condition"] == "NEXT_TRADING_DAY_VALID_OPEN"
+    assert "entry_executable_probability" not in result.test_predictions.columns
+    assert result.test_predictions["entry_gap_condition"].eq(
+        "NEXT_TRADING_DAY_VALID_OPEN"
+    ).all()

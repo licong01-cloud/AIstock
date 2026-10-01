@@ -71,6 +71,29 @@ def test_compact_config_summary_reads_nested_dataset_binding_and_marks_star50_hi
     assert summary["universe"]["protocol_status"] == "historical_star50_non_top20"
 
 
+def test_compact_config_summary_exposes_execution_data_exclusion_identity() -> None:
+    exclusion = {
+        "schema_version": "qe_execution_data_exclusion_v1",
+        "instrument": "601989.SH",
+        "scope": "full_backtest_window",
+        "start_date": "2024-07-01",
+        "end_date": "2026-08-28",
+        "reason_code": "minute_source_gap_confirmed_unfillable",
+        "evidence_sha256": "e" * 64,
+    }
+
+    summary = compact_config_summary(
+        {"model_params": {"execution_data_exclusions": [exclusion]}}
+    )
+
+    assert summary["execution_data_exclusions"]["count"] == 1
+    assert summary["execution_data_exclusions"]["instruments"] == ["601989.SH"]
+    assert summary["execution_data_exclusions"]["reason_codes"] == [
+        "minute_source_gap_confirmed_unfillable"
+    ]
+    assert len(summary["execution_data_exclusions"]["contract_sha256"]) == 64
+
+
 def test_compact_metric_summary_drops_large_enhanced_payloads() -> None:
     metrics = {
         "IC": 0.0412,
@@ -188,6 +211,30 @@ def test_compact_policy_summary_reports_enablement_and_effect_evidence() -> None
     }
     assert summary["sector_blacklist"]["effective"] is True
     assert summary["sector_blacklist"]["action_count"] == 7
+
+
+def test_compact_policy_summary_uses_materialized_blacklist_diagnostics() -> None:
+    summary = compact_policy_summary(
+        {
+            "sector_blacklist": ["801080.SI"],
+            "_qe_sector_blacklist_policy": {
+                "schema_version": "qe_sector_blacklist_policy_v1",
+                "requested": True,
+                "enabled": True,
+                "effective": True,
+                "blacklist_excluded_count": 19,
+            },
+        },
+        {},
+    )
+
+    assert summary["sector_blacklist"] == {
+        "requested": True,
+        "enabled": True,
+        "effective": True,
+        "action_count": 19,
+        "effective_reason": "action_observed",
+    }
 
 
 def test_compact_enhanced_summary_derives_position_counts_from_stock_trades() -> None:

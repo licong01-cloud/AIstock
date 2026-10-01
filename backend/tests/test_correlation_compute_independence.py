@@ -62,6 +62,261 @@ def test_correlation_wsl_runner_no_args_returns_structured_usage() -> None:
     assert "usage:" in payload["data"]["error"]
 
 
+def test_correlation_wsl_runner_routes_target_only_mode(monkeypatch, tmp_path, capsys) -> None:
+    from backend.scripts import run_correlation_compute_wsl as runner
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "mode": "target_only",
+                "target_factor_name": "factor_target",
+                "as_of_date": "2026-08-31",
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+    monkeypatch.setattr(runner, "assert_wsl_runtime", lambda _operation: None)
+    monkeypatch.setattr(
+        svc,
+        "run_target_correlation_refresh_local",
+        lambda **kwargs: captured.update(kwargs) or {"success": True},
+    )
+    monkeypatch.setattr(
+        svc,
+        "run_correlation_compute_local",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("full reset must not run")),
+    )
+    monkeypatch.setattr(sys, "argv", [str(RUNNER), str(payload_path)])
+
+    assert runner.main() == 0
+    assert captured["target_factor_name"] == "factor_target"
+    assert json.loads(capsys.readouterr().out.strip())["data"]["success"] is True
+
+
+def test_target_correlation_persistence_replaces_only_target_pairs(monkeypatch) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    statements = []
+    inserted = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            statements.append((" ".join(sql.split()), params))
+
+        def fetchall(self):
+            return [(1, 2)]
+
+    class Conn:
+        committed = False
+        rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    conn = Conn()
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "reference"},
+                {"id": 3, "factor_name": "unrelated"},
+            ]
+
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        svc,
+        "execute_values",
+        lambda _cur, _sql, values, **_kwargs: inserted.extend(values),
+    )
+
+    written = svc._persist_target_correlations(
+        target_factor_name="target",
+        records=[
+            {
+                "factor_a": "target",
+                "factor_b": "reference",
+                "correlation": 0.25,
+                "method": "spearman_ewma",
+            }
+        ],
+        as_of_date="2026-08-31",
+        universe_metadata={"universe_key": "aistock_equity_pit_canonical_v2"},
+    )
+
+    assert written == 1
+    assert conn.committed is True
+    assert conn.rolled_back is False
+    assert inserted[0][:2] == (1, 2)
+    assert statements[0][1] == (1, 1)
+    assert all("TRUNCATE" not in sql for sql, _params in statements)
+    assert statements[1][1] == ([2],)
+    assert statements[-1][1] == (1, 1)
+
+
+def test_target_correlation_persistence_rolls_back_before_replacing_state(
+    monkeypatch,
+) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params=None):
+            return None
+
+        def fetchall(self):
+            return [(1, 2)]
+
+    class Conn:
+        committed = False
+        rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    conn = Conn()
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "reference"},
+            ]
+
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        svc,
+        "execute_values",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("insert failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        svc._persist_target_correlations(
+            target_factor_name="target",
+            records=[
+                {
+                    "factor_a": "target",
+                    "factor_b": "reference",
+                    "correlation": 0.25,
+                }
+            ],
+            as_of_date="2026-08-31",
+            universe_metadata={},
+        )
+
+    assert conn.committed is False
+    assert conn.rolled_back is True
+
+
+def test_target_correlation_route_submits_explicit_profile_without_full_reset(
+    monkeypatch,
+) -> None:
+    from backend.routers import quantevolver_evolution as router
+
+    submitted = {}
+
+    class Lock:
+        def locked(self):
+            return False
+
+    class Eligibility:
+        def get_eligible_factor_names(self, **_kwargs):
+            return ["target"]
+
+    class Executor:
+        def submit(self, fn, **kwargs):
+            submitted["fn"] = fn
+            submitted.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(router, "_computing_lock", Lock())
+    monkeypatch.setattr(router, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(router, "_compute_executor", Executor())
+    monkeypatch.setattr(
+        router._correlation_compute_service,
+        "get_correlation_factor_cache_status",
+        lambda: {"as_of_date": "2026-08-31"},
+    )
+
+    result = router.refresh_target_correlations(
+        router.CorrelationTargetRefreshRequest(
+            target_factor_name="target",
+            as_of_date="2026-08-31",
+            dataset_profile_path="X:/profiles/r8.json",
+        )
+    )
+
+    assert result["status"] == "accepted"
+    assert result["unrelated_rows_reset"] is False
+    assert submitted["target_factor_name"] == "target"
+    assert submitted["dataset_profile_path"] == "X:/profiles/r8.json"
+
+
+def test_target_correlation_refresh_fails_closed_when_reference_cache_is_missing(
+    monkeypatch,
+) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "missing_reference"},
+            ]
+
+    class Pipeline:
+        def get_cached_singles(self):
+            return [{"factor_name": "target"}]
+
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda _operation: None)
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", Pipeline)
+    monkeypatch.setattr(svc, "_update_job_status", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(ValueError, match="missing from the cache"):
+        svc.run_target_correlation_refresh_local(target_factor_name="target")
+
+
 def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
     from backend.services.quantevolver.factor_value_loader import _DEFAULT_PIPELINE_DIR

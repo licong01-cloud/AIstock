@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body, Path as PathParam
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
@@ -67,6 +67,7 @@ from ..services.quantevolver.qe_log_broker import (
 from ..services.quantevolver.experiment_config import (
     LongTrendEvaluationOptIn,
     ensure_qe_risk_policy,
+    normalize_prediction_replay_contract,
     normalize_label_horizon,
     normalize_qe_random_seed,
     split_qe_runtime_metadata,
@@ -237,6 +238,16 @@ def _model_to_dict(model: BaseModel) -> Dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _active_dataset_params_from_custom_loop(cfg_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Project top-level loop controls into the active-dataset resolver input."""
+
+    params = dict(cfg_dict.get("custom_params") or {})
+    sector_blacklist = cfg_dict.get("sector_blacklist")
+    if sector_blacklist is not None:
+        params["sector_blacklist"] = list(sector_blacklist)
+    return params
 
 
 def _sync_stock_pool_to_remote(stock_pool_path: str, node: dict):
@@ -1510,7 +1521,23 @@ class CustomEvoLoopConfig(BaseModel):
     backtest_only: bool = Field(False, description="是否跳过训练仅回测（需提供 model_source，且因子不可变更）")
     model_source_task_id: Optional[str] = Field(None, description="模型来源任务 ID（backtest_only=True 时必填）")
     model_source_loop_index: Optional[int] = Field(None, description="模型来源 Loop 索引（backtest_only=True 时必填）")
+    prediction_replay: StrictBool = Field(False, description="Replay one immutable completed-loop pred.pkl without training or inference")
+    prediction_source_task_id: Optional[str] = Field(None, description="Completed source QE task for prediction replay")
+    prediction_source_loop_index: Optional[int] = Field(None, description="Completed source Loop index for prediction replay")
+    prediction_source_sha256: Optional[str] = Field(None, description="Optional expected SHA256 pin for the source pred.pkl")
     node_id: Optional[str] = Field(None, description="Loop execution node; blank inherits Loop1")
+
+    @model_validator(mode="after")
+    def _validate_prediction_replay(self) -> "CustomEvoLoopConfig":
+        replay = normalize_prediction_replay_contract(
+            self.model_dump(),
+            context="custom_evo_loop",
+        )
+        self.prediction_replay = replay["prediction_replay"]
+        self.prediction_source_task_id = replay["prediction_source_task_id"]
+        self.prediction_source_loop_index = replay["prediction_source_loop_index"]
+        self.prediction_source_sha256 = replay["prediction_source_sha256"]
+        return self
 
 class CustomEvolutionCreateRequest(BaseModel):
     task_name: str = Field(..., description="任务名称")
@@ -1691,13 +1718,27 @@ async def _prepare_custom_evo_loop_configs(
             raise HTTPException(status_code=400, detail=f"Loop {pos}: model_id is required")
         if loop_cfg.enable_sector_hmm and not loop_cfg.hmm_model_version_id:
             raise HTTPException(status_code=400, detail=f"Loop {pos}: hmm_model_version_id is required when HMM is enabled")
-        if loop_cfg.backtest_only:
-            if not loop_cfg.model_source_task_id or loop_cfg.model_source_loop_index is None:
-                raise HTTPException(status_code=400, detail=f"Loop {pos}: backtest-only requires model_source")
+        if loop_cfg.backtest_only or loop_cfg.prediction_replay:
+            reuse_mode = "prediction replay" if loop_cfg.prediction_replay else "backtest-only"
+            source_task_id = (
+                loop_cfg.model_source_task_id
+                if loop_cfg.backtest_only
+                else loop_cfg.prediction_source_task_id
+            )
+            source_loop_index = (
+                loop_cfg.model_source_loop_index
+                if loop_cfg.backtest_only
+                else loop_cfg.prediction_source_loop_index
+            )
+            if not source_task_id or source_loop_index is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Loop {pos}: {reuse_mode} requires a source task and loop",
+                )
             try:
                 source_label_horizon = scheduler._get_source_loop_label_horizon(
-                    loop_cfg.model_source_task_id,
-                    loop_cfg.model_source_loop_index,
+                    source_task_id,
+                    source_loop_index,
                 )
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=f"Loop {pos}: {e}") from e
@@ -1706,38 +1747,38 @@ async def _prepare_custom_evo_loop_configs(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Loop {pos}: backtest-only label_horizon={loop_label_horizon} does not match "
-                        f"source model label_horizon={source_label_horizon}"
+                        f"Loop {pos}: {reuse_mode} label_horizon={loop_label_horizon} does not match "
+                        f"source loop label_horizon={source_label_horizon}"
                     ),
                 )
             source_factors = _get_source_loop_factors(
-                loop_cfg.model_source_task_id,
-                loop_cfg.model_source_loop_index,
+                source_task_id,
+                source_loop_index,
             )
             if source_factors is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: source loop factors cannot be read; backtest-only is not allowed",
+                    detail=f"Loop {pos}: source loop factors cannot be read; {reuse_mode} is not allowed",
                 )
             current_factors = sorted(k.split("||")[0] for k in loop_cfg.factor_keys)
             if current_factors != sorted(source_factors):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: backtest-only requires the same factor list as the source model",
+                    detail=f"Loop {pos}: {reuse_mode} requires the same factor list as the source loop",
                 )
             source_disable_alpha158 = _get_source_loop_disable_alpha158(
-                loop_cfg.model_source_task_id,
-                loop_cfg.model_source_loop_index,
+                source_task_id,
+                source_loop_index,
             )
             if source_disable_alpha158 is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: source Alpha158 baseline setting cannot be read; backtest-only is not allowed",
+                    detail=f"Loop {pos}: source Alpha158 baseline setting cannot be read; {reuse_mode} is not allowed",
                 )
             if bool(loop_cfg.disable_alpha158) != bool(source_disable_alpha158):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Loop {pos}: backtest-only requires the same Alpha158 baseline setting as the source model",
+                    detail=f"Loop {pos}: {reuse_mode} requires the same Alpha158 baseline setting as the source loop",
                 )
 
     loops_config: List[Dict[str, Any]] = []
@@ -1768,7 +1809,7 @@ async def _prepare_custom_evo_loop_configs(
             f"custom_loop[{pos}].execution_algo",
         )
         cfg_dict["label_horizon"] = normalize_label_horizon(loop_cfg.label_horizon)
-        if loop_cfg.backtest_only and pos in loop_source_horizons:
+        if (loop_cfg.backtest_only or loop_cfg.prediction_replay) and pos in loop_source_horizons:
             cfg_dict["source_label_horizon"] = loop_source_horizons[pos]
         loops_config.append(cfg_dict)
 
@@ -1847,7 +1888,9 @@ async def _prepare_custom_evo_loop_configs(
         )
     if unresolved and active_profile is None:
         semantic_requested = any(
-            cfg.get("universe_selection") is not None for _pos, cfg in unresolved
+            cfg.get("universe_selection") is not None
+            or bool(cfg.get("sector_blacklist"))
+            for _pos, cfg in unresolved
         )
         if semantic_requested or required_profile_identity is not None:
             raise HTTPException(
@@ -1873,8 +1916,9 @@ async def _prepare_custom_evo_loop_configs(
                     ),
                 )
         for pos, cfg_dict in unresolved:
+            active_dataset_params = _active_dataset_params_from_custom_loop(cfg_dict)
             try:
-                reject_client_dataset_internals(cfg_dict.get("custom_params"))
+                reject_client_dataset_internals(active_dataset_params)
             except RuntimeError as exc:
                 raise HTTPException(status_code=400, detail=f"Loop {pos}: {exc}") from exc
             if cfg_dict.get("stock_pool") and cfg_dict.get("universe_selection") is not None:
@@ -1887,7 +1931,7 @@ async def _prepare_custom_evo_loop_configs(
                     node_id=str(cfg_dict["node_id"]),
                     data_split=cfg_dict.get("data_split"),
                     universe_selection=cfg_dict.get("universe_selection"),
-                    custom_params=cfg_dict.get("custom_params"),
+                    custom_params=active_dataset_params,
                     label_horizon=int(cfg_dict.get("label_horizon") or 1),
                     profile=active_profile,
                 )
@@ -2247,6 +2291,20 @@ async def run_custom_evo_task(task_id: str, req: CustomEvoRunRequest, background
                 ensure_loop_fixed_seed(dict(loop), context=f"custom_evo.task[{task_id}].loops[{idx}]")
             except ValueError as exc:
                 raise_http_seed_error(exc)
+        if req.force_full_train:
+            replay_loops = [
+                loop.get("loop_index")
+                for loop in config.get("loops") or []
+                if loop.get("prediction_replay")
+            ]
+            if replay_loops:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "force_full_train cannot override immutable prediction replay "
+                        f"loops={replay_loops}"
+                    ),
+                )
         claim = scheduler.claim_custom_evo_start(task_id)
         if not claim.get("claimed"):
             raise HTTPException(
@@ -3317,6 +3375,9 @@ def _run_correlation_compute_via_dispatch(
     as_of_date: str = None,
     job_id: str = None,
     data_date: str = None,
+    *,
+    target_factor_name: str | None = None,
+    dataset_profile_path: str | None = None,
 ):
     import asyncio
     import time as _time
@@ -3324,7 +3385,9 @@ def _run_correlation_compute_via_dispatch(
     global _active_dispatch_task_id
 
     payload = {
+        "mode": "target_only" if target_factor_name else "full",
         "factor_names": list(factor_names or []),
+        "target_factor_name": target_factor_name,
         "as_of_date": as_of_date,
         "job_id": str(job_id) if job_id else None,
         "data_date": data_date,
@@ -3338,12 +3401,21 @@ def _run_correlation_compute_via_dispatch(
         )
         _update_job_status(job_id, "running")
         try:
-            created = asyncio.run(_get_dispatch_service().create_and_submit_task({
-                "task_name": f"correlation_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            dispatch_request = {
+                "task_name": (
+                    f"correlation_target_{target_factor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    if target_factor_name
+                    else f"correlation_full_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                ),
                 "task_type": "correlation_compute",
                 "node_id": os.getenv("AISTOCK_DEFAULT_GPU_NODE_ID", "wsl2-5080"),
                 "payload": payload,
-            }))
+            }
+            if dataset_profile_path:
+                dispatch_request["dataset_profile_path"] = dataset_profile_path
+            created = asyncio.run(
+                _get_dispatch_service().create_and_submit_task(dispatch_request)
+            )
             task_id = created["task_id"]
             _active_dispatch_task_id = task_id
             deadline = _time.time() + _MATRIX_TIMEOUT_SEC
@@ -3411,6 +3483,22 @@ def _run_correlation_compute(factor_names: list, as_of_date: str = None, job_id:
     )
 
 
+def _run_target_correlation_refresh_via_dispatch(
+    *,
+    target_factor_name: str,
+    as_of_date: str | None,
+    data_date: str | None,
+    dataset_profile_path: str,
+):
+    return _run_correlation_compute_via_dispatch(
+        factor_names=[target_factor_name],
+        as_of_date=as_of_date,
+        data_date=data_date,
+        target_factor_name=target_factor_name,
+        dataset_profile_path=dataset_profile_path,
+    )
+
+
 def _get_loader(source: str = "single") -> FactorValueLoader:
     global _correlation_loader
     if _correlation_loader is None or getattr(_correlation_loader, '_source', None) != source:
@@ -3431,6 +3519,17 @@ class CorrelationComputeRequest(BaseModel):
     force_recompute: bool = Field(False, description="强制重新计算，忽略旧相关性结果")
     db_threshold: float = Field(0, description="写入 DB 的相关性阈值 (threshold=0 全量存储)")
     include_disabled: bool = Field(False, description="为 True 时包含已禁用因子")
+
+
+class CorrelationTargetRefreshRequest(BaseModel):
+    target_factor_name: str = Field(..., min_length=1)
+    as_of_date: str = Field(..., description="Must equal the official cache cutoff")
+    data_date: Optional[str] = Field(None, description="Scheduler metadata only")
+    dataset_profile_path: str = Field(
+        ...,
+        min_length=1,
+        description="Absolute canonical profile for the same official cache release",
+    )
 
 
 @router.post("/correlations/compute", summary="触发因子相关性矩阵计算")
@@ -3490,6 +3589,49 @@ def compute_correlations(req: CorrelationComputeRequest):
             "cache_root": cache_status.get("cache_root"),
             "cache_source": cache_status.get("cache_source"),
         },
+    }
+
+
+@router.post(
+    "/correlations/refresh-target",
+    summary="Refresh one factor's official correlations without resetting unrelated rows",
+)
+def refresh_target_correlations(req: CorrelationTargetRefreshRequest):
+    if _computing_lock.locked():
+        return {
+            "status": "computing",
+            "message": "another correlation computation is already running",
+            "progress": _correlation_progress.snapshot(),
+        }
+    target = req.target_factor_name.strip()
+    eligible = FactorEligibilityService().get_eligible_factor_names(
+        factor_names=[target],
+        include_disabled=False,
+    )
+    if eligible != [target]:
+        raise HTTPException(status_code=409, detail="target factor is not official-eligible")
+    cache_status = _correlation_compute_service.get_correlation_factor_cache_status()
+    if cache_status.get("as_of_date") != req.as_of_date:
+        raise HTTPException(
+            status_code=409,
+            detail="target correlation as_of_date differs from official cache",
+        )
+
+    global _compute_future
+    _compute_future = _compute_executor.submit(
+        _run_target_correlation_refresh_via_dispatch,
+        target_factor_name=target,
+        as_of_date=req.as_of_date,
+        data_date=req.data_date,
+        dataset_profile_path=req.dataset_profile_path,
+    )
+    return {
+        "status": "accepted",
+        "mode": "target_only",
+        "target_factor_name": target,
+        "as_of_date": req.as_of_date,
+        "dataset_profile_path": req.dataset_profile_path,
+        "unrelated_rows_reset": False,
     }
 
 

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pandas as pd
 import pytest
 import yaml
 
+from backend.services.dataset_release.canonical import digest_named_fields
+from backend.services.dataset_release.shared_sector_context import (
+    RELEASE_SW_L2_CODE_MAP_SCHEMA,
+    RELEASE_SW_L2_MEMBER_BACKED_SCHEMA,
+)
 from backend.services.quantevolver.config_composer import (
     ConfigComposer,
     QE_DIRECT_V2_DATASET_BINDING_FILE,
@@ -21,6 +29,12 @@ from backend.services.quantevolver.qe_dataset_contract import (
     QE_DIRECT_V2_DATASET_BINDING_PARAM,
     QE_DIRECT_V2_INDEX_CODES,
     QEDirectV2DatasetBinding,
+)
+from backend.services.quantevolver.qe_sector_blacklist_policy import (
+    QESectorBlacklistPolicyError,
+    SECTOR_BLACKLIST_POLICY_PARAM,
+    materialize_sector_blacklist_universe,
+    requested_sector_codes,
 )
 from scripts.qe_build_frozen_suspend_filter import build_suspend_filter_payload
 from backend.services.quantevolver.qe_validate_direct_v2_dataset import (
@@ -57,12 +71,8 @@ def _component(root: Path, name: str, *, freq: str, start: str) -> dict[str, str
     }
     if freq == "day":
         benchmark_line = f"000300.SH\t{start}\t2026-08-31\n"
-        (component / "instruments" / "stock_universe.txt").write_text(
-            stock_payload, encoding="utf-8"
-        )
-        (component / "instruments" / "benchmark.txt").write_text(
-            benchmark_line, encoding="utf-8"
-        )
+        (component / "instruments" / "stock_universe.txt").write_text(stock_payload, encoding="utf-8")
+        (component / "instruments" / "benchmark.txt").write_text(benchmark_line, encoding="utf-8")
         instruments.write_text(stock_payload + benchmark_line, encoding="utf-8")
         meta_payload["benchmark_only"] = {
             "schema_version": "qe_direct_daily_benchmark_v1",
@@ -116,9 +126,7 @@ def _fixture(tmp_path: Path) -> tuple[dict, Path]:
 
     suspend = root / "components" / "suspend_d_daily_candidate_v2"
     suspend.mkdir(parents=True)
-    suspend_frame = pd.DataFrame(
-        [{"trade_date": "2026-08-28", "ts_code": "000001.SZ", "suspend_type": "S"}]
-    )
+    suspend_frame = pd.DataFrame([{"trade_date": "2026-08-28", "ts_code": "000001.SZ", "suspend_type": "S"}])
     suspend_frame.to_parquet(suspend / "suspend_d.parquet", index=False)
     suspend_meta = {
         "schema_version": "qe_direct_suspend_d_v1",
@@ -306,10 +314,7 @@ def test_direct_v2_composer_uses_only_bound_paths_and_direct_suspend_meta(
     assert "market: &market all" not in conf
     parsed_conf = yaml.safe_load(conf)
     assert parsed_conf["market"] == "stock_universe"
-    assert (
-        parsed_conf["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"]
-        == "all"
-    )
+    assert parsed_conf["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] == "all"
     prepare = result["experiment_files"]["prepare_factors.py"]
     assert repr(dict(binding.factor_meta)) in prepare
     assert binding.factor_meta_sha256 in prepare
@@ -334,10 +339,7 @@ def test_direct_v2_composer_uses_only_bound_paths_and_direct_suspend_meta(
         tmp_path / "20260831-qe-hmm-v2-candidate" / "components" / "daily_bin_candidate"
     )
     local_spec["suspend"]["provider_uri"] = str(
-        tmp_path
-        / "20260831-qe-hmm-v2-candidate"
-        / "components"
-        / "suspend_d_daily_candidate_v2"
+        tmp_path / "20260831-qe-hmm-v2-candidate" / "components" / "suspend_d_daily_candidate_v2"
     )
     payload = build_suspend_filter_payload(local_spec)
     assert payload["suspended_row_count"] == 1
@@ -349,13 +351,7 @@ def test_direct_v2_binding_rejects_benchmark_in_selection_universe(tmp_path: Pat
     raw, root = _fixture(tmp_path)
     raw = _with_local_paths(raw, root)
     binding_file = tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE
-    stock_path = (
-        root
-        / "components"
-        / "daily_bin_candidate"
-        / "instruments"
-        / "stock_universe.txt"
-    )
+    stock_path = root / "components" / "daily_bin_candidate" / "instruments" / "stock_universe.txt"
     stock_path.write_text(
         stock_path.read_text(encoding="utf-8") + "000300.SH\t2018-08-01\t2026-08-31\n",
         encoding="utf-8",
@@ -428,6 +424,24 @@ def _v3_receipt() -> str:
     )
 
 
+def _v3_stock_universe_receipt() -> str:
+    return json.dumps(
+        {
+            "schema_version": "qe_index_pool_coverage_receipt_v1",
+            "release_id": "qe_hmm_full_v2_20260831",
+            "cutoff": "2026-08-31",
+            "pools": {
+                "stock_universe": {
+                    "available_start": "2018-08-01",
+                    "available_end": "2026-08-31",
+                    "gaps": [],
+                }
+            },
+        },
+        sort_keys=True,
+    )
+
+
 def test_direct_v2_v3_validator_accepts_packaged_index_sidecar(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -444,6 +458,76 @@ def test_direct_v2_v3_validator_accepts_packaged_index_sidecar(
     validated = validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
 
     assert validated["selection_pins"]["mode"] == "single_index"
+
+
+def test_direct_v2_v3_validator_accepts_packaged_filtered_stock_universe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, root = _fixture(tmp_path)
+    sidecar = "000002.SZ\t2018-08-01\t2026-08-31\n"
+    receipt = _v3_stock_universe_receipt()
+    raw = _with_local_paths(_v3_binding(raw, sidecar=sidecar, receipt=receipt), root)
+    raw["selection_pins"].update(
+        {
+            "mode": "stock_universe",
+            "pool_ids": [],
+            "instrument_name": "stock_universe",
+            "instruments_file": "stock_universe.txt",
+            "membership_revision": "stock-universe-pit-v2|sector_blacklist:test",
+        }
+    )
+    _write_json(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE, raw)
+    (tmp_path / "stock_universe.txt").write_bytes(sidecar.encode("utf-8"))
+    (tmp_path / QE_UNIVERSE_COVERAGE_RECEIPT_FILE).write_bytes(receipt.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+
+    validated = validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
+
+    assert validated["selection_pins"]["membership_revision"].endswith("sector_blacklist:test")
+    validator = (
+        Path(__file__).parents[3]
+        / "backend"
+        / "services"
+        / "quantevolver"
+        / "qe_validate_direct_v2_dataset.py"
+    )
+    completed = subprocess.run(
+        [sys.executable, str(validator)],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "QE direct-v2 dataset binding verified" in completed.stdout
+
+
+def test_direct_v2_v3_validator_keeps_unfiltered_stock_universe_at_candidate_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, root = _fixture(tmp_path)
+    candidate_path = root / "components" / "daily_bin_candidate" / "instruments" / "stock_universe.txt"
+    sidecar = candidate_path.read_bytes().decode("utf-8")
+    receipt = _v3_stock_universe_receipt()
+    raw = _with_local_paths(_v3_binding(raw, sidecar=sidecar, receipt=receipt), root)
+    raw["selection_pins"].update(
+        {
+            "mode": "stock_universe",
+            "pool_ids": [],
+            "instrument_name": "stock_universe",
+            "instruments_file": "stock_universe.txt",
+            "membership_revision": "stock-universe-pit-v2",
+        }
+    )
+    _write_json(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE, raw)
+    (tmp_path / QE_UNIVERSE_COVERAGE_RECEIPT_FILE).write_bytes(receipt.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+
+    validated = validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
+
+    assert validated["selection_pins"]["membership_revision"] == "stock-universe-pit-v2"
 
 
 def test_direct_v2_v3_validator_rejects_non_iso_sidecar_dates(
@@ -463,7 +547,7 @@ def test_direct_v2_v3_validator_rejects_non_iso_sidecar_dates(
         validate_binding(tmp_path / QE_DIRECT_V2_DATASET_BINDING_FILE)
 
 
-def test_direct_v2_v3_composer_builds_read_only_run_local_day_overlay(
+def test_direct_v2_v3_composer_builds_blacklist_filtered_stock_universe_overlay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -471,12 +555,28 @@ def test_direct_v2_v3_composer_builds_read_only_run_local_day_overlay(
     sidecar = "000001.SZ\t2018-08-01\t2026-08-31\n"
     receipt = _v3_receipt()
     raw = _v3_binding(raw, sidecar=sidecar, receipt=receipt)
+    raw["selection_pins"].update(
+        {
+            "mode": "stock_universe",
+            "pool_ids": [],
+            "instrument_name": "stock_universe",
+            "instruments_file": "stock_universe.txt",
+            "membership_revision": "stock-universe-pit-v2|sector-blacklist:test",
+        }
+    )
     params = _custom_params(raw)
     params.update(
         {
-            "stock_pool": "index_pool__csi300",
+            "stock_pool": "stock_universe",
             QE_RUN_STOCK_POOL_CONTENT_PARAM: sidecar,
             QE_RUN_COVERAGE_RECEIPT_PARAM: receipt,
+            SECTOR_BLACKLIST_POLICY_PARAM: {
+                "schema_version": "qe_sector_blacklist_policy_v1",
+                "requested": True,
+                "enabled": True,
+                "effective": True,
+                "blacklist_excluded_count": 11,
+            },
         }
     )
     composer = ConfigComposer()
@@ -524,16 +624,308 @@ def test_direct_v2_v3_composer_builds_read_only_run_local_day_overlay(
     )
 
     files = result["experiment_files"]
-    assert files["index_pool__csi300.txt"] == sidecar
+    assert files["stock_universe.txt"] == sidecar
     assert files[QE_UNIVERSE_COVERAGE_RECEIPT_FILE] == receipt
     conf = yaml.safe_load(files["conf.yaml"])
     assert conf["qlib_init"]["provider_uri"]["day"] == "/tmp/qe_workspace/direct-v3-test/qe_provider_day"
     assert conf["qlib_init"]["provider_uri"]["1min"] == raw["provider_uri_1min"]
-    assert conf["market"] == "index_pool__csi300"
+    assert conf["market"] == "stock_universe"
+    assert SECTOR_BLACKLIST_POLICY_PARAM not in files["conf.yaml"]
     command = result["wsl_command_core"]
     assert "ln -sfn" in command
-    assert "cp -f index_pool__csi300.txt" in command
+    assert "cp -f stock_universe.txt" in command
     assert raw["provider_uri_day"] in command
+    assert "; done; true" not in command
+    assert 'if [ ! -e "$f" ] && [ -e "$_FDD/$f" ]; then ln -sf "$_FDD/$f" .; fi; done' in command
+    assert "python qe_validate_direct_v2_dataset.py && _FDD=" in command
     risk_spec = json.loads(files["qe_frozen_build_spec.json"])
     assert risk_spec["provider_uri_day"].endswith("/qe_provider_day")
-    assert risk_spec["pins"]["instruments_file"] == "index_pool__csi300.txt"
+    assert risk_spec["pins"]["instruments_file"] == "stock_universe.txt"
+
+
+BLACKLIST_CALENDAR = [
+    dt.date(2026, 8, 3),
+    dt.date(2026, 8, 4),
+    dt.date(2026, 8, 5),
+    dt.date(2026, 8, 6),
+]
+
+
+def _blacklist_frozen_inputs(
+    tmp_path: Path,
+    *,
+    unknown: bool = False,
+    omit_last: bool = False,
+    reverse_rows: bool = False,
+) -> dict[str, object]:
+    code_map: dict[str, object] = {
+        "schema_version": "qe_sw_l2_code_map_v1",
+        "ordered_codes": ["801010.SI", "801020.SI"],
+    }
+    code_map["code_map_digest"] = digest_named_fields(
+        "dataset_release_sw_l2_code_map_v1",
+        {"ordered_codes": code_map["ordered_codes"]},
+    )
+    map_path = tmp_path / "sector_code_map.json"
+    map_path.write_text(json.dumps(code_map, sort_keys=True), encoding="utf-8")
+    rows = [
+        {
+            "instrument": "000001.SZ",
+            "start_date": "2026-08-03",
+            "end_date": "2026-08-04",
+            "l2_code_id": 0,
+        },
+        {
+            "instrument": "000001.SZ",
+            "start_date": "2026-08-05",
+            "end_date": "2026-08-06",
+            "l2_code_id": -1 if unknown else 1,
+        },
+        {
+            "instrument": "000002.SZ",
+            "start_date": "2026-08-03",
+            "end_date": "2026-08-05" if omit_last else "2026-08-06",
+            "l2_code_id": 1,
+        },
+    ]
+    if reverse_rows:
+        rows.reverse()
+    membership_path = tmp_path / "sector_membership_spans.parquet"
+    pd.DataFrame(rows).to_parquet(membership_path, index=False)
+    return {
+        "schema_version": "qe_sector_policy_input_v1",
+        "membership_file": membership_path.name,
+        "membership_sha256": _sha(membership_path),
+        "code_map_file": map_path.name,
+        "code_map_sha256": _sha(map_path),
+        "start": BLACKLIST_CALENDAR[0].isoformat(),
+        "end": BLACKLIST_CALENDAR[-1].isoformat(),
+        "universe_key": "aistock_equity_pit_canonical_v2",
+    }
+
+
+def test_materialize_sector_blacklist_preserves_pit_transitions(tmp_path: Path) -> None:
+    result = materialize_sector_blacklist_universe(
+        base_intervals=[
+            ("000001.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+            ("000002.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+        ],
+        calendar=BLACKLIST_CALENDAR,
+        window_start=BLACKLIST_CALENDAR[0],
+        window_end=BLACKLIST_CALENDAR[-1],
+        factor_root=tmp_path,
+        pins=_blacklist_frozen_inputs(tmp_path),
+        blacklist_codes=["801010.SI"],
+    )
+
+    assert result.instruments_content == ("000001.SZ\t2026-08-05\t2026-08-06\n000002.SZ\t2026-08-03\t2026-08-06\n")
+    assert result.diagnostics["blacklist_excluded_count"] == 1
+    assert result.diagnostics["blacklist_excluded_membership_days"] == 2
+    assert result.diagnostics["effective"] is True
+
+
+def test_materialize_sector_blacklist_preserves_pre_policy_intervals_without_membership(
+    tmp_path: Path,
+) -> None:
+    pins = _blacklist_frozen_inputs(tmp_path)
+    membership_path = tmp_path / str(pins["membership_file"])
+    membership = pd.read_parquet(membership_path)
+    membership = membership[membership["end_date"] >= "2026-08-05"].copy()
+    membership.loc[membership["start_date"] < "2026-08-05", "start_date"] = "2026-08-05"
+    membership = pd.concat(
+        [
+            membership,
+            pd.DataFrame(
+                [
+                    {
+                        "instrument": "000004.SZ",
+                        "start_date": "2026-08-05",
+                        "end_date": "2026-08-06",
+                        "l2_code_id": 0,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    ).sort_values(["instrument", "start_date"], ignore_index=True)
+    membership.to_parquet(membership_path, index=False)
+    pins["membership_sha256"] = _sha(membership_path)
+    pins["start"] = "2026-08-05"
+
+    result = materialize_sector_blacklist_universe(
+        base_intervals=[
+            ("000001.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+            ("000002.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+            ("000003.SZ", BLACKLIST_CALENDAR[0], dt.date(2026, 8, 4)),
+            ("000004.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+        ],
+        calendar=BLACKLIST_CALENDAR,
+        window_start=BLACKLIST_CALENDAR[0],
+        policy_start=dt.date(2026, 8, 5),
+        window_end=BLACKLIST_CALENDAR[-1],
+        factor_root=tmp_path,
+        pins=pins,
+        blacklist_codes=["801020.SI"],
+    )
+
+    assert result.instruments_content == (
+        "000001.SZ\t2026-08-03\t2026-08-04\n"
+        "000002.SZ\t2026-08-03\t2026-08-04\n"
+        "000003.SZ\t2026-08-03\t2026-08-04\n"
+        "000004.SZ\t2026-08-03\t2026-08-06\n"
+    )
+    assert result.diagnostics["window_start"] == "2026-08-03"
+    assert result.diagnostics["policy_start"] == "2026-08-05"
+    assert result.diagnostics["blacklist_excluded_count"] == 2
+
+
+def test_materialize_sector_blacklist_rejects_empty_policy_universe_despite_training_rows(
+    tmp_path: Path,
+) -> None:
+    pins = _blacklist_frozen_inputs(tmp_path)
+    membership_path = tmp_path / str(pins["membership_file"])
+    membership = pd.read_parquet(membership_path)
+    membership = membership[membership["instrument"] == "000002.SZ"].copy()
+    membership["start_date"] = "2026-08-05"
+    membership.to_parquet(membership_path, index=False)
+    pins["membership_sha256"] = _sha(membership_path)
+    pins["start"] = "2026-08-05"
+
+    with pytest.raises(QESectorBlacklistPolicyError, match="qe_sector_blacklist_universe_empty"):
+        materialize_sector_blacklist_universe(
+            base_intervals=[
+                ("000002.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+                ("000003.SZ", BLACKLIST_CALENDAR[0], dt.date(2026, 8, 4)),
+            ],
+            calendar=BLACKLIST_CALENDAR,
+            window_start=BLACKLIST_CALENDAR[0],
+            policy_start=dt.date(2026, 8, 5),
+            window_end=BLACKLIST_CALENDAR[-1],
+            factor_root=tmp_path,
+            pins=pins,
+            blacklist_codes=["801020.SI"],
+        )
+
+
+def test_materialize_sector_blacklist_accepts_shared_sparse_release_ids(tmp_path: Path) -> None:
+    pins = _blacklist_frozen_inputs(tmp_path)
+    authority = {"authority_id": "fixture", "authority_sha256": "a" * 64}
+    entries = [{"l2_code_id": index * 2 + 1, "canonical_l2_code": f"801{index:03d}.SI"} for index in range(131)]
+    codes = sorted(row["canonical_l2_code"] for row in entries)
+    code_map = {
+        "schema_version": RELEASE_SW_L2_CODE_MAP_SCHEMA,
+        "mapping_authority": authority,
+        "entries": entries,
+        "member_backed_codes": codes,
+        "code_map_digest": digest_named_fields(
+            RELEASE_SW_L2_CODE_MAP_SCHEMA,
+            {"mapping_authority": authority, "entries": entries},
+        ),
+        "member_backed_digest": digest_named_fields(
+            RELEASE_SW_L2_MEMBER_BACKED_SCHEMA,
+            {"mapping_authority": authority, "member_backed_codes": codes},
+        ),
+    }
+    map_path = tmp_path / "sector_code_map.json"
+    map_path.write_text(json.dumps(code_map), encoding="utf-8")
+    pins["code_map_sha256"] = _sha(map_path)
+    membership_path = tmp_path / "sector_membership_spans.parquet"
+    membership = pd.read_parquet(membership_path)
+    membership["l2_code_id"] = membership["l2_code_id"].map({0: 21, 1: 41})
+    membership.to_parquet(membership_path, index=False)
+    pins["membership_sha256"] = _sha(membership_path)
+
+    result = materialize_sector_blacklist_universe(
+        base_intervals=[
+            ("000001.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+            ("000002.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+        ],
+        calendar=BLACKLIST_CALENDAR,
+        window_start=BLACKLIST_CALENDAR[0],
+        window_end=BLACKLIST_CALENDAR[-1],
+        factor_root=tmp_path,
+        pins=pins,
+        blacklist_codes=["801010.SI"],
+    )
+
+    assert result.diagnostics["blacklist_excluded_count"] == 1
+    assert result.diagnostics["code_map_digest"] == code_map["code_map_digest"]
+
+
+@pytest.mark.parametrize(
+    ("fixture_kwargs", "reason_code"),
+    [
+        ({"unknown": True}, "qe_sector_blacklist_membership_unknown"),
+        ({"omit_last": True}, "qe_sector_blacklist_membership_incomplete"),
+    ],
+)
+def test_materialize_sector_blacklist_fails_closed_on_membership_gaps(
+    tmp_path: Path,
+    fixture_kwargs: dict[str, bool],
+    reason_code: str,
+) -> None:
+    pins = _blacklist_frozen_inputs(tmp_path, **fixture_kwargs)
+    with pytest.raises(QESectorBlacklistPolicyError, match=reason_code):
+        materialize_sector_blacklist_universe(
+            base_intervals=[
+                ("000001.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+                ("000002.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1]),
+            ],
+            calendar=BLACKLIST_CALENDAR,
+            window_start=BLACKLIST_CALENDAR[0],
+            window_end=BLACKLIST_CALENDAR[-1],
+            factor_root=tmp_path,
+            pins=pins,
+            blacklist_codes=["801010.SI"],
+        )
+
+
+def test_materialize_sector_blacklist_rejects_hash_drift(tmp_path: Path) -> None:
+    pins = _blacklist_frozen_inputs(tmp_path)
+    (tmp_path / "sector_code_map.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(
+        QESectorBlacklistPolicyError,
+        match="qe_sector_blacklist_frozen_mapping_hash_mismatch",
+    ):
+        materialize_sector_blacklist_universe(
+            base_intervals=[("000001.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1])],
+            calendar=BLACKLIST_CALENDAR,
+            window_start=BLACKLIST_CALENDAR[0],
+            window_end=BLACKLIST_CALENDAR[-1],
+            factor_root=tmp_path,
+            pins=pins,
+            blacklist_codes=["801010.SI"],
+        )
+
+
+def test_sector_blacklist_request_is_canonical_and_snapshot_must_match() -> None:
+    assert requested_sector_codes({"sector_blacklist": ["801020.si", "801010.SI"]}) == ("801010.SI", "801020.SI")
+    with pytest.raises(QESectorBlacklistPolicyError, match="snapshot differs"):
+        requested_sector_codes(
+            {
+                "sector_blacklist": ["801010.SI"],
+                "sector_blacklist_snapshot": {"items": [{"sw2_code": "801020.SI"}]},
+            }
+        )
+
+    with pytest.raises(QESectorBlacklistPolicyError, match="requires at least one"):
+        requested_sector_codes({"sector_blacklist_enabled": True, "sector_blacklist": []})
+
+
+def test_materialize_sector_blacklist_rejects_noncanonical_membership_order(
+    tmp_path: Path,
+) -> None:
+    pins = _blacklist_frozen_inputs(tmp_path, reverse_rows=True)
+    with pytest.raises(
+        QESectorBlacklistPolicyError,
+        match="canonical instrument/date order",
+    ):
+        materialize_sector_blacklist_universe(
+            base_intervals=[("000001.SZ", BLACKLIST_CALENDAR[0], BLACKLIST_CALENDAR[-1])],
+            calendar=BLACKLIST_CALENDAR,
+            window_start=BLACKLIST_CALENDAR[0],
+            window_end=BLACKLIST_CALENDAR[-1],
+            factor_root=tmp_path,
+            pins=pins,
+            blacklist_codes=["801010.SI"],
+        )
