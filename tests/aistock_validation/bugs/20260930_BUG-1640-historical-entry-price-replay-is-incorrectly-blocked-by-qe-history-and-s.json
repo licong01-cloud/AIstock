@@ -223,8 +223,8 @@
   },
   "first_seen_at": "2026-09-30T07:23:42.711580Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "67cc14541f82d6d3e4d9f495d80ac0bc82d09143",
+  "fixed_at": "2026-10-01T08:54:45Z",
   "github_issue_number": 5146,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5146",
   "last_seen_at": "2026-09-30T07:23:42.711580Z",
@@ -237,6 +237,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5150",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -265,6 +266,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -276,7 +278,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1640",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ebaad138d50d3720",
+    "recorded_at": "2026-10-01T08:55:53.057281Z",
+    "runtime_contract_digest": "3973a330bce9906bf4edde3744ef812ca7462b035601fae31d6784df1ad86533",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cf59702f676cd4901f23f0a89598b8981e1e8919",
+    "source_merge_commit": "67cc14541f82d6d3e4d9f495d80ac0bc82d09143",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5150",
+    "validation_evidence": [
+      "validation-receipt: id=4bd171795ad4c4e1 commit=a698ee92e47df3fd817c3963f598e6f9999a2ca0 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=909b7682fa8f5d48 commit=a698ee92e47df3fd817c3963f598e6f9999a2ca0 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/watchlist/test_advisory_api.py::test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_run_id -q` result=`passed`"
+    ],
+    "validation_evidence_digest": "19b5c0e23ea85f7655e7682b217175012398d54814f6bcfbdf38658d4b1faadb"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -285,6 +309,10 @@
     "fingerprint": "fe10a7d2eb4474485cdbe970",
     "source_event_id": "FE-20260930-fe10a7d2eb44"
   },
+  "validation_evidence": [
+    "validation-receipt: id=4bd171795ad4c4e1 commit=a698ee92e47df3fd817c3963f598e6f9999a2ca0 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=909b7682fa8f5d48 commit=a698ee92e47df3fd817c3963f598e6f9999a2ca0 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/watchlist/test_advisory_api.py::test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_run_id -q` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
