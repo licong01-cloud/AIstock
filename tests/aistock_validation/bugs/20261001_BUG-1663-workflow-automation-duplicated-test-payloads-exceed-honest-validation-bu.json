@@ -158,6 +158,23 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
+  "validation_evidence": [
+    "RED: canonical main workflow budget node fails at 0.30268268043551466 > 0.30; production denominator=44545; test SLOC=13483.",
+    "GREEN: exact workflow budget node passed after fixture consolidation; threshold, ownership and production source unchanged.",
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q --tb=short -> 50 passed, including both off/opt_in_auto_file cases.",
+    "rtk ruff check backend/tests/scripts/test_ci_failure_issue_summary.py -> passed.",
+    "rtk nox -s l0 -> passed, findings=0, blocking=0; git diff --check -> passed."
+  ],
+  "review_rounds": [
+    {"round": 1, "kind": "local_self_review", "result": "passed", "scope": "shared payload and CLI fixtures preserve run URL, branch, commit and case-specific overrides"},
+    {"round": 2, "kind": "local_self_review_and_tests", "result": "passed", "scope": "50 behavioral cases retained; kill-switch and opt-in tested independently; no production/ownership/gate changes"}
+  ],
+  "design_compliance": {
+    "no_partial_success_claim": true,
+    "no_silent_failure": true,
+    "business_semantics_unchanged": true,
+    "no_new_gate_or_approval": true
+  },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
