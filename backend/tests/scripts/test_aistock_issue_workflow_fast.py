@@ -15,6 +15,31 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("command", ["promote-ci-issue", "ci-issue-janitor"])
+def test_metadata_cli_starts_without_process_dependency(command):
+    import sys
+
+    code = (
+        "import importlib.abc, runpy, sys\n"
+        "class NoPsutil(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'psutil':\n"
+        "            raise ModuleNotFoundError('No psutil in metadata runner', name='psutil')\n"
+        "sys.meta_path.insert(0, NoPsutil())\n"
+        f"sys.argv = ['aistock_issue_workflow.py', {command!r}, '--help']\n"
+        "runpy.run_path('scripts/aistock_issue_workflow.py', run_name='__main__')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert command in result.stdout
+
+
+def test_process_probe_fails_closed_without_prebuilt_psutil(monkeypatch):
+    monkeypatch.setattr(workflow, "psutil", None)
+    with pytest.raises(workflow.WorkflowError, match="requires the prebuilt psutil"):
+        workflow._monthly_release_worker_process_snapshot({})
+
+
 def _monthly_ready_payload() -> dict[str, Any]:
     from backend.services.dataset_release.monthly_unified import STAGES
     return {
