@@ -1,43 +1,43 @@
 {
-  "actual": "业务探针无鉴权401，无法生成完整重启验证receipt",
+  "actual": "no target-owned business-smoke semantic contract registered for monthly operation endpoint",
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-    "tests/aistock_validation/bugs/20261001_BUG-1656-api.json"
+    "tests/aistock_validation/bugs/20261001_BUG-1657-operation.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1656",
-  "closed_at": "2026-10-01T16:19:51Z",
+  "bug_id": "BUG-1657",
+  "closed_at": "2026-10-01T16:31:01Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-10-01T16:03:45.951994Z",
-  "description": "业务探针无鉴权401，无法生成完整重启验证receipt",
+  "created_at": "2026-10-01T16:20:49.462214Z",
+  "description": "no target-owned business-smoke semantic contract registered for monthly operation endpoint",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20261001-3b1310e20668",
-      "timestamp": "2026-10-01T16:03:45.951975Z"
+      "note": "Promoted from IC-20261001-568097e1c0bc",
+      "timestamp": "2026-10-01T16:20:49.462194Z"
     }
   ],
   "evidence_uris": [
-    "F:/Dev/AIstock_worktrees/BUG-1650-close-sync-20261001/tmp/issue_workflow/BUG-1650/post-restart-verify.json"
+    "F:/Dev/AIstock_worktrees/BUG-1656-api-20261001/tmp/issue_workflow/BUG-1650/post-restart-verify.json"
   ],
-  "expected": "受控月更只读业务探针携带操作员token并保留原业务语义验收",
+  "expected": "只有完整READY_TO_ACTIVATE且身份和checkpoint闭合的状态读回可通过验收",
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
-      "tests/aistock_validation/bugs/20261001_BUG-1656-api.json"
+      "tests/aistock_validation/bugs/20261001_BUG-1657-operation.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
-      "tests/aistock_validation/bugs/20261001_BUG-1656-api.json"
+      "tests/aistock_validation/bugs/20261001_BUG-1657-operation.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -91,23 +91,23 @@
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ]
   },
-  "first_seen_at": "2026-10-01T16:03:45.951994Z",
+  "first_seen_at": "2026-10-01T16:20:49.462214Z",
   "fix_branch": null,
-  "fix_commit": "a8786c0f1efd3308667950e8f1bf540a4b187601",
-  "fixed_at": "2026-10-01T16:19:51Z",
-  "github_issue_number": 5199,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5199",
-  "last_seen_at": "2026-10-01T16:03:45.951994Z",
+  "fix_commit": "e427f61fc11b4b58d1db94f6a392c3fd5307e6bb",
+  "fixed_at": "2026-10-01T16:31:01Z",
+  "github_issue_number": 5203,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5203",
+  "last_seen_at": "2026-10-01T16:20:49.462214Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5201",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5206",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "post-restart-verify --bug-id BUG-1650 --target backend-main --expected-identity 479d97d6e8ec586c1dc73587301278abebb4fdb2",
+  "reproduce_command": "post-restart-verify BUG-1650 authenticated GET monthly operation -> semantic contract missing",
   "required_verification": [
     "l0",
     "validation_workflow_automation"
@@ -131,41 +131,41 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1656",
+    "bug_id": "BUG-1657",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "26bd8d789ecdf01d",
-    "recorded_at": "2026-10-01T16:21:00.607158Z",
+    "receipt_id": "15ea4690c5f27d84",
+    "recorded_at": "2026-10-01T16:32:27.617474Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "7369b2eb3d0e307f7d21e61578365cbe96d2d245",
-    "source_merge_commit": "a8786c0f1efd3308667950e8f1bf540a4b187601",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5201",
+    "source_head_oid": "d7175f41d90611788ff3486d2157270e8330101c",
+    "source_merge_commit": "e427f61fc11b4b58d1db94f6a392c3fd5307e6bb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5206",
     "validation_evidence": [
-      "validation-receipt: id=575b187488f6bf71 commit=7369b2eb3d0e307f7d21e61578365cbe96d2d245 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q` result=`passed (135 tests)`",
-      "validation-receipt: id=10a3094acd45ce00 commit=7369b2eb3d0e307f7d21e61578365cbe96d2d245 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261001_BUG-1656-api.json` result=`passed`",
-      "validation-receipt: id=861fd72b54804c33 commit=7369b2eb3d0e307f7d21e61578365cbe96d2d245 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1656 --changed-file scripts/aistock_issue_workflow.py --module validation` result=`passed`"
+      "validation-receipt: id=2205fcf98abc9568 commit=d7175f41d90611788ff3486d2157270e8330101c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q` result=`passed (154 tests)`",
+      "validation-receipt: id=5a564b6a7a18d433 commit=d7175f41d90611788ff3486d2157270e8330101c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261001_BUG-1657-operation.json` result=`passed`",
+      "validation-receipt: id=63f4bb82a0adb2e8 commit=d7175f41d90611788ff3486d2157270e8330101c kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1657 --changed-file scripts/aistock_issue_workflow.py --module validation` result=`passed`"
     ],
-    "validation_evidence_digest": "4a13b41e6b2e650662bb71d8aa7635b7a27d6d6ecafc774e27698133c2938e88"
+    "validation_evidence_digest": "a5f0e4e00dd861193f972a709e2028e0ae2a578f0f68e191c3522534d7f26f7a"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "重启只读验收探针未携带月更API受控操作员鉴权",
+  "title": "月更状态只读验收缺少operation绑定的业务语义合同",
   "trigger_condition": {
-    "fingerprint": "3b1310e206681c872e799e52",
-    "source_event_id": "FE-20261001-3b1310e20668"
+    "fingerprint": "568097e1c0bcc53f9809679f",
+    "source_event_id": "FE-20261001-568097e1c0bc"
   },
   "validation_evidence": [
-    "validation-receipt: id=575b187488f6bf71 commit=7369b2eb3d0e307f7d21e61578365cbe96d2d245 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q` result=`passed (135 tests)`",
-    "validation-receipt: id=10a3094acd45ce00 commit=7369b2eb3d0e307f7d21e61578365cbe96d2d245 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261001_BUG-1656-api.json` result=`passed`",
-    "validation-receipt: id=861fd72b54804c33 commit=7369b2eb3d0e307f7d21e61578365cbe96d2d245 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1656 --changed-file scripts/aistock_issue_workflow.py --module validation` result=`passed`"
+    "validation-receipt: id=2205fcf98abc9568 commit=d7175f41d90611788ff3486d2157270e8330101c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q` result=`passed (154 tests)`",
+    "validation-receipt: id=5a564b6a7a18d433 commit=d7175f41d90611788ff3486d2157270e8330101c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20261001_BUG-1657-operation.json` result=`passed`",
+    "validation-receipt: id=63f4bb82a0adb2e8 commit=d7175f41d90611788ff3486d2157270e8330101c kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1657 --changed-file scripts/aistock_issue_workflow.py --module validation` result=`passed`"
   ],
   "verification_budget": {
     "budget": "standard",
