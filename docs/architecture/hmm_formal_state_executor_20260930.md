@@ -1,6 +1,6 @@
 # 当前版 L1/L2 D3～D6 formal executor
 
-版本：v0.2 implementation-in-progress（冻结输入 v16）。Feature tier：F2。
+版本：v0.3 source-review（冻结输入 v16）。Feature tier：F2。
 
 ## Background
 
@@ -17,6 +17,8 @@
 新增当前数值模块、输入桥接、离线 CLI 和 `backend/tests/hmm_risk` 定向测试。
 训练与验收只采用既有详细设计中的 D3-03-A、D4-01-MAP-A、D4-02-A、D4-03-PERSISTENT-A、D5-01-B、D6-01-B + D6-NA-A。
 对应权威：[Phase 2 详细设计](hmm_evolution_phase2_risk_monitoring_detailed_design_20260722.md)。
+
+2026-10-01 源码提交审核允许在同一 HMM 测试包按当前源文件职责整理已有测试：`backend/tests/hmm_risk/test_formal_state_model.py`、`test_formal_state_model_set.py`、`test_freeze_formal_industry_authority.py`，并补齐 `test_formal_state_input.py` 的直接输入测试。只移动既有测试或增加实际缺失的合同测试，不复制测试、不建立兼容代理，不修改全局 CI/nox/test plan。源码修复仍限于既有 executor 和目录冻结 CLI 的合同回读、写入安全边界。
 
 ## Non-goals
 
@@ -55,9 +57,9 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 ## Design Acceptance Index
 
 - F-001：当前批准的 v16/full-v3 文件身份与完整 C-010/A5 输入闭合；v15 失败记录仅作演进历史。
-- F-002：D3/D4 原数值、MAP、covariance 和结构合同。
-- F-003：两次 fresh-process 全 grid、零-refit readback 与 D5 train-only selection。
-- F-004：D6-NA 完整 carrier/source/masks/ledger 与 selected-only semantic acceptance。
+- F-002：D3/D4 原数值、MAP、covariance 和结构合同的完整源码实现与直接测试。
+- F-003：两次 fresh-process 全 grid、零-refit readback 与 D5 train-only selection 的完整执行控制流和故障测试。
+- F-004：D6-NA 完整 carrier/source/masks/ledger 与 selected-only semantic acceptance 的源码及共享 readback 验证。
 - F-005：正式 5184 fits 和真实终态，禁止伪 READY。
 
 ## Implementation Plan
@@ -75,15 +77,17 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 数据库目录准备不是把数据库市场行情混入 v15，也不改变原 C-013 classification interval 的权威身份。
 每轮审核明确记录发现与修复。任何输入缺口不得以默认值、占位回执或新阈值替代。
 
+源码提交门禁覆盖 F-001～F-004 的完整实现及实际直接验证；F-005 是源码合入之后的真实实验，不属于“代码已经可执行”的证明。用户最新明确禁止本轮正式训练，因此 F-005 以明确批准的未执行项保留。源码 F2 通过不等于 5184 fits 已执行、模型合格或产品 READY。不能为了提交门禁消耗正式训练授权，也不能删除 F-005 或用 mock 冒充其完成。
+
 ## Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | backend/services/hmm_risk/formal_state_authority.py; backend/services/hmm_risk/formal_state_domains.py; backend/services/hmm_risk/formal_state_input.py; backend/services/hmm_risk/formal_state_executor.py | backend/tests/hmm_risk/test_formal_state_authority.py; backend/tests/hmm_risk/test_formal_state_domains.py; backend/tests/hmm_risk/test_rotation_l1_input_bundle.py；真实 prepare + 独立 fresh-process preflight，request SHA=924d06c13146425e9d13b74f5e02cc92c85e457efed5ece6e53ef40bbf0d9f90，receipt SHA=f7ea7d420e501c31d5794cf6a5729929e8438f54d68bec0b360f3731d3843bea | PASS | 仅批准的 v16/full-v3 文件输入构造及 request 回读闭合；31/131、7D/20D、601/182 和完整 A5 policy 已校验。不代表 D3～D6 模型验收或整个 F2 完成 |
-| F-002 | formal_state_model.py | test_formal_state_executor.py；原数值/结构矩阵及固定 D1 projection 定向测试 | PARTIAL | 已接入批准的 801207.SI raw exact-zero、full-20 preprocess 后固定 19D likelihood；其他行业不自动降维。定向测试不代表全部合同审核完成 |
-| F-003 | formal_state_executor.py; run_formal_state_model_set.py | test_formal_state_executor.py；signed-zero mismatch、CLI durable failure、child projection 重新哈希后拒绝、完整 mixed-shape serialization 与零-refit selected readback | PARTIAL | 未运行正式 fresh-process grid；真实 source-to-selected artifact 全链验证仍未完成，合成序列化测试不证明模型通过验收 |
-| F-004 | formal_state_calendar.py; formal_state_input.py; formal_state_model.py; formal_state_executor.py | test_formal_state_calendar.py；完整 182 日、compact finite payload、mask/source/hash 漂移、空 sentinel、diagnostic tie、失败 ledger 和零-refit 回读 | PARTIAL | carrier/manifest、逐日 ledger、T/O/U/E 和共享语义回读已实现；须在完整文件构造接通后完成真实 source 与 selected artifact 全链验证，不以单元测试推导正式验收 |
-| F-005 | run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py；仅合成测试，正式 fits=0/5184 | BLOCKED | 仅在 F-001～F-004 真正完成后执行，不把合成单元测试写为正式训练 |
+| F-001 | backend/services/hmm_risk/formal_state_authority.py; backend/services/hmm_risk/formal_state_domains.py; backend/services/hmm_risk/formal_state_input.py; backend/services/hmm_risk/formal_state_executor.py | backend/tests/hmm_risk/test_formal_state_authority.py; backend/tests/hmm_risk/test_formal_state_domains.py; backend/tests/hmm_risk/test_formal_state_input.py; backend/tests/hmm_risk/test_rotation_l1_input_bundle.py；真实 prepare + 独立 fresh-process preflight，request SHA=924d06c13146425e9d13b74f5e02cc92c85e457efed5ece6e53ef40bbf0d9f90，receipt SHA=f7ea7d420e501c31d5794cf6a5729929e8438f54d68bec0b360f3731d3843bea | PASS | 无 |
+| F-002 | backend/services/hmm_risk/formal_state_model.py | backend/tests/hmm_risk/test_formal_state_model.py；原数值/结构矩阵、MAP 联合停止、重哈希 drift、固定 19D projection 和零-refit 数值回读 | PASS | 无 |
+| F-003 | backend/services/hmm_risk/formal_state_executor.py; scripts/hmm_risk/run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py; backend/tests/hmm_risk/test_formal_state_model_set.py；完整 mocked grid、signed-zero mismatch、parent 环境/flags 回读、child/finalization durable failure、CLI fresh-process 拒绝和 mixed-shape serialization | PASS | 无 |
+| F-004 | backend/services/hmm_risk/formal_state_calendar.py; backend/services/hmm_risk/formal_state_input.py; backend/services/hmm_risk/formal_state_model.py; backend/services/hmm_risk/formal_state_executor.py | backend/tests/hmm_risk/test_formal_state_calendar.py; backend/tests/hmm_risk/test_formal_state_executor.py::test_parent_selected_d6_sparse_evidence_real_readback_without_refit；真实 v16 182 日 carrier 预检，synthetic selected D4/D5→D6→durable readback，mask/ledger/hash 漂移拒绝；无 reselection/refit | PASS | 无 |
+| F-005 | scripts/hmm_risk/run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py；控制流测试不代表正式训练，正式 fits=0/5184 | APPROVED_BY_USER_DEFERRED_FORMAL_EXECUTION | 用户于 2026-10-01 明确批准 v16 input/preflight 并禁止本轮正式训练；保留后续真实 5184 fits 与模型终态验收，不视为已完成，不生成 model/READY |
 
 2026-09-30 当前准备回执：官方数据库目录在只读 repeatable-read 事务中提取并冻结到
 `F:/Dev/AIstock_runtime/hmm_formal_state/20260930-db-preparation/industry_authority.json`，
@@ -140,7 +144,15 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 - A5 schema=`hmm_risk_c010_feature_domain_policy_v2`；批准的 train exclusion 仍仅 `689009.SH`。原 `302132.SZ/2021-07-30` 资金流阻断已由真实文件构造解除，没有新增排除或伪造 provider absence。
 - active profile 前后 SHA 均为 `56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f`，仍为 v15；v16 仅作为本 executor 获准的显式冻结输入。没有激活或修改任何候选。
 
-本轮到此停止；F-002～F-004 保持 PARTIAL，F-005 正式实验未执行。未执行真实 D5 selection、D6 semantic validation、model/READY、数据库写入、服务控制或依赖安装。下一步是完成 executor 源码整体验收与 PR 门禁；正式训练须在允许执行该动作的后续授权下进行，不由本次预检自动启动。
+上述是输入预检时的停止节点；随后用户授权继续源码审核和提交门禁，当前源码验收矩阵为本文件最新状态。F-005 正式实验仍未执行。未执行真实 D5 selection、D6 semantic validation、model/READY、数据库写入、服务控制或依赖安装；正式训练须在允许执行该动作的后续授权下进行，不由本次审核自动启动。
+
+### 2026-10-01 本轮源码复审与提交门禁
+
+第一轮发现 parent 未独立验证两个相同 child 的 schema、环境和 typed flags；已加入与 parent 固定环境的 canonical 核对，环境漂移、unknown schema、ready=true、整数冒充 boolean 和 float fit-count 的 5 个 RED 用例修复后通过。该回读发生在 D5 前，不增加模型门禁或调整数值合同。
+
+新增 synthetic 集成测试：只拟合一个合成数值 fixture，以 mocked grid 产生完整 schedule；parent 的 D4 数值回读、D5、selected-only D6 和 durable readback 均真实执行。2 条 utility evidence 明确失败并保留 182 日 ledger/posterior，禁止换 seed/refit/模型发布；逐层重哈希的 ledger 漂移仍拒绝。另有 4 个 parent child/finalization/readback 故障测试验证 durable typed failure。上述一律不是正式 5184 fits。
+
+第二轮修复目录冻结 CLI 的输出路径未覆盖 canonical root/间接祖先；复用现有 `validate_output_location`，数据库连接之前拒绝，两项 RED→GREEN。测试按源文件职责原子整理，解决四个 direct-neighbor 路由缺口，未改变 CI/nox/test plan 或复制测试。本轮最终门禁结果须绑定最终提交记录后填写。
 
 ### 2026-10-01 历史长任务增量（v15 阶段）
 
@@ -204,4 +216,4 @@ Conda AIstock mutation=false；dataset/profile mutation=false；runtime/process 
 3. 无业务漂移：模型合同与 full denominator 不变；未来 utility 纠回复用 daily-excess sum；D6 不新增 O-only tie 门禁。
 4. 无未经批准门禁/审批：不增加资源、availability ratio、统计 significance 或人工 sector 特批；本次合入授权不扩展为服务控制、数据写入或删除授权。
 
-本记录不是正式验收通过声明；F2 当前不得 PASS。
+本记录不是正式模型验收通过声明。源码提交 F2 按 F-001～F-004 和明确批准的 F-005 未执行边界检查；正式 fits、D5/D6 结果与产品能力仍为独立状态。

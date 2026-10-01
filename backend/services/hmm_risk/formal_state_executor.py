@@ -332,6 +332,26 @@ def finalize(request: Mapping[str, Any], first: Mapping[str, Any], second: Mappi
             raise FormalStateError("hmm_risk_model_restart_schedule_incomplete", "repeat lineage differs")
     if canonical_json_bytes(first) != canonical_json_bytes(second):
         raise FormalStateError("hmm_risk_model_repeat_mismatch", "fresh processes are not bitwise equal")
+    required_fields = {
+        "schema_version",
+        "request_sha256",
+        "numeric_environment",
+        "fit_attempts",
+        "groups",
+        "selection_performed",
+        "validation_accessed",
+        "ready",
+        "receipt_sha256",
+    }
+    if (
+        set(first) != required_fields
+        or first["schema_version"] != VERSION
+        or type(first["fit_attempts"]) is not int
+        or any(first[field] is not False for field in ("selection_performed", "validation_accessed", "ready"))
+    ):
+        raise FormalStateError("hmm_risk_model_receipt_invalid", "repeat contract fields/types differ")
+    if canonical_json_bytes(first["numeric_environment"]) != canonical_json_bytes(numeric_environment()):
+        raise FormalStateError("hmm_risk_numeric_environment_mismatch", "repeat environment differs from parent")
     expected_groups = {f"{family}:{level}" for family in FAMILIES for level in ("L1", "L2")}
     if set(first["groups"]) != expected_groups:
         raise FormalStateError("hmm_risk_model_restart_schedule_incomplete", "four family/level groups required")

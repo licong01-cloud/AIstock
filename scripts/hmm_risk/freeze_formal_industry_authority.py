@@ -18,7 +18,12 @@ def main() -> int:
     import psycopg2
 
     from backend.services.hmm_risk.formal_state_authority import build_authority, read_catalog
-    from backend.services.hmm_risk.formal_state_executor import PIT_BUNDLE, read_json, write_once
+    from backend.services.hmm_risk.formal_state_executor import (
+        PIT_BUNDLE,
+        read_json,
+        validate_output_location,
+        write_once,
+    )
     from backend.services.hmm_risk.rotation_l1_input_bundle import _industry_adapter, _is_indirect_path
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -26,17 +31,16 @@ def main() -> int:
     parser.add_argument("--env-file", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    authority_root, output = args.authority_root, args.output
+    authority_root = args.authority_root
     if (
         not authority_root.is_absolute()
         or not authority_root.is_dir()
-        or _is_indirect_path(authority_root)
-        or not output.is_absolute()
-        or _is_indirect_path(output)
-        or output.exists()
-        or any(output.is_relative_to(root) for root in (ROOT, authority_root, authority_root.parents[3]))
+        or any(_is_indirect_path(parent) for parent in (authority_root, *authority_root.parents))
     ):
-        raise ValueError("authority/output must be explicit ordinary paths; output must be external and new")
+        raise ValueError("authority must be an explicit ordinary path")
+    output = validate_output_location(args.output, dataset_root=authority_root)
+    if output.exists():
+        raise ValueError("output must be external and new")
     manifest = read_json(authority_root / "candidate_bundle_manifest.json")
     if manifest["bundle_hash"] != PIT_BUNDLE:
         raise ValueError("only approved full-v3 PIT authority may be frozen")

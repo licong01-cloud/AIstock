@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
-import os
 import subprocess
 import sys
 from datetime import date, timedelta
@@ -14,200 +12,11 @@ import pytest
 from backend.services.hmm_risk import formal_state_executor as executor
 from backend.services.hmm_risk import formal_state_model as subject
 from backend.services.hmm_risk.contracts import canonical_sha256
+from backend.tests.hmm_risk import test_formal_state_model as numerical_test_support
 
-
-@pytest.fixture(scope="module")
-def fitted():
-    rng = np.random.RandomState(42)
-    means = np.tile(np.repeat([-3.0, 0.0, 3.0], 30), 6)
-    values = np.column_stack((means + rng.normal(0, 0.4, len(means)), means * 0.7 + rng.normal(0, 0.3, len(means))))
-    dates = [(date(2022, 1, 3) + timedelta(days=i)).isoformat() for i in range(len(values))]
-    entry = subject.fit_entry(values, dates, 42)
-    return values, dates, entry
-
-
-def test_map_joint_stop_and_zero_refit_readback(fitted):
-    values, dates, entry = fitted
-    subject.validate_fit_entry(entry, values, dates)
-    history = entry["history"]
-    assert 2 <= len(history) <= 300
-    assert abs(history[-1]["delta"]) <= history[-1]["tolerance"]
-    assert entry["covariance"]["covariance_valid"]
-    assert entry["final_train_likelihood"] == history[-1]["raw_likelihood"]
-    repeated = subject.fit_entry(values, dates, 42)
-    assert repeated == entry
-
-
-@pytest.mark.parametrize("field", ["accepted", "final_train_likelihood", "train_posterior", "structure"])
-def test_rehashed_candidate_cannot_forge_acceptance(fitted, field):
-    values, dates, original = fitted
-    entry = copy.deepcopy(original)
-    if field == "accepted":
-        entry[field] = not entry[field]
-    elif field == "final_train_likelihood":
-        entry[field] += 1
-    elif field == "train_posterior":
-        entry[field][0] = [1.0, 0.0, 0.0]
-    else:
-        entry[field]["states"][0]["count"] += 1
-        entry[field] = subject.receipt({k: v for k, v in entry[field].items() if k != "receipt_sha256"})
-    entry = subject.receipt({k: v for k, v in entry.items() if k != "receipt_sha256"})
-    with pytest.raises(subject.FormalStateError, match="authority differs"):
-        subject.validate_fit_entry(entry, values, dates)
-
-
-@pytest.mark.parametrize("field", ["nu", "parameters", "initial_covariance", "initial_transmat"])
-def test_rehashed_initialization_cannot_change_approved_profile(fitted, field):
-    values, dates, entry = fitted
-    changed = copy.deepcopy(entry)
-    initial = changed["initialization"]
-    if field == "nu":
-        initial[field] = 2.0
-    elif field == "parameters":
-        initial[field]["tol"] = 1.0
-    else:
-        initial[field][0][0] += 0.01
-    changed["initialization"] = subject.receipt({k: v for k, v in initial.items() if k != "receipt_sha256"})
-    changed = subject.receipt({k: v for k, v in changed.items() if k != "receipt_sha256"})
-    with pytest.raises(subject.FormalStateError, match="initialization formula/profile"):
-        subject.validate_fit_entry(changed, values, dates)
-
-
-def test_boolean_acceptance_and_integer_seed_are_not_numeric_equivalents(fitted):
-    values, dates, entry = fitted
-    changed = copy.deepcopy(entry)
-    changed["accepted"] = int(entry["accepted"])
-    with pytest.raises(subject.FormalStateError, match="authority differs"):
-        subject.validate_fit_entry(
-            subject.receipt({k: v for k, v in changed.items() if k != "receipt_sha256"}), values, dates
-        )
-    with pytest.raises(subject.FormalStateError, match="undeclared seed"):
-        subject.parameter_profile(42.0, np.ones(2))
-    candidates = _selection_candidates()
-    candidates[0]["seed"] = 42.0
-    with pytest.raises(subject.FormalStateError, match="schedule differs"):
-        subject.select_restart(candidates, ["A", "B"])
-
-
-def test_d3_sector_reference_prior_no_projection(fitted):
-    values, _, _ = fitted
-    model, initialization = subject.initialize(values, 42)
-    reference = values.var(axis=0, ddof=0)
-    n = np.asarray(initialization["counts"])[:, None]
-    s = np.asarray(initialization["cluster_variance"])
-    np.testing.assert_array_equal(model._covars_, (n * s + reference) / (n + 1))
-    np.testing.assert_array_equal(model.covars_prior, np.tile(reference, (3, 1)))
-    assert model.covars_weight == 2 and model.min_covar == 0 and model.init_params == ""
-
-
-@pytest.mark.parametrize("bad", [0.0, float("nan"), float("inf"), -1.0])
-def test_covariance_invalid_never_projected(fitted, bad):
-    values, _, entry = fitted
-    model = subject.restore_model(entry["model"])
-    model._covars_[0, 0] = bad
-    with pytest.raises(subject.FormalStateError):
-        subject.covariance_audit(model, values, values.var(axis=0))
-    assert model._covars_[0, 0] == bad or np.isnan(model._covars_[0, 0])
-
-
-@pytest.mark.parametrize("bad", ([[True, False]], [[True, 2]], [["1", "2"]], [[None, 1]], [[1 + 2j, 1]]))
-def test_numerical_contract_rejects_coercible_non_numeric_payloads(bad):
-    with pytest.raises(subject.FormalStateError, match="real numeric"):
-        subject.array(bad, (1, 2), "request values")
-
-
-def test_preprocess_is_train_global_and_immutable():
-    x = np.arange(240, dtype=float).reshape(120, 2)
-    parameters = subject.preprocess_fit([x, x + 7], subject.FAMILIES[1])
-    before = canonical_sha256(parameters)
-    assert subject.preprocess_apply(np.array([[1e10, -1e10]]), parameters).shape == (1, 2)
-    assert canonical_sha256(parameters) == before
-    with pytest.raises(subject.FormalStateError):
-        subject.preprocess_fit([np.ones((120, 2))], subject.FAMILIES[1])
-
-
-def _projection_fixture():
-    rng = np.random.RandomState(42)
-    raw = rng.normal(size=(120, 20))
-    raw[:, 19] = -0.0
-    other_sector = rng.normal(loc=-3.0, size=(800, 20))
-    parameters = subject.preprocess_fit([raw, other_sector], subject.FAMILIES[1])
-    return raw, parameters
-
-
-def test_d1_fixed_projection_after_full_preprocess_and_d6_zero_refit():
-    raw, parameters = _projection_fixture()
-    projected, projection = subject.project_training(
-        raw, parameters, family=subject.FAMILIES[1], level="L2", sector="801207.SI", source_receipt_sha256="a" * 64
-    )
-    full = subject.preprocess_apply(raw, parameters)
-    assert np.all(full[:, 19] == full[0, 19]) and full[0, 19] != 0
-    assert projected.shape == (120, 19)
-    assert projection["feature_count"] == 20 and projection["likelihood_feature_count"] == 19
-    assert projection["inactive_feature_names"] == ["sf_dispersion_5d_neg"]
-    assert projection["all_raw_inactive_values_exact_zero"]
-    np.testing.assert_array_equal(projected, full[:, :19])
-    np.testing.assert_array_equal(subject.project_validation(raw[:3], parameters, projection), projected[:3])
-    assert subject.project_validation(np.empty((0, 20)), parameters, projection).shape == (0, 19)
-
-
-@pytest.mark.parametrize("bad", [1e-300, 1.0, float("nan"), float("inf")])
-def test_d1_no_near_zero_nonzero_or_nonfinite_allowlist(bad):
-    raw, parameters = _projection_fixture()
-    raw[0, 19] = bad
-    with pytest.raises(subject.FormalStateError):
-        subject.project_training(
-            raw, parameters, family=subject.FAMILIES[1], level="L2", sector="801207.SI", source_receipt_sha256="a" * 64
-        )
-
-
-def test_d1_no_dynamic_projection_for_other_sector_or_level():
-    raw, parameters = _projection_fixture()
-    for level, sector in (("L2", "801206.SI"), ("L1", "801207.SI")):
-        values, projection = subject.project_training(
-            raw, parameters, family=subject.FAMILIES[1], level=level, sector=sector, source_receipt_sha256="a" * 64
-        )
-        assert values.shape == (120, 20) and projection["inactive_feature_indices"] == []
-        with pytest.raises(subject.FormalStateError, match="sector-local variance"):
-            subject.initialize(values, 42)
-    rng = np.random.RandomState(43)
-    full = rng.normal(size=(120, 20))
-    identity_values, identity = subject.project_training(
-        full, parameters, family=subject.FAMILIES[1], level="L2", sector="801206.SI", source_receipt_sha256="b" * 64
-    )
-    assert identity["likelihood_feature_count"] == 20 and identity["inactive_feature_indices"] == []
-    np.testing.assert_array_equal(identity_values, subject.preprocess_apply(full, parameters))
-
-
-@pytest.mark.parametrize("drift", ["mask", "algorithm", "preprocess", "validation", "full_features"])
-def test_d1_rehashed_drift_does_not_authorize_projection(drift):
-    raw, parameters = _projection_fixture()
-    _, projection = subject.project_training(
-        raw, parameters, family=subject.FAMILIES[1], level="L2", sector="801207.SI", source_receipt_sha256="a" * 64
-    )
-    raw = raw[:3].copy()
-    if drift == "mask":
-        projection["active_feature_mask"][0] = 1
-    elif drift == "algorithm":
-        projection["algorithm_version"] = "unknown"
-    elif drift == "preprocess":
-        parameters = {**parameters, "center": [v + 0.1 for v in parameters["center"]]}
-    elif drift == "validation":
-        raw[0, 19] = 1e-300
-    else:
-        raw = raw[:, :19]
-    projection = subject.receipt({k: v for k, v in projection.items() if k != "receipt_sha256"})
-    with pytest.raises(subject.FormalStateError):
-        subject.project_validation(raw, parameters, projection)
-
-
-def test_d5_mixed_dimension_uses_effective_dimension_not_global_twenty():
-    candidates = _selection_candidates()
-    for candidate in candidates:
-        candidate["entries"]["a"].update(final_train_likelihood=-1900.0, training_rows=100, feature_count=19)
-    result = subject.select_restart(candidates, ["a"])
-    assert result["selected_seed"] == 42
-    assert result["candidates"][0]["scores"] == [-1.0]
+fitted = numerical_test_support.fitted
+_projection_fixture = numerical_test_support._projection_fixture
+_selection_candidates = numerical_test_support._selection_candidates
 
 
 @pytest.mark.parametrize(
@@ -247,13 +56,17 @@ def test_parent_rejects_rehashed_child_projection_before_d5(monkeypatch, field):
     )
     repeat = subject.receipt(
         {
+            "schema_version": subject.VERSION,
             "request_sha256": "c" * 64,
+            "numeric_environment": {"test_only": True},
             "fit_attempts": 2592,
             "selection_performed": False,
             "validation_accessed": False,
+            "ready": False,
             "groups": groups,
         }
     )
+    monkeypatch.setattr(executor, "numeric_environment", lambda: {"test_only": True})
     monkeypatch.setattr(executor, "validate_fit_entry", lambda *_, **__: None)
     monkeypatch.setattr(executor, "select_restart", lambda *_: pytest.fail("D5 accessed before projection closure"))
     with pytest.raises(subject.FormalStateError, match="projection authority differs"):
@@ -404,6 +217,98 @@ def test_full_grid_failures_remain_complete_and_never_access_d6(monkeypatch):
     assert result["ready"] is result["phase2_ready"] is False
 
 
+def test_parent_selected_d6_sparse_evidence_real_readback_without_refit(monkeypatch):
+    # Synthetic numerical fixture + mocked grid execution, never a formal fit.
+    # Parent D4/D5, selected D6 and semantic readback below are not mocked.
+    from backend.services.hmm_risk.formal_state_calendar import build_calendar_carrier
+    from backend.services.hmm_risk.contracts import BASE_FEATURES
+
+    rng = np.random.RandomState(42)
+    signal = np.tile(np.repeat([-3.0, 0.0, 3.0], 30), 6)
+    raw = signal[:, None] + rng.normal(0, 0.4, (len(signal), 7))
+    dates = [(date(2022, 1, 3) + timedelta(days=i)).isoformat() for i in range(len(raw))]
+    projected, _ = subject.project_training(
+        raw,
+        subject.preprocess_fit([raw], subject.FAMILIES[0]),
+        family=subject.FAMILIES[0],
+        level="L1",
+        sector="801000.SI",
+        source_receipt_sha256="c" * 64,
+    )
+    fitted_entry = subject.fit_entry(projected, dates, 42, calendar=dates)
+    assert fitted_entry["accepted"] is True
+    codes = {"L1": [f"801{i:03}.SI" for i in range(31)], "L2": [f"802{i:03}.SI" for i in range(131)]}
+    source_identity = {"test_only": "synthetic source, no dataset access"}
+    policy = {"receipt_sha256": "a" * 64}
+    carrier = build_calendar_carrier(
+        dates=_validation_dates(),
+        feature_names=BASE_FEATURES,
+        observations=raw[:182],
+        components={f"excess_return_{h}d": {"positions": [0, 1], "values": [0.01, 0.02]} for h in (5, 10, 20)},
+        source_identity_sha256=canonical_sha256(source_identity),
+        source_receipt_sha256=policy["receipt_sha256"],
+    )
+    request = {
+        "receipt_sha256": "b" * 64,
+        "sector_codes": codes,
+        "train_calendar": dates,
+        "validation_calendar": _validation_dates(),
+        "source_identity": source_identity,
+        "policy": policy,
+        "series": {},
+    }
+    for family in subject.FAMILIES:
+        values = raw if family == subject.FAMILIES[0] else rng.normal(size=(len(raw), 20))
+        for level in ("L1", "L2"):
+            request["series"][f"{family}:{level}"] = {
+                code: {
+                    "train_values": values.tolist(),
+                    "train_dates": dates,
+                    "feature_names": list(BASE_FEATURES) if family == subject.FAMILIES[0] else [],
+                    "source_receipt_sha256": "c" * 64,
+                    "validation": carrier,
+                }
+                for code in codes[level]
+            }
+    calls = 0
+
+    def synthetic_grid_fit(values, observed, seed, *, calendar):
+        nonlocal calls
+        calls += 1
+        if calls <= 248 and seed == 42:
+            assert np.array_equal(values, raw) and observed == calendar == dates
+            return fitted_entry
+        raise subject.FormalStateError("hmm_risk_model_fit_failed", "test-only failed candidate")
+
+    monkeypatch.setattr(executor, "numeric_environment", lambda: {"test_only": "fixed environment"})
+    monkeypatch.setattr(executor, "fit_entry", synthetic_grid_fit)
+    repeat = executor.train_repeat(request)
+    assert calls == 2592
+    monkeypatch.setattr(executor, "fit_entry", lambda *_, **__: pytest.fail("unexpected refit"))
+    final = executor.finalize(request, repeat, copy.deepcopy(repeat))
+    key = f"{subject.FAMILIES[0]}:L1"
+    assert final["selection"][key]["selected_seed"] == 42
+    assert set(final["semantic"]) == {key} and len(final["semantic"][key]) == 31
+    for meaning in final["semantic"][key].values():
+        assert meaning["assignment_status"] == "accepted" and meaning["evidence_status"] == "failed"
+        assert meaning["primary_reason"] == "hmm_risk_semantic_validation_evidence_rows_insufficient"
+        assert len(meaning["ledger"]) == len(meaning["posterior"]) == 182
+    assert final["d3_d6_accepted"] is final["ready"] is False
+    monkeypatch.setattr(executor, "select_restart", lambda *_: pytest.fail("unexpected D5 reselection"))
+    executor.validate_semantic_readback(final, request, repeat["groups"])
+    changed = copy.deepcopy(final)
+    meaning = changed["semantic"][key][codes["L1"][0]]
+    meaning["ledger"][0]["evidence_included"] = False
+    changed["semantic"][key][codes["L1"][0]] = subject.receipt(
+        {k: v for k, v in meaning.items() if k != "receipt_sha256"}
+    )
+    changed = subject.receipt({k: v for k, v in changed.items() if k != "receipt_sha256"})
+    with pytest.raises(subject.FormalStateError, match="semantic write/readback differs"):
+        executor.validate_semantic_readback(changed, request, repeat["groups"])
+    with pytest.raises(subject.FormalStateError, match="accepted current request"):
+        executor.selected_model_set(final, request, repeat["groups"])
+
+
 def test_train_persistent_path_and_singleton_fail():
     hard = np.tile(np.repeat([0, 1, 2], 60), 3)
     posterior = np.eye(3)[hard]
@@ -441,18 +346,6 @@ def test_hard_ties_are_not_broken_by_state_index():
         subject.validate_posterior(np.array([[0.5, 0.5, 0.0]]), 1, require_margin=True)
 
 
-def _selection_candidates():
-    return [
-        {
-            "seed": seed,
-            "entries": {
-                "a": {"accepted": True, "final_train_likelihood": float(seed), "training_rows": 1, "feature_count": 1}
-            },
-        }
-        for seed in subject.SEEDS
-    ]
-
-
 def test_d5_lex_pool_schedule_and_validation_invisibility():
     candidates = _selection_candidates()
     selection = subject.select_restart(candidates, ["a"])
@@ -483,6 +376,76 @@ def test_fresh_process_mismatch_fails_before_d5(monkeypatch):
     monkeypatch.setattr(executor, "select_restart", lambda *_: pytest.fail("D5 accessed"))
     with pytest.raises(subject.FormalStateError, match="bitwise"):
         executor.finalize(request, first, second)
+
+
+@pytest.mark.parametrize(
+    "field", ["numeric_environment", "schema_version", "ready", "validation_accessed", "fit_attempts"]
+)
+def test_parent_rejects_equal_rehashed_repeat_contract_drift_before_d5(monkeypatch, field):
+    environment = {"test_only": "fixed parent/child identity"}
+    monkeypatch.setattr(executor, "numeric_environment", lambda: environment)
+    monkeypatch.setattr(executor, "select_restart", lambda *_: pytest.fail("D5 accessed before repeat closure"))
+    body = {
+        "schema_version": subject.VERSION,
+        "request_sha256": "a" * 64,
+        "numeric_environment": environment,
+        "fit_attempts": 2592,
+        "groups": {f"{family}:{level}": {} for family in subject.FAMILIES for level in ("L1", "L2")},
+        "selection_performed": False,
+        "validation_accessed": False,
+        "ready": False,
+    }
+    body[field] = {
+        "numeric_environment": {"test_only": "different host or versions"},
+        "schema_version": "unknown",
+        "ready": True,
+        "validation_accessed": 0,
+        "fit_attempts": 2592.0,
+    }[field]
+    repeat = subject.receipt(body)
+    with pytest.raises(subject.FormalStateError, match="repeat (environment|contract)"):
+        executor.finalize({"receipt_sha256": "a" * 64}, repeat, copy.deepcopy(repeat))
+
+
+@pytest.mark.parametrize("stage", ["child", "finalize", "acceptance_readback", "model_readback"])
+def test_parent_durable_failure_covers_children_and_finalization(tmp_path, monkeypatch, stage):
+    request_file = tmp_path / "request.json"
+    executor.write_once(request_file, {"test_only": True})
+    request = {"source_identity": {"dataset_root": str(tmp_path / "release")}}
+    monkeypatch.setattr(executor, "load_request", lambda *_: request)
+    child_calls = []
+
+    def child(command, **kwargs):
+        child_calls.append(command)
+        assert command[0] == sys.executable and "child" in command
+        assert all(kwargs["env"][key] == "1" for key in executor.THREAD_VARIABLES)
+        if stage == "child":
+            return subprocess.CompletedProcess(command, 1)
+        executor.write_once(Path(command[-1]), subject.receipt({"groups": {}}))
+        return subprocess.CompletedProcess(command, 0)
+
+    def reject(*_, **__):
+        raise subject.FormalStateError("hmm_risk_model_receipt_invalid", f"test-only {stage} failure")
+
+    monkeypatch.setattr(executor.subprocess, "run", child)
+    monkeypatch.setattr(
+        executor, "finalize", reject if stage == "finalize" else lambda *_: subject.receipt({"d3_d6_accepted": True})
+    )
+    monkeypatch.setattr(
+        executor, "validate_semantic_readback", reject if stage == "acceptance_readback" else lambda *_: None
+    )
+    monkeypatch.setattr(executor, "selected_model_set", lambda *_: subject.receipt({"ready": False}))
+    monkeypatch.setattr(executor, "validate_selected_model_set", reject)
+    output = tmp_path / "output"
+    script = Path(__file__).resolve().parents[3] / "scripts/hmm_risk/run_formal_state_model_set.py"
+    with pytest.raises(subject.FormalStateError):
+        executor.run_two_processes(request_file, output, script)
+    failure = executor.read_json(output / "parent.failure.json")
+    executor.verify_hash(failure)
+    assert len(child_calls) == (1 if stage == "child" else 2)
+    assert failure["status"] == "failed" and failure["ready"] is False
+    assert failure["database_write"] is failure["runtime_action"] is False
+    assert failure["request_file_sha256"] is not None
 
 
 def test_output_no_overwrite_or_fake_readback(tmp_path):
@@ -580,30 +543,6 @@ def test_signed_zero_repeat_mismatch_is_not_object_equality(monkeypatch):
         executor.finalize(request, first, second)
 
 
-def test_cli_preflight_missing_request_durable_failure_zero_fit(tmp_path):
-    root = Path(__file__).resolve().parents[3]
-    output = tmp_path / "preflight.json"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(root / "scripts/hmm_risk/run_formal_state_model_set.py"),
-            "preflight",
-            "--request",
-            str(tmp_path / "missing.json"),
-            "--output",
-            str(output),
-        ],
-        env={**os.environ, "PYTHONPATH": str(root)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 1 and not output.exists()
-    failure = json.loads(output.with_name("preflight.json.failure.json").read_text(encoding="utf-8"))
-    assert failure["ready"] is False and failure["database_write"] is False
-    assert failure["exception_type"] == "FileNotFoundError"
-
-
 def test_output_location_rejects_source_release_relative_and_indirect_paths(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[3]
     release = tmp_path / "release"
@@ -619,28 +558,3 @@ def test_output_location_rejects_source_release_relative_and_indirect_paths(tmp_
         executor.validate_output_location(link / "failure.json")
     assert executor.validate_output_location(tmp_path / "result.json") == tmp_path / "result.json"
     assert not (release / "new").exists()
-
-
-def test_cli_unsafe_output_does_not_write_a_failure_receipt(tmp_path):
-    root = Path(__file__).resolve().parents[3]
-    release = tmp_path / "release"
-    release.mkdir()
-    (release / "direct_monthly_state.json").write_text("{}", encoding="utf-8")
-    output = release / "forbidden.json"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(root / "scripts/hmm_risk/run_formal_state_model_set.py"),
-            "preflight",
-            "--request",
-            str(tmp_path / "missing.json"),
-            "--output",
-            str(output),
-        ],
-        env={**os.environ, "PYTHONPATH": str(root)},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 1 and "without writing" in result.stderr
-    assert not output.exists() and not output.with_name(output.name + ".failure.json").exists()
