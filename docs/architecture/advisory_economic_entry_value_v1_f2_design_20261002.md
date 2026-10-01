@@ -1,7 +1,7 @@
 # Advisory 收益与风险驱动的日频买入价格建议 F2 详细设计 v1.0
 
 > 日期：2026-10-02；Feature tier：F2；业务归属：Selection Center / Advisory。
-> 状态：DESIGN_REVIEWED_IMPLEMENTATION_NOT_STARTED；已完成两轮设计审核和修订，F2结构校验通过；不宣称源码、模型效果或生产功能完成。
+> 状态：DESIGN_MERGED_KERNEL_IMPLEMENTATION_IN_PROGRESS；设计PR #5215已合入，标签/训练/查询内核已实现并进行多轮审核；消费者数据与工件闭环尚未完成，不宣称完整功能、模型效果或生产完成。
 > 用户需求：给出有预期净收益、风险可接受的买入/卖出价格条件；允许区间外不买和当日零推荐，不以开盘价覆盖率替代业务收益。
 > 父级：[策略条件化模型蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) §5.3、§6.3、§6.7、§6.8、§16。
 
@@ -85,6 +85,10 @@ entry_advantage = enter_value - skip_value
 原M3弱信号和旧Entry试验负结果是基线事实，不直接作为新角色的有效训练头。新hypothesis family定义为“同候选、同exit policy下的价格条件化进入价值”，不是P0主模型替换或旧动态q90阈值回选。先固定一个候选模型和透明对照；不扫描大量模型、持有期、阈值或亏损容差。
 
 训练价格支持域、每个条件段有效样本量、日期分布和不确定性校准均由past-only训练/validation确定并写入工件，不能根据回放结果扩域。训练不足不伪造下界或默认风险，模型对单股未知信息不强行估值。新信息尚不可得时不机械宣布低开股票坏掉；可直接表示原推荐条件失效。
+
+首轮特征顺序固定为：parent_combined_score、parent_rank_pct、leg_norm_score_gap、ret_1、ret_5、atr14_close、csi300_ret_5、market_up_ratio、query_gap_bps。前八项为既有D可见特征，第九项只在训练采用真实观察条件、盘前采用明确假设参数；不消费未来path列。支持域以训练期100 bps gap分桶，每桶至少30个真实观察且覆盖5个决策日，并限制在该桶真实观察min/max与其它D特征训练范围内。不确定性首先报告validation绝对误差p90诊断，不作为均值置信界或盈利概率。
+
+规则比较臂固定gap [-300,+300] bps、风险预算引用既有800 bps stop policy；均为首次真实收益读取前确定，不能因结果追调。训练资源请求显式行数预算，默认100,000，固定2线程。模型工件保存前仍需正式run request及registry登记，本节不是已执行实验收据。
 
 ### 5.4 建议集合与合同状态
 
@@ -176,7 +180,7 @@ Exit从已可见持仓状态出发，比较下一合法可交易点退出vs继�
 
 ## 12. Production Gates / 生产状态
 
-source_merge=NOT_SUBMITTED；runtime_activation=NOT_REQUESTED；backend_restart_owner=user；production_ddl_gate=NOOP；database_written=false；profile_changed=false；qe_experiment_submitted=false；new_model_trained=false；binding_activated=false；sealed_holdout_accessed=false。
+design_source_merge=PR_5215_MERGED(a0c7e5aba50f8b33c1f715115181a64fc56eab4c)；kernel_source_merge=NOT_SUBMITTED；runtime_activation=NOT_REQUESTED；backend_restart_owner=user；production_ddl_gate=NOOP；database_written=false；profile_changed=false；qe_experiment_submitted=false；real_data_model_trained=false；binding_activated=false；sealed_holdout_accessed=false。
 
 当前只授权本长任务的设计、开发和研究；部署、后端重启、生产操作均非本设计默认动作。按此前有效提交/合入授权交付源码时仍需满足完整审核和必需CI，设计合入不等于模型激活。清理仅限明确授权的本任务精确目标，不能删除其它worktree或旧实验。
 
@@ -197,3 +201,13 @@ source_merge=NOT_SUBMITTED；runtime_activation=NOT_REQUESTED；backend_restart_
 E1元数据spike（未读取收益值、未训练）：既有policy dataset `81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd` manifest文件SHA=`cbf7378d25c90ba62e97a14769778c04510e34c1bc43c7be88560f95b7951518`，与N1冻结引用精确匹配；Parquet元数据为7,720行/386决策日（2024-07-04～2026-02-02，源截止2026-03-10）。既有shadow为Top5/exit rank40、确认2日、止损800 bps、移动止盈1800/700 bps、time stop20日；cost buy/sell=0.95/5.95 bps、cash=0。净收益沿用现有乘法成本公式而非简易减法，不能二次扣除。
 
 该旧标签schema有entry/exit/net return和label_information_end，但没有D原始参考价、公司行动投影和同episode日级回撤路径；不能把缺字段补0或直接声称风险训练输入就绪。E1下一步只读补充真实观察gap与policy-bound日级mark路径，完成坐标/身份parity；若公开consumer不足提出精确需求，不修改数据/QE或伪造完成。最新只读QE profile响应为`20260928-v15-unified-moneyflow1`、cutoff2026-08-31、两个available nodes；这只是消费者入口状态，尚不构成新训练数据完整性或PIT证明，本任务没有修改或激活profile。
+
+## 15. 内核开发检查点（非完整业务验收）
+
+Advisory独立源码：economic_entry_contracts.py、economic_entry_labels.py、economic_entry_training.py、economic_entry_inference.py。入口绑定原policy/cost/候选和价格来源hash；不重建退出policy、不扣第二次成本。支持完整标签、正常未进入、右删失、未知缺失分离；真实gap校验raw reference，daily mark只到实际退出开盘。
+
+多轮本窗口源码审核发现并修复：缺开盘不能当正常SKIP；嵌套policy突变需消费前重验hash；训练query condition不能采用调用者携带的未来列；D参考价时钟必须精确D；部分价格未知不能宣称全价格拒绝；非连续接受集合不能桥接拒绝节点；模型支持统计及风险输出非法必须失败。训练只使用固定白名单，按成熟信息截止purge；测试收益及未来path毒化不改变真实LightGBM训练工件。合成fixture拟合仅为单元测试，不是研究证据或经济有效结果。
+
+定向测试：`pytest backend/tests/advisory_model_first/test_economic_entry_labels.py backend/tests/advisory_model_first/test_economic_entry_model.py`。Ruff与定向L0通过；L0的P2 ALGO-COMPLEXITY提示已按行数预算、精确键一对一join和9列矩阵做复杂度审核，不转移ownership或改变其它模块。
+
+尚待完成：只读真实DB/工件价格坐标及daily路径消费者；正式预登记/registry和原子工件/恢复CLI；开发窗口matched组合回放；独立API/UI接入与经济有效确认。本节不覆盖§10的全部源码验收，不将设计矩阵DESIGN_VERIFIED改为完整功能PASS。

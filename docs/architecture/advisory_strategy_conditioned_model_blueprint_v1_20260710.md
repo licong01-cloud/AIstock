@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.71
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.72
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-02
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
-> 当前状态：`ECONOMIC_ENTRY_VALUE_DESIGN_IN_PROGRESS_OPEN_DISTRIBUTION_NOT_CONFIRMED`（2026-10-02）。独立entry、历史四阶段及每日接入经PR #5099合入，merge=`ad6d73e591a1666490cffae84f6518d8c2694efd`；用户重启及BUG-1623、BUG-1632/1636语义验证已完成。BUG-1640 / PR #5150已合入，重启验收及close-sync PR #5190完成；原29日/580样本四阶段探索回放NOT_CONFIRMED，仅NAVIGATION_ONLY。原v3/v4和P0/N3研究结论不改判，零新binding/数据库写入。新的主动目标是收益与风险驱动的条件式买入价格建议，开盘分布仅为辅助能力；新设计/源码/模型效果/生产状态分开报告。
+> 当前状态：`ECONOMIC_ENTRY_VALUE_KERNEL_IN_PROGRESS_OPEN_DISTRIBUTION_NOT_CONFIRMED`（2026-10-02）。独立entry、历史四阶段及每日接入经PR #5099合入，merge=`ad6d73e591a1666490cffae84f6518d8c2694efd`；用户重启及BUG-1623、BUG-1632/1636语义验证已完成。BUG-1640 / PR #5150已合入，重启验收及close-sync PR #5190完成；原29日/580样本四阶段探索回放NOT_CONFIRMED，仅NAVIGATION_ONLY。原v3/v4和P0/N3研究结论不改判，零新binding/数据库写入。新的主动目标是收益与风险驱动的条件式买入价格建议，开盘分布仅为辅助能力；新设计PR #5215已合入a0c7e5ab，标签/训练/价格查询内核39项合成定向测试通过，真实数据消费者及工件闭环未完成、尚未启动真实研究；设计/源码/模型效果/生产状态分开报告。
 > 当前价格/执行边界：Advisory只研发日频PIT价格分布、条件式买入价值和日频退出价值建议，不研发分钟线择时、最佳分钟买卖点、拆单或成交执行策略。收益型建议与开盘分布采用独立目标和证据，不以coverage证明盈利。未来QE、Paper或Execution可通过版本化只读合同独立消费建议，但执行研发和激活仍不属于本蓝图。
 > 最新接续：2026-10-02用户批准按调整后目标开始超过10小时长任务，计划12～16小时按§16.1顺序执行。20日恢复证据均非原生、其中三日完整成员未证明；完整候选和日期不变。新的[收益型买入设计](advisory_economic_entry_value_v1_f2_design_20261002.md)先明确价格条件化净价值、风险、真实观察点、支持域和matched比较，不以重新命名旧M4完成业务目标。
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 均有真实实现与独立验证，但尚无当前同时提供四类输出的组合bundle。`AdvisoryDailyPriceEnvelopeV1`源码、v3三头真实训练 artifact `30e8a75b...` 和 v4 validation-only 校准 artifact `508fedfe...` 均已完成；validation/test 覆盖率分别为 `0.811702/0.733125`，校准扩张量为 0。PR #4732 / merge `3be76e742...` 已交付独立自然前向收集通道；首次正式 request `advprpros_405d704a7dbe866eb0b6ae0e` 和 prediction bundle `631d5011858684403d84d1d0975ec0e0642c1d8f52ebd62048829187a1e5435c` 在 T=`2026-09-15` 开盘前完成，20/20候选可用并通过exact retry，且零目标结果访问、零binding、零数据库写入、零sealed holdout消费。T日18:00后自然settlement `advprsett_14c46af1fa2bdb92088b425c` 已发布：20/20市场及模型可用，业务coverage `0.70`、lower/upper miss `0.25/0.05`、平均/中位宽度 `288.615/249.832 bps`、平均/中位mid误差 `116.422/63.188 bps`；单日只进入`ACCUMULATING`，不能选择或激活模型。PR #4785 / merge `8021790ab...` 又交付固定rolling-20D matured CQR历史导航审计；正式 request `advpradapt_8c81ea2bd2f70d75e1683fe9` 在已消费80日回放上selected=0，故保持静态v4、零新binding和零运行时激活，P0-D exact descriptor仍只绑定meta-label shadow，M3/M4 child typed unavailable。
@@ -1919,9 +1919,9 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 | 顺序 / 编号 | 任务、依赖与精确交付 | 当前状态及完成条件 |
 |---|---|---|
-| E0 / 目标及设计，2h | 统一本蓝图与[收益型进入价值F2设计](advisory_economic_entry_value_v1_f2_design_20261002.md)，明确三语义、两时钟和旧结果 | DESIGN_IN_PROGRESS；多轮审核，不用覆盖率替代净收益 |
-| E1 / 合同及标签，2～3h | 真实开盘观察、冻结exit policy/cost、成熟/正常缺失保留、价格坐标parity | 尚未实现；只读consumer，不重选候选、不改QE |
-| E2 / 价值模型及支持域，3～4h | 一个预登记模型，价格条件化均值/下行风险、past-only训练与label-end purge，多区间/空集 | 尚未训练；不能机械抄底、回选旧q90、扫描大量模型 |
+| E0 / 目标及设计，2h | 统一本蓝图与[收益型进入价值F2设计](advisory_economic_entry_value_v1_f2_design_20261002.md)，明确三语义、两时钟和旧结果 | DESIGN_MERGED；PR #5215 / a0c7e5ab；两轮审核及F2结构校验通过，设计通过不等于业务有效 |
+| E1 / 合同及标签，2～3h | 真实开盘观察、冻结exit policy/cost、成熟/正常缺失保留、价格坐标parity | LABEL_KERNEL_IMPLEMENTED_CONSUMER_PENDING；schema/adapter定向测试通过，原7,720行标签缺raw reference及daily mark，真实补充/坐标parity尚待完成；只读、不重选、不改QE |
+| E2 / 价值模型及支持域，3～4h | 一个预登记模型，价格条件化均值/下行风险、past-only训练与label-end purge，多区间/空集 | TRAIN_QUERY_KERNEL_IMPLEMENTED_REAL_STUDY_NOT_STARTED；四内核合计39项测试通过；固定9特征/100bps支持桶，原子bundle/registry尚待实现；合成fixture拟合不是研究证据 |
 | E3 / 历史导航，2～3h | 已消费开发窗口，固定槽位matched回放，净增量/尾损/错失机会/干预支持度 | 尚未运行新研究；HISTORICAL_REPLAY/NAVIGATION_ONLY，不激活 |
 | E4 / 审核与角色交付，2h | 至少两轮代码审核修复、独立API/UI和binding设计/可交付切片；保留旧M4默认通道 | 设计/源码/模型/运行时分别报告；后端重启由用户执行，缺口不冒充完整 |
 | E5 / Exit后续设计，1～2h | 下一合法退出vs继续policy的剩余净价值，复用既有Advisory label/oracle | 本轮先设计，不声称Exit已训练或最佳分钟卖点 |
