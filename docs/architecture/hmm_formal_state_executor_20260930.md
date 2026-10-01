@@ -1,6 +1,6 @@
 # 当前版 L1/L2 D3～D6 formal executor
 
-版本：v0.1 implementation-in-progress。Feature tier：F2。
+版本：v0.2 implementation-in-progress（冻结输入 v16）。Feature tier：F2。
 
 ## Background
 
@@ -11,6 +11,8 @@
 ## Scope
 
 本任务还允许对 `backend/services/hmm_risk/rotation_l1_input_bundle.py` 的现有文件 stock-row 构造增加可选只读 callback；默认调用行为不变。用于复用已审查的 source/alias/PIT/circ_mv 构造，不复制实现，也不改产品公式、数据或其他模块。
+
+2026-10-01 用户另行批准将本 executor 冻结输入更新为 v16 successor。允许在上述共享 HMM reader 中增加显式 frozen-release binding 参数，并复用相同 manifest/component 校验；普通产品入口仍强制 active profile，不改变其默认行为。对应身份测试纳入 `backend/tests/hmm_risk/test_rotation_l1_input_bundle.py`，不修改数据生产代码或流程文件。
 
 新增当前数值模块、输入桥接、离线 CLI 和 `backend/tests/hmm_risk` 定向测试。
 训练与验收只采用既有详细设计中的 D3-03-A、D4-01-MAP-A、D4-02-A、D4-03-PERSISTENT-A、D5-01-B、D6-01-B + D6-NA-A。
@@ -26,7 +28,7 @@
 
 ## Architecture
 
-共享 v15 文件与 full-v3 PIT → 完整 C-010/A5 构造 → 冻结全 7D/20D 输入及完整 D6 calendar → 两 child 独立执行各 2592 fits →
+显式批准的共享 v16 文件与 full-v3 PIT → 完整 C-010/A5 构造 → 冻结全 7D/20D 输入及完整 D6 calendar → 两 child 独立执行各 2592 fits →
 parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 family/level 单一 train-only D5 selection → selected-only D6。
 有 typed failure 则保留 blocked/failed，不以 fit completed 冒充 acceptance，不回到 D5 换 seed。
 
@@ -34,8 +36,11 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 
 ## Contracts
 
-- v15 generation：`20260928-v15-unified-moneyflow1`。
-- dataset manifest：`2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc`。
+- 当前冻结 generation：`20261001-v16-unified-moneyflow2`；revision：`20261001-r8-unified-moneyflow2`；release：`qe_hmm_full_v2_20260831`；cutoff：`2026-08-31`。
+- dataset manifest：`fcc90ff0df761511c7e4d431da8a9bddf04e1c66c70c8780c6359e876f247098`。
+- manifest 文件 SHA256：`7f242fcf3100969ad5e4057fac457c09ec195972d3e8befb1e192cb7725f88a0`。
+- candidate root 必须显式传入；本 executor 不读取 active profile 来替代冻结输入，不执行 profile 切换，不自动发现 latest 或回退 v15。
+- 重新通过正式 constructor 生成完整 source/request/policy/calendar 身份，不仅替换旧 request 或 manifest 哈希。共享模型、特征、窗口、seed、阈值和 PIT bundle 均不变。
 - PIT bundle：`051e2af357703734080ff3ea5b4311926905aa7cbd1f31d926ef5b8575261313`。
 - train：2022-01-01..2024-06-30，601 日；validation：2024-07-01..2025-03-31，182 日；utility watermark：2025-04-30。
 - family：legacy_covfix 7D / autocycle_all_core 20D；L1=31 / L2=131。不得按已观察到的行业数缩小目录分母。
@@ -113,6 +118,12 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 非 allowlist 常量维不得中断正常 restart schedule；不把这些代码测试写作正式 fit/D5/D6 的结果。
 
 ## Rollout / Rollback
+
+### 当前执行授权：v16 冻结输入更新与预检
+
+用户已批准显式绑定 `20261001-v16-unified-moneyflow2`，并执行完整 file-only preflight。数据窗口已交付不可变 successor，历史 v15 的输入失败事实保留在下面的时间记录；不能将其误写成当前 v16 已失败或已通过。
+当前授权不启动正式训练、服务、数据集/profile 写入；不合入数据窗口 PR #5177，也不把 CANDIDATE_READY 当作 HMM 预检通过。
+本轮完成前 F-001 继续阻断；以实际 constructor 和 request readback 终态更新，不以局部 alias 修复推导全部行业、特征覆盖。
 
 ### 2026-10-01 当前长任务增量
 

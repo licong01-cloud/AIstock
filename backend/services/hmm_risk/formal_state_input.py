@@ -20,7 +20,12 @@ import pandas as pd
 from backend.services.hmm_risk.contracts import ALL_CORE_FEATURES, BASE_FEATURES, canonical_sha256
 from backend.services.hmm_risk.formal_state_calendar import build_calendar_carrier
 from backend.services.hmm_risk.formal_state_domains import authority_identity, build_a5_receipts, partition_entry
-from backend.services.hmm_risk.formal_state_executor import ACTIVE_GENERATION, ACTIVE_MANIFEST, TRAIN_CALENDAR_HASH
+from backend.services.hmm_risk.formal_state_executor import (
+    FROZEN_GENERATION,
+    FROZEN_MANIFEST,
+    TRAIN_CALENDAR_HASH,
+    frozen_release_binding,
+)
 from backend.services.hmm_risk.formal_state_model import CONTRACTS, FAMILIES, VERSION, FormalStateError, receipt
 from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest
 from backend.services.hmm_risk.security_identity import load_security_source_identity_manifest
@@ -375,13 +380,14 @@ def prepare_file_request(
         security_identity_manifest=security_identity_manifest,
         provider_absence_manifest=provider_absence_manifest,
         data_window_end=SOURCE_END,
+        frozen_release_binding=frozen_release_binding(),
     )
     identity = assets["release_identity"]
     if (
-        identity["active_profile_generation"] != ACTIVE_GENERATION
-        or identity["dataset_manifest_sha256"] != ACTIVE_MANIFEST
+        identity["frozen_release_generation"] != FROZEN_GENERATION
+        or identity["dataset_manifest_sha256"] != FROZEN_MANIFEST
     ):
-        raise FormalStateError("hmm_risk_formal_identity_mismatch", "only approved active v15 allowed")
+        raise FormalStateError("hmm_risk_formal_identity_mismatch", "only approved frozen v16 allowed")
     calendar_all = source_reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt")
     calendar = tuple(day for day in calendar_all if SOURCE_START <= day <= SOURCE_END)
     if not calendar or calendar[0] != SOURCE_START or calendar[-1] != SOURCE_END:
@@ -511,8 +517,8 @@ def prepare_file_request(
         circ_mv_crossings=circ_mv_crossings,
     )
     source_identity = {
-        "generation": ACTIVE_GENERATION,
-        "manifest_sha256": ACTIVE_MANIFEST,
+        "generation": FROZEN_GENERATION,
+        "manifest_sha256": FROZEN_MANIFEST,
         "cutoff": assets["release_cutoff"].isoformat(),
         "dataset_root": str(assets["release_root"]),
         "dataset_manifest_hash": canonical_sha256(dataset_manifest),
@@ -556,8 +562,8 @@ def prepare_request(
     if (
         policy["schema_version"] != "hmm_risk_c010_feature_domain_policy_v2"
         or policy["dataset_manifest_hash"] != source_identity["dataset_manifest_hash"]
-        or source_identity["generation"] != ACTIVE_GENERATION
-        or source_identity["manifest_sha256"] != ACTIVE_MANIFEST
+        or source_identity["generation"] != FROZEN_GENERATION
+        or source_identity["manifest_sha256"] != FROZEN_MANIFEST
     ):
         raise FormalStateError("hmm_risk_c010_policy_identity_mismatch", "current A5/source identity required")
     if list(calendar) != sorted(set(calendar)) or any(date.fromisoformat(d) > date(2025, 4, 30) for d in calendar):

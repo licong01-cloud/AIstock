@@ -37,8 +37,8 @@ from backend.services.hmm_risk.formal_state_model import (
 )
 from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
 
-ACTIVE_GENERATION = "20260928-v15-unified-moneyflow1"
-ACTIVE_MANIFEST = "2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc"
+FROZEN_GENERATION = "20261001-v16-unified-moneyflow2"
+FROZEN_MANIFEST = "fcc90ff0df761511c7e4d431da8a9bddf04e1c66c70c8780c6359e876f247098"
 PIT_BUNDLE = "051e2af357703734080ff3ea5b4311926905aa7cbd1f31d926ef5b8575261313"
 TRAIN_CALENDAR_HASH = "b48fb5e911295d1c16920178b6ea48285c5890455aeaa31ad03ef7e11841f715"
 THREAD_VARIABLES = (
@@ -56,6 +56,17 @@ EXPECTED_VERSIONS = {
     "hmmlearn": "0.3.3",
     "threadpoolctl": "3.6.0",
 }
+
+
+def frozen_release_binding() -> dict[str, str]:
+    return {
+        "generation": FROZEN_GENERATION,
+        "release_id": "qe_hmm_full_v2_20260831",
+        "revision": "20261001-r8-unified-moneyflow2",
+        "cutoff": "2026-08-31",
+        "manifest_sha256": FROZEN_MANIFEST,
+        "manifest_file_sha256": "7f242fcf3100969ad5e4057fac457c09ec195972d3e8befb1e192cb7725f88a0",
+    }
 
 
 def numeric_environment() -> dict[str, Any]:
@@ -129,7 +140,7 @@ def verify_hash(value: Mapping[str, Any]) -> None:
 
 
 def load_request(path: Path) -> dict[str, Any]:
-    from backend.services.hmm_risk.rotation_l1_input_bundle import _industry_adapter, load_active_hmm_dataset_identity
+    from backend.services.hmm_risk.rotation_l1_input_bundle import _industry_adapter
 
     request = read_json(path)
     verify_hash(request)
@@ -147,29 +158,30 @@ def load_request(path: Path) -> dict[str, Any]:
     }
     if set(request) != required or request["schema_version"] != VERSION or request["contracts"] != CONTRACTS:
         raise FormalStateError("hmm_risk_formal_request_invalid", "request fields/version differ")
-    active = load_active_hmm_dataset_identity()
-    # The current release is explicitly approved; no latest or old-release fallback.
+    # Explicit frozen successor; active remains untouched and is not a fallback.
     source = request["source_identity"]
     if (
-        source["generation"] != ACTIVE_GENERATION
-        or source["manifest_sha256"] != ACTIVE_MANIFEST
+        source["generation"] != FROZEN_GENERATION
+        or source["manifest_sha256"] != FROZEN_MANIFEST
         or source["cutoff"] != "2026-08-31"
     ):
-        raise FormalStateError("hmm_risk_formal_identity_mismatch", "request is not approved active v15")
-    if active.get("generation") != ACTIVE_GENERATION:
-        raise FormalStateError("hmm_risk_formal_identity_mismatch", "active profile generation changed")
+        raise FormalStateError("hmm_risk_formal_identity_mismatch", "request is not approved frozen v16")
     from backend.services.hmm_risk.rotation_l1_input_bundle import (
         _is_indirect_path,
-        _require_active_direct_v2_profile,
+        _require_frozen_direct_v2_profile,
     )
 
     root = Path(source["dataset_root"])
     if not root.is_absolute() or _is_indirect_path(root) or not root.is_dir():
         raise FormalStateError("hmm_risk_formal_identity_mismatch", "dataset root invalid")
     state = read_json(root / "direct_monthly_state.json")
-    _, _, manifest = _require_active_direct_v2_profile(root=root, state=state, release_cutoff=active["cutoff"])
-    if manifest.get("dataset_manifest_sha256") != ACTIVE_MANIFEST:
-        raise FormalStateError("hmm_risk_formal_identity_mismatch", "active manifest differs")
+    from datetime import date
+
+    _, _, manifest = _require_frozen_direct_v2_profile(
+        root=root, state=state, release_cutoff=date(2026, 8, 31), binding=frozen_release_binding()
+    )
+    if manifest.get("dataset_manifest_sha256") != FROZEN_MANIFEST:
+        raise FormalStateError("hmm_risk_formal_identity_mismatch", "frozen manifest differs")
     # Use the existing shared PIT reader and projections; no integer-index mapping.
     authority = request["industry_authority"]
     if authority["identity"]["bundle_hash"] != PIT_BUNDLE:
