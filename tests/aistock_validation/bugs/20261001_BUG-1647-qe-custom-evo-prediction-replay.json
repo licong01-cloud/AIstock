@@ -117,8 +117,8 @@
   },
   "first_seen_at": "2026-10-01T06:42:28.961183Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3bed0a0a716ba348a22a057e5805cacdecff190c",
+  "fixed_at": "2026-10-01T07:49:42Z",
   "github_issue_number": 5176,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5176",
   "last_seen_at": "2026-10-01T06:42:28.961183Z",
@@ -126,6 +126,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5178",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -152,6 +153,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -163,7 +165,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1647",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e4f880e106b04782",
+    "recorded_at": "2026-10-01T07:51:27.039574Z",
+    "runtime_contract_digest": "7806d1f34d2dab3d9ec8421f2fdc51fa6ef999cf5f0a4c7daf3ac379ad5f5232",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fe4d8062fb0045b13ffecc17638cd402cef4035d",
+    "source_merge_commit": "3bed0a0a716ba348a22a057e5805cacdecff190c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5178",
+    "validation_evidence": [
+      "rtk pytest -q backend/tests/unified_engine/test_qe_custom_evo_wait.py backend/tests/unified_engine/test_qe_results_only_retry.py -> passed; 37 passed",
+      "python -m nox -s l0 -- --changed-only -> passed; blocking=0"
+    ],
+    "validation_evidence_digest": "f930b6f1641c8cfa57e4e61c7fabe78ae99b559ab8aa2c919b7b1e86fcde33bd"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -172,6 +196,10 @@
     "fingerprint": "d0376158ab19733cf0efe632",
     "source_event_id": "FE-20261001-d0376158ab19"
   },
+  "validation_evidence": [
+    "rtk pytest -q backend/tests/unified_engine/test_qe_custom_evo_wait.py backend/tests/unified_engine/test_qe_results_only_retry.py -> passed; 37 passed",
+    "python -m nox -s l0 -- --changed-only -> passed; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
