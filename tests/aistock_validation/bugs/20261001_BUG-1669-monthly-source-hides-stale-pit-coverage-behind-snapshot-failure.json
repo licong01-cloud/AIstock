@@ -32,16 +32,22 @@
   ],
   "expected": "Stale PIT produces SOURCE_BLOCKED with exact dates and operator reference; unexpected failures invalidate snapshot.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_snapshot.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_snapshot.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1669-monthly-source-hides-stale-pit-coverage-behind-snapshot-failure.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_snapshot.py",
-      "backend/services/dataset_release/monthly_source_producer.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_snapshot.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_snapshot.py",
-      "backend/tests/dataset_release/test_monthly_source_producer.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "tests/aistock_validation/bugs/20261001_BUG-1669-monthly-source-hides-stale-pit-coverage-behind-snapshot-failure.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_snapshot.py",
@@ -183,15 +189,20 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "新 Python 进程加载受跟踪修复；DEV 与生产分别导入同一受管只读 snapshot，真实 PIT end=2026-08-31，目标=2026-09-30，精确返回 SOURCE_INCOMPLETE / BLOCKED_PIT_STATE_NOT_READY；未执行 DDL/DML、导出或激活。",
-      "RED 6 项复现旧包装错误与冻结前漏检；GREEN 及边界审核后 52 项相关测试通过。三轮本地审核分别覆盖错误传递与资源释放、严格日期/dirty/status 与来源身份、真实双库只读验证及无写入边界。"
+      "RED 6 项复现旧包装错误与冻结前漏检；GREEN 及边界审核后 52 项相关测试通过。三轮本地审核分别覆盖错误传递与资源释放、严格日期/dirty/status 与来源身份、真实双库只读验证及无写入边界。",
+      "Fresh Python loaded tracked monthly PIT readiness precheck in DEV and production imported readonly snapshots; exact cutoff readback verified, database_write=false, candidate_write=false, no activation or process control"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
