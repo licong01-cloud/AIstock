@@ -1,7 +1,7 @@
-# Advisory 收益与风险驱动的日频买入价格建议 F2 详细设计 v1.0
+# Advisory 收益与风险驱动的日频买入价格建议 F2 详细设计 v1.1
 
 > 日期：2026-10-02；Feature tier：F2；业务归属：Selection Center / Advisory。
-> 状态：DESIGN_REVIEWED_IMPLEMENTATION_NOT_STARTED；已完成两轮设计审核和修订，F2结构校验通过；不宣称源码、模型效果或生产功能完成。
+> 状态：OFFLINE_ECONOMIC_PIPELINE_VERIFIED_MODEL_NO_TAKE_NOT_CONFIRMED；设计PR #5215已合入，标签/训练/条件查询与消费者工件闭环已完成真实运行；首轮模型TAKE=0，不具备激活依据。日常D冻结网格/API/UI及独立经济确认仍未交付，不宣称完整业务或生产完成。
 > 用户需求：给出有预期净收益、风险可接受的买入/卖出价格条件；允许区间外不买和当日零推荐，不以开盘价覆盖率替代业务收益。
 > 父级：[策略条件化模型蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) §5.3、§6.3、§6.7、§6.8、§16。
 
@@ -86,6 +86,10 @@ entry_advantage = enter_value - skip_value
 
 训练价格支持域、每个条件段有效样本量、日期分布和不确定性校准均由past-only训练/validation确定并写入工件，不能根据回放结果扩域。训练不足不伪造下界或默认风险，模型对单股未知信息不强行估值。新信息尚不可得时不机械宣布低开股票坏掉；可直接表示原推荐条件失效。
 
+首轮特征顺序固定为：parent_combined_score、parent_rank_pct、leg_norm_score_gap、ret_1、ret_5、atr14_close、csi300_ret_5、market_up_ratio、query_gap_bps。前八项为既有D可见特征，第九项只在训练采用真实观察条件、盘前采用明确假设参数；不消费未来path列。支持域以训练期100 bps gap分桶，每桶至少30个真实观察且覆盖5个决策日，并限制在该桶真实观察min/max与其它D特征训练范围内。不确定性首先报告validation绝对误差p90诊断，不作为均值置信界或盈利概率。
+
+规则比较臂固定gap [-300,+300] bps、风险预算引用既有800 bps stop policy；均为首次真实收益读取前确定，不能因结果追调。训练资源请求显式行数预算，默认100,000，固定2线程。模型工件保存前仍需正式run request及registry登记，本节不是已执行实验收据。
+
 ### 5.4 建议集合与合同状态
 
 对预先冻结的合法价格网格，只保留：在支持域内、可交易条件满足、预期净价值严格高于预登记的最小经济效用且下行风险满足预算的节点。首轮进入vs空槽的净价值阈值为0 bps，要求`expected_net_return_bps > 0`（与既有cash_return=0一致，成本已经扣除），不是收益保证；matched增量另行评价。不确定性另报；不得把收益分位数称为期望收益置信下界。下行预算优先明确引用现有shadow policy的止损预算，注明这是风险预算参考而非跳空止损保证，正值及价格基础须前置核验；没有有效既有预算时只交付价值/风险估计并列出欠缺参数，不新增审批平台或擅自指定风险容忍。不能由TAKE数量反调。
@@ -121,7 +125,7 @@ Exit从已可见持仓状态出发，比较下一合法可交易点退出vs继�
 | E4 | 2h | 多轮审核修复、独立API/UI接入设计及可交付切片 | 源码/设计/经济证据分别判定；有缺口不称完整；生产仍未绑定 |
 | E5 | 1～2h | Exit设计复用审计、结果/下一轮交接 | 日级建议与执行边界；不研发分钟策略、不重复QE |
 
-本次明确文件范围：本设计、主蓝图；新`backend/services/advisory_model_first/economic_entry_{contracts,labels,training,inference,pipeline,cli}.py`及对应Advisory定向测试。文件名为计划范围，未存在不视为已实现。API/UI实际实施前另行登记精确Advisory文件/版本，不能把设计条目勾成已加载端点。不修改其它模块、全局CI、标准或AGENTS。
+本次明确文件范围：本设计、主蓝图；新`backend/services/advisory_model_first/economic_entry_{contracts,labels,training,inference,sources,pipeline,cli}.py`及对应Advisory定向测试。其中sources.py在2026-10-02源码阶段前登记为消费者侧只读DB批量读取和价格坐标parity，不修改公共数据生产者。文件名为计划范围，未存在不视为已实现。API/UI实际实施前另行登记精确Advisory文件/版本，不能把设计条目勾成已加载端点。不修改其它模块、全局CI、标准或AGENTS。
 
 所有代码至少两轮：首轮核对经济语义/PIT/坐标/支持域，修复后第二轮核对恢复、身份、未知缺失和legacy回归；有新发现继续修复到通过。离线批量先核容量并固定最多2线程、单条只读SQL超时30秒，不按QE历史状态误阻断纯回放。临时目录X不可用即报告，不回退C；不人为烧满预算，完成可交付阶段提前交付。
 
@@ -149,21 +153,21 @@ Exit从已可见持仓状态出发，比较下一合法可交易点退出vs继�
 
 ## 10. Design Acceptance Matrix
 
-本矩阵只验收E0设计文本；源码验收必须在E1～E4逐项更新为真实代码/测试/工件，不能用本文自证模型有效。DESIGN_VERIFIED不代表功能/模型通过，下面引用的artifact是可审阅设计文件而非运行收据。
+本矩阵在E0设计通过基础上验收本次明确交付的E1～E3**离线内核/研究消费者**，F-550仅验收退出后续设计。OFFLINE_ENGINEERING_VERIFIED只说明该切片合同成立，不代表经济模型有效；本次真实模型NO_MODEL_TAKE/NOT_CONFIRMED。完整D每日网格/API/UI/生产binding不在这次源码切片的完成声明内，仍按E4实施；不将本矩阵或历史模拟收益冒充其完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-540 | §1、§4、§6 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-541 | §4.2、§5.2 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-542 | §5.1～§5.2 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-543 | §4.3、§5.3～§5.4 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-544 | §5.3、§6 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-545 | §5.4 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-546 | §6 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-547 | §1、§3、§6 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-548 | §3、§7、§12 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-549 | §7～§8 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-550 | §2、§5.5 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
+| F-540 | economic_entry_contracts.py、§15.2 | backend/tests/advisory_model_first/test_economic_entry_model.py | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-541 | economic_entry_training.py、economic_entry_inference.py、economic_entry_evaluation.py | backend/tests/advisory_model_first/test_economic_entry_model.py、backend/tests/advisory_model_first/test_economic_entry_evaluation.py | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-542 | economic_entry_labels.py、economic_entry_sources.py | backend/tests/advisory_model_first/test_economic_entry_labels.py、backend/tests/advisory_model_first/test_economic_entry_sources.py | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-543 | economic_entry_training.py、economic_entry_inference.py；§15.2风险口径缺陷限制激活 | backend/tests/advisory_model_first/test_economic_entry_model.py | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-544 | economic_entry_training.py | backend/tests/advisory_model_first/test_economic_entry_model.py | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-545 | economic_entry_inference.py、economic_entry_evaluation.py | backend/tests/advisory_model_first/test_economic_entry_model.py、backend/tests/advisory_model_first/test_economic_entry_evaluation.py | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-546 | economic_entry_evaluation.py、§15.2；本项不是模型晋级 | backend/tests/advisory_model_first/test_economic_entry_evaluation.py；artifact: F:/Dev/AIstock_model_artifacts/advisory_economic_entry_value_v1_20261002/adveconomic_4962fd2ec68948033628954a/evaluated/evaluation.json | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-547 | economic_entry_pipeline.py、§15.1 | backend/tests/advisory_model_first/test_economic_entry_pipeline.py | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-548 | economic_entry_sources.py、economic_entry_cli.py、§12 | backend/tests/advisory_model_first/test_economic_entry_sources.py；artifact: F:/Dev/AIstock_model_artifacts/advisory_economic_entry_value_v1_20261002/adveconomic_4962fd2ec68948033628954a/prepared/source_receipt.json | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-549 | economic_entry_pipeline.py、§14～§15.2 | backend/tests/advisory_model_first/test_economic_entry_pipeline.py；artifact: F:/Dev/AIstock_model_artifacts/advisory_economic_entry_value_v1_20261002/adveconomic_4962fd2ec68948033628954a/evaluated/manifest.json | OFFLINE_ENGINEERING_VERIFIED | none |
+| F-550 | §16，已有exit_label_oracle.py/exit_learnability_contracts.py只读复用审计 | artifact: docs/architecture/advisory_economic_entry_value_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
 
 ## 11. Risks / 风险与修订纪律
 
@@ -176,7 +180,7 @@ Exit从已可见持仓状态出发，比较下一合法可交易点退出vs继�
 
 ## 12. Production Gates / 生产状态
 
-source_merge=NOT_SUBMITTED；runtime_activation=NOT_REQUESTED；backend_restart_owner=user；production_ddl_gate=NOOP；database_written=false；profile_changed=false；qe_experiment_submitted=false；new_model_trained=false；binding_activated=false；sealed_holdout_accessed=false。
+design_source_merge=PR_5215_MERGED(a0c7e5aba50f8b33c1f715115181a64fc56eab4c)；kernel_source_merge=NOT_SUBMITTED；runtime_activation=NOT_REQUESTED；backend_restart_owner=user；production_ddl_gate=NOOP；database_written=false；profile_changed=false；qe_experiment_submitted=false；real_data_model_trained=true；real_model_variant_count=1；economic_model_confirmed=false；binding_activated=false；sealed_holdout_accessed=false。
 
 当前只授权本长任务的设计、开发和研究；部署、后端重启、生产操作均非本设计默认动作。按此前有效提交/合入授权交付源码时仍需满足完整审核和必需CI，设计合入不等于模型激活。清理仅限明确授权的本任务精确目标，不能删除其它worktree或旧实验。
 
@@ -197,3 +201,53 @@ source_merge=NOT_SUBMITTED；runtime_activation=NOT_REQUESTED；backend_restart_
 E1元数据spike（未读取收益值、未训练）：既有policy dataset `81e2c9bac5ce1f8e2fdc5a6174bc948dfbe984cf5028726c89ea72eb59fc69bd` manifest文件SHA=`cbf7378d25c90ba62e97a14769778c04510e34c1bc43c7be88560f95b7951518`，与N1冻结引用精确匹配；Parquet元数据为7,720行/386决策日（2024-07-04～2026-02-02，源截止2026-03-10）。既有shadow为Top5/exit rank40、确认2日、止损800 bps、移动止盈1800/700 bps、time stop20日；cost buy/sell=0.95/5.95 bps、cash=0。净收益沿用现有乘法成本公式而非简易减法，不能二次扣除。
 
 该旧标签schema有entry/exit/net return和label_information_end，但没有D原始参考价、公司行动投影和同episode日级回撤路径；不能把缺字段补0或直接声称风险训练输入就绪。E1下一步只读补充真实观察gap与policy-bound日级mark路径，完成坐标/身份parity；若公开consumer不足提出精确需求，不修改数据/QE或伪造完成。最新只读QE profile响应为`20260928-v15-unified-moneyflow1`、cutoff2026-08-31、两个available nodes；这只是消费者入口状态，尚不构成新训练数据完整性或PIT证明，本任务没有修改或激活profile。
+
+## 15. 内核开发检查点（非完整业务验收）
+
+Advisory独立源码：economic_entry_contracts.py、economic_entry_labels.py、economic_entry_training.py、economic_entry_inference.py。入口绑定原policy/cost/候选和价格来源hash；不重建退出policy、不扣第二次成本。支持完整标签、正常未进入、右删失、未知缺失分离；真实gap校验raw reference，daily mark只到实际退出开盘。
+
+多轮本窗口源码审核发现并修复：缺开盘不能当正常SKIP；嵌套policy突变需消费前重验hash；训练query condition不能采用调用者携带的未来列；D参考价时钟必须精确D；部分价格未知不能宣称全价格拒绝；非连续接受集合不能桥接拒绝节点；模型支持统计及风险输出非法必须失败。训练只使用固定白名单，按成熟信息截止purge；测试收益及未来path毒化不改变真实LightGBM训练工件。合成fixture拟合仅为单元测试，不是研究证据或经济有效结果。
+
+定向测试：`pytest backend/tests/advisory_model_first/test_economic_entry_labels.py backend/tests/advisory_model_first/test_economic_entry_model.py`。Ruff与定向L0通过；L0的P2 ALGO-COMPLEXITY提示已按行数预算、精确键一对一join和9列矩阵做复杂度审核，不转移ownership或改变其它模块。
+
+真实离线闭环已完成：只读DB/价格坐标消费者、独立预登记/registry、原子工件、恢复CLI、固定模型训练、实际开盘条件导航和matched组合比较。首次SQL超时、S/R歧义和DB scalar序列化错误的零模型输入尝试均保留；没有依结果改变模型、门槛或数据窗口。最终study `adveconomic_4962fd2ec68948033628954a` 绑定相同首轮研究配置。独立API/UI、完整日常D冻结网格消费者和经济确认仍未完成；本次源码交付单元是离线内核及研究消费者，不是完整价格建议产品。
+
+### 15.1 消费者和工件实施合同
+
+首次读取真实label/未来价格路径之前，先登记独立study plan：冻结已消费窗口、源文件hash、固定模型配置、规则臂和数据转换方法；prepare输出的新数据hash只是绑定已生成输入，不能借绑定调整研究参数。使用既有trial registry与research window授权函数，ledger仅在本次独立Advisory输出根追加，不写旧台账或数据库。
+
+只读来源为现有DB的kline_daily_raw/adj_factor/stk_limit/suspend_d/dividend/trading_calendar。批量限制单条SQL30秒、一次repeatable-read readonly事务，完成后rollback；元/股、价格单位除数只转换一次。公司行动投影复用Advisory现有D可见计算。政策价格允许通过所有既存成熟entry/exit端点核验同一symbol常数×DB adj_factor坐标；这是坐标恢复，不是原生receipt，不能从收益效果反调系数。坐标相对误差预先固定2个float32 machine epsilon（2^-22），绝对误差1e-8，仅覆盖两个Qlib端点的表示误差，不是事后收益容忍；超过即fail closed，无法确定坐标的样本保留unknown。原始文件及候选不改。
+
+工件发布采用同盘持久generation目录写完后原子目录rename，只有完成manifest校验的published stage可消费。未发布generation是可恢复的持久工件，不删除、不伪装完成；临时scratch和第三方TEMP只在X，不使用C。exact retry读取并核验同request/parent及全部文件hash，不再训练或查询；冲突、截断和外来文件fail closed。模型及工件不得自动生产绑定。
+
+只读查询采用一个repeatable-read快照中的月度批次，joined表分别显式约束相同日期边界，以裁剪历史分区；不是每日重建工作区，不改变候选、窗口、模型或超时合同。源收据记录各query行数/耗时。停牌事件的原始S/R/timing逐条保留：R-only不作为停牌；S且全天时段、无R冲突才认定全天停牌。S/R同日歧义或日内停牌在本日频开盘合同中标记tradability_unknown，不任意决定先后；受影响进入/退出端点标签为DATA_UNAVAILABLE并保留候选，其它完整样本继续。不把正常歧义当全局请求失败、SKIP或零收益。未知类型/身份/窗口/重复报价等结构矛盾仍fail closed。
+
+下一切片预登记范围：新增`backend/services/advisory_model_first/economic_entry_evaluation.py`及对应定向测试，只消费已发布输入和冻结模型做固定比较，不修改既有shadow simulator。首次评价仅为实际开盘条件价值导航，不声称全部D冻结网格/实时API/UI已完成；评估实现hash另行前置绑定，不能改模型训练方案。UNKNOWN明确报告；若采用baseline fallback作匹配研究控制，只能作为研究回放的控制处理，不能展示为模型TAKE，也不形成生产默认降级。组合沿用既存模拟器的固定槽位/cost口径，并单独核对episode精确净收益与每日组合口径的差别。
+
+### 15.2 真实导航结果与风险语义审查
+
+持久根：`F:/Dev/AIstock_model_artifacts/advisory_economic_entry_value_v1_20261002/adveconomic_4962fd2ec68948033628954a`。完整候选/标签7,720条、386决策日，AVAILABLE=7,716、正常NOT_ENTERED=3、右删失=1；缺旧特征1,160条保留UNKNOWN。数据库38万余行（380,240）、25条语句合计9.28s、最长0.578s；15,432个既存entry/exit坐标端点全匹配，最大相对误差1.113e-7。仍为RECOVERED_LIMITED，不升级原生历史receipt。
+
+第二轮可交易性审核另修复条件查询消费者对开盘涨停/涨跌停身份缺失的显式UNAVAILABLE处理；原study查询没有显式过滤该条件，限制保留且无模型TAKE，不重跑或覆盖其结果。追加审核收据为`evaluation_review_35c03a06b550/evaluated/attribution.json`；初版归因收据也保留。实际成交仍不属于本日频模型验证。
+
+唯一模型train=3,139、validation=1,509、purged=349，6个训练支持桶；validation收益绝对误差p90=1,108.48 bps、风险q90覆盖率=0.9642。该误差不是期望收益置信界，风险coverage不是荐股胜率。test及校准切分按原预登记，不消费sealed。
+
+测试窗口2025-10-09～2026-02-02，共81决策日、1,620个Top20条件查询、405个Top5机会；共同组合估值期100日。基线/固定±300bps规则/模型臂共同期收益约+19.17%/+19.17%/+5.97%，MDD约-10.23%/-10.23%/-2.22%；模型减基线平均日收益=-12.47 bps。这是同一模拟器的历史研究口径，不是指数超额、自然前向或真实成交。固定规则未改变实际组合结果，不能把其7次候选SKIP冒充7次真实干预。
+
+模型Top5动作SKIP=397、UNKNOWN=8、TAKE=0；397个受支持条件中197个期望净值为正，风险q90预算通过=0（预测最小约875 bps）。模型臂7笔进入全部来自UNKNOWN时的研究基线控制，不是模型TAKE；其+5.97%不能称为模型荐股正收益。追加归因独立保存于`evaluation_review/evaluated/attribution.json`，不改旧评价：48个基线进入信号被模型SKIP，其中29个原episode盈利、19个亏损；这些是episode描述，不相加成组合收益或因果避免损失。
+
+首轮结论：**NOT_CONFIRMED / NO_MODEL_TAKE，不激活，不回选阈值。** 本轮暴露的首要设计风险是把“入场价止损800bps”引用为“全episode峰值至谷值日级回撤q90≤800bps”的预算；两者语义并不等价。不能据此宣称价格价值不可学，也不能把800提高到刚好放行模型。下一经济研究前先修订风险标签/预算关系：分别描述entry-anchored净下行、peak-to-trough回撤与止损规则；采用明确经济风险口径或相对冻结基线动作的风险增量，预先决定、独立新lineage，旧结果不改判。此项优先于换loss、加模型族或重训其它seed；源码工具可以验收，但当前模型禁止生产绑定。
+
+E4产品身份必须区分训练来源identity与每日预测输入identity。本离线内核按同一历史研究身份绑定消费；不能用该相等检查要求未来每日候选/price source hash等于训练原始数据hash，从而只支持回测。下一产品消费者需独立PredictionInputContext，绑定新的D截止/候选/来源hash，同时显式核对训练scope的package/policy/cost/特征schema/股票池定义及坐标算法版本。预测来源变化不触发重训；scope不兼容则typed unavailable，不自动为新包宣称可用，也不修改QE。
+
+工程审核证据：57项定向测试通过（2.57s）、Ruff通过、L0通过；feature扫描0finding，主扫描6项P2 ALGO-COMPLEXITY提示/0blocking。逐条审查：source端点与特征仅exact many-to-one/one-to-one加入；raw market行数500,000上限，本次380,240；特征100,000上限、实际7,720，模型矩阵9列；month批次单一快照，查询预算30s；实际条件查询1,620行、Top5匹配最多405机会，不做股票×日期笛卡尔积。公开API/UI、跨模块业务回归留给其实施阶段/CI，不用这些单测冒充已部署业务。DESIGN-COMPLIANCE-001四项已核查：不声明完整产品；未知/fail-closed和研究控制显式区分；旧实验/政策/成本/门槛不改；不增加新审批或跨模块修改。
+
+## 16. Exit后续设计与已有能力复用核查（本轮design-only）
+
+只增加日级EXIT_VALUE价格条件价值建议，不研发分钟执行或接管Paper持仓。已存在`exit_label_oracle.py`的退出vs保持政策增量标签、合法延迟/右删失/UNKNOWN状态；`exit_learnability_contracts.py`已有持有状态、rank、D可见收益/波动、距离止损/止盈及regime的固定特征。二者可复用合同和模拟器，但oracle标记future_information_ceiling=true、deployable=false，不是已激活退出模型；旧holding/liability信号也不能当作剩余收益预测。
+
+新标签以D的合法持有状态和下一合法观察价为条件，在同一冻结终端/政策和价格坐标下比较：`exit_value = 当前合法卖价×(1-sell_cost)后在共同终端持有现金`；`hold_value = 从当前状态继续冻结退出政策的终端净价值`；`exit_advantage = exit_value-hold_value`。既往入场成本已沉没，不再次扣入退出动作差；两臂只对各自未来交易成本计一次。入场价、持有龄和历史peak可作为D状态/政策条件，但“回本”不是退出的经济目标。
+
+必须记录episode/policy/cost/模型/状态/公司行动hash、D截止、实际可卖日期、共同终端、label_information_end与动作等待原因；T+1/停牌/限售或不可证明成交时返回WAITING/UNAVAILABLE，不把无法卖出标成应继续持有的获利样本。仅在合法T开盘条件查询时读取该点价格，不读取T后路径作feature；未来路径只生成成熟标签并按information_end purge。
+
+后续实施顺序：先审计已有Exit标签和价格坐标能否对齐当前经济口径→冻结一组状态/实际观察标签和开发窗口→固定简单learnability基线→通过有效干预与matched增量后设计独立bundle/API/UI。可接受卖价集合按exit advantage和继续持有的尾部风险定义，允许不连续/空集/UNKNOWN；不得把买入价×固定止盈比例或M4开盘分位数改名为模型卖出区间。该阶段尚未训练新EXIT_VALUE模型，也未完成其产品接口；Entry风险合同修订不因这项设计被搁置。
