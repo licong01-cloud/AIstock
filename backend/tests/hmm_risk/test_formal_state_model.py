@@ -1,13 +1,37 @@
 from __future__ import annotations
 
 import copy
+import os
 from datetime import date, timedelta
+from importlib import import_module
 
 import numpy as np
 import pytest
+from threadpoolctl import threadpool_info, threadpool_limits
 
 from backend.services.hmm_risk import formal_state_model as subject
 from backend.services.hmm_risk.contracts import canonical_sha256
+from backend.services.hmm_risk.formal_state_executor import THREAD_VARIABLES
+
+
+@pytest.fixture(scope="module", autouse=True)
+def single_thread_numerics():
+    # These synthetic fits test the approved single-thread contract, not host defaults.
+    # Scope both loaded native pools and env vars; restore them when the module ends.
+    # fit_entry imports these lazily. Load them before capturing native pool limits.
+    import_module("hmmlearn.hmm")
+    import_module("sklearn.cluster")
+    with pytest.MonkeyPatch.context() as patch:
+        for key in THREAD_VARIABLES:
+            patch.setenv(key, "1")
+        with threadpool_limits(limits=1):
+            yield
+
+
+def test_numerical_fixtures_use_approved_single_thread_pools():
+    pools = threadpool_info()
+    assert pools and all(pool["num_threads"] == 1 for pool in pools)
+    assert all(os.environ[key] == "1" for key in THREAD_VARIABLES)
 
 
 def _selection_candidates():
@@ -23,7 +47,7 @@ def _selection_candidates():
 
 
 @pytest.fixture(scope="module")
-def fitted():
+def fitted(single_thread_numerics):
     rng = np.random.RandomState(42)
     means = np.tile(np.repeat([-3.0, 0.0, 3.0], 30), 6)
     values = np.column_stack((means + rng.normal(0, 0.4, len(means)), means * 0.7 + rng.normal(0, 0.3, len(means))))

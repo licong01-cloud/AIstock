@@ -15,6 +15,7 @@ from backend.services.hmm_risk.contracts import canonical_sha256
 from backend.tests.hmm_risk import test_formal_state_model as numerical_test_support
 
 fitted = numerical_test_support.fitted
+single_thread_numerics = numerical_test_support.single_thread_numerics
 _projection_fixture = numerical_test_support._projection_fixture
 _selection_candidates = numerical_test_support._selection_candidates
 
