@@ -1,6 +1,7 @@
 {
   "actual": "Nested ensure_tables and builder _ensure_tables execute CREATE, COMMENT and data_stats_config upsert although receipt claims no DDL.",
   "allowed_write_scope": [
+    "noxfile.py",
     "scripts/prepare_canonical_pit_monthly.py",
     "backend/services/stock_universe_pit_service.py",
     "scripts/build_stock_universe_pit_spans.py",
@@ -30,16 +31,27 @@
   "evidence_uris": [],
   "expected": "Operator apply only performs bounded canonical universe DML after existing-schema validation; no DDL or catalog writes anywhere in nested chain.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/prepare_canonical_pit_monthly.py",
+    "actual_changed_files": [
       "backend/services/stock_universe_pit_service.py",
-      "scripts/build_stock_universe_pit_spans.py",
       "backend/tests/scripts/test_prepare_canonical_pit_monthly.py",
       "backend/tests/test_stock_universe_pit_service.py",
-      "backend/tests/test_stock_universe_pit_spans.py"
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "scripts/prepare_canonical_pit_monthly.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1670-canonical-pit-monthly-apply-executes-schema-bootstrap-despite-no-ddl-con.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "noxfile.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/scripts/test_prepare_canonical_pit_monthly.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "scripts/prepare_canonical_pit_monthly.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1670-canonical-pit-monthly-apply-executes-schema-bootstrap-despite-no-ddl-con.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/prepare_canonical_pit_monthly.py",
@@ -177,20 +189,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "RED 5 项复现 operator 默认工厂和 service/builder 缺少无 DDL 约束；GREEN 及嵌套传递测试通过，最终 70 项定向矩阵、Ruff、L0 通过。三轮本地审核覆盖默认兼容性与 contract digest、嵌套 schema fail-closed 与无 catalog 写入、真实 fresh-process 只读 dry-run 及权限边界。",
       "新 Python 进程真实 DEV dry-run 使用 existing_schema_only=True，未执行 DDL/DML；因 DEV stock_st 仅到 2026-08-31，缺失 2026-09-30 边界，按正式 builder fail closed。生产只读核对 stock_st 已覆盖九月 21 交易日，9/30 有 201 行。DEV apply 与生产 apply 尚未执行，不得据此宣称月更就绪。",
-      "新 Python 进程正式 builder 的生产 read-only dry-run 通过：end_date=2026-09-30，existing_schema_only=True，dry_run=True；拟生成 5662 spans/2905 events/5343 eligible instruments，invalid/overlap/event-action/terminal-reentry 均 0；database_write=false。回执位于 X:/AIstock_dataset_release_control/operator_reports/BUG-1670-production-dry-run-20261002/aistock_equity_pit_canonical_v2_summary_20261001_215712.json。此为只读计划，不是 DEV apply 或 production apply。"
+      "新 Python 进程正式 builder 的生产 read-only dry-run 通过：end_date=2026-09-30，existing_schema_only=True，dry_run=True；拟生成 5662 spans/2905 events/5343 eligible instruments，invalid/overlap/event-action/terminal-reentry 均 0；database_write=false。回执位于 X:/AIstock_dataset_release_control/operator_reports/BUG-1670-production-dry-run-20261002/aistock_equity_pit_canonical_v2_summary_20261001_215712.json。此为只读计划，不是 DEV apply 或 production apply。",
+      "Fresh Python production readonly dry-run generated 5662 spans and 2905 events with four validation counts zero; DEV readonly dry-run correctly blocks missing September ST boundary; existing_schema_only=true, database_write=false, candidate_write=false, no activation or process control"
     ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
-    "database_readback_ref": "not_required",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
