@@ -43,8 +43,8 @@
   },
   "first_seen_at": "2026-10-01T17:33:01.010912Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "56b880cb143880db9d45103e95a3d1962f796b1a",
+  "fixed_at": "2026-10-01T17:54:27Z",
   "github_issue_number": 5212,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5212",
   "last_seen_at": "2026-10-01T17:33:01.010912Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5213",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,6 +81,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -91,7 +93,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1659",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0e5504e63c252908",
+    "recorded_at": "2026-10-01T17:55:47.022132Z",
+    "runtime_contract_digest": "986ad9dcb33f12aeefd7f3e233f59566a2e2c57a201478777cc60b89f7413e5f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1d236c94dea46a328b31ab9625d91f8cd5a92483",
+    "source_merge_commit": "56b880cb143880db9d45103e95a3d1962f796b1a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5213",
+    "validation_evidence": [
+      "validation-receipt: id=c7ec76378c327679 commit=1d236c94dea46a328b31ab9625d91f8cd5a92483 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`84 passed before final blank-identity hardening; 29 DEV SQL cases`",
+      "validation-receipt: id=cf2952b96d5244ed commit=1d236c94dea46a328b31ab9625d91f8cd5a92483 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py::test_actual_postgres_writer_query_in_readonly_dev[blank_execution_identity-True] -q` result=`passed latest commit existing DEV readonly; 30 DEV SQL cases total`",
+      "validation-receipt: id=7f0cb831dc9c9147 commit=1d236c94dea46a328b31ab9625d91f8cd5a92483 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv -- exact changed files` result=`passed`",
+      "validation-receipt: id=23f606152660a97d commit=1d236c94dea46a328b31ab9625d91f8cd5a92483 kind=ruff plan=direct status=passed command=`ruff check exact changed Python files; git diff --check` result=`passed latest blank-identity hardening`"
+    ],
+    "validation_evidence_digest": "e2b3688e3016872f76929fe994c4a82fe973aeab8ecc53fe68285ad4e0ca83d9"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -100,6 +126,12 @@
     "fingerprint": "de957ad3c31ed0fd7bba3d28",
     "source_event_id": "FE-20261001-de957ad3c31e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c7ec76378c327679 commit=1d236c94dea46a328b31ab9625d91f8cd5a92483 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`84 passed before final blank-identity hardening; 29 DEV SQL cases`",
+    "validation-receipt: id=cf2952b96d5244ed commit=1d236c94dea46a328b31ab9625d91f8cd5a92483 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py::test_actual_postgres_writer_query_in_readonly_dev[blank_execution_identity-True] -q` result=`passed latest commit existing DEV readonly; 30 DEV SQL cases total`",
+    "validation-receipt: id=7f0cb831dc9c9147 commit=1d236c94dea46a328b31ab9625d91f8cd5a92483 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv -- exact changed files` result=`passed`",
+    "validation-receipt: id=23f606152660a97d commit=1d236c94dea46a328b31ab9625d91f8cd5a92483 kind=ruff plan=direct status=passed command=`ruff check exact changed Python files; git diff --check` result=`passed latest blank-identity hardening`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
