@@ -2,6 +2,9 @@
   "actual": "2026-10-01 monthly September rehearsal: monthly_postgres_source.py assigns expected_count=observed_count and unconditionally writes zero missing/invalid/duplicate PASS without invoking independent daily/minute/daily_basic coverage validators. Missing dates/fields can falsely close source gates. Need bounded consistent-snapshot independent expectation audit, exact typed failures and regressions; no source DML/profile activation/services.",
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/services/dataset_release/monthly_frozen_source_audit.py",
+    "backend/services/dataset_release/monthly_source_audit.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "tests/aistock_validation/bugs/20261001_BUG-1650-monthly-postgresql-source-gates-fabricate-zero-gap-pass-from-observed-pa.json"
   ],
   "assigned_agent": null,
@@ -23,7 +26,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "All nine SOURCE gates use independently frozen calendar/PIT/key/field contracts, bounded verified source streams and real blocking counts. They must not infer completeness from observed partition row counts. No data repair or runtime mutation is performed by the auditor.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -84,7 +87,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -92,11 +95,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "fresh_process_evidence": [
+      "RED: new frozen source regressions failed on absent auditor. GREEN: 36 tests passed in fresh Python process across frozen auditor, PostgreSQL adapter, shared source contracts and official quote policy; missing keys and invalid fields have real BLOCKED counts and cannot build/seal.",
+      "Review 1: independent frozen calendar/PIT keys, OHLCV finite/domain, exact 240 close-labelled bars, shared 1e-4 parity tolerances unchanged. Review 2: shared SecuritySourceResolution.source_ts_code, alias collision rejection, independent margin provider denominator and incremental publication floor, no all-equity margin assumption. Review 3: fully verified CAS streams, one-month residency and aggregate-only minute summaries, create-exclusive receipts, exact source/alias/quote pins, no database/provider/repair or runtime calls.",
+      "DESIGN-COMPLIANCE-001: required nine SOURCE gates implemented with real counts, no partial/fake PASS; shared alias and publication semantics reused; no business/source repair semantic changes; no new human approval gate. September diagnostic is still BLOCKED, not claimed ready."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
