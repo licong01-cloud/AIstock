@@ -160,6 +160,20 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 
 后续仅记录文档和 PR 提交状态，不将文档-only HEAD 冒充上述代码测试的执行 HEAD。F2 源码验收通过；F-005 仍明确未执行。CI 状态以 PR 实时检查为准，不把本地通过写成 CI 全绿。
 
+### 2026-10-02 PR #5194 数值测试修复与当前边界
+
+已在干净任务工作树安全合并最新 main。CI run `36877367133` 的实际结果为 218 passed / 1 failed；唯一失败是合成 fixture 两次拟合的严格 bitwise 比较，差异为浮点末位。该 run 的 changed-test coverage 已通过，不将此失败归因于测试路由或全局流水线。
+
+修复仅涉及两个 HMM 测试文件：共享 module-scoped fixture 先加载延迟导入的 hmmlearn/sklearn，再以 `threadpool_limits(1)` 和既有五个线程环境变量落实批准的单线程条件；退出模块后恢复原线程池与环境。新增前提测试在未修复的 AIstock-CI 环境实际 RED，修复后 GREEN；严格 `repeated == entry`、错误环境拒绝及生产 fail-closed 均保留，不使用容差、舍入、skip 或模型算法变更。
+
+本轮代码验证 HEAD 为 `805bfb52116ea3695179828f26554fe715d6a290`：在未手工设置单线程环境的既有 AIstock-CI 解释器运行 classifier-bound `hmm_risk_pr_slice`，13 个测试文件、220 passed，changed-test coverage PASS；module registry 8 passed / 14 个映射；L0 findings=0/blocking=0；两份实际修改 Python 文件 Ruff check/format、py_compile 及 diff check 通过；20 个 PR 文件 ownership 全部映射。另以同一进程验证三个 fix-point 用例通过，测试结束后线程池恢复为宿主原有 24/24/32，环境变量恢复。两轮复审补齐延迟加载池的生命周期，未增加生产合同或全局 CI/nox/test plan 变更。
+
+同一代码 HEAD 的 router/health/executor/input/model fresh-process import 通过，加载路径全部属于本任务工作树，network/database/fit/active-profile 访问均设置 poison。实际 changed-files 的 runtime 分类仍为 backend、target_ids=[backend-main]、catalog_error=null；源码合入与用户重启后的运行态验收保持独立。
+
+先前 `ef2b87b7d5f644da9e7e74678757027d5355dffe` 的完整 file-only preflight 仍是该 HEAD 的实际结果；本轮只改测试，没有重复构造或重新读取大 request，更没有把旧 preflight 冒充本轮 HEAD 新执行的结果。正式 fits 仍为 0/5184，F-005 未执行，PR CI 以更新后实际结果为准。
+
+数据侧尚有独立阻断：现有冻结 request 中 8 个 family×sector 的 D6 `|E|<30`，电子 `801080.SI` 两个 family 均为 E=0。定向检查发现 155 个因果 circ_mv 失败键位于 PIT entry，source window 内缺少严格早于当日的 daily_basic 事实；现有消费者已允许 source window 内的入池前事实，不得用当日市值、前填、缩小分母或修改阈值绕过。共享文件事实补齐和 successor 交付由数据窗口负责，本 HMM PR 不修改数据生产代码、冻结数据集或 active profile。未核对数据库源事实，不能把文件缺口描述为数据库或 provider 缺失。
+
 ### 2026-10-01 历史长任务增量（v15 阶段）
 
 完整 file-only C-010/A5 constructor 与 `prepare` CLI 已实现，复用现有 shared reader、alias/PIT resolver、stock-fact 聚合和严格 receipt validator。
