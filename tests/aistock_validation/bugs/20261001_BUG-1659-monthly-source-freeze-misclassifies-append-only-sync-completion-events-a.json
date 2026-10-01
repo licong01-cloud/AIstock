@@ -1,6 +1,8 @@
 {
   "actual": "九月月更 dmr_63a313d97fd046a38d5a876265565014 attempt6 SOURCE 被 ManagedRepairImpactJournal 阻断。只读生产核验首三条实际均为 reconciled 且 finished_at 非空；适配器误将 ingestion_jobs terminal status 通用于 data_sync_attempts，未处理 append-only started/terminal 同 job/target 事件谱系。需分账本解析真实生命周期，保留活跃/未知/身份不闭合 fail-closed，保留冻结后全部写入失效检查，禁止生产账本改写或忽略真实字段缺口。仅改数据准备适配器和定向测试，DEV只读SQL验证，多轮审核后按已有授权合入，后端由用户重启。",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_repair_journal.py",
+    "backend/tests/dataset_release/test_monthly_repair_journal.py",
     "tests/aistock_validation/bugs/20261001_BUG-1659-monthly-source-freeze-misclassifies-append-only-sync-completion-events-a.json"
   ],
   "assigned_agent": null,
@@ -22,7 +24,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "分别按两种写入账本的正式生命周期解析完成状态；仅按同 target/job/run 的结束事件或同 job 的 ingestion 最终状态证明 started 已结束，保留未知/活跃/缺 finished_at 的阻断，以及冻结后所有写入的失效检查。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -54,7 +56,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python scripts/monthly_unified_dataset_release.py status --operation-id dmr_63a313d97fd046a38d5a876265565014",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
@@ -62,15 +64,29 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "RED：新增两个账本合同/执行身份回归测试在旧实现失败。GREEN：现有DEV只读SQL矩阵通过，使用相同生产SQL和typed CTE，未创建表或数据库；transaction_read_only=on。",
+      "独立Python进程生产只读核验：原阻断首三条均为reconciled且finished_at存在；修正查询返回真实活跃writer=0，已读回managed-writer-ledgers-v2 watermark；所有连接rollback/close，database_write=false。",
+      "审核1：分离ingestion与sync枚举、缺finished_at及NULL/未知状态仍阻断。审核2：异步回调可先落库，按完整执行身份闭合，不依赖target最后一条或跨客户端/数据库时钟排序。审核3：真实活跃ingestion仍阻断，即使sync已有结束回调；冻结后failed/retry/reconciled/final_blocked/started均使source失效；没有生产账本改写或数据完整性豁免。",
+      "Fresh Python loaded tracked monthly_repair_journal fix; existing DEV port5433 transaction_read_only=on executed identical production SQL over typed SELECT-only CTE cases, 29 passed; production readonly real ledger watermark readback passed, rollback/close, database_write=false",
+      "Fresh Python loaded tracked repair-journal fix; existing DEV port5433 transaction_read_only=on SQL matrix passed; production real ledger readonly watermark passed, rollback/close, database_write=false"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
