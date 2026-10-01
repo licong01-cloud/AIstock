@@ -122,7 +122,7 @@ v2研究只验证语义修复，不改原退出policy、候选、成本、seed�
 
 7,720条原候选全部保留；新风险标签AVAILABLE=7,336+349=7,685（349条为label-end purged），UNAVAILABLE=31，NOT_ENTERED=3，CENSORED=1。31个新未知中ENTRY_OPEN_LIMIT_EXECUTION_UNPROVEN=14、EXIT_OPEN_LIMIT_EXECUTION_UNPROVEN=17；其中真实拟合eligible变化train=22、validation=2。结果`BLOCKED_ELIGIBILITY_DRIFT/REUSE_BLOCKED_NO_FIT`，registry planned=1/generated=0/evaluated=0，未拟合研究risk或return，不计算新模型收益、不改变原v1结论。原source仍RECOVERED_LIMITED，不是native COMPLETE。
 
-下一步不是放宽本复用合同：先独立审定“同一新risk目标和执行性过滤下，return与risk两个头一起按新eligible重建”的显式方案；冻结参数/seed/窗口/800研究参考不变，保留所有未知行和原工件，不把新拟合称为exact retry或独立OOS。当前零模型prepare不关闭经济价格建议方向，也不能被报告为模型效果失败。每日API/UI另登记确切文件，不阻断其合同设计。
+本复用合同不放宽：[一致集合v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)设计PR #5245已合入，固定双头真实拟合与导航已完成，新study planned/generated/evaluated=1/1/1。实际模型TAKE16笔，但相对基线日增量-8.888bps、区间跨零，因此本candidate停止、不绑定；本v2仍generated0，不把新拟合称为exact retry或独立OOS。冻结参数/seed/窗口/800参考及旧工件不变。完整每日API/UI另登记确切文件继续，不以新候选失败关闭经济价格建议业务。
 
 ## 11. Production Gates
 

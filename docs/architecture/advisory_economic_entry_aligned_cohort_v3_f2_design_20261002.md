@@ -1,6 +1,6 @@
-# Advisory 经济进入价值：一致监督集合双头 v3 F2 设计 v0.2
+# Advisory 经济进入价值：一致监督集合双头 v3 F2 设计 v0.3
 
-> 日期2026-10-02；状态DESIGN_REVIEWED_IMPLEMENTATION_PENDING。父设计：[风险口径与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)。这是原权重复用被明确阻断后的新拟合方案，不放宽旧合同，不是exact retry，目前未执行研究训练。
+> 日期2026-10-02；状态OFFLINE_ALIGNED_FIT_NAVIGATION_VERIFIED_INCREMENT_NEGATIVE。设计PR #5245已合入`d638dc3dbb175afaa52a7ae9203cd9d40c393c3c`。父设计：[风险口径与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)。这是原权重复用被明确阻断后的独立新拟合，不放宽旧合同，不是exact retry；已完成唯一真实候选及固定导航，未确认、未激活，日常API/UI仍未交付。
 
 ## 1. Background / 已核验事实
 
@@ -64,17 +64,17 @@ v2 prepare `adventryloss_daadbb8de554e555061df5d8`完整保留7,720候选，新�
 
 ## 10. Design Acceptance Matrix
 
-仅设计验收，源码/真实模型尚未实施。
+本切片源码和真实历史导航已验证；经济正增量没有通过。日常API/UI和激活不在本切片完成声明内。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-560 | §1、§3～§4 | artifact: docs/architecture/advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-561 | §3～§4 | artifact: docs/architecture/advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-562 | §4 | artifact: docs/architecture/advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-563 | §5、§8 | artifact: docs/architecture/advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-564 | §6 | artifact: docs/architecture/advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-565 | §2、§7 | artifact: docs/architecture/advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-566 | §7～§8 | artifact: docs/architecture/advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md | DESIGN_VERIFIED | none |
+| F-560 | economic_entry_aligned_contracts.py、§13 | artifact: F:/Dev/AIstock_model_artifacts/advisory_entry_loss_alignment_v2_20261002/adventryloss_daadbb8de554e555061df5d8/prepared/reuse_audit.json | IMPLEMENTED_VERIFIED | none |
+| F-561 | economic_entry_aligned_training.py | backend/tests/advisory_model_first/test_economic_entry_aligned_training.py；§13真实拟合 | IMPLEMENTED_VERIFIED | none |
+| F-562 | economic_entry_aligned_pipeline.py | backend/tests/advisory_model_first/test_economic_entry_aligned_pipeline.py；§13三阶段hash | IMPLEMENTED_VERIFIED | none |
+| F-563 | economic_entry_aligned_inference.py、economic_entry_aligned_evaluation.py | backend/tests/advisory_model_first/test_economic_entry_aligned_training.py；backend/tests/advisory_model_first/test_economic_entry_aligned_evaluation.py | IMPLEMENTED_VERIFIED | none |
+| F-564 | economic_entry_aligned_evaluation.py | backend/tests/advisory_model_first/test_economic_entry_aligned_evaluation.py；§13真实三臂 | IMPLEMENTED_VERIFIED | none |
+| F-565 | economic_entry_aligned_pipeline.py、§2 | backend/tests/advisory_model_first/test_economic_entry_aligned_pipeline.py；§13边界核验 | IMPLEMENTED_VERIFIED | none |
+| F-566 | §2、§12～§13 | artifact: docs/architecture/advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md | IMPLEMENTED_VERIFIED | approved_by_user: 仅离线切片，不声称完整API/UI或经济有效 |
 
 ## 11. Risks
 
@@ -84,6 +84,20 @@ v2 prepare `adventryloss_daadbb8de554e555061df5d8`完整保留7,720候选，新�
 
 ## 12. Production Gates / Rollout / Rollback
 
-design_merge=pending；source_implemented=false；model_trained=false；daily_api_ui_delivered=false；model_confirmed=false；binding_active=false；DB/profile/service操作noop；sealed未读；backend_restart_owner=user。
+design_merge=merged_PR5245；source_implemented=true_source_merge_pending；model_trained=true_one_candidate；daily_api_ui_delivered=false；model_confirmed=false；binding_active=false；DB/profile/service操作noop；sealed未读；backend_restart_owner=user。
 
 先设计后独立源码和唯一导航候选，失败保留新收据，不改旧数据/模型/合同。typed unknown仅影响新经济角色，不重排或重新运行Selection。后续角色版本独立回滚，不覆盖旧ENTRY_PRICE/M4；本次无生产操作，不称运行时激活完成。
+
+## 13. 实现审核与真实导航结果
+
+三轮源码复核：第一轮核验同一监督集合、标签截止清理及test毒化不改两头；第二轮分离候选SKIP与组合真实干预、模型TAKE与UNKNOWN控制；第三轮补齐三臂新episode端点执行限制、候选排名唯一性、零episode、不可变登记及exact retry不再拟合。11项最小直接测试通过，Ruff PASS，L0无阻断。P2 ALGO-COMPLEXITY-001已人工核验：候选及episode上限100,000，D/symbol右表唯一、many_to_one不扩行，九列矩阵、批量预测，无笛卡尔积；此为已审警告而非0 findings。合成测试仅证明工程合同，不是以下研究收益。
+
+唯一study=`advaligned_00089672bee4c91dd2261cf1`，根`F:/Dev/AIstock_model_artifacts/advisory_aligned_entry_value_v3_20261002`。planned/generated/evaluated=1/1/1；train3,117/validation1,507/purged349，全部7,720原候选仍保留，5个train-only价格支持桶。return及entry-loss两个新头同集合拟合；validation误差p90=1139.2969bps不是均值置信界，entry-loss q90 coverage=0.956204不是胜率。
+
+plan stage SHA=`e5ac3092652a048909dc6d86ee47d3388a8bbc7e5f39f5653314da114412378c`；trained=`142fa58efc30218594953383ce9edb2d5170c42c889bcb0f2525aef807ca98c4`；evaluated=`4b50e12bf15c39cd859c8ca3a83146da64d29b3c97af55883a6dba7401a5cbf5`；common fit rows=`989131e53a3a280021de4b63545da07bcdf98461f5647ba679c04fe8bd1ce53c`。五新核心implementation SHA=`b791859d9e1f1c00fab136621ecba80a29dcaff3bf5c1c4c2131516155f0060e`，旧七/五核心未改，v2仍generated0。
+
+81个test决策日、1,620 Top20/405 Top5、100个共同估值日。Top5 TAKE27/SKIP368/UNKNOWN10；实际新模型TAKE episode16（10盈利），另有9笔UNKNOWN基线控制（6盈利）。不能将16/25混成模型胜率或把控制利润归模型。100日名义组合：baseline/固定±300规则/model净收益19.1729%/19.1729%/9.6268%，MDD -10.2278%/-10.2278%/-5.2608%。模型减baseline平均日收益-8.8880bps，固定block95%区间[-29.3835,12.0840]，不是独立确认或指数超额。
+
+候选SKIP覆盖81日，但组合实际进入动作不同42日、持仓构成不同92/100日；43个基线进入被SKIP，25原盈利/18原亏损，仅为episode描述，不相加成组合增量。原v2 test的1个未知端点仍独立保留；三臂实际发生的名义episode端点逐项审计均无额外限制，但日频端点核验仍非真实fill证明。RECOVERED_LIMITED、NAVIGATION_ONLY、sealed未读、不绑定。
+
+本candidate停止：有模型干预和正绝对名义收益，但净增量为负、区间跨零，不能宣称优于基线或激活，不改800/参数/阈值搜结果。下一步完整D价格条件消费者/API/UI的独立合同及功能实现可继续；模型确认与业务上线另验收，不需要先等实盘数据。退出剩余价值继续以已有oracle合同设计为准，不因本进入模型失败而启动第二条上游Alpha训练。
