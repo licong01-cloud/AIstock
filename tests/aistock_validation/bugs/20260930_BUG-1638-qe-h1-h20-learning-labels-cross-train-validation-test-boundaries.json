@@ -146,7 +146,8 @@
       "WSL rdagent-gpu fresh Qlib DataHandlerLP: h1 DK_I105/DK_L99 and h20 DK_I105/DK_L58; train/valid last mature dates verified, full signal end unchanged; no training/backtest/GPU/DB writes",
       "WSL fresh Qlib DataHandlerLP h1 and h20 learn-only isolation passed, DK_I full 105 rows preserved; no model training, no service control",
       "WSL Qlib DataHandlerLP fresh process h1/h20 DK_I105 preserved; DK_L99/58 and exact mature boundary passed; no experiments or process control",
-      "WSL fresh Qlib DataHandlerLP h1/h20 learn-only masking passed; DK_I105 rows and signal_end preserved; no training/backtest/DB writes/process control"
+      "WSL fresh Qlib DataHandlerLP h1/h20 learn-only masking passed; DK_I105 rows and signal_end preserved; no training/backtest/DB writes/process control",
+      "WSL rdagent-gpu fresh Qlib DataHandlerLP h1/h10/h20: DK_I105 unchanged, DK_L99/78/58; exact train/valid mature dates and full signal end verified; loader SHA256=042600f857dd91d2792aede0610ce40b7f81634a064dffe4476780f4c0aec513; no fit/backtest/DB/service control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
