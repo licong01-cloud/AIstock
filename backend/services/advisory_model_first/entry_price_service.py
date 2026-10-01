@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
@@ -45,6 +45,7 @@ class PreparedEntryPriceDay:
     frozen_input_ids: Mapping[str, str]
     list_created_at: Any
     list_status: str
+    provenance_identity: Mapping[str, Any] = field(default_factory=dict)
 
 
 def unavailable_entry_candidate(
@@ -266,6 +267,7 @@ class AdvisoryEntryPriceService:
         self, *, model_root, program_id: str, binding_version_id: str,
         target_trade_date: date, scope: EntryPriceScope, role_binding_sha256: str,
         frozen_input_ids=None, capture_as_of: datetime | None = None,
+        legacy_provenance=None,
     ) -> PreparedEntryPriceDay:
         from .feature_schema_v1 import FEATURE_SCHEMA_HASH
         from .model_binding_resolution import AdvisoryModelBindingResolutionV1
@@ -343,7 +345,16 @@ class AdvisoryEntryPriceService:
         summary = version.get("summary_json") or {}
         receipt = summary.get("advisory_universe_receipt") or {}
         if receipt.get("universe_selection") != declared_universe:
-            _identity_error("entry frozen list universe differs from Program scope")
+            from .entry_price_legacy_provenance import LegacyExploratoryInputs
+            if ("advisory_universe_receipt" in summary or capture_as_of is not None
+                    or not isinstance(legacy_provenance, LegacyExploratoryInputs)
+                    or legacy_provenance.request.study_type != "EXPLORATORY_SCREEN"
+                    or legacy_provenance.request.decision_use != "NAVIGATION_ONLY"
+                    or legacy_provenance.request.evidence_level != "HISTORICAL_REPLAY"
+                    or legacy_provenance.request.data_identity.qualification != "CONSUMED_OR_NON_VINTAGE"
+                    or legacy_provenance.request.scope != scope
+                    or legacy_provenance.request.request_sha256 != role_binding_sha256):
+                _identity_error("entry frozen list universe differs from Program scope")
         rows = (
             _candidate_rows_for_recommendation_list(selection.aggregate_results, items)
             if scope.universe_selection.mode != "stock_universe" else selection.aggregate_results
@@ -359,6 +370,21 @@ class AdvisoryEntryPriceService:
             list_items=items, expected_symbols=candidates["instrument"].tolist(),
             review_policy_sha256=scope.review_policy_sha256,
         )
+        provenance = {"kind": "NATIVE_LIST_RECEIPT", "native_receipt_present": True}
+        archive_ref = summary.get("advisory_frozen_input_archive")
+        run_archive_ref = selection.runtime_config.get("advisory_frozen_input_archive")
+        if archive_ref is not None or run_archive_ref is not None:
+            if archive_ref != run_archive_ref:
+                _identity_error("entry run/list frozen input archive reference differs")
+            from backend.services.selection_center.advisory_input_archive import validate_archive_reference
+            validate_archive_reference(archive_ref, run=selection, program_id=program_id,
+                                       binding_version_id=binding_version_id,
+                                       review_policy_sha256=scope.review_policy_sha256)
+        if not receipt or (legacy_provenance is not None and target_trade_date in legacy_provenance.metadata):
+            legacy_provenance.validate_live_day(
+                version=version, items=items, selection=selection, decision=decision, target=target_trade_date,
+                candidates=candidates, request_sha256=role_binding_sha256)
+            provenance = legacy_provenance.identity(target_trade_date)
         pit_kwargs = {}
         if has_canonical_pit_runtime_profile(selection.runtime_config):
             lease = require_canonical_pit_runtime_binding(selection.runtime_config, trade_date=decision)
@@ -372,12 +398,14 @@ class AdvisoryEntryPriceService:
                 "review_run_id": str(version["review_run_id"]), "selection_run_id": str(selection.run_id),
             },
             list_created_at=version.get("created_at"), list_status=str(version.get("version_status") or ""),
+            provenance_identity=provenance,
         )
 
     def evaluate_day(
         self, *, model_root, program_id: str, binding_version_id: str,
         target_trade_date: date, scope: EntryPriceScope, role_binding_sha256: str,
         evidence_state: str = "EXPERIMENTAL", frozen_input_ids=None, capture_as_of: datetime | None = None,
+        legacy_provenance=None,
     ) -> EntryPriceDayResult:
         from .shared_feature_builder import build_advisory_feature_matrix
 
@@ -385,12 +413,14 @@ class AdvisoryEntryPriceService:
             model_root=model_root, program_id=program_id, binding_version_id=binding_version_id,
             target_trade_date=target_trade_date, scope=scope, role_binding_sha256=role_binding_sha256,
             frozen_input_ids=frozen_input_ids, capture_as_of=capture_as_of,
+            legacy_provenance=legacy_provenance,
         )
         decision, candidates, parent, price = prepared.decision_date, prepared.candidates, prepared.parent, prepared.price
         identity = dict(program_id=program_id, binding_version_id=binding_version_id, scope=scope,
                         role_binding_sha256=role_binding_sha256, decision=decision, target_trade_date=target_trade_date,
                         price=price, evidence_state=evidence_state)
         inputs = {**prepared.frozen_input_ids, "list_created_at": str(prepared.list_created_at), "list_status": prepared.list_status,
+                  "candidate_provenance": dict(prepared.provenance_identity),
                   "pit_input": dict(prepared.pit_kwargs), "feature_source": "DATABASE_DAILY_AS_OF_DECISION"}
         if candidates.empty:
             return EntryPriceDayResult(envelope=_entry_envelope(projected=(), **identity), scored=(), contexts={},
