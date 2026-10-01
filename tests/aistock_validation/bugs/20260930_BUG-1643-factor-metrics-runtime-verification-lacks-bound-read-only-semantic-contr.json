@@ -21,7 +21,7 @@
       "limit"
     ]
   },
-  "closed_at": null,
+  "closed_at": "2026-10-01T13:55:48Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -107,8 +107,8 @@
   },
   "first_seen_at": "2026-09-30T20:56:55.969564Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c5521cdae7015cdf557f50248f09c2329f9c93cb",
+  "fixed_at": "2026-10-01T13:55:48Z",
   "github_issue_number": 5167,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5167",
   "last_seen_at": "2026-09-30T20:56:55.969564Z",
@@ -116,6 +116,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5168",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -144,6 +145,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -153,7 +155,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1643",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "043c1bb7870c21a3",
+    "recorded_at": "2026-10-01T13:57:12.370609Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "28fb69077b0a8495b832b9264be2de9727ad58e3",
+    "source_merge_commit": "c5521cdae7015cdf557f50248f09c2329f9c93cb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5168",
+    "validation_evidence": [
+      "validation-receipt: id=c3617c408acae457 commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -p no:cacheprovider` result=`127 passed`",
+      "validation-receipt: id=56f5f78fb368418f commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json` result=`passed; blocking=0`",
+      "validation-receipt: id=c96ab13230e5eb3e commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+      "validation-receipt: id=e2587a7b117df552 commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1643 --module validation --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "11d9cccb61362639313d80d5d7241e827fc62a06943555661008ff89a2aed061"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -162,6 +188,12 @@
     "fingerprint": "c1ab7b7b15411786446b5ef4",
     "source_event_id": "FE-20260930-c1ab7b7b1541"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c3617c408acae457 commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -p no:cacheprovider` result=`127 passed`",
+    "validation-receipt: id=56f5f78fb368418f commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json` result=`passed; blocking=0`",
+    "validation-receipt: id=c96ab13230e5eb3e commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+    "validation-receipt: id=e2587a7b117df552 commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1643 --module validation --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
