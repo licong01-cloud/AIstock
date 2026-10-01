@@ -32,9 +32,9 @@ from .monthly_source_producer import (
     MonthlySourceReadSet,
     SourceArtifact,
 )
-from .monthly_unified import SOURCE_GATES, SourceChange
+from .monthly_unified import SOURCE_GATES, MonthlyReleaseSourceBlocked, SourceChange
 from .monthly_worker import ProducerContext
-from .profile import DatasetProfile
+from .profile import CANONICAL_PROFILE_ID, DatasetProfile
 from .source_authority import (
     FrozenSourceAuthoritySnapshot,
     MonthlySourceAuthority,
@@ -46,7 +46,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "2"
+POSTGRES_SOURCE_ADAPTER_VERSION = "3"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
 _CHANGE_DATASET_ALIASES = {
@@ -230,6 +230,7 @@ class PostgresMonthlySourceAdapter:
                 "source_authority_policy": "dataset_release_source_authority_v1",
                 "artifact_ready_contract": "dataset_release_artifact_ready_contract_v1",
                 "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
+                "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
                 "mvcc_partition_reuse": self.mvcc_partition_reuse,
                 "gates": list(SOURCE_GATES),
                 "source_audit_contract": AUDIT_SCHEMA,
@@ -242,11 +243,12 @@ class PostgresMonthlySourceAdapter:
         identity: MonthlySnapshotIdentity,
         context: ProducerContext,
     ) -> MonthlySourceReadSet:
-        del connection  # Data sessions below import identity.snapshot_id before their first query.
         predecessor_cutoff = date.fromisoformat(str(context.plan["predecessor"]["cutoff"]))
         target_cutoff = date.fromisoformat(str(context.plan["target_cutoff"]))
         if target_cutoff <= predecessor_cutoff:
             raise MonthlyPostgresSourceError("monthly source cutoff did not advance")
+        if self.profile.profile == CANONICAL_PROFILE_ID:
+            self._require_pit_coverage(connection, target_cutoff)
 
         baseline_row = self.source_catalog.latest_source_snapshot(
             profile=self.profile.profile,
@@ -393,6 +395,44 @@ class PostgresMonthlySourceAdapter:
             changes=changes,
             input_artifacts=tuple(artifacts),
             seal_token=self._catalog_spec(frozen, identity=identity),
+        )
+
+    def _require_pit_coverage(self, connection: SnapshotConnection, cutoff: date) -> None:
+        # The coordinator has already imported its read-only snapshot. Check
+        # readiness before any CAS partition, freeze or baseline materialization.
+        # This does not extend spans or replace the later exact PIT validation.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT start_date,end_date,status,dirty "
+                "FROM market.stock_universe_pit_state WHERE universe_key=%s",
+                (self.profile.universe_key,),
+            )
+            row = cursor.fetchone()
+        if row is not None and len(row) == 4:
+            start, end, status, dirty = row
+            if (
+                type(start) is date and type(end) is date
+                and start <= self.profile.start_date and end >= cutoff
+                and status == 'ready' and dirty is False
+            ):
+                return
+        else:
+            start, end, status, dirty = None, None, None, None
+        raise MonthlyReleaseSourceBlocked(
+            "canonical PIT authority is not ready for the requested source window",
+            context={
+                "reason_code": "BLOCKED_PIT_STATE_NOT_READY",
+                "universe_key": self.profile.universe_key,
+                "requested_start": self.profile.start_date.isoformat(),
+                "requested_cutoff": cutoff.isoformat(),
+                "state_start": start.isoformat() if type(start) is date else None,
+                "state_end": end.isoformat() if type(end) is date else None,
+                "state_status": status if isinstance(status, str) else None,
+                "state_dirty": dirty if type(dirty) is bool else None,
+                "operator_script": "scripts/prepare_canonical_pit_monthly.py",
+                "production_apply_requires_authorization": True,
+                "database_write_performed": False,
+            },
         )
 
     def _bundle(
