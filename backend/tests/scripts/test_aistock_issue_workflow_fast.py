@@ -15,6 +15,67 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+def _monthly_ready_payload() -> dict[str, Any]:
+    from backend.services.dataset_release.monthly_unified import STAGES
+    return {
+        "schema_version": "aistock_monthly_release_status_v1",
+        "data": {
+            "schema_version": "aistock_monthly_release_state_v1",
+            "operation_id": "dmr_" + "a" * 32,
+            "status": "READY_TO_ACTIVATE", "attempt": 1,
+            "plan_sha256": "b" * 64, "ready_receipt_sha256": "c" * 64,
+            "cancel_requested": False, "last_error": None, "current_stage": None,
+            "checkpoints": dict.fromkeys(STAGES, True),
+        },
+    }
+
+
+def _monthly_verdict(payload):
+    return workflow._evaluate_business_smoke_semantics(
+        "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32,
+        json.dumps(payload), response_sha256="d" * 64,
+    )[1]
+
+
+def test_monthly_ready_probe_requires_operation_bound_success() -> None:
+    verdict = _monthly_verdict(_monthly_ready_payload())
+    assert verdict["contract_id"] == "monthly_release_ready"
+    assert verdict["verdict"] == "passed"
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("operation_id", "dmr_" + "f" * 32), ("status", "FAILED"),
+    ("status", "SOURCE_READY"), ("status", "ACTIVATED_VERIFY_FAILED"),
+    ("status", []),
+    ("cancel_requested", True), ("cancel_requested", 0), ("attempt", True),
+    ("ready_receipt_sha256", ""), ("plan_sha256", "invalid"),
+    ("current_stage", "SOURCE"), ("last_error", {"code": "SOURCE_INCOMPLETE"}),
+])
+def test_monthly_probe_rejects_cross_operation_or_unready_state(key, value) -> None:
+    payload = _monthly_ready_payload()
+    payload["data"][key] = value
+    assert _monthly_verdict(payload)["verdict"] == "failed"
+
+
+@pytest.mark.parametrize("case", ["missing", "non_bool", "extra", "failed", "outer_schema", "state_schema"])
+def test_monthly_probe_checkpoint_and_schema_closure(case) -> None:
+    payload = _monthly_ready_payload()
+    points = payload["data"]["checkpoints"]
+    if case == "missing":
+        del points["SOURCE"]
+    elif case == "non_bool":
+        points["SOURCE"] = 1
+    elif case == "extra":
+        points["UNREVIEWED"] = True
+    elif case == "failed":
+        points["SOURCE"] = False
+    elif case == "outer_schema":
+        payload["schema_version"] = "other"
+    else:
+        payload["data"]["schema_version"] = "other"
+    assert _monthly_verdict(payload)["verdict"] == "failed"
+
+
 def test_monthly_read_only_probe_uses_scoped_operator_file(monkeypatch, tmp_path) -> None:
     token = hashlib.sha256(b"monthly-probe-credential-fixture").hexdigest()
     secret_file = tmp_path / "operator.token"
