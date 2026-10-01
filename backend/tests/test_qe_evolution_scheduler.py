@@ -80,6 +80,13 @@ class _Cursor:
             self.state.task["status"] = "running"
             self.rowcount = 1
             return
+        if normalized.startswith("UPDATE qe_evolution_loops SET config_json = %s"):
+            config_json, loop_id = params
+            assert loop_id == self.state.loop["loop_id"]
+            self.state.loop["config_json"] = json.loads(config_json)
+            assert self.state.loop["config_json"]["parallel_training_eligible"] is True
+            self.rowcount = 1
+            return
         if "SET config_json = jsonb_set" in normalized:
             state_value, loop_id, retry_attempt_id = params
             metadata = self.state.loop["config_json"]["_qe_retry_submission"]
@@ -168,7 +175,7 @@ def test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume(
     scheduler._get_workspace_client_for_node_id = lambda _node_id: object()  # type: ignore[method-assign]
     scheduler._get_callback_url_for_node = lambda _node_id: None  # type: ignore[method-assign]
     scheduler._resolve_gpu_execution_contract = (  # type: ignore[method-assign]
-        lambda **_kwargs: ("parallel", False)
+        lambda **_kwargs: ("parallel", False, True)
     )
 
     first = asyncio.run(
