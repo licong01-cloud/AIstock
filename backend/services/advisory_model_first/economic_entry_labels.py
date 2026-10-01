@@ -16,6 +16,7 @@ import pandas as pd
 from backend.services.advisory_model_first.economic_entry_contracts import (
     EconomicEntryInputIdentityV1,
     EconomicEntryLabelV1,
+    POLICY_PRICE_RELATIVE_TOLERANCE,
 )
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
@@ -143,6 +144,8 @@ def build_economic_entry_labels(
         _fail("reference provenance mismatch")
     if not price_table["suspended"].map(lambda value: isinstance(value, bool)).all():
         _fail("suspension state must be explicit boolean, not unknown or truthy string")
+    if "tradability_unknown" in price_table and not price_table["tradability_unknown"].map(lambda value: isinstance(value, bool)).all():
+        _fail("unknown tradability must be an explicit boolean")
     calendar = pd.DatetimeIndex([_day(day) for day in trading_calendar])
     if calendar.empty or not calendar.is_unique or not calendar.is_monotonic_increasing:
         _fail("trading calendar must be ordered and unique")
@@ -182,6 +185,9 @@ def build_economic_entry_labels(
                 else "DATA_UNAVAILABLE" if status == "NOT_ENTERED_MISSING_OPEN" else status
             )
             observed_entry = price_map.get((target, symbol))
+            if observed_entry is not None and observed_entry.get("tradability_unknown", False):
+                output.append(EconomicEntryLabelV1(**base, status="DATA_UNAVAILABLE", reason_code="ENTRY_TRADABILITY_UNKNOWN"))
+                continue
             if status == "NOT_ENTERED_SUSPENDED" and observed_entry is not None and not observed_entry["suspended"]:
                 _fail("frozen suspension label contradicts the observed suspension state")
             output.append(EconomicEntryLabelV1(**base, status=adapted, reason_code=status))
@@ -225,6 +231,8 @@ def _mature_label(
     decision_row = prices.get((decision, symbol))
     if entry is None or exit_row is None or decision_row is None:
         return unavailable("PRICE_ENDPOINT_MISSING")
+    if entry.get("tradability_unknown", False) or exit_row.get("tradability_unknown", False):
+        return unavailable("ENDPOINT_TRADABILITY_UNKNOWN")
     if entry["suspended"] or exit_row["suspended"]:
         _fail("mature episode claims an executable entry/exit on a suspended day")
     raw_open = _positive(entry["raw_open_cny"])
@@ -245,7 +253,7 @@ def _mature_label(
         if factor is None or raw is None or recorded is None:
             return unavailable("PRICE_COORDINATE_ENDPOINT_INVALID")
         projected = raw * factor
-        if not math.isclose(projected, recorded, rel_tol=1e-7, abs_tol=1e-8):
+        if not math.isclose(projected, recorded, rel_tol=POLICY_PRICE_RELATIVE_TOLERANCE, abs_tol=1e-8):
             _fail("raw-to-policy price parity failed", "ADVISORY_ECONOMIC_PRICE_PARITY")
         endpoints.append(recorded)
     cost = identity.cost_policy

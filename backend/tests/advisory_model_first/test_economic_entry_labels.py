@@ -80,6 +80,17 @@ def test_cost_once_true_cash_advantage_and_chronological_daily_risk(inputs):
     assert build_economic_entry_labels(**inputs)[0].label_sha256 == label.label_sha256
 
 
+@pytest.mark.parametrize("status", ["MATURED", "NOT_ENTERED_SUSPENDED"])
+def test_ambiguous_execution_state_preserves_candidate_without_fake_skip(inputs, status):
+    inputs["episodes"].loc[0, "label_status"] = status
+    inputs["prices"]["tradability_unknown"] = False
+    inputs["prices"].loc[1, "tradability_unknown"] = True
+    label, = build_economic_entry_labels(**inputs)
+    assert label.status == "DATA_UNAVAILABLE" and label.entry_advantage_bps is None
+    assert label.original_label_status == status
+    assert "TRADABILITY_UNKNOWN" in label.reason_code
+
+
 def test_corporate_action_reference_and_raw_to_policy_parity(inputs):
     inputs["prices"].loc[1:, ["raw_open_cny", "raw_close_cny"]] /= 2
     inputs["prices"].loc[1:, "policy_price_per_raw_cny"] = 2

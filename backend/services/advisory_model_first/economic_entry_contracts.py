@@ -13,25 +13,25 @@ from backend.services.advisory_model_first.policy_contracts import (
     transition_policy_from_payload,
 )
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256
+from backend.services.advisory_model_first.research_control_contracts import EvidenceReferenceV1
 
 
 SHA256 = r"^[0-9a-f]{64}$"
+# Two float32 machine epsilons cover conversion of both frozen Qlib endpoints.
+# This is a representation tolerance, not an outcome-tuned economic threshold.
+POLICY_PRICE_RELATIVE_TOLERANCE = 2 ** -22
 ECONOMIC_FEATURE_NAMES = (
     "parent_combined_score", "parent_rank_pct", "leg_norm_score_gap", "ret_1", "ret_5",
     "atr14_close", "csi300_ret_5", "market_up_ratio", "query_gap_bps",
 )
 
 
-class EconomicEntryTrainingRequestV1(BaseModel):
-    """One pre-registered candidate, no data-driven parameter or feature search."""
+class EconomicEntryTrainingConfigurationV1(BaseModel):
+    """Settings that can be registered before outcome-source preparation."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    schema_version: Literal["economic_entry_training_request_v1"] = "economic_entry_training_request_v1"
     hypothesis: Literal["actual_open_conditioned_entry_value_v1"] = "actual_open_conditioned_entry_value_v1"
-    input_identity_sha256: str = Field(pattern=SHA256)
-    feature_source_sha256: str = Field(pattern=SHA256)
-    implementation_sha256: str = Field(pattern=SHA256)
     feature_names: tuple[str, ...] = ECONOMIC_FEATURE_NAMES
     train_start: date
     train_end: date
@@ -54,7 +54,7 @@ class EconomicEntryTrainingRequestV1(BaseModel):
     deployable: Literal[False] = False
 
     @model_validator(mode="after")
-    def validate_clock(self) -> EconomicEntryTrainingRequestV1:
+    def validate_clock(self) -> EconomicEntryTrainingConfigurationV1:
         if not (
             self.train_start <= self.train_end < self.validation_start <= self.validation_end
             < self.test_start <= self.test_end <= self.label_cutoff
@@ -74,9 +74,54 @@ class EconomicEntryTrainingRequestV1(BaseModel):
             "return_objective": "regression", "risk_objective": "quantile", "risk_alpha": 0.9,
         }
 
+
+class EconomicEntryTrainingRequestV1(EconomicEntryTrainingConfigurationV1):
+    """A frozen configuration bound to the actual prepared input identities."""
+
+    schema_version: Literal["economic_entry_training_request_v1"] = "economic_entry_training_request_v1"
+    input_identity_sha256: str = Field(pattern=SHA256)
+    feature_source_sha256: str = Field(pattern=SHA256)
+    implementation_sha256: str = Field(pattern=SHA256)
+
     @property
     def request_sha256(self) -> str:
         return canonical_json_sha256({**self.model_dump(mode="json"), "parameters": self.effective_parameters})
+
+
+class EconomicEntryStudyPlanV1(BaseModel):
+    """Pre-outcome registration. Unknown prepared-source hashes are not invented."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
+
+    schema_version: Literal["economic_entry_study_plan_v1"] = "economic_entry_study_plan_v1"
+    configuration: EconomicEntryTrainingConfigurationV1
+    dataset_identity: str = Field(pattern=SHA256)
+    dataset_manifest_ref: EvidenceReferenceV1
+    feature_ref: EvidenceReferenceV1
+    window_contract_ref: EvidenceReferenceV1
+    policy_identity: str = Field(pattern=SHA256)
+    implementation_sha256: str = Field(pattern=SHA256)
+    parent_lineage: tuple[str, ...] = Field(min_length=1)
+    raw_data_source_policy: Literal["READONLY_DB_DAILY_POLICY_COORDINATE_PARITY_V1"] = (
+        "READONLY_DB_DAILY_POLICY_COORDINATE_PARITY_V1"
+    )
+    missing_feature_policy: Literal["PRESERVE_UNKNOWN_NO_BACKFILL"] = "PRESERVE_UNKNOWN_NO_BACKFILL"
+    resource_max_market_rows: int = Field(default=2000000, gt=0)
+    study_type: Literal["EXPLORATORY_SCREEN"] = "EXPLORATORY_SCREEN"
+    objective_contract: Literal["RISK_MANAGED_ADVISORY"] = "RISK_MANAGED_ADVISORY"
+    decision_use: Literal["NAVIGATION_ONLY"] = "NAVIGATION_ONLY"
+    sealed_holdout_accessed: Literal[False] = False
+    deployable: Literal[False] = False
+
+    @property
+    def plan_sha256(self) -> str:
+        return canonical_json_sha256({
+            **self.model_dump(mode="json"), "parameters": self.configuration.effective_parameters,
+        })
+
+    @property
+    def experiment_id(self) -> str:
+        return f"adveconomic_{self.plan_sha256[:24]}"
 
 
 class EconomicEntryInputIdentityV1(BaseModel):
