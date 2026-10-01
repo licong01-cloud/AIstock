@@ -118,6 +118,7 @@ jobs:
         shell: powershell
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
+          AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
         run: python scripts/ci_environment_verify.py
 
       - name: Build changed-file list
