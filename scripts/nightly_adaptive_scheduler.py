@@ -99,9 +99,54 @@ def load_retry_context(
     if not isinstance(planned_sessions_raw, list):
         raise ValueError("Nightly retry execution plan must contain selected_sessions")
     planned_sessions = unique_values([str(session) for session in planned_sessions_raw])
+    prior_changed_files = previous_plan.get("changed_files")
+    if not isinstance(prior_changed_files, list):
+        raise ValueError("Nightly retry execution plan must contain changed_files")
+    normalized_prior_changed_files = unique_values(
+        [nightly_discovery_input_pack.normalize_repo_path(str(path)) for path in prior_changed_files]
+    )
+    raw_session_args = previous_plan.get("session_positional_args") or {}
+    if not isinstance(raw_session_args, dict):
+        raise ValueError("Nightly retry execution plan session_positional_args must be an object")
+    prior_scoped_files: list[str] = []
+    for session, raw_args in raw_session_args.items():
+        if session not in planned_sessions or not isinstance(raw_args, list):
+            raise ValueError("Nightly retry execution plan contains invalid session_positional_args")
+        if session in CHANGE_FILE_ONLY_SESSIONS:
+            prior_scoped_files.extend(
+                nightly_discovery_input_pack.normalize_repo_path(str(path))
+                for path in raw_args
+                if str(path).strip()
+            )
+    durable_change_scope = unique_values([*prior_scoped_files, *normalized_prior_changed_files])
     observed_sessions = [str(row.get("session") or "").strip() for row in results]
     if any(not session for session in observed_sessions) or len(observed_sessions) != len(set(observed_sessions)):
         raise ValueError("Nightly retry results contain missing or duplicate session identities")
+    invalid_plan_rows = [
+        row
+        for row in results
+        if str(row.get("session") or "").strip() == "nightly_execution_plan"
+        and str(row.get("result") or "").strip() == "failure"
+        and str(row.get("failure_kind") or "").strip() == "invalid_plan"
+    ]
+    if invalid_plan_rows:
+        if len(results) != 1:
+            raise ValueError("Nightly invalid-plan receipt must contain exactly one failure row")
+        retry_sessions = [
+            session
+            for session in planned_sessions
+            if session not in CHANGE_FILE_ONLY_SESSIONS or durable_change_scope
+        ]
+        return {
+            "failed_sessions": retry_sessions,
+            "change_scoped_files": (
+                durable_change_scope
+                if CHANGE_FILE_ONLY_SESSIONS.intersection(retry_sessions)
+                else []
+            ),
+            "source_head": source_head,
+            "recovery_kind": "invalid_plan_rebuilt" if retry_sessions else "invalid_empty_plan_discarded",
+        }
     unexpected_sessions = [session for session in observed_sessions if session not in planned_sessions]
     if unexpected_sessions:
         raise ValueError("Nightly retry results contain sessions outside the bound plan: " + ", ".join(unexpected_sessions))
@@ -111,13 +156,8 @@ def load_retry_context(
             *[session for session in planned_sessions if session not in observed_sessions],
         ]
     )
-    prior_changed_files = previous_plan.get("changed_files")
-    if not isinstance(prior_changed_files, list):
-        raise ValueError("Nightly retry execution plan must contain changed_files")
     change_scoped_files = (
-        unique_values(
-            [nightly_discovery_input_pack.normalize_repo_path(str(path)) for path in prior_changed_files]
-        )
+        durable_change_scope
         if CHANGE_FILE_ONLY_SESSIONS.intersection(failed_sessions)
         else []
     )
@@ -154,17 +194,37 @@ def build_nightly_execution_plan(
             key
             for key, plan in plans.items()
             if key not in CHANGE_FILE_ONLY_PLAN_KEYS
+            and plan.get("execution_scope") != "pr"
             and plan.get("enabled", True)
             and plan.get("runner_enabled")
             and plan.get("nox_session")
         )
-    else:
+    elif normalized:
         plan_keys.extend(selection.get("required_plans") or [])
         plan_keys.extend(selection.get("recommended_plans") or [])
 
     selected_plan_keys: list[str] = []
     selected_sessions: list[str] = []
+    nightly_plan_keys: list[str] = []
     for key in unique_values(plan_keys):
+        plan = plans.get(key) or {}
+        if not full_run and plan.get("execution_scope") == "pr":
+            replacement_key = str(plan.get("nightly_replacement_plan") or "").strip()
+            replacement = plans.get(replacement_key) or {}
+            if (
+                not replacement_key
+                or not replacement
+                or replacement.get("execution_scope") == "pr"
+                or not replacement.get("enabled", True)
+                or not replacement.get("runner_enabled", False)
+                or not str(replacement.get("nox_session") or "").strip()
+            ):
+                raise ValueError(f"Nightly replacement plan is invalid for PR-only plan {key}: {replacement_key}")
+            key = replacement_key
+        if key not in nightly_plan_keys:
+            nightly_plan_keys.append(key)
+
+    for key in nightly_plan_keys:
         plan = plans.get(key) or {}
         session = str(plan.get("nox_session") or "").strip()
         if not session or not plan.get("enabled", True) or not plan.get("runner_enabled", False):
@@ -175,7 +235,10 @@ def build_nightly_execution_plan(
     enabled_sessions = {
         str(plan.get("nox_session") or "").strip(): key
         for key, plan in plans.items()
-        if plan.get("enabled", True) and plan.get("runner_enabled") and str(plan.get("nox_session") or "").strip()
+        if plan.get("execution_scope") != "pr"
+        and plan.get("enabled", True)
+        and plan.get("runner_enabled")
+        and str(plan.get("nox_session") or "").strip()
     }
     unknown_retry_sessions = [session for session in retry_sessions if session not in enabled_sessions]
     if unknown_retry_sessions:
@@ -205,10 +268,14 @@ def build_nightly_execution_plan(
         "changed_files_count": len(normalized),
         "full_run": full_run,
         "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
+        "excluded_pr_only_plans": (
+            sorted(key for key, plan in plans.items() if plan.get("execution_scope") == "pr") if full_run else []
+        ),
         "selected_plan_keys": selected_plan_keys,
         "selected_sessions": selected_sessions,
         "retry_sessions": retry_sessions,
         "retry_source_head": retry_context.get("source_head"),
+        "retry_recovery_kind": retry_context.get("recovery_kind"),
         "session_positional_args": session_positional_args,
         "impacted_modules": selection.get("impacted_modules") or [],
         "unmatched_code_files": unmatched_code,

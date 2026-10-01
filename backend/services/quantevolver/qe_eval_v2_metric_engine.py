@@ -849,6 +849,20 @@ def prepare_shared_context(
 
     close_unstacked = close_df["close"].unstack(level="instrument")
     del close_df
+    observed_price_instruments = set(close_unstacked.columns)
+    requested_instruments = (
+        sorted(instrument_hint)
+        if instrument_hint is not None
+        else sorted(observed_price_instruments)
+    )
+    if instrument_hint is not None:
+        # Preserve the caller's explicit PIT denominator even when an
+        # instrument has no physical close Bin. Missing prices remain NaN;
+        # they are never filled or inferred.
+        close_unstacked = close_unstacked.reindex(columns=requested_instruments)
+    missing_price_instruments = sorted(
+        set(requested_instruments) - observed_price_instruments
+    )
 
     fwd_ret_mats: dict[str, pd.DataFrame] = {}
     for period_name, shift_n in HOLDING_PERIODS.items():
@@ -899,6 +913,14 @@ def prepare_shared_context(
         "universe_metadata": universe_metadata,
         "coverage_semantics": universe_metadata.get("coverage_semantics", OFFICIAL_FACTOR_COVERAGE_SEMANTICS),
         "calc_engine": "qe_eval_v2",
+        "instrument_coverage": {
+            "requested_instrument_count": len(requested_instruments),
+            "physical_price_instrument_count": len(
+                observed_price_instruments & set(requested_instruments)
+            ),
+            "missing_price_instrument_count": len(missing_price_instruments),
+            "missing_price_instruments": missing_price_instruments,
+        },
     }
 
 

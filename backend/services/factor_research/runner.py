@@ -1,26 +1,29 @@
 """Reviewed candidate scripts in fresh processes; reuse the existing metric engine."""
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
 import subprocess
 import sys
 from datetime import date, datetime, timezone
+from math import isfinite
+from numbers import Integral, Real
 from pathlib import Path
 
 from .models import ResearchError, encode, identifier, json_object
 
 CANONICAL_UNIVERSE = "aistock_equity_pit_canonical_v2"
 REPO_ROOT = Path(__file__).resolve().parents[3]
+CANDIDATE_SUBPROCESS = Path(__file__).with_name("candidate_subprocess.py")
 
 
 def validate_spec(value):
     spec = json_object(value)
     allowed = {"task_id", "record_id", "attempt_id", "expected_revision", "universe_key", "method_version",
                "read_start", "signal_start", "signal_end", "read_end", "cutoff", "instruments",
-               "data_dir", "qlib_bin_path", "artifact_root", "candidates", "timeout_seconds", "comparison"}
+               "data_dir", "qlib_bin_path", "artifact_root", "candidates", "timeout_seconds", "comparison",
+               "full_evaluation"}
     if set(spec) - allowed:
         raise ResearchError("invalid_request", f"Unknown run fields: {sorted(set(spec) - allowed)}")
     for key in ("task_id", "record_id", "attempt_id"):
@@ -86,6 +89,12 @@ def validate_spec(value):
             raise ResearchError("invalid_comparison", "Comparison windows must stay inside the declared signal window")
         if spec["comparison"]["knowledge_cutoff"]["date"] > spec["cutoff"]:
             raise ResearchError("invalid_comparison", "Comparison knowledge cutoff cannot exceed the run cutoff")
+    if spec.get("full_evaluation") is not None:
+        from .full_evaluation import validate_full_evaluation_spec
+
+        spec["full_evaluation"] = validate_full_evaluation_spec(
+            spec["full_evaluation"], candidate_names=set(names), repo_root=REPO_ROOT
+        )
     timeout = spec.get("timeout_seconds", 600)
     if type(timeout) not in (int, float) or timeout <= 0:
         raise ResearchError("invalid_request", "timeout_seconds must be positive")
@@ -93,10 +102,37 @@ def validate_spec(value):
     return spec, output
 
 
+def _normalize_computed_metrics(value):
+    """Represent undefined computed numbers as JSON null, never as zero."""
+    if value is None or isinstance(value, (str, bool, date, datetime, Path)):
+        return value, 0
+    if isinstance(value, Integral):
+        return int(value), 0
+    if isinstance(value, Real):
+        number = float(value)
+        return (number, 0) if isfinite(number) else (None, 1)
+    if isinstance(value, dict):
+        result, replaced = {}, 0
+        for key, item in value.items():
+            normalized, count = _normalize_computed_metrics(item)
+            result[key] = normalized
+            replaced += count
+        return result, replaced
+    if isinstance(value, (list, tuple)):
+        result, replaced = [], 0
+        for item in value:
+            normalized, count = _normalize_computed_metrics(item)
+            result.append(normalized)
+            replaced += count
+        return result, replaced
+    return value, 0
+
+
 def write_json(path, payload):
     """Exclusive immutable result creation, not a dataset identity/hash operation."""
+    rendered = encode(payload)
     with Path(path).open("x", encoding="utf-8") as stream:
-        stream.write(encode(payload))
+        stream.write(rendered)
 
 
 def load_values(path, name):
@@ -159,6 +195,9 @@ def execute(spec, output, *, prepare=None, compute=None):
         compute = compute or compute_single_factor_metrics
     ctx = None
     results = []
+    full_evaluation_windows = None
+    instruments_path = output / "scope_instruments.json"
+    write_json(instruments_path, spec["instruments"])
     for candidate in spec["candidates"]:
         name = candidate["factor_name"]
         folder = output / name
@@ -166,9 +205,10 @@ def execute(spec, output, *, prepare=None, compute=None):
         script = folder / "factor.py"
         shutil.copyfile(candidate["script"], script)
         result_path = folder / "values.h5"
-        command = [sys.executable, str(script), "--data-dir", spec["data_dir"],
+        command = [sys.executable, str(CANDIDATE_SUBPROCESS), "--script", str(script),
+                   "--data-dir", spec["data_dir"],
                    "--output", str(result_path), "--start-date", spec["read_start"],
-                   "--end-date", spec["read_end"], "--instruments", json.dumps(spec["instruments"])]
+                   "--end-date", spec["read_end"], "--instruments-file", str(instruments_path)]
         # Logs belong only to this attempt; no capture of huge subprocess output in RAM.
         with (folder / "stdout.log").open("x", encoding="utf-8") as stdout, (
                 folder / "stderr.log").open("x", encoding="utf-8") as stderr:
@@ -190,12 +230,44 @@ def execute(spec, output, *, prepare=None, compute=None):
             ctx = evaluation_context(ctx, spec)
         selected = frame.loc[(dates >= pd.Timestamp(spec["signal_start"])) &
                              (dates <= pd.Timestamp(spec["signal_end"]))]
-        metrics = compute(name, selected, ctx)
+        if spec.get("full_evaluation") is not None:
+            from .full_evaluation import build_standard_windows, compute_candidate_metrics
+
+            if full_evaluation_windows is None:
+                full_evaluation_windows = build_standard_windows(
+                    pd.DatetimeIndex(ctx["dates"]),
+                    signal_start=spec["signal_start"],
+                    signal_end=spec["signal_end"],
+                )
+            raw_metrics = compute_candidate_metrics(
+                name,
+                selected,
+                ctx,
+                full_evaluation_windows,
+                compute=compute,
+            )
+        else:
+            raw_metrics = compute(name, selected, ctx)
+        metrics, nonfinite_count = _normalize_computed_metrics(raw_metrics)
         result = {"factor_name": name, "scope": "research_candidate", "metrics": metrics,
                   "rows": len(frame), "nan_rows": int(frame[name].isna().sum()),
                   "signal_rows": len(selected), "source_script": str(script),
                   "values": str(result_path), "actual_signal_start": ctx["data_start"],
-                  "actual_signal_end": ctx["data_end"], "correlation_status": "not_computed"}
+                  "actual_signal_end": ctx["data_end"], "correlation_status": "not_computed",
+                  "computed_metric_serialization": {
+                      "nonfinite_values_as_null": nonfinite_count,
+                      "policy": "ieee_nonfinite_to_json_null_no_zero_fill_or_row_removal",
+                  }}
+        if spec.get("full_evaluation") is not None:
+            finite = selected.loc[selected[name].notna()]
+            result["actual_factor_value_range"] = (
+                {
+                    "start": str(finite.index.get_level_values("datetime").min().date()),
+                    "end": str(finite.index.get_level_values("datetime").max().date()),
+                }
+                if not finite.empty
+                else None
+            )
         write_json(folder / "metrics.json", result)
         results.append(result)
         del frame, selected
@@ -230,4 +302,14 @@ def execute(spec, output, *, prepare=None, compute=None):
                "finished_at": datetime.now(timezone.utc).isoformat()}
     if comparison is not None:
         payload["research_comparison"] = comparison
+    if spec.get("full_evaluation") is not None:
+        from .full_evaluation import build_full_evaluation_result
+
+        payload["full_evaluation"] = build_full_evaluation_result(
+            run_spec=spec,
+            evaluation_spec=spec["full_evaluation"],
+            ctx=ctx,
+            candidate_results=results,
+            candidate_paths={item["factor_name"]: Path(item["values"]) for item in results},
+        )
     return payload

@@ -40,6 +40,42 @@ H20_FIELD_TYPES = {
 H20_FIELDS = H20_METRIC_FIELDS
 
 
+def test_shared_context_preserves_explicit_missing_price_instruments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dates = pd.bdate_range("2026-01-05", periods=25)
+    frame = pd.DataFrame(
+        {"close": np.linspace(10.0, 11.0, len(dates))},
+        index=pd.MultiIndex.from_arrays(
+            [dates, ["000001.SZ"] * len(dates)],
+            names=["datetime", "instrument"],
+        ),
+    )
+    monkeypatch.setattr(metric_engine, "read_close_prices", lambda *_args, **_kwargs: frame)
+
+    context = metric_engine.prepare_shared_context(
+        qlib_bin_path=Path("unused"),
+        start_date="2026-01-05",
+        end_date="2026-02-06",
+        instrument_hint={"000001.SZ", "000002.SZ"},
+        load_suspend_d=False,
+        load_st_pit_mask=False,
+    )
+
+    assert list(context["close_unstacked"].columns) == ["000001.SZ", "000002.SZ"]
+    assert context["close_unstacked"]["000002.SZ"].isna().all()
+    assert all(
+        values["000002.SZ"].isna().all()
+        for values in context["fwd_ret_mats"].values()
+    )
+    assert context["instrument_coverage"] == {
+        "requested_instrument_count": 2,
+        "physical_price_instrument_count": 1,
+        "missing_price_instrument_count": 1,
+        "missing_price_instruments": ["000002.SZ"],
+    }
+
+
 class _FakeCursor:
     def __init__(self) -> None:
         self.executed: list[tuple[str, Any]] = []

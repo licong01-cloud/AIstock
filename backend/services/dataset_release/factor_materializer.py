@@ -32,6 +32,12 @@ from backend.data_service.moneyflow_contract import (
     moneyflow_unit_contract_receipt,
     normalize_tushare_moneyflow_units,
 )
+from backend.data_service.security_source_identity import (
+    DEFAULT_MANIFEST_PATH,
+    MONEYFLOW_DATASET,
+    SecuritySourceIdentityManifest,
+    load_security_source_identity_manifest,
+)
 
 from .canonical import digest_named_fields, ensure_sha256
 from .canonical_stock_transformer import QfqDenominatorAuthority
@@ -209,6 +215,7 @@ class FactorMaterializationSpec:
     chunks: tuple[SealedFactorChunk, ...]
     static_ordered_columns: tuple[str, ...]
     row_group_rows: int
+    security_source_identity_path: Path = DEFAULT_MANIFEST_PATH
 
     def __post_init__(self) -> None:
         if type(self.row_group_rows) is not int or not 0 < self.row_group_rows <= 100_000:
@@ -217,6 +224,7 @@ class FactorMaterializationSpec:
             raise FactorMaterializationError("static schema authority differs from qe_static_factors_121_v1")
         if "l2_code_id" not in self.static_ordered_columns:
             raise FactorMaterializationError("static schema omits l2_code_id")
+        load_security_source_identity_manifest(self.security_source_identity_path)
         identities = [(item.dataset, item.partition_key) for item in self.chunks]
         if len(identities) != len(set(identities)):
             raise FactorMaterializationError("factor plan contains duplicate chunks")
@@ -235,6 +243,7 @@ class FactorMaterializationSpec:
 
     @property
     def digest(self) -> str:
+        identity = load_security_source_identity_manifest(self.security_source_identity_path)
         return digest_named_fields(
             FACTOR_MATERIALIZATION_SCHEMA,
             {
@@ -253,6 +262,7 @@ class FactorMaterializationSpec:
                 "factor_h5_dtypes": FACTOR_H5_DTYPES,
                 "factor_h5_density_contracts": FACTOR_H5_DENSITY_CONTRACTS,
                 "row_group_rows": self.row_group_rows,
+                "security_source_identity": identity.evidence(),
             },
         )
 
@@ -442,6 +452,7 @@ def restore_rolling_factor_state_from_bundle(
     root = _plain_root(factor_root, must_exist=True)
     partitions = _plain_root(root / "partitions", must_exist=True)
     requested = {str(value).upper() for value in instrument_filter}
+    identity = load_security_source_identity_manifest(root / "security_source_identity.json")
 
     def tail(dataset: str, rows: int) -> pd.DataFrame:
         dataset_root = _plain_root(partitions / dataset, must_exist=True)
@@ -452,6 +463,12 @@ def restore_rolling_factor_state_from_bundle(
         for frame in iter_parquet_frames(paths, max_rows=max_rows):
             if frame.empty:
                 continue
+            if dataset == "moneyflow":
+                frame = _canonicalize_moneyflow_artifact_frame(
+                    frame,
+                    identity=identity,
+                    requested=requested,
+                )
             if requested:
                 frame = frame.loc[frame.index.get_level_values("instrument").isin(requested)]
                 if frame.empty:
@@ -876,7 +893,7 @@ class FactorPartitionProducer:
             "sector_data",
             "margin_detail",
         ):
-            frame = _read_source_slice(
+            raw_frame = _read_source_slice(
                 reader,
                 dataset=dataset,
                 partition=partition,
@@ -884,9 +901,14 @@ class FactorPartitionProducer:
                 allow_empty=True,
                 read_chunk_rows=spec.row_group_rows,
             )
-            frame = _normalize_aux_frame(frame, dataset=dataset)
+            frame = _normalize_aux_frame(raw_frame, dataset=dataset)
             frame, pit_receipts[dataset] = filter_frame_to_pit_spans(frame, spec.pit_snapshot)
             frame = frame.sort_index() if not frame.empty else frame
+            artifact_frame = (
+                _moneyflow_source_identity_frame(frame, raw_frame)
+                if dataset == "moneyflow"
+                else frame
+            )
             static_frame, tail = _static_asof_frame(
                 dataset,
                 frame,
@@ -906,7 +928,7 @@ class FactorPartitionProducer:
                 working,
                 dataset=dataset,
                 partition_key=partition.partition_key,
-                frame=frame,
+                frame=artifact_frame,
                 row_group_rows=spec.row_group_rows,
             )
             if dataset in {"daily_basic", "moneyflow"}:
@@ -1044,6 +1066,18 @@ class FactorBundleMaterializer:
         chunks_root.mkdir(exist_ok=True)
         checkpoint_path = factor_root / "factor_checkpoint.json"
         durable = _load_checkpoint(checkpoint_path, spec.digest)
+        identity = load_security_source_identity_manifest(spec.security_source_identity_path)
+        identity_target = factor_root / "security_source_identity.json"
+        _publish_sealed_copy(
+            identity.source_path,
+            identity_target,
+            expected_sha256=identity.file_sha256,
+        )
+        durable["security_source_identity"] = {
+            "relative_path": identity_target.relative_to(staging_root).as_posix(),
+            **identity.evidence(),
+        }
+        _write_checkpoint(checkpoint_path, durable)
 
         local: dict[tuple[str, str], Path] = {}
         chunk_receipts: list[dict[str, Any]] = []
@@ -1138,6 +1172,20 @@ class FactorBundleMaterializer:
             outputs[STATIC_DATASET] = _portable_output_receipt(static_receipt, root=staging_root)
 
         durable["outputs"] = outputs
+        alias_receipt_path = factor_root / "moneyflow_alias_coverage_v1.json"
+        alias_receipt = _audit_moneyflow_alias_coverage(
+            daily_paths=_dataset_paths(spec, local, "daily_pv"),
+            paths=_dataset_paths(spec, local, "moneyflow"),
+            moneyflow_h5=factor_root / "moneyflow.h5",
+            identity=identity,
+            max_rows=spec.row_group_rows,
+        )
+        _write_canonical_json_create_or_verify(alias_receipt_path, alias_receipt)
+        durable["moneyflow_alias_coverage"] = {
+            "relative_path": alias_receipt_path.relative_to(staging_root).as_posix(),
+            "sha256": sha256_file(alias_receipt_path),
+            **alias_receipt,
+        }
         durable["status"] = "PASS"
         durable["memory_contract"] = {
             "mode": "partitioned_parquet_to_new_aggregate_v1",
@@ -1418,6 +1466,74 @@ def _normalize_aux_frame(frame: pd.DataFrame, *, dataset: str) -> pd.DataFrame:
     if output.index.has_duplicates:
         raise FactorMaterializationError(f"{dataset} output contains duplicate keys")
     return output
+
+
+def _moneyflow_source_identity_frame(
+    canonical: pd.DataFrame,
+    raw: pd.DataFrame,
+) -> pd.DataFrame:
+    """Restore source-specific codes for the frozen moneyflow artifact only.
+
+    Calculations and PIT filtering use canonical identities.  The shared raw
+    moneyflow H5 keeps the provider identity so consumers can reproduce the
+    exact historical source row and resolve it through the pinned authority.
+    """
+
+    if canonical.empty:
+        return canonical
+    source = _reset_source_index(raw)
+    required = {"ts_code", "trade_date"}
+    if not required.issubset(source.columns):
+        raise FactorMaterializationError("moneyflow source identity keys are missing")
+    if "source_ts_code" not in source.columns:
+        source["source_ts_code"] = source["ts_code"]
+    source["ts_code"] = source["ts_code"].astype(str).str.upper()
+    source["source_ts_code"] = source["source_ts_code"].astype(str).str.upper()
+    source["trade_date"] = pd.to_datetime(source["trade_date"], errors="raise")
+    identity = source.loc[:, ["trade_date", "ts_code", "source_ts_code"]]
+    if identity.duplicated(["trade_date", "ts_code"]).any():
+        raise FactorMaterializationError("moneyflow canonical/source identity is ambiguous")
+    values = canonical.reset_index().rename(
+        columns={"datetime": "trade_date", "instrument": "ts_code"}
+    )
+    values["trade_date"] = pd.to_datetime(values["trade_date"], errors="raise")
+    values["ts_code"] = values["ts_code"].astype(str).str.upper()
+    values = values.merge(
+        identity,
+        on=["trade_date", "ts_code"],
+        how="left",
+        validate="one_to_one",
+    )
+    if values["source_ts_code"].isna().any():
+        raise FactorMaterializationError("moneyflow source identity cannot be restored after PIT filtering")
+    values["instrument"] = values.pop("source_ts_code")
+    values["datetime"] = values.pop("trade_date")
+    values = values.drop(columns=["ts_code"])
+    output = values.set_index(["datetime", "instrument"])[list(canonical.columns)].sort_index()
+    if output.index.has_duplicates or len(output) != len(canonical):
+        raise FactorMaterializationError("moneyflow source artifact identity is duplicated")
+    return output.astype({column: str(dtype) for column, dtype in canonical.dtypes.items()})
+
+
+def _canonicalize_moneyflow_artifact_frame(
+    frame: pd.DataFrame,
+    *,
+    identity: SecuritySourceIdentityManifest,
+    requested: set[str],
+) -> pd.DataFrame:
+    source = _reset_source_index(frame)
+    source_codes = {str(value).upper() for value in source.get("ts_code", ())}
+    canonical_codes = set(requested) if requested else set(source_codes)
+    for row in identity.rows:
+        if row.source_dataset == MONEYFLOW_DATASET and row.source_ts_code in source_codes:
+            canonical_codes.discard(row.source_ts_code)
+            canonical_codes.add(row.canonical_ts_code)
+    mapped = identity.remap_source_rows(
+        source,
+        canonical_codes=canonical_codes,
+        source_dataset=MONEYFLOW_DATASET,
+    )
+    return _normalize_aux_frame(mapped, dataset="moneyflow")
 
 
 def _static_asof_frame(
@@ -2022,6 +2138,146 @@ def _audit_existing_parquet(
         "size_bytes": int(path.stat().st_size),
         "columns": list(columns),
     }
+
+
+def _audit_moneyflow_alias_coverage(
+    *,
+    daily_paths: Sequence[Path],
+    paths: Sequence[Path],
+    moneyflow_h5: Path,
+    identity: SecuritySourceIdentityManifest,
+    max_rows: int,
+) -> dict[str, Any]:
+    canonical_presence: set[tuple[str, date]] = set()
+    for frame in iter_parquet_frames(daily_paths, max_rows=max_rows):
+        if frame.empty:
+            continue
+        dates = pd.to_datetime(frame.index.get_level_values("datetime")).date
+        codes = frame.index.get_level_values("instrument").astype(str)
+        canonical_presence.update(zip(codes, dates, strict=True))
+    aliases = tuple(
+        row
+        for row in identity.rows
+        if row.source_dataset == MONEYFLOW_DATASET
+        and any(
+            code == row.canonical_ts_code
+            and row.effective_start <= observed <= row.effective_end
+            for code, observed in canonical_presence
+        )
+    )
+    expected: dict[tuple[str, date], np.ndarray] = {}
+    columns = tuple(MONEYFLOW_FIELD_MAP.values())
+    for frame in iter_parquet_frames(paths, max_rows=max_rows):
+        if frame.empty:
+            continue
+        dates = pd.to_datetime(frame.index.get_level_values("datetime")).date
+        codes = frame.index.get_level_values("instrument").astype(str)
+        for alias in aliases:
+            mask = (
+                (codes == alias.source_ts_code)
+                & (dates >= alias.effective_start)
+                & (dates <= alias.effective_end)
+            )
+            for index in np.flatnonzero(mask):
+                key = (alias.source_ts_code, dates[index])
+                if key in expected:
+                    raise FactorMaterializationError(f"duplicate moneyflow alias source fact: {key}")
+                expected[key] = frame.iloc[index].loc[list(columns)].to_numpy(dtype=np.float64)
+    if aliases and not expected:
+        raise FactorMaterializationError("moneyflow alias authority resolved no frozen source facts")
+
+    resolved: set[tuple[str, date]] = set()
+    nonfinite = 0
+    mismatched = 0
+    net_amount_position = columns.index("mf_net_amt")
+    for frame in iter_hdf_frames(moneyflow_h5, chunksize=max_rows):
+        if frame.empty:
+            continue
+        dates = pd.to_datetime(frame.index.get_level_values("datetime")).date
+        codes = frame.index.get_level_values("instrument").astype(str)
+        for index in range(len(frame)):
+            key = (codes[index], dates[index])
+            source_values = expected.get(key)
+            if source_values is None:
+                continue
+            frozen_values = frame.iloc[index].loc[list(columns)].to_numpy(dtype=np.float64)
+            if not np.isfinite(frozen_values[net_amount_position]):
+                nonfinite += 1
+            elif not np.allclose(source_values, frozen_values, rtol=1e-6, atol=1e-3, equal_nan=True):
+                mismatched += 1
+            else:
+                resolved.add(key)
+    unknown = set(expected).difference(resolved)
+    status = "PASS" if not unknown and nonfinite == 0 and mismatched == 0 else "BLOCKED"
+    if status != "PASS":
+        raise FactorMaterializationError(
+            "moneyflow alias coverage is incomplete",
+            context={
+                "expected": len(expected),
+                "resolved": len(resolved),
+                "unknown": len(unknown),
+                "nonfinite": nonfinite,
+                "mismatched": mismatched,
+            },
+        )
+    ordered_keys = [
+        {"effective_source_code": code, "trade_date": observed.isoformat()}
+        for code, observed in sorted(expected)
+    ]
+    encoded_keys = json.dumps(
+        ordered_keys,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    dates = [item[1] for item in expected]
+    return {
+        "schema_version": "qe_moneyflow_alias_coverage_receipt_v1",
+        "status": status,
+        "source_dataset": MONEYFLOW_DATASET,
+        "audit_start": min(dates).isoformat() if dates else None,
+        "audit_end": max(dates).isoformat() if dates else None,
+        "identity_authority": identity.evidence(),
+        "moneyflow_sha256": sha256_file(moneyflow_h5),
+        "alias_count": len(aliases),
+        "expected": len(expected),
+        "resolved": len(resolved),
+        "provider_absence": 0,
+        "unknown": len(unknown),
+        "nonfinite": nonfinite,
+        "mismatched": mismatched,
+        "expected_key_sha256": hashlib.sha256(encoded_keys).hexdigest(),
+        "database_read": False,
+        "database_write": False,
+    }
+
+
+def _write_canonical_json_create_or_verify(path: Path, payload: Mapping[str, Any]) -> None:
+    raw = (
+        json.dumps(
+            dict(payload),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    if path.exists():
+        _assert_plain(path)
+        if path.read_bytes() != raw:
+            raise FactorCheckpointConflict(f"existing factor authority differs: {path.name}")
+        return
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o440)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _assert_l2_int16(path: Path, max_rows: int) -> None:

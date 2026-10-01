@@ -1,0 +1,267 @@
+{
+  "actual": "Reader uses metric_columns=sector_columns[1:] and rejects 3024 finite moneyflow values for six officially unpublished SW L2 sectors in R8.",
+  "allowed_write_scope": [
+    "scripts/precompute_hmm_coefficients.py",
+    "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+    "tests/aistock_validation/bugs/20260919_BUG-1585-hmm-frozen-reader-rejects-real-moneyflow-outside-sw-l2-quote-availabilit.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1585",
+  "closed_at": "2026-09-19T07:34:22Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-19T07:17:36.486455Z",
+  "description": "Reader uses metric_columns=sector_columns[1:] and rejects 3024 finite moneyflow values for six officially unpublished SW L2 sectors in R8.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260919-7a7260d150ee",
+      "timestamp": "2026-09-19T07:17:36.486428Z"
+    }
+  ],
+  "evidence_uris": [
+    "R8 sector_data SHA256 399213873b096d015e241dc5603948330504afabfb068545b0af998538780440"
+  ],
+  "expected": "Quote-unavailable sector dates reject finite quote columns but accept real finite moneyflow; quote-available dates require all formal quote fields; coefficient sectors follow quote authority without changing membership.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+      "scripts/precompute_hmm_coefficients.py",
+      "tests/aistock_validation/bugs/20260919_BUG-1585-hmm-frozen-reader-rejects-real-moneyflow-outside-sw-l2-quote-availabilit.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+      "scripts/precompute_hmm_coefficients.py",
+      "tests/aistock_validation/bugs/20260919_BUG-1585-hmm-frozen-reader-rejects-real-moneyflow-outside-sw-l2-quote-availabilit.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/precompute_hmm_coefficients.py",
+        "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+      ],
+      "impacted_modules": [
+        "selection_center",
+        "paper_v2",
+        "strategy_package",
+        "hmm",
+        "qe.core"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/precompute_hmm_coefficients.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/precompute_hmm_coefficients.py",
+        "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+    ]
+  },
+  "first_seen_at": "2026-09-19T07:17:36.486455Z",
+  "fix_branch": null,
+  "fix_commit": "3f0441f35a762f8260385772032e33ba6f2542f9",
+  "fixed_at": "2026-09-19T07:34:22Z",
+  "github_issue_number": 4948,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4948",
+  "last_seen_at": "2026-09-19T07:17:36.486455Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4951",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "hmm_data_source_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM frozen reader rejects real moneyflow outside SW L2 quote availability",
+  "trigger_condition": {
+    "fingerprint": "7a7260d150ee38f2017848bc",
+    "source_event_id": "FE-20260919-7a7260d150ee"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=f2d59599e6ae8836 commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=pytest plan=direct status=passed command=`pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py -q` result=`26 passed`",
+    "validation-receipt: id=6ea0e6cd0770dec5 commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=pytest plan=direct status=passed command=`pytest backend/tests/scripts/test_precompute_hmm_coefficients.py -q` result=`3 passed`",
+    "validation-receipt: id=cd0a554baeba3cb8 commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=nox plan=hmm_data_source_backend status=passed command=`nox -s hmm_data_source_backend` result=`122 passed, 1 skipped, 5 deselected, coverage 76.40%`",
+    "validation-receipt: id=a1d7326e972d200c commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=nox plan=validation_module_registry_l0 status=passed command=`nox -s validation_module_registry_l0` result=`8 passed, ownership 14/14`",
+    "validation-receipt: id=cec59ff3beb58c20 commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed, blocking=0`",
+    "validation-receipt: id=ed75169a59d6fd0c commit=483f88c827f9ec51e708b801ecac1d9f7d1202cd kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "paper_v2",
+        "hmm_data_source"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "hmm_data_source_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "paper_v2",
+          "hmm_data_source"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "hmm_data_source_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

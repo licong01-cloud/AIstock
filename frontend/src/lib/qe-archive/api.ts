@@ -188,6 +188,18 @@ export type ArchiveSourceItemStatus = {
   eligible?: boolean;
   recommended?: boolean;
   reason?: string;
+  compute_status?: string;
+  warehouse_status?: "not_eligible" | "pending" | "persisted" | "failed";
+  asset_status?: "not_required" | "pending" | "published" | "partial" | "failed";
+  workspace_status?: "active" | "grace_period" | "cleanup_pending" | "cleaned" | "cleanup_incomplete";
+  value_class?: "A" | "B" | "C" | "X" | "classification_pending";
+  duplicate_of?: string | null;
+  retention_summary?: JsonObject;
+  protected_owner_count?: number;
+  lifecycle_reason_code?: string;
+  asset_reason_code?: string | null;
+  business_identity_sha256?: string | null;
+  result_digest_sha256?: string | null;
 };
 
 export type ArchiveTaskStatus = {
@@ -200,6 +212,15 @@ export type ArchiveTaskStatus = {
   manual_only_loop_count?: number;
   not_recommended_loop_count?: number;
   run_ids?: string[];
+  compute_status?: string;
+  warehouse_status?: string;
+  asset_status?: string;
+  workspace_status?: string;
+  value_class?: string;
+  duplicate_of?: string | null;
+  lifecycle_reason_code?: string;
+  asset_reason_code?: string | null;
+  protected_owner_count?: number;
 };
 
 export type ArchiveSourceStatus = {

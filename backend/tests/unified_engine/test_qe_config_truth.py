@@ -1,4 +1,5 @@
 
+import hashlib
 import json
 import shlex
 import sys
@@ -30,6 +31,7 @@ from backend.services.quantevolver import qe_reconciliation_coordinator as qerc
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
 from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.services.quantevolver.config_composer import (
+    EXECUTION_DATA_EXCLUSIONS_PARAM,
     PRECOMPUTED_HMM_COEFF_JSON_PARAM,
     ConfigComposer,
     QE_DEFAULT_BACKTEST_END,
@@ -119,6 +121,141 @@ def test_custom_evo_zombie_recovery_is_single_flight(monkeypatch) -> None:
         assert scheduler._zombie_resume_tasks == {}
 
     asyncio.run(scenario())
+
+
+def test_custom_evo_capacity_recovery_is_exact_loop_single_flight(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    scheduler._custom_evo_capacity_resume_tasks = {}
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def fake_resume(*, task_id: str, loop_index: int, loop_db_id: str) -> None:
+        calls.append((task_id, loop_index, loop_db_id))
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(scheduler, "_safe_resume_custom_evo_capacity_loop", fake_resume)
+
+    async def scenario() -> None:
+        kwargs = {
+            "loop_db_id": "qe_capacity_task_Loop3",
+            "task_id": "qe_capacity_task",
+            "loop_index": 3,
+        }
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is True
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is False
+        assert calls == [("qe_capacity_task", 3, "qe_capacity_task_Loop3")]
+        release.set()
+        await asyncio.gather(*tuple(scheduler._custom_evo_capacity_resume_tasks.values()))
+        await asyncio.sleep(0)
+        assert scheduler._custom_evo_capacity_resume_tasks == {}
+
+        started.clear()
+        release.clear()
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is True
+        await asyncio.wait_for(started.wait(), timeout=1)
+        release.set()
+        await asyncio.gather(*tuple(scheduler._custom_evo_capacity_resume_tasks.values()))
+        assert calls == [
+            ("qe_capacity_task", 3, "qe_capacity_task_Loop3"),
+            ("qe_capacity_task", 3, "qe_capacity_task_Loop3"),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_custom_evo_capacity_recovery_submits_only_matching_persisted_loop(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    submissions = []
+
+    async def fake_submit(task_id: str, loop_index: int):
+        submissions.append((task_id, loop_index))
+        return f"{task_id}_Loop{loop_index}"
+
+    monkeypatch.setattr(scheduler, "submit_custom_evo_loop", fake_submit)
+
+    async def scenario() -> None:
+        await scheduler._safe_resume_custom_evo_capacity_loop(
+            task_id="qe_capacity_task",
+            loop_index=5,
+            loop_db_id="qe_capacity_task_Loop5",
+        )
+        await scheduler._safe_resume_custom_evo_capacity_loop(
+            task_id="qe_capacity_task",
+            loop_index=6,
+            loop_db_id="qe_other_task_Loop6",
+        )
+
+    asyncio.run(scenario())
+    assert submissions == [("qe_capacity_task", 5)]
+
+
+def test_scan_recovers_persisted_custom_evo_capacity_wait_without_zombie_replay(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    scheduler._retry_resume_tasks = {}
+    sql_seen = []
+    capacity_rows = [
+        {
+            "loop_id": "qe_restart_capacity_Loop3",
+            "task_id": "qe_restart_capacity",
+            "loop_index": 3,
+        }
+    ]
+
+    class Cursor:
+        def __init__(self):
+            self.rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params=None):
+            normalized = " ".join(str(sql).split())
+            sql_seen.append(normalized)
+            self.rows = capacity_rows if "t.task_type = 'custom_evo'" in normalized else []
+
+        def fetchall(self):
+            return list(self.rows)
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, *_args, **_kwargs):
+            return Cursor()
+
+    scheduled = []
+
+    def fake_schedule(**kwargs):
+        scheduled.append(dict(kwargs))
+        return True
+
+    monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(scheduler, "_schedule_custom_evo_capacity_recovery", fake_schedule)
+
+    asyncio.run(scheduler.scan_running_loops())
+
+    assert scheduled == [
+        {
+            "loop_db_id": "qe_restart_capacity_Loop3",
+            "task_id": "qe_restart_capacity",
+            "loop_index": 3,
+        }
+    ]
+    zombie_sql = next(sql for sql in sql_seen if "SELECT t.task_id" in sql)
+    capacity_sql = next(sql for sql in sql_seen if "t.task_type = 'custom_evo'" in sql)
+    assert "agent_analysis #>> '{_qe_execution_capacity,state}' = 'waiting_capacity'" in zombie_sql
+    assert "l.status = 'pending'" in capacity_sql
+    assert "NOT COALESCE(l.config_json ? %s, false)" in capacity_sql
+    assert "ORDER BY l.updated_at, l.loop_id" in capacity_sql
 
 
 def _load_qrun_minute_module(monkeypatch):
@@ -216,6 +353,247 @@ def test_hmm_coefficients_read_local_artifact_without_legacy_wsl_fallback(monkey
 
     payload = json.loads(result)
     assert payload["daily_coefficients"]["2024-07-01"]["801010.SI"] == 1.0
+
+
+def test_hmm_coefficients_validator_accepts_complete_pit_membership() -> None:
+    ConfigComposer._validate_hmm_coefficients_json(
+        json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"801010.SI": 1.0}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {"000001.SZ": "801010.SI"},
+                },
+                "stock_sector_membership_spans": {
+                    "000001.SZ": [
+                        {
+                            "start_date": "2026-07-16",
+                            "end_date": "2026-07-16",
+                            "sector_code": "801010.SI",
+                        }
+                    ]
+                },
+            }
+        )
+    )
+
+
+def test_hmm_coefficients_selects_exact_active_release_artifact(monkeypatch, tmp_path) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    project_root = tmp_path / "project"
+    model_path = project_root / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    active_summary = {
+        "generation": "20260920-v14-unified",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "profile_sha256": "4" * 64,
+        "dataset_manifest_sha256": "3" * 64,
+        "dataset_manifest_file_sha256": "2" * 64,
+    }
+    payload = {
+        "dataset_identity": {
+            "generation": active_summary["generation"],
+            "release_id": active_summary["release_id"],
+            "active_profile_sha256": active_summary["profile_sha256"],
+            "dataset_manifest_sha256": active_summary["dataset_manifest_sha256"],
+            "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+        },
+        "daily_coefficients": {"2024-07-01": {"801010.SI": 1.0}},
+        "stock_sector_membership_spans": {
+            "000001.SZ": [
+                {"start_date": "2024-07-01", "end_date": "2026-08-28", "sector_code": "801010.SI"}
+            ]
+        },
+    }
+    content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    filename = "coefficients_preset_A_2024-07-01_2026-08-28__v14.json"
+    coeff_path = model_path.parent / filename
+    coeff_path.write_text(content, encoding="utf-8")
+    sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": active_summary["generation"],
+                    "release_id": active_summary["release_id"],
+                    "active_profile_sha256": active_summary["profile_sha256"],
+                    "dataset_manifest_identity": active_summary["dataset_manifest_sha256"],
+                    "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+                    "coefficient_filename": filename,
+                    "coefficient_sha256": sha256,
+                    "coefficient_bytes": len(content.encode("utf-8")),
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", project_root)
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        result = ConfigComposer()._precompute_hmm_coefficients(
+            {
+                "sector_hmm_model_path": str(model_path),
+                "hmm_model_version_id": "snap",
+                "hmm_signal_preset": "preset_A",
+                "_qe_active_dataset_summary": active_summary,
+            },
+            {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+        )
+
+    assert json.loads(result)["dataset_identity"]["generation"] == active_summary["generation"]
+
+    coeff_path.write_text(content + "\n", encoding="utf-8")
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="SHA-256 differs"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+    stale_payload = json.loads(content)
+    stale_payload["dataset_identity"]["generation"] = "20260918-v11"
+    stale_content = json.dumps(stale_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    coeff_path.write_text(stale_content, encoding="utf-8")
+    window = svc.get_config.return_value["config_json"]["coefficient_windows"][0]
+    window["coefficient_sha256"] = hashlib.sha256(stale_content.encode("utf-8")).hexdigest()
+    window["coefficient_bytes"] = len(stale_content.encode("utf-8"))
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="dataset identity differs"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+
+def test_hmm_coefficients_rejects_stale_release_registration(monkeypatch, tmp_path) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    model_path = tmp_path / "project" / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": "20260918-v11",
+                    "release_id": "qe_hmm_full_v2_20260831",
+                    "active_profile_sha256": "1" * 64,
+                    "dataset_manifest_identity": "1" * 64,
+                    "dataset_manifest_file_sha256": "1" * 64,
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", tmp_path / "project")
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="not registered for the active dataset identity"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": {
+                        "generation": "20260920-v14-unified",
+                        "release_id": "qe_hmm_full_v2_20260831",
+                        "profile_sha256": "4" * 64,
+                        "dataset_manifest_sha256": "3" * 64,
+                        "dataset_manifest_file_sha256": "2" * 64,
+                    },
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+
+def test_hmm_coefficients_rejects_active_window_without_immutable_file_binding(
+    monkeypatch, tmp_path
+) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    model_path = tmp_path / "project" / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    active_summary = {
+        "generation": "20260920-v14-unified",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "profile_sha256": "4" * 64,
+        "dataset_manifest_sha256": "3" * 64,
+        "dataset_manifest_file_sha256": "2" * 64,
+    }
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": active_summary["generation"],
+                    "release_id": active_summary["release_id"],
+                    "active_profile_sha256": active_summary["profile_sha256"],
+                    "dataset_manifest_identity": active_summary["dataset_manifest_sha256"],
+                    "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", tmp_path / "project")
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="missing immutable artifact binding"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+
+def test_hmm_coefficients_validator_rejects_missing_pit_membership_date() -> None:
+    with pytest.raises(RuntimeError, match="missing coefficient dates"):
+        ConfigComposer._validate_hmm_coefficients_json(
+            json.dumps(
+                {
+                    "daily_coefficients": {"2026-07-16": {"801010.SI": 1.0}},
+                    "stock_sector_map_by_date": {
+                        "2026-07-15": {"000001.SZ": "801010.SI"},
+                    },
+                }
+            )
+        )
 
 
 def test_hmm_linux_worker_model_path_is_not_converted_to_windows(monkeypatch):
@@ -701,6 +1079,59 @@ def test_qe_frozen_risk_policy_spec_pins_frozen_dataset_without_db(monkeypatch):
     assert spec["pins"]["meta_export_sha256"] == QE_FROZEN_META_EXPORT_SHA256
 
 
+def test_qe_frozen_spec_pins_explicit_full_window_execution_data_exclusion():
+    exclusion = {
+        "schema_version": "qe_execution_data_exclusion_v1",
+        "instrument": "601989.SH",
+        "scope": "full_backtest_window",
+        "start_date": DATA_SPLIT["test_start"],
+        "end_date": DATA_SPLIT["backtest_end"],
+        "reason_code": "minute_source_gap_confirmed_unfillable",
+        "evidence_sha256": "c" * 64,
+    }
+    spec = json.loads(
+        ConfigComposer()._build_qe_frozen_risk_policy_spec(
+            DATA_SPLIT,
+            {
+                "risk_policy": {"enabled": True, "providers": ["st_pit"]},
+                EXECUTION_DATA_EXCLUSIONS_PARAM: [exclusion],
+            },
+            qlib_data_path="/frozen/bin",
+        )
+    )
+
+    assert spec[EXECUTION_DATA_EXCLUSIONS_PARAM] == [exclusion]
+    assert ConfigComposer._is_suspend_filter_enabled(
+        {EXECUTION_DATA_EXCLUSIONS_PARAM: [exclusion]}
+    ) is True
+
+
+def test_qe_execution_data_exclusion_rejects_partial_window_or_untyped_reason():
+    base = {
+        "schema_version": "qe_execution_data_exclusion_v1",
+        "instrument": "601989.SH",
+        "scope": "full_backtest_window",
+        "start_date": DATA_SPLIT["test_start"],
+        "end_date": DATA_SPLIT["backtest_end"],
+        "reason_code": "minute_source_gap_confirmed_unfillable",
+        "evidence_sha256": "d" * 64,
+    }
+    for update in (
+        {"start_date": "2021-07-02"},
+        {"reason_code": "ignore_missing_data"},
+    ):
+        invalid = {**base, **update}
+        with pytest.raises(ValueError):
+            ConfigComposer()._build_qe_frozen_risk_policy_spec(
+                DATA_SPLIT,
+                {
+                    "risk_policy": {"enabled": True, "providers": ["st_pit"]},
+                    EXECUTION_DATA_EXCLUSIONS_PARAM: [invalid],
+                },
+                qlib_data_path="/frozen/bin",
+            )
+
+
 def test_qe_frozen_risk_policy_spec_requires_provider_uri():
     with pytest.raises(RuntimeError, match="reason_code=qe_frozen_build_spec_invalid"):
         ConfigComposer()._build_qe_frozen_risk_policy_spec(
@@ -765,6 +1196,27 @@ def test_qe_risk_policy_suspend_filter_wires_frozen_artifact():
     assert artifact is None
     assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
     assert custom_params["suspend_filter_strict"] is True
+
+
+def test_execution_data_exclusion_is_control_metadata_not_qlib_kwarg():
+    exclusion = {
+        "schema_version": "qe_execution_data_exclusion_v1",
+        "instrument": "601989.SH",
+        "scope": "full_backtest_window",
+        "start_date": DATA_SPLIT["test_start"],
+        "end_date": DATA_SPLIT["backtest_end"],
+        "reason_code": "minute_source_gap_confirmed_unfillable",
+        "evidence_sha256": "f" * 64,
+    }
+
+    yaml_text = _base_yaml(
+        custom_params={EXECUTION_DATA_EXCLUSIONS_PARAM: [exclusion]}
+    )
+
+    outer_strategy = _slice_yaml_between(yaml_text, "    strategy:", "    model:")
+    assert "class: SuspendFilterTopkDropoutStrategy" in outer_strategy
+    assert "filter_suspended_on_signal: true" in outer_strategy
+    assert EXECUTION_DATA_EXCLUSIONS_PARAM not in yaml_text
 
 
 def test_hmm_precomputed_coefficients_skip_runtime_precompute(monkeypatch):
@@ -1440,11 +1892,19 @@ def test_scheduler_resolves_model_aware_gpu_training_policy(monkeypatch):
         "gat-model": {"model_id": "gat-model", "model_config": {"class": "EfficientGATs"}},
         "lstm-model": {"model_id": "lstm-model", "model_name": "LSTM"},
     }
-    monkeypatch.setattr(ConfigComposer, "_get_model_info", lambda _self, model_id: model_rows[model_id])
+    monkeypatch.setattr(
+        ConfigComposer,
+        "_get_model_info",
+        lambda _self, model_id: model_rows.get(model_id),
+    )
 
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy("gat-model") == "exclusive"
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy("lstm-model") == "parallel"
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy(None) == "parallel"
+    assert AutoEvolutionScheduler._resolve_model_gpu_training_contract("missing-model") == (
+        "parallel",
+        False,
+    )
 
 
 def test_scheduler_forces_durable_phase_tracking_for_exclusive_full_train(monkeypatch):
@@ -1454,31 +1914,60 @@ def test_scheduler_forces_durable_phase_tracking_for_exclusive_full_train(monkey
 
     def _resolve(model_id):
         calls.append(model_id)
-        return policies[model_id]
+        return policies[model_id], True
 
-    monkeypatch.setattr(scheduler, "_resolve_model_gpu_training_policy", _resolve)
+    monkeypatch.setattr(scheduler, "_resolve_model_gpu_training_contract", _resolve)
 
     assert scheduler._resolve_gpu_execution_contract(
         model_id="gat-model",
         requested_phase_pipeline=False,
         full_train=True,
-    ) == ("exclusive", True)
+        allow_parallel_training=True,
+    ) == ("exclusive", True, False)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="lstm-model",
         requested_phase_pipeline=False,
         full_train=True,
-    ) == ("parallel", False)
+        allow_parallel_training=True,
+    ) == ("parallel", False, True)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="lstm-model",
         requested_phase_pipeline=True,
         full_train=True,
-    ) == ("parallel", True)
+        allow_parallel_training=True,
+    ) == ("parallel", True, True)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="gat-model",
         requested_phase_pipeline=True,
         full_train=False,
-    ) == ("parallel", False)
-    assert calls == ["gat-model", "lstm-model", "lstm-model"]
+        allow_parallel_training=True,
+    ) == ("parallel", False, False)
+    assert scheduler._resolve_gpu_execution_contract(
+        model_id="lstm-model",
+        requested_phase_pipeline=False,
+        full_train=True,
+        allow_parallel_training=False,
+    ) == ("parallel", False, False)
+    assert calls == ["gat-model", "lstm-model", "lstm-model", "lstm-model"]
+
+
+def test_custom_evo_submission_propagates_proven_parallel_training_capacity():
+    source = inspect.getsource(AutoEvolutionScheduler._submit_custom_evo_loop_unified)
+
+    assert '"parallel_training_eligible": parallel_training_eligible' in source
+    assert 'submission_node_capacity=int(slot["limit"])' in source
+    assert "parallel_training_eligible=parallel_training_eligible" in source
+    assert "parallel_training_eligible=False" in source
+
+
+def test_custom_evo_retry_persists_parallel_training_capacity_before_submit():
+    source = inspect.getsource(AutoEvolutionScheduler.retry_loop)
+
+    persist_idx = source.index('config["parallel_training_eligible"]')
+    submit_idx = source.index("result = await executor.submit")
+    assert persist_idx < submit_idx
+    assert 'int(slot["limit"]) if slot is not None else None' in source
+    assert "parallel_training_eligible=retry_parallel_training_eligible" in source
 
 
 def test_scheduler_atomically_reserves_policy_specific_gpu_phase_sessions(monkeypatch):
