@@ -122,8 +122,8 @@ class ManagedRepairImpactJournal:
                        )
                        AND NOT (
                             lower(COALESCE(attempt.status, '')) = 'started'
-                            AND (NULLIF(attempt.job_id, '') IS NOT NULL
-                                 OR NULLIF(attempt.run_id, '') IS NOT NULL)
+                            AND (NULLIF(btrim(attempt.job_id), '') IS NOT NULL
+                                 OR NULLIF(btrim(attempt.run_id), '') IS NOT NULL)
                             AND (EXISTS (
                                 SELECT 1 FROM market.data_sync_attempts AS completed
                                  WHERE completed.target_id = attempt.target_id

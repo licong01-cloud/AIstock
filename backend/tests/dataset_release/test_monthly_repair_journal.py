@@ -179,6 +179,7 @@ def readonly_dev_connection():  # type: ignore[no-untyped-def]
     ("same_execution", False), ("reverse_callback", False), ("different_job", True),
     ("different_run", True), ("different_target", True), ("no_execution_identity", True),
     ("run_only_execution", False), ("callback_without_finish", True),
+    ("blank_execution_identity", True),
     ("owner_success", False), ("owner_timeout", False), ("owner_delayed", False),
     ("owner_unfinished", True), ("owner_unknown", True), ("owner_running", True),
     ("owner_null_status", True), ("running_with_completed_callback", True),
@@ -207,7 +208,7 @@ def test_actual_postgres_writer_query_in_readonly_dev(
         attempt["status"] = None if case == "null_status" else "mystery"
     elif case in {"same_execution", "reverse_callback", "different_job", "different_run",
                   "different_target", "no_execution_identity", "run_only_execution",
-                  "callback_without_finish"}:
+                  "callback_without_finish", "blank_execution_identity"}:
         if case == "different_job":
             completed["job_id"] = "other"
         if case == "different_run":
@@ -221,6 +222,8 @@ def test_actual_postgres_writer_query_in_readonly_dev(
             attempt["run_id"] = completed["run_id"] = "run"
         if case == "callback_without_finish":
             completed["finished_at"] = None
+        if case == "blank_execution_identity":
+            attempt["job_id"] = completed["job_id"] = " "
         attempts.append(completed)
         if case == "reverse_callback":
             attempts.reverse()
