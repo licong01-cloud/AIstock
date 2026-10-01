@@ -69,19 +69,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["Windows Python 3.13.5 and WSL Python 3.10.19 loaded current task source; each compared 3912 real R8 points: raw T-1 == projected official executor, maximum difference 0; no release/production writes"],
-    "inference_basis": "actual_changed_files",
-    "persistence_basis": "git_tracked_source",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
     "business_smoke_limitation": "Existing metrics binding checks read-path availability only, not corrected T-1 values. Closure additionally requires authorized production code/cache correction, raw T-1 parity and a new official batch readback; old batch is not correction evidence.",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "fresh_process_evidence": [
+      "Windows Python 3.13.5 and WSL Python 3.10.19 loaded current task source; each compared 3912 real R8 points: raw T-1 == projected official executor, maximum difference 0; no release/production writes",
+      "Windows Python 3.13.5 and WSL Python 3.10.19 fresh processes loaded 5c694a0d9 task source; R8 raw T-1 and official executor equal at 3912 points, max difference 0; DEV save existing ID21 readback passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart_and_authorized_production_factor_correction",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
-    "target_ids": ["backend-main"]
+    "target_ids": [
+      "backend-main"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -94,6 +100,23 @@
     "fingerprint": "f7df190b5c34120516d30aa9",
     "source_event_id": "FE-20261001-f7df190b5c34"
   },
+  "validation_evidence": [
+    "2026-10-02：登记文件的 python -m nox -s l0 -> passed，findings=0，blocking=0；仅验证登记，不证明问题已修复。",
+    "2026-10-02：changed-files classifier -> bug_registry_metadata_only，blocking=[]，backend_sessions=[]，dev_db_plan_keys=[]；runtime catalog -> none。",
+    "2026-10-02：BUG JSON 状态、Issue #5217 链接及精确两文件写入范围断言、git diff --check -> passed；BUG 仍为 open，fix_commit=null。"
+  ],
+  "validation_receipts": [
+    {
+      "command": "python -m nox -s l0",
+      "commit": "add7cde5fd383cd709326653aa2844d28d6143b5",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "receipt_id": "e741ef062f5806bf",
+      "result": "passed; findings=0; blocking=0; registration only",
+      "schema_version": "aistock_validation_receipt_v1",
+      "status": "passed"
+    }
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -136,23 +159,6 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
-  "validation_receipts": [
-    {
-      "schema_version": "aistock_validation_receipt_v1",
-      "receipt_id": "e741ef062f5806bf",
-      "commit": "add7cde5fd383cd709326653aa2844d28d6143b5",
-      "evidence_kind": "nox",
-      "plan": "l0",
-      "command": "python -m nox -s l0",
-      "result": "passed; findings=0; blocking=0; registration only",
-      "status": "passed"
-    }
-  ],
-  "validation_evidence": [
-    "2026-10-02：登记文件的 python -m nox -s l0 -> passed，findings=0，blocking=0；仅验证登记，不证明问题已修复。",
-    "2026-10-02：changed-files classifier -> bug_registry_metadata_only，blocking=[]，backend_sessions=[]，dev_db_plan_keys=[]；runtime catalog -> none。",
-    "2026-10-02：BUG JSON 状态、Issue #5217 链接及精确两文件写入范围断言、git diff --check -> passed；BUG 仍为 open，fix_commit=null。"
-  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
