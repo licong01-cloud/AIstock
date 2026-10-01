@@ -348,6 +348,7 @@ jobs:
       - name: Verify prebuilt AIstock-CI and frontend dependencies
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
+          AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
         run: |
           if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
             Write-Host "::error::conda not on PATH on this self-hosted runner"
@@ -493,9 +494,17 @@ jobs:
             --github-env-file "${env:GITHUB_ENV}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
+      - name: Verify prebuilt AIstock-CI and isolated test storage
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+          AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
+        run: |
+          conda run -n AIstock-CI python scripts/ci_environment_verify.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: nox -s paper_v2_live
         run: |
-          conda run -n AIstock python -m nox -s paper_v2_live
+          conda run -n AIstock-CI python -m nox -s paper_v2_live
 
       - name: Print paper-v2 live evidence manifest
         if: always()

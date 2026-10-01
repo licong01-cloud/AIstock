@@ -18,6 +18,7 @@ non_runtime_source_paths:
   - backend/services/advisory_phase0b/snapshot_reader.py
   - backend/services/announcements/title_classifier.py
   - backend/services/dataset_release/direct_monthly.py
+  - backend/services/dataset_release/daily_basic_history_repair.py
   - backend/services/event_signal/st_announcement_adapter.py
   - backend/services/hmm_risk/rotation_l1_gbdt.py
   - backend/services/hmm_risk/rotation_l1_input_bundle.py
@@ -99,6 +100,7 @@ targets:
       - backend/services/dataset_release/candidate_validator.py
       - backend/services/dataset_release/canonical_stock_transformer.py
       - backend/services/dataset_release/factor_materializer.py
+      - backend/services/dataset_release/source_fact_history.py
       - backend/services/dataset_release/index_contract.py
       - backend/services/dataset_release/index_sources.py
       - backend/services/dataset_release/minute_overlay.py
@@ -144,6 +146,7 @@ targets:
           - backend/services/dataset_release/build_stage.py
           - backend/services/dataset_release/candidate_validator.py
           - backend/services/dataset_release/factor_materializer.py
+          - backend/services/dataset_release/source_fact_history.py
           - backend/services/dataset_release/monthly_consumer_layout.py
           - backend/services/dataset_release/monthly_local_validation.py
           - backend/services/dataset_release/monthly_worker_nodes.py
@@ -174,6 +177,7 @@ targets:
           - backend/services/dataset_release/candidate_validator.py
           - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/factor_materializer.py
+          - backend/services/dataset_release/source_fact_history.py
           - backend/services/dataset_release/index_contract.py
           - backend/services/dataset_release/index_sources.py
           - backend/services/dataset_release/minute_overlay.py
