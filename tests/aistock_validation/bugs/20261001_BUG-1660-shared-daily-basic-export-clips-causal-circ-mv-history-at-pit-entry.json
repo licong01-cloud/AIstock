@@ -121,6 +121,10 @@
     {"round": 3, "kind": "local_self_review_and_regression", "result": "passed", "scope": "latest invalid raw fact invalidates older positive cap; nan/inf/zero/negative RED-to-GREEN; strict candidate readback remains 155 resolved, train/validation zero, one honest source-boundary gap"}
   ],
   "source_delivery_blocker": {
+    "status": "resolved_by_separate_bug",
+    "resolution_bug_id": "BUG-1663",
+    "resolution_source_pr": "https://github.com/licong01-cloud/AIstock/pull/5220",
+    "resolution_merge_commit": "5e2a774dbf150a6842a3f96de2574e7f42c47065",
     "plan": "validation_catalog_integrity",
     "nodeid": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
     "baseline_main_reproduced": true,
@@ -128,6 +132,12 @@
     "required_max_ratio": 0.30,
     "unrelated_module_modified": false,
     "required_gate_bypassed": false
+  },
+  "design_compliance": {
+    "source_fix_complete_but_candidate_blocked_reported": true,
+    "no_silent_failure_or_invalid_fact_fallback": true,
+    "hmm_qe_pit_business_semantics_unchanged": true,
+    "no_private_data_gate_or_new_approval_invented": true
   },
   "suspected_modules": [
     "local_data"
