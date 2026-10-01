@@ -126,7 +126,9 @@ v2研究只验证语义修复，不改原退出policy、候选、成本、seed�
 
 ## 11. Production Gates
 
-design_source_merge=merged_PR5233；offline_label_and_daily_contract_kernel=verified；source_merge=pending；v2_research_model_trained=false；daily_api_ui_implemented=false；qe_experiment_submitted=false；database_written=false；profile_activated=false；sealed_holdout_accessed=false；binding_activated=false；backend_restart_owner=user。
+design_source_merge=merged_PR5233；offline_label_and_daily_contract_kernel=verified；source_merge=merged_PR5242_ea659553；v2_research_model_trained=false；daily_api_ui_implemented=false；qe_experiment_submitted=false；database_written=false；profile_activated=false；sealed_holdout_accessed=false；binding_activated=false；backend_restart_owner=user。
+
+后续一致监督集合双头方案见[独立v3 F2设计](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)：新拟合不改变本复用阻断或generated0，不称exact retry，旧v2源码/labels/prepare保持不变。
 
 ## 12. Rollout / Rollback
 
