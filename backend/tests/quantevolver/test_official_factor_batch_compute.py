@@ -223,6 +223,43 @@ result = margin[['md_rzye']].rename(columns={'md_rzye': 'value'})
     assert result.dataframe["value"].tolist() == [10.0]
 
 
+def test_net_repayment_tminus1_delays_raw_and_official_inputs_exactly_once(tmp_path):
+    from backend.services.quantevolver.net_repayment_tminus1_factor import calculate
+
+    dates = pd.bdate_range("2026-03-20", periods=20).difference(pd.to_datetime(["2026-04-06"]))
+    index = pd.MultiIndex.from_product([dates, ["000001.SZ", "600000.SH"]],
+                                       names=["datetime", "instrument"])
+    raw = pd.DataFrame({"md_rzche": [float(i * i) for i in range(len(index))],
+                        "md_rzmre": 1.0, "md_rzye": 100.0}, index=index)
+    raw.loc[(dates[7], "000001.SZ"), "md_rzche"] = float("nan")
+    raw.loc[(dates[9], "600000.SH"), "md_rzye"] = 0.0
+    daily = pd.DataFrame({"close": 1.0}, index=index)
+    daily.to_hdf(tmp_path / "daily_pv.h5", key="data")
+    raw.to_hdf(tmp_path / "margin_detail.h5", key="data")
+    cache = BacktestBaseDataMemoryCache.load_once(tmp_path, str(dates[0].date()), str(dates[-1].date()))
+    projected = cache.get("margin_detail.h5", columns=["md_rzche", "md_rzmre", "md_rzye"])
+    assert projected.attrs["aistock_margin_availability"] == "next_trade_decision_date_v1"
+    expected = calculate(raw, dates)
+    pd.testing.assert_frame_equal(calculate(projected, dates), expected)
+    source_rate = ((raw.md_rzche - raw.md_rzmre) / raw.md_rzye.replace(0, float("nan"))).unstack("instrument")
+    explicit = source_rate.rolling(10, min_periods=5).mean().shift(1).stack().to_frame(expected.columns[0])
+    pd.testing.assert_frame_equal(expected, explicit)
+    prefix = dates[:12]
+    changed = raw.copy()
+    changed.loc[changed.index.get_level_values("datetime") >= prefix[-1], "md_rzche"] = 99999.0
+    pd.testing.assert_frame_equal(calculate(changed, dates).loc[:prefix[-1]], expected.loc[:prefix[-1]])
+    pd.testing.assert_frame_equal(calculate(raw.loc[:prefix[-1]], prefix), expected.loc[:prefix[-1]])
+    single = raw.xs("000001.SZ", level="instrument", drop_level=False)
+    pd.testing.assert_frame_equal(calculate(single, dates), expected.xs("000001.SZ", level="instrument", drop_level=False))
+    code = Path(__import__(calculate.__module__, fromlist=["__file__"]).__file__).read_text(encoding="utf-8")
+    result = OfflineCodeTextFactorExecutor(cache).compute_factor(expected.columns[0], code)
+    assert result.success, result.error
+    pd.testing.assert_frame_equal(result.dataframe, expected.rename(columns={expected.columns[0]: "value"}))
+    projected.attrs["aistock_margin_availability"] = "unknown"
+    with pytest.raises(ValueError, match="Unknown margin input availability"):
+        calculate(projected, dates)
+
+
 def test_margin_projection_requires_canonical_daily_calendar(tmp_path):
     data_dir = tmp_path / "factor_data"
     data_dir.mkdir()
