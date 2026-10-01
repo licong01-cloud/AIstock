@@ -14,6 +14,12 @@
   ],
   "created_at": "2026-10-01T19:39:37.505632Z",
   "description": "Required catalog gate fails on untouched main; exceeds test budget by 120 effective lines.",
+  "design_compliance": {
+    "business_semantics_unchanged": true,
+    "no_new_gate_or_approval": true,
+    "no_partial_success_claim": true,
+    "no_silent_failure": true
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -25,11 +31,16 @@
   "evidence_uris": [],
   "expected": "Same behavioral cases and fail-closed assertions; workflow test SLOC ratio below 30%.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1663-workflow-automation-duplicated-test-payloads-exceed-honest-validation-bu.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/scripts/test_ci_failure_issue_summary.py"
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1663-workflow-automation-duplicated-test-payloads-exceed-honest-validation-bu.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/scripts/test_ci_failure_issue_summary.py"
@@ -87,14 +98,30 @@
     "l0",
     "validation_workflow_automation"
   ],
+  "review_rounds": [
+    {
+      "kind": "local_self_review",
+      "result": "passed",
+      "round": 1,
+      "scope": "shared payload and CLI fixtures preserve run URL, branch, commit and case-specific overrides"
+    },
+    {
+      "kind": "local_self_review_and_tests",
+      "result": "passed",
+      "round": 2,
+      "scope": "50 behavioral cases retained; kill-switch and opt-in tested independently; no production/ownership/gate changes"
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -111,6 +138,13 @@
     "fingerprint": "8fd1e14b719d7800642a47e7",
     "source_event_id": "FE-20261001-8fd1e14b719d"
   },
+  "validation_evidence": [
+    "RED: canonical main workflow budget node fails at 0.30268268043551466 > 0.30; production denominator=44545; test SLOC=13483.",
+    "GREEN: exact workflow budget node passed after fixture consolidation; threshold, ownership and production source unchanged.",
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q --tb=short -> 50 passed, including both off/opt_in_auto_file cases.",
+    "rtk ruff check backend/tests/scripts/test_ci_failure_issue_summary.py -> passed.",
+    "rtk nox -s l0 -> passed, findings=0, blocking=0; git diff --check -> passed."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -157,23 +191,6 @@
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
-  },
-  "validation_evidence": [
-    "RED: canonical main workflow budget node fails at 0.30268268043551466 > 0.30; production denominator=44545; test SLOC=13483.",
-    "GREEN: exact workflow budget node passed after fixture consolidation; threshold, ownership and production source unchanged.",
-    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q --tb=short -> 50 passed, including both off/opt_in_auto_file cases.",
-    "rtk ruff check backend/tests/scripts/test_ci_failure_issue_summary.py -> passed.",
-    "rtk nox -s l0 -> passed, findings=0, blocking=0; git diff --check -> passed."
-  ],
-  "review_rounds": [
-    {"round": 1, "kind": "local_self_review", "result": "passed", "scope": "shared payload and CLI fixtures preserve run URL, branch, commit and case-specific overrides"},
-    {"round": 2, "kind": "local_self_review_and_tests", "result": "passed", "scope": "50 behavioral cases retained; kill-switch and opt-in tested independently; no production/ownership/gate changes"}
-  ],
-  "design_compliance": {
-    "no_partial_success_claim": true,
-    "no_silent_failure": true,
-    "business_semantics_unchanged": true,
-    "no_new_gate_or_approval": true
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
