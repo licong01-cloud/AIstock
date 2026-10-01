@@ -84,7 +84,7 @@ v2 prepare `adventryloss_daadbb8de554e555061df5d8`完整保留7,720候选，新�
 
 ## 12. Production Gates / Rollout / Rollback
 
-design_merge=merged_PR5245；source_implemented=true_source_merge_pending；model_trained=true_one_candidate；daily_api_ui_delivered=false；model_confirmed=false；binding_active=false；DB/profile/service操作noop；sealed未读；backend_restart_owner=user。
+design_merge=merged_PR5245；source_merge=merged_PR5249_c4ce9566b51d1ff24ad564ef11d27e2344acd4fc；source_implemented=true；model_trained=true_one_candidate；daily_api_ui_delivered=false；model_confirmed=false；binding_active=false；DB/profile/service操作noop；sealed未读；backend_restart_owner=user。
 
 先设计后独立源码和唯一导航候选，失败保留新收据，不改旧数据/模型/合同。typed unknown仅影响新经济角色，不重排或重新运行Selection。后续角色版本独立回滚，不覆盖旧ENTRY_PRICE/M4；本次无生产操作，不称运行时激活完成。
 
@@ -101,3 +101,5 @@ plan stage SHA=`e5ac3092652a048909dc6d86ee47d3388a8bbc7e5f39f5653314da114412378c
 候选SKIP覆盖81日，但组合实际进入动作不同42日、持仓构成不同92/100日；43个基线进入被SKIP，25原盈利/18原亏损，仅为episode描述，不相加成组合增量。原v2 test的1个未知端点仍独立保留；三臂实际发生的名义episode端点逐项审计均无额外限制，但日频端点核验仍非真实fill证明。RECOVERED_LIMITED、NAVIGATION_ONLY、sealed未读、不绑定。
 
 本candidate停止：有模型干预和正绝对名义收益，但净增量为负、区间跨零，不能宣称优于基线或激活，不改800/参数/阈值搜结果。下一步完整D价格条件消费者/API/UI的独立合同及功能实现可继续；模型确认与业务上线另验收，不需要先等实盘数据。退出剩余价值继续以已有oracle合同设计为准，不因本进入模型失败而启动第二条上游Alpha训练。
+
+源码PR #5249已合入上述merge SHA；required CI run36931373299 / verdict SUCCESS，canonical main ff-only同步/clean，无重启、数据或进程操作。下一阶段详见[日常消费者/API/UI F2设计](advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md)，研究和正式资格分开，当前负结果不激活。

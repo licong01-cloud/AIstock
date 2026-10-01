@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.75
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.76
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-02
@@ -1941,7 +1941,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 2026-09-30元数据读回：匹配包的ENABLED Top20 Program有31个PUBLISHED目标日（2026-08-14～09-30），另有1个REPLAY。仅11日带原生universe receipt（09-15～09-30），低于最低20日支持要求；日期存在缺口，不能将31日拼接成连续合格窗口。未读取目标效果，也不声明全部成熟、PIT或未消费。已准备的v4 test回放advprhist_5135d6b0f6a53c706f0fc561（D=2025-11-07～2026-03-10）仅NAVIGATION_ONLY，资源未放行前不执行。新推理输入材料如无法证明PIT/lineage则仅探索性，不可绑定。
 
-当前接续顺序：v3离线源码审核/CI/交付及真实导航结论同步→完整每日D冻结价格条件消费者与独立API/UI（精确范围/研究与发布边界先登记）→功能历史验证及合格模型独立确认→按角色激活。本v3 candidate增量负向，不变更预算/阈值，不绑定；生产无合格模型保持typed unavailable，但不阻塞功能实现。E5退出设计已可复用但不新增并行训练线。旧OPEN_DISTRIBUTION的coverage确认只影响旧ENTRY_PRICE发布，不能充当新ENTRY_VALUE收益验收或研发门禁。历史导航、生产发布和源码合入分开，不重建候选、不等待实盘更新替代历史功能验证、不重复QE实验。
+当前接续顺序：v3源码PR #5249已合入`c4ce9566b51d1ff24ad564ef11d27e2344acd4fc`，CI全绿/main同步→[完整每日D价格条件消费者与独立API/UI设计](advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md)两轮审核完成，精确范围、辅助日常hook及研究/正式资格已登记→共核网格/只读消费者/API/UI实现→已消费历史功能验证及合格模型独立确认→按角色激活。本v3 candidate增量负向，不变更预算/阈值，不绑定；生产无合格模型保持typed unavailable，但不阻塞完整成功消费者的功能实现。E5退出设计已可复用但不新增并行训练线。旧OPEN_DISTRIBUTION的coverage确认只影响旧ENTRY_PRICE发布，不能充当新ENTRY_VALUE收益验收或研发门禁。历史导航、生产发布和源码合入分开，不重建候选、不等待实盘更新替代历史功能验证、不重复QE实验。
 
 本轮真实导航：预登记同一研究配置，零模型source失败尝试保留；最终一个模型。共同组合100日口径下，基线/±300bps规则/模型臂收益约+19.17%/+19.17%/+5.97%、MDD约-10.23%/-10.23%/-2.22%，模型减基线平均日收益-12.47 bps。这不是指数超额或真实成交；模型臂7笔均来自UNKNOWN研究基线控制，真实模型TAKE=0，不能把+5.97%解释为模型盈利。397个支持条件中197个预测均值正、风险q90≤800条件0；48个基线进入信号SKIP涉及29个原盈利/19个亏损episode，只作描述，不相加为组合净收益。首要风险是entry stop800与全episode peak-to-trough q90≤800语义不等价；先审查标签/预算关系，不换模型族或反调风险阈值。所有结论HISTORICAL_REPLAY/NAVIGATION_ONLY/RECOVERED_LIMITED，未恢复原生receipt、未消费sealed、未绑定。详见经济F2设计§15.2。
 
