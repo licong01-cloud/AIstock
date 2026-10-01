@@ -401,7 +401,9 @@ def test_graph_workflow_uses_lf_without_changing_global_git_and_retains_failures
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8"))
-    env = {**os.environ, **workflow["env"]}
+    steps = workflow["jobs"]["refresh-after-main"]["steps"]
+    prepare = next(step for step in steps if step.get("name") == "Prepare exact main workspace")
+    env = {**os.environ, **workflow["env"], **prepare["env"]}
     assert env["GIT_CONFIG_KEY_0"] == "http.version" and env["GIT_CONFIG_VALUE_0"] == "HTTP/1.1"
     assert env["GIT_CONFIG_KEY_1"] == "core.autocrlf" and env["GIT_CONFIG_VALUE_1"] == "false"
     def git(*args, input=None):
@@ -415,10 +417,11 @@ def test_graph_workflow_uses_lf_without_changing_global_git_and_retains_failures
     git("update-index", "--add", "--cacheinfo", "100644", oid, "source.py")
     git("checkout-index", "--all", "--force")
     assert (tmp_path / "source.py").read_bytes() == content
-    steps = workflow["jobs"]["refresh-after-main"]["steps"]
-    upload = next(step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@"))
-    assert upload["if"] == "failure()" and upload["with"]["if-no-files-found"] == "error"
-    assert "github.run_attempt" in upload["with"]["name"]
+    report = next(step for step in steps if step.get("name") == "Report refresh status")
+    assert report["if"] == "always()"
+    assert "codegraph_failure_diagnostic=" in report["run"]
+    assert "oversized_critical_files" in report["run"] and "coverage_errors" in report["run"]
+    assert not any("artifact@" in step.get("uses", "") for step in steps)
     assert any("--require-publish-ready" in step.get("run", "") for step in steps)
 
 
@@ -522,11 +525,7 @@ def test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scop
     assert 'AISTOCK_RUN_PAID_UA_REFRESH' in refresh_workflow
     assert 'if ($env:AISTOCK_RUN_PAID_UA_REFRESH -eq "true")' in refresh_workflow
     assert "scripts/code_intelligence_adapter.py ua-refresh" in refresh_workflow
-    # Successful graph state is kept locally; only failure diagnostics leave the runner.
-    import yaml
-    uploads = [step for step in yaml.safe_load(refresh_workflow)["jobs"]["refresh-after-main"]["steps"]
-               if step.get("uses", "").startswith("actions/upload-artifact@")]
-    assert uploads and all(step.get("if") == "failure()" for step in uploads)
+    assert "actions/upload-artifact@" not in refresh_workflow
     assert "actions/download-artifact@" not in refresh_workflow
     assert "code-intelligence-refresh-main" in nightly
     assert "cancel-in-progress: true" in nightly
