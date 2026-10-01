@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1648",
-  "closed_at": null,
+  "closed_at": "2026-10-01T08:16:30Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -169,8 +169,8 @@
   },
   "first_seen_at": "2026-10-01T07:57:21.940837Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a52cffb49b3a4681941ae003700d9da3301113aa",
+  "fixed_at": "2026-10-01T08:16:30Z",
   "github_issue_number": 5180,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5180",
   "last_seen_at": "2026-10-01T07:57:21.940837Z",
@@ -178,6 +178,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5181",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -198,6 +199,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -207,7 +209,34 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1648",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "be334b31d9964ecb",
+    "recorded_at": "2026-10-01T08:18:03.901877Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2b57c5069000be977c7107c988277409becf56bf",
+    "source_merge_commit": "a52cffb49b3a4681941ae003700d9da3301113aa",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5181",
+    "validation_evidence": [
+      "validation-receipt: id=30e24b6eb6be8ddb commit=2b57c5069000be977c7107c988277409becf56bf kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_ci_environment_verify.py -q -p no:cacheprovider` result=`21 passed`",
+      "validation-receipt: id=b3416f1bbdd0bb5f commit=2b57c5069000be977c7107c988277409becf56bf kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_historical_range/test_phase1c3_batch_d_integrity.py -q -p no:cacheprovider` result=`4 passed; prepare_test_temp X-only environment`",
+      "validation-receipt: id=1750c9831546b396 commit=2b57c5069000be977c7107c988277409becf56bf kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- .github/workflows/test.yml scripts/ci_environment_verify.py backend/tests/scripts/test_ci_environment_verify.py` result=`passed; blocking=0`",
+      "validation-receipt: id=d5c0eba66f9559df commit=2b57c5069000be977c7107c988277409becf56bf kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`16 passed; catalog_integrity passed; findings=0`",
+      "validation-receipt: id=19e50d6594db2726 commit=2b57c5069000be977c7107c988277409becf56bf kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; blocking=0; ownership 4/4 mapped`",
+      "validation-receipt: id=2240160eb1917291 commit=2b57c5069000be977c7107c988277409becf56bf kind=ruff plan=direct status=passed command=`rtk ruff check scripts/ci_environment_verify.py backend/tests/scripts/test_ci_environment_verify.py` result=`passed`",
+      "validation-receipt: id=ad715c3746c44b1c commit=2b57c5069000be977c7107c988277409becf56bf kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1648 --module validation` result=`passed`"
+    ],
+    "validation_evidence_digest": "da0c5127f69b4bb14d9cf3e1c8aeaf77f967f07d1cce9a74605c08bc207a43a3"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -216,6 +245,15 @@
     "fingerprint": "3ead8571b78c665c57431c99",
     "source_event_id": "FE-20261001-3ead8571b78c"
   },
+  "validation_evidence": [
+    "validation-receipt: id=30e24b6eb6be8ddb commit=2b57c5069000be977c7107c988277409becf56bf kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_ci_environment_verify.py -q -p no:cacheprovider` result=`21 passed`",
+    "validation-receipt: id=b3416f1bbdd0bb5f commit=2b57c5069000be977c7107c988277409becf56bf kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/advisory_historical_range/test_phase1c3_batch_d_integrity.py -q -p no:cacheprovider` result=`4 passed; prepare_test_temp X-only environment`",
+    "validation-receipt: id=1750c9831546b396 commit=2b57c5069000be977c7107c988277409becf56bf kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- .github/workflows/test.yml scripts/ci_environment_verify.py backend/tests/scripts/test_ci_environment_verify.py` result=`passed; blocking=0`",
+    "validation-receipt: id=d5c0eba66f9559df commit=2b57c5069000be977c7107c988277409becf56bf kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`16 passed; catalog_integrity passed; findings=0`",
+    "validation-receipt: id=19e50d6594db2726 commit=2b57c5069000be977c7107c988277409becf56bf kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; blocking=0; ownership 4/4 mapped`",
+    "validation-receipt: id=2240160eb1917291 commit=2b57c5069000be977c7107c988277409becf56bf kind=ruff plan=direct status=passed command=`rtk ruff check scripts/ci_environment_verify.py backend/tests/scripts/test_ci_environment_verify.py` result=`passed`",
+    "validation-receipt: id=ad715c3746c44b1c commit=2b57c5069000be977c7107c988277409becf56bf kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1648 --module validation` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
