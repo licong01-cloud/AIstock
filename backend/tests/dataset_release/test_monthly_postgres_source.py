@@ -209,6 +209,77 @@ DAY = date(2026, 9, 30)
 SYMBOL = "000001.SZ"
 
 
+@pytest.mark.parametrize('state', [
+    None,
+    (date(2018, 8, 1), date(2026, 8, 31), 'ready', False),
+    (date(2020, 1, 1), DAY, 'ready', False),
+    (date(2018, 8, 1), DAY, 'building', False),
+    (date(2018, 8, 1), DAY, 'ready', True),
+    (date(2018, 8, 1), '2026-09-30', 'ready', False),
+    (date(2018, 8, 1), DAY, 'ready', None),
+])
+def test_canonical_pit_readiness_blocks_before_freeze(tmp_path, monkeypatch, state):
+    from backend.services.dataset_release import monthly_postgres_source as source
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseSourceBlocked
+
+    class Connection:
+        statements = []
+
+        def cursor(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def execute(self, sql, params):
+            self.statements.append((sql, params))
+
+        def fetchone(self):
+            return state
+
+    monkeypatch.setattr(source, 'MonthlySourceAuthority', lambda *_args, **_kwargs: pytest.fail('must not freeze'))
+    adapter = PostgresMonthlySourceAdapter(
+        profile=SimpleNamespace(profile='qe_hmm_full_v2', universe_key='aistock_equity_pit_canonical_v2',
+                                start_date=date(2018, 8, 1)),
+        cas=SimpleNamespace(root=tmp_path), artifact_root=tmp_path,
+        source_catalog=SimpleNamespace(root=tmp_path, latest_source_snapshot=lambda **_kwargs: pytest.fail('no baseline read')),
+    )
+    context = SimpleNamespace(plan={'predecessor': {'cutoff': '2026-08-31'}, 'target_cutoff': DAY.isoformat()})
+    connection = Connection()
+    with pytest.raises(MonthlyReleaseSourceBlocked) as caught:
+        adapter.read(connection, MonthlySnapshotIdentity('1-AA-1', '2026-10-02T00:00:00+00:00', 'watermark'), context)
+    assert caught.value.context['reason_code'] == 'BLOCKED_PIT_STATE_NOT_READY'
+    assert caught.value.context['requested_cutoff'] == DAY.isoformat()
+    assert caught.value.context['operator_script'] == 'scripts/prepare_canonical_pit_monthly.py'
+    assert len(connection.statements) == 1
+    assert connection.statements[0][0].lstrip().startswith('SELECT')
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_canonical_pit_precheck_accepts_exact_ready_scope():
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def execute(self, sql, params):
+            assert sql.lstrip().startswith('SELECT')
+            assert params == ('aistock_equity_pit_canonical_v2',)
+
+        def fetchone(self):
+            return date(2018, 8, 1), DAY, 'ready', False
+
+    adapter = SimpleNamespace(profile=SimpleNamespace(
+        universe_key='aistock_equity_pit_canonical_v2', start_date=date(2018, 8, 1),
+    ))
+    PostgresMonthlySourceAdapter._require_pit_coverage(adapter, SimpleNamespace(cursor=Cursor), DAY)
+
+
 def daily():
     return {
         "ts_code": SYMBOL,
