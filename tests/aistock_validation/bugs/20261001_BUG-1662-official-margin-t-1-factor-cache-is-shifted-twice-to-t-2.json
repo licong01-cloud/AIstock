@@ -2,7 +2,9 @@
   "actual": "对 000001.SZ、600000.SH 的 2026-01-01..2026-08-31 官方缓存只读抽查共 320 个配对点：与原始两融数据 T-2 回放完全一致（最大绝对差为 0），与 T-1 最大绝对差为 0.00807836577296257。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20261001_BUG-1662-official-margin-t-1-factor-cache-is-shifted-twice-to-t-2.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "backend/services/quantevolver/backtest_base_data_memory_cache.py",
+    "backend/services/quantevolver/net_repayment_tminus1_factor.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1662",
@@ -51,12 +53,13 @@
   "last_seen_at": "2026-10-01T18:40:11.215739Z",
   "module": "quantevolver",
   "non_goals": [
-    "本登记不修复代码、不刷新官方缓存/指标/相关性，也不关闭 BUG。",
+    "本轮仅实现输入时点标识和兼容原始/已投影输入的同名因子源码；生产 catalog/cache/指标/相关性更新另需精确授权，问题在生产纠正前保持开放。",
     "未经 DEV 验证和用户精确授权，不修改生产因子 code_text 或任何生产数据。",
     "不修改 QE 实验、策略或数据集；后端重启由用户执行。"
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
+  "production_dml_gate": "pending_user_authorization: existing factor ID 1545 code_text/cache and downstream official metrics only; DEV ID 21 readback passed",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
   "reproduce_command": "wsl -d Ubuntu -- /home/lc999/miniconda3/envs/rdagent-gpu/bin/python /mnt/x/AIstock_factor_research/r8-margin-demand-20261002/audit_official_timing.py",
@@ -66,15 +69,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": ["Windows Python 3.13.5 and WSL Python 3.10.19 loaded current task source; each compared 3912 real R8 points: raw T-1 == projected official executor, maximum difference 0; no release/production writes"],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "business_smoke_limitation": "Existing metrics binding checks read-path availability only, not corrected T-1 values. Closure additionally requires authorized production code/cache correction, raw T-1 parity and a new official batch readback; old batch is not correction evidence.",
+    "post_restart_effective_gate": "pending_user_restart_and_authorized_production_factor_correction",
+    "provisional": false,
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "backend-main",
+    "target_ids": ["backend-main"]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
