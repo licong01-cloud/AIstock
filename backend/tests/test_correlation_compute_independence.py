@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -782,7 +783,8 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
     assert result["cache_root"].endswith("factor_values")
 
 
-def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("failure_stage", [None, "preflight", "matrix"])
+def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch, tmp_path, failure_stage) -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
     from backend.services.quantevolver.correlation_engine import CorrelationResult
 
@@ -800,10 +802,17 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
         encoding="utf-8",
     )
 
+    statements = []
+    old_snapshot = tmp_path / "data" / "correlation_matrices" / "corr_20260410.h5"
+    old_snapshot.parent.mkdir(parents=True)
+    old_snapshot.write_bytes(b"existing published snapshot")
+
     class FakePipeline:
         _output_dir = str(tmp_path)
 
         def validate_meta_integrity(self):
+            if failure_stage == "preflight":
+                raise RuntimeError("preflight failure")
             return {
                 "ok": True,
                 "factor_count": 2,
@@ -822,7 +831,8 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def execute(self, *_args, **_kwargs):
+        def execute(self, sql, *_args, **_kwargs):
+            statements.append(str(sql))
             return None
 
     class FakeConn:
@@ -843,6 +853,9 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
             self.loader = loader
 
         def compute_full_matrix(self, factor_names, **kwargs):
+            if failure_stage == "matrix":
+                raise RuntimeError("matrix failure")
+            assert kwargs["save_hdf5"] is False
             assert factor_names == ["factor_a", "factor_b"]
             assert kwargs["expected_as_of_date"] == "2026-04-10"
             return CorrelationResult(
@@ -859,6 +872,7 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
             )
 
     monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
+    monkeypatch.setattr(svc, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
@@ -880,10 +894,15 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     monkeypatch.setattr(svc, "CorrelationEngine", FakeCorrelationEngine)
     monkeypatch.setattr(svc.FactorValueLoader, "invalidate_single_cache", lambda factor_name=None: None)
     monkeypatch.setattr(svc.FactorValueLoader, "invalidate_merged_cache", lambda pipeline_dir=None: None)
-    monkeypatch.setattr("glob.glob", lambda pattern: [])
 
     result = svc.run_correlation_compute_local(["factor_a", "factor_b"])
 
+    assert not statements, "Preflight/computation must not mutate published DB state"
+    assert old_snapshot.read_bytes() == b"existing published snapshot"
+    if failure_stage:
+        assert result["success"] is False
+        assert result["error"] == f"{failure_stage} failure"
+        return
     assert result["success"] is True
     assert result["requested_factor_count"] == 2
     assert result["success_factor_count"] == 2
@@ -891,6 +910,90 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     assert result["as_of_date"] is None
     assert result["cache_source"] == "offline_research_backtest_factor_values"
     assert result["cache_root"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("failure_stage", [None, "insert", "catalog", "metadata", "h5", "replace", "commit"])
+def test_full_correlation_publication_preserves_previous_state_on_failure(monkeypatch, tmp_path, failure_stage):
+    from backend.services.quantevolver import correlation_compute_service as svc
+    from backend.services.quantevolver.correlation_engine import CorrelationResult
+
+    target = tmp_path / "corr_20260410.h5"
+    target.write_bytes(b"previous H5")
+    other = tmp_path / "corr_20260409.h5"
+    other.write_bytes(b"other date")
+    result = CorrelationResult(np.array([[1.0, 0.42], [0.42, 1.0]]),
+                               ["factor_a", "factor_b"], "2026-04-10", 252, 0.01,
+                               {"hdf5_path": str(target)})
+    events = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, *_args):
+            stage = "metadata" if "INSERT INTO qe_correlation_metadata" in sql else "catalog"
+            events.append(sql)
+            if failure_stage == stage:
+                raise RuntimeError(stage)
+
+    class Conn:
+        def cursor(self):
+            return Cursor()
+
+    @contextmanager
+    def connect(**options):
+        assert options == {"autocommit": False, "manage_transaction": True}
+        try:
+            yield Conn()
+            if failure_stage == "commit":
+                raise RuntimeError("commit")
+            events.append("COMMIT")
+        except Exception:
+            events.append("ROLLBACK")
+            raise
+
+    def insert(*_args, **_kwargs):
+        events.append("INSERT PAIRS")
+        if failure_stage == "insert":
+            raise RuntimeError("insert")
+
+    original_replace = os.replace
+
+    def replace(source, destination):
+        if failure_stage == "replace" and Path(source).name.startswith(".corr-stage-"):
+            raise RuntimeError("replace")
+        original_replace(source, destination)
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [{"id": 1, "factor_name": "factor_a"}, {"id": 2, "factor_name": "factor_b"}]
+
+    monkeypatch.setattr(svc, "get_conn", connect)
+    monkeypatch.setattr(svc, "execute_values", insert)
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc.os, "replace", replace)
+    if failure_stage == "h5":
+        monkeypatch.setattr(result, "to_hdf5", lambda _path: (_ for _ in ()).throw(RuntimeError("h5")))
+    records = [{"factor_a": "factor_a", "factor_b": "factor_b", "correlation": 0.42,
+                "method": "spearman_ewma", "data_period": "252d_as_of_2026-04-10"}]
+    if failure_stage:
+        with pytest.raises(RuntimeError, match=failure_stage):
+            svc._persist_correlations_batch(records, replace_all=True, correlation_result=result)
+        assert target.read_bytes() == b"previous H5"
+        assert "COMMIT" not in events
+        if failure_stage != "h5":
+            assert events[-1] == "ROLLBACK"
+    else:
+        assert svc._persist_correlations_batch(records, replace_all=True, correlation_result=result) == 1
+        assert events[0] == "TRUNCATE TABLE qe_factor_correlations"
+        assert events[-1] == "COMMIT"
+        assert any("INSERT INTO qe_correlation_metadata" in sql for sql in events)
+        assert np.array_equal(CorrelationResult.from_hdf5(str(target)).matrix, result.matrix)
+    assert other.read_bytes() == b"other date"
+    assert sorted(path.name for path in tmp_path.iterdir()) == [other.name, target.name]
 
 
 def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(monkeypatch, tmp_path) -> None:
@@ -979,6 +1082,8 @@ def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(
 
     def fake_persist_records(records, **_kwargs):
         persisted_records.extend(records)
+        assert _kwargs["replace_all"] is True
+        persisted_metadata.append(dict(_kwargs["correlation_result"].metadata))
         return len(records)
 
     def fake_persist_metadata(result):

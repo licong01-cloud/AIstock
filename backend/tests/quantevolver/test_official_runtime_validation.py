@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from backend.data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 from backend.services.quantevolver.factor_value_loader import FactorValueLoader
@@ -238,6 +239,53 @@ def test_correlation_runtime_validation_classifies_exclusions(tmp_path: Path) ->
     assert report["gate_status"] == "passed"
     assert report["excluded_summary"] == {"missing_from_cache": 1, "degenerate_nan": 0}
     assert report["checks"]["official_cache_only"] is True
+
+
+@pytest.mark.parametrize("entry,helper_first,guard", [
+    ("compute_factor", True, True), ("main", False, True), ("compute_factor", False, False),
+    ("wrapper", True, True),
+    ("qlib", True, True),
+])
+def test_live_transform_preserves_helpers_and_entry_result(entry, helper_first, guard, monkeypatch):
+    from backend.services.quantevolver.factor_code_transformer import (
+        FactorCodeTransformer, NON_OFFICIAL_LIVE_TRANSFORMATION_CONTEXT,
+    )
+
+    helper = "def helper(frame):\n    return frame * SCALE\n"
+    implementation = "compute_factor" if entry in {"wrapper", "qlib"} else entry
+    body = f'''def {implementation}():
+    df = pd.read_hdf('daily_pv.h5', key='data')
+    result = helper(df[['close']])
+    result.to_hdf(
+        path_or_buf='result.h5', key='data'
+    )
+'''
+    original = "import pandas as pd\nSCALE = 2\n" + (helper + body if helper_first else body + helper)
+    if entry == "wrapper":
+        original += "def main():\n    compute_factor()\n"
+        entry = "main"
+    elif entry == "qlib":
+        original = "from qlib.data import D\n" + original
+        entry = "compute_factor"
+    if guard:
+        original += f"if __name__ == '__main__':\n    {entry}()\n"
+
+    def forbid_write(*_args, **_kwargs):
+        raise AssertionError("live transformation must not write H5")
+
+    monkeypatch.setattr(pd.DataFrame, "to_hdf", forbid_write)
+    transformed = FactorCodeTransformer(NON_OFFICIAL_LIVE_TRANSFORMATION_CONTEXT).transform(original, "probe")
+    assert transformed.success, transformed.error
+    frame = pd.DataFrame({"close": [1., 2.]})
+
+    class Loader:
+        def load(self, **_kwargs):
+            return frame.copy()
+
+    namespace = {"pd": pd, "_REALTIME_LOADER": Loader()}
+    exec(transformed.transformed_code, namespace)
+    actual = namespace["calculate_probe"](["000001.SZ"], "2026-04-09", "2026-04-10")
+    pd.testing.assert_frame_equal(actual, frame * 2)
 
 
 def test_factor_value_loader_classifies_hash_mismatch(tmp_path: Path) -> None:

@@ -2892,6 +2892,25 @@ def _payload_schema_evidence(body: bytes) -> dict[str, Any]:
 _READ_ONLY_HTTP_PROBE_MAX_BYTES = 8 * 1024 * 1024
 
 
+def _monthly_read_only_probe_headers(url: str) -> dict[str, str]:
+    """Never forward the operator credential outside the exact local GET routes."""
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        _normalized_http_origin(url) not in {
+            "http://127.0.0.1:8001", "http://localhost:8001"
+        }
+        or parsed.query or parsed.fragment
+        or not re.fullmatch(
+            r"/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}(?:/receipts)?",
+            parsed.path,
+        )
+    ):
+        return {}
+    from scripts.monthly_unified_dataset_release import TOKEN_HEADER, _token
+
+    return {TOKEN_HEADER: _token()}
+
+
 def _read_only_http_probe(
     name: str,
     url: str,
@@ -2922,18 +2941,39 @@ def _read_only_http_probe(
             "transport": {"status_code": None, "ok": False, "error": reason},
             "payload_schema": {"json": False, "kind": "none"},
         }
-    request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
+    try:
+        credential_headers = _monthly_read_only_probe_headers(url)
+    except (OSError, RuntimeError, ValueError):
+        reason = "monthly read-only probe operator credential is unavailable"
+        return {
+            "name": name, "url": url, "status": "blocked", "error": reason,
+            "transport": {"status_code": None, "ok": False, "error": reason},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    request = urllib.request.Request(
+        url, method="GET",
+        headers={"Accept": "application/json,text/plain,*/*", **credential_headers},
+    )
     try:
         with _open_read_only_url(request, timeout_seconds=timeout_seconds) as response:
             status_code = int(getattr(response, "status", 200))
             body = response.read(_READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # Credential-bearing transport errors must not reflect request headers.
+        error = "authenticated monthly read-only probe failed" if credential_headers else str(exc)
         return {
             "name": name,
             "url": url,
             "status": "failed",
-            "error": str(exc),
-            "transport": {"status_code": None, "ok": False, "error": str(exc)},
+            "error": error,
+            "transport": {"status_code": None, "ok": False, "error": error},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    if any(secret.encode("utf-8") in body for secret in credential_headers.values()):
+        reason = "monthly read-only probe response contains sensitive content"
+        return {
+            "name": name, "url": url, "status": "failed", "error": reason,
+            "transport": {"status_code": status_code, "ok": False, "error": reason},
             "payload_schema": {"json": False, "kind": "none"},
         }
     transport_ok = 200 <= status_code < 400
@@ -4416,7 +4456,45 @@ def _validate_local_data_freshness(payload: Any, *, url: str) -> tuple[str, str 
     return 'passed', None, facts
 
 
+def _validate_monthly_release_ready(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """A readable operation is not a successfully prepared monthly release."""
+    from backend.services.dataset_release.monthly_unified import STATE_SCHEMA, STAGES
+
+    if not isinstance(payload, dict) or payload.get("schema_version") != "aistock_monthly_release_status_v1":
+        return "failed", "monthly release status schema differs", {}
+    data = payload.get("data")
+    if not isinstance(data, dict) or data.get("schema_version") != STATE_SCHEMA:
+        return "failed", "monthly release state schema differs", {}
+    operation_id = urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
+    if data.get("operation_id") != operation_id:
+        return "failed", "monthly release operation identity differs", {}
+    facts = {"operation_id": operation_id, "status": data.get("status")}
+    if not isinstance(data.get("status"), str) or data["status"] not in {"READY_TO_ACTIVATE", "ACTIVATED_VERIFIED"}:
+        return "failed", "monthly release has not completed prepare/verification", facts
+    if (
+        data.get("cancel_requested") is not False
+        or "last_error" not in data or data["last_error"] not in (None, {})
+        or "current_stage" not in data or data["current_stage"] is not None
+        or type(data.get("attempt")) is not int or data["attempt"] < 0
+    ):
+        return "failed", "monthly release ready state contradicts cancellation/error/progress", facts
+    for key in ("plan_sha256", "ready_receipt_sha256"):
+        value = data.get(key)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            return "failed", "monthly release ready content identity missing", facts
+        facts[key] = value
+    checkpoints = data.get("checkpoints")
+    if (
+        not isinstance(checkpoints, dict) or set(checkpoints) != set(STAGES)
+        or any(value is not True for value in checkpoints.values())
+    ):
+        return "failed", "monthly release does not have all six successful checkpoints", facts
+    facts.update(attempt=data["attempt"], completed_stage_count=len(STAGES))
+    return "passed", None, facts
+
+
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}$"), "monthly_release_ready", _validate_monthly_release_ready),
     (re.compile(r"^/api/v1/local-data/(?:overview|data-stats)$"), "local_data_freshness", _validate_local_data_freshness),
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
@@ -4578,6 +4656,7 @@ def _evaluate_business_smoke_semantics(
         "hmm_rotation_l2_overview",
         "advisory_entry_price_status",
         "local_data_freshness",
+        "monthly_release_ready",
     }:
         verdict, reason, facts = validator(payload, url=url)
     else:

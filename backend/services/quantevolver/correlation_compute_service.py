@@ -14,6 +14,9 @@ import os
 import threading
 import time
 import traceback
+from contextlib import contextmanager, nullcontext
+import shutil
+import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -756,55 +759,9 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             phase2_elapsed = 0.0
             phase3_elapsed = 0.0
 
-            # ═══ 先收敛历史脏状态，保证当前 official 准入规则和 DB 一致 ═══
-            reconcile_stats = _reconcile_correlation_state(reset_all=True)
-            _correlation_logs.append(
-                "[收敛] 清理历史相关性状态: "
-                f"eligible={reconcile_stats['eligible_factors']}, "
-                f"deleted_pairs={reconcile_stats['deleted_pairs']}, "
-                f"reset_ineligible={reconcile_stats['reset_ineligible_catalog']}, "
-                f"reset_orphan={reconcile_stats['reset_orphan_catalog']}, "
-                f"reset_all={reconcile_stats['reset_all_catalog']}"
-            )
-
-            # ═══ 清空所有历史相关性数据（每次计算前必须清空）═══
-            import glob as _glob
-            _correlation_logs.append("[清空] 清空所有历史相关性数据...")
-
-            # 1. TRUNCATE qe_factor_correlations
-            try:
-                with get_conn() as _conn:
-                    with _conn.cursor() as _cur:
-                        _cur.execute("TRUNCATE TABLE qe_factor_correlations")
-                        _cur.execute(
-                            """
-                            UPDATE aistock_factor_catalog
-                            SET correlation_computed_at = NULL,
-                                correlation_pair_count = 0
-                            WHERE correlation_computed_at IS NOT NULL
-                               OR COALESCE(correlation_pair_count, 0) <> 0
-                            """
-                        )
-                    _conn.commit()
-                _correlation_logs.append("[清空] DB: qe_factor_correlations 与 catalog correlation 状态已清空")
-            except Exception as e:
-                _correlation_logs.append(f"[清空] DB 清空失败，终止计算: {e}", "ERROR")
-                logger.error(f"TRUNCATE 失败: {e}")
-                _correlation_progress.finish("failed", f"DB 清空失败: {e}")
-                _update_job_status(job_id, "failed")
-                return {
-                    "success": False,
-                    "status": "failed",
-                    "error": f"DB 清空失败: {e}",
-                }
-
-            # 2. 删除 HDF5 相关性矩阵缓存
-            _hdf5_dir = os.path.normpath(str(REPO_ROOT / "data" / "correlation_matrices"))
-            for _h5 in _glob.glob(os.path.join(_hdf5_dir, "corr_*.h5")):
-                os.remove(_h5)
-                _correlation_logs.append(f"[清空] 删除 HDF5: {os.path.basename(_h5)}")
-
-            # 3. 清除内存缓存
+            # Only replace published DB/H5 state after successful computation.
+            _correlation_logs.append("[保护] 校验与计算期间保留已发布 DB 和 HDF5 结果")
+            # Invalidate process-local caches, not persistent state.
             FactorValueLoader.invalidate_single_cache()
             FactorValueLoader.invalidate_merged_cache(str(CORRELATION_FACTOR_VALUE_CACHE_DIR))
             _correlation_logs.append("[清空] 内存缓存已清除")
@@ -1049,7 +1006,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             result = engine.compute_full_matrix(
                 matrix_factors,
                 as_of_date=as_of_date,
-                save_hdf5=True,
+                save_hdf5=False,
                 on_progress=_matrix_progress,
                 stop_event=_stop_event,
                 expected_as_of_date=_aod_value,
@@ -1058,7 +1015,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 expected_universe_fingerprint_sha256=universe_metadata.get("universe_fingerprint_sha256"),
                 expected_index_policy=universe_metadata.get("index_policy"),
             )
-            _latest_result = result
             _correlation_progress.advance(done=1)
             records = result.to_db_records(threshold=0)
             no_valid_pair_factors = sorted(result.get_no_valid_pair_factors())
@@ -1083,22 +1039,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 if high_pairs:
                     _correlation_logs.append(f"  发现 {len(high_pairs)} 对高相关因子 (|r|>0.7)")
 
-            # Phase 3: 写 DB
-            _correlation_progress.advance(phase="db_persist", phase_label="写入数据库", done=0, total=1)
-            _correlation_logs.append(f"[阶段3/3] 写入数据库 ({len(records)} 条记录)")
-            phase3_t0 = time.time()
-            if records:
-                _persist_correlations_batch(records, universe_metadata=universe_metadata)
-            if _latest_result:
-                _persist_correlation_metadata(_latest_result)
-            _correlation_progress.advance(done=1)
-            phase3_elapsed = round(time.time() - phase3_t0, 1)
-            _correlation_logs.append(f"阶段3完成: DB 写入耗时 {phase3_elapsed}s")
-
-            _correlation_progress.finish("success")
-            _update_job_status(job_id, "success")
-            total_elapsed = _correlation_progress.snapshot().get("elapsed_sec", 0)
-
             # ── 成功响应: 显式汇报成功/失败因子数 + 排除原因分类 ──
             # 排除来源两类 (互斥):
             # 1) missing_from_cache: Phase 1 缺独立指标缓存 (missing_factors)
@@ -1120,6 +1060,34 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 f"no_valid_pairs={len(_no_valid_pair_factors)})"
             )
 
+            runtime_validation = _build_correlation_runtime_validation(
+                requested_count=_requested_count, success_count=_success_count,
+                failed_count=_failed_count, missing_factors=missing_factors,
+                degenerate_factors=_degenerate_factors,
+                no_valid_pair_factors=_no_valid_pair_factors, record_count=len(records),
+                as_of_date=as_of_date, cache_root=CORRELATION_FACTOR_VALUE_CACHE_DIR,
+                integrity=integrity, universe_metadata=universe_metadata,
+            )
+            # Publish only after the existing result invariants have been evaluated.
+            _correlation_progress.advance(phase="db_persist", phase_label="写入数据库", done=0, total=1)
+            phase3_t0 = time.time()
+            if records:
+                result.metadata.setdefault(
+                    "hdf5_path",
+                    str(Path(getattr(engine, "_hdf5_dir", REPO_ROOT / "data" / "correlation_matrices"))
+                        / f"corr_{result.as_of_date.replace('-', '')}.h5"),
+                )
+                _persist_correlations_batch(
+                    records, universe_metadata=universe_metadata,
+                    replace_all=True, correlation_result=result,
+                )
+                _latest_result = result
+            _correlation_progress.advance(done=1)
+            phase3_elapsed = round(time.time() - phase3_t0, 1)
+            _correlation_progress.finish("success")
+            _update_job_status(job_id, "success")
+            total_elapsed = _correlation_progress.snapshot().get("elapsed_sec", 0)
+
             # --- 完整汇总日志 ---
             _correlation_logs.append("=" * 50)
             _correlation_logs.append("计算完成汇总")
@@ -1138,19 +1106,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 f"success={_success_count}, failed={_failed_count}, "
                 f"no_valid_pairs={len(_no_valid_pair_factors)}, "
                 f"records={len(records)}, elapsed={total_elapsed}s"
-            )
-            runtime_validation = _build_correlation_runtime_validation(
-                requested_count=_requested_count,
-                success_count=_success_count,
-                failed_count=_failed_count,
-                missing_factors=missing_factors,
-                degenerate_factors=_degenerate_factors,
-                no_valid_pair_factors=_no_valid_pair_factors,
-                record_count=len(records),
-                as_of_date=as_of_date,
-                cache_root=CORRELATION_FACTOR_VALUE_CACHE_DIR,
-                integrity=integrity,
-                universe_metadata=universe_metadata,
             )
             return {
                 "success": True,
@@ -1212,9 +1167,57 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
 # ── 相关性 DB 持久化辅助函数 ──
 
+@contextmanager
+def _correlation_snapshot_publication(result: Optional[CorrelationResult]):
+    """Restore the previous H5 when publication or DB commit raises."""
+    if result is None:
+        yield lambda: None
+        return
+    target = Path(result.metadata["hdf5_path"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = backup = None
+    replaced = False
+    restore_completed = True
+    had_previous = target.exists()
+    try:
+        fd, name = tempfile.mkstemp(prefix=".corr-stage-", suffix=".h5", dir=target.parent)
+        os.close(fd)
+        staged = Path(name)
+        result.to_hdf5(str(staged))
+        if had_previous:
+            fd, name = tempfile.mkstemp(prefix=".corr-rollback-", suffix=".h5", dir=target.parent)
+            os.close(fd)
+            backup = Path(name)
+            shutil.copyfile(target, backup)
+
+        def publish():
+            nonlocal replaced
+            os.replace(staged, target)
+            replaced = True
+
+        yield publish
+    except BaseException:
+        if replaced:
+            restore_completed = False
+            if had_previous:
+                os.replace(backup, target)
+            else:
+                target.unlink()
+            restore_completed = True
+        raise
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        if backup is not None and restore_completed:
+            backup.unlink(missing_ok=True)
+
+
 def _persist_correlations_batch(
     records: List[Dict[str, Any]],
     universe_metadata: Optional[Dict[str, Any]] = None,
+    *,
+    replace_all: bool = False,
+    correlation_result: Optional[CorrelationResult] = None,
 ) -> int:
     """批量写入相关性记录到 qe_factor_correlations 表。
 
@@ -1236,7 +1239,10 @@ def _persist_correlations_batch(
     if not catalog_name_to_id:
         raise RuntimeError("catalog 中无可用于写入相关性的因子")
 
-    with get_conn() as conn:
+    # Outer file context also receives errors raised by the inner DB commit.
+    with _correlation_snapshot_publication(correlation_result) as publish, get_conn(
+        autocommit=False, manage_transaction=True,
+    ) as conn:
         with conn.cursor() as cur:
             # 预处理: 构建去重的 (a_id, b_id) -> row 映射.
             # 如果某一侧因子在 catalog 里查不到 id (异常状态), 记 WARN 并 skip.
@@ -1274,6 +1280,14 @@ def _persist_correlations_batch(
             if not values:
                 raise RuntimeError(
                     f"相关性结果全部无法映射到 catalog id, 拒绝写入, skip={skipped_unknown} 条"
+                )
+
+            if replace_all:
+                cur.execute("TRUNCATE TABLE qe_factor_correlations")
+                cur.execute(
+                    "UPDATE aistock_factor_catalog SET correlation_computed_at = NULL, "
+                    "correlation_pair_count = 0 WHERE correlation_computed_at IS NOT NULL "
+                    "OR COALESCE(correlation_pair_count, 0) <> 0"
                 )
 
             execute_values(
@@ -1326,7 +1340,9 @@ def _persist_correlations_batch(
                 WHERE c.id = sub.factor_id
             """, (computed_id_list, computed_id_list))
 
-        conn.commit()
+        if correlation_result is not None:
+            _persist_correlation_metadata(correlation_result, connection=conn)
+        publish()
 
     written = len(values)
     logger.info(
@@ -1335,9 +1351,11 @@ def _persist_correlations_batch(
     return written
 
 
-def _persist_correlation_metadata(result: CorrelationResult) -> None:
+def _persist_correlation_metadata(result: CorrelationResult, *, connection=None) -> None:
     """写入相关性计算元数据。"""
-    with get_conn() as conn:
+    with (nullcontext(connection) if connection is not None else get_conn(
+        autocommit=False, manage_transaction=True,
+    )) as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO qe_correlation_metadata

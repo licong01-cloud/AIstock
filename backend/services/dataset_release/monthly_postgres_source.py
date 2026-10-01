@@ -26,7 +26,8 @@ from .contracts import Scope
 from .control_store import ControlStore, SourceSnapshotCatalogSpec
 from .index_sources import independent_postgres_connection_factory
 from .monthly_snapshot import MonthlySnapshotIdentity, SnapshotConnection
-from .monthly_source_audit import SourceGateEvidence
+from .monthly_source_audit import close_source_audit
+from .monthly_frozen_source_audit import AUDIT_SCHEMA, audit_frozen_source
 from .monthly_source_producer import (
     MonthlySourceReadSet,
     SourceArtifact,
@@ -45,20 +46,8 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "1"
+POSTGRES_SOURCE_ADAPTER_VERSION = "2"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
-
-_GATE_DATASETS: Mapping[str, tuple[str, ...]] = {
-    "calendar_lifecycle": ("trading_calendar", "stock_basic"),
-    "daily_price": ("kline_daily_raw",),
-    "minute_price": ("kline_minute_raw",),
-    "adj_factor_history": ("adj_factor",),
-    "daily_basic_required_fields": ("daily_basic",),
-    "financial_moneyflow": ("moneyflow_ts", "bak_basic", "cyq_perf", "margin_detail"),
-    "suspend_limit": ("suspend_d", "stk_limit"),
-    "pit_stock_pools": ("stock_universe_pit", "index_membership_pit"),
-    "sector_authority": ("sector_data", "sw_index_classify", "sw_index_member", "sw_daily"),
-}
 
 _CHANGE_DATASET_ALIASES = {
     "moneyflow_ts": "moneyflow",
@@ -159,9 +148,8 @@ def _source_diffs(
             kind = "TAIL_APPEND" if start > predecessor_cutoff else "NEW_SECURITY_HISTORY"
         elif previous.get("schema_digest") != row.get("schema_digest"):
             kind = "SCHEMA_CHANGE"
-        elif (
-            previous.get("content_digest") == row.get("content_digest")
-            and previous.get("row_count") == row.get("row_count")
+        elif previous.get("content_digest") == row.get("content_digest") and previous.get("row_count") == row.get(
+            "row_count"
         ):
             continue
         else:
@@ -244,6 +232,7 @@ class PostgresMonthlySourceAdapter:
                 "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
                 "mvcc_partition_reuse": self.mvcc_partition_reuse,
                 "gates": list(SOURCE_GATES),
+                "source_audit_contract": AUDIT_SCHEMA,
             },
         )
 
@@ -296,37 +285,13 @@ class PostgresMonthlySourceAdapter:
             cutoff=target_cutoff,
             baseline_partitions=baseline_partitions,
         )
-        ready = ArtifactReadySourceBuilder(self.profile, self.cas).build(frozen)
-        loaded = load_artifact_ready_contract(
-            self.cas,
-            self.profile,
-            ready.artifact_ready_contract_ref,
-            expected_source_content_root=frozen.source_content_root,
-            expected_pit_snapshot_digest=frozen.pit_snapshot_digest,
-        )
-        frozen = replace(
-            frozen,
-            artifact_ready_contract_ref=ready.artifact_ready_contract_ref,
-            artifact_ready_content_root=ready.artifact_ready_content_root,
-            artifact_ready_provenance_root=loaded.artifact_ready_provenance_root,
-            provider_receipt_refs=ready.provider_receipt_refs,
-            artifact_ready_derived_source_receipt_refs=ready.derived_source_receipt_refs,
-        )
-        source_stage_ref = seal_source_stage_receipt(
-            self.cas,
-            frozen,
-            profile=self.profile.profile,
-        )
         current_reuse = self.cas.get_json_bounded(
             frozen.source_reuse_manifest_ref,
             max_bytes=64 * 1024 * 1024,
         )
         if not isinstance(current_reuse, Mapping):
             raise MonthlyPostgresSourceError("current source reuse manifest is invalid")
-        pit_changed = (
-            baseline_row is None
-            or baseline_row.get("pit_snapshot_digest") != frozen.pit_snapshot_digest
-        )
+        pit_changed = baseline_row is None or baseline_row.get("pit_snapshot_digest") != frozen.pit_snapshot_digest
         diffs = _source_diffs(
             baseline=baseline_manifest,
             current=current_reuse,
@@ -338,11 +303,7 @@ class PostgresMonthlySourceAdapter:
             raise MonthlyPostgresSourceError("advanced cutoff produced an empty source change set")
 
         input_root = (
-            self.artifact_root
-            / "monthly"
-            / context.operation_id
-            / "source-inputs"
-            / f"attempt-{context.attempt}"
+            self.artifact_root / "monthly" / context.operation_id / "source-inputs" / f"attempt-{context.attempt}"
         )
         input_root.mkdir(parents=True, exist_ok=False)
 
@@ -378,6 +339,37 @@ class PostgresMonthlySourceAdapter:
             for item in diffs
         )
 
+        gates, audit_artifacts = audit_frozen_source(
+            cas=self.cas,
+            frozen=frozen,
+            profile=self.profile,
+            input_root=input_root,
+            artifact_root=self.artifact_root,
+            snapshot_group_id=f"postgres:{identity.snapshot_id}",
+            changes=changes,
+            predecessor_cutoff=predecessor_cutoff,
+        )
+        # Persist real blocked gate readbacks before any provider materialization
+        # or seal. Failed audit evidence must never enter the reuse catalog.
+        close_source_audit(cutoff=target_cutoff, predecessor_cutoff=predecessor_cutoff, gates=gates, changes=changes)
+        ready = ArtifactReadySourceBuilder(self.profile, self.cas).build(frozen)
+        loaded = load_artifact_ready_contract(
+            self.cas,
+            self.profile,
+            ready.artifact_ready_contract_ref,
+            expected_source_content_root=frozen.source_content_root,
+            expected_pit_snapshot_digest=frozen.pit_snapshot_digest,
+        )
+        frozen = replace(
+            frozen,
+            artifact_ready_contract_ref=ready.artifact_ready_contract_ref,
+            artifact_ready_content_root=ready.artifact_ready_content_root,
+            artifact_ready_provenance_root=loaded.artifact_ready_provenance_root,
+            provider_receipt_refs=ready.provider_receipt_refs,
+            artifact_ready_derived_source_receipt_refs=ready.derived_source_receipt_refs,
+        )
+        source_stage_ref = seal_source_stage_receipt(self.cas, frozen, profile=self.profile.profile)
+
         bundle_path = input_root / "frozen-source-bundle.json"
         bundle = self._bundle(
             frozen,
@@ -388,72 +380,14 @@ class PostgresMonthlySourceAdapter:
         )
         _write_canonical_exclusive(bundle_path, bundle)
 
-        gates: list[SourceGateEvidence] = []
         artifacts: list[SourceArtifact] = [
             artifact(diff_path),
             artifact(bundle_path),
+            *audit_artifacts,
         ]
-        partition_rows = tuple((*frozen.partitions, *frozen.pit_partitions))
-        snapshot_group_id = f"postgres:{identity.snapshot_id}"
-        for gate in SOURCE_GATES:
-            datasets = set(_GATE_DATASETS[gate])
-            matching = [item for item in partition_rows if item.spec.dataset in datasets]
-            if gate == "pit_stock_pools":
-                matching.extend(frozen.pit_partitions)
-            observed_count = sum(item.summary.row_count for item in matching)
-            if observed_count <= 0:
-                raise MonthlyPostgresSourceError(f"monthly source gate has no evidence: {gate}")
-            expectation = input_root / "gates" / f"{gate}-expectation.json"
-            readback = input_root / "gates" / f"{gate}-readback.json"
-            expectation_id = expectation.relative_to(self.artifact_root).as_posix()
-            readback_id = readback.relative_to(self.artifact_root).as_posix()
-            _write_canonical_exclusive(
-                expectation,
-                {
-                    "schema_version": "aistock_monthly_source_gate_expectation_v1",
-                    "gate_id": gate,
-                    "snapshot_group_id": snapshot_group_id,
-                    "datasets": sorted(datasets),
-                    "partition_identities": sorted(item.spec.identity for item in matching),
-                    "expected_count": observed_count,
-                    "authority_refs": self._gate_authority_refs(frozen, gate),
-                },
-            )
-            _write_canonical_exclusive(
-                readback,
-                {
-                    "schema_version": "aistock_monthly_source_gate_readback_v1",
-                    "gate_id": gate,
-                    "snapshot_group_id": snapshot_group_id,
-                    "observed_count": observed_count,
-                    "unexplained_missing_count": 0,
-                    "duplicate_count": 0,
-                    "invalid_value_count": 0,
-                    "status": "PASS",
-                },
-            )
-            artifacts.extend(
-                (
-                    artifact(expectation),
-                    artifact(readback),
-                )
-            )
-            gates.append(
-                SourceGateEvidence(
-                    gate=gate,
-                    snapshot_group_id=snapshot_group_id,
-                    expectation_contract_ref=expectation_id,
-                    readback_ref=readback_id,
-                    expected_count=observed_count,
-                    observed_count=observed_count,
-                )
-            )
 
         cas_refs = self._all_refs(frozen, source_stage_ref)
-        artifacts.extend(
-            _cas_artifact(self.cas, reference)
-            for reference in cas_refs
-        )
+        artifacts.extend(_cas_artifact(self.cas, reference) for reference in cas_refs)
         return MonthlySourceReadSet(
             gates=tuple(gates),
             changes=changes,
@@ -514,20 +448,6 @@ class PostgresMonthlySourceAdapter:
             "database_write_performed": False,
             "runtime_fallback": False,
         }
-
-    @staticmethod
-    def _gate_authority_refs(
-        frozen: FrozenSourceAuthoritySnapshot,
-        gate: str,
-    ) -> list[Mapping[str, Any]]:
-        refs = [frozen.source_manifest_ref.as_dict(), frozen.source_audit_ref.as_dict()]
-        if gate in {"calendar_lifecycle", "pit_stock_pools", "sector_authority"}:
-            refs.append(frozen.pit_snapshot_ref.as_dict())
-        if gate == "pit_stock_pools":
-            refs.extend(item.as_dict() for item in frozen.derived_source_receipt_refs)
-        if frozen.artifact_ready_contract_ref is not None:
-            refs.append(frozen.artifact_ready_contract_ref.as_dict())
-        return refs
 
     @staticmethod
     def _all_refs(
