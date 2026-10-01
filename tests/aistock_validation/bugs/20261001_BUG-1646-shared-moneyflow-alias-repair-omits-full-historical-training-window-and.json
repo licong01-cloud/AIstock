@@ -1,0 +1,254 @@
+{
+  "actual": "Frozen v15 manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc exports only 120 historical 300114.SZ moneyflow rows for canonical 302132.SZ. Read-only production confirms 1090 historical source rows in 2020-07-30..2025-04-30 including 591 finite-price training dates. Previous audit starts 2024-08-13 and enumerates source/absence rows rather than all required frozen trading dates. Generic immutable successor repair only; no DB write, active switch, HMM/QE source, runtime or merge authorized.",
+  "allowed_write_scope": [
+    "scripts/audit_qe_moneyflow_alias_coverage.py",
+    "scripts/repair_qe_moneyflow_alias_candidate.py",
+    "backend/tests/scripts/test_qe_moneyflow_alias_candidate.py",
+    "tests/aistock_validation/bugs/20261001_BUG-1646-shared-moneyflow-alias-repair-omits-full-historical-training-window-and.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1646",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-01T06:26:01.856894Z",
+  "description": "Frozen v15 manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc exports only 120 historical 300114.SZ moneyflow rows for canonical 302132.SZ. Read-only production confirms 1090 historical source rows in 2020-07-30..2025-04-30 including 591 finite-price training dates. Previous audit starts 2024-08-13 and enumerates source/absence rows rather than all required frozen trading dates. Generic immutable successor repair only; no DB write, active switch, HMM/QE source, runtime or merge authorized.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261001-120b03bd3e7a",
+      "timestamp": "2026-10-01T06:26:01.856870Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [
+      "scripts/repair_qe_moneyflow_alias_candidate.py",
+      "backend/tests/scripts/test_qe_moneyflow_alias_candidate.py"
+    ],
+    "changed_files": [
+      "scripts/audit_qe_moneyflow_alias_coverage.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "scripts/audit_qe_moneyflow_alias_coverage.py",
+        "scripts/repair_qe_moneyflow_alias_candidate.py",
+        "backend/tests/scripts/test_qe_moneyflow_alias_candidate.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "local_data",
+        "qe.core",
+        "hmm",
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/audit_qe_moneyflow_alias_coverage.py",
+          "impact_modules": [
+            "local_data",
+            "qe.core",
+            "hmm"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_moneyflow_source_identity"
+        },
+        {
+          "file": "scripts/repair_qe_moneyflow_alias_candidate.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_qe_moneyflow_alias_candidate.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/audit_qe_moneyflow_alias_coverage.py",
+        "scripts/repair_qe_moneyflow_alias_candidate.py",
+        "backend/tests/scripts/test_qe_moneyflow_alias_candidate.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "scripts/repair_qe_moneyflow_alias_candidate.py",
+      "backend/tests/scripts/test_qe_moneyflow_alias_candidate.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/audit_qe_moneyflow_alias_coverage.py",
+      "scripts/repair_qe_moneyflow_alias_candidate.py",
+      "backend/tests/scripts/test_qe_moneyflow_alias_candidate.py"
+    ]
+  },
+  "first_seen_at": "2026-10-01T06:26:01.856894Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5175,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5175",
+  "last_seen_at": "2026-10-01T06:26:01.856894Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Shared moneyflow alias repair omits full historical training window and audit misses absent dates",
+  "trigger_condition": {
+    "fingerprint": "120b03bd3e7a252bd4a8dfd7",
+    "source_event_id": "FE-20261001-120b03bd3e7a"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
