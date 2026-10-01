@@ -22,7 +22,10 @@
       "timestamp": "2026-10-01T21:05:41.352491Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "同一 main 基线 RED：workflow ratio=0.3012334604171339；参数化重复 close-sync 身份、dirty guard、client publish setup 和共享无效 catalog fixture 后，production SLOC=44590 不变，test SLOC=13365，ratio=0.29973088136353443。目标测试文件有效 SLOC=1333→1266，实质减少67行，ownership/阈值/production 均未修改。",
+    "三轮本地审核：逐案例保持 PR/commit 身份与 dirty path 正反断言；保持两个 client publish 场景及 runtime catalog 两层 fail-closed 断言；最终176项相关测试、Ruff、L0、workflow-smoke通过。无数据、DB、profile或运行态动作。"
+  ],
   "expected": "Same semantic cases with deduplicated fixtures, workflow test ratio below 0.30 and catalog integrity PASS.",
   "file_scope_contract": {
     "added_files": [],
