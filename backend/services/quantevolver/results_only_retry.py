@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import math
 import pickle
@@ -117,6 +118,8 @@ async def collect_results_only_artifacts(
     task_id: str,
     loop_id: str,
     node_id: str | None = None,
+    expected_prediction_panel_sha256: str | None = None,
+    expected_prediction_rows: int | None = None,
 ) -> ResultsOnlyArtifacts:
     """Validate existing QE loop artifacts without launching qrun/backtest."""
 
@@ -160,6 +163,31 @@ async def collect_results_only_artifacts(
         node_id=node_id,
     )
     prediction = _validate_prediction_object(pred_obj, task_id=task_id, loop_id=loop_id, node_id=node_id)
+    if expected_prediction_panel_sha256 is not None:
+        import pandas as pd
+
+        if not isinstance(pred_obj, pd.DataFrame):
+            raise ResultsOnlyGateError(
+                reason_code="prediction_replay_panel_invalid", artifact="pred.pkl",
+                task_id=task_id, loop_id=loop_id, node_id=node_id,
+            )
+        # Same ordered-content contract as qrun's replay receipt; pickle byte
+        # hashes are not interchangeable with the executable panel identity.
+        metadata = json.dumps(
+            {
+                "index_names": [str(value) for value in pred_obj.index.names],
+                "columns": [str(value) for value in pred_obj.columns],
+                "dtypes": [str(value) for value in pred_obj.dtypes],
+                "rows": len(pred_obj),
+            }, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+        values = pd.util.hash_pandas_object(pred_obj, index=True, categorize=True).values.tobytes()
+        actual_sha256 = hashlib.sha256(metadata + b"\n" + values).hexdigest()
+        if actual_sha256 != expected_prediction_panel_sha256 or len(pred_obj) != expected_prediction_rows:
+            raise ResultsOnlyGateError(
+                reason_code="prediction_replay_panel_mismatch", artifact="pred.pkl",
+                task_id=task_id, loop_id=loop_id, node_id=node_id,
+            )
 
     report_path = f"{artifact_prefix}/portfolio_analysis/report_normal_1day.pkl"
     report_bytes = await _download_required_bytes(
