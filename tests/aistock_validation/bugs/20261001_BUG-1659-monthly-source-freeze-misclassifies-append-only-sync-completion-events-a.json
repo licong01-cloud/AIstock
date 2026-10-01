@@ -71,7 +71,8 @@
       "独立Python进程生产只读核验：原阻断首三条均为reconciled且finished_at存在；修正查询返回真实活跃writer=0，已读回managed-writer-ledgers-v2 watermark；所有连接rollback/close，database_write=false。",
       "审核1：分离ingestion与sync枚举、缺finished_at及NULL/未知状态仍阻断。审核2：异步回调可先落库，按完整执行身份闭合，不依赖target最后一条或跨客户端/数据库时钟排序。审核3：真实活跃ingestion仍阻断，即使sync已有结束回调；冻结后failed/retry/reconciled/final_blocked/started均使source失效；没有生产账本改写或数据完整性豁免。",
       "Fresh Python loaded tracked monthly_repair_journal fix; existing DEV port5433 transaction_read_only=on executed identical production SQL over typed SELECT-only CTE cases, 29 passed; production readonly real ledger watermark readback passed, rollback/close, database_write=false",
-      "Fresh Python loaded tracked repair-journal fix; existing DEV port5433 transaction_read_only=on SQL matrix passed; production real ledger readonly watermark passed, rollback/close, database_write=false"
+      "Fresh Python loaded tracked repair-journal fix; existing DEV port5433 transaction_read_only=on SQL matrix passed; production real ledger readonly watermark passed, rollback/close, database_write=false",
+      "Fresh Python loaded tracked repair-journal fix; DEV5433 readonly SQL matrix 29 passed; production readonly real ledger watermark passed, rollback/close, database_write=false. Three layered reviews preserved active/unknown fail-closed, exact execution identity, asynchronous reverse callbacks and all post-freeze writer invalidation."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
