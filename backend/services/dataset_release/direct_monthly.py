@@ -26,6 +26,7 @@ from typing import Any, Callable, Mapping, Sequence
 from .canonical import digest_named_fields
 from .errors import DatasetReleaseError
 from .shared_sector_context import build_release_sw_l2_code_map_payload
+from .source_fact_history import filter_source_fact_history
 
 
 DIRECT_MONTHLY_SCHEMA = "qe_direct_monthly_candidate_v1"
@@ -1499,6 +1500,8 @@ def build_factor_h5_static_component(layout: DirectMonthlyLayout) -> Mapping[str
                         canonical_codes=codes,
                     )
                     if name == "moneyflow.h5"
+                    else filter_source_fact_history(frame, codes=codes, start=chunk_start, end=chunk_end)
+                    if name == "daily_basic.h5"
                     else _filter_frame_to_pit(frame, spans, chunk_start, chunk_end)
                 )
                 if bounded.empty and name in {"daily_pv.h5", "daily_basic.h5", "moneyflow.h5"}:
