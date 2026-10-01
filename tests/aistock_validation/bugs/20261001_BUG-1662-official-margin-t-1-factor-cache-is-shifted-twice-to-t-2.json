@@ -1,0 +1,206 @@
+{
+  "actual": "对 000001.SZ、600000.SH 的 2026-01-01..2026-08-31 官方缓存只读抽查共 320 个配对点：与原始两融数据 T-2 回放完全一致（最大绝对差为 0），与 T-1 最大绝对差为 0.00807836577296257。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20261001_BUG-1662-official-margin-t-1-factor-cache-is-shifted-twice-to-t-2.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1662",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-01T18:40:11.215739Z",
+  "description": "m_md_net_repay_rate_10d_tminus1（官方因子 ID 1545）的代码在 rolling(10, min_periods=5) 后执行 shift(1)，而当前官方共享上下文已经将 margin_detail/md_* 投影至下一交易日；两条路径叠加使实际输入成为 T-2，而非声明的 T-1。研究窗口通过 R8 v14 原始 H5 与既有官方单因子缓存的 320 个点逐值确认该偏差。本登记 PR 仅固化问题，不实施修复、不改分类/评级或生产缓存；后续修复必须分别验证原始输入与已投影输入语义，禁止全局移除其他两融因子的因果投影。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261001-f7df190b5c34",
+      "timestamp": "2026-10-01T18:40:11.215716Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_factor_research/r8-margin-demand-20261002/findings.md"
+  ],
+  "expected": "声明的两融 T-1 统计量只延迟一次，与原始来源按交易日历回放一致；不得事后将 T-2 结果冒充 T-1、修改方向或仅改写缓存身份。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-01T18:40:11.215739Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5217,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5217",
+  "last_seen_at": "2026-10-01T18:40:11.215739Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "本登记不修复代码、不刷新官方缓存/指标/相关性，也不关闭 BUG。",
+    "未经 DEV 验证和用户精确授权，不修改生产因子 code_text 或任何生产数据。",
+    "不修改 QE 实验、策略或数据集；后端重启由用户执行。"
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "wsl -d Ubuntu -- /home/lc999/miniconda3/envs/rdagent-gpu/bin/python /mnt/x/AIstock_factor_research/r8-margin-demand-20261002/audit_official_timing.py",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "Official margin T-1 factor cache is shifted twice to T-2",
+  "trigger_condition": {
+    "fingerprint": "f7df190b5c34120516d30aa9",
+    "source_event_id": "FE-20261001-f7df190b5c34"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "validation_receipts": [
+    {
+      "schema_version": "aistock_validation_receipt_v1",
+      "receipt_id": "e741ef062f5806bf",
+      "commit": "add7cde5fd383cd709326653aa2844d28d6143b5",
+      "evidence_kind": "nox",
+      "plan": "l0",
+      "command": "python -m nox -s l0",
+      "result": "passed; findings=0; blocking=0; registration only",
+      "status": "passed"
+    }
+  ],
+  "validation_evidence": [
+    "2026-10-02：登记文件的 python -m nox -s l0 -> passed，findings=0，blocking=0；仅验证登记，不证明问题已修复。",
+    "2026-10-02：changed-files classifier -> bug_registry_metadata_only，blocking=[]，backend_sessions=[]，dev_db_plan_keys=[]；runtime catalog -> none。",
+    "2026-10-02：BUG JSON 状态、Issue #5217 链接及精确两文件写入范围断言、git diff --check -> passed；BUG 仍为 open，fix_commit=null。"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
