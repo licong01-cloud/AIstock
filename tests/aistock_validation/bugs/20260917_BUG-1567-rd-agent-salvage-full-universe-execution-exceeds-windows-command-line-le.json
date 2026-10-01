@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1567",
-  "closed_at": null,
+  "closed_at": "2026-10-01T14:20:43.955078Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -111,10 +111,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\factor-aftercare-20261001\\verify-BUG-1567.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1567",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "6aa47962d6e0474b95cdc449365eb0aaec8f0eb2d97235bd85bf1ad4433c1026",
+      "expected_identity": "b5345662235673c23c33907002d52b0c102caa17",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-01T14:20:38.954286Z",
+      "mode": "read_only",
+      "observed_identity": "3626c1cf5f338a7e6678ca62d737ff06ab1cacb1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e27efca03b0c363f948f4e4bf286a10ec6d7490ca3b779664527c89cbe9731c7",
+      "receipt_sha256": "efa92078af6ef622c696cf8bb3cc7b40b383dc51bc34bea1e6dbd7ddabeb5764",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f5fa0d27be5fc42fd50a15289cf5c5ac53fa2f64e8e726a6128e862daf0fdab0",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -145,7 +167,7 @@
     ],
     "validation_evidence_digest": "aa4f27705ab56417121b47683e54f8c87f953f4d71165f0c36ab90f5274a2908"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "factor_library.research"
   ],
