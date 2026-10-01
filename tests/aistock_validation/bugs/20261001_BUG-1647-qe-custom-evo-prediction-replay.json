@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1647",
-  "closed_at": null,
+  "closed_at": "2026-10-01T08:50:21.242484Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -152,10 +152,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1647/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1647",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "c6231172332ec1b3026ee331f2183b6a5c8166391186696f63f1b77eecf93ec8",
+      "expected_identity": "3bed0a0a716ba348a22a057e5805cacdecff190c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-01T08:48:48.718751Z",
+      "mode": "read_only",
+      "observed_identity": "3626c1cf5f338a7e6678ca62d737ff06ab1cacb1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b7cb4a8dc0c0efd2694a706480678a5e24429d26b67402f6dfd95ff0c02650fa",
+      "receipt_sha256": "f383e9ab2845f918d9b537bed3c0618406f1cf73a50e6fa34eae3715e7d76aa5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7ae053f11b444c4357095724086c2563d6e1f1246261e1d1666c510509f2b34a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -187,7 +209,7 @@
     ],
     "validation_evidence_digest": "f930b6f1641c8cfa57e4e61c7fabe78ae99b559ab8aa2c919b7b1e86fcde33bd"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -198,7 +220,8 @@
   },
   "validation_evidence": [
     "rtk pytest -q backend/tests/unified_engine/test_qe_custom_evo_wait.py backend/tests/unified_engine/test_qe_results_only_retry.py -> passed; 37 passed",
-    "python -m nox -s l0 -- --changed-only -> passed; blocking=0"
+    "python -m nox -s l0 -- --changed-only -> passed; blocking=0",
+    "Loop21 results_only recovered existing completed remote result; UI metrics completed experiment_id qe_20261001_052959_a6ab_L21; replay source SHA 34ea48d1ca3dc5380634bd5e89d87eb21bfc3b36eda43eaddc430bf8e6f41756; warehouse 21/21 eligible loops; parent failed due 4 preserved compensated original attempts"
   ],
   "verification_budget": {
     "budget": "standard",
