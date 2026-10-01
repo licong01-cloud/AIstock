@@ -220,6 +220,9 @@ def repair_daily_basic_history(
             audit[name] = {"before": causal_coverage(spans, calendar, old_facts, start=start, end=end),
                            "after": causal_coverage(spans, calendar, new_facts, start=start, end=end),
                            "source": causal_coverage(spans, calendar, source_facts, start=start, end=end)}
+            for section in audit[name].values():
+                section["window_start"] = start
+                section["window_end"] = end
         targeted = []
         for key in diagnostic["keys"]:
             symbol, entry = key["symbol"], key["pit_entry_date"]
