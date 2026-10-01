@@ -164,6 +164,7 @@ MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC_ENV = "QE_MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC"
 DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS = 3
 DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC = 0.1
 DEFAULT_MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC = 30.0
+QE_QLIB_KERNEL_LIMIT = 4
 _MLFLOW_EMPTY_METRIC_RE = re.compile(r"Metric '([^']+)' is malformed\. No data found\.")
 
 
@@ -173,6 +174,24 @@ class QEMlflowMetricReadRaceError(RuntimeError):
 
 class QEMlflowAsyncDrainError(RuntimeError):
     """Raised when queued Qlib MLflow writes cannot reach a read barrier."""
+
+
+def _qlib_init_config_with_kernel_limit(config: dict) -> dict:
+    """Return an isolated Qlib init config with the per-Loop worker limit."""
+    qlib_init_config = dict(config.get("qlib_init") or {})
+    qlib_init_config["kernels"] = QE_QLIB_KERNEL_LIMIT
+    return qlib_init_config
+
+
+def _verify_qlib_kernel_limit(freq: str) -> None:
+    """Fail closed when Qlib did not apply the requested worker limit."""
+    effective_kernels = C.get_kernels(freq)
+    if effective_kernels != QE_QLIB_KERNEL_LIMIT:
+        raise RuntimeError(
+            "QE_QLIB_KERNEL_LIMIT_NOT_EFFECTIVE: "
+            f"expected={QE_QLIB_KERNEL_LIMIT} actual={effective_kernels}"
+        )
+    print(f"[INFO] Qlib kernels limited to {effective_kernels} per Loop")
 
 
 def _env_int(name: str, default_value: int) -> int:
@@ -1744,6 +1763,116 @@ def _resolve_minute_instrument_path(
     return minute_all_path
 
 
+def _coverage_symbol_aliases(symbol: str) -> set[str]:
+    raw = str(symbol).strip().upper()
+    aliases = {raw}
+    if "." in raw:
+        code, exchange = raw.split(".", 1)
+        exchange = {"SSE": "SH", "SZSE": "SZ", "BSE": "BJ"}.get(exchange, exchange)
+        aliases.update({f"{code}.{exchange}", f"{exchange}{code}"})
+    elif len(raw) >= 8 and raw[:2] in {"SH", "SZ", "BJ"} and raw[2:].isdigit():
+        aliases.add(f"{raw[2:]}.{raw[:2]}")
+    return aliases
+
+
+def _load_minute_coverage_explanations(cwd: Path) -> tuple[dict[str, set[str]], list[dict]]:
+    artifact_path = cwd / "qe_suspend_filter.json"
+    if not artifact_path.is_file():
+        return {}, []
+    try:
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: path={artifact_path}"
+        ) from exc
+    by_date = payload.get("suspended_by_date")
+    exclusions = payload.get("execution_data_exclusions", [])
+    if not isinstance(by_date, dict) or not isinstance(exclusions, list):
+        raise RuntimeError(f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: path={artifact_path}")
+    suspended: dict[str, set[str]] = {}
+    for day, symbols in by_date.items():
+        if not isinstance(symbols, list):
+            raise RuntimeError(f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: path={artifact_path}")
+        expanded: set[str] = set()
+        for symbol in symbols:
+            expanded.update(_coverage_symbol_aliases(symbol))
+        suspended[str(day)] = expanded
+    normalized_exclusions: list[dict] = []
+    if exclusions:
+        expected_contract_sha256 = str(
+            payload.get("execution_data_exclusion_contract_sha256") or ""
+        ).lower()
+        actual_contract_sha256 = hashlib.sha256(
+            json.dumps(
+                exclusions,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        if expected_contract_sha256 != actual_contract_sha256:
+            raise RuntimeError(
+                "QE_MINUTE_COVERAGE_ARTIFACT_INVALID: "
+                f"execution_data_exclusion contract hash mismatch path={artifact_path}"
+            )
+    for index, item in enumerate(exclusions):
+        if not isinstance(item, dict):
+            raise RuntimeError(
+                f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: exclusion_index={index} path={artifact_path}"
+            )
+        instrument = str(item.get("instrument") or "").strip().upper()
+        start_date = str(item.get("start_date") or "")
+        end_date = str(item.get("end_date") or "")
+        evidence_sha256 = str(item.get("evidence_sha256") or "").strip().lower()
+        if (
+            item.get("schema_version") != "qe_execution_data_exclusion_v1"
+            or item.get("scope") != "full_backtest_window"
+            or item.get("reason_code") != "minute_source_gap_confirmed_unfillable"
+            or not re.fullmatch(r"[0-9]{6}\.(SH|SZ)", instrument)
+            or not start_date
+            or not end_date
+            or end_date < start_date
+            or not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256)
+        ):
+            raise RuntimeError(
+                f"QE_MINUTE_COVERAGE_ARTIFACT_INVALID: exclusion_index={index} path={artifact_path}"
+            )
+        normalized_exclusions.append(
+            {
+                "aliases": _coverage_symbol_aliases(instrument),
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+        )
+    return suspended, normalized_exclusions
+
+
+def _read_minute_coverage_calendar(day_root: Path, start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]:
+    calendar_path = day_root / "calendars" / "day.txt"
+    if not calendar_path.is_file():
+        raise RuntimeError(f"QE_MINUTE_CALENDAR_FILE_MISSING: {calendar_path}")
+    days: list[pd.Timestamp] = []
+    for line_number, raw_line in enumerate(
+        calendar_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        value = raw_line.strip()
+        if not value:
+            continue
+        try:
+            day = pd.Timestamp(value).normalize()
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError(
+                f"QE_MINUTE_CALENDAR_FILE_INVALID: path={calendar_path} line={line_number}"
+            ) from exc
+        if start <= day <= end:
+            days.append(day)
+    if not days:
+        raise RuntimeError(
+            f"QE_MINUTE_CALENDAR_WINDOW_EMPTY: path={calendar_path} window={start.date()}..{end.date()}"
+        )
+    return sorted(set(days))
+
+
 def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | None = None) -> None:
     """Require the minute quote universe to cover the day universe for the replay window."""
 
@@ -1807,7 +1936,11 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
     required_window_start = window_start.normalize()
     required_window_end = window_end.normalize()
 
+    suspended_by_date, execution_exclusions = _load_minute_coverage_explanations(workspace_root)
+    calendar_days: list[pd.Timestamp] | None = None
     expected = 0
+    suspension_explained = 0
+    exclusion_explained = 0
     uncovered: list[str] = []
     for symbol, spans in day_spans.items():
         for day_start, day_end in spans:
@@ -1816,14 +1949,46 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
             if required_end < required_start:
                 continue
             expected += 1
-            if not any(
+            if any(
                 minute_start.normalize() <= required_start
                 and minute_end.normalize() >= required_end
                 for minute_start, minute_end in minute_spans.get(symbol, [])
             ):
-                uncovered.append(
-                    f"{symbol}:{required_start.isoformat()}..{required_end.isoformat()}"
+                continue
+            if not suspended_by_date and not execution_exclusions:
+                uncovered.append(f"{symbol}:{required_start.isoformat()}..{required_end.isoformat()}")
+                continue
+            if calendar_days is None:
+                calendar_days = _read_minute_coverage_calendar(
+                    day_root,
+                    required_window_start,
+                    required_window_end,
                 )
+            symbol_aliases = _coverage_symbol_aliases(symbol)
+            required_days = [day for day in calendar_days if required_start <= day <= required_end]
+            if not required_days:
+                uncovered.append(
+                    f"{symbol}:{required_start.isoformat()}..{required_end.isoformat()}:calendar_empty"
+                )
+                continue
+            for day in required_days:
+                if any(
+                    minute_start.normalize() <= day <= minute_end.normalize()
+                    for minute_start, minute_end in minute_spans.get(symbol, [])
+                ):
+                    continue
+                day_key = day.date().isoformat()
+                if symbol_aliases & suspended_by_date.get(day_key, set()):
+                    suspension_explained += 1
+                    continue
+                if any(
+                    symbol_aliases & item["aliases"]
+                    and item["start_date"] <= day_key <= item["end_date"]
+                    for item in execution_exclusions
+                ):
+                    exclusion_explained += 1
+                    continue
+                uncovered.append(f"{symbol}:{day_key}")
     if expected <= 0:
         raise RuntimeError(
             "QE_MINUTE_DAY_UNIVERSE_EMPTY: "
@@ -1834,6 +1999,14 @@ def _validate_minute_instrument_coverage_contract(config: dict, *, cwd: Path | N
             "QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH: "
             f"market={selection_market} expected={expected} uncovered={len(uncovered)} examples={uncovered[:5]}"
         )
+    config["qe_minute_coverage_summary"] = {
+        "schema_version": "qe_minute_coverage_summary_v1",
+        "selection_market": selection_market,
+        "expected_spans": expected,
+        "suspension_explained_days": suspension_explained,
+        "execution_exclusion_explained_days": exclusion_explained,
+        "execution_data_exclusion_count": len(execution_exclusions),
+    }
 
     workspace_pool = workspace_root / f"{selection_market}.txt"
     if workspace_pool.is_file():
@@ -1859,7 +2032,6 @@ def _validate_pred_backtest_has_execution(recorder, config: dict, pred_df: pd.Da
             "QE_MINUTE_PREDICTION_WINDOW_EMPTY: "
             f"no prediction rows cover {start.date()}..{end.date()}"
         )
-
     indicators = recorder.load_object("portfolio_analysis/indicators_normal_1day.pkl")
     if not isinstance(indicators, pd.DataFrame) or indicators.empty:
         raise RuntimeError("QE_MINUTE_EXECUTION_INDICATORS_MISSING: daily execution indicators are empty")
@@ -1876,6 +2048,161 @@ def _validate_pred_backtest_has_execution(recorder, config: dict, pred_df: pd.Da
             "QE_MINUTE_BACKTEST_ZERO_TRADES: "
             f"prediction_rows={prediction_rows} count={float(count)} deal_amount={float(deal_amount)}"
         )
+
+
+def _filter_pred_backtest_to_dataset(pred_df: pd.DataFrame, raw_label: pd.DataFrame) -> pd.DataFrame:
+    """Restrict replayed predictions to the run-scoped dataset universe.
+
+    ``--pred-backtest`` bypasses ``SignalRecord`` and injects an existing
+    prediction directly.  Intersecting with the freshly constructed dataset
+    label is therefore the final enforcement point for PIT stock pools and
+    derived sector-blacklist universes.
+    """
+
+    if not isinstance(raw_label.index, pd.MultiIndex):
+        raise RuntimeError("QE_PRED_BACKTEST_LABEL_INDEX_INVALID: label index must be MultiIndex")
+    mask = pred_df.index.isin(raw_label.index)
+    filtered = pred_df.loc[mask].copy()
+    if filtered.empty:
+        raise RuntimeError(
+            "QE_PRED_BACKTEST_UNIVERSE_EMPTY: prediction has no rows in the run-scoped dataset universe"
+        )
+    return filtered
+
+
+def _prediction_panel_sha256(pred_df: pd.DataFrame) -> str:
+    """Hash ordered executable prediction content independently of pickle bytes."""
+
+    metadata = json.dumps(
+        {
+            "index_names": [str(value) for value in pred_df.index.names],
+            "columns": [str(value) for value in pred_df.columns],
+            "dtypes": [str(value) for value in pred_df.dtypes],
+            "rows": len(pred_df),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    values = pd.util.hash_pandas_object(pred_df, index=True, categorize=True).values.tobytes()
+    return hashlib.sha256(metadata + b"\n" + values).hexdigest()
+
+
+def _prediction_replay_raw_label_task_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Build a replay-only dataset config without model preprocessing.
+
+    Prediction replay consumes an immutable prediction panel and needs the
+    dataset only for raw test labels and the run-scoped instrument universe.
+    Running inference or learning processors here is both unnecessary and
+    incorrect: those processors are training contracts and may legitimately
+    reject pre-index-inception train segments even when the replay test segment
+    is complete.  Keep the loader, label formula, segments, and instruments
+    unchanged while explicitly disabling all handler processor pipelines.
+    """
+
+    from copy import deepcopy
+
+    task_config = deepcopy(config.get("task"))
+    if not isinstance(task_config, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_TASK_CONFIG_INVALID")
+    dataset_config = task_config.get("dataset")
+    if not isinstance(dataset_config, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_DATASET_CONFIG_INVALID")
+    dataset_kwargs = dataset_config.get("kwargs")
+    if not isinstance(dataset_kwargs, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_DATASET_KWARGS_INVALID")
+    handler_config = dataset_kwargs.get("handler")
+    if not isinstance(handler_config, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_HANDLER_CONFIG_INVALID")
+    handler_kwargs = handler_config.get("kwargs")
+    if not isinstance(handler_kwargs, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_HANDLER_KWARGS_INVALID")
+
+    data_loader = handler_kwargs.get("data_loader")
+    if data_loader is not None:
+        handler_kwargs["data_loader"] = _prediction_replay_label_only_loader(data_loader)
+
+    for processor_key in ("shared_processors", "infer_processors", "learn_processors"):
+        processors = handler_kwargs.get(processor_key)
+        if processors is not None and not isinstance(processors, (list, tuple)):
+            raise RuntimeError(
+                "QE_PRED_BACKTEST_PROCESSOR_CONFIG_INVALID: "
+                f"{processor_key} must be a list or tuple"
+            )
+        handler_kwargs[processor_key] = []
+    return task_config
+
+
+def _prediction_replay_label_only_loader(data_loader: Any) -> dict[str, Any]:
+    """Replace a feature-bearing loader with an exact label-only Qlib loader."""
+
+    if not isinstance(data_loader, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_DATA_LOADER_CONFIG_INVALID")
+
+    loader_class = str(data_loader.get("class") or "").strip()
+    loader_kwargs = data_loader.get("kwargs")
+    if not loader_class or not isinstance(loader_kwargs, dict):
+        raise RuntimeError("QE_PRED_BACKTEST_DATA_LOADER_CONFIG_INVALID")
+
+    label_config: Any = None
+    if loader_class.rsplit(".", 1)[-1] == "DynamicFactorsOnlyLoader":
+        label_fields = {"close": "$close", "open": "$open", "vwap": "$vwap"}
+        label_type = str(loader_kwargs.get("label_type") or "close").strip().lower()
+        if label_type not in label_fields:
+            raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID")
+        try:
+            label_horizon = int(loader_kwargs.get("label_horizon", 1))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID") from exc
+        if label_horizon not in {1, 3, 5, 10, 20, 30, 40, 60, 120, 180}:
+            raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID")
+        field = label_fields[label_type]
+        expression = f"Ref({field}, -{label_horizon + 1}) / Ref({field}, -1) - 1"
+        label_config = [[expression], ["LABEL0"]]
+    else:
+        candidates: list[Any] = []
+
+        def collect_label_configs(value: Any) -> None:
+            if isinstance(value, dict):
+                config_value = value.get("config")
+                if isinstance(config_value, dict) and "label" in config_value:
+                    candidates.append(config_value["label"])
+                for nested in value.values():
+                    collect_label_configs(nested)
+            elif isinstance(value, (list, tuple)):
+                for nested in value:
+                    collect_label_configs(nested)
+
+        collect_label_configs(data_loader)
+        if len(candidates) != 1:
+            raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID")
+        label_config = candidates[0]
+
+    if not isinstance(label_config, (list, tuple)) or not label_config:
+        raise RuntimeError("QE_PRED_BACKTEST_LABEL_CONFIG_INVALID")
+    return {
+        "class": "QlibDataLoader",
+        "module_path": "qlib.data.dataset.loader",
+        "kwargs": {"config": {"label": label_config}},
+    }
+
+
+def _load_prediction_replay_source_ref(pred_path: Path) -> dict[str, Any] | None:
+    ref_path = Path.cwd() / "qe_prediction_replay_source_ref.json"
+    if not ref_path.exists():
+        return None
+    try:
+        source_ref = json.loads(ref_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("QE_PREDICTION_REPLAY_SOURCE_REF_INVALID") from exc
+    if not isinstance(source_ref, dict) or source_ref.get("schema_version") != "qe_prediction_replay_source_ref_v1":
+        raise RuntimeError("QE_PREDICTION_REPLAY_SOURCE_REF_INVALID")
+    observed_size = pred_path.stat().st_size
+    observed_sha256 = hashlib.sha256(pred_path.read_bytes()).hexdigest()
+    if source_ref.get("size_bytes") != observed_size:
+        raise RuntimeError("QE_PREDICTION_REPLAY_STAGED_SIZE_MISMATCH")
+    if source_ref.get("sha256") != observed_sha256:
+        raise RuntimeError("QE_PREDICTION_REPLAY_STAGED_SHA256_MISMATCH")
+    return source_ref
 
 
 def main():
@@ -1906,7 +2233,6 @@ def _run_main(args):
     rendered = render_yaml_template(args.yaml_path)
     yaml = YAML(typ="safe", pure=True)
     config = yaml.load(rendered)
-    _validate_minute_instrument_coverage_contract(config, cwd=Path.cwd())
 
     # BUG-989 zero-DB data plane: rebuild qe_event_risk_policy.json from the
     # frozen qlib bin dataset (pinned by qe_frozen_build_spec.json) before
@@ -1945,14 +2271,15 @@ def _run_main(args):
                     "qe_build_frozen_suspend_filter.py helper is missing from the workspace"
                 )
 
+    # Coverage validation consumes the just-built frozen suspend artifact so
+    # fully suspended constituent days can be distinguished from real quote
+    # gaps.  Unknown gaps still fail closed; explicit execution-data
+    # exclusions are accepted only through the immutable run-scoped artifact.
+    _validate_minute_instrument_coverage_contract(config, cwd=Path.cwd())
+
     patch_backtest_config(config)
     apply_qe_fixed_seed(config)
     sys_config(config, config_path=args.yaml_path)
-
-    # 限制 qlib 并行度（必须在 qlib.init 之前！）
-    # 默认 kernels=28 会导致 28 个子进程各自继承父进程内存
-    C["kernels"] = 4
-    print("[INFO] Limited qlib kernels to 4")
 
     isolation_manifest = None
     if args.backtest_only:
@@ -1967,7 +2294,9 @@ def _run_main(args):
     exp_manager["kwargs"]["uri"] = "file:" + tracking_uri
     if args.backtest_only:
         _validate_backtest_recorder_isolation_manifest(isolation_manifest)
-    qlib.init(**config.get("qlib_init"), exp_manager=exp_manager)
+    qlib_init_config = _qlib_init_config_with_kernel_limit(config)
+    qlib.init(**qlib_init_config, exp_manager=exp_manager)
+    _verify_qlib_kernel_limit("1min")
     _install_mlflow_metric_read_retry()
 
     # 注入 benchmark Series（在 qlib init 之后，fallback 需要 D.features）
@@ -2030,11 +2359,12 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
     4. 执行 SigAnaRecord（IC/ICIR 分析）
     5. 执行 PortAnaRecord（选股+分钟线回测：收益/回撤/Sharpe/换手率/持仓）
     """
-    import copy
     import pandas as pd
     from qlib.utils import init_instance_by_config
     from qlib.workflow import R
     from qlib.data.dataset import Dataset
+
+    replay_source_ref = _load_prediction_replay_source_ref(pred_path)
 
     # 1. 加载 prediction
     pred_df = _load_pickle_with_size_bound(
@@ -2065,7 +2395,7 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
           f"{pred_df.index.get_level_values(0).max()}")
 
     # 2. 初始化 dataset（需要 label 用于 SigAnaRecord 计算 IC）
-    task_config = copy.deepcopy(config.get("task"))
+    task_config = _prediction_replay_raw_label_task_config(config)
     dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)
     dataset.config(dump_all=False, recursive=True)
 
@@ -2084,6 +2414,26 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
             "SigAnaRecord 需要 label 来计算 IC/ICIR。"
             "请检查 conf.yaml 的 dataset 配置和数据路径。"
         )
+    original_prediction_rows = len(pred_df)
+    pred_df = _filter_pred_backtest_to_dataset(pred_df, raw_label)
+    if replay_source_ref is not None:
+        replay_result = {
+            "schema_version": "qe_prediction_replay_result_v1",
+            "source_prediction_sha256": replay_source_ref["sha256"],
+            "executable_prediction_panel_sha256": _prediction_panel_sha256(pred_df),
+            "source_prediction_rows": original_prediction_rows,
+            "executable_prediction_rows": len(pred_df),
+            "excluded_prediction_rows": original_prediction_rows - len(pred_df),
+        }
+        (Path.cwd() / "qe_prediction_replay_result.json").write_text(
+            json.dumps(replay_result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    print(
+        "[INFO] Enforced run-scoped prediction universe: "
+        f"input_rows={original_prediction_rows} executable_rows={len(pred_df)} "
+        f"excluded_rows={original_prediction_rows - len(pred_df)}"
+    )
     print(f"[INFO] Extracted label from dataset: {len(raw_label)} rows")
 
     # 3. 构建 records 列表：跳过 SignalRecord（不需要模型预测），保留 SigAnaRecord + PortAnaRecord

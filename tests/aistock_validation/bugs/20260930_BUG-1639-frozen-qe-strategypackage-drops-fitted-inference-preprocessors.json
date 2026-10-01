@@ -1,0 +1,355 @@
+{
+  "actual": "Frozen runtime omits fitted DatasetH and trained feature order/20-session temporal input; CUDA-backed weights cannot load on CPU consumers.",
+  "allowed_write_scope": [
+    "backend/inference_engine.py",
+    "scripts/strategy_package_frozen_self_check.py",
+    "backend/services/strategy_package/manifest.py",
+    "backend/services/strategy_package/models.py",
+    "backend/services/strategy_package/package_asset_freeze.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/services/strategy_package/frozen_runtime_self_check.py",
+    "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+    "backend/tests/strategy_package/test_frozen_preprocessor_assets.py",
+    "tests/aistock_validation/bugs/20260930_BUG-1639-frozen-qe-strategypackage-drops-fitted-inference-preprocessors.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1639",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-30T07:15:20.934041Z",
+  "description": "Package asset closure omits the fitted dataset, training feature order and temporal input contract; repair consumer fidelity without refitting or changing QE research inputs.",
+  "events": [
+    {
+      "action": "asset_closure_scope_review",
+      "actor": "Codex",
+      "note": "Scope expanded before implementation to backend/inference_engine.py and the existing frozen-self-check script: preserve fitted normalization, original feature order, TSDatasetH step_len=20 and CPU deserialization. No Advisory/Simulation business code changes.",
+      "timestamp": "2026-09-30T08:40:00Z"
+    },
+    {
+      "action": "real_lstm_frozen_replay_verified",
+      "actor": "Codex",
+      "note": "WSL fresh CPU-only process froze 18 assets from qe_20260929_200405_d638_L1: 14 factors, original weight, fitted dataset and model.py/qe_custom_loaders.py. Dataset SHA c73d454125dc37669209915672eb6f9774ae2c48270aa7404bd43fce76300722. Normalization, native Qlib 20-session sampler tensors and final LSTM scores match exactly on the diagnostic panel; refit=0, DB writes=0, service control=false. Temporary verification CAS was not a persisted StrategyPackage.",
+      "timestamp": "2026-09-30T08:41:00Z"
+    },
+    {
+      "action": "design_compliance_multi_round_review",
+      "actor": "Codex",
+      "note": "Three self-review rounds repaired missing fitted state, trained-order drift, CPU deserialization, temporal-input truncation and TSDataSampler frame consumption. DESIGN-COMPLIANCE-001: complete consumer closure, missing/hash/recorder/schema errors remain explicit, original model/factors/seed/normalization/20-session Qlib policy unchanged, no added approval or statistical gate. Legacy no-processor manifest hashes retained. Broader strategy_package/paper_v2 regression delegated to CI/nightly.",
+      "timestamp": "2026-09-30T08:42:00Z"
+    },
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260930-ea97cc0cad8d",
+      "timestamp": "2026-09-30T07:15:20.934023Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Package-owned inference uses original fitted processors and immutable hashes, independent of QE workspace.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/models.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/tests/strategy_package/test_frozen_preprocessor_assets.py",
+      "scripts/strategy_package_frozen_self_check.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1639-frozen-qe-strategypackage-drops-fitted-inference-preprocessors.json"
+    ],
+    "added_files": [
+      "backend/tests/strategy_package/test_frozen_preprocessor_assets.py"
+    ],
+    "changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/models.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/tests/strategy_package/test_frozen_preprocessor_assets.py",
+      "scripts/strategy_package_frozen_self_check.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1639-frozen-qe-strategypackage-drops-fitted-inference-preprocessors.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/strategy_package/models.py",
+        "backend/services/strategy_package/package_asset_freeze.py",
+        "backend/services/strategy_package/live_inference.py",
+        "backend/services/strategy_package/frozen_runtime_self_check.py",
+        "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+        "backend/tests/strategy_package/test_frozen_preprocessor_assets.py"
+      ],
+      "impacted_modules": [
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/strategy_package/models.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/package_asset_freeze.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/live_inference.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/frozen_runtime_self_check.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_frozen_preprocessor_assets.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/strategy_package/models.py",
+        "backend/services/strategy_package/package_asset_freeze.py",
+        "backend/services/strategy_package/live_inference.py",
+        "backend/services/strategy_package/frozen_runtime_self_check.py",
+        "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+        "backend/tests/strategy_package/test_frozen_preprocessor_assets.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/strategy_package/models.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+      "backend/tests/strategy_package/test_frozen_preprocessor_assets.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/strategy_package/models.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+      "backend/tests/strategy_package/test_frozen_preprocessor_assets.py"
+    ]
+  },
+  "first_seen_at": "2026-09-30T07:15:20.934041Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5145,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5145",
+  "last_seen_at": "2026-09-30T07:15:20.934041Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages",
+    "fresh_process_evidence": [
+      "WSL CPU-only real LSTM frozen replay: 18 protected assets, original weight + fitted DatasetH sha c73d454125dc37669209915672eb6f9774ae2c48270aa7404bd43fce76300722, 14 features, original order and step_len20 preserved; normalization, native TS sampler and final scores exact; refit=0 DB writes=0 service control=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "Frozen QE StrategyPackage drops fitted inference preprocessors",
+  "trigger_condition": {
+    "fingerprint": "ea97cc0cad8dbb4f0e6c1ce2",
+    "source_event_id": "FE-20260930-ea97cc0cad8d"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

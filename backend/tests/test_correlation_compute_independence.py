@@ -62,6 +62,260 @@ def test_correlation_wsl_runner_no_args_returns_structured_usage() -> None:
     assert "usage:" in payload["data"]["error"]
 
 
+def test_correlation_wsl_runner_routes_target_only_mode(monkeypatch, tmp_path, capsys) -> None:
+    from backend.scripts import run_correlation_compute_wsl as runner
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "mode": "target_only",
+                "target_factor_name": "factor_target",
+                "as_of_date": "2026-08-31",
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+    monkeypatch.setattr(runner, "assert_wsl_runtime", lambda _operation: None)
+    monkeypatch.setattr(
+        svc,
+        "run_target_correlation_refresh_local",
+        lambda **kwargs: captured.update(kwargs) or {"success": True},
+    )
+    monkeypatch.setattr(
+        svc,
+        "run_correlation_compute_local",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("full reset must not run")),
+    )
+    monkeypatch.setattr(sys, "argv", [str(RUNNER), str(payload_path)])
+
+    assert runner.main() == 0
+    assert captured["target_factor_name"] == "factor_target"
+    assert json.loads(capsys.readouterr().out.strip())["data"]["success"] is True
+
+
+def test_target_correlation_persistence_replaces_only_target_pairs(monkeypatch) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    statements = []
+    inserted = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            statements.append((" ".join(sql.split()), params))
+
+        def fetchall(self):
+            return [(1, 2)]
+
+    class Conn:
+        committed = False
+        rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    conn = Conn()
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "reference"},
+                {"id": 3, "factor_name": "unrelated"},
+            ]
+
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        svc,
+        "execute_values",
+        lambda _cur, _sql, values, **_kwargs: inserted.extend(values),
+    )
+
+    written = svc._persist_target_correlations(
+        target_factor_name="target",
+        records=[
+            {
+                "factor_a": "target",
+                "factor_b": "reference",
+                "correlation": 0.25,
+                "method": "spearman_ewma",
+            }
+        ],
+        as_of_date="2026-08-31",
+        universe_metadata={"universe_key": "aistock_equity_pit_canonical_v2"},
+    )
+
+    assert written == 1
+    assert conn.committed is True
+    assert conn.rolled_back is False
+    assert inserted[0][:2] == (1, 2)
+    assert statements[0][1] == (1, 1)
+    assert all("TRUNCATE" not in sql for sql, _params in statements)
+    assert statements[1][1] == ([2],)
+    assert statements[-1][1] == (1, 1)
+
+
+def test_target_correlation_persistence_rolls_back_before_replacing_state(
+    monkeypatch,
+) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params=None):
+            return None
+
+        def fetchall(self):
+            return [(1, 2)]
+
+    class Conn:
+        committed = False
+        rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    conn = Conn()
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "reference"},
+            ]
+
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        svc,
+        "execute_values",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("insert failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        svc._persist_target_correlations(
+            target_factor_name="target",
+            records=[
+                {
+                    "factor_a": "target",
+                    "factor_b": "reference",
+                    "correlation": 0.25,
+                }
+            ],
+            as_of_date="2026-08-31",
+            universe_metadata={},
+        )
+
+    assert conn.committed is False
+    assert conn.rolled_back is True
+
+
+def test_target_correlation_route_submits_explicit_profile_without_full_reset(
+    monkeypatch,
+) -> None:
+    from backend.routers import quantevolver_evolution as router
+
+    submitted = {}
+
+    class Lock:
+        def locked(self):
+            return False
+
+    class Eligibility:
+        def get_eligible_factor_names(self, **_kwargs):
+            return ["target"]
+
+    class Executor:
+        def submit(self, fn, **kwargs):
+            submitted["fn"] = fn
+            submitted.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(router, "_computing_lock", Lock())
+    monkeypatch.setattr(router, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(router, "_compute_executor", Executor())
+    monkeypatch.setattr(
+        router._correlation_compute_service,
+        "get_correlation_factor_cache_status",
+        lambda: {"as_of_date": "2026-08-31"},
+    )
+
+    result = router.refresh_target_correlations(
+        router.CorrelationTargetRefreshRequest(
+            target_factor_name="target",
+            as_of_date="2026-08-31",
+            dataset_profile_path="X:/profiles/r8.json",
+        )
+    )
+
+    assert result["status"] == "accepted"
+    assert result["unrelated_rows_reset"] is False
+    assert submitted["target_factor_name"] == "target"
+    assert submitted["dataset_profile_path"] == "X:/profiles/r8.json"
+
+
+def test_target_correlation_refresh_fails_closed_when_reference_cache_is_missing(
+    monkeypatch,
+) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "missing_reference"},
+            ]
+
+    class Pipeline:
+        def get_cached_singles(self):
+            return [{"factor_name": "target"}]
+
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda _operation: None)
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", Pipeline)
+    monkeypatch.setattr(svc, "_update_job_status", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(ValueError, match="missing from the cache"):
+        svc.run_target_correlation_refresh_local(target_factor_name="target")
+
 
 def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
@@ -127,23 +381,13 @@ def test_selected_correlation_submatrix_is_rectangular_and_order_invariant() -> 
 
     dates = pd.bdate_range("2026-01-05", periods=4)
     instruments = ["000001.SZ", "000002.SZ", "000003.SZ"]
-    index = pd.MultiIndex.from_product(
-        [dates, instruments], names=["datetime", "instrument"]
-    )
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
     base = np.tile(np.asarray([1.0, 2.0, 3.0]), len(dates))
-    candidates = pd.DataFrame(
-        {"candidate_b": -base, "candidate_a": base}, index=index
-    )
-    references = pd.DataFrame(
-        {"reference_b": -base, "reference_a": base}, index=index
-    )
-    engine = CorrelationEngine(
-        object(), window=4, half_life=2, min_stocks=3, min_days=2
-    )
+    candidates = pd.DataFrame({"candidate_b": -base, "candidate_a": base}, index=index)
+    references = pd.DataFrame({"reference_b": -base, "reference_a": base}, index=index)
+    engine = CorrelationEngine(object(), window=4, half_life=2, min_stocks=3, min_days=2)
 
-    first = engine.compute_selected_submatrix(
-        candidates, references, as_of_date="2026-01-08"
-    )
+    first = engine.compute_selected_submatrix(candidates, references, as_of_date="2026-01-08")
     second = engine.compute_selected_submatrix(
         candidates.sample(frac=1.0, random_state=7)[["candidate_a", "candidate_b"]],
         references.sample(frac=1.0, random_state=8)[["reference_a", "reference_b"]],
@@ -168,13 +412,9 @@ def test_selected_correlation_submatrix_reports_insufficient_support_as_null() -
     )
     candidate = pd.DataFrame({"candidate": [1.0, 2.0]}, index=index)
     reference = pd.DataFrame({"reference": [2.0, 1.0]}, index=index)
-    engine = CorrelationEngine(
-        object(), window=4, half_life=2, min_stocks=2, min_days=2
-    )
+    engine = CorrelationEngine(object(), window=4, half_life=2, min_stocks=2, min_days=2)
 
-    result = engine.compute_selected_submatrix(
-        candidate, reference, as_of_date="2026-01-05"
-    )
+    result = engine.compute_selected_submatrix(candidate, reference, as_of_date="2026-01-05")
 
     assert np.isnan(result.matrix[0, 0])
     assert result.effective_days[0, 0] == 1
@@ -182,12 +422,169 @@ def test_selected_correlation_submatrix_reports_insufficient_support_as_null() -
     assert result.records()[0]["reason"] == "insufficient_effective_days"
 
 
+def test_selected_daily_submatrix_preserves_pairwise_mask_semantics() -> None:
+    from scipy import stats
+
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    dates = pd.bdate_range("2026-01-05", periods=3)
+    instruments = [f"{code:06d}.SZ" for code in range(1, 7)]
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
+    candidates = pd.DataFrame(
+        {
+            "candidate_a": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                2,
+                3,
+                np.nan,
+                5,
+                6,
+                7,
+                3,
+                4,
+                5,
+                6,
+                np.nan,
+                8,
+            ],
+            "candidate_b": [
+                6,
+                5,
+                4,
+                3,
+                2,
+                1,
+                7,
+                np.nan,
+                5,
+                4,
+                3,
+                2,
+                8,
+                7,
+                6,
+                np.nan,
+                4,
+                3,
+            ],
+        },
+        index=index,
+    )
+    references = pd.DataFrame(
+        {
+            "reference_a": [
+                1,
+                4,
+                2,
+                6,
+                3,
+                5,
+                2,
+                5,
+                3,
+                np.nan,
+                4,
+                6,
+                3,
+                np.nan,
+                4,
+                8,
+                5,
+                7,
+            ],
+            "reference_b": [
+                5,
+                2,
+                6,
+                1,
+                4,
+                3,
+                6,
+                3,
+                np.nan,
+                2,
+                5,
+                4,
+                7,
+                4,
+                8,
+                3,
+                6,
+                np.nan,
+            ],
+        },
+        index=index,
+    )
+    engine = CorrelationEngine(
+        object(),
+        window=3,
+        half_life=2,
+        min_stocks=3,
+        min_days=1,
+        winsorize_quantile=0.2,
+    )
+
+    daily = engine.compute_selected_daily_submatrix(candidates, references, as_of_date="2026-01-07")
+
+    expected = np.full((3, 2, 2), np.nan)
+    for day_index, date in enumerate(dates):
+        left_day = candidates.loc[date]
+        right_day = references.loc[date]
+        for i, candidate in enumerate(sorted(candidates.columns)):
+            for j, reference in enumerate(sorted(references.columns)):
+                left = left_day[candidate].to_numpy(dtype=float)
+                right = right_day[reference].to_numpy(dtype=float)
+                valid = np.isfinite(left) & np.isfinite(right)
+                if int(valid.sum()) < 3:
+                    continue
+                corr, _ = stats.spearmanr(
+                    engine._winsorize_array(left[valid]),
+                    engine._winsorize_array(right[valid]),
+                )
+                if np.isfinite(corr):
+                    expected[day_index, i, j] = corr
+
+    assert np.allclose(daily.correlations, expected, equal_nan=True, atol=1e-12)
+    assert daily.metadata["mask_groups"] < 3 * 2 * 2
+
+
+def test_selected_daily_submatrix_reuses_dates_without_changing_window_result() -> None:
+    from backend.services.quantevolver.correlation_engine import CorrelationEngine
+
+    dates = pd.bdate_range("2026-01-05", periods=5)
+    instruments = [f"{code:06d}.SZ" for code in range(1, 7)]
+    index = pd.MultiIndex.from_product([dates, instruments], names=["datetime", "instrument"])
+    base = np.tile(np.asarray([1.0, 3.0, 2.0, 6.0, 4.0, 5.0]), len(dates))
+    candidates = pd.DataFrame({"candidate": base}, index=index)
+    references = pd.DataFrame({"reference": np.roll(base, 1)}, index=index)
+    engine = CorrelationEngine(object(), window=5, half_life=2, min_stocks=3, min_days=2)
+    daily = engine.compute_selected_daily_submatrix(candidates, references, as_of_date="2026-01-09")
+    reused = engine.aggregate_selected_daily_submatrix(
+        daily,
+        start_date="2026-01-07",
+        end_date="2026-01-09",
+        as_of_date="2026-01-09",
+    )
+    sliced = engine.compute_selected_submatrix(
+        candidates.loc[(slice(pd.Timestamp("2026-01-07"), None), slice(None)), :],
+        references.loc[(slice(pd.Timestamp("2026-01-07"), None), slice(None)), :],
+        as_of_date="2026-01-09",
+    )
+
+    assert np.allclose(reused.matrix, sliced.matrix, equal_nan=True, atol=1e-12)
+    assert np.array_equal(reused.effective_days, sliced.effective_days)
+    assert np.allclose(reused.avg_stocks_per_day, sliced.avg_stocks_per_day)
+
+
 def test_selected_correlation_submatrix_rejects_non_daily_or_invalid_identity() -> None:
     from backend.services.quantevolver.correlation_engine import CorrelationEngine
 
-    engine = CorrelationEngine(
-        object(), window=4, half_life=2, min_stocks=2, min_days=2
-    )
+    engine = CorrelationEngine(object(), window=4, half_life=2, min_stocks=2, min_days=2)
     intraday_index = pd.MultiIndex.from_product(
         [[pd.Timestamp("2026-01-05 09:30:00")], ["000001.SZ", "000002.SZ"]],
         names=["datetime", "instrument"],
@@ -285,9 +682,7 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
         json.dumps(
             {
                 "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
-                "factors": {
-                    "factor_a": {"as_of_date": "2026-04-10"}
-                }
+                "factors": {"factor_a": {"as_of_date": "2026-04-10"}},
             },
             ensure_ascii=False,
         ),
@@ -361,13 +756,17 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
     monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
-    monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
-        "eligible_factors": 2,
-        "deleted_pairs": 0,
-        "reset_ineligible_catalog": 0,
-        "reset_orphan_catalog": 0,
-        "reset_all_catalog": 0,
-    })
+    monkeypatch.setattr(
+        svc,
+        "_reconcile_correlation_state",
+        lambda reset_all=False: {
+            "eligible_factors": 2,
+            "deleted_pairs": 0,
+            "reset_ineligible_catalog": 0,
+            "reset_orphan_catalog": 0,
+            "reset_all_catalog": 0,
+        },
+    )
     monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
     monkeypatch.setattr(svc, "_persist_correlations_batch", lambda records, **kwargs: len(records))
     monkeypatch.setattr(svc, "_persist_correlation_metadata", lambda result: None)
@@ -394,7 +793,7 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
                 "factors": {
                     "factor_a": {"as_of_date": "2026-04-10"},
                     "factor_b": {"as_of_date": "2026-04-10"},
-                }
+                },
             },
             ensure_ascii=False,
         ),
@@ -464,13 +863,17 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
-    monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
-        "eligible_factors": 2,
-        "deleted_pairs": 0,
-        "reset_ineligible_catalog": 0,
-        "reset_orphan_catalog": 0,
-        "reset_all_catalog": 0,
-    })
+    monkeypatch.setattr(
+        svc,
+        "_reconcile_correlation_state",
+        lambda reset_all=False: {
+            "eligible_factors": 2,
+            "deleted_pairs": 0,
+            "reset_ineligible_catalog": 0,
+            "reset_orphan_catalog": 0,
+            "reset_all_catalog": 0,
+        },
+    )
     monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
     monkeypatch.setattr(svc, "_persist_correlations_batch", lambda records, **kwargs: len(records))
     monkeypatch.setattr(svc, "_persist_correlation_metadata", lambda result: None)
@@ -490,7 +893,6 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     assert result["cache_root"] == str(tmp_path)
 
 
-
 def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(monkeypatch, tmp_path) -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
     from backend.services.quantevolver.correlation_engine import CorrelationResult
@@ -500,10 +902,7 @@ def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(
         json.dumps(
             {
                 "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
-                "factors": {
-                    name: {"as_of_date": "2026-04-30"}
-                    for name in factors
-                }
+                "factors": {name: {"as_of_date": "2026-04-30"} for name in factors},
             },
             ensure_ascii=False,
         ),
@@ -590,13 +989,17 @@ def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
     monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: _FakeUniverseMaskService())
-    monkeypatch.setattr(svc, "_reconcile_correlation_state", lambda reset_all=False: {
-        "eligible_factors": 3,
-        "deleted_pairs": 0,
-        "reset_ineligible_catalog": 0,
-        "reset_orphan_catalog": 0,
-        "reset_all_catalog": 0,
-    })
+    monkeypatch.setattr(
+        svc,
+        "_reconcile_correlation_state",
+        lambda reset_all=False: {
+            "eligible_factors": 3,
+            "deleted_pairs": 0,
+            "reset_ineligible_catalog": 0,
+            "reset_orphan_catalog": 0,
+            "reset_all_catalog": 0,
+        },
+    )
     monkeypatch.setattr(svc, "_update_job_status", lambda *args, **kwargs: None)
     monkeypatch.setattr(svc, "_persist_correlations_batch", fake_persist_records)
     monkeypatch.setattr(svc, "_persist_correlation_metadata", fake_persist_metadata)

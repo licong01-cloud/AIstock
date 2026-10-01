@@ -466,7 +466,8 @@ def test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scop
     assert "workflow_dispatch:" in refresh_workflow
     assert "- cron: '30 18 * * *'" in refresh_workflow
     assert "group: code-intelligence-refresh-main" in refresh_workflow
-    assert "cancel-in-progress: false" in refresh_workflow
+    assert "cancel-in-progress: true" in refresh_workflow
+    assert refresh_workflow.index("jobs:") < refresh_workflow.index("concurrency:")
     assert "continue-on-error: true" not in refresh_workflow
     assert "GITHUB_OUTPUT" not in refresh_workflow
     assert "--require-publish-ready" in refresh_workflow
@@ -481,6 +482,7 @@ def test_graph_refresh_workflows_are_daily_required_deduplicated_and_source_scop
     assert "actions/upload-artifact@" not in refresh_workflow
     assert "actions/download-artifact@" not in refresh_workflow
     assert "code-intelligence-refresh-main" in nightly
+    assert "cancel-in-progress: true" in nightly
     assert "name: Code intelligence daily graph refresh and summary" in nightly
     assert "scripts/code_intelligence_adapter.py codegraph-sync" in nightly
     assert "scripts/code_intelligence_adapter.py ua-refresh" in nightly

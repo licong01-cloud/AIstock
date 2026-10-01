@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AdvisoryApiError,
   historicalRangeApi,
+  type HistoricalRangeComparison,
   type HistoricalRangeCreatePayload,
   type HistoricalRangeMutationData,
   type HistoricalRangeOptions,
@@ -53,6 +54,8 @@ export function useHistoricalRangeResearch() {
   const [outcomePage, setOutcomePage] = useState<HistoricalRangePage>(EMPTY_PAGE);
   const [summaries, setSummaries] = useState<HistoricalRangeRecord[]>([]);
   const [summaryPage, setSummaryPage] = useState<HistoricalRangePage>(EMPTY_PAGE);
+  const [comparison, setComparison] = useState<HistoricalRangeComparison | null>(null);
+  const [comparing, setComparing] = useState(false);
   const [activeOperation, setActiveOperation] = useState<HistoricalRangeRecord | null>(null);
   const [selectedHorizons, setSelectedHorizons] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,6 +91,7 @@ export function useHistoricalRangeResearch() {
 
   const selectBatch = useCallback(async (batchId: string) => {
     setError(null);
+    setComparison(null);
     try {
       const nextRuns = await refreshSelectedBatch(batchId);
       if (nextRuns[0]) setSelectedRun(nextRuns[0]);
@@ -95,6 +99,27 @@ export function useHistoricalRangeResearch() {
       setError(asApiError(cause));
     }
   }, [refreshSelectedBatch]);
+
+  const compareRuns = useCallback(async (baselineRangeRunId: string, candidateRangeRunId: string) => {
+    if (!selectedBatchId) return null;
+    setComparing(true);
+    setError(null);
+    setComparison(null);
+    try {
+      const result = await historicalRangeApi.comparison(
+        selectedBatchId,
+        baselineRangeRunId,
+        candidateRangeRunId,
+      );
+      setComparison(result);
+      return result;
+    } catch (cause) {
+      setError(asApiError(cause));
+      return null;
+    } finally {
+      setComparing(false);
+    }
+  }, [selectedBatchId]);
 
   const selectRun = useCallback(async (run: HistoricalRangeRecord) => {
     const runId = String(run.range_run_id);
@@ -414,9 +439,9 @@ export function useHistoricalRangeResearch() {
   return {
     options, batches, batchPage, selectedBatch, runs, runPage, operations, operationPage, selectedRun, days, dayPage,
     selectedDay, candidates, candidatePage, listVersion, listItems, listItemPage,
-    outcomes, outcomePage, summaries, summaryPage, activeOperation, selectedHorizons, setSelectedHorizons,
-    loading, mutating, error,
-    create, mutate, selectBatch, selectRun, selectDay, selectOperation,
+    outcomes, outcomePage, summaries, summaryPage, comparison, activeOperation, selectedHorizons, setSelectedHorizons,
+    loading, mutating, comparing, error,
+    create, mutate, compareRuns, selectBatch, selectRun, selectDay, selectOperation,
     loadMoreBatches, loadMoreRuns, loadMoreOperations, loadMoreDays, loadMoreCandidates,
     loadMoreListItems, loadMoreOutcomes, loadMoreSummaries,
   };

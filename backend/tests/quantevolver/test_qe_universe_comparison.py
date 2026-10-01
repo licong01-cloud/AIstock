@@ -75,6 +75,42 @@ def test_universe_comparison_rejects_duplicate_or_preselected_pools() -> None:
             )
         )
 
+
+def test_universe_comparison_records_explicit_star50_top20_arm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    async def fake_create(req, _background_tasks):
+        captured["request"] = req
+        return {"status": "success", "task_id": "qe_cmp_task", "total_loops": len(req.loops)}
+
+    monkeypatch.setattr(evolution_router, "create_custom_evolution_task", fake_create)
+    request = _request(["star50", "csi300"])
+    request.topk_by_pool = {"csi300": 50, "star50": 20}
+
+    result = asyncio.run(
+        evolution_router.create_universe_comparison_task(request, BackgroundTasks())
+    )
+
+    loops = captured["request"].loops
+    by_pool = {loop.universe_selection["pool_ids"][0]: loop for loop in loops}
+    assert by_pool["star50"].strategy_params["topk"] == 20
+    assert by_pool["csi300"].strategy_params["topk"] == 50
+    assert {arm["pool_id"]: arm["topk"] for arm in result["arms"]} == {
+        "csi300": 50,
+        "star50": 20,
+    }
+
+
+def test_universe_comparison_rejects_unknown_topk_override() -> None:
+    request = _request(["csi300", "csi500"])
+    request.topk_by_pool = {"star50": 20}
+    with pytest.raises(HTTPException, match="outside pool_ids"):
+        asyncio.run(
+            evolution_router.create_universe_comparison_task(request, BackgroundTasks())
+        )
+
     request = _request(["csi300", "csi500"])
     request.base_loop.universe_selection = {"mode": "single_index", "pool_ids": ["csi300"]}
     with pytest.raises(HTTPException, match="must omit"):
@@ -84,6 +120,54 @@ def test_universe_comparison_rejects_duplicate_or_preselected_pools() -> None:
                 BackgroundTasks(),
             )
         )
+
+
+def test_universe_comparison_rejects_star50_inheriting_explicit_top50() -> None:
+    request = _request(["star50", "csi300"])
+    request.base_loop.strategy_params["topk"] = 50
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            evolution_router.create_universe_comparison_task(
+                request,
+                BackgroundTasks(),
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["reason_code"] == "qe_star50_topk_required"
+    assert exc_info.value.detail["context"]["pool_id"] == "star50"
+
+
+def test_strategy_fork_rejects_star50_non_top20_before_scheduler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def fake_strategy_fork_task(**_kwargs):
+        nonlocal called
+        called = True
+        return "qe_fork"
+
+    monkeypatch.setattr(evolution_router, "ensure_qe_label_horizon_schema", lambda: None)
+    monkeypatch.setattr(evolution_router.scheduler, "strategy_fork_task", fake_strategy_fork_task)
+    request = evolution_router.StrategyEvolutionForkRequest(
+        from_loop_index=1,
+        loops=[
+            evolution_router.StrategyLoopConfig(
+                strategy_params={"topk": 50},
+                universe_selection={"mode": "single_index", "pool_ids": ["star50"]},
+                execution_algo="TWAP",
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(evolution_router.strategy_fork_task("qe_source", request))
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["reason_code"] == "qe_star50_topk_required"
+    assert called is False
 
 
 def test_strategy_fork_success_returns_once_without_retired_execution_mode(
@@ -215,6 +299,172 @@ def test_custom_evo_rerun_reuses_persisted_binding_without_reading_active_profil
         "mode": "single_index",
         "pool_ids": ["csi300"],
     }
+
+
+def test_custom_evo_routes_top_level_sector_blacklist_to_active_dataset_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_params: list[dict] = []
+
+    monkeypatch.setattr(
+        evolution_router,
+        "resolve_custom_loop_nodes",
+        lambda loops, _node: (
+            [{**loop, "node_id": "wsl2-5080"} for loop in loops],
+            "wsl2-5080",
+            {"wsl2-5080"},
+        ),
+    )
+
+    async def fake_preflight(_node_ids):
+        return {}
+
+    def fake_resolve_and_apply_active_qe_dataset(**kwargs):
+        params = dict(kwargs.get("custom_params") or {})
+        captured_params.append(params)
+        if params.get("sector_blacklist"):
+            params["_qe_sector_blacklist_policy"] = {
+                "blacklist_excluded_count": 7,
+            }
+            params["sector_blacklist_enabled"] = True
+        params["stock_pool"] = "index_pool__csi300"
+        return (
+            {"test_end": "2026-08-31", "backtest_end": "2026-08-28"},
+            params,
+            {
+                "generation": "generation-1",
+                "release_id": "release-1",
+                "cutoff": "2026-08-31",
+            },
+        )
+
+    monkeypatch.setattr(evolution_router, "preflight_qe_nodes", fake_preflight)
+    monkeypatch.setattr(profile_module, "load_active_qe_profile", lambda: object())
+    monkeypatch.setattr(
+        profile_module,
+        "resolve_and_apply_active_qe_dataset",
+        fake_resolve_and_apply_active_qe_dataset,
+    )
+
+    p10 = _request(["csi300", "csi500"]).base_loop.model_copy(
+        update={"universe_selection": {"mode": "single_index", "pool_ids": ["csi300"]}}
+    )
+    p11 = p10.model_copy(update={"sector_blacklist": ["801020.SI", "801010.SI"]})
+
+    loops, _node_id, _parallelism = asyncio.run(
+        evolution_router._prepare_custom_evo_loop_configs(
+            [p10, p11],
+            request_node_id="wsl2-5080",
+            node_parallelism_payload=None,
+        )
+    )
+
+    assert "sector_blacklist" not in captured_params[0]
+    assert captured_params[1]["sector_blacklist"] == ["801020.SI", "801010.SI"]
+    assert "_qe_sector_blacklist_policy" not in loops[0]["custom_params"]
+    assert loops[1]["custom_params"]["_qe_sector_blacklist_policy"] == {
+        "blacklist_excluded_count": 7,
+    }
+
+
+def test_custom_evo_sector_blacklist_requires_active_dataset_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        evolution_router,
+        "resolve_custom_loop_nodes",
+        lambda loops, _node: (
+            [{**loop, "node_id": "wsl2-5080"} for loop in loops],
+            "wsl2-5080",
+            {"wsl2-5080"},
+        ),
+    )
+
+    async def fake_preflight(_node_ids):
+        return {}
+
+    monkeypatch.setattr(evolution_router, "preflight_qe_nodes", fake_preflight)
+    monkeypatch.setattr(profile_module, "load_active_qe_profile", lambda: None)
+    p11 = _request(["csi300", "csi500"]).base_loop.model_copy(
+        update={"sector_blacklist": ["801010.SI"]}
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            evolution_router._prepare_custom_evo_loop_configs(
+                [p11],
+                request_node_id="wsl2-5080",
+                node_parallelism_payload=None,
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "qe_active_dataset_profile_missing" in str(exc_info.value.detail)
+
+
+def test_custom_evo_persisted_star50_binding_defaults_and_rejects_top50(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persisted = {
+        "loop_index": 1,
+        "node_id": "wsl2-5080",
+        "data_split": {"test_end": "2026-08-31", "backtest_end": "2026-08-28"},
+        "stock_pool": "index_pool__star50",
+        "custom_params": {
+            "_qe_direct_v2_dataset_binding": {
+                "schema_version": "qe_direct_v2_dataset_binding_v3",
+                "selection_pins": {
+                    "mode": "single_index",
+                    "pool_ids": ["star50"],
+                    "instrument_name": "index_pool__star50",
+                },
+            }
+        },
+    }
+    monkeypatch.setattr(
+        evolution_router,
+        "resolve_custom_loop_nodes",
+        lambda loops, _node: (
+            [{**loop, "node_id": "wsl2-5080"} for loop in loops],
+            "wsl2-5080",
+            {"wsl2-5080"},
+        ),
+    )
+
+    async def fake_preflight(_node_ids):
+        return {}
+
+    monkeypatch.setattr(evolution_router, "preflight_qe_nodes", fake_preflight)
+    base = evolution_router.CustomEvoLoopConfig(
+        factor_keys=["demo||catalog"],
+        model_id="model_lgbm_v1",
+        strategy_params={},
+        runtime_flags={"random_seed": 123},
+        label_horizon=20,
+    )
+    loops, _node_id, _parallelism = asyncio.run(
+        evolution_router._prepare_custom_evo_loop_configs(
+            [base],
+            request_node_id="wsl2-5080",
+            node_parallelism_payload=None,
+            assigned_loop_indexes=[1],
+            persisted_loop_configs={1: persisted},
+        )
+    )
+    assert loops[0]["strategy_params"]["topk"] == 20
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            evolution_router._prepare_custom_evo_loop_configs(
+                [base.model_copy(update={"strategy_params": {"topk": 50}})],
+                request_node_id="wsl2-5080",
+                node_parallelism_payload=None,
+                assigned_loop_indexes=[1],
+                persisted_loop_configs={1: persisted},
+            )
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail["reason_code"] == "qe_star50_topk_required"
 
 
 def test_public_custom_evo_config_preserves_legacy_stock_pool_without_binding() -> None:
