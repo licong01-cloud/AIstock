@@ -54,7 +54,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 
 ## Design Acceptance Index
 
-- F-001：v15/full-v3 文件身份与完整 C-010/A5 输入闭合。
+- F-001：当前批准的 v16/full-v3 文件身份与完整 C-010/A5 输入闭合；v15 失败记录仅作演进历史。
 - F-002：D3/D4 原数值、MAP、covariance 和结构合同。
 - F-003：两次 fresh-process 全 grid、零-refit readback 与 D5 train-only selection。
 - F-004：D6-NA 完整 carrier/source/masks/ledger 与 selected-only semantic acceptance。
@@ -63,7 +63,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 ## Implementation Plan
 
 一个实现任务包完成 F-001～F-004、聚焦测试和多轮修复；不是为每个小功能另建阶段。
-输入正式 preflight 和源码审核通过后执行已获批准的 5184 fits，形成 F-005 的真实结果。
+历史长期计划是在输入正式 preflight 和源码审核通过后执行 5184 fits，形成 F-005 的真实结果；当前 v16 输入更新授权明确不启动正式训练，本轮只到完整 file-only preflight，后续以允许训练动作的授权为准。
 只创建一个完整源码 PR；本文件不把未实现项标为完成。源码合入与后续正式模型验收是不同结果，不以源码通过推导模型成功。
 
 ## Verification Plan
@@ -79,7 +79,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | formal_state_authority.py; formal_state_domains.py; formal_state_input.py; formal_state_executor.py | 官方 DB 只读目录 freeze + adapter readback 成功；历史 stable-taxonomy-backcast 训练视图覆盖 131/131；A5 full-key partition/opportunity/eligibility 定向测试通过；真实 file-only constructor 已执行并明确拒绝未经 authority 闭合的资金流缺失 | BLOCKED | constructor 已接通，但冻结 v15 缺少 302132.SZ 在训练窗口的历史资金流；不以代码完成替代真实输入验收，详见本轮输入终态 |
+| F-001 | backend/services/hmm_risk/formal_state_authority.py; backend/services/hmm_risk/formal_state_domains.py; backend/services/hmm_risk/formal_state_input.py; backend/services/hmm_risk/formal_state_executor.py | backend/tests/hmm_risk/test_formal_state_authority.py; backend/tests/hmm_risk/test_formal_state_domains.py; backend/tests/hmm_risk/test_rotation_l1_input_bundle.py；真实 prepare + 独立 fresh-process preflight，request SHA=924d06c13146425e9d13b74f5e02cc92c85e457efed5ece6e53ef40bbf0d9f90，receipt SHA=f7ea7d420e501c31d5794cf6a5729929e8438f54d68bec0b360f3731d3843bea | PASS | 仅批准的 v16/full-v3 文件输入构造及 request 回读闭合；31/131、7D/20D、601/182 和完整 A5 policy 已校验。不代表 D3～D6 模型验收或整个 F2 完成 |
 | F-002 | formal_state_model.py | test_formal_state_executor.py；原数值/结构矩阵及固定 D1 projection 定向测试 | PARTIAL | 已接入批准的 801207.SI raw exact-zero、full-20 preprocess 后固定 19D likelihood；其他行业不自动降维。定向测试不代表全部合同审核完成 |
 | F-003 | formal_state_executor.py; run_formal_state_model_set.py | test_formal_state_executor.py；signed-zero mismatch、CLI durable failure、child projection 重新哈希后拒绝、完整 mixed-shape serialization 与零-refit selected readback | PARTIAL | 未运行正式 fresh-process grid；真实 source-to-selected artifact 全链验证仍未完成，合成序列化测试不证明模型通过验收 |
 | F-004 | formal_state_calendar.py; formal_state_input.py; formal_state_model.py; formal_state_executor.py | test_formal_state_calendar.py；完整 182 日、compact finite payload、mask/source/hash 漂移、空 sentinel、diagnostic tie、失败 ledger 和零-refit 回读 | PARTIAL | carrier/manifest、逐日 ledger、T/O/U/E 和共享语义回读已实现；须在完整文件构造接通后完成真实 source 与 selected artifact 全链验证，不以单元测试推导正式验收 |
@@ -111,7 +111,7 @@ raw 与 processed IEEE-754 payload hash、固定 mask、effective dimension；pa
 D6 先验证完整 20D O payload，再使用同一固定 19D mask，selected artifact 保留逐 entry projection 与维数直方图。
 非 allowlist 常量维不自动删除，仍由各 restart 的初始化明确失败；不因投影新增检查跳过正常 grid 迭代。
 合成序列化矩阵覆盖四个 family-level 和 31/131 分母，但不作为正式 D3～D6 acceptance 或模型生成证据。
-完整文件 constructor 与真实 source/request/selected 链未闭合，F-001～F-004 继续保持 PARTIAL。
+上述为 v15 阶段审核时状态。当前 v16 source/request 终态见下文；真实 selected 链仍未闭合，F-002～F-004 继续保持 PARTIAL。
 最终聚焦矩阵实际运行 75 passed（executor/calendar/domains/authority/stock_fact_observation）；
 固定投影及 selected artifact fix-point 16 passed。Ruff check/format、py_compile、git diff --check、
 module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5 前投影 identity 闭合和
@@ -121,18 +121,35 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 
 ### 当前执行授权：v16 冻结输入更新与预检
 
-用户已批准显式绑定 `20261001-v16-unified-moneyflow2`，并执行完整 file-only preflight。数据窗口已交付不可变 successor，历史 v15 的输入失败事实保留在下面的时间记录；不能将其误写成当前 v16 已失败或已通过。
+用户已批准显式绑定 `20261001-v16-unified-moneyflow2`，并执行完整 file-only preflight。数据窗口已交付不可变 successor，历史 v15 的输入失败事实保留在下面的时间记录；当前结论以本节实际 v16 终态为准。
 当前授权不启动正式训练、服务、数据集/profile 写入；不合入数据窗口 PR #5177，也不把 CANDIDATE_READY 当作 HMM 预检通过。
-本轮完成前 F-001 继续阻断；以实际 constructor 和 request readback 终态更新，不以局部 alias 修复推导全部行业、特征覆盖。
+完整 constructor 和独立 request readback 均实际通过后，F-001 更新为 PASS；不以局部 alias 修复推导正式模型验收。
 
-### 2026-10-01 当前长任务增量
+身份更新源码提交 `9a087c299064211cdff4096fb8f55f8437588e5c`：显式 frozen binding 复用共享 manifest 校验，输入和 request 回读均拒绝旧 v15 或重哈希漂移；普通产品入口仍要求 active profile。两轮复审覆盖状态/schema/structural boolean、间接祖先路径及默认产品行为。固定 Conda base 直接矩阵 160 passed；Ruff、py_compile、16/16 ownership、module registry 8 passed、L0 blocking=0、fresh-process router/health/constructor import 通过。上述仅是代码验证，不是正式训练或全输入通过声明。
+真实预检进程禁止 socket connection、active resolver 和正式 fit，使用新输出 `F:/Dev/AIstock_runtime/hmm_formal_state/20261001-v16-file-construction/request.json`；producer 为上述不可变源码提交，不覆盖 v15 失败产物。
+
+### 当前终态：v16 完整 file-only preflight PASS
+
+`prepare` 和独立 fresh-process `preflight` 均退出 0；正式 fits=0。预检回执为 `F:/Dev/AIstock_runtime/hmm_formal_state/20261001-v16-file-construction/preflight.json`，status=`preflight_passed`，database_write=false，runtime_action=false。request 为重新读取 v16 源文件、执行完整 C-010/A5 构造后的新资产，不是修改旧 manifest 哈希。
+
+- source 范围 `2020-07-30..2025-04-30`；训练 calendar 601 日、validation calendar 182 日。
+- 两 family 各完整包含 L1 31 个和 L2 131 个行业；legacy 为 7D，autocycle 为 20D，保留原批准的模型 projection 与数值合同。
+- 实际 train rows：autocycle L1 194～558、L2 336～601；legacy L1 294～558、L2 420～601。
+- validation carrier 保留完整 182 日和显式 O/U mask。实际 observed rows：autocycle L1 84～181、L2 125～182；legacy L1 112～181、L2 144～182。没有补零、前填或静默删除 calendar 日期。
+- 实际 future-utility rows：两 family L1 2～182、L2 49～182。这是仍需正式 selected-only D6 判断的证据稀疏性，不能将 carrier 合法或输入预检通过当作每个行业 D6 通过，也不得为此更改样本、阈值或窗口。
+- A5 schema=`hmm_risk_c010_feature_domain_policy_v2`；批准的 train exclusion 仍仅 `689009.SH`。原 `302132.SZ/2021-07-30` 资金流阻断已由真实文件构造解除，没有新增排除或伪造 provider absence。
+- active profile 前后 SHA 均为 `56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f`，仍为 v15；v16 仅作为本 executor 获准的显式冻结输入。没有激活或修改任何候选。
+
+本轮到此停止；F-002～F-004 保持 PARTIAL，F-005 正式实验未执行。未执行真实 D5 selection、D6 semantic validation、model/READY、数据库写入、服务控制或依赖安装。下一步是完成 executor 源码整体验收与 PR 门禁；正式训练须在允许执行该动作的后续授权下进行，不由本次预检自动启动。
+
+### 2026-10-01 历史长任务增量（v15 阶段）
 
 完整 file-only C-010/A5 constructor 与 `prepare` CLI 已实现，复用现有 shared reader、alias/PIT resolver、stock-fact 聚合和严格 receipt validator。
 没有用九维产品 bundle、count-only contributor receipt 或模型私有行业编号替代正式输入。真实源构造仍在执行，完成前 F-001 不报告通过。
 
-上述“仍在执行”为启动时记录；最终输入终态如下，后续步骤以此为准。
+上述“仍在执行”为 v15 启动时记录；紧随其后是该阶段失败终态，当前结论以本节前面的 v16 PASS 为准。
 
-### 本轮输入终态：冻结 v15 历史资金流覆盖阻断
+### 历史输入终态：冻结 v15 历史资金流覆盖阻断
 
 第二轮 file-only constructor 非零退出，失败点为 `302132.SZ/2021-07-30` 未找到资金流，且没有精确 provider-absence authority。未生成正式 request，fits 仍为 0/5184。
 只读索引查询同时检查历史代码 `300114.SZ` 和规范代码 `302132.SZ`，不是通过猜测代码或数据库 fallback 补数据：
@@ -177,7 +194,7 @@ forward 仍遵循 as-published PIT；历史 non-as-known-taxonomy 身份不能�
 
 production_ddl_gate=noop；production_dml_gate=noop；dependency_install=noop。
 Conda AIstock mutation=false；dataset/profile mutation=false；runtime/process control=false。
-正式训练及后续提交/合入已获用户授权；不因此跳过完整实现、正式审核、F2 和 CI。
+历史长期计划的正式训练及后续提交/合入曾获用户授权；本轮最新授权限制为 v16 输入绑定、设计状态更新和 file-only preflight，不启动正式训练。任何后续动作仍须满足其授权边界及完整实现、正式审核、F2 和 CI。
 当前未完成的 feature 不创建或合入部分交付 PR。模块生产影响须以最终 changed files 的 workflow/runtime contract 为准。
 
 ## DESIGN-COMPLIANCE-001 当前复审
