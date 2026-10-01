@@ -12,7 +12,9 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Source merge and restart alone do not fix the existing production code_text/cache: update only existing ID1545 after exact production authorization, preserve name/source/identity, and prove cache raw T-1 parity.",
+    "Read back the corrected official metrics using the new batch/window/snapshot/universe/horizon and report correlations/classification/rating separately. The old T-2 batch HTTP smoke is not timing-correction evidence."
   ],
   "created_at": "2026-10-01T18:40:11.215739Z",
   "description": "m_md_net_repay_rate_10d_tminus1（官方因子 ID 1545）的代码在 rolling(10, min_periods=5) 后执行 shift(1)，而当前官方共享上下文已经将 margin_detail/md_* 投影至下一交易日；两条路径叠加使实际输入成为 T-2，而非声明的 T-1。研究窗口通过 R8 v14 原始 H5 与既有官方单因子缓存的 320 个点逐值确认该偏差。本登记 PR 仅固化问题，不实施修复、不改分类/评级或生产缓存；后续修复必须分别验证原始输入与已投影输入语义，禁止全局移除其他两融因子的因果投影。",
