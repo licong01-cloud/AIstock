@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
+
+from scripts import ci_environment_verify as ci_env
 from scripts.ci_environment_verify import verify_environment
 
 
@@ -16,6 +22,108 @@ def _env(tmp_path: Path, **overrides: str) -> dict[str, str]:
     }
     values.update(overrides)
     return values
+
+
+def _job_env(**overrides: str) -> dict[str, str]:
+    return {
+        "GITHUB_REPOSITORY": "licong01-cloud/AIstock",
+        "GITHUB_RUN_ID": "36782788857",
+        "GITHUB_RUN_ATTEMPT": "1",
+        "GITHUB_JOB": "ci-verdict",
+        **overrides,
+    }
+
+
+def test_job_temp_environment_reaches_fresh_python_and_pytest(tmp_path, monkeypatch):
+    monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path / "ci-temp")
+    updates = ci_env.prepare_test_temp(_job_env())
+    assert updates["TEMP"] == updates["TMP"] == updates["TMPDIR"]
+    test = tmp_path / "test_child_temp.py"
+    test.write_text(
+        "import os, tempfile\nfrom pathlib import Path\n"
+        "def test_temp(tmp_path):\n"
+        "    assert Path(tempfile.gettempdir()) == Path(os.environ['TEMP'])\n"
+        "    assert tmp_path.is_relative_to(Path(os.environ['PYTEST_DEBUG_TEMPROOT']))\n",
+        encoding="utf-8",
+    )
+    env = {**os.environ, **updates, "PYTEST_ADDOPTS": ""}
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", str(test), "-q", "-p", "no:cacheprovider"],
+        env=env, capture_output=True, text=True, timeout=40,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_public_ci_prepares_x_only_temp_before_any_tests():
+    import yaml
+
+    assert ci_env.TEST_TEMP_ROOT.drive.upper() == "X:"
+    steps = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))["jobs"]["ci-verdict"]["steps"]
+    index, prep = next((i, step) for i, step in enumerate(steps) if step.get("name") == "Verify prebuilt AIstock-CI environment")
+    assert prep["env"]["AISTOCK_CI_TEST_TEMP_REQUIRED"] == "1" and not prep.get("continue-on-error")
+    assert prep["run"] == "python scripts/ci_environment_verify.py"
+    assert index < next(i for i, step in enumerate(steps) if step.get("id") == "l0_validation")
+
+
+@pytest.mark.parametrize("key,value", [("GITHUB_RUN_ID", "2"), ("GITHUB_RUN_ATTEMPT", "2"),
+                                      ("GITHUB_JOB", "other-job"), ("GITHUB_REPOSITORY", "other/repo")])
+def test_job_temp_isolation(tmp_path, monkeypatch, key, value):
+    monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path)
+    assert ci_env.prepare_test_temp(_job_env())["TEMP"] != ci_env.prepare_test_temp(_job_env(**{key: value}))["TEMP"]
+
+
+@pytest.mark.parametrize("value", ["", "../escape", "job\nTEMP=C:/tmp", "a" * 161])
+def test_job_temp_rejects_unbound_or_escaping_identity(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path)
+    with pytest.raises(ValueError, match="identity"):
+        ci_env.prepare_test_temp(_job_env(GITHUB_JOB=value))
+
+
+def test_job_temp_unavailable_or_redirected_storage_never_falls_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path / "ci-temp")
+    resolve = Path.resolve
+
+    def redirected(path, **kwargs):
+        if path == ci_env.TEST_TEMP_ROOT:
+            return Path("Z:/elsewhere")
+        return resolve(path, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", redirected)
+    with pytest.raises(ValueError, match="escaped"):
+        ci_env.prepare_test_temp(_job_env())
+    monkeypatch.setattr(Path, "resolve", resolve)
+    monkeypatch.setattr(ci_env.tempfile, "TemporaryFile", lambda **_: (_ for _ in ()).throw(PermissionError("unwritable")))
+    with pytest.raises(PermissionError, match="unwritable"):
+        ci_env.prepare_test_temp(_job_env())
+
+
+@pytest.mark.parametrize("missing_drive", [True, False])
+def test_job_temp_missing_drive_and_cross_job_redirect_fail(tmp_path, monkeypatch, missing_drive):
+    monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path / "ci-temp")
+    resolve = Path.resolve
+    def checked_resolve(path, **kwargs):
+        if missing_drive and path == Path(ci_env.TEST_TEMP_ROOT.anchor):
+            raise FileNotFoundError("missing drive")
+        return tmp_path if not missing_drive and path.name == "tmp" else resolve(path, **kwargs)
+    monkeypatch.setattr(Path, "resolve", checked_resolve)
+    with pytest.raises((FileNotFoundError, ValueError)):
+        ci_env.prepare_test_temp(_job_env())
+
+
+def test_main_publishes_temp_only_after_successful_preflight(tmp_path, monkeypatch):
+    monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path / "ci-temp")
+    monkeypatch.setattr(ci_env, "verify_environment", lambda: {"status": "ready", "failure_reasons": []})
+    for key, value in _job_env().items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("AISTOCK_CI_TEST_TEMP_REQUIRED", "1")
+    output = tmp_path / "github-env"
+    monkeypatch.setenv("GITHUB_ENV", str(output))
+    assert ci_env.main() == 0
+    assert "PYTEST_DEBUG_TEMPROOT=" in output.read_text(encoding="utf-8")
+    prior = output.read_bytes()
+    monkeypatch.setenv("GITHUB_JOB", "../escape")
+    assert ci_env.main() == 1
+    assert output.read_bytes() == prior
 
 
 def test_prebuilt_windows_environment_is_ready_without_installing(tmp_path: Path) -> None:
