@@ -146,7 +146,7 @@ def prepare_test_temp(environ: Mapping[str, str]) -> dict[str, str]:
         raise ValueError("CI temporary storage escaped the configured X drive")
     root.mkdir(parents=True, exist_ok=True)
     job_root = root.joinpath(*parts)
-    directories = {"temporary": job_root / "tmp", "pytest": job_root / "pytest"}
+    directories = {"temporary": job_root / "tmp", "pytest": job_root / "tmp" / "pytest"}
     for directory in directories.values():
         resolved = directory.resolve()
         if resolved != directory:
