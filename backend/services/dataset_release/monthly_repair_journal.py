@@ -24,7 +24,12 @@ class MonthlyRepairJournalError(RuntimeError):
     pass
 
 
-TERMINAL_JOB_STATUSES = frozenset({"success", "failed", "cancelled", "completed"})
+# These are two different contracts. A terminal attempt can request a future
+# retry without being an active writer or proving source data completeness.
+TERMINAL_JOB_STATUSES = frozenset(
+    {"success", "failed", "cancelled", "completed", "timeout", "delayed"}
+)
+TERMINAL_SYNC_STATUSES = frozenset({"failed", "retry", "final_blocked", "reconciled"})
 MANAGED_SOURCE_DATASETS = frozenset(
     {
         "adj_factor",
@@ -73,6 +78,12 @@ class ManagedRepairImpactJournal:
     def initial_watermark(self, connection: RepairJournalConnection) -> str:
         """Reject active managed writers and bind the watermark to snapshot time."""
 
+        # Dispatch is asynchronous: a terminal callback may be appended before
+        # the dispatcher's 'started' event. Client started_at/finished_at and DB
+        # created_at are also different clocks. Bind completion to the exact
+        # immutable execution identity, not insertion order, wall-clock ordering
+        # or the latest event for a target (which can have concurrent jobs).
+
         with connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -91,8 +102,10 @@ class ManagedRepairImpactJournal:
                                NULLIF(summary->>'schedule_dataset', ''),
                                NULLIF(summary->>'dataset', '')
                            ) AS dataset
-                      FROM market.ingestion_jobs
-                     WHERE lower(status) <> ALL(%s)
+                      FROM market.ingestion_jobs AS job
+                     WHERE job.status IS NULL
+                        OR lower(job.status) <> ALL(%s)
+                        OR job.finished_at IS NULL
                 ), active_sync AS (
                     SELECT 'data_sync_attempts'::text AS ledger_kind,
                            attempt.attempt_id::text AS ledger_identity,
@@ -101,8 +114,30 @@ class ManagedRepairImpactJournal:
                       FROM market.data_sync_attempts AS attempt
                       JOIN market.data_sync_targets AS target
                         ON target.target_id=attempt.target_id
-                     WHERE lower(attempt.status) <> ALL(%s)
-                       AND target.dataset = ANY(%s)
+                     WHERE target.dataset = ANY(%s)
+                       AND (
+                            attempt.status IS NULL
+                            OR lower(attempt.status) <> ALL(%s)
+                            OR attempt.finished_at IS NULL
+                       )
+                       AND NOT (
+                            lower(COALESCE(attempt.status, '')) = 'started'
+                            AND (NULLIF(btrim(attempt.job_id), '') IS NOT NULL
+                                 OR NULLIF(btrim(attempt.run_id), '') IS NOT NULL)
+                            AND (EXISTS (
+                                SELECT 1 FROM market.data_sync_attempts AS completed
+                                 WHERE completed.target_id = attempt.target_id
+                                   AND completed.job_id IS NOT DISTINCT FROM attempt.job_id
+                                   AND completed.run_id IS NOT DISTINCT FROM attempt.run_id
+                                   AND lower(completed.status) = ANY(%s)
+                                   AND completed.finished_at IS NOT NULL
+                            ) OR EXISTS (
+                                SELECT 1 FROM market.ingestion_jobs AS owner_job
+                                 WHERE owner_job.job_id::text = attempt.job_id
+                                   AND lower(owner_job.status) = ANY(%s)
+                                   AND owner_job.finished_at IS NOT NULL
+                            ))
+                       )
                 )
                 SELECT ledger_kind,ledger_identity,status,dataset
                   FROM (
@@ -116,8 +151,10 @@ class ManagedRepairImpactJournal:
                 """,
                 (
                     sorted(TERMINAL_JOB_STATUSES),
-                    sorted(TERMINAL_JOB_STATUSES),
                     sorted(self.managed_datasets),
+                    sorted(TERMINAL_SYNC_STATUSES),
+                    sorted(TERMINAL_SYNC_STATUSES),
+                    sorted(TERMINAL_JOB_STATUSES),
                     sorted(self.managed_datasets),
                 ),
             )
