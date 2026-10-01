@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-01T08:42:42.644496Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e8a1aa348c7e1ab7be84322ebbb0b50b26256aa5",
+  "fixed_at": "2026-10-01T08:54:47Z",
   "github_issue_number": 5188,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5188",
   "last_seen_at": "2026-10-01T08:42:42.644496Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5189",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,6 +132,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -142,7 +144,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1652",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9e54a42fb3c78a42",
+    "recorded_at": "2026-10-01T09:01:51.649901Z",
+    "runtime_contract_digest": "986ad9dcb33f12aeefd7f3e233f59566a2e2c57a201478777cc60b89f7413e5f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5b8df4034ddb4ca88c075442a4a8d3d0216348fb",
+    "source_merge_commit": "e8a1aa348c7e1ab7be84322ebbb0b50b26256aa5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5189",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_source_authority.py -q -> passed",
+      "python -m nox -s l0 --no-install -> passed",
+      "python -m ruff check backend/services/dataset_release/monthly_snapshot.py backend/tests/dataset_release/test_monthly_snapshot.py -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "b80479d402c6d5e824573779a7afae25e8a7deed2a07ab6e233d9b87615bd066"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -151,6 +177,12 @@
     "fingerprint": "e1996bb6661be2e2fb7fa22f",
     "source_event_id": "FE-20261001-e1996bb6661b"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_source_authority.py -q -> passed",
+    "python -m nox -s l0 --no-install -> passed",
+    "python -m ruff check backend/services/dataset_release/monthly_snapshot.py backend/tests/dataset_release/test_monthly_snapshot.py -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
