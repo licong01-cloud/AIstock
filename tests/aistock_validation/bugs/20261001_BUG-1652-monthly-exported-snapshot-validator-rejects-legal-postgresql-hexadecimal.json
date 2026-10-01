@@ -101,7 +101,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_snapshot.py -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -109,7 +109,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh Python process exported PostgreSQL snapshot 0000000D-00030CF0-1, imported it using MonthlySnapshotCoordinator and shared source validator, verified transaction_read_only=on and 21 September sessions; all connections rollback/close; database_write=false, candidate_write=false, runtime_action=false.",
+      "RED: 2 valid hex-first snapshot cases failed in existing code, 11 tests passed. GREEN: failed nodeids passed after shared regex fix; final snapshot/source producer/source authority matrix: 23 passed.",
+      "Review round 1: strict ASCII hexadecimal/decimal allowlist, quotes/newline/nonhex/unicode/injection rejected; no SQL literal escaping drift. Round 2: coordinator and imported source reader use the same validator, cleanup and repair-watermark semantics unchanged. Round 3: production readonly exported/imported snapshot readback passed, no database or runtime writes."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

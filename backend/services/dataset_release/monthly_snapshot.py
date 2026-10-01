@@ -16,7 +16,10 @@ from typing import Any, Callable, Protocol, Sequence, TypeVar
 from .monthly_repair_journal import ManagedRepairImpactJournal
 
 
-SNAPSHOT_ID_RE = re.compile(r"^[0-9]+-[0-9A-Fa-f]+-[0-9]+$")
+# PostgreSQL prints both the backend slot and local transaction counter in hex.
+# Keep the literal allowlist shared with imported source sessions; no quotes,
+# whitespace or SQL metacharacters may enter SET TRANSACTION SNAPSHOT.
+SNAPSHOT_ID_RE = re.compile(r"^[0-9A-Fa-f]+-[0-9A-Fa-f]+-[0-9]+$")
 T = TypeVar("T")
 
 
