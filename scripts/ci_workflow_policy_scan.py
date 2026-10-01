@@ -48,6 +48,34 @@ PR_ONLY_QUALITY_WORKFLOWS = {"test.yml"}
 STABLE_MERGE_QUALITY_CONTEXTS = (
     "CI verdict",
 )
+GIT_MIRROR_STEP_MARKERS = (
+    "name: Prepare verified local Git object mirror",
+    "id: git_mirror",
+    "$env:GIT_ALTERNATE_OBJECT_DIRECTORIES = ''",
+    "aistock_git_object_mirror_v1",
+    "$workspaceHead = Join-Path $env:GITHUB_WORKSPACE '.git\\HEAD'",
+    "Test-Path -LiteralPath $workspaceHead -PathType Leaf",
+    "fallback=bounded_remote",
+    '"GIT_ALTERNATE_OBJECT_DIRECTORIES=$objects" >> $env:GITHUB_ENV',
+    "exit 0",
+)
+GIT_MIRROR_CHECKOUT_MARKER = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES: ${{ steps.git_mirror.outputs.objects }}"
+)
+GIT_HTTP_LOW_SPEED_MARKERS = (
+    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n",
+    "\n  GIT_HTTP_LOW_SPEED_TIME: '60'\n",
+    "\n  GIT_CONFIG_COUNT: '1'\n",
+    "\n  GIT_CONFIG_KEY_0: http.version\n",
+    "\n  GIT_CONFIG_VALUE_0: HTTP/1.1\n",
+)
+CHECKOUT_ACTION_RE = re.compile(r"(?m)^      - uses:\s*actions/checkout@[^\s#]+")
+SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER = "\n        timeout-minutes: 5\n"
+INTERRUPTED_PACK_CLEANUP_MARKERS = (
+    "\n        continue-on-error: true\n",
+    "Get-ChildItem -LiteralPath $packRoot -File -Filter 'tmp_pack_*'",
+    "Remove-Item -LiteralPath $fragment.FullName -Force -ErrorAction Stop",
+)
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
     r"|\bnpm\s+(?:ci|install)\b"
@@ -60,6 +88,96 @@ _DB_CREATE_RE = re.compile(
     r"\b(?:postgres|timescale)\b",
     re.IGNORECASE,
 )
+
+
+def _workflow_job_blocks(text: str) -> list[str]:
+    """Return individual top-level GitHub Actions job blocks without a YAML dependency."""
+
+    lines = text.splitlines(keepends=True)
+    jobs_index = next(
+        (index for index, line in enumerate(lines) if line.strip() == "jobs:" and not line.startswith(" ")),
+        None,
+    )
+    if jobs_index is None:
+        return []
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in lines[jobs_index + 1 :]:
+        if line.strip() and not line.startswith(" "):
+            break
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
+            if current:
+                blocks.append("".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        blocks.append("".join(current))
+    return blocks
+
+
+def _job_runs_on_self_hosted(block: str) -> bool:
+    lines = block.splitlines()
+    for index, line in enumerate(lines):
+        match = re.match(r"^    runs-on:\s*(.*)$", line)
+        if not match:
+            continue
+        value_lines = [match.group(1)]
+        for continuation in lines[index + 1 :]:
+            if continuation.strip() and re.match(r"^    \S", continuation):
+                break
+            value_lines.append(continuation)
+        return "self-hosted" in "\n".join(value_lines)
+    return False
+
+
+def _workflow_step_blocks(job_block: str) -> list[str]:
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in job_block.splitlines(keepends=True):
+        if re.match(r"^      - \S", line):
+            if current:
+                blocks.append("".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        blocks.append("".join(current))
+    return blocks
+
+
+def _checkout_step_blocks(job_block: str) -> list[str]:
+    return [block for block in _workflow_step_blocks(job_block) if CHECKOUT_ACTION_RE.search(block)]
+
+
+def _pack_cleanup_step_blocks(job_block: str) -> list[str]:
+    return [
+        block
+        for block in _workflow_step_blocks(job_block)
+        if re.search(r"(?m)^      - name:\s*Reclaim interrupted Git pack fragments\s*$", block)
+    ]
+
+
+def _checkout_has_verified_mirror_predecessor(job_block: str, checkout_step: str) -> bool:
+    steps = _workflow_step_blocks(job_block)
+    checkout_index = steps.index(checkout_step)
+    return (
+        GIT_MIRROR_CHECKOUT_MARKER in checkout_step
+        and any(
+            all(marker in step for marker in GIT_MIRROR_STEP_MARKERS)
+            for step in steps[:checkout_index]
+        )
+    )
+
+
+def _self_hosted_checkout_job_blocks(text: str) -> list[str]:
+    return [
+        block
+        for block in _workflow_job_blocks(text)
+        if _job_runs_on_self_hosted(block) and _checkout_step_blocks(block)
+    ]
+
+
 _SETUP_ACTION_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*actions/setup-(?:python|node|go|miniconda)@", re.IGNORECASE)
 _SERVICES_RE = re.compile(r"^\s*(?:-\s*)?services\s*:", re.IGNORECASE)
 _DB_IMAGE_RE = re.compile(r"^\s*image:\s*[^#\n]*(?:postgres|timescale)", re.IGNORECASE)
@@ -129,9 +247,57 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
 
     findings: list[dict[str, str]] = []
     for path in paths:
+        text = path.read_text(encoding="utf-8")
+        if "self-hosted" in text and not all(marker in text for marker in GIT_HTTP_LOW_SPEED_MARKERS):
+            findings.append(
+                {
+                    "path": path.as_posix(),
+                    "line": "1",
+                    "reason": "self-hosted workflow must bound stalled or unusably slow Git HTTP transfers",
+                    "text": "GIT_HTTP_LOW_SPEED_LIMIT/GIT_HTTP_LOW_SPEED_TIME/http.version",
+                }
+            )
+        for checkout_job in _self_hosted_checkout_job_blocks(text):
+            for checkout_step in _checkout_step_blocks(checkout_job):
+                if not _checkout_has_verified_mirror_predecessor(checkout_job, checkout_step):
+                    findings.append(
+                        {
+                            "path": path.as_posix(),
+                            "line": "1",
+                            "reason": (
+                                "self-hosted checkout must use a verified local Git object mirror "
+                                "with bounded remote fallback"
+                            ),
+                            "text": "Prepare verified local Git object mirror",
+                        }
+                    )
+                if SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER not in checkout_step:
+                    findings.append(
+                        {
+                            "path": path.as_posix(),
+                            "line": "1",
+                            "reason": "self-hosted actions/checkout must have a five-minute hard step timeout",
+                            "text": "actions/checkout timeout-minutes: 5",
+                        }
+                    )
+            cleanup_steps = _pack_cleanup_step_blocks(checkout_job)
+            if not any(
+                all(marker in cleanup_step for marker in INTERRUPTED_PACK_CLEANUP_MARKERS)
+                for cleanup_step in cleanup_steps
+            ):
+                findings.append(
+                    {
+                        "path": path.as_posix(),
+                        "line": "1",
+                        "reason": (
+                            "self-hosted checkout must reclaim interrupted Git pack fragments by literal path "
+                            "without blocking the PR"
+                        ),
+                        "text": "Reclaim interrupted Git pack fragments",
+                    }
+                )
         if path.name not in WINDOWS_CI_WORKFLOWS:
             continue
-        text = path.read_text(encoding="utf-8")
         expected_label = WINDOWS_WORKFLOW_RUNNER_LABEL[path.name]
         runner_re = re.compile(
             rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
@@ -183,6 +349,8 @@ def build_contract_evidence(
     runner_start_path: Path = Path("scripts/start_aistock_github_runner.ps1"),
     runner_supervisor_path: Path = Path("scripts/supervise_aistock_github_runner.ps1"),
     runner_health_path: Path = Path("scripts/aistock_runner_health.py"),
+    git_mirror_maintenance_path: Path = Path("scripts/maintain_aistock_git_mirror.ps1"),
+    test_plans_path: Path = Path("tests/aistock_validation/catalog/test_plans.yaml"),
 ) -> dict[str, bool]:
     """Return the exact evidence booleans named by the machine standard."""
 
@@ -220,6 +388,12 @@ def build_contract_evidence(
         nightly_session_runner_path.read_text(encoding="utf-8") if nightly_session_runner_path.exists() else ""
     )
     runner_configure_text = runner_configure_path.read_text(encoding="utf-8") if runner_configure_path.exists() else ""
+    git_mirror_maintenance_text = (
+        git_mirror_maintenance_path.read_text(encoding="utf-8")
+        if git_mirror_maintenance_path.exists()
+        else ""
+    )
+    test_plans_text = test_plans_path.read_text(encoding="utf-8") if test_plans_path.exists() else ""
     runner_start_text = runner_start_path.read_text(encoding="utf-8") if runner_start_path.exists() else ""
     runner_supervisor_text = (
         runner_supervisor_path.read_text(encoding="utf-8") if runner_supervisor_path.exists() else ""
@@ -274,6 +448,20 @@ def build_contract_evidence(
             and "needs: security-runner-preflight" in downstream
         )
 
+    def code_intelligence_preflight_precedes_refresh_concurrency(text: str) -> bool:
+        workflow_header = text.split("\njobs:", 1)[0]
+        refresh_match = re.search(
+            r"(?ms)^  refresh-after-main:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            text,
+        )
+        refresh = refresh_match.group("body") if refresh_match else ""
+        return (
+            "concurrency:" not in workflow_header
+            and "concurrency:" in refresh
+            and "group: code-intelligence-refresh-main" in refresh
+            and "cancel-in-progress: true" in refresh
+        )
+
     nightly_code_intelligence_input_match = re.search(
         r"(?ms)^      run_code_intelligence:\n(?P<body>.*?)(?=^      [a-z0-9_]+:\n|^defaults:)",
         nightly_text,
@@ -281,6 +469,11 @@ def build_contract_evidence(
     nightly_code_intelligence_input = (
         nightly_code_intelligence_input_match.group("body") if nightly_code_intelligence_input_match else ""
     )
+    self_hosted_checkout_jobs = [
+        block
+        for text in workflow_text.values()
+        for block in _self_hosted_checkout_job_blocks(text)
+    ]
 
     evidence = {
         "windows_self_hosted_runner": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
@@ -289,6 +482,42 @@ def build_contract_evidence(
         and all("aistock-ci" in text.casefold() for text in ci_texts),
         "environment_fingerprint_match": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
         and all("ci_environment_verify.py" in text for text in ci_texts),
+        "self_hosted_workflows_use_verified_git_object_mirror": bool(self_hosted_checkout_jobs)
+        and all(
+            _checkout_has_verified_mirror_predecessor(job_block, checkout_step)
+            for job_block in self_hosted_checkout_jobs
+            for checkout_step in _checkout_step_blocks(job_block)
+        ),
+        "git_object_mirror_maintenance_is_bounded_and_offline": all(
+            marker in git_mirror_maintenance_text
+            for marker in (
+                "Resolve-BoundedPath",
+                "refs/heads/main:refs/heads/main",
+                "fsck', '--connectivity-only', '--no-dangling",
+                "network_accessed = $false",
+                "process_control_performed = $false",
+                "Timed out waiting for Git mirror maintenance lock",
+            )
+        ),
+        "self_hosted_git_http_stalls_are_bounded": all(
+            "self-hosted" not in text
+            or all(marker in text for marker in GIT_HTTP_LOW_SPEED_MARKERS)
+            for text in workflow_text.values()
+        ),
+        "self_hosted_checkout_steps_have_hard_timeout": bool(self_hosted_checkout_jobs)
+        and all(
+            SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER in checkout_step
+            for job_block in self_hosted_checkout_jobs
+            for checkout_step in _checkout_step_blocks(job_block)
+        ),
+        "self_hosted_checkout_cleans_interrupted_pack_fragments": bool(self_hosted_checkout_jobs)
+        and all(
+            any(
+                all(marker in cleanup_step for marker in INTERRUPTED_PACK_CLEANUP_MARKERS)
+                for cleanup_step in _pack_cleanup_step_blocks(job_block)
+            )
+            for job_block in self_hosted_checkout_jobs
+        ),
         "no_setup_actions": "setup-* actions install mutable toolchains; use a prebuilt runner" not in reasons,
         "no_dependency_install_commands": "dependency installation is prohibited in CI" not in reasons,
         "nox_ci_install_fail_closed_guard": bool(nox_text) and not scan_nox_text(nox_text, nox_path.as_posix()),
@@ -332,6 +561,14 @@ def build_contract_evidence(
             and not re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get(name, ""))
             for name in PR_ONLY_QUALITY_WORKFLOWS
         ),
+        "dependency_update_pr_validation_reuses_ci_verdict": (
+            "pull_request:" not in workflow_text.get("dependency-update-validate.yml", "")
+            and "workflow_dispatch:" in workflow_text.get("dependency-update-validate.yml", "")
+            and "Validate changed dependency surface" in test_text
+            and "steps.classify.outputs.dependency_validation_required == 'true'" in test_text
+            and "scripts/validate_changed_requirements.py" in test_text
+            and "DEPENDENCY_RESULT" in test_text
+        ),
         "merge_quality_contexts_are_change_scoped": (
             STABLE_MERGE_QUALITY_CONTEXTS == ("CI verdict",)
             and "pull_request:" not in codeql_text
@@ -365,11 +602,16 @@ def build_contract_evidence(
         "codeql_uses_hash_verified_prebuilt_bundle": (
             "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'" in workflow_text.get("codeql.yml", "")
             and "AISTOCK_CI_CODEQL_BUNDLE_SHA256:" in workflow_text.get("codeql.yml", "")
-            and "_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
+            and "prebuilt\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
             and "prebuilt CodeQL bundle SHA-256 mismatch" in environment_verify_text
             and "database create" in workflow_text.get("codeql.yml", "")
             and "database analyze" in workflow_text.get("codeql.yml", "")
             and "github upload-results" in workflow_text.get("codeql.yml", "")
+        ),
+        "codeql_bundle_path_is_runner_independent": (
+            "prebuilt\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
+            and "aistock\\_work\\_tool\\CodeQL" not in workflow_text.get("codeql.yml", "")
+            and "aistock-security\\_work\\_tool\\CodeQL" not in workflow_text.get("codeql.yml", "")
         ),
         "codeql_remote_action_download_is_eliminated": (
             "github/codeql-action/" not in codeql_text
@@ -415,13 +657,18 @@ def build_contract_evidence(
         "security_workflows_fail_fast_before_runner_allocation": (
             has_security_runner_preflight(codeql_text, "codeql-nightly")
             and has_security_runner_preflight(code_intelligence_refresh_text, "refresh-after-main")
+            and code_intelligence_preflight_precedes_refresh_concurrency(code_intelligence_refresh_text)
         ),
         "nightly_code_intelligence_has_single_scheduled_owner": (
             "schedule:" in code_intelligence_refresh_text
             and "default: false" in nightly_code_intelligence_input
             and "if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence" in nightly_text
             and "if: github.event_name == 'schedule' || inputs.run_code_intelligence" not in nightly_text
-            and "--required-label aistock-ci" in nightly_text
+        ),
+        "nightly_preflight_requires_distinct_runner_roles": (
+            "--required-role general=self-hosted,windows,aistock-ci" in nightly_text
+            and "--required-role security=self-hosted,windows,aistock-ci-security" in nightly_text
+            and "--required-label aistock-ci" not in nightly_text
         ),
         "redundant_issue_event_workflows_retired": (
             "issue-auto-link.yml" not in workflow_text
@@ -475,6 +722,26 @@ def build_contract_evidence(
         and "WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}" in ci_verdict_text
         and "workflow_validation=${WORKFLOW_TEST_RESULT}" in ci_verdict_text
         and "workflow_policy=${WORKFLOW_POLICY_RESULT}" in ci_verdict_text,
+        "pr_ci_heavy_lanes_short_circuit_after_prerequisites": (
+            "id: prerequisite_gate" in ci_verdict_text
+            and "heavy_lanes_allowed=false" in ci_verdict_text
+            and "steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true'" in ci_verdict_text
+            and ci_verdict_text.count(
+                "steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true'"
+            )
+            >= 7
+            and "PR_QUALITY_RESULT: ${{ steps.pr_quality_validation.outcome }}" in ci_verdict_text
+            and "L0_RESULT: ${{ steps.l0_validation.outcome }}" in ci_verdict_text
+            and "CATALOG_INTEGRITY_RESULT: ${{ steps.catalog_integrity_validation.outcome }}"
+            in ci_verdict_text
+        ),
+        "selected_validation_plans_are_subsumed_once": (
+            "def _apply_plan_subsumption(" in classifier_text
+            and 'plan.get("subsumes")' in classifier_text
+            and '"suppressed_plan_keys"' in classifier_text
+            and "redundant validation plans were subsumed" in classifier_text
+            and "subsumes: [hmm_risk_pr_slice]" in test_plans_text
+        ),
         "changed_tests_reachable_from_selected_ci_plan": (
             "def _changed_test_plan_coverage(" in classifier_text
             and "def _selected_nox_test_targets(" in classifier_text

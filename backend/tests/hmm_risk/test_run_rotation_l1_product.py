@@ -113,6 +113,38 @@ def _install_valid_authorities(monkeypatch: pytest.MonkeyPatch, args: Namespace)
     monkeypatch.setattr(subject, "close_processes", lambda *_args, **_kwargs: acceptance)
 
 
+def test_authority_validation_passes_explicit_v14_input_bundle_to_reclosure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    args = _arguments(tmp_path)
+    args.v14_input_root = tmp_path / "v14-input"
+    args.v14_input_root.mkdir()
+    acceptance = json.loads(args.development_acceptance.read_text(encoding="utf-8"))
+    candidate_bundle = {"identity": "candidate"}
+    v14_bundle = {"identity": "v1.4"}
+    monkeypatch.setattr(subject, "validate_v14_process_reference", lambda _value: None)
+
+    def read(root: Path, **_kwargs: Any) -> dict[str, Any]:
+        return {"bundle": v14_bundle if root == args.v14_input_root else candidate_bundle}
+
+    monkeypatch.setattr(subject, "read_input_bundle", read)
+    captured: dict[str, Any] = {}
+
+    def close(*_children: Any, **kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return acceptance
+
+    monkeypatch.setattr(subject, "close_processes", close)
+
+    subject._validated_authority(args)
+
+    assert captured == {
+        "v14_reference": json.loads(args.v14_process_file.read_text(encoding="utf-8")),
+        "input_bundle": candidate_bundle,
+        "v14_input_bundle": v14_bundle,
+    }
+
+
 def _install_prediction(monkeypatch: pytest.MonkeyPatch, args: Namespace) -> None:
     def predict(**kwargs: Any) -> dict[str, Any]:
         assert kwargs["trade_date"] == args.trade_date

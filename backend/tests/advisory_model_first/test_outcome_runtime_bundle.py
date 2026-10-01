@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -20,6 +21,7 @@ from backend.services.advisory_model_first.outcome_runtime_bundle import (
     _validate_outcome_runtime_manifest,
     expected_outcome_model_names,
     load_exact_outcome_bundle,
+    load_frozen_outcome_bundle,
     outcome_binding_path,
     publish_outcome_binding,
 )
@@ -86,9 +88,7 @@ def test_outcome_binding_loads_exact_46_head_bundle(tmp_path: Path) -> None:
         feature_names=tuple(MODEL_FEATURE_COLUMNS),
         categorical_vocabulary={"l2_code_id": (1, 2)},
         metrics={"model_count": len(models), "calibration_state": "UNCALIBRATED"},
-        test_predictions=pd.DataFrame(
-            {"decision_as_of_trade_date": [date], "instrument": ["000001.SZ"]}
-        ),
+        test_predictions=pd.DataFrame({"decision_as_of_trade_date": [date], "instrument": ["000001.SZ"]}),
         training_log={"evaluation_history": {}},
     )
     bundle_id, _bundle_path, _manifest = publish_outcome_bundle(
@@ -129,6 +129,55 @@ def test_outcome_binding_loads_exact_46_head_bundle(tmp_path: Path) -> None:
             booster_factory=_LoadedModel,
         )
     assert error.value.reason_code == "ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH"
+
+
+def test_frozen_outcome_loader_uses_explicit_bundle_without_binding(tmp_path: Path) -> None:
+    date = pd.Timestamp("2024-01-02")
+    split = OutcomeDateSplit((date,), (date,), (date,), (date,), (date,))
+    models = {name: _SavedModel(name) for name in expected_outcome_model_names()}
+    training = OutcomeTrainingResult(
+        models=models,
+        feature_names=tuple(MODEL_FEATURE_COLUMNS),
+        categorical_vocabulary={"l2_code_id": (1, 2)},
+        metrics={"model_count": len(models), "calibration_state": "UNCALIBRATED"},
+        test_predictions=pd.DataFrame({"decision_as_of_trade_date": [date], "instrument": ["000001.SZ"]}),
+        training_log={"evaluation_history": {}},
+    )
+    bundle_id, bundle_path, _manifest = publish_outcome_bundle(
+        model_root=tmp_path,
+        request=_request(tmp_path),
+        split=split,
+        training=training,
+        environment_report={"conda_environment": "rdagent-gpu"},
+        resource_report={"peak_rss_bytes": 100},
+    )
+    manifest_sha256 = hashlib.sha256((bundle_path / "manifest.json").read_bytes()).hexdigest()
+
+    loaded = load_frozen_outcome_bundle(
+        model_root=tmp_path,
+        outcome_bundle_id=bundle_id,
+        outcome_bundle_manifest_sha256=manifest_sha256,
+        expected_package_id="pkg_runtime",
+        expected_manifest_sha256="d" * 64,
+        expected_style_profile_hash="e" * 64,
+        expected_parent_bundle_id="c" * 64,
+        booster_factory=_LoadedModel,
+    )
+
+    assert loaded.outcome_bundle_id == bundle_id
+    assert not (tmp_path / "outcome_bindings").exists()
+
+    with pytest.raises(AdvisoryModelFirstError):
+        load_frozen_outcome_bundle(
+            model_root=tmp_path,
+            outcome_bundle_id=bundle_id,
+            outcome_bundle_manifest_sha256="0" * 64,
+            expected_package_id="pkg_runtime",
+            expected_manifest_sha256="d" * 64,
+            expected_style_profile_hash="e" * 64,
+            expected_parent_bundle_id="c" * 64,
+            booster_factory=_LoadedModel,
+        )
 
 
 def test_outcome_binding_path_rejects_package_escape(tmp_path: Path) -> None:

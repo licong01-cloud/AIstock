@@ -9,8 +9,9 @@ param(
   [string]$RepositoryUrl = 'https://github.com/licong01-cloud/AIstock',
   [string]$RunnerName = "$env:COMPUTERNAME-aistock-security",
   [string]$Role = 'security',
-  [string[]]$Labels = @('aistock', 'aistock-ci-security'),
+  [string[]]$Labels = @('aistock', 'aistock-ci', 'aistock-ci-security'),
   [string]$StartHelperPath,
+  [switch]$AuditOnly,
   [switch]$Apply,
   [switch]$Start,
   [switch]$Json
@@ -44,6 +45,9 @@ function Resolve-BoundedPath {
 if ($Role -notin @('general', 'security')) {
   throw "Runner role must be general or security: $Role"
 }
+if ($AuditOnly -and ($Apply -or $Start)) {
+  throw 'AuditOnly cannot be combined with Apply or Start'
+}
 
 function Get-RunnerProcess {
   param([string]$Root)
@@ -65,10 +69,107 @@ function Get-RunnerProcess {
 if (-not $Labels -or $Labels.Count -eq 0) {
   throw 'At least one explicit runner label is required'
 }
-$requiredRoleLabel = $(if ($Role -eq 'general') { 'aistock-ci' } else { 'aistock-ci-security' })
-if ($Labels -notcontains $requiredRoleLabel) {
-  throw "Runner labels for role $Role must include $requiredRoleLabel"
+$requiredRoleLabels = $(
+  if ($Role -eq 'general') {
+    @('aistock-ci')
+  } else {
+    @('aistock-ci', 'aistock-ci-security')
+  }
+)
+foreach ($requiredRoleLabel in $requiredRoleLabels) {
+  if ($Labels -notcontains $requiredRoleLabel) {
+    throw "Runner labels for role $Role must include $requiredRoleLabel"
+  }
 }
+if ($Role -eq 'general' -and $Labels -contains 'aistock-ci-security') {
+  throw 'General runner labels must not include aistock-ci-security'
+}
+
+$resolvedRoot = Resolve-BoundedPath -Path $InstallRoot -Boundary $AllowedRoot
+if ($AuditOnly) {
+  $auditIdentityPath = Join-Path $resolvedRoot '.runner'
+  $auditWrapperPath = Join-Path $resolvedRoot 'run-aistock-runner-hidden.cmd'
+  $auditSupervisorPath = Join-Path $resolvedRoot 'supervise-aistock-runner.ps1'
+  $auditSupervisorStatePath = Join-Path $resolvedRoot '.aistock-runner-supervisor.json'
+  $blocking = @()
+  $warnings = @()
+  $identity = $null
+  $supervisorPid = $null
+  $supervisorAlive = $false
+
+  if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
+    $blocking += "runner install root is missing: $resolvedRoot"
+  } elseif (-not (Test-Path -LiteralPath $auditIdentityPath -PathType Leaf)) {
+    $blocking += "runner identity is missing: $auditIdentityPath"
+  } else {
+    try {
+      $identity = Get-Content -Raw -LiteralPath $auditIdentityPath | ConvertFrom-Json
+    } catch {
+      $blocking += "runner identity is invalid: $auditIdentityPath"
+    }
+  }
+
+  if ($null -ne $identity) {
+    if ($identity.gitHubUrl.TrimEnd('/') -ne $RepositoryUrl.TrimEnd('/')) {
+      $blocking += "configured runner repository mismatch: $($identity.gitHubUrl)"
+    }
+    if ($identity.workFolder -ne '_work') {
+      $blocking += "configured runner work folder mismatch: $($identity.workFolder)"
+    }
+    if (-not [bool]$identity.disableUpdate) {
+      $blocking += 'runner automatic update is enabled; disableUpdate=true is required'
+    }
+  }
+  if (-not (Test-Path -LiteralPath $auditWrapperPath -PathType Leaf)) {
+    $blocking += "runner wrapper is missing: $auditWrapperPath"
+  } else {
+    $auditWrapperText = Get-Content -Raw -LiteralPath $auditWrapperPath
+    if ($auditWrapperText -notmatch '(?im)^set "GIT_ALTERNATE_OBJECT_DIRECTORIES="\s*$') {
+      $blocking += 'runner wrapper must clear GIT_ALTERNATE_OBJECT_DIRECTORIES; external object caches are not durable runner dependencies'
+    }
+  }
+  if (-not (Test-Path -LiteralPath $auditSupervisorPath -PathType Leaf)) {
+    $blocking += "runner supervisor is missing: $auditSupervisorPath"
+  }
+  if (Test-Path -LiteralPath $auditSupervisorStatePath -PathType Leaf) {
+    try {
+      $state = Get-Content -Raw -LiteralPath $auditSupervisorStatePath | ConvertFrom-Json
+      if ($state.schema_version -eq 'aistock_github_runner_supervisor_state_v1' -and [int]$state.supervisor_pid -gt 0) {
+        $supervisorPid = [int]$state.supervisor_pid
+        $supervisorAlive = $null -ne (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)
+      }
+    } catch {
+      $warnings += "runner supervisor state is invalid: $auditSupervisorStatePath"
+    }
+  }
+  if ((Test-Path -LiteralPath $auditSupervisorPath -PathType Leaf) -and -not $supervisorAlive) {
+    $warnings += 'runner supervisor is installed but not active'
+  }
+
+  $payload = @{
+    schema_version = 'aistock_github_runner_install_audit_v1'
+    status = $(if ($blocking.Count -eq 0) { 'ready' } else { 'blocked' })
+    workflow_gate = $(if ($blocking.Count -eq 0) { 'ready' } else { 'blocked' })
+    configured = $null -ne $identity
+    started = $false
+    role = $Role
+    labels = $Labels
+    runner_name = $(if ($null -ne $identity) { $identity.agentName } else { $null })
+    install_root = $resolvedRoot
+    automatic_update_disabled = $(if ($null -ne $identity) { [bool]$identity.disableUpdate } else { $false })
+    wrapper_present = Test-Path -LiteralPath $auditWrapperPath -PathType Leaf
+    supervisor_present = Test-Path -LiteralPath $auditSupervisorPath -PathType Leaf
+    supervisor_pid = $supervisorPid
+    supervisor_alive = $supervisorAlive
+    blocking = $blocking
+    warnings = $warnings
+    process_control_performed = $false
+    remediation = $(if ($blocking.Count -eq 0) { 'none' } else { 'run configure helper with pinned archive inputs only after explicit runner process-control authorization' })
+  }
+  Write-Result $payload
+  exit $(if ($blocking.Count -eq 0) { 0 } else { 2 })
+}
+
 if (-not $RunnerVersion -or $RunnerVersion -notmatch '^\d+\.\d+\.\d+$') {
   throw 'RunnerVersion must be an explicit semantic version such as 2.337.0'
 }
@@ -79,7 +180,6 @@ if (-not $ArchiveSha256 -or $ArchiveSha256 -notmatch '^[a-fA-F0-9]{64}$') {
   throw 'ArchiveSha256 must be an explicit 64-character SHA-256'
 }
 
-$resolvedRoot = Resolve-BoundedPath -Path $InstallRoot -Boundary $AllowedRoot
 $resolvedArchive = [System.IO.Path]::GetFullPath($ArchivePath)
 $resolvedTemplate = [System.IO.Path]::GetFullPath($TemplateWrapper)
 $resolvedSupervisorSource = [System.IO.Path]::GetFullPath($SupervisorSource)
@@ -218,6 +318,13 @@ $wrapperText = [regex]::Replace(
   ('cd /d "' + $resolvedRoot + '"'),
   1
 )
+$gitAlternatePattern = '(?im)^set "GIT_ALTERNATE_OBJECT_DIRECTORIES=.*"\s*$'
+$gitAlternateClear = 'set "GIT_ALTERNATE_OBJECT_DIRECTORIES="'
+if ($wrapperText -match $gitAlternatePattern) {
+  $wrapperText = [regex]::Replace($wrapperText, $gitAlternatePattern, $gitAlternateClear)
+} else {
+  $wrapperText = $wrapperText -replace '(?im)^call run\.cmd', ($gitAlternateClear + "`r`ncall run.cmd")
+}
 if ($wrapperText -match '(?im)^set "AISTOCK_RUNNER_ROLE=.*"\s*$') {
   $wrapperText = [regex]::Replace(
     $wrapperText,

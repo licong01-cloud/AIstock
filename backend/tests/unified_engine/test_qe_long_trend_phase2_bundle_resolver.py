@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import importlib
 import importlib.util
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -23,6 +24,28 @@ from backend.services.quantevolver.long_trend_evaluation_contract import (
     QELongTrendReason,
 )
 from backend.services.quantevolver.qe_workspace_client import QELongTrendWorkspaceError, QEWorkspaceClient
+
+
+def test_qe_workspace_client_import_is_order_independent_in_fresh_process() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    script = "\n".join(
+        (
+            "from backend.services.quantevolver.qe_workspace_client import QEWorkspaceClient",
+            "from backend.services.strategy_package import StrategyPackageComponentService",
+            "assert QEWorkspaceClient.__name__ == 'QEWorkspaceClient'",
+            "assert StrategyPackageComponentService.__name__ == 'StrategyPackageComponentService'",
+        )
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def _environment(digest: str = "a" * 64) -> dict[str, object]:

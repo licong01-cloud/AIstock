@@ -98,6 +98,10 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert hmm_frontend.ownership_status == "mapped"
     assert hmm_frontend.primary_module == "hmm.evolution"
 
+    root_page = catalog.match_path("frontend/src/app/page.tsx")
+    assert root_page.ownership_status == "mapped"
+    assert root_page.primary_module == "frontend_common"
+
     platform_router = catalog.match_path("backend/routers/health.py")
     assert platform_router.ownership_status == "mapped"
     assert platform_router.primary_module == "platform.api"

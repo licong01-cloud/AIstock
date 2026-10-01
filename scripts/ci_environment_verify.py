@@ -7,13 +7,16 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence
 
 
 DEFAULT_ENVIRONMENT_NAME = "AIstock-CI"
 DEFAULT_REQUIRED_MODULES = ("nox", "pytest", "yaml")
+TEST_TEMP_ROOT = Path("X:/AIstock-CI/tmp")
 CODEQL_BUNDLE_REQUIRED_ENV = "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED"
 CODEQL_BUNDLE_PATH_ENV = "AISTOCK_CI_CODEQL_BUNDLE_PATH"
 CODEQL_BUNDLE_SHA256_ENV = "AISTOCK_CI_CODEQL_BUNDLE_SHA256"
@@ -125,8 +128,57 @@ def verify_environment(
     return payload
 
 
+def prepare_test_temp(environ: Mapping[str, str]) -> dict[str, str]:
+    """Prepare writable job-scoped X storage; never use tempfile's fallback."""
+    repository = environ.get("GITHUB_REPOSITORY", "").split("/")
+    parts = [
+        *repository,
+        environ.get("GITHUB_RUN_ID", ""),
+        environ.get("GITHUB_RUN_ATTEMPT", ""),
+        environ.get("GITHUB_JOB", ""),
+    ]
+    if len(repository) != 2 or any(not re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", part) or part in {".", ".."} for part in parts):
+        raise ValueError("CI temporary storage requires valid repository/run/attempt/job identity")
+    # strict drive resolution prevents missing X mounts and junctions onto C.
+    drive = Path(TEST_TEMP_ROOT.anchor).resolve(strict=True)
+    root = TEST_TEMP_ROOT.resolve()
+    if drive.drive.casefold() != TEST_TEMP_ROOT.drive.casefold() or not root.is_relative_to(drive):
+        raise ValueError("CI temporary storage escaped the configured X drive")
+    root.mkdir(parents=True, exist_ok=True)
+    job_root = root.joinpath(*parts)
+    directories = {"temporary": job_root / "tmp", "pytest": job_root / "tmp" / "pytest"}
+    for directory in directories.values():
+        resolved = directory.resolve()
+        if resolved != directory:
+            raise ValueError("CI temporary storage escaped its job root")
+        directory.mkdir(parents=True, exist_ok=True)
+        # Probe precisely this directory, not the ambient TEMP location.
+        with tempfile.TemporaryFile(dir=directory) as handle:
+            handle.write(b"ci-temp-write-probe")
+            handle.flush()
+    return {
+        "TEMP": str(directories["temporary"]),
+        "TMP": str(directories["temporary"]),
+        "TMPDIR": str(directories["temporary"]),
+        "PYTEST_DEBUG_TEMPROOT": str(directories["pytest"]),
+    }
+
+
 def main() -> int:
     payload = verify_environment()
+    if payload["status"] == "ready" and os.environ.get("AISTOCK_CI_TEST_TEMP_REQUIRED") == "1":
+        try:
+            github_env = os.environ.get("GITHUB_ENV", "")
+            if not github_env:
+                raise ValueError("GITHUB_ENV is missing; cannot propagate CI temporary storage")
+            updates = prepare_test_temp(os.environ)
+            with Path(github_env).open("a", encoding="utf-8") as handle:
+                for key, value in updates.items():
+                    handle.write(f"{key}={value}\n")
+            payload["test_temp_environment"] = updates
+        except (OSError, ValueError) as exc:
+            payload["status"] = "environment_mismatch"
+            payload["failure_reasons"].append(f"X-only CI temporary storage unavailable: {exc}")
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0 if payload["status"] == "ready" else 1
 
