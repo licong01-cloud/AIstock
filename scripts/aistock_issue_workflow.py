@@ -4456,7 +4456,45 @@ def _validate_local_data_freshness(payload: Any, *, url: str) -> tuple[str, str 
     return 'passed', None, facts
 
 
+def _validate_monthly_release_ready(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """A readable operation is not a successfully prepared monthly release."""
+    from backend.services.dataset_release.monthly_unified import STATE_SCHEMA, STAGES
+
+    if not isinstance(payload, dict) or payload.get("schema_version") != "aistock_monthly_release_status_v1":
+        return "failed", "monthly release status schema differs", {}
+    data = payload.get("data")
+    if not isinstance(data, dict) or data.get("schema_version") != STATE_SCHEMA:
+        return "failed", "monthly release state schema differs", {}
+    operation_id = urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
+    if data.get("operation_id") != operation_id:
+        return "failed", "monthly release operation identity differs", {}
+    facts = {"operation_id": operation_id, "status": data.get("status")}
+    if not isinstance(data.get("status"), str) or data["status"] not in {"READY_TO_ACTIVATE", "ACTIVATED_VERIFIED"}:
+        return "failed", "monthly release has not completed prepare/verification", facts
+    if (
+        data.get("cancel_requested") is not False
+        or "last_error" not in data or data["last_error"] not in (None, {})
+        or "current_stage" not in data or data["current_stage"] is not None
+        or type(data.get("attempt")) is not int or data["attempt"] < 0
+    ):
+        return "failed", "monthly release ready state contradicts cancellation/error/progress", facts
+    for key in ("plan_sha256", "ready_receipt_sha256"):
+        value = data.get(key)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            return "failed", "monthly release ready content identity missing", facts
+        facts[key] = value
+    checkpoints = data.get("checkpoints")
+    if (
+        not isinstance(checkpoints, dict) or set(checkpoints) != set(STAGES)
+        or any(value is not True for value in checkpoints.values())
+    ):
+        return "failed", "monthly release does not have all six successful checkpoints", facts
+    facts.update(attempt=data["attempt"], completed_stage_count=len(STAGES))
+    return "passed", None, facts
+
+
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}$"), "monthly_release_ready", _validate_monthly_release_ready),
     (re.compile(r"^/api/v1/local-data/(?:overview|data-stats)$"), "local_data_freshness", _validate_local_data_freshness),
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
@@ -4618,6 +4656,7 @@ def _evaluate_business_smoke_semantics(
         "hmm_rotation_l2_overview",
         "advisory_entry_price_status",
         "local_data_freshness",
+        "monthly_release_ready",
     }:
         verdict, reason, facts = validator(payload, url=url)
     else:
