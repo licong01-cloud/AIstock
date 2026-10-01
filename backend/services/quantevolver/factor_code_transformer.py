@@ -481,15 +481,16 @@ class FactorCodeTransformer:
         code, dc, dw = self._replace_d_features(code)
         changes.extend(dc)
         warnings.extend(dw)
-        code, lc, lw = self._replace_data_loads(code, factor_name)
-        changes.extend(lc)
-        warnings.extend(lw)
-        code, rc = self._replace_h5_write_with_return(code, factor_name)
-        changes.extend(rc)
         if not re.search(r"^def calculate_\w+\s*\(", code, re.MULTILINE):
             code, wc, ww = self._transform_module_level_code(code, factor_name)
             changes.extend(wc)
             warnings.extend(ww)
+        else:
+            code, lc, lw = self._replace_data_loads(code, factor_name)
+            changes.extend(lc)
+            warnings.extend(lw)
+            code, rc = self._replace_h5_write_with_return(code, factor_name)
+            changes.extend(rc)
         return code, changes, warnings
 
     # ── 数据加载替换 ──────────────────────────────────────────────────

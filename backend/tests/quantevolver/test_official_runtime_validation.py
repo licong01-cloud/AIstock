@@ -244,6 +244,7 @@ def test_correlation_runtime_validation_classifies_exclusions(tmp_path: Path) ->
 @pytest.mark.parametrize("entry,helper_first,guard", [
     ("compute_factor", True, True), ("main", False, True), ("compute_factor", False, False),
     ("wrapper", True, True),
+    ("qlib", True, True),
 ])
 def test_live_transform_preserves_helpers_and_entry_result(entry, helper_first, guard, monkeypatch):
     from backend.services.quantevolver.factor_code_transformer import (
@@ -251,7 +252,7 @@ def test_live_transform_preserves_helpers_and_entry_result(entry, helper_first, 
     )
 
     helper = "def helper(frame):\n    return frame * SCALE\n"
-    implementation = "compute_factor" if entry == "wrapper" else entry
+    implementation = "compute_factor" if entry in {"wrapper", "qlib"} else entry
     body = f'''def {implementation}():
     df = pd.read_hdf('daily_pv.h5', key='data')
     result = helper(df[['close']])
@@ -263,6 +264,9 @@ def test_live_transform_preserves_helpers_and_entry_result(entry, helper_first, 
     if entry == "wrapper":
         original += "def main():\n    compute_factor()\n"
         entry = "main"
+    elif entry == "qlib":
+        original = "from qlib.data import D\n" + original
+        entry = "compute_factor"
     if guard:
         original += f"if __name__ == '__main__':\n    {entry}()\n"
 
