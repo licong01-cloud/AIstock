@@ -26,7 +26,7 @@
 不修改共享数据集、active profile、其他模块、数据库或服务进程。
 不搜索参数、不扩 seed、不改训练/验证窗口、不使用 validation 重选 seed。
 数值/语义模型验收不等于样本外轮动预测有效性，不自动生成或发布产品 READY。
-源码提交与合入已在 2026-09-30/2026-10-01 后续授权内；仍须完整实现、审核、F2 与 CI 通过。该授权不包含服务控制、数据写入或删除。
+本轮继续源码审核、修复和提交门禁；完整源码通过后可提交并创建 PR，PR 合入仍等待用户另行确认。该授权不包含服务控制、数据写入或删除。
 
 ## Architecture
 
@@ -115,7 +115,7 @@ raw 与 processed IEEE-754 payload hash、固定 mask、effective dimension；pa
 D6 先验证完整 20D O payload，再使用同一固定 19D mask，selected artifact 保留逐 entry projection 与维数直方图。
 非 allowlist 常量维不自动删除，仍由各 restart 的初始化明确失败；不因投影新增检查跳过正常 grid 迭代。
 合成序列化矩阵覆盖四个 family-level 和 31/131 分母，但不作为正式 D3～D6 acceptance 或模型生成证据。
-上述为 v15 阶段审核时状态。当前 v16 source/request 终态见下文；真实 selected 链仍未闭合，F-002～F-004 继续保持 PARTIAL。
+上述为 v15 阶段审核时状态，当时真实 selected 链尚未闭合、F-002～F-004 为 PARTIAL。当前 v16 source/request 终态和完整源码测试结论见最新验收矩阵及下文，不将历史状态视为当前阻断。
 最终聚焦矩阵实际运行 75 passed（executor/calendar/domains/authority/stock_fact_observation）；
 固定投影及 selected artifact fix-point 16 passed。Ruff check/format、py_compile、git diff --check、
 module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5 前投影 identity 闭合和
@@ -152,7 +152,13 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 
 新增 synthetic 集成测试：只拟合一个合成数值 fixture，以 mocked grid 产生完整 schedule；parent 的 D4 数值回读、D5、selected-only D6 和 durable readback 均真实执行。2 条 utility evidence 明确失败并保留 182 日 ledger/posterior，禁止换 seed/refit/模型发布；逐层重哈希的 ledger 漂移仍拒绝。另有 4 个 parent child/finalization/readback 故障测试验证 durable typed failure。上述一律不是正式 5184 fits。
 
-第二轮修复目录冻结 CLI 的输出路径未覆盖 canonical root/间接祖先；复用现有 `validate_output_location`，数据库连接之前拒绝，两项 RED→GREEN。测试按源文件职责原子整理，解决四个 direct-neighbor 路由缺口，未改变 CI/nox/test plan 或复制测试。本轮最终门禁结果须绑定最终提交记录后填写。
+第二轮修复目录冻结 CLI 的输出路径未覆盖 canonical root/间接祖先；复用现有 `validate_output_location`，数据库连接之前拒绝，两项 RED→GREEN。测试按源文件职责原子整理，解决四个 direct-neighbor 路由缺口，未改变 CI/nox/test plan 或复制测试。
+
+最终源码门禁绑定 `ef2b87b7d5f644da9e7e74678757027d5355dffe`（修复提交 `71c214af4`，随后安全合并 main）：classifier 指定 `hmm_risk_pr_slice` 实际 13 个测试文件、219 passed；module registry 8 passed、14/14 映射；L0 findings=0/blocking=0；19 个 Python 文件 Ruff check/format 与 py_compile 通过；20 个实际 changed files ownership 全部映射、无歧义；git diff --check 通过。此前未绑定 classifier 的 29 项默认 smoke 不作为完整提交 slice 证据。
+
+同一源码 HEAD 的独立 fresh process 验证 router、health、executor/input/model 共 5 个模块全部从当前任务工作树加载；network/database、active resolver 和 formal fit 均设置 poison。复用已冻结 request 的完整正式 `preflight` 退出 0，request SHA 与 receipt SHA 均保持上述 F-001 值，fits=0。输出为 `F:/Dev/AIstock_runtime/hmm_formal_state/20261001-v16-source-review/ef2b87b7-preflight.json`。这不是重新构建输入、重跑训练或读取新实验结果。
+
+后续仅记录文档和 PR 提交状态，不将文档-only HEAD 冒充上述代码测试的执行 HEAD。F2 源码验收通过；F-005 仍明确未执行。CI 状态以 PR 实时检查为准，不把本地通过写成 CI 全绿。
 
 ### 2026-10-01 历史长任务增量（v15 阶段）
 
@@ -189,7 +195,7 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 
 ## Risks
 
-输入正式目录投影已由数据库只读冻结解决；A5 完整文件源构造及 D6 真实 source/selected artifact 全链验证仍未完成。
+输入正式目录投影、v16 完整 A5 文件源构造与 182 日 D6 carrier 预检已闭合；selected D4/D5/D6/readback 的完整源码链已通过合成数据合同测试，但真实模型验收仍未执行。真实 L1 future-utility evidence 最少仅 2 日，低于既有 D6 最低 30 日；预检通过不能消除该模型验收风险，禁止缩小目录、改阈值或换 seed 绕过。
 真实 v15 moneyflow H5 物理行乱序被旧 HMM reader 误判为无效，已登记独立 BUG-1641 / Issue #5147；
 仅对 table H5 在内存中排序，保留重复键、日期、schema 的 fail-closed，不重写数据文件。
 原始 full-v3 as-published classification 的 resolved identity 只观察到 126 个 L2，
@@ -197,7 +203,7 @@ module registry 8 passed 与 L0 blocking=0。两轮复审修复投影遗漏、D5
 但当前批准的历史模式并非直接使用这一原始 resolved 子集：现有 adapter 的 stable-taxonomy-backcast
 从冻结、单一且可校验的候选来源派生身份，实际 active classification 视图覆盖全部 131 个目录 L2。
 因此不能将原始 identity=None 误判为历史训练缺行业，也不需要补写 full-v3 或拼接数据库成员分类。
-此结论只表示行业身份覆盖闭合，不证明每个交易日的全部价格、资金流、特征或 A5 coverage 已通过。
+该历史目录结论只表示行业身份覆盖闭合；当前 v16 正式文件构造的价格、资金流、特征与 A5 验证以本文件最新 preflight 为准，不推导模型通过。
 数据库目录对应这 5 个行业的股票数为 4/9/13/7/28，仅用于目录诊断，不作为历史分类 authority。
 forward 仍遵循 as-published PIT；历史 non-as-known-taxonomy 身份不能冒充 forward 确认。
 正式全 grid 可能没有完整 D5 candidate，或选中后 D6 失败；均是允许的真实结果，不得改阈值、换 seed 或发布预测能力。
@@ -206,14 +212,14 @@ forward 仍遵循 as-published PIT；历史 non-as-known-taxonomy 身份不能�
 
 production_ddl_gate=noop；production_dml_gate=noop；dependency_install=noop。
 Conda AIstock mutation=false；dataset/profile mutation=false；runtime/process control=false。
-历史长期计划的正式训练及后续提交/合入曾获用户授权；本轮最新授权限制为 v16 输入绑定、设计状态更新和 file-only preflight，不启动正式训练。任何后续动作仍须满足其授权边界及完整实现、正式审核、F2 和 CI。
-当前未完成的 feature 不创建或合入部分交付 PR。模块生产影响须以最终 changed files 的 workflow/runtime contract 为准。
+本轮授权为 v16 输入绑定、完整 file-only preflight 以及下一轮源码审核和提交门禁；不启动正式训练。完整源码 PR 不把明确未执行的 F-005 实验写为完成；PR 合入等待用户另行确认。
+实际 20 个 changed files 的 runtime contract 为 `runtime_impact=backend`、`target_ids=[backend-main]`、`catalog_error=null`，不得因 CLI 为离线用途降级为 none。fresh-process import 已通过；尚未合入或激活，合入后如需 backend-main 重启及运行态验证，由用户操作并单独记录，不由审核或提交授权推导进程控制。
 
 ## DESIGN-COMPLIANCE-001 当前复审
 
-1. 无简化交付：当前整体明确未完成，完整 C-010/A5 和 D6 carrier 不用简化证据替代；未请求合入。
+1. 无简化交付：F-001～F-004 完整源码已验证，完整 C-010/A5 和 D6 carrier 不用简化证据替代；F-005 正式模型实验未执行，源码就绪不等于模型或预测功能验收。
 2. 无静默错误：source/seed/hash/tie/非有限值与 durable failure 采用显式拒绝，缺口继续报告。
 3. 无业务漂移：模型合同与 full denominator 不变；未来 utility 纠回复用 daily-excess sum；D6 不新增 O-only tie 门禁。
-4. 无未经批准门禁/审批：不增加资源、availability ratio、统计 significance 或人工 sector 特批；本次合入授权不扩展为服务控制、数据写入或删除授权。
+4. 无未经批准门禁/审批：不增加资源、availability ratio、统计 significance 或人工 sector 特批；已有环境/路径合同回读不新增模型门禁，本次提交授权不扩展为合入、服务控制、数据写入或删除授权。
 
 本记录不是正式模型验收通过声明。源码提交 F2 按 F-001～F-004 和明确批准的 F-005 未执行边界检查；正式 fits、D5/D6 结果与产品能力仍为独立状态。
