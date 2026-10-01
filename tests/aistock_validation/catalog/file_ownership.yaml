@@ -1128,6 +1128,7 @@ rules:
       - backend/tests/data_service/test_security_source_identity.py
       - backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py
       - scripts/audit_qe_moneyflow_alias_coverage.py
+      - scripts/repair_qe_moneyflow_alias_candidate.py
     primary_module: qlib_data
     impact_modules: [local_data, qe.core, hmm]
     layer: data_pipeline
