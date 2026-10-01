@@ -47,6 +47,11 @@ from .moneyflow_contract import (
     derive_moneyflow_factors,
     normalize_tushare_moneyflow_units,
 )
+from .security_source_identity import (
+    MONEYFLOW_DATASET,
+    SecuritySourceIdentityManifest,
+    load_default_security_source_identity_manifest,
+)
 
 logger = logging.getLogger("aistock.qe_data_service")
 LIVE_ASOF_STATIC_PREFIXES = ("bb_", "cp_", "md_", "sw2_")
@@ -589,6 +594,9 @@ def load_moneyflow(
     instruments: List[str],
     start_date: Union[str, date],
     end_date: Union[str, date],
+    *,
+    security_identity: SecuritySourceIdentityManifest | None = None,
+    preserve_source_codes: bool = False,
 ) -> pd.DataFrame:
     """
     加载资金流向原始数据，输出 mf_* 前缀字段。
@@ -600,13 +608,20 @@ def load_moneyflow(
     ts_codes = _normalize_and_validate_instruments(
         instruments, source="load_moneyflow", start_date=start, end_date=end
     )
+    identity = security_identity or load_default_security_source_identity_manifest()
+    source_codes = identity.query_source_codes(ts_codes, start, end, MONEYFLOW_DATASET)
 
-    cached = _CACHE.get("load_moneyflow", ts_codes, start.isoformat(), end.isoformat())
+    cache_codes = [
+        *ts_codes,
+        f"identity:{identity.manifest_sha256}",
+        f"output:{'source' if preserve_source_codes else 'canonical'}",
+    ]
+    cached = _CACHE.get("load_moneyflow", cache_codes, start.isoformat(), end.isoformat())
     if cached is not None:
         logger.debug("load_moneyflow: 缓存命中")
         return cached
 
-    placeholders = ",".join(["%s"] * len(ts_codes))
+    placeholders = ",".join(["%s"] * len(source_codes))
     sql = f"""
         SELECT trade_date, ts_code,
                buy_sm_vol, buy_sm_amount, sell_sm_vol, sell_sm_amount,
@@ -619,7 +634,7 @@ def load_moneyflow(
           AND trade_date >= %s AND trade_date <= %s
         ORDER BY trade_date, ts_code
     """
-    params = ts_codes + [start.isoformat(), end.isoformat()]
+    params = source_codes + [start.isoformat(), end.isoformat()]
 
     with get_conn() as conn:
         df = pd.read_sql(sql, conn, params=params)
@@ -627,11 +642,47 @@ def load_moneyflow(
     if df.empty:
         return pd.DataFrame()
 
+    df = identity.annotate_source_rows(
+        df,
+        canonical_codes=ts_codes,
+        source_dataset=MONEYFLOW_DATASET,
+    )
+    if df.empty:
+        return pd.DataFrame()
+    if preserve_source_codes:
+        df = df.drop(columns=["_canonical_ts_code"])
+    else:
+        df["ts_code"] = df.pop("_canonical_ts_code")
     df = normalize_tushare_moneyflow_units(df, copy=False)
     df = df.rename(columns=MONEYFLOW_FIELD_MAP)
     result = _build_multiindex_df(df, "mf_")
-    _CACHE.set("load_moneyflow", ts_codes, start.isoformat(), end.isoformat(), result)
+    _CACHE.set("load_moneyflow", cache_codes, start.isoformat(), end.isoformat(), result)
     return result
+
+
+def canonicalize_moneyflow_source_frame(
+    frame: pd.DataFrame,
+    instruments: List[str],
+    *,
+    security_identity: SecuritySourceIdentityManifest | None = None,
+) -> pd.DataFrame:
+    """Convert an authorized source-indexed moneyflow frame to canonical indices."""
+
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    if not isinstance(frame.index, pd.MultiIndex) or frame.index.names != ["datetime", "instrument"]:
+        raise ValueError("source moneyflow frame must use the canonical datetime/instrument index")
+    identity = security_identity or load_default_security_source_identity_manifest()
+    ts_codes = _normalize_and_validate_instruments(instruments, source="canonicalize_moneyflow_source_frame")
+    source = frame.reset_index().rename(columns={"datetime": "trade_date", "instrument": "ts_code"})
+    canonical = identity.remap_source_rows(
+        source,
+        canonical_codes=ts_codes,
+        source_dataset=MONEYFLOW_DATASET,
+    )
+    canonical["datetime"] = pd.to_datetime(canonical.pop("trade_date"))
+    canonical["instrument"] = canonical.pop("ts_code").map(_normalize_instrument)
+    return canonical.set_index(["datetime", "instrument"]).sort_index()[list(frame.columns)]
 
 
 def load_bak_basic(

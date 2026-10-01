@@ -1,0 +1,306 @@
+{
+  "actual": "The endpoint is unregistered; nine source-loaded BUGs cannot complete formal read-only verification.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1643",
+  "business_smoke_probe_contract": {
+    "acceptance_scope": "bound_metrics_readback_only",
+    "contract_id": "factor_metrics_results",
+    "owner_followup": "After this workflow PR merges, factor owner selects a batch tied to the relevant existing acceptance evidence, updates only its own BUG probe, reruns formal verifier, then close-sync. Never reuse an unrelated recent metric row as proof of all nine algorithms. No restart is required for this CLI-only workflow fix.",
+    "required_query_values": [
+      "factor_name",
+      "calc_batch_id",
+      "eval_window",
+      "expected_snapshot_date",
+      "expected_universe",
+      "expected_return_horizon",
+      "limit"
+    ]
+  },
+  "closed_at": "2026-10-01T13:55:48Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-30T20:56:55.969564Z",
+  "description": "The endpoint is unregistered; nine source-loaded BUGs cannot complete formal read-only verification.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260930-c1ab7b7b1541",
+      "timestamp": "2026-09-30T20:56:55.969547Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock/tmp/factor-aftercare-20261001/aftercare-report.md"
+  ],
+  "expected": "An explicitly bound metrics results probe is semantically verified; unbound/empty/malformed/contradictory responses stay blocked. Owners retain per-BUG acceptance responsibility.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      ],
+      "impacted_modules": [
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ]
+  },
+  "first_seen_at": "2026-09-30T20:56:55.969564Z",
+  "fix_branch": null,
+  "fix_commit": "c5521cdae7015cdf557f50248f09c2329f9c93cb",
+  "fixed_at": "2026-10-01T13:55:48Z",
+  "github_issue_number": 5167,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5167",
+  "last_seen_at": "2026-09-30T20:56:55.969564Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5168",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "related_bug_acceptance_review": {
+    "BUG-1381": "Same direct-v2 factor/Qlib/PIT identity, complete available-factor five-window metrics and same-source correlation; preserve source-bound candidate/coverage receipts. Metrics readback alone does not prove completeness or correlation.",
+    "BUG-1437": "Requested/actual full, annual, recent and monthly windows, explicit gaps and old-run compatibility; retain the existing full-evaluation coverage report.",
+    "BUG-1440": "Preserved multiple instrument spans and interval filtering, explicit missing-bin counts; retain the existing reader/span evidence.",
+    "BUG-1442": "Custom windows/horizons and order-invariant pair submatrix, dates/support/gap reasons and no DB writes; retain the existing engine/correlation acceptance evidence.",
+    "BUG-1448": "All explicitly requested PIT instruments remain in denominator; physically missing prices stay NaN; retain the request/count/NaN evidence.",
+    "BUG-1453": "Dedicated official value-column loader and strict candidate-column behavior; retain the official-artifact loader evidence.",
+    "BUG-1455": "Official reference infinities become explicit missing observations with per-factor counts; strict candidate rejection and no cache rewrite; retain finite-value/count evidence.",
+    "BUG-1456": "Daily Spearman computed once, old/new aggregate equality and bounded runtime/resource evidence; retain source-bound parity/performance evidence.",
+    "BUG-1567": "Full-universe Windows-safe salvage transport and complete candidate row/instrument counts; retain the existing 5144-instrument/7970157-row salvage receipt, not a metrics row as its substitute."
+  },
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_workflow_automation"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1643",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "043c1bb7870c21a3",
+    "recorded_at": "2026-10-01T13:57:12.370609Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "28fb69077b0a8495b832b9264be2de9727ad58e3",
+    "source_merge_commit": "c5521cdae7015cdf557f50248f09c2329f9c93cb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5168",
+    "validation_evidence": [
+      "validation-receipt: id=c3617c408acae457 commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -p no:cacheprovider` result=`127 passed`",
+      "validation-receipt: id=56f5f78fb368418f commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json` result=`passed; blocking=0`",
+      "validation-receipt: id=c96ab13230e5eb3e commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+      "validation-receipt: id=e2587a7b117df552 commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1643 --module validation --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "11d9cccb61362639313d80d5d7241e827fc62a06943555661008ff89a2aed061"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Factor metrics runtime verification lacks bound read-only semantic contract",
+  "trigger_condition": {
+    "fingerprint": "c1ab7b7b15411786446b5ef4",
+    "source_event_id": "FE-20260930-c1ab7b7b1541"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=c3617c408acae457 commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -p no:cacheprovider` result=`127 passed`",
+    "validation-receipt: id=56f5f78fb368418f commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py tests/aistock_validation/bugs/20260930_BUG-1643-factor-metrics-runtime-verification-lacks-bound-read-only-semantic-contr.json` result=`passed; blocking=0`",
+    "validation-receipt: id=c96ab13230e5eb3e commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+    "validation-receipt: id=e2587a7b117df552 commit=28fb69077b0a8495b832b9264be2de9727ad58e3 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-1643 --module validation --changed-file scripts/aistock_issue_workflow.py --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

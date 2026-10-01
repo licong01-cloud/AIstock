@@ -1,4 +1,5 @@
 """Research-only orchestration for complete candidate evaluation views."""
+
 from __future__ import annotations
 
 import math
@@ -12,7 +13,65 @@ from .models import ResearchError, json_object
 from .runner import load_values
 
 
-_FACTOR_NAME = re.compile(r"[a-z][a-z0-9_]{2,80}")
+_FACTOR_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,80}")
+
+
+def load_reference_values(path: Path, name: str) -> pd.DataFrame:
+    """Load one official single-factor artifact without relaxing candidate schema."""
+    import numpy as np
+
+    path = Path(path)
+    if path.is_symlink() or not path.is_file():
+        raise ResearchError(
+            "full_evaluation_reference_missing",
+            "Expected a regular official reference result file",
+        )
+    frame = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_hdf(path, key="data")
+    if not isinstance(frame, pd.DataFrame) or list(frame.columns) != ["value"]:
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Expected exactly the official value column",
+        )
+    if not isinstance(frame.index, pd.MultiIndex) or frame.index.names != ["datetime", "instrument"]:
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Expected MultiIndex(datetime,instrument)",
+        )
+    if frame.empty or not frame.index.is_unique:
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Reference is empty or has duplicate index rows",
+        )
+    dates = frame.index.get_level_values("datetime")
+    if not isinstance(dates, pd.DatetimeIndex) or dates.hasnans or dates.tz is not None:
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Expected non-null timezone-naive market dates",
+        )
+    if not dates.equals(dates.normalize()):
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Daily values must use normalized market dates",
+        )
+    values = frame["value"]
+    if not pd.api.types.is_numeric_dtype(values) or pd.api.types.is_complex_dtype(values):
+        raise ResearchError(
+            "full_evaluation_reference_schema_invalid",
+            "Expected real numeric reference values",
+        )
+    infinite_mask = np.isinf(values.to_numpy(dtype=float))
+    quality = {
+        "rows": len(frame),
+        "preexisting_missing_values": int(values.isna().sum()),
+        "infinite_values_excluded": int(infinite_mask.sum()),
+        "nonfinite_policy": "exclude_infinite_observation_as_missing_no_fill",
+    }
+    if quality["infinite_values_excluded"]:
+        frame = frame.copy()
+        frame.loc[infinite_mask, "value"] = np.nan
+    normalized = frame.rename(columns={"value": name}).sort_index()
+    normalized.attrs["reference_value_quality"] = quality
+    return normalized
 
 
 def validate_full_evaluation_spec(
@@ -156,9 +215,7 @@ def compute_correlation_views(
     candidate_frames = [load_values(path, name) for name, path in sorted(candidate_paths.items())]
     candidate_panel = pd.concat(candidate_frames, axis=1, join="outer").sort_index()
     reference_items = [
-        (name, Path(path))
-        for name, path in spec["reference_value_artifacts"].items()
-        if name not in candidate_paths
+        (name, Path(path)) for name, path in spec["reference_value_artifacts"].items() if name not in candidate_paths
     ]
     batch_size = spec["correlation_batch_size"]
     # Monthly all-horizon metrics are part of the independent evaluation, but
@@ -166,22 +223,45 @@ def compute_correlation_views(
     # recent comparison views. Computing every candidate/reference pair again
     # for every month would add cost without satisfying a separate research
     # question.
-    correlation_windows = {
-        name: window for name, window in windows.items() if not name.startswith("month_")
-    }
+    correlation_windows = {name: window for name, window in windows.items() if not name.startswith("month_")}
     states: dict[str, dict[str, Any]] = {}
+    reference_value_quality: dict[str, dict[str, Any]] = {}
     candidate_pair_results: list[dict[str, Any]] = []
+    full_candidate_dates = pd.DatetimeIndex(candidate_panel.index.get_level_values("datetime")).unique()
+    engine = CorrelationEngine(
+        object(),
+        window=len(full_candidate_dates),
+        half_life=spec["correlation_half_life"],
+        min_stocks=spec["correlation_min_stocks"],
+        min_days=spec["correlation_min_effective_days"],
+    )
     for window_name, window in correlation_windows.items():
-        candidate_window = _slice(candidate_panel, window["start"], window["end"])
+        candidate_window_empty = not bool(
+            (
+                (full_candidate_dates >= pd.Timestamp(window["start"]))
+                & (full_candidate_dates <= pd.Timestamp(window["end"]))
+            ).any()
+        )
         state = {
             "window": window,
-            "candidate_panel": candidate_window,
-            "engine": None,
+            "candidate_window_empty": candidate_window_empty,
             "records": [],
         }
         states[window_name] = state
-        if candidate_window.empty:
-            internal_empty = [
+    internal_daily = None
+    prefix = "candidate_reference__"
+    if len(candidate_panel.columns) > 1:
+        renamed = candidate_panel.rename(columns={name: f"{prefix}{name}" for name in candidate_panel.columns})
+        internal_daily = engine.compute_selected_daily_submatrix(
+            candidate_panel,
+            renamed,
+            as_of_date=max(window["end"] for window in correlation_windows.values()),
+        )
+    for window_name, state in states.items():
+        window = state["window"]
+        internal_records: list[dict[str, Any]] = []
+        if state["candidate_window_empty"]:
+            internal_records = [
                 {
                     "candidate": left,
                     "reference": right,
@@ -194,41 +274,12 @@ def compute_correlation_views(
                 for position, left in enumerate(sorted(candidate_paths))
                 for right in sorted(candidate_paths)[position + 1 :]
             ]
-            candidate_pair_results.append(
-                {
-                    "window": window_name,
-                    "start": window["start"],
-                    "end": window["end"],
-                    "records": internal_empty,
-                    "reason": "candidate_window_empty",
-                    "requested_pairs": len(candidate_paths)
-                    * (len(candidate_paths) - 1)
-                    // 2,
-                    "available_pairs": 0,
-                    "unavailable_pairs": len(internal_empty),
-                }
-            )
-            continue
-        engine = CorrelationEngine(
-            object(),
-            window=len(
-                pd.DatetimeIndex(
-                    candidate_window.index.get_level_values("datetime")
-                ).unique()
-            ),
-            half_life=spec["correlation_half_life"],
-            min_stocks=spec["correlation_min_stocks"],
-            min_days=spec["correlation_min_effective_days"],
-        )
-        state["engine"] = engine
-        internal_records: list[dict[str, Any]] = []
-        if len(candidate_window.columns) > 1:
-            prefix = "candidate_reference__"
-            renamed = candidate_window.rename(
-                columns={name: f"{prefix}{name}" for name in candidate_window.columns}
-            )
-            internal = engine.compute_selected_submatrix(
-                candidate_window, renamed, as_of_date=window["end"]
+        elif internal_daily is not None:
+            internal = engine.aggregate_selected_daily_submatrix(
+                internal_daily,
+                start_date=window["start"],
+                end_date=window["end"],
+                as_of_date=window["end"],
             )
             for row in internal.records():
                 reference = row["reference"].removeprefix(prefix)
@@ -241,12 +292,8 @@ def compute_correlation_views(
                 "end": window["end"],
                 "records": internal_records,
                 "requested_pairs": len(candidate_paths) * (len(candidate_paths) - 1) // 2,
-                "available_pairs": sum(
-                    row["status"] == "available" for row in internal_records
-                ),
-                "unavailable_pairs": sum(
-                    row["status"] != "available" for row in internal_records
-                ),
+                "available_pairs": sum(row["status"] == "available" for row in internal_records),
+                "unavailable_pairs": sum(row["status"] != "available" for row in internal_records),
             }
         )
 
@@ -255,18 +302,31 @@ def compute_correlation_views(
     # multi-year artifact for every annual/recent view.
     for offset in range(0, len(reference_items), batch_size):
         batch = reference_items[offset : offset + batch_size]
-        reference_frames = [load_values(path, name) for name, path in batch]
+        reference_frames = []
+        for name, path in batch:
+            frame = load_reference_values(path, name)
+            reference_value_quality[name] = frame.attrs["reference_value_quality"]
+            reference_frames.append(frame)
         reference_full = pd.concat(reference_frames, axis=1, join="outer").sort_index()
+        reference_daily = engine.compute_selected_daily_submatrix(
+            candidate_panel,
+            reference_full,
+            as_of_date=max(window["end"] for window in correlation_windows.values()),
+        )
+        reference_dates = pd.DatetimeIndex(reference_full.index.get_level_values("datetime")).unique()
         for state in states.values():
             window = state["window"]
-            candidate_window = state["candidate_panel"]
             records = state["records"]
-            if candidate_window.empty:
+            if state["candidate_window_empty"]:
                 reason = "candidate_window_empty"
-                reference_window = None
             else:
-                reference_window = _slice(reference_full, window["start"], window["end"])
-                reason = "reference_window_empty" if reference_window.empty else None
+                reference_window_empty = not bool(
+                    (
+                        (reference_dates >= pd.Timestamp(window["start"]))
+                        & (reference_dates <= pd.Timestamp(window["end"]))
+                    ).any()
+                )
+                reason = "reference_window_empty" if reference_window_empty else None
             if reason is not None:
                 for candidate in candidate_paths:
                     for reference, _ in batch:
@@ -282,9 +342,10 @@ def compute_correlation_views(
                             }
                         )
                 continue
-            result = state["engine"].compute_selected_submatrix(
-                candidate_window,
-                reference_window,
+            result = engine.aggregate_selected_daily_submatrix(
+                reference_daily,
+                start_date=window["start"],
+                end_date=window["end"],
                 as_of_date=window["end"],
             )
             records.extend(result.records())
@@ -305,11 +366,11 @@ def compute_correlation_views(
                 "unavailable_pairs": sum(row["status"] != "available" for row in records),
             }
         )
-        del state["candidate_panel"], state["engine"]
     return {
         "method": "cross_sectional_spearman_ewma_selected_pairs",
         "reference_count": len(reference_items),
         "reference_names": [name for name, _ in reference_items],
+        "reference_value_quality": dict(sorted(reference_value_quality.items())),
         "parameters": {
             key: spec[key]
             for key in (
@@ -357,6 +418,10 @@ def build_full_evaluation_result(
         },
         "price_context_covers_requested_range": (
             actual_start <= run_spec["signal_start"] and actual_end >= run_spec["signal_end"]
+        ),
+        "instrument_coverage": ctx["instrument_coverage"],
+        "all_requested_instruments_have_physical_prices": (
+            ctx["instrument_coverage"]["missing_price_instrument_count"] == 0
         ),
         "windows": windows,
         "candidate_names": [row["factor_name"] for row in candidate_results],

@@ -83,7 +83,7 @@ def test_candidate_create_outputs_event_candidate_and_stable_fingerprint(tmp_pat
     assert first["candidate"]["schema_version"] == "aistock_issue_candidate_v1"
     assert first["candidate"]["fingerprint"] == second["candidate"]["fingerprint"]
     assert first["candidate"]["risk_level"] == "high"
-    assert "guardrail_changed_files" in first["candidate"]["suggested_validation"]
+    assert first["candidate"]["suggested_validation"] == ["l0", "validation_workflow_automation"]
     assert first["candidate"]["suggested_scope"] == ["scripts/issue_flow.py"]
 
 
@@ -332,6 +332,21 @@ def test_validation_select_does_not_treat_dataset_release_plan_yaml_as_ddl(
     assert flow._requires_production_ddl("backend/db/migrations/run_watchlist_migration.py") is True
 
 
+def test_hmm_validation_select_uses_slice_for_local_and_cross_contract_sources() -> None:
+    local = flow.select_validation(
+        [
+            "backend/services/hmm_risk/rotation_l1_prediction.py",
+            "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+        ]
+    )
+    critical = flow.select_validation(["backend/services/hmm_risk/state_model_set.py"])
+
+    assert "hmm_risk_pr_slice" in local["required_plans"]
+    assert "hmm_risk_backend" not in local["required_plans"]
+    assert "hmm_risk_backend" not in critical["required_plans"]
+    assert "hmm_risk_pr_slice" in critical["required_plans"]
+
+
 def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.CaptureFixture[str]) -> None:
     assert flow.main([
         "validation-select",
@@ -424,14 +439,15 @@ def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys:
     assert payload["required_plans"] == []
 
 
-def test_validation_select_uses_module_hint_only_when_ownership_is_unmapped() -> None:
+def test_validation_select_prefers_owned_module_over_broad_module_hint() -> None:
     payload = flow.select_validation(
         ["scripts/aistock_issue_workflow.py"],
         module="validation",
     )
 
-    assert payload["primary_modules"] == ["validation.guardrails"]
-    assert "guardrail_changed_files" in payload["required_plans"]
+    assert payload["primary_modules"] == ["validation.workflow_automation"]
+    assert payload["required_plans"] == ["l0", "validation_workflow_automation"]
+    assert "guardrail_changed_files" not in payload["required_plans"]
     assert "validation_center_backend" not in payload["required_plans"]
 
 
@@ -1380,9 +1396,23 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
     assert '"paths":{"scanned":[]}' in run
 
 
-def test_dependency_update_validate_covers_github_tooling_requirements() -> None:
+def test_dependency_update_validation_is_folded_into_unified_ci() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/dependency-update-validate.yml").read_text(encoding="utf-8"))
-    assert ".github/requirements/*.txt" in workflow[True]["pull_request"]["paths"]
+    triggers = workflow.get("on") or workflow.get(True)
+    assert triggers == {"workflow_dispatch": {}}
+
+    ci_workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    ci_steps = ci_workflow["jobs"]["ci-verdict"]["steps"]
+    dependency_step = next(step for step in ci_steps if step.get("name") == "Validate changed dependency surface")
+    dependency_run = str(dependency_step["run"])
+
+    assert "steps.classify.outputs.dependency_validation_required == 'true'" in dependency_step["if"]
+    assert dependency_step["env"]["DEPENDENCY_FILES"] == "${{ steps.classify.outputs.dependency_files }}"
+    assert ".github/requirements/*.txt" in dependency_run
+    assert "python scripts/validate_changed_requirements.py" in dependency_run
+    assert "python -m pip check" in dependency_run
+    assert "pip install" not in dependency_run
+
     steps = workflow["jobs"]["dependency-update-validate"]["steps"]
     runs = "\n".join(str(step.get("run") or "") for step in steps if isinstance(step, dict))
 

@@ -1,0 +1,315 @@
+{
+  "actual": "The typed authority resolves the 002352 aggregate/components and 600989 mutually exclusive holder-class rates, but the required full-scope consumer preflight remains fail-closed: 15 additional stock-action factor mismatches or unverifiable boundaries were discovered across the r5 population.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/build_pt_next_020_corporate_action_authority.py",
+    "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20260915_BUG-1528-pt-next-020-corporate-action-source-cannot-express-aggregate-and-holder.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1528",
+  "closed_at": "2026-09-16T02:49:46Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-15T18:30:32.777958Z",
+  "description": "CORPORATE_ACTION_ECONOMIC_CONFLICT blocks snapshot generation; 002352 exposes 0.4/1.0/1.4 same-day rows and 600989 exposes mutually exclusive 0.3158/0.265 holder-class rates.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260915-181478f43cc7",
+      "timestamp": "2026-09-15T18:30:32.777938Z"
+    },
+    {
+      "action": "full_scope_consumer_preflight_blocked",
+      "actor": "codex",
+      "note": "Initial two economic conflicts resolved in immutable authority; existing consumer found 15 additional stock-action factor mismatch or boundary-unverifiable symbols, so no full PT-NEXT-020 consumer readiness is claimed and a follow-up BUG is required.",
+      "timestamp": "2026-09-15T19:01:29.409417Z"
+    },
+    {
+      "action": "dev_readonly_source_validation",
+      "actor": "codex",
+      "note": "DEV market.dividend contains zero rows for the two target symbol/date groups; the producer failed closed without creating an artifact. Production evidence remains a repeatable-read read-only snapshot, with no DDL or DML.",
+      "timestamp": "2026-09-16T02:38:00Z"
+    },
+    {
+      "action": "ci_test_plan_scope_expansion",
+      "actor": "codex",
+      "note": "PR CI failed closed because the new direct test was not executed by data_sync_autonomy_backend; noxfile.py was added to scope solely to compile the producer and execute that test in the existing local_data plan.",
+      "timestamp": "2026-09-16T02:43:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/position_timing_universe_benchmark_validation_f1_20260914.md",
+    "X:/AIstock_dataset_candidates/corporate_action_authorities/pt-next-020-20260916-r1/receipt.json"
+  ],
+  "expected": "A content-addressed authority classifies the five source rows, produces one non-duplicated account action per symbol/date, and supports a full-scope read-only source audit with zero economic conflicts.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "scripts/build_pt_next_020_corporate_action_authority.py",
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/bugs/20260915_BUG-1528-pt-next-020-corporate-action-source-cannot-express-aggregate-and-holder.json"
+    ],
+    "added_files": [
+      "scripts/build_pt_next_020_corporate_action_authority.py",
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py"
+    ],
+    "changed_files": [
+      "scripts/build_pt_next_020_corporate_action_authority.py",
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/bugs/20260915_BUG-1528-pt-next-020-corporate-action-source-cannot-express-aggregate-and-holder.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/build_pt_next_020_corporate_action_authority.py",
+        "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+        "noxfile.py"
+      ],
+      "impacted_modules": [
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "scripts/build_pt_next_020_corporate_action_authority.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/build_pt_next_020_corporate_action_authority.py",
+        "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+        "noxfile.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/build_pt_next_020_corporate_action_authority.py",
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "noxfile.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/build_pt_next_020_corporate_action_authority.py",
+      "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
+      "noxfile.py"
+    ]
+  },
+  "first_seen_at": "2026-09-15T18:30:32.777958Z",
+  "fix_branch": null,
+  "fix_commit": "ed44b8670d5ac6f34d75fdda40533945863f163f",
+  "fixed_at": "2026-09-16T02:49:46Z",
+  "github_issue_number": 4795,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4795",
+  "last_seen_at": "2026-09-15T18:30:32.777958Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4811",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m backend.services.position_timing.pattern_universe_benchmark prepare --corporate-action-snapshot <snapshot>",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1528",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2faf91d0cf8106d6",
+    "recorded_at": "2026-09-16T02:51:22.446093Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a22c12781d0975f4e57e2bee64a096bb5dd00888",
+    "source_merge_commit": "ed44b8670d5ac6f34d75fdda40533945863f163f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4811",
+    "validation_evidence": [
+      "nox -s data_sync_autonomy_backend -> passed: 359 passed and 1 skipped",
+      "nox -s validation_catalog_integrity -> passed: 16 passed and zero findings",
+      "nox -s validation_module_registry_l0 -> passed: 8 passed and ownership scan",
+      "nox -s l0 -> passed: zero blocking findings"
+    ],
+    "validation_evidence_digest": "358be5b944cc6f4125a437283e092971f31982009134b1a7f1aa7d37a19de855"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "PT-NEXT-020 corporate-action source cannot express aggregate and holder-class lineage",
+  "trigger_condition": {
+    "fingerprint": "181478f43cc7789e301b54f8",
+    "source_event_id": "FE-20260915-181478f43cc7"
+  },
+  "validation_evidence": [
+    "nox -s data_sync_autonomy_backend -> passed: 359 passed and 1 skipped",
+    "nox -s validation_catalog_integrity -> passed: 16 passed and zero findings",
+    "nox -s validation_module_registry_l0 -> passed: 8 passed and ownership scan",
+    "nox -s l0 -> passed: zero blocking findings"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

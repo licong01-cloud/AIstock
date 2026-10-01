@@ -13,6 +13,7 @@ import math
 import os
 import time
 import uuid
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
@@ -100,6 +101,34 @@ def _daily_basic_required_field_coverage_receipt(
         "row_count": row_count,
         "ratio": ratio,
         "required_ratio": DAILY_BASIC_REQUIRED_RATIO,
+    }
+
+
+def _etf_share_size_publication_quality(
+    rows: List[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Detect the provider's shares-only intermediate publication stage.
+
+    Tushare can publish all ETF share rows before any daily size values are
+    available. Requiring a percentage would create an arbitrary universe-size
+    gate and would penalize legitimate late overseas ETFs. The narrow contract
+    here only rejects an entire source field being unavailable for the day.
+    """
+
+    row_count = len(rows)
+    share_count = sum(1 for row in rows if _is_finite_number(row.get("total_share")))
+    size_count = sum(1 for row in rows if _is_finite_number(row.get("total_size")))
+    receipt = {
+        "schema_version": "etf_share_size_publication_quality_v1",
+        "row_count": row_count,
+        "total_share_finite_count": share_count,
+        "total_size_finite_count": size_count,
+    }
+    if row_count > 0 and share_count > 0 and size_count > 0:
+        return receipt, {"quality_status": "ok"}
+    return receipt, {
+        "quality_status": "low_coverage",
+        "failure_category": "required_source_field_unpublished",
     }
 _logger = logging.getLogger(__name__)
 
@@ -515,7 +544,12 @@ class TushareSyncEngine:
 
     def _fetch_from_tushare(self, spec: DatasetSpec, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Call Tushare API with rate limiting, retry, and optional pagination."""
-        col_names = list(spec.columns.keys())
+        provider_columns = [
+            column
+            for column in spec.columns
+            if column != spec.snapshot_date_column
+        ]
+        col_names = provider_columns
         db_to_api = {c: spec.api_field_map.get(c, c) for c in col_names}
         api_fields = [db_to_api[c] for c in col_names]
         api_to_db = {v: k for k, v in db_to_api.items()}
@@ -1179,6 +1213,9 @@ class TushareSyncEngine:
                     "tushare_api": spec.tushare_api,
                     "mode": spec.query_mode.value,
                 }
+                if spec.name == "etf_share_size":
+                    publication_quality, audit_quality = _etf_share_size_publication_quality(rows)
+                    audit_metadata["publication_quality"] = publication_quality
                 if spec.name == "daily_basic":
                     # BUG-1425: persist the required-field coverage receipt so
                     # the freshness gate can prove turnover_rate_f coverage
@@ -1397,6 +1434,12 @@ class TushareSyncEngine:
         for params in param_sets:
             try:
                 rows = self._fetch_from_tushare(spec, params)
+                if spec.snapshot_date_column:
+                    snapshot_date = dt.datetime.now(ZoneInfo("Asia/Shanghai")).date()
+                    rows = [
+                        {**row, spec.snapshot_date_column: snapshot_date}
+                        for row in rows
+                    ]
                 if spec.row_limit > 0 and len(rows) >= spec.row_limit:
                     raise RuntimeError(
                         f"{spec.name} single_call params={params} returned {len(rows)} rows; "

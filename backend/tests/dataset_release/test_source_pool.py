@@ -129,6 +129,33 @@ def test_independent_pool_enforces_readonly_session_and_reuses_own_connection() 
             pass
 
 
+def test_transaction_initializer_runs_before_resource_queries() -> None:
+    connection = FakeConnection()
+
+    # The fixture cursor deliberately lacks context-manager methods.  Use the
+    # same explicit cursor lifecycle expected from DB-API drivers.
+    def initialize(value):
+        cursor = value.cursor()
+        try:
+            cursor.execute("SET TRANSACTION SNAPSHOT '00000003-0000001B-1'")
+        finally:
+            cursor.close()
+
+    pool = ReadOnlySourcePool(
+        lambda: connection,
+        ResourcePolicy(),
+        transaction_initializer=initialize,
+    )
+
+    with pool.connection():
+        pass
+
+    statements = [sql for sql, _params in connection.executed]
+    assert statements[0] == "SET TRANSACTION SNAPSHOT '00000003-0000001B-1'"
+    assert "set_config" in statements[1]
+    pool.close()
+
+
 def test_source_pool_hard_bounds_and_readonly_sql_guard() -> None:
     assert not hasattr(source_pool_module, "SourcePoolConfig")
     assert (
