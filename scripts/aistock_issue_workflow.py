@@ -2892,6 +2892,25 @@ def _payload_schema_evidence(body: bytes) -> dict[str, Any]:
 _READ_ONLY_HTTP_PROBE_MAX_BYTES = 8 * 1024 * 1024
 
 
+def _monthly_read_only_probe_headers(url: str) -> dict[str, str]:
+    """Never forward the operator credential outside the exact local GET routes."""
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        _normalized_http_origin(url) not in {
+            "http://127.0.0.1:8001", "http://localhost:8001"
+        }
+        or parsed.query or parsed.fragment
+        or not re.fullmatch(
+            r"/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}(?:/receipts)?",
+            parsed.path,
+        )
+    ):
+        return {}
+    from scripts.monthly_unified_dataset_release import TOKEN_HEADER, _token
+
+    return {TOKEN_HEADER: _token()}
+
+
 def _read_only_http_probe(
     name: str,
     url: str,
@@ -2922,18 +2941,39 @@ def _read_only_http_probe(
             "transport": {"status_code": None, "ok": False, "error": reason},
             "payload_schema": {"json": False, "kind": "none"},
         }
-    request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
+    try:
+        credential_headers = _monthly_read_only_probe_headers(url)
+    except (OSError, RuntimeError, ValueError):
+        reason = "monthly read-only probe operator credential is unavailable"
+        return {
+            "name": name, "url": url, "status": "blocked", "error": reason,
+            "transport": {"status_code": None, "ok": False, "error": reason},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    request = urllib.request.Request(
+        url, method="GET",
+        headers={"Accept": "application/json,text/plain,*/*", **credential_headers},
+    )
     try:
         with _open_read_only_url(request, timeout_seconds=timeout_seconds) as response:
             status_code = int(getattr(response, "status", 200))
             body = response.read(_READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # Credential-bearing transport errors must not reflect request headers.
+        error = "authenticated monthly read-only probe failed" if credential_headers else str(exc)
         return {
             "name": name,
             "url": url,
             "status": "failed",
-            "error": str(exc),
-            "transport": {"status_code": None, "ok": False, "error": str(exc)},
+            "error": error,
+            "transport": {"status_code": None, "ok": False, "error": error},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    if any(secret.encode("utf-8") in body for secret in credential_headers.values()):
+        reason = "monthly read-only probe response contains sensitive content"
+        return {
+            "name": name, "url": url, "status": "failed", "error": reason,
+            "transport": {"status_code": status_code, "ok": False, "error": reason},
             "payload_schema": {"json": False, "kind": "none"},
         }
     transport_ok = 200 <= status_code < 400

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 import subprocess
 from pathlib import Path
@@ -11,6 +13,70 @@ import pytest
 
 import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
+
+
+def test_monthly_read_only_probe_uses_scoped_operator_file(monkeypatch, tmp_path) -> None:
+    token = hashlib.sha256(b"monthly-probe-credential-fixture").hexdigest()
+    secret_file = tmp_path / "operator.token"
+    secret_file.write_text(token, encoding="utf-8")
+    monkeypatch.setenv("DATASET_RELEASE_OPERATOR_TOKEN_FILE", str(secret_file))
+    captured = []
+
+    def open_probe(request, **_kwargs):
+        captured.append(request)
+        return io.BytesIO(b'{"status":"FAILED"}')
+
+    monkeypatch.setattr(workflow, "_open_read_only_url", open_probe)
+    url = "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32
+    receipt = workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=["http://127.0.0.1:8001"])
+    assert captured[0].get_header("X-dataset-release-operator-token") == token
+    assert captured[0].method == "GET"
+    assert token not in json.dumps(receipt)
+    assert receipt["_response_body"] == '{"status":"FAILED"}'  # HTTP success is not business success.
+
+
+@pytest.mark.parametrize("url", [
+    "http://node1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32,
+    "http://127.0.0.1:8001/health",
+    "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "/activate",
+    "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "?redirect=evil",
+])
+def test_other_probes_never_read_or_forward_operator_secret(monkeypatch, url) -> None:
+    from scripts import monthly_unified_dataset_release as release
+    monkeypatch.setattr(release, "_token", lambda: pytest.fail("must not load secret"))
+    captured = []
+    monkeypatch.setattr(workflow, "_open_read_only_url", lambda request, **kw: (captured.append(request) or io.BytesIO(b"{}")))
+    origin = workflow._normalized_http_origin(url)
+    workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=[origin])
+    assert all(request.get_header("X-dataset-release-operator-token") is None for request in captured)
+
+
+def test_monthly_probe_missing_secret_fails_closed_before_network(monkeypatch) -> None:
+    monkeypatch.delenv("DATASET_RELEASE_OPERATOR_TOKEN_FILE", raising=False)
+    monkeypatch.setattr(workflow, "_open_read_only_url", lambda *a, **kw: pytest.fail("must not call API"))
+    url = "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32
+    receipt = workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=["http://127.0.0.1:8001"])
+    assert receipt["status"] == "blocked"
+
+
+@pytest.mark.parametrize("reflect_in_error", [False, True])
+def test_authenticated_probe_never_records_reflected_secret(monkeypatch, reflect_in_error) -> None:
+    from scripts import monthly_unified_dataset_release as release
+    import urllib.error
+    token = hashlib.sha256(b"monthly-probe-reflected-fixture").hexdigest()
+    monkeypatch.setattr(release, "_token", lambda: token)
+
+    def open_probe(*args, **kwargs):
+        if reflect_in_error:
+            raise urllib.error.URLError(token)
+        return io.BytesIO(json.dumps({"echo": token}).encode())
+
+    monkeypatch.setattr(workflow, "_open_read_only_url", open_probe)
+    url = "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "/receipts"
+    receipt = workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=["http://127.0.0.1:8001"])
+    assert receipt["status"] == "failed"
+    assert token not in json.dumps(receipt)
+    assert "_response_body" not in receipt
 
 
 def test_pre_pr_gate_reuses_exact_ci_classifier_and_blocks_before_push(monkeypatch: pytest.MonkeyPatch) -> None:
