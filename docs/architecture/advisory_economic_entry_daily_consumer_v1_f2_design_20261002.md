@@ -1,4 +1,4 @@
-# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.3
+# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.4
 
 > 日期2026-10-02；状态DESIGN_REVIEWED_IMPLEMENTATION_PENDING。父设计：[经济进入价值](advisory_economic_entry_value_v1_f2_design_20261002.md)、[风险与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)、[一致双头v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)。本设计把离线数值内核接到完整日频条件网格、只读消费者/API与Advisory展示，不新增模型搜索，不研发分钟执行。
 
@@ -75,6 +75,7 @@ v3源码PR #5249已合入`c4ce9566b51d1ff24ad564ef11d27e2344acd4fc`，11直接�
 - 新GET `/api/v1/advisory/programs/{program_id}/entry-value/status`：只读当前角色身份、精确目标日/最新合法D产物、原因与剩余资格缺口，不生成预测；运行状态≠业务建议已确认。
 - 新GET `/api/v1/advisory/programs/{program_id}/entry-value/research`：显式指定已登记bundle ID/target，仅只读已存在研究产物，验证原program/名单及窗口权限；不接受任意客户端路径、不隐式计算。当前研究v3即使有正价格节点，也只标明未确认探索估值。
 - 现有model-shadow加入`entry_value`，采用同一序列化投影。服务失败只影响该新角色typed unavailable，不误改旧ENTRY_PRICE、排名、价格分布或其它正常角色；必需身份矛盾不能隐藏成普通空集。
+- 页面为entry_value维护独立请求/加载/错误状态，直接调用status/research API；不得依赖旧model-shadow成功或旧M4/HMM可加载才展示经济价格通道。model-shadow中的同名子对象只是兼容组合投影，不是新角色唯一入口。
 - Advisory页新增独立“经济买入价格条件”小组件，显示目标合同、D/T、CNY、证据状态、多段区间/支持范围/未知、期望净收益、entry-loss q90、预算来源及具体原因。正常主推荐不展示探索BUY；研究产物只能在明确研究查看状态呈现。无模型时真实NOT_CONFIGURED，而不是假区间、历史价格或rule_default冒充模型。
 - 前端不重新判mean/risk阈值，不把null当0，空集显示“已知条件下无合适价格”，部分未知不得显示“当日全部不推荐”。用户可查看完整identity和限制，默认卡片只展示有业务意义的精简字段。
 
@@ -153,6 +154,8 @@ v3源码PR #5249已合入`c4ce9566b51d1ff24ad564ef11d27e2344acd4fc`，11直接�
 第一轮设计审核修订：补上自动日频收集的自有Advisory hook而不控制scheduler；修正前端测试栈为已有Playwright，不安装依赖；明确独立研究GET路径和不接受任意path；upper-limit执行未知不能出现在可买集合；正式资格读回完整确认链而非caller布尔值；自然捕获时钟、过期展示及候选唯一性补齐。
 
 第二轮逐项审核：核对实际现有forward测试路径，限制hook不改数据库基线；补全空名单、API有界投影及独立projection hash，防止节点爆炸/删节点后冒充完整hash；确认原型两腿特征不适配任意新包、股票池定义/每日成员/训练全panel hash严格分开；确认全价格域未知与拒绝不混淆、停牌逐候选保留；未配置正式模型的真实状态不是宣布完整功能通过。DESIGN-COMPLIANCE-001四项：完整成功消费者/APIUI需实际验收；未知/未确认不静默补位；scope/旧policy/排名/研究结果不漂移；不新增审批平台或等待实盘门禁。
+
+提交前追加集成复核发现：如果页面仅从旧model-shadow读取新子对象，Ranking/M4失败会间接阻断新ENTRY_VALUE。已修订为独立API请求/状态并列显示，源与页面都不得通过旧M4/HMM取得无关前置；后续定向测试必须验证旧角色失败时新角色仍可读。本修订只在已登记API/page范围内，不扩大业务模块或修改旧策略排序。
 
 ## 13. Production Gates / Rollout / Rollback
 
