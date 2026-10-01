@@ -141,7 +141,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261001_052959_a6ab",
     "fresh_process_evidence": [
       "Independent python pytest process loaded persistent qe_evolution_service/results_only_retry; unit-contract execution uses isolated mocked DB/remote clients; no backend/process control, experiment submission or production writes",
-      "Fresh Python pytest process loaded tracked qe_evolution_service/results_only_retry and ran isolated mock DB/remote-client contracts; no real experiment submission, data preparation, backend process control or production DB writes"
+      "Fresh Python pytest process loaded tracked qe_evolution_service/results_only_retry and ran isolated mock DB/remote-client contracts; no real experiment submission, data preparation, backend process control or production DB writes",
+      "Fresh independent python pytest loads persistent tracked QE waiter/replay-recovery source; DB/client mocks only, no real qrun, training, backend restart or production writes. Original-main targeted RED checks failed as expected; fixed counterparts passed."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
