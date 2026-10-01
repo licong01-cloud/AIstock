@@ -129,6 +129,11 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
+  "validation_evidence": [
+    "2026-10-02：登记文件的 python -m nox -s l0 -> passed，findings=0，blocking=0；仅验证登记，不证明问题已修复。",
+    "2026-10-02：changed-files classifier -> bug_registry_metadata_only，blocking=[]，backend_sessions=[]，dev_db_plan_keys=[]；runtime catalog -> none。",
+    "2026-10-02：BUG JSON 状态、Issue #5217 链接及精确两文件写入范围断言、git diff --check -> passed；BUG 仍为 open，fix_commit=null。"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
