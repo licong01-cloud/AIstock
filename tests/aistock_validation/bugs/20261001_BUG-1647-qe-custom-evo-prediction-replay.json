@@ -17,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-01T06:42:28.961183Z",
-  "description": "MA-E33 Loop21 中央10:09误标failed，node1 09:01启动、10:19正常完成527日回测。waiter每次提前唤醒累计60秒并共用排队/执行4h期限，直接写failed；prediction replay被统一禁止结果补收。修复只等待对账权威终态，4h单调时钟仅告警；显式results_only校验远端完成回执、六字段源引用、实际预测面板哈希/行数后补收，禁止自动重训或重复回测。失败写入不能覆盖并发完成/处理中状态。最终回归发现main既有重试测试仍用旧二元GPU合同夹具，已仅修正夹具并保留原attempt/claim断言。",
+  "description": "MA-E33 Loop21 中央10:09误标failed，node1 09:01启动、10:19正常完成527日回测。waiter每次提前唤醒累计60秒并共用排队/执行4h期限，直接写failed；prediction replay被统一禁止结果补收。修复只等待对账权威终态，4h单调时钟仅告警；显式results_only校验远端完成回执、六字段源引用、实际预测面板哈希/行数后补收，禁止自动重训或重复回测。失败写入不能覆盖并发完成/处理中状态。扩展核对发现main既有test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume仍用旧二元GPU合同夹具，未修改main代码亦复现；该存量测试无选定CI覆盖，撤回验证用夹具修改，单独记录债务，不修改流水线或删除断言。",
   "design_compliance_review": [
     "禁止简化交付：等待、结果资产校验、登记/入仓链路复用现有完整实现；不以手工状态翻转代替收尾。",
     "禁止静默错误：非completed回执、跨task/loop、源引用/哈希漂移、预测面板不符和缺资产均显式失败；补收失败不能覆盖其他请求成功。",
