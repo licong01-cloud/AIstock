@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "scripts/seed_dataset_refresh_audit.py",
     "backend/tests/scripts/test_seed_dataset_refresh_audit.py",
+    "backend/tests/dataset_release/test_seed_dataset_refresh_audit.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20261002_BUG-1690-monthly-readiness-recovery-cannot-bound-september-audit-repair-and-repla.json"
   ],
   "assigned_agent": null,
@@ -24,8 +26,17 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_dataset_release_control/operator_receipts/september-readiness-plan-20261003.json"
+    "X:/AIstock_dataset_release_control/operator_receipts/september-readiness-plan-20261003.json",
+    "X:/AIstock_dataset_release_control/operator_receipts/september-readiness-bounded-plan-BUG1690-20261003.json",
+    "X:/AIstock_dataset_release_control/operator_receipts/september-readiness-dev-readonly-plan-BUG1690-20261003.json"
   ],
+  "implementation_review": {
+    "round_1": "RED two fix-point tests; GREEN two. Added inclusive start-date without widening profile history and preserved all policy-valid audit authorities.",
+    "round_2": "Reviewed exact range in receipts/digests and DEV authorization compatibility. Real empty margin_detail 2026-09-30 remains BLOCKED. Six contract tests and production read-only plan passed expected behavior; DEV September source data is incomplete, not DML validation PASS.",
+    "scope_expansion": "Place data-owned audit tests in existing dataset_release CI ownership and add them to qlib_data_backend nightly full_targets; existing script test directory has no owned executable CI mapping. No CI classifier or business contract changes.",
+    "design_compliance": "No partial monthly release declared complete; no failure swallowed; no business semantic changes; no new gate. Production DML and activation require pre-existing separate authorization.",
+    "data_apply": "not performed; this BUG fixes operator planning only; monthly operation remains SOURCE failed"
+  },
   "expected": "Exact bounded September plan identifies 31 recoverable audit keys and margin_detail 2026-09-30 as a real blocked key; unrelated historical audit rows not scheduled; DEV/production authorization remains strict.",
   "file_scope_contract": {
     "added_files": [
