@@ -23,6 +23,7 @@ from backend.services.dataset_release.monthly_unified import (
     MonthlyReleaseRequest,
     MonthlyReleaseRequestInvalid,
     MonthlyReleaseService,
+    MonthlyReleaseSourceBlocked,
     REQUIRED_CONSUMERS,
     REQUIRED_NODES,
     SOURCE_GATES,
@@ -527,6 +528,65 @@ def test_cancel_is_observed_at_stage_boundary(tmp_path: Path) -> None:
     operation_id = service.submit(_request())["operation_id"]
     service.cancel(operation_id)
     assert service.run(operation_id)["status"] == "CANCELLED"
+
+
+def test_source_blocked_waits_for_explicit_resume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pipeline = Pipeline()
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+    producer = pipeline.run_stage
+
+    def blocked(**kwargs: Any) -> Mapping[str, Any]:
+        pipeline.calls.append(str(kwargs["stage"]))
+        raise MonthlyReleaseSourceBlocked("PIT cutoff is stale", context={"reason_code": "BLOCKED_PIT_STATE_NOT_READY"})
+
+    monkeypatch.setattr(pipeline, "run_stage", blocked)
+    worker = MonthlyReleaseWorker(service)
+    first = worker.run_once()
+    assert first is not None and first["status"] == "SOURCE_BLOCKED"
+    for _ in range(10):
+        assert worker.run_once() is None
+    assert service.run(operation_id) == first  # A stale queue observation cannot bypass resume.
+    assert pipeline.calls == ["SOURCE"]
+    assert service.store.pending_operation_ids() == ()
+    service.allowed_cutoff_resolver = lambda: date(2026, 10, 30)
+    with pytest.raises(MonthlyReleaseConflict, match="another monthly operation"):
+        service.submit(MonthlyReleaseRequest(date(2026, 10, 30), "qe_hmm_full_v2", "october"))
+    monkeypatch.setattr(pipeline, "run_stage", producer)
+    assert service.resume(operation_id)["status"] == "PLANNED"
+    assert service.store.pending_operation_ids() == (operation_id,)
+    final = worker.run_once()
+    assert final is not None and final["status"] == "READY_TO_ACTIVATE"
+    assert final["attempt"] == first["attempt"] + 1
+    assert pipeline.calls.count("SOURCE") == 2
+
+
+@pytest.mark.parametrize("cancel_during_failure", [False, True])
+def test_blocked_cancel_finishes_without_another_source_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_during_failure: bool
+) -> None:
+    pipeline = Pipeline()
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+
+    def blocked(**kwargs: Any) -> Mapping[str, Any]:
+        pipeline.calls.append(str(kwargs["stage"]))
+        if cancel_during_failure:
+            service.cancel(operation_id)
+        raise MonthlyReleaseSourceBlocked("source unavailable")
+
+    monkeypatch.setattr(pipeline, "run_stage", blocked)
+    worker = MonthlyReleaseWorker(service)
+    first = worker.run_once()
+    assert first is not None and first["status"] == "SOURCE_BLOCKED"
+    if cancel_during_failure:
+        assert worker.run_once()["status"] == "CANCELLED"
+    else:
+        assert service.cancel(operation_id)["status"] == "CANCELLED"
+    assert worker.run_once() is None
+    assert service.status(operation_id)["attempt"] == first["attempt"]
+    assert pipeline.calls == ["SOURCE"]
+    assert service.resume(operation_id)["status"] == "PLANNED"
 
 
 def test_activation_requires_exact_authorization_and_supports_safe_rollback(tmp_path: Path) -> None:
