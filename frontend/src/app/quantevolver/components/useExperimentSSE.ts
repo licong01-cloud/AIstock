@@ -8,7 +8,8 @@ const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const MAX_RECONNECT = 100;
 /** 重连间隔（ms） */
 const RECONNECT_DELAY = 3000;
-const ACTIVE_STATUS_POLL_INTERVAL = 10000;
+const ACTIVE_STATUS_POLL_INTERVAL = 30000;
+const DISCONNECTED_STATUS_POLL_INTERVAL = 30000;
 const TERMINAL_EXPERIMENT_LOG_STATUSES = new Set([
   "completed",
   "failed",
@@ -68,6 +69,9 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
   const statusPollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const abortRef = useRef(false);
   const reconnectCountRef = useRef(0);
+  const activeExperimentRef = useRef<string | null>(null);
+  const explicitLogRequestRef = useRef(false);
+  const connectSSERef = useRef<((experimentId: string) => void) | null>(null);
   const onDisconnectRef = useRef(onDisconnect);
   onDisconnectRef.current = onDisconnect;
 
@@ -83,6 +87,26 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
       eventSourceRef.current?.close();
       if (statusPollTimerRef.current) clearInterval(statusPollTimerRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        eventSourceRef.current?.close();
+        eventSourceRef.current = null;
+        if (statusPollTimerRef.current) {
+          clearInterval(statusPollTimerRef.current);
+          statusPollTimerRef.current = null;
+        }
+        return;
+      }
+      const experimentId = activeExperimentRef.current;
+      if (experimentId && explicitLogRequestRef.current && !abortRef.current) {
+        connectSSERef.current?.(experimentId);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
   const appendLog = useCallback((line: string) => {
@@ -134,10 +158,13 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
 
   /** SSE 断开后轮询最终状态 */
   const pollFinalStatus = useCallback(async (experimentId: string) => {
-    for (let i = 0; i < maxPollRetries; i++) {
+    let attempts = 0;
+    while (attempts < maxPollRetries) {
       if (abortRef.current) return;
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, DISCONNECTED_STATUS_POLL_INTERVAL));
       if (abortRef.current) return;
+      if (document.visibilityState !== "visible") continue;
+      attempts += 1;
       try {
         const res = await fetch(`${API}/quantevolver/experiments/${experimentId}/run-status`);
         if (abortRef.current) return;
@@ -167,6 +194,7 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
     stopStatusPolling();
     const check = async () => {
       if (abortRef.current) return;
+      if (document.visibilityState !== "visible") return;
       try {
         const res = await fetch(`${API}/quantevolver/experiments/${experimentId}/run-status`);
         if (abortRef.current) return;
@@ -194,6 +222,8 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
   }, [appendLog, handleCompleted, stopStatusPolling]);
 
   const connectSSE = useCallback((experimentId: string) => {
+    activeExperimentRef.current = experimentId;
+    if (document.visibilityState !== "visible" || !explicitLogRequestRef.current) return;
     eventSourceRef.current?.close();
     startActiveStatusPolling(experimentId);
     const sse = new EventSource(`${API}/quantevolver/experiments/${experimentId}/logs`);
@@ -209,6 +239,7 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
       sse.close();
       if (eventSourceRef.current === sse) eventSourceRef.current = null;
       if (abortRef.current) return;
+      if (document.visibilityState !== "visible") return;
 
       // 先查状态，决定是重连还是结束
       fetch(`${API}/quantevolver/experiments/${experimentId}/run-status`)
@@ -265,11 +296,14 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
         });
     };
   }, [pollAfterDisconnect, pollFinalStatus, appendLog, handleCompleted, startActiveStatusPolling]);
+  connectSSERef.current = connectSSE;
 
   /** POST /run → 建立 SSE */
   const startRun = useCallback(async (experimentId: string, nodeId?: string) => {
     abortRef.current = false;
     reconnectCountRef.current = 0;
+    activeExperimentRef.current = experimentId;
+    explicitLogRequestRef.current = true;
     setRunStatus("starting");
     setRunLogs(["[System] 正在提交实验到 RDAgent..."]);
     setRunMetrics(null);
@@ -299,8 +333,11 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
   const openLogs = useCallback((experimentId: string) => {
     abortRef.current = false;
     reconnectCountRef.current = 0;
+    activeExperimentRef.current = experimentId;
+    explicitLogRequestRef.current = true;
     setRunLogs(["[System] 正在检查实验状态..."]);
     setEnhancedMetrics(null);
+    if (document.visibilityState !== "visible") return;
     fetch(`${API}/quantevolver/experiments/${experimentId}/run-status`)
       .then(r => r.ok ? r.json() : null)
       .then(data => {
@@ -345,6 +382,8 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
     stopStatusPolling();
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
+    activeExperimentRef.current = null;
+    explicitLogRequestRef.current = false;
     setRunStatus(null);
     setRunLogs([]);
   }, [stopStatusPolling]);
@@ -356,6 +395,8 @@ export function useExperimentSSE(options: UseExperimentSSEOptions = {}): UseExpe
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
     reconnectCountRef.current = 0;
+    activeExperimentRef.current = null;
+    explicitLogRequestRef.current = false;
     setRunStatus(null);
     setRunLogs([]);
     setRunMetrics(null);

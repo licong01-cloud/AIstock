@@ -822,7 +822,7 @@ def test_review_from_selection_accepts_target_date_with_explicit_data_cutoff() -
         def __init__(self) -> None:
             self.calls: list[dict] = []
 
-        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config, advisory_archive_context=None):
             self.calls.append(
                 {
                     "package_ids": list(package_ids),
@@ -830,6 +830,7 @@ def test_review_from_selection_accepts_target_date_with_explicit_data_cutoff() -
                     "trade_date": trade_date,
                     "data_source": data_source,
                     "runtime_config": dict(runtime_config),
+                    "advisory_archive_context": advisory_archive_context,
                 }
             )
             cutoff = runtime_config["advisory_date_context"]["selection_as_of_trade_date"]
@@ -882,11 +883,16 @@ def test_review_from_selection_accepts_target_date_with_explicit_data_cutoff() -
     }
     assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-08"
     assert runtime_config["selection_artifact_config"]["cutoff_policy"] == "FIXED_CUTOFF"
+    assert runtime_config["selection_price_mode"] == "DAILY_DB_ONLY"
     assert runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
     assert result.active_pool[0].effective_entry_date == date(2026, 6, 9)
     assert result.list_items[0].effective_trade_date == date(2026, 6, 9)
     assert result.list_items[0].evidence_json["reference_price_trade_date"] == "2026-06-08"
     assert result.change_summary["advisory_date_context"]["selection_as_of_trade_date"] == "2026-06-08"
+    archive_context = fake_selection.calls[0]["advisory_archive_context"]
+    assert archive_context["program_id"] == program.program_id
+    assert archive_context["review_policy_sha256"] == program.review_policy_sha256
+    assert archive_context["decision_as_of_trade_date"] == "2026-06-08"
 
 
 def test_review_marks_active_holding_not_in_current_topk_instead_of_waiting_evidence() -> None:

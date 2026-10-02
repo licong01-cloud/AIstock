@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -476,8 +477,43 @@ def _build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--design", required=True, type=Path)
         subparser.add_argument("--acceptance", type=Path)
         subparser.add_argument("--tier", choices=("F0", "F1", "F2", "f0", "f1", "f2"), required=True)
+        subparser.add_argument(
+            "--changed-file",
+            action="append",
+            help="Override automatic origin/main + worktree changed-file discovery for CI coverage preflight.",
+        )
         subparser.add_argument("--format", choices=("summary", "json"), default="summary")
     return parser
+
+
+def _git_changed_files(repo_root: Path) -> list[str]:
+    paths: set[str] = set()
+    commands = (
+        ["git", "diff", "--name-only", "--diff-filter=ACMRTD", "origin/main...HEAD", "--"],
+        ["git", "diff", "--name-only", "--diff-filter=ACMRTD", "--"],
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMRTD", "--"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    )
+    for command in commands:
+        completed = subprocess.run(command, cwd=repo_root, text=True, capture_output=True, check=False)
+        if completed.returncode != 0:
+            continue
+        paths.update(line.strip().replace("\\", "/") for line in completed.stdout.splitlines() if line.strip())
+    return sorted(paths)
+
+
+def _feature_ci_preflight(repo_root: Path, changed_files: list[str] | None = None) -> dict[str, object]:
+    try:
+        from scripts import ci_change_classifier
+    except ImportError:  # Direct execution: python scripts/aistock_feature_workflow.py
+        import ci_change_classifier  # type: ignore[no-redef]
+
+    selected = sorted({str(item).strip().replace("\\", "/") for item in (changed_files or []) if str(item).strip()})
+    if not selected:
+        selected = _git_changed_files(repo_root)
+    if not selected:
+        return {"workflow_gate": "skipped", "classification": "no_changed_files", "blocking": []}
+    return ci_change_classifier.classify_changed_files(selected, repo_root=repo_root)
 
 
 def _print_result(result: FeatureValidationResult, *, output_format: str, command: str) -> None:
@@ -520,6 +556,18 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"Feature workflow validation: FAIL\n- file_error: {exc}", file=sys.stderr)
         return 2
+    repo_root = Path(__file__).resolve().parents[1]
+    design_in_repo = args.design.resolve().is_relative_to(repo_root.resolve())
+    if args.changed_file or design_in_repo:
+        ci_preflight = _feature_ci_preflight(repo_root, args.changed_file)
+        if ci_preflight.get("workflow_gate") == "blocked":
+            result.findings.append(
+                ValidationFinding(
+                    code=f"ci_classifier_{ci_preflight.get('classification') or 'blocked'}",
+                    message="; ".join(str(item) for item in ci_preflight.get("blocking") or []),
+                    path=str(repo_root),
+                )
+            )
     _print_result(result, output_format=args.format, command=args.command)
     return 0 if result.ok else 1
 

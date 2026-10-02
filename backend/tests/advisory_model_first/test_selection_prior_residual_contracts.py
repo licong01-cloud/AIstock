@@ -10,55 +10,7 @@ from backend.services.advisory_model_first.selection_prior_residual_contracts im
     approved_selection_prior_residual_families,
     build_frozen_selection_prior_residual_request,
 )
-
-
-def _reference(role: str) -> dict[str, object]:
-    values = {
-        "P0D_V2_REFERENCE": (
-            "a",
-            "b",
-            "ARM_P0D_V2_BINARY_PARITY",
-            "FAMILY_POLICY_UTILITY_CORE_HMM",
-            20260813,
-            "BINARY_TAKE_SKIP_PARITY_V2",
-        ),
-        "P0F_V2_REFERENCE": (
-            "c",
-            "d",
-            "ARM_P0F_V2_HUBER_UTILITY",
-            "FAMILY_POLICY_UTILITY_CORE",
-            20260817,
-            "HUBER_CONTINUOUS_POLICY_NET_EXCESS_V2",
-        ),
-        "P0G_V1_REFERENCE": (
-            "e",
-            "f",
-            "ARM_P0G_V1_TURNOVER_CONSTRAINED_UTILITY",
-            "FAMILY_TURNOVER_CONSTRAINED_CORE",
-            20260817,
-            "HUBER_TURNOVER_CONSTRAINED_POLICY_UTILITY_V1",
-        ),
-        "P0H_V1_REFERENCE": (
-            "1",
-            "2",
-            "ARM_P0H_V1_DUAL_HEAD_OUTPUT_CONSTRAINED_UTILITY",
-            "FAMILY_DUAL_HEAD_CORE_HMM",
-            20260823,
-            "P0H_DUAL_HEAD_OUTPUT_CONSTRAINT_V1",
-        ),
-    }
-    bundle, manifest, arm, family, seed, objective = values[role]
-    return {
-        "role": role,
-        "bundle_root": f"/models/{role.lower()}",
-        "bundle_id": bundle * 64,
-        "manifest_file_sha256": manifest * 64,
-        "arm_id": arm,
-        "winner_family_id": family,
-        "winner_seed": seed,
-        "winner_training_objective": objective,
-        "winner_boost_rounds": 2 if role == "P0D_V2_REFERENCE" else 17,
-    }
+from backend.tests.advisory_model_first._test_support import p0_reference as _reference
 
 
 def _p0i_evidence() -> dict[str, object]:

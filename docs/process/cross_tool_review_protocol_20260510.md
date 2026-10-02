@@ -1,5 +1,7 @@
 # Cross-Tool Review Protocol (Claude Code <-> Codex)
 
+> **RETIRED (2026-09-06):** This cross-tool review protocol and its MemPalace notification path are decommissioned. Use the current AIstock issue workflow, GitHub review checks, durable receipts, and each client's native session/agent functions. This document remains only as historical evidence.
+
 > **作者**: Claude Code 战略 session 2026-05-10
 > **状态**: AUTHORITATIVE — 用户 2026-05-10 已确认 4 层扫描 / Phase 3 后启动
 > **关联文档**: `docs/process/dev_db_test_data_plan_20260510.md`

@@ -19,7 +19,11 @@ from backend.services.tushare_dataset_specs import (
     SW_INDEX_MEMBER,
     TUSHARE_FORECAST_RAW,
 )
-from backend.services.tushare_sync_engine import TushareSyncEngine
+from backend.services.tushare_sync_engine import (
+    DividendSourceVersionConflict,
+    TushareSyncEngine,
+    _canonicalize_dividend_rows,
+)
 
 
 class _NoopTargetRepository:
@@ -174,6 +178,172 @@ def test_sync_by_date_treats_empty_dividend_as_valid_complete_set(monkeypatch):
     )
     assert audit_params[4] == "success"
     assert audit_params[-2] == "empty_valid"
+
+
+def _dividend_row(**overrides):
+    row = {
+        "ts_code": "872931.BJ",
+        "end_date": "20231231",
+        "ann_date": "20240426",
+        "div_proc": "实施",
+        "stk_div": 0.0,
+        "stk_bo_rate": None,
+        "stk_co_rate": None,
+        "cash_div": 0.1,
+        "cash_div_tax": 0.1,
+        "record_date": "20240626",
+        "ex_date": "20240627",
+        "pay_date": "20240627",
+        "div_listdate": None,
+        "imp_ann_date": "20240620",
+        "base_date": "20240626",
+        "base_share": 9018.0,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_dividend_equivalent_source_revisions_are_canonicalized_deterministically():
+    rows = [
+        _dividend_row(ts_code="872931.bj ", div_proc="实施 ", base_share=9018.0),
+        _dividend_row(base_share=9393.0),
+    ]
+
+    canonical, removed = _canonicalize_dividend_rows(rows)
+
+    assert removed == 1
+    assert len(canonical) == 1
+    assert canonical[0]["ts_code"] == "872931.BJ"
+    assert canonical[0]["div_proc"] == "实施"
+    assert canonical[0]["base_share"] == 9393.0
+
+
+def test_dividend_same_source_identity_with_different_economics_fails_closed():
+    rows = [
+        _dividend_row(cash_div=0.1, cash_div_tax=0.1),
+        _dividend_row(cash_div=0.2, cash_div_tax=0.2),
+    ]
+
+    with pytest.raises(DividendSourceVersionConflict) as caught:
+        _canonicalize_dividend_rows(rows)
+
+    assert caught.value.failure_category == "source_version_conflict"
+    assert caught.value.context == {
+        "scope": "primary_key",
+        "ts_code": "872931.BJ",
+        "end_date": "2023-12-31",
+        "ann_date": "2024-04-26",
+        "div_proc": "实施",
+        "version_count": 2,
+        "economic_action_count": 2,
+    }
+
+
+def test_dividend_later_timestamped_revision_supersedes_older_economics():
+    rows = [
+        _dividend_row(base_date="20231231", cash_div=0.1, cash_div_tax=0.1),
+        _dividend_row(base_date="20240626", cash_div=0.2, cash_div_tax=0.2),
+    ]
+
+    canonical, removed = _canonicalize_dividend_rows(rows)
+
+    assert removed == 1
+    assert len(canonical) == 1
+    assert canonical[0]["base_date"] == "20240626"
+    assert canonical[0]["cash_div_tax"] == 0.2
+
+
+def test_dividend_unimplemented_lifecycle_row_does_not_conflict_with_final_action():
+    rows = [
+        _dividend_row(),
+        _dividend_row(
+            ann_date="20240823",
+            div_proc="预案",
+            cash_div=0.0,
+            cash_div_tax=0.93,
+            imp_ann_date=None,
+            base_date="20240823",
+        ),
+    ]
+
+    canonical, removed = _canonicalize_dividend_rows(rows)
+
+    assert removed == 0
+    assert len(canonical) == 2
+
+
+def test_dividend_distinct_actions_on_same_symbol_ex_date_are_preserved():
+    rows = [
+        _dividend_row(),
+        _dividend_row(end_date="20240630", ann_date="20240701", cash_div_tax=0.2),
+    ]
+
+    canonical, removed = _canonicalize_dividend_rows(rows)
+
+    assert removed == 0
+    assert len(canonical) == 2
+
+
+def test_sync_by_date_writes_one_canonical_dividend_revision_and_audits_count(monkeypatch):
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    conn = _FakeConn()
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    trade_date = dt.date(2024, 6, 27)
+    written = []
+    rows = [
+        _dividend_row(div_proc="实施 ", base_share=9018.0),
+        _dividend_row(base_share=9393.0),
+    ]
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
+    monkeypatch.setattr(
+        engine,
+        "_replace_date_batch",
+        lambda _conn, _spec, _date, fetched: written.extend(fetched) or len(fetched),
+    )
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, DIVIDEND, trade_date, trade_date, uuid.uuid4())
+
+    assert result.ok is True
+    assert result.inserted_rows == 1
+    assert result.canonicalized_source_revisions == 1
+    assert len(written) == 1
+    assert written[0]["div_proc"] == "实施"
+    assert written[0]["base_share"] == 9393.0
+    assert audit.success_calls[0]["metadata"]["canonicalized_source_revisions"] == 1
+
+
+def test_sync_by_date_records_typed_dividend_source_conflict_without_db_write(monkeypatch):
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    conn = _FakeConn()
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+    trade_date = dt.date(2024, 6, 27)
+    writes = []
+    rows = [_dividend_row(), _dividend_row(cash_div=0.2, cash_div_tax=0.2)]
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
+    monkeypatch.setattr(
+        engine,
+        "_replace_date_batch",
+        lambda *_args: writes.append(True) or len(rows),
+    )
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, DIVIDEND, trade_date, trade_date, uuid.uuid4())
+
+    assert result.failed_batches == 1
+    assert result.success_batches == 0
+    assert writes == []
+    assert len(audit.failure_calls) == 1
+    failure = audit.failure_calls[0]
+    assert failure["failure_category"] == "source_version_conflict"
+    assert failure["quality_status"] == "error"
+    assert failure["metadata"]["failure_context"]["scope"] == "primary_key"
 
 
 def test_sync_by_date_uses_upsert_only_when_replace_existing_dates_is_disabled(monkeypatch):
@@ -793,6 +963,15 @@ def test_sw_index_member_spec_enables_replace_by_code():
     assert SW_DAILY.replace_by_code is False
 
 
+def test_sw_daily_spec_selects_only_published_sw2021_l1_and_l2():
+    normalized = " ".join((SW_DAILY.code_source_sql or "").split())
+
+    assert "level IN ('L1', 'L2')" in normalized
+    assert "src = 'SW2021'" in normalized
+    assert "is_pub = '1'" in normalized
+    assert "ORDER BY index_code" in normalized
+
+
 def test_replace_code_batch_deletes_then_inserts_in_single_transaction(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
@@ -1156,3 +1335,54 @@ def test_chip_and_margin_specs_carry_min_expected_rows():
     assert CYQ_PERF.min_expected_rows == 5000
     assert MARGIN_DETAIL.min_expected_rows == 4000
     assert SW_DAILY.min_expected_rows == 100
+
+
+def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch):
+    from backend.services.tushare_dataset_specs import DAILY_BASIC
+
+    trade_date = dt.date(2026, 9, 8)
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    conn = _FakeConn()
+    audit = _CapturingAudit()
+    engine._refresh_audit = audit
+
+    rows = []
+    for index in range(100):
+        row = {
+            col: ("20260908" if col == "trade_date" else f"{col}-{index}")
+            for col in DAILY_BASIC.columns
+        }
+        # 5 rows with a null turnover_rate_f — ratio 95/100 == required ratio.
+        # Set the sentinel AFTER the comprehension so it is not overwritten.
+        row["turnover_rate_f"] = 1.5 if index >= 5 else None
+        rows.append(row)
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, fetched: len(fetched))
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda _conn, _spec, start, end: [trade_date])
+    monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(conn, DAILY_BASIC, trade_date, trade_date, uuid.uuid4())
+
+    assert result.failed_batches == 0
+    assert len(audit.success_calls) == 1
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "ok"
+    coverage = call["metadata"]["required_field_coverage"]
+    assert coverage["schema_version"] == "daily_basic_required_field_coverage_v1"
+    assert coverage["field"] == "turnover_rate_f"
+    assert coverage["row_count"] == 100
+    assert coverage["finite_count"] == 95
+    assert coverage["ratio"] == pytest.approx(0.95)
+    assert coverage["required_ratio"] == 0.95
+
+
+def test_daily_basic_coverage_receipt_treats_nan_string_as_non_finite():
+    rows = [
+        {"ts_code": f"{i:06d}.SZ", "turnover_rate_f": ("NaN" if i == 0 else 1.5)}
+        for i in range(10)
+    ]
+    receipt = sync_engine._daily_basic_required_field_coverage_receipt(rows)
+    assert receipt["finite_count"] == 9
+    assert receipt["ratio"] == pytest.approx(0.9)

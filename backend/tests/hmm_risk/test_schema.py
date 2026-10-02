@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
@@ -63,6 +64,9 @@ def _valid_contract(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 def test_schema_ddl_contains_all_tables_views_comments_and_no_unsupported_json_function() -> None:
     ddl = "\n".join(schema.iter_ddl()).lower()
+    rotation_ddl = ddl.split("create table if not exists hmm_risk.rotation_l1_prediction", 1)[1].split(
+        "create table if not exists hmm_risk.risk_l1_prediction", 1
+    )[0]
 
     for table in schema.EXPECTED_COLUMNS:
         assert f"create table if not exists hmm_risk.{table}" in ddl
@@ -74,6 +78,27 @@ def test_schema_ddl_contains_all_tables_views_comments_and_no_unsupported_json_f
     assert "missing_evidence jsonb not null default" not in ddl
     assert "failed_count=0 and jsonb_array_length(missing_evidence)=0" in ddl
     assert "failed_count>0 and jsonb_array_length(missing_evidence)>0" in ddl
+    assert "create table if not exists hmm_risk.rotation_l1_prediction" in ddl
+    assert "rotation_score>'-infinity'::double precision" in ddl
+    assert "isfinite(rotation_score)" not in ddl
+    assert "advisory_status<>'available'" in ddl
+    assert "research_surface_status='not_available'" in ddl
+    assert "research_surface_status in ('not_available','available_experimental')" not in ddl
+    assert "unique (model_hash,trade_date,sector_code,revision)" in ddl
+    assert "prediction_id uuid" in ddl
+    assert "supersedes_prediction_id uuid" in ddl
+    assert "(trade_date,sector_code,revision desc)" in ddl
+    assert "development_oof_rank_ic is not null" in ddl
+    assert "development_oof_rank_ic_hac_lower is not null" in ddl
+    assert "development_oof_rank_ic_hac_upper is not null" in ddl
+    assert "jsonb_array_length(feature_contributions) in (10,11)" in ddl
+    assert "jsonb_array_length(feature_contributions)=10" not in rotation_ddl
+    assert "create table if not exists hmm_risk.risk_l1_prediction" in ddl
+    assert "jsonb_array_length(feature_contributions)=10" in ddl
+    assert "create table if not exists hmm_risk.rotation_l2_prediction" in ddl
+    assert "ck_hmm_risk_rotation_l2_prediction_hashes" in ddl
+    assert "validation_basis='historical_causal_replay_zero_fit'" in ddl
+    assert "explicit run, date and sw l2 sector revision lookup" in ddl
     assert "select *" not in ddl
 
 
@@ -154,3 +179,269 @@ def test_bootstrap_executes_every_statement_then_verifies(monkeypatch: pytest.Mo
 
     assert connection.executed == list(schema.iter_ddl())
     assert connection.verified is True
+
+
+class _RotationSchemaCursor:
+    def __init__(self, *, drift: bool = False, contribution_drift: bool = False) -> None:
+        self.step = 0
+        self.drift = drift
+        self.contribution_drift = contribution_drift
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, _statement, _values) -> None:
+        self.step += 1
+
+    def fetchall(self):
+        if self.step == 1:
+            rows = []
+            for name in schema.ROTATION_L1_PREDICTION_COLUMNS:
+                sql_type, not_null, default = schema.ROTATION_L1_PREDICTION_COLUMN_CONTRACT[name]
+                comment = f"rotation_l1_prediction.{name} exact hmm_risk_rotation_l1_prediction_v1 contract"
+                rows.append((name, sql_type, not_null, default, comment))
+            if self.drift:
+                rows[-1] = (*rows[-1][:-1], "old")
+            return rows
+        if self.step == 2:
+            rows = [
+                (
+                    name,
+                    " ".join(schema.ROTATION_L1_PREDICTION_CONSTRAINT_TOKENS[name]),
+                    f"{name} enforces hmm_risk_rotation_l1_prediction_v1",
+                )
+                for name in sorted(schema.ROTATION_L1_PREDICTION_CONSTRAINTS)
+            ]
+            dimension_fragment = (
+                "jsonb_array_length(feature_contributions) = 10"
+                if self.contribution_drift
+                else "jsonb_array_length(feature_contributions) = ANY (ARRAY[10, 11])"
+            )
+            return [
+                (name, f"{definition} {dimension_fragment}", comment)
+                if name == "ck_hmm_risk_rotation_l1_prediction_availability"
+                else (name, definition, comment)
+                for name, definition, comment in rows
+            ]
+        raise AssertionError(self.step)
+
+    def fetchone(self):
+        if self.step == 3:
+            return ("Append-only G2-A L1 rotation prediction revisions; scores are not probabilities.",)
+        if self.step == 4:
+            return (
+                "CREATE INDEX idx_hmm_risk_rotation_l1_lookup ON hmm_risk.rotation_l1_prediction "
+                "USING btree (trade_date, sector_code, revision DESC)",
+                "Date and sector L1 rotation revision lookup; model identity remains explicit.",
+            )
+        raise AssertionError(self.step)
+
+
+class _RotationSchemaConnection:
+    def __init__(self, *, drift: bool = False, contribution_drift: bool = False) -> None:
+        self.drift = drift
+        self.contribution_drift = contribution_drift
+
+    def cursor(self):
+        return _RotationSchemaCursor(drift=self.drift, contribution_drift=self.contribution_drift)
+
+
+def test_rotation_l1_prediction_schema_verifier_accepts_exact_contract_and_rejects_drift() -> None:
+    schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection())
+
+    with pytest.raises(RuntimeError, match="column comments"):
+        schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection(drift=True))
+
+    with pytest.raises(RuntimeError, match="contribution dimensions"):
+        schema.verify_rotation_l1_prediction_schema(_RotationSchemaConnection(contribution_drift=True))
+
+
+class _RotationL2SchemaCursor:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.step = 0
+        self.drift = drift
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, _statement, _values) -> None:
+        self.step += 1
+
+    def fetchall(self):
+        if self.step == 1:
+            rows = [
+                (
+                    name,
+                    *schema.ROTATION_L2_PREDICTION_COLUMN_CONTRACT[name],
+                    f"rotation_l2_prediction.{name} exact hmm_risk_rotation_l2_prediction_v1 contract",
+                )
+                for name in schema.ROTATION_L2_PREDICTION_COLUMNS
+            ]
+            if self.drift:
+                rows[-1] = (*rows[-1][:-1], "old")
+            return rows
+        if self.step == 2:
+            return [
+                (
+                    name,
+                    " ".join(schema.ROTATION_L2_PREDICTION_CONSTRAINT_TOKENS[name]),
+                    f"{name} enforces hmm_risk_rotation_l2_prediction_v1",
+                )
+                for name in sorted(schema.ROTATION_L2_PREDICTION_CONSTRAINTS)
+            ]
+        raise AssertionError(self.step)
+
+    def fetchone(self):
+        if self.step == 3:
+            return (
+                "Immutable SW L2 zero-fit rotation research predictions; product availability requires an external validation receipt.",
+            )
+        if self.step == 4:
+            return (
+                "CREATE INDEX idx_hmm_risk_rotation_l2_lookup ON hmm_risk.rotation_l2_prediction "
+                "USING btree (run_id, trade_date, sector_code, revision DESC)",
+                "Explicit run, date and SW L2 sector revision lookup.",
+            )
+        raise AssertionError(self.step)
+
+
+class _RotationL2SchemaConnection:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.drift = drift
+
+    def cursor(self):
+        return _RotationL2SchemaCursor(drift=self.drift)
+
+
+def test_rotation_l2_prediction_schema_verifier_accepts_exact_contract_and_rejects_drift() -> None:
+    schema.verify_rotation_l2_prediction_schema(_RotationL2SchemaConnection())
+
+    with pytest.raises(RuntimeError, match="column comments"):
+        schema.verify_rotation_l2_prediction_schema(_RotationL2SchemaConnection(drift=True))
+
+
+def test_rotation_l2_prediction_migration_is_locked_and_rollback_refuses_data_loss() -> None:
+    migration_root = Path(schema.__file__).parent / "migrations"
+    apply_sql = (
+        (migration_root / "create_hmm_risk_rotation_l2_prediction_20260922.sql").read_text(encoding="utf-8").lower()
+    )
+    rollback_sql = (
+        (migration_root / "create_hmm_risk_rotation_l2_prediction_20260922.rollback.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+
+    assert "begin;" in apply_sql and "commit;" in apply_sql
+    assert "pg_advisory_xact_lock" in apply_sql
+    assert "moneyflow_intensity_delta_5d_rank" in apply_sql
+    assert "tail_accessed" in apply_sql and "completed_fits" in apply_sql
+    assert "pg_advisory_xact_lock" in rollback_sql
+    assert "refusing to drop non-empty hmm_risk.rotation_l2_prediction" in rollback_sql
+
+
+class _RiskSchemaCursor:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.step = 0
+        self.drift = drift
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, _statement, _values) -> None:
+        self.step += 1
+
+    def fetchall(self):
+        if self.step == 1:
+            rows = []
+            for name in schema.RISK_L1_PREDICTION_COLUMNS:
+                sql_type, not_null, default = schema.RISK_L1_PREDICTION_COLUMN_CONTRACT[name]
+                comment = f"risk_l1_prediction.{name} exact hmm_risk_risk_l1_prediction_v1 contract"
+                rows.append((name, sql_type, not_null, default, comment))
+            if self.drift:
+                rows[-1] = (*rows[-1][:-1], "old")
+            return rows
+        if self.step == 2:
+            return [
+                (
+                    name,
+                    " ".join(schema.RISK_L1_PREDICTION_CONSTRAINT_TOKENS[name]),
+                    f"{name} enforces hmm_risk_risk_l1_prediction_v1",
+                )
+                for name in sorted(schema.RISK_L1_PREDICTION_CONSTRAINTS)
+            ]
+        raise AssertionError(self.step)
+
+    def fetchone(self):
+        if self.step == 3:
+            return ("Append-only G2-B L1 risk warning revisions; scores are uncalibrated research outputs.",)
+        if self.step == 4:
+            return (
+                "CREATE INDEX idx_hmm_risk_risk_l1_lookup ON hmm_risk.risk_l1_prediction "
+                "USING btree (trade_date, sector_code, revision DESC)",
+                "Date and sector L1 risk revision lookup; model identity remains explicit.",
+            )
+        raise AssertionError(self.step)
+
+
+class _RiskSchemaConnection:
+    def __init__(self, *, drift: bool = False) -> None:
+        self.drift = drift
+
+    def cursor(self):
+        return _RiskSchemaCursor(drift=self.drift)
+
+
+def test_risk_l1_prediction_schema_verifier_accepts_exact_contract_and_rejects_drift() -> None:
+    schema.verify_risk_l1_prediction_schema(_RiskSchemaConnection())
+
+    with pytest.raises(RuntimeError, match="column comments"):
+        schema.verify_risk_l1_prediction_schema(_RiskSchemaConnection(drift=True))
+
+
+def test_rotation_l1_prediction_contribution_migration_is_guarded_and_reversible() -> None:
+    migration_root = Path(schema.__file__).parent / "migrations"
+    apply_sql = (
+        (migration_root / "alter_hmm_risk_rotation_l1_prediction_contributions_20260911.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+    rollback_sql = (
+        (migration_root / "alter_hmm_risk_rotation_l1_prediction_contributions_20260911.rollback.sql")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
+
+    assert "lock table hmm_risk.rotation_l1_prediction in share row exclusive mode" in apply_sql
+    assert "unexpected contribution dimensions" in apply_sql
+    assert "stored contribution dimensions invalid" in apply_sql
+    assert "jsonb_array_length(feature_contributions) in (10,11)" in apply_sql
+    assert "comment on constraint ck_hmm_risk_rotation_l1_prediction_availability" in apply_sql
+    assert "unexpected contribution dimensions" in rollback_sql
+    assert "non-v1.3 contribution dimensions exist" in rollback_sql
+    assert "jsonb_array_length(feature_contributions)=10" in rollback_sql
+
+
+def test_risk_l1_prediction_migration_is_guarded_and_rollback_refuses_data_loss() -> None:
+    migration_root = Path(schema.__file__).parent / "migrations"
+    apply_sql = (migration_root / "create_hmm_risk_risk_l1_prediction_20260914.sql").read_text(
+        encoding="utf-8"
+    ).lower()
+    rollback_sql = (
+        migration_root / "create_hmm_risk_risk_l1_prediction_20260914.rollback.sql"
+    ).read_text(encoding="utf-8").lower()
+
+    assert "pg_advisory_xact_lock" in apply_sql
+    assert "create table if not exists hmm_risk.risk_l1_prediction" in apply_sql
+    assert "jsonb_array_length(feature_contributions)=10" in apply_sql
+    assert "advisory_status='not_available' and not tail_accessed" in apply_sql
+    assert "refusing to drop non-empty hmm_risk.risk_l1_prediction" in rollback_sql
+    assert "exists (select 1 from hmm_risk.risk_l1_prediction limit 1)" in rollback_sql

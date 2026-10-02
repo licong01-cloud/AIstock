@@ -17,14 +17,15 @@ from typing import Iterable
 
 DEFAULT_WORKFLOW_ROOT = Path(".github/workflows")
 DEFAULT_NOX_PATH = Path("noxfile.py")
-WINDOWS_PR_WORKFLOWS = {
+WINDOWS_CI_WORKFLOWS = {
     "test.yml",
     "pr-quality.yml",
     "codeql.yml",
     "semgrep.yml",
     "dependency-update-validate.yml",
 }
-WINDOWS_PR_WORKFLOW_RUNNER_LABEL = {
+WINDOWS_PR_WORKFLOWS = WINDOWS_CI_WORKFLOWS - {"codeql.yml"}
+WINDOWS_WORKFLOW_RUNNER_LABEL = {
     "test.yml": "aistock-ci",
     "pr-quality.yml": "aistock-ci",
     "codeql.yml": "aistock-ci-security",
@@ -34,13 +35,11 @@ WINDOWS_PR_WORKFLOW_RUNNER_LABEL = {
 SUPERSEDED_RUN_WORKFLOWS = {
     "test.yml",
     "pr-quality.yml",
-    "codeql.yml",
     "semgrep.yml",
     "dependency-update-validate.yml",
 }
 BASE_FETCH_RETRY_WORKFLOWS = {
     "test.yml",
-    "codeql.yml",
     "semgrep.yml",
     "dependency-update-validate.yml",
     "pr-quality.yml",
@@ -48,7 +47,34 @@ BASE_FETCH_RETRY_WORKFLOWS = {
 PR_ONLY_QUALITY_WORKFLOWS = {"test.yml"}
 STABLE_MERGE_QUALITY_CONTEXTS = (
     "CI verdict",
-    "CodeQL verdict",
+)
+GIT_MIRROR_STEP_MARKERS = (
+    "name: Prepare verified local Git object mirror",
+    "id: git_mirror",
+    "$env:GIT_ALTERNATE_OBJECT_DIRECTORIES = ''",
+    "aistock_git_object_mirror_v1",
+    "$workspaceHead = Join-Path $env:GITHUB_WORKSPACE '.git\\HEAD'",
+    "Test-Path -LiteralPath $workspaceHead -PathType Leaf",
+    "fallback=bounded_remote",
+    '"GIT_ALTERNATE_OBJECT_DIRECTORIES=$objects" >> $env:GITHUB_ENV',
+    "exit 0",
+)
+GIT_MIRROR_CHECKOUT_MARKER = (
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES: ${{ steps.git_mirror.outputs.objects }}"
+)
+GIT_HTTP_LOW_SPEED_MARKERS = (
+    "\n  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n",
+    "\n  GIT_HTTP_LOW_SPEED_TIME: '60'\n",
+    "\n  GIT_CONFIG_COUNT: '1'\n",
+    "\n  GIT_CONFIG_KEY_0: http.version\n",
+    "\n  GIT_CONFIG_VALUE_0: HTTP/1.1\n",
+)
+CHECKOUT_ACTION_RE = re.compile(r"(?m)^      - uses:\s*actions/checkout@[^\s#]+")
+SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER = "\n        timeout-minutes: 5\n"
+INTERRUPTED_PACK_CLEANUP_MARKERS = (
+    "\n        continue-on-error: true\n",
+    "Get-ChildItem -LiteralPath $packRoot -File -Filter 'tmp_pack_*'",
+    "Remove-Item -LiteralPath $fragment.FullName -Force -ErrorAction Stop",
 )
 _INSTALL_RE = re.compile(
     r"\b(?:python\s+-m\s+)?pip(?:\d+(?:\.\d+)?)?\s+install\b"
@@ -62,6 +88,126 @@ _DB_CREATE_RE = re.compile(
     r"\b(?:postgres|timescale)\b",
     re.IGNORECASE,
 )
+
+
+def _workflow_job_blocks(text: str) -> list[str]:
+    """Return individual top-level GitHub Actions job blocks without a YAML dependency."""
+
+    lines = text.splitlines(keepends=True)
+    jobs_index = next(
+        (index for index, line in enumerate(lines) if line.strip() == "jobs:" and not line.startswith(" ")),
+        None,
+    )
+    if jobs_index is None:
+        return []
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in lines[jobs_index + 1 :]:
+        if line.strip() and not line.startswith(" "):
+            break
+        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
+            if current:
+                blocks.append("".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        blocks.append("".join(current))
+    return blocks
+
+
+def _job_runs_on_self_hosted(block: str) -> bool:
+    lines = block.splitlines()
+    for index, line in enumerate(lines):
+        match = re.match(r"^    runs-on:\s*(.*)$", line)
+        if not match:
+            continue
+        value_lines = [match.group(1)]
+        for continuation in lines[index + 1 :]:
+            if continuation.strip() and re.match(r"^    \S", continuation):
+                break
+            value_lines.append(continuation)
+        return "self-hosted" in "\n".join(value_lines)
+    return False
+
+
+def _workflow_step_blocks(job_block: str) -> list[str]:
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in job_block.splitlines(keepends=True):
+        if re.match(r"^      - \S", line):
+            if current:
+                blocks.append("".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        blocks.append("".join(current))
+    return blocks
+
+
+def has_event_bound_base_preparation(text: str, *, manual: bool) -> bool:
+    """Check preparation step inputs, not unrelated strings elsewhere in a workflow."""
+    mode = "--prepare-manual-merge-base-only" if manual else "--prepare-pr-merge-base-only"
+    steps = [
+        step for job in _workflow_job_blocks(text) for step in _workflow_step_blocks(job)
+        if mode in step
+    ]
+    if len(steps) != 1:
+        return False
+    step = steps[0]
+    expected = {
+        "BASE_REF": "inputs.base_ref" if manual else "github.event.pull_request.base.ref",
+        "BASE_SHA": "inputs.base_sha" if manual else "github.event.pull_request.base.sha",
+        "SOURCE_HEAD_SHA": "github.sha" if manual else "github.event.pull_request.head.sha",
+        "CHECKOUT_REF": "github.ref",
+    }
+    for key, expression in expected.items():
+        match = re.search(rf"(?m)^          {key}:\s*(.+)$", step)
+        if not match or expression not in match.group(1):
+            return False
+    if manual and "github.event_name == 'pull_request'" in step:
+        return False
+    return all(
+        argument in step for argument in (
+            '--base-ref "${BASE_REF}"', '--base-sha "${BASE_SHA}"',
+            '--checkout-ref "${CHECKOUT_REF}"', '--source-head-sha "${SOURCE_HEAD_SHA}"',
+        )
+    )
+
+
+def _checkout_step_blocks(job_block: str) -> list[str]:
+    return [block for block in _workflow_step_blocks(job_block) if CHECKOUT_ACTION_RE.search(block)]
+
+
+def _pack_cleanup_step_blocks(job_block: str) -> list[str]:
+    return [
+        block
+        for block in _workflow_step_blocks(job_block)
+        if re.search(r"(?m)^      - name:\s*Reclaim interrupted Git pack fragments\s*$", block)
+    ]
+
+
+def _checkout_has_verified_mirror_predecessor(job_block: str, checkout_step: str) -> bool:
+    steps = _workflow_step_blocks(job_block)
+    checkout_index = steps.index(checkout_step)
+    return (
+        GIT_MIRROR_CHECKOUT_MARKER in checkout_step
+        and any(
+            all(marker in step for marker in GIT_MIRROR_STEP_MARKERS)
+            for step in steps[:checkout_index]
+        )
+    )
+
+
+def _self_hosted_checkout_job_blocks(text: str) -> list[str]:
+    return [
+        block
+        for block in _workflow_job_blocks(text)
+        if _job_runs_on_self_hosted(block) and _checkout_step_blocks(block)
+    ]
+
+
 _SETUP_ACTION_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*actions/setup-(?:python|node|go|miniconda)@", re.IGNORECASE)
 _SERVICES_RE = re.compile(r"^\s*(?:-\s*)?services\s*:", re.IGNORECASE)
 _DB_IMAGE_RE = re.compile(r"^\s*image:\s*[^#\n]*(?:postgres|timescale)", re.IGNORECASE)
@@ -131,10 +277,58 @@ def scan_environment_contracts(paths: Iterable[Path]) -> list[dict[str, str]]:
 
     findings: list[dict[str, str]] = []
     for path in paths:
-        if path.name not in WINDOWS_PR_WORKFLOWS:
-            continue
         text = path.read_text(encoding="utf-8")
-        expected_label = WINDOWS_PR_WORKFLOW_RUNNER_LABEL[path.name]
+        if "self-hosted" in text and not all(marker in text for marker in GIT_HTTP_LOW_SPEED_MARKERS):
+            findings.append(
+                {
+                    "path": path.as_posix(),
+                    "line": "1",
+                    "reason": "self-hosted workflow must bound stalled or unusably slow Git HTTP transfers",
+                    "text": "GIT_HTTP_LOW_SPEED_LIMIT/GIT_HTTP_LOW_SPEED_TIME/http.version",
+                }
+            )
+        for checkout_job in _self_hosted_checkout_job_blocks(text):
+            for checkout_step in _checkout_step_blocks(checkout_job):
+                if not _checkout_has_verified_mirror_predecessor(checkout_job, checkout_step):
+                    findings.append(
+                        {
+                            "path": path.as_posix(),
+                            "line": "1",
+                            "reason": (
+                                "self-hosted checkout must use a verified local Git object mirror "
+                                "with bounded remote fallback"
+                            ),
+                            "text": "Prepare verified local Git object mirror",
+                        }
+                    )
+                if SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER not in checkout_step:
+                    findings.append(
+                        {
+                            "path": path.as_posix(),
+                            "line": "1",
+                            "reason": "self-hosted actions/checkout must have a five-minute hard step timeout",
+                            "text": "actions/checkout timeout-minutes: 5",
+                        }
+                    )
+            cleanup_steps = _pack_cleanup_step_blocks(checkout_job)
+            if not any(
+                all(marker in cleanup_step for marker in INTERRUPTED_PACK_CLEANUP_MARKERS)
+                for cleanup_step in cleanup_steps
+            ):
+                findings.append(
+                    {
+                        "path": path.as_posix(),
+                        "line": "1",
+                        "reason": (
+                            "self-hosted checkout must reclaim interrupted Git pack fragments by literal path "
+                            "without blocking the PR"
+                        ),
+                        "text": "Reclaim interrupted Git pack fragments",
+                    }
+                )
+        if path.name not in WINDOWS_CI_WORKFLOWS:
+            continue
+        expected_label = WINDOWS_WORKFLOW_RUNNER_LABEL[path.name]
         runner_re = re.compile(
             rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
             re.IGNORECASE,
@@ -176,17 +370,24 @@ def build_contract_evidence(
     classifier_path: Path = Path("scripts/ci_change_classifier.py"),
     environment_verify_path: Path = Path("scripts/ci_environment_verify.py"),
     changed_files_path: Path = Path("scripts/ci_changed_files.py"),
+    test_plan_coverage_path: Path = Path("scripts/ci_plan_coverage.py"),
     workspace_prepare_path: Path = Path("scripts/ci/prepare_self_hosted_workspace.py"),
     issue_workflow_path: Path = Path("scripts/aistock_issue_workflow.py"),
     nightly_scheduler_path: Path = Path("scripts/nightly_adaptive_scheduler.py"),
     nightly_session_runner_path: Path = Path("scripts/nightly_session_runner.py"),
+    runner_configure_path: Path = Path("scripts/configure_aistock_github_runner.ps1"),
+    runner_start_path: Path = Path("scripts/start_aistock_github_runner.ps1"),
+    runner_supervisor_path: Path = Path("scripts/supervise_aistock_github_runner.ps1"),
+    runner_health_path: Path = Path("scripts/aistock_runner_health.py"),
+    git_mirror_maintenance_path: Path = Path("scripts/maintain_aistock_git_mirror.ps1"),
+    test_plans_path: Path = Path("tests/aistock_validation/catalog/test_plans.yaml"),
 ) -> dict[str, bool]:
     """Return the exact evidence booleans named by the machine standard."""
 
     path_list = list(paths)
     workflow_text = {path.name: path.read_text(encoding="utf-8") for path in path_list}
-    pr_texts = [workflow_text[name] for name in sorted(WINDOWS_PR_WORKFLOWS) if name in workflow_text]
-    pr_combined = "\n".join(pr_texts)
+    ci_texts = [workflow_text[name] for name in sorted(WINDOWS_CI_WORKFLOWS) if name in workflow_text]
+    ci_combined = "\n".join(ci_texts)
     test_text = workflow_text.get("test.yml", "")
     pr_quality_text = workflow_text.get("pr-quality.yml", "")
     codeql_text = workflow_text.get("codeql.yml", "")
@@ -208,11 +409,26 @@ def build_contract_evidence(
         environment_verify_path.read_text(encoding="utf-8") if environment_verify_path.exists() else ""
     )
     changed_files_text = changed_files_path.read_text(encoding="utf-8") if changed_files_path.exists() else ""
+    test_plan_coverage_text = (
+        test_plan_coverage_path.read_text(encoding="utf-8") if test_plan_coverage_path.exists() else ""
+    )
     workspace_prepare_text = workspace_prepare_path.read_text(encoding="utf-8") if workspace_prepare_path.exists() else ""
     nightly_scheduler_text = nightly_scheduler_path.read_text(encoding="utf-8") if nightly_scheduler_path.exists() else ""
     nightly_session_runner_text = (
         nightly_session_runner_path.read_text(encoding="utf-8") if nightly_session_runner_path.exists() else ""
     )
+    runner_configure_text = runner_configure_path.read_text(encoding="utf-8") if runner_configure_path.exists() else ""
+    git_mirror_maintenance_text = (
+        git_mirror_maintenance_path.read_text(encoding="utf-8")
+        if git_mirror_maintenance_path.exists()
+        else ""
+    )
+    test_plans_text = test_plans_path.read_text(encoding="utf-8") if test_plans_path.exists() else ""
+    runner_start_text = runner_start_path.read_text(encoding="utf-8") if runner_start_path.exists() else ""
+    runner_supervisor_text = (
+        runner_supervisor_path.read_text(encoding="utf-8") if runner_supervisor_path.exists() else ""
+    )
+    runner_health_text = runner_health_path.read_text(encoding="utf-8") if runner_health_path.exists() else ""
     ci_preparation_match = re.search(
         r"(?ms)^  ci-verdict:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
         test_text,
@@ -225,7 +441,7 @@ def build_contract_evidence(
     combined_workflow_text = "\n".join(workflow_text.values())
     reasons = {item["reason"] for item in workflow_findings}
     def uses_expected_runner(name: str) -> bool:
-        expected_label = WINDOWS_PR_WORKFLOW_RUNNER_LABEL[name]
+        expected_label = WINDOWS_WORKFLOW_RUNNER_LABEL[name]
         literal_runner = bool(
             re.search(
                 rf"runs-on:\s*\[self-hosted,\s*Windows,\s*{re.escape(expected_label)}\]",
@@ -242,30 +458,117 @@ def build_contract_evidence(
         )
         return literal_runner or dynamic_windows_runner
 
+    def has_security_runner_preflight(text: str, downstream_job: str) -> bool:
+        preflight_match = re.search(
+            r"(?ms)^  security-runner-preflight:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            text,
+        )
+        downstream_match = re.search(
+            rf"(?ms)^  {re.escape(downstream_job)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            text,
+        )
+        preflight = preflight_match.group("body") if preflight_match else ""
+        downstream = downstream_match.group("body") if downstream_match else ""
+        return (
+            "runs-on: ubuntu-latest" in preflight
+            and "Fail fast when the security runner is offline" in preflight
+            and 'secrets.AISTOCK_RUNNER_HEALTH_TOKEN || github.token' in preflight
+            and 'repos/${GITHUB_REPOSITORY}/actions/runners?per_page=100' in preflight
+            and 'index("aistock-ci-security")' in preflight
+            and "needs: security-runner-preflight" in downstream
+        )
+
+    def code_intelligence_preflight_precedes_refresh_concurrency(text: str) -> bool:
+        workflow_header = text.split("\njobs:", 1)[0]
+        refresh_match = re.search(
+            r"(?ms)^  refresh-after-main:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
+            text,
+        )
+        refresh = refresh_match.group("body") if refresh_match else ""
+        return (
+            "concurrency:" not in workflow_header
+            and "concurrency:" in refresh
+            and "group: code-intelligence-refresh-main" in refresh
+            and "cancel-in-progress: true" in refresh
+        )
+
+    nightly_code_intelligence_input_match = re.search(
+        r"(?ms)^      run_code_intelligence:\n(?P<body>.*?)(?=^      [a-z0-9_]+:\n|^defaults:)",
+        nightly_text,
+    )
+    nightly_code_intelligence_input = (
+        nightly_code_intelligence_input_match.group("body") if nightly_code_intelligence_input_match else ""
+    )
+    self_hosted_checkout_jobs = [
+        block
+        for text in workflow_text.values()
+        for block in _self_hosted_checkout_job_blocks(text)
+    ]
+
     evidence = {
-        "windows_self_hosted_runner": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all(uses_expected_runner(name) for name in WINDOWS_PR_WORKFLOWS),
-        "prebuilt_aistock_ci_environment": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all("aistock-ci" in text.casefold() for text in pr_texts),
-        "environment_fingerprint_match": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all("ci_environment_verify.py" in text for text in pr_texts),
+        "windows_self_hosted_runner": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
+        and all(uses_expected_runner(name) for name in WINDOWS_CI_WORKFLOWS),
+        "prebuilt_aistock_ci_environment": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
+        and all("aistock-ci" in text.casefold() for text in ci_texts),
+        "environment_fingerprint_match": len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
+        and all("ci_environment_verify.py" in text for text in ci_texts),
+        "self_hosted_workflows_use_verified_git_object_mirror": bool(self_hosted_checkout_jobs)
+        and all(
+            _checkout_has_verified_mirror_predecessor(job_block, checkout_step)
+            for job_block in self_hosted_checkout_jobs
+            for checkout_step in _checkout_step_blocks(job_block)
+        ),
+        "git_object_mirror_maintenance_is_bounded_and_offline": all(
+            marker in git_mirror_maintenance_text
+            for marker in (
+                "Resolve-BoundedPath",
+                "refs/heads/main:refs/heads/main",
+                "fsck', '--connectivity-only', '--no-dangling",
+                "network_accessed = $false",
+                "process_control_performed = $false",
+                "Timed out waiting for Git mirror maintenance lock",
+            )
+        ),
+        "self_hosted_git_http_stalls_are_bounded": all(
+            "self-hosted" not in text
+            or all(marker in text for marker in GIT_HTTP_LOW_SPEED_MARKERS)
+            for text in workflow_text.values()
+        ),
+        "self_hosted_checkout_steps_have_hard_timeout": bool(self_hosted_checkout_jobs)
+        and all(
+            SELF_HOSTED_CHECKOUT_TIMEOUT_MARKER in checkout_step
+            for job_block in self_hosted_checkout_jobs
+            for checkout_step in _checkout_step_blocks(job_block)
+        ),
+        "self_hosted_checkout_cleans_interrupted_pack_fragments": bool(self_hosted_checkout_jobs)
+        and all(
+            any(
+                all(marker in cleanup_step for marker in INTERRUPTED_PACK_CLEANUP_MARKERS)
+                for cleanup_step in _pack_cleanup_step_blocks(job_block)
+            )
+            for job_block in self_hosted_checkout_jobs
+        ),
         "no_setup_actions": "setup-* actions install mutable toolchains; use a prebuilt runner" not in reasons,
         "no_dependency_install_commands": "dependency installation is prohibited in CI" not in reasons,
         "nox_ci_install_fail_closed_guard": bool(nox_text) and not scan_nox_text(nox_text, nox_path.as_posix()),
         "no_linux_or_production_environment_fallback": (
-            len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-            and all("conda run -n aistock" not in text.casefold() for text in pr_texts)
+            len(ci_texts) == len(WINDOWS_CI_WORKFLOWS)
+            and all("conda run -n aistock" not in text.casefold() for text in ci_texts)
             and all(
                 "ubuntu-" not in workflow_text.get(name, "").casefold()
-                for name in WINDOWS_PR_WORKFLOWS - {"test.yml"}
+                for name in WINDOWS_CI_WORKFLOWS - {"test.yml", "codeql.yml"}
             )
             and test_text.casefold().count("ubuntu-latest") == 1
+            and codeql_text.casefold().count("runs-on: ubuntu-latest") == 1
+            and has_security_runner_preflight(codeql_text, "codeql-nightly")
             and "github_hosted_metadata" in test_text
             and "scripts/bug_registry_metadata_check.py" in test_text
             and "--close-sync-only" in test_text
         ),
-        "windows_git_bash_shell": len(pr_texts) == len(WINDOWS_PR_WORKFLOWS)
-        and all("shell: bash" in text.casefold() for text in pr_texts),
+        "windows_git_bash_shell": all(
+            "shell: bash" in workflow_text.get(name, "").casefold()
+            for name in WINDOWS_PR_WORKFLOWS
+        ),
         "pr_quality_no_external_report_action_dependency": "actions/upload-artifact@" not in pr_quality_text
         and "actions/github-script@" not in pr_quality_text,
         "superseded_pr_runs_cancel_in_progress": all(
@@ -275,7 +578,7 @@ def build_contract_evidence(
             for name in SUPERSEDED_RUN_WORKFLOWS
         ),
         "bounded_pr_base_fetch_retry": all(
-            "--prepare-pr-merge-base-only" in workflow_text.get(name, "")
+            has_event_bound_base_preparation(workflow_text.get(name, ""), manual=name != "test.yml")
             for name in BASE_FETCH_RETRY_WORKFLOWS
         )
         and "for index in range(max(1, int(attempts)))" in changed_files_text
@@ -288,18 +591,22 @@ def build_contract_evidence(
             and not re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get(name, ""))
             for name in PR_ONLY_QUALITY_WORKFLOWS
         ),
+        "dependency_update_pr_validation_reuses_ci_verdict": (
+            "pull_request:" not in workflow_text.get("dependency-update-validate.yml", "")
+            and "workflow_dispatch:" in workflow_text.get("dependency-update-validate.yml", "")
+            and "Validate changed dependency surface" in test_text
+            and "steps.classify.outputs.dependency_validation_required == 'true'" in test_text
+            and "scripts/validate_changed_requirements.py" in test_text
+            and "DEPENDENCY_RESULT" in test_text
+        ),
         "merge_quality_contexts_are_change_scoped": (
-            "  pull_request:\n    branches: [main]" in codeql_text
-            and bool(re.search(r"(?m)^  codeql-verdict:\s*$", codeql_text))
-            and "name: CodeQL verdict" in codeql_text
-            and "if: always()" in codeql_text
+            STABLE_MERGE_QUALITY_CONTEXTS == ("CI verdict",)
+            and "pull_request:" not in codeql_text
+            and not re.search(r"(?m)^  push:\s*$", codeql_text)
             and "pull_request:" not in workflow_text.get("semgrep.yml", "")
             and "workflow_dispatch:" in workflow_text.get("semgrep.yml", "")
             and "pull_request:" not in pr_quality_text
             and "workflow_dispatch:" in pr_quality_text
-            and "github.event_name != 'pull_request'" in codeql_text
-            and "startsWith(github.head_ref, 'chore/BUG-')" in codeql_text
-            and "contains(github.head_ref, '-close-sync-')" in codeql_text
             and "github_hosted_metadata" in test_text
             and "ubuntu-latest" in test_text
             and "name: CI verdict" in test_text
@@ -311,19 +618,30 @@ def build_contract_evidence(
             and "scripts/bug_registry_metadata_check.py" in test_text
             and "_merge_quality_contexts_for_head_ref" in issue_workflow_text
             and all(f'"{context}"' in issue_workflow_text for context in STABLE_MERGE_QUALITY_CONTEXTS)
+            and '"CodeQL verdict"' not in issue_workflow_text
         ),
-        "codeql_default_branch_security_scan_preserved": bool(
-            re.search(r"(?m)^\s{2}push:\s*$", workflow_text.get("codeql.yml", ""))
-            and "branches: [main]" in workflow_text.get("codeql.yml", "")
+        "codeql_daily_nightly_full_scan": bool(
+            "schedule:" in codeql_text
+            and "cron: '27 20 * * *'" in codeql_text
+            and "workflow_dispatch:" in codeql_text
+            and "pull_request:" not in codeql_text
+            and not re.search(r"(?m)^  push:\s*$", codeql_text)
+            and "name: CodeQL nightly full scan" in codeql_text
+            and "CODEQL_LANGUAGES: '[\"python\",\"javascript-typescript\"]'" in codeql_text
         ),
         "codeql_uses_hash_verified_prebuilt_bundle": (
             "AISTOCK_CI_CODEQL_BUNDLE_REQUIRED: '1'" in workflow_text.get("codeql.yml", "")
             and "AISTOCK_CI_CODEQL_BUNDLE_SHA256:" in workflow_text.get("codeql.yml", "")
-            and "_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
+            and "prebuilt\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
             and "prebuilt CodeQL bundle SHA-256 mismatch" in environment_verify_text
             and "database create" in workflow_text.get("codeql.yml", "")
             and "database analyze" in workflow_text.get("codeql.yml", "")
             and "github upload-results" in workflow_text.get("codeql.yml", "")
+        ),
+        "codeql_bundle_path_is_runner_independent": (
+            "prebuilt\\CodeQL\\2.26.3\\x64\\codeql" in workflow_text.get("codeql.yml", "")
+            and "aistock\\_work\\_tool\\CodeQL" not in workflow_text.get("codeql.yml", "")
+            and "aistock-security\\_work\\_tool\\CodeQL" not in workflow_text.get("codeql.yml", "")
         ),
         "codeql_remote_action_download_is_eliminated": (
             "github/codeql-action/" not in codeql_text
@@ -338,9 +656,8 @@ def build_contract_evidence(
             and "strategy:" not in codeql_text
             and "matrix:" not in codeql_text
             and codeql_text.count("Prepare exact local workspace (no remote actions)") == 1
-            and "CODEQL_LANGUAGES: ${{ steps.fast_lane.outputs.languages }}" in codeql_text
+            and "CODEQL_LANGUAGES: '[\"python\",\"javascript-typescript\"]'" in codeql_text
             and "foreach ($language in $languages)" in codeql_text
-            and "CLASSIFIER_RESULT: ${{ steps.fast_lane.outcome }}" in codeql_text
             and "ANALYZE_RESULT: ${{ steps.codeql_analysis.outcome }}" in codeql_text
         ),
         "codeql_exact_local_workspace_fetch_is_bounded": (
@@ -352,13 +669,11 @@ def build_contract_evidence(
             and codeql_text.count('$env:GIT_CONFIG_KEY_0 = "core.longpaths"') == 1
             and "git -C $source fetch --no-tags --depth=1" not in codeql_text
         ),
-        "codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push": (
-            "codeql_pr_languages" in classifier_text
-            and "codeql_pr_test_only" in classifier_text
-            and "LANGUAGE_FIELD=" in workflow_text.get("codeql.yml", "")
-            and "pull_request_test_only" in workflow_text.get("codeql.yml", "")
-            and "codeql_languages" in workflow_text.get("codeql.yml", "")
-            and "github.event_name" in workflow_text.get("codeql.yml", "")
+        "codeql_pr_merge_gate_removed": (
+            "pull_request:" not in codeql_text
+            and not re.search(r"(?m)^  push:\s*$", codeql_text)
+            and "ci_change_classifier.py" not in codeql_text
+            and "CodeQL verdict" not in issue_workflow_text
         ),
         "code_intelligence_refresh_is_scheduled_or_manual_only": (
             "schedule:" in code_intelligence_refresh_text
@@ -368,6 +683,29 @@ def build_contract_evidence(
         "code_intelligence_refresh_has_no_external_artifact_action_dependency": (
             "actions/upload-artifact@" not in code_intelligence_refresh_text
             and "actions/download-artifact@" not in code_intelligence_refresh_text
+        ),
+        "security_workflows_fail_fast_before_runner_allocation": (
+            has_security_runner_preflight(codeql_text, "codeql-nightly")
+            and has_security_runner_preflight(code_intelligence_refresh_text, "refresh-after-main")
+            and code_intelligence_preflight_precedes_refresh_concurrency(code_intelligence_refresh_text)
+        ),
+        "nightly_code_intelligence_has_single_scheduled_owner": (
+            "schedule:" in code_intelligence_refresh_text
+            and "default: false" in nightly_code_intelligence_input
+            and "if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence" in nightly_text
+            and "if: github.event_name == 'schedule' || inputs.run_code_intelligence" not in nightly_text
+        ),
+        "nightly_preflight_requires_distinct_runner_roles": (
+            "--required-role general=self-hosted,windows,aistock-ci" in nightly_text
+            and "--required-role security=self-hosted,windows,aistock-ci-security" in nightly_text
+            and "--required-label aistock-ci" not in nightly_text
+        ),
+        "redundant_issue_event_workflows_retired": (
+            "issue-auto-link.yml" not in workflow_text
+            and "issue-on-test-fail.yml" not in workflow_text
+            and "github.rest.issues.create" not in test_text
+            and "Build Nightly failure issue context" in nightly_text
+            and "Auto-register failure as actionable GitHub Issue" in nightly_text
         ),
         "javascript_actions_use_approved_native_node24_majors": all(
             set(re.findall(rf"{re.escape(prefix)}v\d+", combined_workflow_text)) == {expected}
@@ -414,6 +752,42 @@ def build_contract_evidence(
         and "WORKFLOW_POLICY_RESULT: ${{ steps.workflow_policy.outcome }}" in ci_verdict_text
         and "workflow_validation=${WORKFLOW_TEST_RESULT}" in ci_verdict_text
         and "workflow_policy=${WORKFLOW_POLICY_RESULT}" in ci_verdict_text,
+        "pr_ci_heavy_lanes_short_circuit_after_prerequisites": (
+            "id: prerequisite_gate" in ci_verdict_text
+            and "heavy_lanes_allowed=false" in ci_verdict_text
+            and "steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true'" in ci_verdict_text
+            and ci_verdict_text.count(
+                "steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true'"
+            )
+            >= 7
+            and "PR_QUALITY_RESULT: ${{ steps.pr_quality_validation.outcome }}" in ci_verdict_text
+            and "L0_RESULT: ${{ steps.l0_validation.outcome }}" in ci_verdict_text
+            and "CATALOG_INTEGRITY_RESULT: ${{ steps.catalog_integrity_validation.outcome }}"
+            in ci_verdict_text
+        ),
+        "selected_validation_plans_are_subsumed_once": (
+            "def _apply_plan_subsumption(" in classifier_text
+            and 'plan.get("subsumes")' in classifier_text
+            and '"suppressed_plan_keys"' in classifier_text
+            and "redundant validation plans were subsumed" in classifier_text
+            and "subsumes: [hmm_risk_pr_slice]" in test_plans_text
+        ),
+        "changed_tests_reachable_from_selected_ci_plan": (
+            "def _changed_test_plan_coverage(" in classifier_text
+            and "def _selected_nox_test_targets(" in classifier_text
+            and "file_backend_sessions" in classifier_text
+            and "unexecuted_test_files" in classifier_text
+            and "unexecuted_test_blocked" in classifier_text
+            and "changed test files are not executed by any selected CI plan" in classifier_text
+            and "AISTOCK_CI_TEST_COLLECTION_RECEIPT:" in test_text
+            and "AISTOCK_CI_CLASSIFIER_SUMMARY:" in test_text
+            and "backend_changed_test_files" in classifier_text
+            and "PYTEST_ADDOPTS: -p scripts.ci_plan_coverage" in test_text
+            and "python scripts/ci_plan_coverage.py" in test_text
+            and 'backend_failures+=("changed_test_plan_coverage")' in test_text
+            and "def pytest_collection_finish(" in test_plan_coverage_text
+            and "missing_changed_test_files" in test_plan_coverage_text
+        ),
         "pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout": bool(frontend_quality_text)
         and "AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock" in test_text
         and "actions/checkout@v7" in frontend_quality_text
@@ -428,21 +802,40 @@ def build_contract_evidence(
         and "npm ci" not in frontend_quality_text.casefold()
         and "npm install" not in frontend_quality_text.casefold(),
         "pr_workflows_no_external_report_action_dependency": all(
-            marker not in pr_combined
+            marker not in ci_combined
             for marker in ("actions/upload-artifact@", "actions/download-artifact@", "actions/github-script@")
         ),
         "no_workflow_services": "CI workflow services are prohibited; use the existing DEV database lane" not in reasons,
         "no_postgres_or_timescaledb_container_creation": "creating a postgres/timescale container is prohibited in CI" not in reasons
         and "disposable postgres/timescale image is prohibited in CI" not in reasons,
         "classifier_dev_db_required_output": "dev_db_required" in test_text and "dev_db_required" in classifier_text,
-        "existing_dev_database_lane_reference": "external_DEV_validation_required" in test_text
+        "existing_dev_database_lane_reference": "### External DEV database validation" in test_text
+        and "does not run database DDL/DML" in test_text
+        and 'failures+=("dev_db=' not in test_text
         and "existing DEV database" in classifier_text,
         "no_ci_ddl_or_dml": "DDL/DML execution is prohibited in CI workflows" not in reasons,
-        "no_sqlite_substitution_for_real_database_contract": "sqlite" not in pr_combined.casefold(),
+        "no_sqlite_substitution_for_real_database_contract": "sqlite" not in ci_combined.casefold(),
         "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database": (
             "AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'" in nightly_text
             and "docker run" not in nightly_text.casefold()
             and "docker compose up" not in nightly_text.casefold()
+        ),
+        "nightly_research_is_independent_of_dr_and_preserves_dr_failure": (
+            any(
+                block.startswith("  nightly-l3:")
+                and "needs: [runner-preflight]" in block
+                and "needs.dr-validate" not in block
+                and "needs.dr-snapshot" not in block
+                for block in _workflow_job_blocks(nightly_text)
+            )
+            and any(
+                block.startswith("  full-summary:")
+                and "dr-snapshot, dr-validate, nightly-l3" in block
+                and "if: always()" in block
+                and "needs.dr-snapshot.result == 'failure'" in block
+                and "needs.dr-validate.result == 'failure'" in block
+                for block in _workflow_job_blocks(nightly_text)
+            )
         ),
         "nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies": (
             '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in nightly_text
@@ -521,6 +914,22 @@ def build_contract_evidence(
             and bool(nightly_runner_labels)
             and {label.casefold() for label in nightly_runner_labels}
             == {"aistock-ci", "aistock-ci-security"}
+        ),
+        "runner_lifecycle_is_pinned_and_supervised": (
+            "--disableupdate" in runner_configure_text
+            and "automatic_update_disabled" in runner_configure_text
+            and "AISTOCK_GITHUB_RUNNER_VERSION" in runner_configure_text
+            and "actions-runner-win-x64-2.334.0.zip" not in runner_configure_text
+            and "no active Listener, Worker, Updater, or supervisor process" in runner_configure_text
+            and "supervise-aistock-runner.ps1" in runner_configure_text
+            and "supervise-aistock-runner.ps1" in runner_start_text
+            and "aistock_github_runner_supervisor_state_v1" in runner_start_text
+            and "ClearStopRequest" in runner_start_text
+            and "stop_requested" in runner_start_text
+            and "Local\\AIstockGitHubRunner-" in runner_supervisor_text
+            and "restart_budget_exhausted" in runner_supervisor_text
+            and "online_but_not_accepting_work" in runner_health_text
+            and 'stale_queued_minutes: int = 10' in runner_health_text
         ),
         "policy_evidence_remains_one_scanner_step": (
             combined_workflow_text.count("python scripts/ci_workflow_policy_scan.py") == 1

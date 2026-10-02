@@ -300,13 +300,19 @@ class FactorCodeTransformer:
 
         # Step0: 如果body包含 compute_factor()/main() 等无参函数，先提取其函数体
         # 必须在 dedent 之前执行，否则函数体的缩进会被去除导致无法区分
-        body_code, unwrap_changes = self._unwrap_compute_function(body_code, factor_name)
+        body_code, preserved_helpers = self._preserve_module_helpers(body_code)
+        if preserved_helpers:
+            unwrap_changes = ["保留模块辅助函数及入口调用，结果文件写入改为返回值"]
+        else:
+            body_code, unwrap_changes = self._unwrap_compute_function(body_code, factor_name)
         changes.extend(unwrap_changes)
-        unwrapped = bool(unwrap_changes)
+        unwrapped = bool(unwrap_changes) and not preserved_helpers
 
         # Step1: dedent 去掉原始模板代码的公共缩进
         # 如果已经通过 unwrap 提取了函数体，跳过 dedent（函数体已有正确的相对缩进）
-        if not unwrapped:
+        if preserved_helpers:
+            body_code = textwrap.dedent(body_code)
+        elif not unwrapped:
             raw_lines = body_code.split("\n")
             min_indent = float("inf")
             for bl in raw_lines:
@@ -372,6 +378,73 @@ class FactorCodeTransformer:
         final_code = (import_section + "\n\n" + func_code).strip()
         return final_code, changes, warnings
 
+    def _preserve_module_helpers(self, code: str) -> Tuple[str, bool]:
+        """Keep helper closures instead of extracting an entry body without its dependencies."""
+        tree = ast.parse(code)
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+        entries = {node.name for node in functions if node.name in {"compute_factor", "main"}}
+        if not entries or not any(node.name not in entries for node in functions):
+            return code, False
+
+        edits = []
+        invoked = False
+
+        def is_entry_call(node):
+            return (
+                isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name) and node.value.func.id in entries
+                and not node.value.args and not node.value.keywords
+            )
+
+        for node in tree.body:
+            if is_entry_call(node):
+                edits.append((node.lineno, node.end_lineno, f"return {node.value.func.id}()"))
+                invoked = True
+            elif isinstance(node, ast.If) and ast.dump(node.test) == ast.dump(
+                ast.parse("__name__ == '__main__'", mode="eval").body
+            ):
+                if len(node.body) != 1 or node.orelse or not is_entry_call(node.body[0]):
+                    raise ValueError("Cannot preserve a helper module with an ambiguous entry guard")
+                entry = node.body[0].value.func.id
+                edits.append((node.lineno, node.end_lineno, f"return {entry}()"))
+                invoked = True
+
+        # A conventional main() wrapper must propagate the nested compute result.
+        for function in functions:
+            if function.name in entries and function.body and is_entry_call(function.body[-1]):
+                node = function.body[-1]
+                edits.append((node.lineno, node.end_lineno,
+                              " " * node.col_offset + f"return {node.value.func.id}()"))
+
+        # Convert actual result writes, not text inside comments or string literals.
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+                continue
+            call = node.value
+            if not isinstance(call.func, ast.Attribute) or call.func.attr != "to_hdf":
+                continue
+            path = call.args[0] if call.args else next(
+                (keyword.value for keyword in call.keywords if keyword.arg == "path_or_buf"), None
+            )
+            if path is None:
+                continue
+            if not any(
+                isinstance(arg, ast.Constant) and isinstance(arg.value, str) and "result.h5" in arg.value
+                for arg in ast.walk(path)
+            ):
+                continue
+            receiver = ast.get_source_segment(code, call.func.value)
+            edits.append((node.lineno, node.end_lineno, " " * node.col_offset + f"return {receiver}"))
+
+        if not invoked:
+            if len(entries) != 1:
+                raise ValueError("Cannot identify the helper module entry")
+            code = code.rstrip() + f"\nreturn {next(iter(entries))}()\n"
+        lines = code.splitlines()
+        for start, end, replacement in sorted(edits, reverse=True):
+            lines[start - 1:end] = [replacement]
+        return "\n".join(lines), True
+
     def _transform_function_code(self, code: str, factor_name: str):
         changes = []
         warnings = []
@@ -408,15 +481,16 @@ class FactorCodeTransformer:
         code, dc, dw = self._replace_d_features(code)
         changes.extend(dc)
         warnings.extend(dw)
-        code, lc, lw = self._replace_data_loads(code, factor_name)
-        changes.extend(lc)
-        warnings.extend(lw)
-        code, rc = self._replace_h5_write_with_return(code, factor_name)
-        changes.extend(rc)
         if not re.search(r"^def calculate_\w+\s*\(", code, re.MULTILINE):
             code, wc, ww = self._transform_module_level_code(code, factor_name)
             changes.extend(wc)
             warnings.extend(ww)
+        else:
+            code, lc, lw = self._replace_data_loads(code, factor_name)
+            changes.extend(lc)
+            warnings.extend(lw)
+            code, rc = self._replace_h5_write_with_return(code, factor_name)
+            changes.extend(rc)
         return code, changes, warnings
 
     # ── 数据加载替换 ──────────────────────────────────────────────────

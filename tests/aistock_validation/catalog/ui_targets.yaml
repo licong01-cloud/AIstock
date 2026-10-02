@@ -223,6 +223,24 @@ targets:
   - Review candidate registry and evaluation batch state
   - Inspect read-only QE experiment evidence and evaluation results
   coverage_status: partial
+- route_id: hmm.risk
+  href: /hmm-risk
+  label: HMM Risk Research
+  nav_group: HMM 研究工作台
+  primary_module: hmm.risk
+  impact_modules:
+  - hmm
+  - qe.archive
+  risk_level: high
+  required_test_plans:
+  - l0
+  - hmm_risk_backend
+  recommended_test_plans: []
+  business_operations:
+  - Open HMM Risk Research
+  - Review state-model evidence and retrospective reports
+  - Inspect advisory-only risk alerts without trading activation
+  coverage_status: partial
 - route_id: market_regime.timeline
   href: /market-regime
   label: Market Regime
@@ -740,6 +758,25 @@ targets:
   - Open Smart Monitor
   - Review Smart Monitor state
   - Validate Smart Monitor primary workflow
+  coverage_status: planned
+- route_id: portfolio.position_timing
+  href: /position-timing
+  label: Position Timing Advice
+  nav_group: Investment Management
+  primary_module: position_timing
+  impact_modules:
+  - portfolio_management
+  - watchlist
+  risk_level: high
+  required_test_plans:
+  - l0
+  - position_timing_backend
+  - frontend_type_lint
+  recommended_test_plans: []
+  business_operations:
+  - Open Position Timing Advice
+  - Review immutable T+1 daily action cards
+  - Edit next-decision-day sizing intent
   coverage_status: planned
 - route_id: portfolio.realtime_monitor
   href: /monitor

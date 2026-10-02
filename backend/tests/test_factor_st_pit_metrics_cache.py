@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from backend.services.canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
 from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window
 from backend.services.quantevolver.factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
@@ -16,6 +18,7 @@ from backend.services.quantevolver.qe_dataset_contract import (
     QE_DATASET_START_DATE,
 )
 from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+from backend.services.quantevolver import qe_eval_v2_qlib_reader as qlib_reader
 from backend.services.stock_universe_pit_service import StockUniversePitError
 
 
@@ -98,6 +101,39 @@ def test_factor_universe_uses_exact_qe_dataset_snapshot_without_live_refresh() -
         "rule_version": "st_pub_next_trade_restore_active_l_v1",
         "bootstrap_if_missing": True,
     }
+
+
+def test_factor_universe_reads_canonical_v2_state_without_rebuild() -> None:
+    captured: dict[str, object] = {}
+
+    class FakePitService:
+        def get_status_readonly(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+                "rule_version": "shsz_a_252td_st_delist_asof_v2",
+                "scope": "canonical_all_listed",
+                "start_date": "2018-08-01",
+                "end_date": "2026-08-31",
+                "status": "ready",
+                "dirty": False,
+                "source_fingerprint_sha256": "canonical-v2",
+                "last_build_summary": {"validation": {}},
+            }
+
+        def ensure_immutable_dataset_snapshot(self, **_kwargs):
+            raise AssertionError("canonical v2 must not enter the legacy immutable builder")
+
+    metadata = FactorUniverseMaskService(pit_service=FakePitService()).metadata(
+        start_date="2018-08-01",
+        end_date="2026-08-31",
+        universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+    )
+
+    assert captured == {"universe_key": CANONICAL_PIT_UNIVERSE_KEY}
+    assert metadata["universe_key"] == CANONICAL_PIT_UNIVERSE_KEY
+    assert metadata["universe_rule_version"] == "shsz_a_252td_st_delist_asof_v2"
+    assert metadata["universe_end_date"] == "2026-08-31"
 
 
 def test_factor_universe_rejects_live_pit_namespace() -> None:
@@ -279,3 +315,73 @@ def test_fresh_schema_initializers_include_st_pit_metadata_columns() -> None:
     for column in required:
         assert column in init_catalog
         assert column in init_quant
+
+
+def _write_qlib_close(path: Path, start_index: int, values: list[float]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.asarray([float(start_index), *values], dtype="<f").tofile(path)
+
+
+def test_qlib_reader_preserves_all_spans_and_filters_dates_by_union(tmp_path: Path) -> None:
+    (tmp_path / "calendars").mkdir()
+    (tmp_path / "instruments").mkdir()
+    dates = pd.date_range("2026-01-01", periods=8, freq="D")
+    (tmp_path / "calendars" / "day.txt").write_text(
+        "\n".join(str(day.date()) for day in dates), encoding="utf-8"
+    )
+    (tmp_path / "instruments" / "all.txt").write_text(
+        "000001.SZ\t2026-01-02\t2026-01-03\n"
+        "000001.SZ\t2026-01-06\t2026-01-07\n",
+        encoding="utf-8",
+    )
+    _write_qlib_close(
+        tmp_path / "features" / "000001.sz" / "close.day.bin",
+        0,
+        list(range(1, 9)),
+    )
+
+    qlib_reader.clear_close_cache()
+    spans = qlib_reader._read_instruments(tmp_path)
+    result = qlib_reader._load_all_close_prices(tmp_path)
+
+    assert spans == {
+        "000001.SZ": [
+            ("2026-01-02", "2026-01-03"),
+            ("2026-01-06", "2026-01-07"),
+        ]
+    }
+    assert result.index.get_level_values("datetime").tolist() == [
+        pd.Timestamp("2026-01-02"),
+        pd.Timestamp("2026-01-03"),
+        pd.Timestamp("2026-01-06"),
+        pd.Timestamp("2026-01-07"),
+    ]
+    assert result["close"].tolist() == [2.0, 3.0, 6.0, 7.0]
+    qlib_reader.clear_close_cache()
+
+
+def test_qlib_reader_reports_missing_bin_without_dropping_other_symbols(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    (tmp_path / "calendars").mkdir()
+    (tmp_path / "instruments").mkdir()
+    (tmp_path / "calendars" / "day.txt").write_text(
+        "2026-01-01\n2026-01-02\n", encoding="utf-8"
+    )
+    (tmp_path / "instruments" / "all.txt").write_text(
+        "000001.SZ\t2026-01-01\t2026-01-02\n"
+        "000002.SZ\t2026-01-01\t2026-01-02\n",
+        encoding="utf-8",
+    )
+    _write_qlib_close(
+        tmp_path / "features" / "000001.sz" / "close.day.bin", 0, [1.0, 2.0]
+    )
+
+    qlib_reader.clear_close_cache()
+    with caplog.at_level(logging.WARNING):
+        result = qlib_reader._load_all_close_prices(tmp_path)
+
+    assert set(result.index.get_level_values("instrument")) == {"000001.SZ"}
+    assert "without close.day.bin: 1" in caplog.text
+    assert "000002.SZ" in caplog.text
+    qlib_reader.clear_close_cache()

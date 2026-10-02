@@ -1,0 +1,338 @@
+{
+  "actual": "read_close_prices 跳过无 close Bin 股票，unstack 后缺列，后续 PIT mask 与 coverage denominator 不再包含这些请求股票。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+    "backend/tests/test_factor_metrics_h20_contract.py",
+    "backend/services/factor_research/full_evaluation.py",
+    "backend/tests/factor_research/test_full_evaluation.py",
+    "tests/aistock_validation/bugs/20260911_BUG-1448-pit-close-bin.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1448",
+  "closed_at": "2026-10-01T14:16:21.168531Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-11T07:18:51.265811Z",
+  "description": "read_close_prices 跳过无 close Bin 股票，unstack 后缺列，后续 PIT mask 与 coverage denominator 不再包含这些请求股票。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260911-6ef44fa605f1",
+      "timestamp": "2026-09-11T07:18:51.265790Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "显式 instrument_hint 的每只股票均保留在价格/标签/PIT 矩阵；无物理价格者保持 NaN 并计入不可用覆盖，不伪造或填充价格。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+      "backend/tests/test_factor_metrics_h20_contract.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+        "backend/tests/test_factor_metrics_h20_contract.py",
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/tests/factor_research/test_full_evaluation.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "factor_library.research"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/test_factor_metrics_h20_contract.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/factor_research/full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+        "backend/tests/test_factor_metrics_h20_contract.py",
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/tests/factor_research/test_full_evaluation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+      "backend/tests/test_factor_metrics_h20_contract.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+      "backend/tests/test_factor_metrics_h20_contract.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ]
+  },
+  "first_seen_at": "2026-09-11T07:18:51.265811Z",
+  "fix_branch": null,
+  "fix_commit": "2a708a69d34db3709cf6f19ec5dfd58a259a94b4",
+  "fixed_at": "2026-09-11T08:16:05Z",
+  "github_issue_number": 4561,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4561",
+  "last_seen_at": "2026-09-11T07:18:51.265811Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4563",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "prepare_shared_context(... instrument_hint={physical_symbol,missing_symbol}) and inspect close_unstacked columns",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "factor_research_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh Python read current direct-v2 through 2026-08-31 and preserved all 5341 requested PIT instruments, including 197 physical-price-missing instruments as NaN columns",
+      "Windows fresh process direct-v2 PIT denominator preservation -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\factor-aftercare-20261001\\verify-BUG-1448.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1448",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "6aa47962d6e0474b95cdc449365eb0aaec8f0eb2d97235bd85bf1ad4433c1026",
+      "expected_identity": "2a708a69d34db3709cf6f19ec5dfd58a259a94b4",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-01T14:16:13.457461Z",
+      "mode": "read_only",
+      "observed_identity": "3626c1cf5f338a7e6678ca62d737ff06ab1cacb1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e27efca03b0c363f948f4e4bf286a10ec6d7490ca3b779664527c89cbe9731c7",
+      "receipt_sha256": "806658fe5f610a1bdf8df39e055f7e53d4c01ba212ba2903f1a34410e5451779",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ec4ac6fa97ac8e398b668357ebd0b9c802208c100dc7d2d5fb480efc698e31cd",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1448",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f9878b082d988edf",
+    "recorded_at": "2026-09-11T08:17:31.387671Z",
+    "runtime_contract_digest": "740f1001321a5b38f5471c4a337b7a274687c8832ab09585778448008bdf3401",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1aa0a86d08f4d04fce19791a8bee995f718f9bb8",
+    "source_merge_commit": "2a708a69d34db3709cf6f19ec5dfd58a259a94b4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4563",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed, blocking 0; python -m nox -s qe_read_backend -> passed, 441 passed, 1 skipped; python -m nox -s factor_research_backend -> passed, 99 passed, 9 skipped"
+    ],
+    "validation_evidence_digest": "03b05e38a98c29502a8e2847f93f3b634730ce3d1004bd7e7ae3ffc584d24182"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "显式PIT股票请求在缺少物理close Bin时被静默移出完整评价分母",
+  "trigger_condition": {
+    "fingerprint": "6ef44fa605f1c38f61c561e1",
+    "source_event_id": "FE-20260911-6ef44fa605f1"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed, blocking 0; python -m nox -s qe_read_backend -> passed, 441 passed, 1 skipped; python -m nox -s factor_research_backend -> passed, 99 passed, 9 skipped"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe",
+        "qe_read",
+        "factor_research"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "factor_research_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe",
+          "qe_read",
+          "factor_research"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "factor_research_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -14,6 +14,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--request-wsl", required=True)
     parser.add_argument("--repository-root-wsl", required=True)
     parser.add_argument("--conda-env", default="rdagent-gpu")
+    parser.add_argument(
+        "--contract",
+        choices=("legacy-v1", "daily-envelope-v1"),
+        default="legacy-v1",
+        help="Select the frozen training request and output bundle contract.",
+    )
     return parser.parse_args()
 
 
@@ -30,7 +36,8 @@ def main() -> int:
             "export PYTHONUNBUFFERED=1",
             f"cd {shlex.quote(args.repository_root_wsl)}",
             "python scripts/wsl/advisory_price_range_train.py "
-            f"--request {shlex.quote(args.request_wsl)}",
+            f"--request {shlex.quote(args.request_wsl)} "
+            f"--contract {shlex.quote(args.contract)}",
         ]
     )
     completed = subprocess.run(["wsl", "bash", "-lc", command], check=False)

@@ -1,0 +1,362 @@
+{
+  "actual": "compute_correlation_views为每个full/年度/近期窗口反复调用compute_selected_submatrix，重复计算重叠日期。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/correlation_engine.py",
+    "backend/tests/test_correlation_compute_independence.py",
+    "backend/services/factor_research/full_evaluation.py",
+    "backend/tests/factor_research/test_full_evaluation.py",
+    "tests/aistock_validation/bugs/20260911_BUG-1456-spearman.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1456",
+  "closed_at": "2026-10-01T14:19:19.560766Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-11T09:45:44.645081Z",
+  "description": "compute_correlation_views为每个full/年度/近期窗口反复调用compute_selected_submatrix，重复计算重叠日期。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260911-5f52e6417b68",
+      "timestamp": "2026-09-11T09:45:44.645027Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:\\AIstock_factor_research\\full-reevaluation-20260911\\attempts-v2"
+  ],
+  "expected": "每个候选与参照的逐日横截面Spearman只计算一次，再按既有half-life/min-days对预声明窗口聚合；输出与旧逐窗口算法逐值一致。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/services/quantevolver/correlation_engine.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260911_BUG-1456-spearman.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/services/quantevolver/correlation_engine.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260911_BUG-1456-spearman.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/correlation_engine.py",
+        "backend/tests/test_correlation_compute_independence.py",
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/tests/factor_research/test_full_evaluation.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "factor_library.research"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/correlation_engine.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/test_correlation_compute_independence.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/factor_research/full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/correlation_engine.py",
+        "backend/tests/test_correlation_compute_independence.py",
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/tests/factor_research/test_full_evaluation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/correlation_engine.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/correlation_engine.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ]
+  },
+  "first_seen_at": "2026-09-11T09:45:44.645081Z",
+  "fix_branch": null,
+  "fix_commit": "4f53073604cb9a53e29a4ee2247ef88d55acf012",
+  "fixed_at": "2026-09-11T10:22:35Z",
+  "github_issue_number": 4588,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4588",
+  "last_seen_at": "2026-09-11T09:45:44.645081Z",
+  "module": "factor_library.research",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4590",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "run_direct_readonly.py --input run_spec_v2.json",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "factor_research_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh process targeted correlation and factor-research tests -> 23 passed",
+      "WSL rdagent-gpu fresh process full-universe 4x4 candidate correlation -> passed in 11.5 seconds with zero swap"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\factor-aftercare-20261001\\verify-BUG-1456.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1456",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "6aa47962d6e0474b95cdc449365eb0aaec8f0eb2d97235bd85bf1ad4433c1026",
+      "expected_identity": "4f53073604cb9a53e29a4ee2247ef88d55acf012",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-01T14:19:11.558078Z",
+      "mode": "read_only",
+      "observed_identity": "3626c1cf5f338a7e6678ca62d737ff06ab1cacb1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e27efca03b0c363f948f4e4bf286a10ec6d7490ca3b779664527c89cbe9731c7",
+      "receipt_sha256": "2db482d36d9cf53d6c3c96b3bb1954f6ee0cf72fd3173392fadfbfa1828cbd71",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c2f14c74882e4ee8113c9213b9425f1c391c9b4c7ac201c96f3e6b222a5f5e54",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1456",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "339df67128b04c1f",
+    "recorded_at": "2026-09-11T10:23:50.219081Z",
+    "runtime_contract_digest": "740f1001321a5b38f5471c4a337b7a274687c8832ab09585778448008bdf3401",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2370682e81eb19d22052e01713c2d73fa2be0331",
+    "source_merge_commit": "4f53073604cb9a53e29a4ee2247ef88d55acf012",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4590",
+    "validation_evidence": [
+      "validation-receipt: id=e73e01a91fb9cc95 commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_correlation_compute_independence.py backend/tests/factor_research/test_full_evaluation.py -q` result=`23 passed`",
+      "validation-receipt: id=03d9016e22b56302 commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/unified_engine/test_qe_correlation_gpu_lifecycle.py -q` result=`6 passed`",
+      "validation-receipt: id=0c73bad037e60aec commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`101 passed, 9 skipped`",
+      "validation-receipt: id=fd67cebe74160fb1 commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`499 passed, 1 skipped`",
+      "validation-receipt: id=f733641b556a1b63 commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`"
+    ],
+    "validation_evidence_digest": "8d6e50bb0c351d7b75eb710381b91d6149a49ef50dfd9ed7050a37598d0ff058"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "factor_library.research"
+  ],
+  "title": "完整因子评价对重叠窗口重复计算逐日Spearman",
+  "trigger_condition": {
+    "fingerprint": "5f52e6417b68c142ef60e3eb",
+    "source_event_id": "FE-20260911-5f52e6417b68"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=e73e01a91fb9cc95 commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_correlation_compute_independence.py backend/tests/factor_research/test_full_evaluation.py -q` result=`23 passed`",
+    "validation-receipt: id=03d9016e22b56302 commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/unified_engine/test_qe_correlation_gpu_lifecycle.py -q` result=`6 passed`",
+    "validation-receipt: id=0c73bad037e60aec commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`101 passed, 9 skipped`",
+    "validation-receipt: id=fd67cebe74160fb1 commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=nox plan=qe_read_backend status=passed command=`python -m nox -s qe_read_backend` result=`499 passed, 1 skipped`",
+    "validation-receipt: id=f733641b556a1b63 commit=2370682e81eb19d22052e01713c2d73fa2be0331 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "factor_library.research",
+        "qe_read",
+        "factor_research"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "factor_research_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "factor_library.research",
+          "qe_read",
+          "factor_research"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "factor_research_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
