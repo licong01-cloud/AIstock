@@ -75,6 +75,27 @@ def test_causal_audit_rejects_same_day_and_does_not_fill_halts():
     assert audit["unresolved"] == [{"symbol": "000001.SZ", "trade_date": "2024-07-01"}]
 
 
+def test_approved_warmup_and_frozen_suspend_do_not_waive_other_missing_weights():
+    spans = [("000792.SZ", "2021-08-09", "2021-08-12")]
+    calendar = ["2021-08-09", "2021-08-10", "2021-08-11", "2021-08-12"]
+    facts = {"000792.SZ": [(pd.Timestamp("2021-08-10").value, False)]}
+    result = causal_coverage(spans, calendar, facts, start=calendar[0], end=calendar[-1],
+        history_start=calendar[0], approved_warmup_keys=frozenset({("000792.SZ", "2021-08-10")}),
+        not_applicable_keys=frozenset({("000792.SZ", "2021-08-11")}))
+    assert result["explained_warmup"] == 2
+    assert result["not_applicable"] == 1
+    assert result["unresolved"] == [{"symbol": "000792.SZ", "trade_date": "2021-08-12"}]
+    assert result["strict_prior_resolved"] == 0
+
+
+def test_source_window_boundary_does_not_import_outside_window_prior_facts():
+    result = causal_coverage([("000029.SZ", "2020-11-09", "2020-11-09")], ["2020-11-09"],
+        {"000029.SZ": [(pd.Timestamp("2016-09-13").value, True)]},
+        start="2020-07-30", end="2025-04-30", history_start="2020-07-30")
+    assert result["unresolved"] == [{"symbol": "000029.SZ", "trade_date": "2020-11-09"}]
+    assert result["explained_warmup"] == 0
+
+
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), 0, -1])
 def test_latest_invalid_fact_cannot_fall_back_to_older_positive_cap(invalid):
     facts = {}

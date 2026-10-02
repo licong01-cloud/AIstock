@@ -6,6 +6,7 @@ population, prices, moneyflow, and static factors are never rewritten.
 from __future__ import annotations
 
 import copy
+from collections import defaultdict
 import hashlib
 import json
 import os
@@ -55,8 +56,12 @@ def causal_audit_status(audit: dict) -> str:
     for item in audit.values():
         after = item["after"]
         expected, resolved = after["expected_keys"], after["strict_prior_resolved"]
+        explained = after.get("explained_warmup", 0)
+        not_applicable = after.get("not_applicable", 0)
         if (type(expected) is not int or expected <= 0 or type(resolved) is not int
-                or resolved < 0 or resolved + after["unresolved_count"] != expected):
+                or type(explained) is not int or explained < 0
+                or type(not_applicable) is not int or not_applicable < 0
+                or resolved < 0 or resolved + explained + not_applicable + after["unresolved_count"] != expected):
             raise ValueError("causal audit denominator does not close")
     return "BLOCKED" if any(counts) else "CANDIDATE_READY"
 
@@ -82,24 +87,40 @@ def merge_missing_facts(old: pd.DataFrame, source: pd.DataFrame) -> tuple[pd.Dat
 
 
 def causal_coverage(spans: list[tuple[str, str, str]], calendar: list[str],
-                    facts: dict[str, list[tuple[int, bool]]], *, start: str, end: str) -> dict:
+                    facts: dict[str, list[tuple[int, bool]]], *, start: str, end: str,
+                    history_start: str | None = None,
+                    approved_warmup_keys: frozenset[tuple[str, str]] = frozenset(),
+                    not_applicable_keys: frozenset[tuple[str, str]] = frozenset()) -> dict:
     days = pd.DatetimeIndex([day for day in calendar if start <= day <= end]).asi8
-    expected = resolved = 0
+    history_ns = pd.Timestamp(history_start).value if history_start is not None else None
+    warmup_dates: dict[str, list[int]] = defaultdict(list)
+    excluded_dates: dict[str, list[int]] = defaultdict(list)
+    for symbol, day in approved_warmup_keys:
+        warmup_dates[symbol].append(pd.Timestamp(day).value)
+    for symbol, day in not_applicable_keys:
+        excluded_dates[symbol].append(pd.Timestamp(day).value)
+    expected = resolved = explained = not_applicable = 0
     unresolved = []
     for symbol, begin, finish in spans:
         required = days[(days >= pd.Timestamp(begin).value) & (days <= pd.Timestamp(finish).value)]
-        observations = sorted(facts.get(symbol, []))
+        observations = sorted(row for row in facts.get(symbol, []) if history_ns is None or row[0] >= history_ns)
         prior = np.asarray([row[0] for row in observations], dtype=np.int64)
         valid = np.asarray([row[1] for row in observations], dtype=bool)
         positions = np.searchsorted(prior, required, side="left") - 1
         covered = np.zeros(len(required), dtype=bool)
         has_prior = positions >= 0
         covered[has_prior] = valid[positions[has_prior]]
+        exempt = np.isin(required, excluded_dates.get(symbol, ()))
+        warmup = ~has_prior & ~exempt & (np.isin(required, warmup_dates.get(symbol, ()))
+                                         | (required == history_ns if history_ns is not None else False))
         expected += len(required)
-        resolved += int(covered.sum())
-        for day in required[~covered]:
+        resolved += int((covered & ~exempt).sum())
+        explained += int(warmup.sum())
+        not_applicable += int(exempt.sum())
+        for day in required[~covered & ~exempt & ~warmup]:
             unresolved.append({"symbol": symbol, "trade_date": pd.Timestamp(day).date().isoformat()})
     return {"expected_keys": expected, "strict_prior_resolved": resolved,
+            "explained_warmup": explained, "not_applicable": not_applicable,
             "unresolved_count": len(unresolved), "unresolved": unresolved}
 
 
@@ -154,6 +175,19 @@ def repair_daily_basic_history(
     calendar = (baseline / manifest["components"]["day_calendar"]["path"]).read_text().splitlines()
     cutoff = manifest["cutoff_trade_date"]
     required_windows = consumer_causal_windows(cutoff)
+    suspend_path = baseline / "components/suspend_d_daily_candidate_v2/suspend_d.parquet"
+    if not any(pin["path"] == suspend_path.relative_to(baseline).as_posix()
+               for pin in manifest["components"].values()):
+        raise ValueError("frozen suspension authority is not pinned")
+    suspension = pd.read_parquet(suspend_path)
+    full_day = suspension[(suspension.suspend_type == "S")
+                          & suspension.suspend_timing.fillna("").isin(["", "09:30-09:30"])]
+    not_applicable_keys = frozenset((str(row.ts_code), pd.Timestamp(row.trade_date).date().isoformat())
+                                   for row in full_day.itertuples())
+    # Exact user-approved warmup, not a general resumption/provider exemption.
+    causal_options = {"history_start": "2020-07-30",
+                      "approved_warmup_keys": frozenset({("000792.SZ", "2021-08-10")}),
+                      "not_applicable_keys": not_applicable_keys}
     if diagnostic["manifest_identity"] != expected_manifest:
         raise ValueError("diagnostic manifest differs")
     new_inventory_path = "reports/factor_component_pin_inventory_daily_basic_history.json"
@@ -264,9 +298,9 @@ def repair_daily_basic_history(
             raise ValueError("new H5 exact value readback failed")
         audit = {}
         for name, (start, end) in required_windows.items():
-            audit[name] = {"before": causal_coverage(spans, calendar, old_facts, start=start, end=end),
-                           "after": causal_coverage(spans, calendar, new_facts, start=start, end=end),
-                           "source": causal_coverage(spans, calendar, source_facts, start=start, end=end)}
+            audit[name] = {"before": causal_coverage(spans, calendar, old_facts, start=start, end=end, **causal_options),
+                           "after": causal_coverage(spans, calendar, new_facts, start=start, end=end, **causal_options),
+                           "source": causal_coverage(spans, calendar, source_facts, start=start, end=end, **causal_options)}
             for section in audit[name].values():
                 section["window_start"] = start
                 section["window_end"] = end
@@ -307,6 +341,9 @@ def repair_daily_basic_history(
         "source_start": "2018-08-01", "source_end": cutoff,
         "causal_fact_window": {"start": "2020-07-30", "end": "2025-04-30"},
         "consumer_causal_windows": required_windows,
+        "approved_causal_warmup_keys": [{"symbol": "000792.SZ", "trade_date": "2021-08-10"}],
+        "causal_history_start": "2020-07-30",
+        "suspension_authority_path": suspend_path.relative_to(baseline).as_posix(),
         "source_hash_contract": "pandas_hash_pandas_object_ordered_dataframe_v1",
         "pandas_version": pd.__version__, "source_rows_digest": source_digest.hexdigest(),
         "added_rows_digest": added_digest.hexdigest(), "months": months,
