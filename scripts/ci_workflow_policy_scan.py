@@ -790,6 +790,23 @@ def build_contract_evidence(
             and "docker run" not in nightly_text.casefold()
             and "docker compose up" not in nightly_text.casefold()
         ),
+        "nightly_research_is_independent_of_dr_and_preserves_dr_failure": (
+            any(
+                block.startswith("  nightly-l3:")
+                and "needs: [runner-preflight]" in block
+                and "needs.dr-validate" not in block
+                and "needs.dr-snapshot" not in block
+                for block in _workflow_job_blocks(nightly_text)
+            )
+            and any(
+                block.startswith("  full-summary:")
+                and "dr-snapshot, dr-validate, nightly-l3" in block
+                and "if: always()" in block
+                and "needs.dr-snapshot.result == 'failure'" in block
+                and "needs.dr-validate.result == 'failure'" in block
+                for block in _workflow_job_blocks(nightly_text)
+            )
+        ),
         "nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies": (
             '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in nightly_text
             and "Verify prebuilt AIstock-CI and frontend dependencies" in nightly_text

@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 import noxfile
 from scripts.ci_workflow_policy_scan import (
@@ -15,6 +16,23 @@ from scripts.ci_workflow_policy_scan import (
     scan_workflow_text,
     scan_workflows,
 )
+
+
+def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary() -> None:
+    jobs = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"]
+    l3, summary = jobs["nightly-l3"], jobs["full-summary"]
+    assert l3["needs"] == ["runner-preflight"]
+    assert "needs.dr-" not in l3["if"]
+    assert "inputs.run_nightly_l3" in l3["if"]
+    assert jobs["dr-validate"]["needs"] == "dr-snapshot"
+    assert {"dr-snapshot", "dr-validate", "nightly-l3"} <= set(summary["needs"])
+    assert summary["if"] == "always()"
+    failure = next(step for step in summary["steps"] if step.get("name") == "Build Nightly failure issue context")
+    assert "needs.dr-snapshot.result == 'failure'" in failure["if"]
+    assert "needs.dr-validate.result == 'failure'" in failure["if"]
+    assert failure["env"]["L3_RESULT"] == "${{ needs.nightly-l3.result }}"
+    assert failure["env"]["DR_RESULT"] == "${{ needs.dr-snapshot.result }}"
+    assert failure["env"]["DR_VALIDATE_RESULT"] == "${{ needs.dr-validate.result }}"
 
 
 def test_policy_scan_rejects_install_and_disposable_database() -> None:

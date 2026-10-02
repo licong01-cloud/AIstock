@@ -326,6 +326,8 @@ CI workflow 不声明 `services`、启动 PostgreSQL/TimescaleDB 容器、创建
 
 Nightly 的 DR snapshot/restore-readback 属于独立运维 lane，只能连接已存在且已授权的目标并执行既定只读/备份 runbook；不得创建或启动数据库容器，也不得冒充 PR CI 或 DEV 验证。该 lane 必须使用独立名称、权限和 receipt，使 `AIstock` 运维环境与 `AIstock-CI` PR 环境不会被混淆。
 
+Nightly 研发验证不消费 DR 备份产物时，nightly-l3 只依赖 runner/receipt preflight，不等待 dr-snapshot 或 dr-validate。DR 仍按 snapshot → validate 独立执行，full-summary 必须等待两条分支并逐项保留结果；研发测试通过不代表备份成功，DR 失败仍使整体运行失败并进入既有故障处理。只复用现有两个 runner 的有界容量，不新增数据库、runner、验证门禁或人工授权。
+
 <a id="rule-context-budget-001"></a>
 ### 7.1 [CONTEXT-BUDGET-001] 上下文预算
 
