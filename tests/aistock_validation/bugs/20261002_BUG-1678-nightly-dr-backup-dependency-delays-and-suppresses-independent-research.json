@@ -1,6 +1,7 @@
 {
   "actual": "Nightly scheduled L3 requires dr-validate: the latest successful run waits for a 51-minute existing-authorized DR snapshot before about 9 minutes of research sessions, and backup failure suppresses L3. Decouple independent research and DR execution while preserving final DR failures, isolated targets and bounded host concurrency. No database operations or job dispatch during implementation.",
   "allowed_write_scope": [
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     ".github/workflows/nightly.yml",
     "scripts/ci_workflow_policy_scan.py",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
