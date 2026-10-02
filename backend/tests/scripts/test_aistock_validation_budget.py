@@ -104,6 +104,7 @@ def test_build_audit_counts_tracked_code_once_by_primary_owner(tmp_path: Path, m
     import pytest
     with pytest.raises(ValueError, match="no executable tracked files"):
         audit.build_audit(repo_root=tmp_path, catalog=catalog, tracked_paths=paths, module_ids=["missing"])
+    assert audit.main(["--module", "example", "--fail-test-only-owner", "tests.backend"]) == 2
 
 
 def test_test_path_detection_covers_helpers_and_language_conventions() -> None:

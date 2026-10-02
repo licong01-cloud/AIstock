@@ -241,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     registry_path = args.module_registry or repo_root / "tests/aistock_validation/catalog/module_registry.yaml"
     ownership_path = args.file_ownership or repo_root / "tests/aistock_validation/catalog/file_ownership.yaml"
     try:
+        if args.module and set(args.fail_test_only_owner) - set(args.module):
+            raise ValueError("module scope must include every --fail-test-only-owner target")
         registry = ModuleRegistry(registry_path)
         catalog = FileOwnershipCatalog(ownership_path, module_registry=registry)
         registry.load()
