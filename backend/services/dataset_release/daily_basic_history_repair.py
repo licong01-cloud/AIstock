@@ -26,6 +26,41 @@ from .streaming_artifacts import sha256_file
 FACTOR = "components/factor_h5_static_candidate_v2"
 
 
+def consumer_causal_windows(cutoff: str) -> dict[str, tuple[str, str]]:
+    """Approved consumers of this frozen model/release, not inferred model windows.
+
+    Product source history extends to the candidate cutoff. Executor and QE
+    coefficient boundaries remain their approved fixed dates; this producer
+    cannot change them or authorize new NA exceptions.
+    """
+    end = date.fromisoformat(cutoff)
+    if end < date(2026, 8, 31) or end.isoformat() != cutoff:
+        raise ValueError("cutoff cannot cover the approved consumers")
+    return {
+        "source": ("2020-07-30", "2025-04-30"),
+        "train": ("2022-01-01", "2024-06-30"),
+        "validation": ("2024-07-01", "2025-03-31"),
+        "product_history": ("2020-07-30", cutoff),
+        "qe_coefficients": ("2024-07-01", "2026-08-28"),
+    }
+
+
+def causal_audit_status(audit: dict) -> str:
+    """No partial/window-only PASS can label a shared candidate READY."""
+    if set(audit) != set(consumer_causal_windows("2026-08-31")):
+        raise ValueError("required consumer causal windows are incomplete")
+    counts = [item["after"]["unresolved_count"] for item in audit.values()]
+    if any(type(count) is not int or count < 0 for count in counts):
+        raise ValueError("causal gap counts are invalid")
+    for item in audit.values():
+        after = item["after"]
+        expected, resolved = after["expected_keys"], after["strict_prior_resolved"]
+        if (type(expected) is not int or expected <= 0 or type(resolved) is not int
+                or resolved < 0 or resolved + after["unresolved_count"] != expected):
+            raise ValueError("causal audit denominator does not close")
+    return "BLOCKED" if any(counts) else "CANDIDATE_READY"
+
+
 def write_exclusive(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as handle:
@@ -118,6 +153,7 @@ def repair_daily_basic_history(
     codes = sorted({row[0] for row in spans})
     calendar = (baseline / manifest["components"]["day_calendar"]["path"]).read_text().splitlines()
     cutoff = manifest["cutoff_trade_date"]
+    required_windows = consumer_causal_windows(cutoff)
     if diagnostic["manifest_identity"] != expected_manifest:
         raise ValueError("diagnostic manifest differs")
     new_inventory_path = "reports/factor_component_pin_inventory_daily_basic_history.json"
@@ -227,9 +263,7 @@ def repair_daily_basic_history(
         if output_digest.hexdigest() != readback_digest.hexdigest():
             raise ValueError("new H5 exact value readback failed")
         audit = {}
-        for name, start, end in [("source", "2021-07-30", "2025-04-30"),
-                                 ("train", "2022-01-01", "2024-06-30"),
-                                 ("validation", "2024-07-01", "2025-03-31")]:
+        for name, (start, end) in required_windows.items():
             audit[name] = {"before": causal_coverage(spans, calendar, old_facts, start=start, end=end),
                            "after": causal_coverage(spans, calendar, new_facts, start=start, end=end),
                            "source": causal_coverage(spans, calendar, source_facts, start=start, end=end)}
@@ -272,6 +306,7 @@ def repair_daily_basic_history(
         "source_dataset": "market.daily_basic", "snapshot_identity": snapshot_identity,
         "source_start": "2018-08-01", "source_end": cutoff,
         "causal_fact_window": {"start": "2020-07-30", "end": "2025-04-30"},
+        "consumer_causal_windows": required_windows,
         "source_hash_contract": "pandas_hash_pandas_object_ordered_dataframe_v1",
         "pandas_version": pd.__version__, "source_rows_digest": source_digest.hexdigest(),
         "added_rows_digest": added_digest.hexdigest(), "months": months,
@@ -301,7 +336,7 @@ def repair_daily_basic_history(
     content_identity = hashlib.sha256(canonical_json_bytes(updated["components"])).hexdigest()
     updated["deployment_content_sha256"] = content_identity
     updated["deployment_snapshot_id"] = f"{updated['release_id']}_{content_identity[:16]}"
-    updated["availability_status"] = "CANDIDATE_READY" if not audit["source"]["after"]["unresolved_count"] else "BLOCKED"
+    updated["availability_status"] = causal_audit_status(audit)
     updated["dataset_manifest_sha256"] = _manifest_identity(updated)
     write_exclusive(candidate / "qe_dataset_manifest.json", updated)
     _validate_manifest_components(candidate, updated["components"])

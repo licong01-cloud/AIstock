@@ -1,6 +1,7 @@
 {
   "actual": "Monthly PIT readiness checks state coverage but not live pointer; v17 BLOCKED only reports a legal000792 warmup key, comprehensive consumer coverage not established.",
   "allowed_write_scope": [
+    "backend/tests/dataset_release/test_daily_basic_history_repair.py",
     "noxfile.py",
     "scripts/ci_change_classifier.py",
     "backend/tests/dataset_release/test_monthly_postgres_source.py",
@@ -21,6 +22,26 @@
   ],
   "created_at": "2026-10-02T06:41:21.842904Z",
   "description": "Monthly PIT readiness checks state coverage but not live pointer; v17 BLOCKED only reports a legal000792 warmup key, comprehensive consumer coverage not established.",
+  "data_preparation_readback": {
+    "current_receipt": "X:/AIstock_temp/business-data-audit-20261002/business-data-delivery.json",
+    "source_root_cause": "Historical repair audited source from 2021-07-30, omitting the approved 2020-07-30 first year, and readiness inspected only one window. Monthly required-field gate omitted current/strict-prior market caps. Live canonical component readiness did not establish pointer activation or native Selection lease agreement.",
+    "complete_stock_date_keys": 6429998,
+    "qlib_required_field_count": 12,
+    "qlib_non_suspended_invalid_count": 0,
+    "source_unit_value_drift_count": 0,
+    "applicable_source_boundary_null_count": 6,
+    "typed_evidence_is_feature_acceptance": false,
+    "advisory_live_authority": "DEPLOYED_LEGACY_PENDING_MIGRATION",
+    "advisory_generation": 0,
+    "native_canonical_selection_lease_count": 0,
+    "candidate_ready": false,
+    "database_write": false,
+    "candidate_write": false,
+    "active_profile_write": false,
+    "runtime_action": false,
+    "outcomes_read": false,
+    "fit_count": 0
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -142,6 +163,7 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "backend/tests/dataset_release/test_daily_basic_history_repair.py",
       "noxfile.py",
       "scripts/ci_change_classifier.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
@@ -153,6 +175,7 @@
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/tests/dataset_release/test_daily_basic_history_repair.py",
       "noxfile.py",
       "scripts/ci_change_classifier.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
