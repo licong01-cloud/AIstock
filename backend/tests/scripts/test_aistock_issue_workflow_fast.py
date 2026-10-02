@@ -890,13 +890,18 @@ def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
     assert retired.isdisjoint(catalog["non_runtime_source_paths"])
 
 
-def test_runtime_classifier_surfaces_catalog_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def invalid_runtime_catalog(monkeypatch: pytest.MonkeyPatch) -> str:
     message = "runtime target catalog contains one stale source"
 
     def fail_catalog(_root: Path | None = None) -> dict[str, Any]:
         raise workflow.WorkflowError(message)
 
     monkeypatch.setattr(workflow, "_load_runtime_target_catalog", fail_catalog)
+    return message
+
+
+def test_runtime_classifier_surfaces_catalog_validation_error(invalid_runtime_catalog: str) -> None:
 
     payload = workflow._classify_runtime_impact(
         ["backend/services/hmm_risk/contracts.py"]
@@ -904,17 +909,10 @@ def test_runtime_classifier_surfaces_catalog_validation_error(monkeypatch: pytes
 
     assert payload["runtime_impact"] == "unknown"
     assert payload["target_ids"] == ["backend-main"]
-    assert payload["catalog_error"] == message
+    assert payload["catalog_error"] == invalid_runtime_catalog
 
 
-def test_runtime_contract_blocks_on_catalog_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    message = "runtime target catalog contains one stale source"
-
-    def fail_catalog(_root: Path | None = None) -> dict[str, Any]:
-        raise workflow.WorkflowError(message)
-
-    monkeypatch.setattr(workflow, "_load_runtime_target_catalog", fail_catalog)
-
+def test_runtime_contract_blocks_on_catalog_validation_error(invalid_runtime_catalog: str) -> None:
     contract = workflow.build_runtime_contract(
         record={
             "runtime_contract": {
@@ -927,9 +925,31 @@ def test_runtime_contract_blocks_on_catalog_validation_error(monkeypatch: pytest
     )
 
     assert contract["runtime_impact"] == "unknown"
-    assert contract["catalog_validation_error"] == message
-    assert f"runtime target catalog validation failed: {message}" in contract["blocking"]
+    assert contract["catalog_validation_error"] == invalid_runtime_catalog
+    assert f"runtime target catalog validation failed: {invalid_runtime_catalog}" in contract["blocking"]
     assert contract["pre_pr_ready"] is False
+
+
+@pytest.mark.parametrize("path,registered", [
+    ("/api/v1/audit-unregistered-contract", False),
+    ("/api/v1/factor-metrics/results", True),
+])
+def test_runtime_preflight_checks_semantic_registration_without_http(path, registered) -> None:
+    root = workflow.REPO_ROOT
+    runbook = next((root / "docs/operations").glob("*.md")).relative_to(root).as_posix()
+    contract = workflow.build_runtime_contract(
+        record={"runtime_contract": {
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "operator_runbook_ref": runbook,
+            "identity_ref": "http://127.0.0.1:8001/api/v1/runtime/identity",
+            "business_smoke_ref": "http://127.0.0.1:8001" + path,
+            "fresh_process_evidence": ["synthetic-contract-presence-only"],
+        }},
+        changed_files=["backend/main.py"],
+    )
+    semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
+    assert bool(semantic_errors) is not registered
+    assert contract["pre_pr_ready"] is registered
 
 
 def test_bug_1549_active_contract_consumers_remain_backend_main() -> None:
@@ -1131,9 +1151,13 @@ def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch:
     assert emitted["close_sync_commit"]["workflow_gate"] == "deferred_runtime_verification"
 
 
+@pytest.mark.parametrize("pr_number,commit,accepted", [(199, "a", True), (200, "a", False), (199, "b", False)])
 def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    pr_number: int,
+    commit: str,
+    accepted: bool,
 ) -> None:
     issue = tmp_path / "tests" / "aistock_validation" / "bugs" / "BUG-199.json"
     issue.parent.mkdir(parents=True)
@@ -1158,37 +1182,22 @@ def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
         tmp_path,
         "BUG-199",
         issue,
-        source_pr_url="https://github.example/pull/199",
-        merge_commit="a" * 40,
+        source_pr_url=f"https://github.example/pull/{pr_number}",
+        merge_commit=commit * 40,
     )
-
-    assert recovered is not None
-    assert recovered["path"] == "tests/aistock_validation/bugs/BUG-199.json"
-    assert (
-        workflow._recoverable_close_sync_dirty_record(
-            tmp_path,
-            "BUG-199",
-            issue,
-            source_pr_url="https://github.example/pull/200",
-            merge_commit="a" * 40,
-        )
-        is None
-    )
-    assert (
-        workflow._recoverable_close_sync_dirty_record(
-            tmp_path,
-            "BUG-199",
-            issue,
-            source_pr_url="https://github.example/pull/199",
-            merge_commit="b" * 40,
-        )
-        is None
-    )
+    if accepted:
+        assert recovered is not None
+        assert recovered["path"] == "tests/aistock_validation/bugs/BUG-199.json"
+    else:
+        assert recovered is None
 
 
+@pytest.mark.parametrize("recovery_number,accepted", [(199, True), (200, False)])
 def test_close_sync_apply_guard_allows_only_the_exact_recoverable_dirty_record(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    recovery_number: int,
+    accepted: bool,
 ) -> None:
     dirty_path = "tests/aistock_validation/bugs/BUG-199.json"
     monkeypatch.setattr(
@@ -1203,26 +1212,21 @@ def test_close_sync_apply_guard_allows_only_the_exact_recoverable_dirty_record(
     monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
     recovery = {
         "bug_id": "BUG-199",
-        "path": dirty_path,
+        "path": f"tests/aistock_validation/bugs/BUG-{recovery_number}.json",
         "status": "fixed",
         "fix_commit": "a" * 40,
         "pr_url": "https://github.example/pull/199",
     }
 
-    accepted = workflow._validate_close_sync_apply_target(
+    result = workflow._validate_close_sync_apply_target(
         tmp_path,
         recoverable_dirty_record=recovery,
     )
-    rejected = workflow._validate_close_sync_apply_target(
-        tmp_path,
-        recoverable_dirty_record={**recovery, "path": "tests/aistock_validation/bugs/BUG-200.json"},
-    )
-
-    assert accepted["blocking"] == []
-    assert accepted["recoverable_dirty_record"] == recovery
-    assert rejected["blocking"] == [
-        "registry target is dirty (1 file(s)); start from a clean task worktree"
-    ]
+    if accepted:
+        assert result["blocking"] == []
+        assert result["recoverable_dirty_record"] == recovery
+    else:
+        assert result["blocking"] == ["registry target is dirty (1 file(s)); start from a clean task worktree"]
 
 
 def test_windows_process_scan_builds_full_caller_ancestor_exclusion(
@@ -1438,9 +1442,11 @@ def test_cleanup_pr_cache_mismatch_forces_exact_readback(
     assert readbacks == 1
 
 
-def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
+@pytest.mark.parametrize("stale", [False, True])
+def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    stale: bool,
 ) -> None:
     events: list[str] = []
     monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
@@ -1452,7 +1458,7 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
     monkeypatch.setattr(
         workflow,
         "_git_snapshot",
-        lambda root: {"branch": "main", "dirty": False, "head": "old", "origin_main": "new"},
+        lambda root: {"branch": "main", "dirty": False, "head": "same" if stale else "old", "origin_main": "same" if stale else "new"},
     )
     monkeypatch.setattr(
         workflow,
@@ -1467,11 +1473,9 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
         "_merge_commit_changed_files",
         lambda merge_commit, root: {
             "ok": True,
-            "files": [
-                ".codex/skills/aistock-merge-aftercare/SKILL.md",
-                ".claude/commands/aistock-task-router.md",
-                "docs/standards/README.md",
-            ],
+            "files": [".codex/skills/aistock-merge-aftercare/SKILL.md"] if stale else [
+                ".codex/skills/aistock-merge-aftercare/SKILL.md", ".claude/commands/aistock-task-router.md",
+                "docs/standards/README.md"],
         },
     )
 
@@ -1481,7 +1485,10 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
 
     monkeypatch.setattr(workflow, "build_client_install_plan", fake_install)
     monkeypatch.setattr(workflow, "_ClientInstallLock", lambda: workflow.contextlib.nullcontext())
-    monkeypatch.setattr(workflow, "_client_manifest", lambda: {})
+    monkeypatch.setattr(workflow, "_client_manifest", lambda: {
+        "codex_entries": {"merge_aftercare": {"status": "current"}, "validation_delegation": {"status": "stale"}},
+        "claude_entries": {"validation_delegation": {"status": "stale_global"}, "readonly_triage": {"status": "missing_global"}},
+    } if stale else {})
     monkeypatch.setattr(
         workflow,
         "_client_lane_verification",
@@ -1495,74 +1502,15 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
     )
 
     assert result["workflow_gate"] == "installed_and_verified"
-    assert result["selected_lanes"] == ["merge_aftercare", "router"]
-    assert events == ["root_sync", "merge_containment", "install:merge_aftercare", "install:router"]
-    assert result["merge_commit_containment"]["ok"] is True
-
-
-def test_merge_aftercare_backfills_preexisting_stale_lanes_in_same_profile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    installed: list[str] = []
-    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        workflow,
-        "_cleanup_preflight_fetch_origin",
-        lambda root, apply: {"status": "fetched", "result": _result()},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_git_snapshot",
-        lambda root: {"branch": "main", "dirty": False, "head": "same", "origin_main": "same"},
-    )
-    monkeypatch.setattr(workflow, "_run_command", lambda args, **kwargs: _result())
-    monkeypatch.setattr(
-        workflow,
-        "_merge_commit_changed_files",
-        lambda merge_commit, root: {
-            "ok": True,
-            "files": [".codex/skills/aistock-merge-aftercare/SKILL.md"],
-        },
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_client_manifest",
-        lambda: {
-            "codex_entries": {
-                "merge_aftercare": {"status": "current"},
-                "validation_delegation": {"status": "stale"},
-            },
-            "claude_entries": {
-                "validation_delegation": {"status": "stale_global"},
-                "readonly_triage": {"status": "missing_global"},
-            },
-        },
-    )
-    monkeypatch.setattr(workflow, "_ClientInstallLock", lambda: workflow.contextlib.nullcontext())
-    monkeypatch.setattr(
-        workflow,
-        "build_client_install_plan",
-        lambda *, apply, selected_lane, **kwargs: (
-            installed.append(selected_lane) or {"workflow_gate": "installed", "blocking": []}
-        ),
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_client_lane_verification",
-        lambda manifest, selected_lane, verify_codex, verify_claude: {"ready": True, "blocking": []},
-    )
-
-    result = workflow._publish_changed_clients_after_merge(
-        merge_commit="e" * 40,
-        sync_root=True,
-        apply=True,
-    )
-
-    assert result["workflow_gate"] == "installed_and_verified"
-    assert result["changed_lanes"] == ["merge_aftercare"]
-    assert result["stale_lanes_before"] == ["readonly_triage", "validation_delegation"]
-    assert installed == ["merge_aftercare", "readonly_triage", "validation_delegation"]
+    if stale:
+        assert result["changed_lanes"] == ["merge_aftercare"]
+        assert result["stale_lanes_before"] == ["readonly_triage", "validation_delegation"]
+        assert [event for event in events if event.startswith("install:")] == [
+            "install:merge_aftercare", "install:readonly_triage", "install:validation_delegation"]
+    else:
+        assert result["selected_lanes"] == ["merge_aftercare", "router"]
+        assert events == ["root_sync", "merge_containment", "install:merge_aftercare", "install:router"]
+        assert result["merge_commit_containment"]["ok"] is True
 
 
 def test_merge_finalizer_stops_before_close_sync_when_client_publish_blocks(

@@ -2699,6 +2699,13 @@ def build_runtime_contract(
                             if probe_error:
                                 blocking.append(f"runtime target {target_id} {probe_error}")
                     database_ref = target["probes"].get("database_readback_ref")
+                    smoke_ref = target["probes"].get("business_smoke_ref")
+                    smoke_path = urllib.parse.urlsplit(str(smoke_ref or "")).path or "/"
+                    if smoke_ref and _business_smoke_semantic_contract(smoke_path) is None:
+                        blocking.append(
+                            f"runtime target {target_id} has no target-owned business-smoke "
+                            f"semantic contract registered for endpoint path: {smoke_path}"
+                        )
                     if database_ref:
                         probe_error = _validate_runtime_probe_ref(
                             "database_readback_ref",

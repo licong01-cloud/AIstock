@@ -146,6 +146,36 @@ def _workflow_step_blocks(job_block: str) -> list[str]:
     return blocks
 
 
+def has_event_bound_base_preparation(text: str, *, manual: bool) -> bool:
+    """Check preparation step inputs, not unrelated strings elsewhere in a workflow."""
+    mode = "--prepare-manual-merge-base-only" if manual else "--prepare-pr-merge-base-only"
+    steps = [
+        step for job in _workflow_job_blocks(text) for step in _workflow_step_blocks(job)
+        if mode in step
+    ]
+    if len(steps) != 1:
+        return False
+    step = steps[0]
+    expected = {
+        "BASE_REF": "inputs.base_ref" if manual else "github.event.pull_request.base.ref",
+        "BASE_SHA": "inputs.base_sha" if manual else "github.event.pull_request.base.sha",
+        "SOURCE_HEAD_SHA": "github.sha" if manual else "github.event.pull_request.head.sha",
+        "CHECKOUT_REF": "github.ref",
+    }
+    for key, expression in expected.items():
+        match = re.search(rf"(?m)^          {key}:\s*(.+)$", step)
+        if not match or expression not in match.group(1):
+            return False
+    if manual and "github.event_name == 'pull_request'" in step:
+        return False
+    return all(
+        argument in step for argument in (
+            '--base-ref "${BASE_REF}"', '--base-sha "${BASE_SHA}"',
+            '--checkout-ref "${CHECKOUT_REF}"', '--source-head-sha "${SOURCE_HEAD_SHA}"',
+        )
+    )
+
+
 def _checkout_step_blocks(job_block: str) -> list[str]:
     return [block for block in _workflow_step_blocks(job_block) if CHECKOUT_ACTION_RE.search(block)]
 
@@ -548,7 +578,7 @@ def build_contract_evidence(
             for name in SUPERSEDED_RUN_WORKFLOWS
         ),
         "bounded_pr_base_fetch_retry": all(
-            "--prepare-pr-merge-base-only" in workflow_text.get(name, "")
+            has_event_bound_base_preparation(workflow_text.get(name, ""), manual=name != "test.yml")
             for name in BASE_FETCH_RETRY_WORKFLOWS
         )
         and "for index in range(max(1, int(attempts)))" in changed_files_text
@@ -789,6 +819,23 @@ def build_contract_evidence(
             "AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'" in nightly_text
             and "docker run" not in nightly_text.casefold()
             and "docker compose up" not in nightly_text.casefold()
+        ),
+        "nightly_research_is_independent_of_dr_and_preserves_dr_failure": (
+            any(
+                block.startswith("  nightly-l3:")
+                and "needs: [runner-preflight]" in block
+                and "needs.dr-validate" not in block
+                and "needs.dr-snapshot" not in block
+                for block in _workflow_job_blocks(nightly_text)
+            )
+            and any(
+                block.startswith("  full-summary:")
+                and "dr-snapshot, dr-validate, nightly-l3" in block
+                and "if: always()" in block
+                and "needs.dr-snapshot.result == 'failure'" in block
+                and "needs.dr-validate.result == 'failure'" in block
+                for block in _workflow_job_blocks(nightly_text)
+            )
         ),
         "nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies": (
             '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in nightly_text

@@ -1,6 +1,6 @@
-# Advisory 经济进入价值：风险口径对齐与每日消费身份 F2 设计 v0.2
+# Advisory 经济进入价值：风险口径对齐与每日消费身份 F2 设计 v0.3
 
-> 日期2026-10-02；状态DESIGN_REVIEWED_IMPLEMENTATION_PENDING，尚无v2模型/生产绑定。父设计：[经济进入价值v1](advisory_economic_entry_value_v1_f2_design_20261002.md)。本文件不修订已消费v1模型或其负向结论。
+> 日期2026-10-02；状态OFFLINE_RISK_LABEL_AUDIT_VERIFIED_REUSE_BLOCKED，设计PR #5233已合入19719beb。独立风险标签、停止复用检查、D网格/身份合同内核已实现并经多轮审核；没有v2研究模型或生产绑定，每日API/UI尚未交付。父设计：[经济进入价值v1](advisory_economic_entry_value_v1_f2_design_20261002.md)。本文件不修订已消费v1模型或其负向结论。
 
 ## 1. Background / 事实与问题
 
@@ -90,19 +90,19 @@ v2研究只验证语义修复，不改原退出policy、候选、成本、seed�
 
 ## 9. Design Acceptance Matrix
 
-本矩阵首先只验收设计；v0.2已经两轮本窗口语义审核。源码、真实v2研究、每日API/UI均未执行，不利用结构校验宣称已完成。
+本矩阵验收批准的离线标签审计及每日合同内核切片，不是整个价格建议产品。v0.2两轮设计审核后，v0.3又执行来源/公式、模型复用/PIT及输出状态三轮本窗口源码审核；真实只读prepare完成但weight reuse停止，没有研究risk fit。每日API/UI和经济确认仍待后续独立里程碑，不利用内核或合成测试宣称业务已经完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-551 | §1、§3 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-552 | §4 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-553 | §4 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-554 | §4 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-555 | §3、§5 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-556 | §5 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-557 | §4、§6～§7 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-558 | §2、§5 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-559 | §6～§7 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
+| F-551 | economic_risk_alignment_contracts.py | artifact: backend/tests/advisory_model_first/test_economic_risk_alignment_labels.py | VERIFIED | none |
+| F-552 | economic_risk_alignment_labels.py | artifact: backend/tests/advisory_model_first/test_economic_risk_alignment_labels.py | VERIFIED | none |
+| F-553 | economic_risk_alignment_pipeline.py | artifact: backend/tests/advisory_model_first/test_economic_risk_alignment_pipeline.py | VERIFIED | none |
+| F-554 | economic_risk_alignment_training.py | artifact: backend/tests/advisory_model_first/test_economic_risk_alignment_training.py | VERIFIED | none |
+| F-555 | economic_risk_alignment_contracts.py、inference.py | artifact: backend/tests/advisory_model_first/test_economic_risk_alignment_inference.py | VERIFIED | none |
+| F-556 | economic_risk_alignment_inference.py | artifact: backend/tests/advisory_model_first/test_economic_risk_alignment_inference.py | VERIFIED | none |
+| F-557 | §4、§6～§7；本次零模型仅prepare，matched研究待后续 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
+| F-558 | economic_risk_alignment_pipeline.py、§2/§5 | artifact: backend/tests/advisory_model_first/test_economic_risk_alignment_pipeline.py | VERIFIED | none |
+| F-559 | §6～§7；API/UI/独立确认未交付且不冒充 | artifact: docs/architecture/advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md | DESIGN_VERIFIED | none |
 
 ## 10. Risks / 风险
 
@@ -114,9 +114,21 @@ v2研究只验证语义修复，不改原退出policy、候选、成本、seed�
 - 第二轮实现/身份审核：明确train/validation eligible不匹配即停止复用、test UNKNOWN不反向改权重；区分训练来源/每日输入、股票池定义/成员hash；原v1 seven-core源码不改，防止已有study reader失效。API/UI尚无写授权范围，本阶段不以合同代替其交付。
 - DESIGN-COMPLIANCE-001：不称完整产品或经济有效；缺口/未知显式；不改旧政策/成本/结果；不引入新审批门禁或跨模块修改。结构validator另行验证，不能代替这些语义检查。
 
+### 10.2 源码审核与真实prepare
+
+三轮源码审核修复：训练行顺序以D/T/symbol精确对齐而非位置假设；核验原拟合/校准矩阵和return目标hash、split receipt、权重/feature order/LGBM版本；路径只读open/close且退出日只open；法规价单位本来是CNY，不能再次÷1000；输出根禁止越界链接；缺risk合同不等于正常SKIP，全部特征未知不冒充可估值；D网格先算节点预算再分配，拒绝无限/截断；T开盘消费重验hash和合法价、不桥接拒绝/未知节点。旧七核心源码未改，旧study仍可读。
+
+27个直接测试PASS（2.75s），Ruff PASS，L0两扫描0 findings/0 blocking。合成训练只验证固定头/无test拟合的工程合同，不是研究模型。真实prepare study `adventryloss_daadbb8de554e555061df5d8`，输出根`F:/Dev/AIstock_model_artifacts/advisory_entry_loss_alignment_v2_20261002`，prepared stage hash=`bf6151dd28bd6d7720d4bcdb7f6903576cd5817d20d0023e54a6b791fa22586e`。
+
+7,720条原候选全部保留；新风险标签AVAILABLE=7,336+349=7,685（349条为label-end purged），UNAVAILABLE=31，NOT_ENTERED=3，CENSORED=1。31个新未知中ENTRY_OPEN_LIMIT_EXECUTION_UNPROVEN=14、EXIT_OPEN_LIMIT_EXECUTION_UNPROVEN=17；其中真实拟合eligible变化train=22、validation=2。结果`BLOCKED_ELIGIBILITY_DRIFT/REUSE_BLOCKED_NO_FIT`，registry planned=1/generated=0/evaluated=0，未拟合研究risk或return，不计算新模型收益、不改变原v1结论。原source仍RECOVERED_LIMITED，不是native COMPLETE。
+
+本复用合同不放宽：[一致集合v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)设计PR #5245已合入，固定双头真实拟合与导航已完成，新study planned/generated/evaluated=1/1/1。实际模型TAKE16笔，但相对基线日增量-8.888bps、区间跨零，因此本candidate停止、不绑定；本v2仍generated0，不把新拟合称为exact retry或独立OOS。冻结参数/seed/窗口/800参考及旧工件不变。完整每日API/UI另登记确切文件继续，不以新候选失败关闭经济价格建议业务。
+
 ## 11. Production Gates
 
-design_source_merge=pending；source_implemented=false；v2_model_trained=false；qe_experiment_submitted=false；database_written=false；profile_activated=false；sealed_holdout_accessed=false；binding_activated=false；backend_restart_owner=user。
+design_source_merge=merged_PR5233；offline_label_and_daily_contract_kernel=verified；source_merge=merged_PR5242_ea659553；v2_research_model_trained=false；daily_api_ui_implemented=false；qe_experiment_submitted=false；database_written=false；profile_activated=false；sealed_holdout_accessed=false；binding_activated=false；backend_restart_owner=user。
+
+后续一致监督集合双头方案见[独立v3 F2设计](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)：新拟合不改变本复用阻断或generated0，不称exact retry，旧v2源码/labels/prepare保持不变。
 
 ## 12. Rollout / Rollback
 
