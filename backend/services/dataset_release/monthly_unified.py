@@ -682,7 +682,7 @@ class MonthlyOperationStore:
         return None
 
     def pending_operation_ids(self) -> tuple[str, ...]:
-        """Return resumable operations in deterministic creation order."""
+        """Return runnable operations; blocked sources wait for explicit resume."""
 
         pending: list[tuple[str, str]] = []
         if not self.operations.is_dir():
@@ -693,6 +693,8 @@ class MonthlyOperationStore:
                 continue
             state = _read_json(state_path, label="monthly state")
             status = ReleaseState(str(state["status"]))
+            if status == ReleaseState.SOURCE_BLOCKED and state.get("cancel_requested") is not True:
+                continue
             if status == ReleaseState.READY_TO_ACTIVATE:
                 request = _read_json(child / "request.json", label="monthly request")
                 if request.get("activation_mode") != "activate_when_ready":
@@ -735,10 +737,19 @@ class MonthlyOperationStore:
             return state
 
     def request_cancel(self, operation_id: str) -> dict[str, Any]:
-        state = self.read_state(operation_id)
-        if ReleaseState(state["status"]) in TERMINAL_STATES:
+        root = self.operation_root(operation_id)
+        with _exclusive_lock(root / ".operation.lock"):
+            state = self.read_state(operation_id)
+            status = ReleaseState(state["status"])
+            if status in TERMINAL_STATES:
+                return state
+            state["cancel_requested"] = True
+            if status == ReleaseState.SOURCE_BLOCKED:
+                state["status"] = ReleaseState.CANCELLED.value
+                state["current_stage"] = None
+            state["updated_at"] = datetime.now(UTC).isoformat()
+            _replace_json(root / "state.json", state)
             return state
-        return self.update_state(operation_id, cancel_requested=True)
 
     def write_checkpoint(
         self,
@@ -1517,6 +1528,14 @@ class MonthlyReleaseService:
             request = self.store.read_request(operation_id)
             plan = self.store.read_plan(operation_id)
             state = self.store.read_state(operation_id)
+            if ReleaseState(state["status"]) == ReleaseState.SOURCE_BLOCKED:
+                # A stale queue observation must not turn a blocked source into
+                # an implicit retry. A concurrent cancellation needs no producer.
+                if state.get("cancel_requested") is True:
+                    return self.store.update_state(
+                        operation_id, status=ReleaseState.CANCELLED.value, current_stage=None
+                    )
+                return state
             if ReleaseState(state["status"]) in {
                 ReleaseState.READY_TO_ACTIVATE,
                 ReleaseState.ACTIVATED,
