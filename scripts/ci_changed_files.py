@@ -45,10 +45,11 @@ def prepare_pr_merge_base(
     base_ref: str,
     base_sha: str,
     checkout_ref: str,
+    source_head_sha: str = "",
     attempts: int = 3,
     deepen_by: int = 64,
 ) -> dict[str, str | int | bool]:
-    """Prove PR base ancestry, deepening only exact base/checkout refs when needed."""
+    """Prove pinned PR source ancestry without attributing integration-only files."""
 
     root = repo_root.resolve()
     branch = base_ref.strip()
@@ -63,11 +64,15 @@ def prepare_pr_merge_base(
         raise ChangedFilesError("checkout_ref must be an exact refs/* name")
     _git(root, "check-ref-format", source_ref)
     head_commit = _commit(root, "HEAD", "head_sha")
+    pinned_source = source_head_sha.strip().lower()
+    if pinned_source and not _FULL_SHA_RE.fullmatch(pinned_source):
+        raise ChangedFilesError("source_head_sha must be a full Git commit identity")
 
     def ready() -> bool:
         try:
             _commit(root, pinned_base, "base_sha")
-            _git(root, "merge-base", pinned_base, head_commit)
+            source_commit = _commit(root, pinned_source or head_commit, "source_head_sha")
+            _git(root, "merge-base", pinned_base, source_commit)
             return True
         except ChangedFilesError:
             return False
@@ -103,11 +108,15 @@ def prepare_pr_merge_base(
             detail = result.stderr.strip() or result.stdout.strip() or "merge base remains unavailable"
             raise ChangedFilesError(f"pinned PR base/head history preparation failed: {detail}")
     _git(root, "update-ref", f"refs/remotes/origin/{branch}", pinned_base)
-    merge_base = _git(root, "merge-base", pinned_base, head_commit).strip()
+    source_commit = _commit(root, pinned_source or head_commit, "source_head_sha")
+    if pinned_source:
+        _git(root, "merge-base", "--is-ancestor", source_commit, head_commit)
+    merge_base = _git(root, "merge-base", pinned_base, source_commit).strip()
     return {
         "schema_version": "aistock_ci_pr_merge_base_preparation_v1",
         "base_commit": pinned_base,
         "head_commit": head_commit,
+        "source_head_commit": source_commit,
         "merge_base": merge_base,
         "fetch_used": used_attempts > 0,
         "fetch_attempts": used_attempts,
@@ -141,14 +150,21 @@ def build_changed_files(
     head_sha: str = "HEAD",
     diff_filter: str = "",
 ) -> tuple[list[str], dict[str, str | int | None]]:
-    """Return changed paths, preferring the current PR base ref over stale event SHA."""
+    """Return source changes using pinned PR identities or the current manual base."""
 
     root = repo_root.resolve()
     head_commit = _commit(root, head_sha or "HEAD", "head_sha")
     normalized_base_sha = base_sha.strip()
     if base_ref.strip():
-        base_commit = _current_base_commit(root, base_ref)
-        base_source = "current_base_ref"
+        if normalized_base_sha:
+            if not _FULL_SHA_RE.fullmatch(normalized_base_sha):
+                raise ChangedFilesError("PR base_sha must be a full Git commit identity")
+            _git(root, "check-ref-format", "--branch", base_ref.strip())
+            base_commit = _commit(root, normalized_base_sha, "base_sha")
+            base_source = "pinned_pr_base_sha"
+        else:
+            base_commit = _current_base_commit(root, base_ref)
+            base_source = "current_base_ref"
     elif normalized_base_sha and set(normalized_base_sha) != {"0"}:
         base_commit = _commit(root, normalized_base_sha, "base_sha")
         base_source = "event_base_sha"
@@ -195,6 +211,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--diff-filter", default="")
     parser.add_argument("--prepare-pr-merge-base-only", action="store_true")
     parser.add_argument("--checkout-ref", default="")
+    parser.add_argument("--source-head-sha", default="")
     return parser.parse_args()
 
 
@@ -207,6 +224,7 @@ def main() -> int:
                 base_ref=args.base_ref,
                 base_sha=args.base_sha,
                 checkout_ref=args.checkout_ref,
+                source_head_sha=args.source_head_sha,
             )
             print(json.dumps(receipt, sort_keys=True))
             return 0

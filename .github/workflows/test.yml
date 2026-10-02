@@ -108,10 +108,12 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          SOURCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CHECKOUT_REF: ${{ github.ref }}
         run: |
           python scripts/ci_changed_files.py --prepare-pr-merge-base-only \
-            --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}"
+            --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}" \
+            --source-head-sha "${SOURCE_HEAD_SHA}"
 
       - name: Verify prebuilt AIstock-CI environment
         if: ${{ !(startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')) }}
@@ -124,8 +126,8 @@ jobs:
       - name: Build changed-file list
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
-          BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p tmp/validation/ci_change_classifier
           python scripts/ci_changed_files.py \
@@ -224,7 +226,8 @@ jobs:
         env:
           DEPENDENCY_FILES: ${{ steps.classify.outputs.dependency_files }}
           BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           mkdir -p tmp/validation/dependency_update
           mapfile -t dependency_files < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["DEPENDENCY_FILES"])))' | tr -d '\r')
@@ -234,7 +237,7 @@ jobs:
                 key=$(python -c "import hashlib; print(hashlib.sha256('$file'.encode()).hexdigest())")
                 changed="tmp/validation/dependency_update/${key}.changed.txt"
                 python scripts/validate_changed_requirements.py \
-                  --base-commit "origin/${BASE_REF}" \
+                  --base-commit "${BASE_SHA}" \
                   --head-commit "${HEAD_SHA}" \
                   --file "$file" \
                   --requirements-output "$changed" \
@@ -262,19 +265,22 @@ jobs:
         continue-on-error: true
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           AISTOCK_PR_TITLE: ${{ github.event.pull_request.title || '' }}
           AISTOCK_PR_BODY: ${{ github.event.pull_request.body || '' }}
           AISTOCK_PR_QUALITY_ENFORCE_P0P1: ${{ vars.AISTOCK_PR_QUALITY_ENFORCE_P0P1 || 'true' }}
         run: |
           mkdir -p tmp/validation/pr_quality
-          BASE_COMMIT="origin/${BASE_REF}"
+          # Scope is the pinned PR source diff; HEAD remains the integration checkout.
+          BASE_COMMIT="${BASE_SHA}"
           ENFORCE_ARGS=()
           if [ "${AISTOCK_PR_QUALITY_ENFORCE_P0P1}" = "true" ]; then
             ENFORCE_ARGS+=(--enforce-p0-p1-evidence)
           fi
           python scripts/issue_flow.py pr-check \
             --base "${BASE_COMMIT}" \
-            --head HEAD \
+            --head "${HEAD_SHA}" \
             --output-json tmp/validation/pr_quality/summary.json \
             --output-md tmp/validation/pr_quality/summary.md \
             "${ENFORCE_ARGS[@]}"
@@ -287,7 +293,7 @@ jobs:
             --output tmp/validation/pr_quality/code-intelligence-summary.json \
             --output-md tmp/validation/pr_quality/code-intelligence-summary.md
           cat tmp/validation/pr_quality/code-intelligence-summary.md
-          git diff --name-only --diff-filter=ACMRT "${BASE_COMMIT}...HEAD" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
+          git diff --name-only --diff-filter=ACMRT "${BASE_COMMIT}...${HEAD_SHA}" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
           if [ -s tmp/validation/pr_quality/changed_python.txt ]; then
             xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude
           fi

@@ -562,6 +562,15 @@ rules:
     layer: dev_quality_tooling
     risk_level: high
     ownership_reason: Open-source CI/CD and local quality tool configs define issue workflow automation gates.
+  - rule_id: ci_changed_files_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_changed_files.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Changed-file ancestry and scope tests execute scripts/ci_changed_files.py, owned by validation.guardrails, rather than generic workflow orchestration.
   - rule_id: ci_change_classifier_test_owner
     priority: 110
     include:
