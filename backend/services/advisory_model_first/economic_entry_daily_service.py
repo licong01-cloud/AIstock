@@ -414,12 +414,23 @@ class AdvisoryEconomicEntryDailyServiceV1:
                     target = EntryReadOnlyCalendar(session.connection).next_trading_day(local.date(), inclusive=local.time() < time(9, 30))
                 if target < role.effective_from_target_date:
                     continue
-                if self._read_formal(role=role, loaded=loaded, target=target) is not None:
+                try:
+                    if self._read_formal(role=role, loaded=loaded, target=target) is not None:
+                        continue
+                except Exception as exc:
+                    # Corrupt artifacts fail closed for this Program, but must
+                    # not prevent another eligible Program from progressing.
+                    # A global budget failure still aborts the entire cycle.
+                    budget.check()
+                    self._last_attempt[role.program_id] = monotonic()
+                    failures.append({"program_id": role.program_id, "target_date": target.isoformat(), "status": "INPUT_UNAVAILABLE",
+                                     "reason_code": getattr(exc, "reason_code", "ECONOMIC_CAPTURE_UNAVAILABLE")})
                     continue
                 self._last_attempt[role.program_id] = monotonic()
                 try:
                     result = self._capture_formal(role=role, pointer=pointer, loaded=loaded, target=target, budget=budget, session=session)
                 except Exception as exc:
+                    budget.check()
                     result = {"program_id": role.program_id, "target_date": target.isoformat(), "status": "INPUT_UNAVAILABLE",
                               "reason_code": getattr(exc, "reason_code", "ECONOMIC_CAPTURE_UNAVAILABLE")}
                 return {"status": "CHECKED", "new_artifacts": int(result["status"] in {"PUBLISHED", "NO_CANDIDATES"}), "results": [*failures, result]}
@@ -467,6 +478,20 @@ class AdvisoryEconomicEntryDailyServiceV1:
                 or not isinstance(payload.get("advice"), list) or len(payload["advice"]) > 20
                 or (payload["status"] == "NO_CANDIDATES") != (not payload["advice"])):
             _fail("economic formal batch differs from its actual role/model/native identities")
+        # Empty candidate batches have no row-level input validator. Validate
+        # their real native identities and capture window just like nonempty
+        # batches; matching hashes cannot establish a valid prospective clock.
+        try:
+            decision = _day(payload.get("decision_date"))
+            captured = datetime.fromisoformat(payload.get("captured_at"))
+        except (TypeError, ValueError):
+            _fail("economic native batch identity or prospective clock differs")
+        if (any(not isinstance(payload.get(name), str) or not payload[name].strip() for name in ("run_id", "list_id"))
+                or decision >= _day(target) or _day(target) < role.effective_from_target_date
+                or decision <= max(loaded.fitted.request.source_request.label_cutoff, loaded.native_training_scope.latest_upstream_training_date)
+                or captured.utcoffset() is None
+                or not max(role.created_at, datetime.combine(decision, time(15), ZoneInfo("Asia/Shanghai"))) <= captured < _role_open(_day(target))):
+            _fail("economic native batch identity or prospective clock differs")
         symbols, ranks = [], []
         source_receipt = payload["source_receipt"]
         roster = source_receipt.get("candidate_roster")

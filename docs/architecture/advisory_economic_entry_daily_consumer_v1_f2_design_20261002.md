@@ -1,4 +1,4 @@
-# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.12
+# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.13
 
 > 日期2026-10-02；状态DESIGN_REVIEWED_IMPLEMENTATION_IN_PROGRESS。父设计：[经济进入价值](advisory_economic_entry_value_v1_f2_design_20261002.md)、[风险与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)、[一致双头v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)。本设计把离线数值内核接到完整日频条件网格、只读消费者/API与Advisory展示，不新增模型搜索，不研发分钟执行。
 
@@ -190,6 +190,12 @@ LOCKED_HISTORICAL_OOT允许今天登记、对过去合格未消费窗口预测�
 | F-581 | §5、§8 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
 
 ## 12. Risks / 不能被工程交付掩盖的缺口
+
+2026-10-03长任务接续复核：最新主线已普通merge进入自有源码分支。两轮审核分别修复“一个Program的既有daily工件损坏中断其他Program”和“空名单没有逐行校验而漏检原生run/list及D/T捕获时钟”；坏工件不修复、不覆盖，按Program保留INPUT_UNAVAILABLE，其他Program可继续，全局30秒budget不能被局部异常隔离吞掉。空名单也必须D<T、训练/上游成熟边界之后、角色生效之后、D收市后至T开盘前真实aware捕获。
+
+复用既有fixture新增artifact隔离分支，另用4项空名单身份/时钟与2项全局budget参数化覆盖直接安全合同，未扩大到其它业务模块或重复大场景。两次先复现再修复、第三次预算边界复核后，当前相关小矩阵62项实际通过（55既有+7新增）；Ruff和diff检查通过。这里的单元/注入工件不能算真实原生捕获、独立经济确认或浏览器证据。之前55项和81日功能记录仍为当时检查点，不作为当前HEAD的宽验收。
+
+当前仍无合格的Advisory专用UI执行计划：既有六场景必须由Validation Center/CI的安全runner执行，禁止为此启动后端或修改公共验证模块。完整F2未ready、未合入，角色未激活，经济负增量不改判。后续以提交后的真实HEAD绑定验证，不能把设计结构检查、工作树clean或源码checkpoint当成完整验收。
 
 当前模型净增量负向，风险回撤改善可能部分来自少买留现金，不等于证明风险选择alpha；本任务不补跑现金对照或新模型来挑结果。历史股票池原生身份/特征vintage及D属性可产性仍需消费者核验，metadata/source hash PASS不等于业务正路径已证。日常source缺数据交所属窗口，不在Advisory补写。
 

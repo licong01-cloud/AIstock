@@ -171,9 +171,30 @@ def test_actual_readonly_role_store_requires_separate_ACTIVATION_registry_eviden
         store.read(consumer_root=service._root, program_id=role.program_id, binding_version_id=role.binding_version_id)
 
 
-def test_formal_source_failure_cannot_publish_or_starve_a_different_program(tmp_path, study, monkeypatch):
+@pytest.mark.parametrize("poison", [{"captured_at": "2025-04-01T02:00:00+00:00"},
+    {"captured_at": "2025-03-31T09:00:00"}, {"run_id": ""}, {"decision_date": "2025-04-01"}])
+def test_empty_formal_batch_still_requires_native_identity_and_prospective_clock(tmp_path, study, monkeypatch, poison):
     from backend.services.advisory_model_first.entry_price_daily_service import EntryReadOnlyCalendar
-    service, _, role, _, source, observed, _ = _formal_consumer(tmp_path, study)
+    import backend.services.advisory_model_first.economic_entry_daily_service as module
+    service, _, _, _, _, observed, _ = _formal_consumer(tmp_path, study, empty=True)
+    T = observed["target_date"]
+    monkeypatch.setattr(EntryReadOnlyCalendar, "next_trading_day", lambda *args, **kwargs: T)
+    assert service.run_once()["new_artifacts"] == 1
+    assert service.status(program_id="program", target_date=T)["status"] == "NO_CANDIDATES"
+    # Inject matching decoded payload/capsule contents after the existing file
+    # hash gate: integrity alone cannot prove an empty batch's native clock.
+    batch_reader = module._readonly_daily_batch
+    capsule_reader = module._read_economic_metadata_reference
+    monkeypatch.setattr(module, "_readonly_daily_batch", lambda *args, **kwargs: {**batch_reader(*args, **kwargs), **poison})
+    monkeypatch.setattr(module, "_read_economic_metadata_reference", lambda *args, **kwargs: {**capsule_reader(*args, **kwargs), **poison})
+    with pytest.raises(AdvisoryModelFirstError, match="native batch identity or prospective clock"):
+        service.status(program_id="program", target_date=T)
+
+
+@pytest.mark.parametrize("broken_stage", ["role", "existing_daily_artifact"])
+def test_formal_source_failure_cannot_publish_or_starve_a_different_program(tmp_path, study, monkeypatch, broken_stage):
+    from backend.services.advisory_model_first.entry_price_daily_service import EntryReadOnlyCalendar
+    service, loaded, role, pointer, source, observed, programs = _formal_consumer(tmp_path, study)
     monkeypatch.setattr(EntryReadOnlyCalendar, "next_trading_day", lambda *args, **kwargs: observed["target_date"])
     original_rule = observed["candidate_receipt"]["pit_rule_version"]
     observed["candidate_receipt"]["pit_rule_version"] = "foreign-rule"
@@ -187,13 +208,39 @@ def test_formal_source_failure_cannot_publish_or_starve_a_different_program(tmp_
     resolved = service._resolved_role
     def resolver(**kwargs):
         if kwargs["program_id"] == other.name:
-            raise AdvisoryModelFirstError("unit malformed role", reason_code="UNIT_BROKEN_ROLE")
+            if broken_stage == "role":
+                raise AdvisoryModelFirstError("unit malformed role", reason_code="UNIT_BROKEN_ROLE")
+            return role.model_copy(update={"program_id": other.name}), pointer, loaded, programs.get_program("program")
         return resolved(**kwargs)
     monkeypatch.setattr(service, "_resolved_role", resolver)
+    read_formal = service._read_formal
+    def read_daily(**kwargs):
+        if kwargs["role"].program_id == other.name:
+            raise AdvisoryModelFirstError("unit corrupted daily artifact", reason_code="UNIT_BROKEN_ROLE")
+        return read_formal(**kwargs)
+    monkeypatch.setattr(service, "_read_formal", read_daily)
     result = service.run_once()
     assert result["new_artifacts"] == 1 and result["results"][-1]["status"] == "PUBLISHED"
     assert result["results"][0]["reason_code"] == "UNIT_BROKEN_ROLE"
     assert source.calls == 2
+
+
+@pytest.mark.parametrize("failure_stage", ["existing_daily_artifact", "capture"])
+def test_program_failure_isolation_cannot_swallow_global_budget(tmp_path, study, monkeypatch, failure_stage):
+    from backend.services.advisory_model_first.entry_price_daily_service import EntryReadOnlyCalendar, EntryWorkBudget
+    import backend.services.advisory_model_first.economic_entry_daily_service as module
+    service, _, _, _, _, observed, _ = _formal_consumer(tmp_path, study)
+    clock = [0.]
+    monkeypatch.setattr(module, "EntryWorkBudget", lambda: EntryWorkBudget(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(EntryReadOnlyCalendar, "next_trading_day", lambda *args, **kwargs: observed["target_date"])
+    def fail_after_deadline(**kwargs):
+        clock[0] = 31.
+        raise AdvisoryModelFirstError("unit failure after deadline", reason_code="UNIT_ONLY")
+    monkeypatch.setattr(service, "_read_formal", fail_after_deadline if failure_stage == "existing_daily_artifact" else lambda **kwargs: None)
+    monkeypatch.setattr(service, "_capture_formal", fail_after_deadline)
+    with pytest.raises(AdvisoryModelFirstError, match="bounded budget"):
+        service.run_once()
+    assert not (service._root / "entry_value_daily").exists()
 
 
 def test_research_capture_readback_and_retry_never_refit_recapture_or_promote(tmp_path, study):
