@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,10 +12,71 @@ from backend.services.dataset_release.source_authority import (
     PRODUCTION_QUERY_SPECS,
     PostgresSourceSnapshotSession,
     SourceRequiredDatasetEmpty,
+    SourceAuditIncomplete,
     SourceQuerySpec,
     _validate_core_index_membership_authority,
     imported_source_session_factory,
 )
+
+
+def test_monthly_sector_source_policy_is_explicit_and_preserves_legacy_p3a() -> None:
+    from backend.services.dataset_release.source_authority import MonthlySourceAuthority
+
+    profile = SimpleNamespace(profile="qe_hmm_full_v2")
+    legacy = MonthlySourceAuthority(profile, None)
+    monthly = MonthlySourceAuthority(profile, None, sector_source_policy="classification_published_snapshot_v1")
+    assert legacy.uses_p3a_sector_source is True
+    assert monthly.uses_p3a_sector_source is False
+    assert "sector_data" not in {q.query_id for q in legacy._database_query_specs()}
+    assert "sector_data" in {q.query_id for q in monthly._database_query_specs()}
+    assert monthly.profile is profile
+    with pytest.raises(ValueError, match="sector source policy"):
+        MonthlySourceAuthority(profile, None, sector_source_policy="fallback_if_missing")
+
+
+def test_native_sector_receipt_keeps_exact_classification_and_partition_identity() -> None:
+    from backend.services.dataset_release.source_authority import (
+        _validate_monthly_sector_publication_receipt,
+    )
+    from backend.services.dataset_release.sector_enrichment import FrozenSectorEnricher
+
+    classify = [{"identity": "sw_index_classify:timeless", "content_digest": "a" * 64}]
+    member = [{"identity": "sw_index_member:timeless", "content_digest": "b" * 64}]
+    enricher = FrozenSectorEnricher.build(
+        [{"index_code": f"801{value:03d}.SI", "level": "L2"} for value in range(131)], []
+    )
+    receipt = {
+        **enricher.receipt(classify_partitions=classify, member_partitions=member),
+        "schema_version": "dataset_release_monthly_sector_publication_v1",
+        "publication_policy": "classification_published_snapshot_v1",
+        "profile": "qe_hmm_full_v2",
+        "cutoff": "2026-09-30",
+    }
+    arguments = dict(
+        expected_profile="qe_hmm_full_v2",
+        expected_cutoff=date(2026, 9, 30),
+        classify_partitions=classify,
+        member_partitions=member,
+    )
+    _validate_monthly_sector_publication_receipt(receipt, **arguments)
+    for field, wrong in (
+        ("cutoff", "2026-08-31"),
+        ("code_count", 130),
+        ("publication_policy", "silent_fallback"),
+        ("member_partitions", []),
+    ):
+        with pytest.raises(SourceAuditIncomplete, match="sector publication"):
+            _validate_monthly_sector_publication_receipt({**receipt, field: wrong}, **arguments)
+
+    for field, wrong in (
+        ("code_map_digest", "bad"),
+        ("membership_digest", "bad"),
+        ("mapping_policy", "model_private_ids"),
+        ("profile", "other"),
+        ("unexpected", "extra"),
+    ):
+        with pytest.raises(SourceAuditIncomplete, match="sector publication"):
+            _validate_monthly_sector_publication_receipt({**receipt, field: wrong}, **arguments)
 
 
 def test_production_source_allowlist_preserves_exact_daily_and_minute_ordering() -> None:
@@ -146,3 +208,50 @@ def test_core_index_membership_authority_rejects_overlap_and_missing_pool() -> N
             start=date(2018, 8, 1),
             cutoff=date(2026, 9, 30),
         )
+
+
+def test_core_index_stage_receipt_closes_source_pins_and_pool_counts() -> None:
+    from copy import deepcopy
+    from backend.services.dataset_release.cas_store import CASRef
+    from backend.services.dataset_release.source_authority import _validate_core_index_stage_receipt
+
+    partition = SimpleNamespace(
+        spec=SimpleNamespace(dataset="index_membership_pit", identity="index_membership_pit:window"),
+        summary=SimpleNamespace(content_digest="a" * 64, row_count=5),
+        rows_ref=CASRef("b" * 64, 10, "cas/sha256/bb/" + "b" * 64),
+    )
+    receipt = {
+        **_validate_core_index_membership_authority(
+            _core_index_rows(), start=date(2018, 8, 1), cutoff=date(2026, 9, 30)
+        ),
+        "source_partitions": [
+            {
+                "identity": partition.spec.identity,
+                "content_digest": partition.summary.content_digest,
+                "row_count": 5,
+                "rows_ref": partition.rows_ref.as_dict(),
+            }
+        ],
+    }
+    arguments = dict(partitions=[partition], scope_start=date(2018, 8, 1), expected_cutoff=date(2026, 9, 30))
+    _validate_core_index_stage_receipt(receipt, **arguments)
+    for field, wrong in (
+        ("source_partitions", []),
+        ("row_count", 6),
+        ("pool_count", True),
+        ("authority_digest", "bad"),
+        ("database_write_performed", True),
+        ("overlap_count", 1),
+        ("unknown_pool_count", 1),
+        ("window", {"start": "2018-08-01", "cutoff": "2026-08-31"}),
+    ):
+        with pytest.raises(SourceAuditIncomplete, match="core-index"):
+            _validate_core_index_stage_receipt({**receipt, field: wrong}, **arguments)
+    broken = deepcopy(receipt)
+    broken["coverage"]["csi300"]["source_provider"] = "untrusted"
+    with pytest.raises(SourceAuditIncomplete, match="core-index"):
+        _validate_core_index_stage_receipt(broken, **arguments)
+    broken = deepcopy(receipt)
+    broken["coverage"]["csi300"]["first_effective_from"] = "2018-08-02"
+    with pytest.raises(SourceAuditIncomplete, match="core-index"):
+        _validate_core_index_stage_receipt(broken, **arguments)
