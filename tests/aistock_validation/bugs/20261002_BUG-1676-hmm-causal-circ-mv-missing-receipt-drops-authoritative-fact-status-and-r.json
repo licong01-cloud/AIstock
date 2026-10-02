@@ -85,7 +85,7 @@
   },
   "first_seen_at": "2026-10-02T04:34:20.448598Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "470c78ec6935c88b9d5999ac1d7ff30843bd96eb",
   "fix_summary": {
     "active_profile_write": false,
     "behavior_preserved": "缺数仍为 ObservationCoverageError/NA，保留成员分母；后续真实有效日期恢复。禁止旧值回退、窗口外事实、BLOCKED candidate、补零和默认值。",
@@ -109,7 +109,7 @@
     "runtime_validation_boundary": "fresh-process 修复点验证与 router/health 导入为源码证据；rotation-l2 overview 为重启后产品回归探针，不冒充缺数回执本身的线上证据。重启及 post-restart 验证待用户。",
     "training_action": false
   },
-  "fixed_at": null,
+  "fixed_at": "2026-10-02T11:42:48Z",
   "github_issue_number": 5257,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5257",
   "last_seen_at": "2026-10-02T04:34:20.448598Z",
@@ -117,6 +117,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5259",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -143,6 +144,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -154,7 +156,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1676",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bff77b7e202fc75d",
+    "recorded_at": "2026-10-02T11:44:01.590886Z",
+    "runtime_contract_digest": "d127338b9304968eaac9a57f95160edaf1558c844206f34d3292fdde7b9cd9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "54180362e7855ca311a796ab0f0784164ea0d17d",
+    "source_merge_commit": "470c78ec6935c88b9d5999ac1d7ff30843bd96eb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5259",
+    "validation_evidence": [
+      "validation-receipt: id=537c287e7f151aa0 commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_stock_fact_observation.py -k missing_causal_cap -q -p no:cacheprovider` result=`8 passed, 12 deselected`",
+      "validation-receipt: id=61c99ffd8b1b334e commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice --no-venv` result=`PASS; 29 passed`",
+      "validation-receipt: id=5823198ff1e8532a commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`PASS; blocking=0`",
+      "validation-receipt: id=7d7f4dbc644859a4 commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-venv` result=`PASS; 8 passed; mapped=14/14`",
+      "validation-receipt: id=0ba27a965eed86ea commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=diff_check plan=direct status=passed command=`git diff --check` result=`PASS`"
+    ],
+    "validation_evidence_digest": "989917f58327d6bb7a8105cc3fc9c44eccade3c7efb6d59dd46e1243da8c032c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -163,6 +190,13 @@
     "fingerprint": "fffc5f5da4a557dc0e998b45",
     "source_event_id": "FE-20261002-fffc5f5da4a5"
   },
+  "validation_evidence": [
+    "validation-receipt: id=537c287e7f151aa0 commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_stock_fact_observation.py -k missing_causal_cap -q -p no:cacheprovider` result=`8 passed, 12 deselected`",
+    "validation-receipt: id=61c99ffd8b1b334e commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice --no-venv` result=`PASS; 29 passed`",
+    "validation-receipt: id=5823198ff1e8532a commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`PASS; blocking=0`",
+    "validation-receipt: id=7d7f4dbc644859a4 commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-venv` result=`PASS; 8 passed; mapped=14/14`",
+    "validation-receipt: id=0ba27a965eed86ea commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=diff_check plan=direct status=passed command=`git diff --check` result=`PASS`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
