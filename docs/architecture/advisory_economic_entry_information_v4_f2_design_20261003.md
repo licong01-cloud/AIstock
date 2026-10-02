@@ -1,6 +1,6 @@
 # Advisory 收益型进入价格：固定新增日频信息 v4 F2详细设计
 
-> 2026-10-03；DESIGN_REVIEWED_SOURCE_NOT_IMPLEMENTED。本文交付详细设计，不宣称实现、训练、确认或角色启用。新增信息计算PR #5301已合入`9c01032272192fcfc93329d545f1b8c3f8425fab`（34定向测试、required CI通过），旧每日消费者六项浏览器验收仍待专用runner；这些状态不互相替代。
+> 2026-10-03；OFFLINE_SOURCE_IMPLEMENTED_EXPLORATORY_NOT_CONFIRMED。§7批准的六个离线叶模块已实现并完成一次真实固定研究；新family每日消费者、浏览器验收、原生资格与角色启用仍未完成，不能称整个v4业务已交付。新增信息计算PR #5301、详细设计PR #5303已合入；旧每日消费者六项浏览器验收仍待专用runner。各状态不互相替代。
 
 ## 1. Background / 当前事实和目标
 
@@ -56,7 +56,7 @@ LightGBM沿用父有效参数：200轮/lr0.05/depth3/leaves7/minleaf30/seed20261
 
 ## 7. Implementation Plan / 精确文件清单与顺序
 
-本设计PR只增加本文并精确更新蓝图§16当前进展/新主线，不动业务源码。实施必须从设计已合入最新main新建独立Advisory树，精确范围：
+设计PR #5303只增加本文并精确更新蓝图§16，未动业务源码。本次实施按该已批准分阶段范围从设计已合入main创建独立Advisory树；六叶模块离线源码与后续每日消费分别交付，精确范围：
 
 - 新增`backend/services/advisory_model_first/economic_entry_information_contracts.py`：十三字段scope/request/plan。
 - 新增`economic_entry_information_source.py`、`economic_entry_information_training.py`、`economic_entry_information_inference.py`、`economic_entry_information_pipeline.py`、`economic_entry_information_evaluation.py`（均在同Advisory目录）。
@@ -80,7 +80,7 @@ LightGBM沿用父有效参数：200轮/lr0.05/depth3/leaves7/minleaf30/seed20261
 |---|---|
 | F-587 | 单一新信息假设，原负结果/权重/合同不改 |
 | F-588 | 四字段统一D/raw-volume语义、正常未知保留 |
-| F-589 | 十三字段独立scope及双版本显式分派 |
+| F-589 | 十三字段独立scope、离线双臂严格readback；每日serving按§7另登记交付 |
 | F-590 | 同监督集合双臂控制，全部配置/头如实计trial |
 | F-591 | 原政策/成本/支持域，固定全日增量及功效 |
 | F-592 | NAV与native/confirmation/activation严格分开 |
@@ -88,17 +88,17 @@ LightGBM沿用父有效参数：200轮/lr0.05/depth3/leaves7/minleaf30/seed20261
 
 ## 10. Design Acceptance Matrix
 
-以下仅为设计条款核查，不是未来功能实现验收。实现后必须替换为实际源码/nodeid/研究receipt；不可凭此表提交“v4模型已完成”。
+本表验收§7明确分开的六叶模块离线源码及探索流程，不替代后续每日serving/API/UI、native或确认。34项最终小矩阵通过（5.64秒）；随后配置投影修订仅复跑pipeline节点，通过2.80秒。完整四臂交易回放采用真实原shadow simulator；合成fixture只证明工程合同，真实研究见§13。相同测试/CI不反复全量运行。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-587 | 本文§1/§5 | artifact: 本文§1及aligned v3设计§13 | DESIGN_VERIFIED | none |
-| F-588 | 本文§3/§4 | artifact: 本文§8三日D-only可产性与F1合同 | DESIGN_VERIFIED | none |
-| F-589 | 本文§3/§7 | artifact: 本文§3旧validator不变条款 | DESIGN_VERIFIED | none |
-| F-590 | 本文§5 | artifact: 本文§5两配置四头/同集合定义 | DESIGN_VERIFIED | none |
-| F-591 | 本文§5/§6 | artifact: 本文§6固定统计和归因 | DESIGN_VERIFIED | none |
-| F-592 | 本文§4/§6/§12 | artifact: 本文§6sealed硬边界 | DESIGN_VERIFIED | none |
-| F-593 | 本文§2/§7/§12 | artifact: 本文§7精确允许范围 | DESIGN_VERIFIED | none |
+| F-587 | backend/services/advisory_model_first/economic_entry_information_contracts.py | test: backend/tests/advisory_model_first/test_economic_entry_information_contracts.py::test_separate_schema_keeps_old_nine_strict_and_counts_control | VERIFIED_OFFLINE | none |
+| F-588 | backend/services/advisory_model_first/economic_entry_information_source.py | test: backend/tests/advisory_model_first/test_economic_entry_information_source.py；artifact: §13 source_receipt.json | VERIFIED_OFFLINE | none |
+| F-589 | backend/services/advisory_model_first/economic_entry_information_contracts.py；economic_entry_information_pipeline.py；economic_entry_information_inference.py | test: backend/tests/advisory_model_first/test_economic_entry_information_contracts.py；test_economic_entry_information_pipeline.py | VERIFIED_OFFLINE_SCOPE_AND_READBACK | none |
+| F-590 | backend/services/advisory_model_first/economic_entry_information_training.py | test: backend/tests/advisory_model_first/test_economic_entry_information_training.py::test_common_cohort_four_heads_and_test_poison_never_fits；artifact: §13 trained metadata / registry | VERIFIED_OFFLINE | none |
+| F-591 | backend/services/advisory_model_first/economic_entry_information_evaluation.py | test: backend/tests/advisory_model_first/test_economic_entry_information_pipeline.py::test_atomic_two_configuration_registration_fit_readback_and_exact_retry；artifact: §13 prefit power / evaluation | VERIFIED_EXPLORATORY_ONLY | none |
+| F-592 | backend/services/advisory_model_first/economic_entry_information_pipeline.py；economic_entry_information_evaluation.py | test: backend/tests/advisory_model_first/test_economic_entry_information_evaluation.py；artifact: §13 immutable plan / exact retry | VERIFIED_OFFLINE | none |
+| F-593 | 本文§7全部精确路径；本次Git范围 | artifact: 仅六Advisory叶模块、六对应测试及两文档；Ruff / diff / scope review通过 | VERIFIED_SCOPE | none |
 
 ## 11. Risks / 审核记录
 
@@ -110,4 +110,27 @@ DESIGN-COMPLIANCE-001逐项：完整新设计范围而非旧模型自动升级�
 
 ## 12. Production Gates / Rollout / Rollback
 
-production_ddl_gate=noop；production_backend_dependency_gate=noop；production_frontend_dependency_gate=noop；model_trials_generated=0；model_confirmed=false；binding_active=false；backend_restart_owner=user。新family保留旧reader可回退，旧artifact不可变；本设计不改运行时、DB、profile、资金仓位或服务。未来新功能源合入、实际推理、浏览器验收、经济确认和runtime activation分别报告；涉及重启由用户执行。
+production_ddl_gate=noop；production_backend_dependency_gate=noop；production_frontend_dependency_gate=noop；model_configurations_generated=2；economic_candidates=1；heads_fitted=4；model_confirmed=false；binding_active=false；backend_restart_owner=user。本次离线源码无需重启，不部署新reader或绑定。旧artifact不可变；不改运行时、DB、profile、资金仓位或服务。后续每日新family消费者、浏览器验收、经济确认和runtime activation分别报告；涉及重启由用户执行。
+
+## 13. 实施复核与真实探索结果（2026-10-03）
+
+离线源码检查点`d656f0a376109555e7eddac693745aa22a633616`，study=`advinfo_153e00c8509484155d3c8ae0`；持久根`F:/Dev/AIstock_model_artifacts/advisory_entry_information_v4_20261003/`。`preregistered/plan.json`绑定输入`inputs/advinfoinput_26aed90e74c80316334a5cdb/prepared/manifest.json`及source_receipt、模型scope、实现、原policy/成本/两配置；`trained/model_metadata.json`绑定四头，`evaluated/evaluation.json`与matched_daily/各臂episodes是收益来源。全部为已消费开发窗口的NAV，不是独立OOS。
+
+三轮源码审核：①PIT/原候选/正常缺失/哈希与有界批量；②固定同eligible、test毒化、只读原值Decimal精度及scope/readback；③四臂全流程、all-ACTIVE无settled-return列时保留NaN未知、精确重试及跨模块边界。修正了source配置投影（配置与带身份request分开验证），未改变旧9维validator、标签、policy、成本或权重。四臂fixture最初缺combined_score及Top40持有上下文，只修测试fixture，不削弱真实模拟器的Top40合同。
+
+原父实现登记字节为LF，而新Windows树自动CRLF会触发实施身份拒绝。只在本任务树对明确列出的Advisory父文件恢复父研究原字节（含原simulator自身CRLF），核对仅换行差异、旧hash及Git无业务diff；未修改旧plan/receipt，也未放宽任何hash校验。新树先前未加载凭据位置导致一次无密码连接失败，改为读取既存`F:/Dev/AIstock/.env`后成功，未输出密钥、安装依赖或写库。
+
+真实来源准备/plan登记25.000秒，模型四头拟合5.234秒、拟合至四臂评估共21.922秒。仅一次批量只读数据库来源准备，后续训练/评估全部消费不可变工件；保留7,720原候选。新共同train/validation=3,117/1,507，与父v3相同（10条新增量价未知原本已不eligible），matched九字段不能省略，仍登记2配置/4头/1candidate。登记前QE公开只读列表running/queued/finalizing/reconciling均0，不提交QE训练。
+
+| 固定臂 | 100共同估值日名义净收益 | 共同期最大回撤 | 全episode数 | 实际模型TAKE / 正收益笔数 | UNKNOWN基线控制 |
+|---|---|---|---|---|---|
+| baseline | 19.1729% | -10.2278% | 49 | 不适用 | 不适用 |
+| rule ±300bps | 19.1729% | -10.2278% | 49 | 不适用 | 不适用 |
+| matched九字段 | 9.6268% | -5.2608% | 25 | 16 / 10（62.50%） | 9 |
+| 十三字段 | 19.0748% | -8.8228% | 35 | 27 / 16（59.26%） | 8 |
+
+十三减matched九字段日增量+8.7336bps，固定block95%区间[-8.6091,25.5629]；十三减baseline为-0.1545bps，区间[-16.4598,17.0273]。Prefit父开发噪声代理MDE=29.6721bps（不是新模型功效保证）。两模型实际入场不同22/100估值日、持仓不同77/100；81原候选D与100估值日不可混用分母。没有预注册/获证实的市场regime分区，跨regime支持仍未证明，不按结果临时分桶宣称稳定。净收益是原shadow政策名义值、零收益cash参照，非沪深300超额或真实成交。
+
+原test episode执行UNKNOWN=1仍单列在execution_limitations.json；四臂实际模拟episode endpoint audit当前限制数均0，仅表明这些名义端点未发现限制，不证明真实fill/native完整。UNKNOWN控制利润不归模型TAKE；16/27是重复入场episode而非唯一股票数，59.26%不构成经济有效性判定。
+
+实际exact retry8.156秒，profile计数新fit=0/shadow replay=0/DB配置调用=0，trained/evaluated manifest hash不变，registry仍三阶段三记录。新增信息改善旧模型但未显示可靠基线超额：EXPLORATORY_NOT_CONFIRMED、NAVIGATION_ONLY、deployable=false；不搜索阈值/seed、不再次消费sealed、不激活。下一步先交付离线源码及按§7登记每日family消费；旧消费者六真实浏览器场景仍只暂停对应合入，不能用本研究替代UI。经济确认须另具原生训练/daily资格与合法未消费窗口。
