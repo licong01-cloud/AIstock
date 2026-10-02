@@ -8,24 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1662",
-  "production_correction_evidence": {
-    "factor_catalog_id": 1545,
-    "factor_name": "m_md_net_repay_rate_10d_tminus1",
-    "official_dispatch_task_id": "4d2ab4f4-f470-4989-a77b-d76c6a755bc0",
-    "corrected_calc_batch_id": "9e622aba-7e46-4a14-8c03-aaab33dfc3bd",
-    "cache_code_hash": "5fe998ad6afa4c22",
-    "production_source_and_asset_readback": "passed",
-    "original_id1341_source_and_asset_unchanged": true,
-    "fresh_process_raw_t1_cache_parity": {"windows_python": "3.13.5", "wsl_python": "3.10.19", "finite_points_each": 3912, "max_abs_difference_each": 0.0},
-    "official_full_rank_ic": {"1d": 0.013244352089153, "5d": 0.022695478410251, "10d": 0.028451597898401, "20d": 0.030067359725492},
-    "classification_refresh": "passed: MF/money_flow, 2026-10-02",
-    "correlation_refresh": "not_complete: separate BUG-1684 rolling-PIT binding regression, failed before SQL write",
-    "rating_refresh": "not_run: prevent unapproved production schema bootstrap; existing grade is not a refreshed result",
-    "production_ddl_gate": "noop",
-    "dataset_writes": false,
-    "backend_process_control": false
-  },
-  "closed_at": null,
+  "closed_at": "2026-10-02T11:42:16.649628Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -78,6 +61,33 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5236",
   "production_backend_dependency_gate": "noop",
+  "production_correction_evidence": {
+    "backend_process_control": false,
+    "cache_code_hash": "5fe998ad6afa4c22",
+    "classification_refresh": "passed: MF/money_flow, 2026-10-02",
+    "corrected_calc_batch_id": "9e622aba-7e46-4a14-8c03-aaab33dfc3bd",
+    "correlation_refresh": "not_complete: separate BUG-1684 rolling-PIT binding regression, failed before SQL write",
+    "dataset_writes": false,
+    "factor_catalog_id": 1545,
+    "factor_name": "m_md_net_repay_rate_10d_tminus1",
+    "fresh_process_raw_t1_cache_parity": {
+      "finite_points_each": 3912,
+      "max_abs_difference_each": 0.0,
+      "windows_python": "3.13.5",
+      "wsl_python": "3.10.19"
+    },
+    "official_dispatch_task_id": "4d2ab4f4-f470-4989-a77b-d76c6a755bc0",
+    "official_full_rank_ic": {
+      "10d": 0.028451597898401,
+      "1d": 0.013244352089153,
+      "20d": 0.030067359725492,
+      "5d": 0.022695478410251
+    },
+    "original_id1341_source_and_asset_unchanged": true,
+    "production_ddl_gate": "noop",
+    "production_source_and_asset_readback": "passed",
+    "rating_refresh": "not_run: prevent unapproved production schema bootstrap; existing grade is not a refreshed result"
+  },
   "production_ddl_gate": "noop",
   "production_dml_gate": "pending_user_authorization: existing factor ID 1545 code_text/cache and downstream official metrics only; DEV ID 21 readback passed",
   "production_frontend_dependency_gate": "noop",
@@ -99,10 +109,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1662/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1662",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "d2bf34010849411b1f7b4bd12d3df5a79319ecabfe512b17a39a0672896d3939",
+      "contract_digest": "8145d6a462e643bf02cc66742f3857dc8fbe70be082c2ae0a9a38e7e11212126",
+      "expected_identity": "3f50ac580b822fb81f04366061454e257ed59e91",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-02T11:35:09.433639Z",
+      "mode": "read_only",
+      "observed_identity": "f031502f9dc2ba35092ea13af95fcadc8887ec62",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "50a3eff0f53a06bfbc11f214dac88998ffda7f58df53e9cd62680c7ca92ade35",
+      "receipt_sha256": "74e84cc6ade49ff34632a319f569b2385eacc14c09fc360f030c7c0c293d163e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "5924ea1da0597e1f00e41aa64563fcfafe3e120139d8bc035ee4b5b874890785",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -134,7 +166,7 @@
     ],
     "validation_evidence_digest": "1a84850a65df13b314b4912171e538ee7617a1d8e513c3dd663eb30c7ada8311"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -148,7 +180,9 @@
     "2026-10-02：changed-files classifier -> bug_registry_metadata_only，blocking=[]，backend_sessions=[]，dev_db_plan_keys=[]；runtime catalog -> none。",
     "2026-10-02：BUG JSON 状态、Issue #5217 链接及精确两文件写入范围断言、git diff --check -> passed；BUG 仍为 open，fix_commit=null。",
     "validation-receipt: id=94138f81ea0c45e9 commit=95b51e9bd938fcea5b8434814577cb304f3cbdff kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed findings=0 blocking=0`",
-    "validation-receipt: id=66ec162c44fc15b3 commit=95b51e9bd938fcea5b8434814577cb304f3cbdff kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q` result=`37 passed, 1 skipped`"
+    "validation-receipt: id=66ec162c44fc15b3 commit=95b51e9bd938fcea5b8434814577cb304f3cbdff kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q` result=`37 passed, 1 skipped`",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m pytest backend/tests/quantevolver/test_official_factor_batch_compute.py -q -> passed, 37 passed 1 skipped"
   ],
   "validation_receipts": [
     {
