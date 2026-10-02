@@ -306,7 +306,8 @@ def rows():
         "kline_minute_raw": minutes(),
         "adj_factor": [{"ts_code": SYMBOL, "trade_date": DAY, "adj_factor": 1.0}],
         "daily_basic": [
-            {"ts_code": SYMBOL, "trade_date": DAY, "turnover_rate": 1.0, "turnover_rate_f": 1.0, "volume_ratio": 1.0}
+            {"ts_code": SYMBOL, "trade_date": DAY, "turnover_rate": 1.0, "turnover_rate_f": 1.0,
+             "volume_ratio": 1.0, "total_mv": 100.0, "circ_mv": 80.0}
         ],
         "suspend_d": [],
         "stk_limit": [{"ts_code": SYMBOL, "trade_date": DAY, "pre_close": 10, "up_limit": 11, "down_limit": 9}],
@@ -613,7 +614,7 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     daily_gate = next(gate for gate in gates if gate.gate == "daily_price")
     assert daily_gate.expected_count == 1
     assert daily_gate.unexplained_missing_count == int(missing)
-    assert len(artifacts) == 21
+    assert len(artifacts) == 22
     readback = json.loads((tmp_path / daily_gate.readback_ref).read_text())
     assert readback["unexplained_missing_count"] == int(missing)
     assert readback["database_write_performed"] is False
