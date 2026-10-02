@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1242",
-  "closed_at": null,
+  "closed_at": "2026-10-02T07:43:21.835245Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -143,10 +143,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1242/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1242",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "d2bf34010849411b1f7b4bd12d3df5a79319ecabfe512b17a39a0672896d3939",
+      "contract_digest": "e88af8134ee923381ed40aeda874eec36df3c136f568f680be7c65a40e7a401c",
+      "expected_identity": "07ebce16eb4d948e513e4a75ace46e1ad032513d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-02T07:36:44.654250Z",
+      "mode": "read_only",
+      "observed_identity": "04b1968c6f91fede3bfc4a6161cb58125562616e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "edeff38df63a0eaafcff04bd7f96eb152bc677ed8e6d1808620b1d5967850df6",
+      "receipt_sha256": "079fdb3ce5f9c6b761fd13fb83f71f7b8a8538e6dd94f9d42a3647ddf5c07244",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1cd22c534afa64d3f1bbb1be001d31dc4a0af2945a99aa41c0f52dbbb4bc8dbd",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -177,7 +199,7 @@
     ],
     "validation_evidence_digest": "8aefbbdb461d91bca82dc28a9f1274f0d7d74867255d1e710fe32e41847a0793"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -191,7 +213,8 @@
     "validation-receipt: id=45650f52e051a2ea commit=76deb35c35c0fe676da31016e3aba3d4ff5963cb kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; 14/14 mapped`",
     "validation-receipt: id=d9e8bac965dc1418 commit=76deb35c35c0fe676da31016e3aba3d4ff5963cb kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
     "validation-receipt: id=a722cffa9696d681 commit=76deb35c35c0fe676da31016e3aba3d4ff5963cb kind=ruff plan=direct status=passed command=`python -m ruff check + format --check + py_compile + git diff --check` result=`passed`",
-    "PR #3946 final CI verdict -> success; hmm_risk_backend -> success"
+    "PR #3946 final CI verdict -> success; hmm_risk_backend -> success",
+    "PR #3946 source CI success; source merge receipt 1c375ae2de8a2640; current runtime identity descendant and C010/A5 v2 contract readback verified"
   ],
   "verification_budget": {
     "budget": "standard",
