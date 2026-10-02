@@ -222,7 +222,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         profile=profile, cas=SimpleNamespace(root=tmp_path), artifact_root=tmp_path,
         source_catalog=SimpleNamespace(root=tmp_path),
     )
-    old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", {
+    old_fields = {
         "profile": profile.profile, "semantic_profile_digest": profile.semantic_profile_digest,
         "source_authority_policy": "dataset_release_source_authority_v1",
         "artifact_ready_contract": "dataset_release_artifact_ready_contract_v1",
@@ -230,10 +230,14 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
         "mvcc_partition_reuse": False, "gates": list(SOURCE_GATES),
         "source_audit_contract": source.AUDIT_SCHEMA,
-    })
+    }
+    old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
     assert adapter.adapter_version == "4"
     assert adapter.contract_sha256 != old_identity
-    assert adapter.contract_sha256 == adapter.contract_sha256
+    assert adapter.contract_sha256 == digest_named_fields(
+        "aistock_monthly_postgres_source_adapter_v1",
+        {**old_fields, "sector_source_policy": "classification_published_snapshot_v1"},
+    )
 
 
 DAY = date(2026, 9, 30)
