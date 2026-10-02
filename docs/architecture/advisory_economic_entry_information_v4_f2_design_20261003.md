@@ -70,6 +70,8 @@ LightGBM沿用父有效参数：200轮/lr0.05/depth3/leaves7/minleaf30/seed20261
 
 可产性观察时间`2026-10-02T20:44:20.694357+00:00`，三D的information SHA依次为`1e39e676a95ec716d72def63aabfb45be977d61f8012133afac40b3e8cdd356d`、`0af570649cb592a5a2a64ff794b3bcbedc2574cd17fd2d91284e88a9df334a30`、`55ccd50475a33fc5c082d9af5081df57f53f391fd55f3b97f9d05d8b1ab07828`。这些hash绑定实际计算输入而非原生采集资格；首次脚本报告使用错误输出键`features`在事务内报错，已rollback，修正为实际`values`后成功，不是数据库连接故障或业务代码修复。
 
+全开发窗口来源预检随后完成（观察时间`2026-10-02T20:58:32.263175+00:00`）：386D/7,720原候选、938股、379,307 raw bar，四字段全部已知7,710候选；ret_10/相对5日/收盘位置/量比已知数7,716/7,720/7,720/7,710。4条close窗口和10条volume窗口缺口按UNKNOWN保留，均位于train输入；train/validation/已消费test原候选4,380/1,720/1,620，四项全知4,370/1,720/1,620。四个SELECT，一次只读repeatable-read snapshot并rollback，来源6.438秒/总20.422秒；逐D内核只收到原20股≤D的20日子集。逐D信息hash清单SHA=`201a1ef677f74898e5043f509077992856f92bee337288daabce1398f994aebd`。未读取labels/eligible/经济结果、未fit；7,710是特征来源已知数，不是监督样本、胜率或收益支持度，正常缺失不触发填补/删候选。当前历史值仍NON_VINTAGE，原生训练/daily资格未因此闭合。
+
 正式实施测试重点：原候选/日期完整、raw-vs-adjusted volume语义、D adjustment/benchmark/warmup、停牌UNKNOWN、sourcehash/规范重复键、train-only边界及test毒化不影响拟合、两臂同集合/price support、标签/成本政策不变、十三与九reader明确分派、单/批一致及预算，不再重复整套旧研究。真实验证前不将合成测试当收益、native或浏览器通过。
 
 ## 9. Design Acceptance Index
