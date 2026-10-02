@@ -1,6 +1,8 @@
 {
   "actual": "BUG-1662 production ID1545 refresh uses approved R8 v15 but target-only correlation compares obsolete global cache factor_data_dir and qlib_bin_path. Resolve target identity from its own cache metadata; report incompatible reference pairs explicitly without mixing releases or rewriting other factor caches. Refs BUG-1662 Issue #5217 and BUG-1622.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/factor_analyst.py",
+    "backend/tests/quantevolver/test_official_runtime_validation.py",
     "backend/services/quantevolver/correlation_compute_service.py",
     "backend/tests/test_correlation_compute_independence.py",
     "tests/aistock_validation/bugs/20261002_BUG-1680-target-only-correlation-refresh-incorrectly-requires-promoted-global-cac.json"
@@ -14,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-02T05:50:13.022076Z",
-  "description": "BUG-1662 production ID1545 refresh uses approved R8 v15 but target-only correlation compares obsolete global cache factor_data_dir and qlib_bin_path. Resolve target identity from its own cache metadata; report incompatible reference pairs explicitly without mixing releases or rewriting other factor caches. Refs BUG-1662 Issue #5217 and BUG-1622.",
+  "description": "BUG-1662 production ID1545 refresh uses approved R8 v15 but target-only correlation compares obsolete global cache binding; the shared classification rules also omit financing-margin md_* fields. Authorized scope: per-factor target/reference binding with explicit unavailable pairs and shared two-financing classification using existing categories/writers. Do not mix releases, rewrite other caches, use default TECH, modify original factor or datasets. Refs BUG-1662 Issue #5217 and BUG-1622. BUG-1681 classification intake timed out before confirmed Issue/worktree creation; reservation retained, no automatic recreation.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,12 +30,24 @@
   ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261002_BUG-1680-target-only-correlation-refresh-incorrectly-requires-promoted-global-cac.json",
+      "backend/services/quantevolver/correlation_compute_service.py",
+      "backend/services/quantevolver/factor_analyst.py",
+      "backend/tests/quantevolver/test_official_runtime_validation.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "backend/tests/test_factor_metrics_authority_static.py"
+    ],
     "added_files": [],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261002_BUG-1680-target-only-correlation-refresh-incorrectly-requires-promoted-global-cac.json",
       "backend/services/quantevolver/correlation_compute_service.py",
-      "backend/tests/test_correlation_compute_independence.py"
+      "backend/services/quantevolver/factor_analyst.py",
+      "backend/tests/quantevolver/test_official_runtime_validation.py",
+      "backend/tests/test_correlation_compute_independence.py",
+      "backend/tests/test_factor_metrics_authority_static.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/correlation_compute_service.py",
@@ -117,11 +131,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_limitation": "Bound metrics readback proves availability only. Post-restart completion additionally needs the exact target correlation outcome with unavailable references disclosed and financing classification readback; no full-library refresh or rating completion is inferred from HTTP 200.",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=9e622aba-7e46-4a14-8c03-aaab33dfc3bd&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "fresh_process_evidence": [
+      "Windows Python 3.13.5 and WSL Ubuntu rdagent-gpu Python 3.10.19 fresh processes loaded BUG-1680 task worktree source; real correlation engine with synthetic caches: current target plus current reference persisted to stub, old-release reference unavailable, denominator 2 closed; eight financing fields and unknown-field behavior passed. No production reads/writes, dataset modification or services controlled."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -188,6 +212,15 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "review_evidence": [
+    "第一轮：按目标自身元数据绑定；参考缓存逐项比较，异版本不混算，未知来源不按日期猜测，零兼容参考不写库。",
+    "第二轮：复用既有 target writer、单事务及目标配对替换；未修改全库路径、SQL、事务或原版因子；八个两融正式字段精确匹配，不增加类别或 TECH 默认值。",
+    "第三轮 DESIGN-COMPLIANCE-001：非占位/简化交付；部分配对显式 complete=false 并保留分母与原因；未改变因子公式/交易逻辑；未新增审批或资源门禁。生产生效与 ID1545 后续刷新尚待用户重启，未冒充完成。"
+  ],
+  "validation_limitations": [
+    "未改动的 test_factor_metrics_authority_static.py 存在两项主线静态失败，canonical main 只读复现相同结果：全仓路径检查命中其他模块、前端 MultiAlphaGroupEditor.tsx 已迁移。未删除、弱化或标绿这些测试。新增两融回归归入已有官方运行时合同测试，CI 分类 passed，无未映射文件。",
+    "WSL rdagent-gpu 未安装 pytest；未安装依赖，使用标准库 unittest.mock 与真实相关性引擎在隔离合成数据上执行 fresh-process smoke，Windows/WSL 均 PASS。"
+  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
