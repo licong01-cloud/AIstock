@@ -41,8 +41,8 @@
   },
   "first_seen_at": "2026-07-30T18:30:24.026457Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b6a65769e4d7c69d249f80a573bf1fcfca99dba1",
+  "fixed_at": "2026-07-30T19:10:24Z",
   "github_issue_number": 2958,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2958",
   "last_seen_at": "2026-07-30T18:30:24.026457Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2960",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,27 +60,51 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "inference_basis": "actual_changed_files",
-    "runtime_impact": "backend",
-    "target_id": "backend-main",
-    "target_ids": ["backend-main"],
     "backend_restart_owner": "user",
-    "persistence_basis": "git_tracked_source",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
-    "runtime_identity_match": "pending",
-    "post_restart_effective_gate": "pending_user_restart",
     "fresh_process_evidence": [
       "2026-10-02 fresh process: backend/tests/advisory_phase1/test_r4_dataset_build_postgres.py -> 7 passed, including composite per-capture policy, exact artifact readback, complete member coverage and tampered aggregate rejection. No DB writes or experiment retry.",
       "Duplicate registration of BUG-931: exact same title, operation ahrop_bdabf4c70292cb51fed4177c84a12f59 and child ahrop_9f524d3518d95d304225c8864fd8cfe9. Existing source fix PR2960 merge b6a65769e4d7c69d249f80a573bf1fcfca99dba1 is in origin/main. OpenAPI smoke is not a replacement for direct admission tests."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-932",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5c5d10a5b6636fc6",
+    "recorded_at": "2026-10-02T11:59:00.025749Z",
+    "runtime_contract_digest": "19aef19c1fac6fd14c39c1006a55f383b49776621d952b30facbb01b0f0dada3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a91067058fe82bcf4f8ff9718f162b95a825e9d5",
+    "source_merge_commit": "b6a65769e4d7c69d249f80a573bf1fcfca99dba1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/2960",
+    "validation_evidence": [
+      "Duplicate BUG-931 exact title and operation/child identity reviewed; source PR2960 composite admission 7 tests passed; source runtime identity official read-only verification passed; no new code, DB writes or research retry."
+    ],
+    "validation_evidence_digest": "263c6afa1a893c9e8819730a8620251f6015145db38c73655fc287c0c6305115"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory_historical_range"
   ],
@@ -88,6 +113,9 @@
     "fingerprint": "95c1e7e8282b4756e7322096",
     "source_event_id": "FE-20260730-95c1e7e8282b"
   },
+  "validation_evidence": [
+    "Duplicate BUG-931 exact title and operation/child identity reviewed; source PR2960 composite admission 7 tests passed; source runtime identity official read-only verification passed; no new code, DB writes or research retry."
+  ],
   "verification_budget": {
     "budget": "deep",
     "deferred_nightly_verification": {
