@@ -1,6 +1,82 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AdvisoryEntryPrice } from "../../src/lib/api/advisory";
 
+for (const [state, text] of [
+  ["NO_ACCEPTABLE_PRICE", "已知条件下无合适价格"],
+  ["PARTIAL_UNKNOWN", "仍有未知条件"],
+  ["UNAVAILABLE", "不能视为不推荐"],
+] as const) {
+  test(`economic entry read-only research distinguishes ${state} without legacy ranking`, async ({ page }) => {
+    const bundle = "adveserve_" + "a".repeat(24);
+    await mockShellApis(page);
+    const { calls } = await mockAdvisoryApis(page, {
+      modelShadowByProgramId: { [PROGRAM_ID]: { status: "MODEL_UNAVAILABLE", candidates: [], shortlist_count: 0,
+        candidate_count: 0, baselines: {}, hmm_unavailable: [], reason_code: "UNIT_LEGACY_UNAVAILABLE", price_range: null } },
+      economicEntryResearch: { status: "RESEARCH_NAVIGATION", program_id: PROGRAM_ID, bundle_id: bundle,
+        target_date: "2025-01-29", decision_date: "2025-01-28", evidence_state: "RESEARCH_NAVIGATION", decision_use: "NAVIGATION_ONLY", deployable: false,
+        advice: [{ schema_version: "economic_entry_daily_projection_v1", role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY",
+          decision_use: "NAVIGATION_ONLY", deployable: false, evidence_state: "RESEARCH_NAVIGATION", role_binding_sha256: null, recommendation_status: state,
+          availability: state === "NO_ACCEPTABLE_PRICE" ? "COMPLETE" : state === "UNAVAILABLE" ? "UNAVAILABLE" : "PARTIAL",
+          reason_code: null, prediction_input: { program_id: PROGRAM_ID, instrument: "000001.SZ", decision_date: "2025-01-28",
+            binding_version_id: "unit-only-binding", run_id: null, list_id: null, restored_cohort_sha256: "e".repeat(64), selection_rank: 1,
+            captured_at: "2026-10-02T00:00:00Z",
+            target_date: "2025-01-29", source_evidence: "RECOVERED_LIMITED", evidence_level: "HISTORICAL_REPLAY", evidence_limitations: ["unit-only presentation fixture"] },
+          acceptable_price_intervals: [], node_status_counts: {
+            REJECTED: state === "UNAVAILABLE" ? 0 : 1, OUT_OF_SUPPORT: state === "NO_ACCEPTABLE_PRICE" ? 0 : state === "UNAVAILABLE" ? 2 : 1 },
+          query_node_count: state === "NO_ACCEPTABLE_PRICE" ? 1 : 2,
+          risk_budget: { maximum_loss_bps: 800, reference_use: "FIXED_RESEARCH_STOP_REFERENCE" }, model_bundle_sha256: "b".repeat(64),
+          original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }] },
+    });
+    await page.goto("/paper-v2/advisory");
+    const card = page.getByTestId("advisory-economic-entry-value");
+    await expect(card.getByTestId("economic-entry-role-status")).toContainText("NOT_CONFIGURED");
+    await card.locator("summary").filter({ hasText: "只读查看" }).click();
+    await page.getByLabel("经济价格研究bundle").fill(bundle);
+    await page.getByLabel("经济价格研究目标日").fill("2025-01-29");
+    await card.getByRole("button", { name: "读取探索产物" }).click();
+    await expect(card.getByTestId("economic-entry-research-result")).toContainText(text);
+    await expect(card).toContainText("不用于实盘");
+    expect(calls.filter((call) => call.includes("/entry-value/")).every((call) => call.startsWith("GET "))).toBe(true);
+  });
+}
+
+for (const state of ["PUBLISHED", "STALE", "IDENTITY_CONFLICT"] as const) {
+  test(`economic entry qualified presentation distinguishes ${state}`, async ({ page }) => {
+    // Presentation-only fixture, never real confirmation or activation evidence.
+    await mockShellApis(page);
+    const roleSha = "a".repeat(64);
+    const status = state === "IDENTITY_CONFLICT" ? "PUBLISHED" : state;
+    const { calls } = await mockAdvisoryApis(page, { economicEntryStatus: {
+      status, evidence_state: "CONFIRMED_ENTRY_VALUE", deployable: status === "PUBLISHED", decision_use: "ADVISORY_ONLY",
+      automatic_capture_enabled: true, qualification_gaps: [], role_binding_sha256: roleSha, pointer_sha256: "b".repeat(64),
+      bundle_id: "advecserve_" + "c".repeat(24), binding_version_id: "unit-only-binding", original_batch_sha256: "d".repeat(64),
+      reason_code: status === "STALE" ? "D_ADVICE_EXPIRED_AT_T_OPEN" : null,
+      advice: [{ schema_version: "economic_entry_daily_projection_v1", role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY",
+        evidence_state: "CONFIRMED_ENTRY_VALUE", deployable: true, decision_use: "ADVISORY_ONLY", role_binding_sha256: state === "IDENTITY_CONFLICT" ? "f".repeat(64) : roleSha,
+        recommendation_status: "ACCEPTABLE_PRICE_SET", availability: "PARTIAL", reason_code: null,
+        prediction_input: { program_id: PROGRAM_ID, binding_version_id: "unit-only-binding", run_id: "unit-only-run", list_id: "unit-only-list",
+          instrument: "000001.SZ", selection_rank: 1, restored_cohort_sha256: null, decision_date: "2026-06-08", target_date: "2026-06-09",
+          captured_at: "2026-06-08T17:00:00+08:00", source_evidence: "NATIVE_COMPLETE", evidence_level: "PROSPECTIVE_INPUT", evidence_limitations: ["unit-only presentation fixture"] },
+        acceptable_price_intervals: [{ minimum_cny: 9.95, maximum_cny: 9.97, grid_step_cny: .01, node_count: 3,
+          expected_net_return_min_bps: 30, expected_net_return_max_bps: 45, entry_net_max_loss_q90_max_bps: 200 }],
+        node_status_counts: { ACCEPTABLE: 3, OUT_OF_SUPPORT: 1 }, query_node_count: 4,
+        risk_budget: { maximum_loss_bps: 800, reference_use: "EXPLICIT_BUSINESS_CONFIGURATION", configuration_sha256: "e".repeat(64) },
+        model_bundle_sha256: "b".repeat(64), original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }],
+    } });
+    await page.goto("/paper-v2/advisory");
+    const card = page.getByTestId("advisory-economic-entry-value");
+    if (state === "IDENTITY_CONFLICT") {
+      await expect(card.getByTestId("economic-entry-status-error")).toContainText("身份或证据不一致");
+      await expect(card).not.toContainText("9.95");
+    } else {
+      await expect(card.getByTestId("economic-entry-role-status")).toContainText(state);
+      await expect(card).toContainText("9.95～9.97 CNY");
+      if (state === "STALE") await expect(card).toContainText("不能作为当前买入建议");
+    }
+    expect(calls.filter((call) => call.includes("/entry-value/")).every((call) => call.startsWith("GET "))).toBe(true);
+  });
+}
+
 type JsonObject = Record<string, unknown>;
 
 const PROGRAM_ID = "adv_codex_smoke_20260604";
@@ -616,6 +692,8 @@ async function mockAdvisoryApis(page: Page, options: {
   listVersionsByProgramId?: Record<string, JsonObject[]>;
   bindingsByProgramId?: Record<string, JsonObject[]>;
   modelShadowByProgramId?: Record<string, JsonObject>;
+  economicEntryResearch?: JsonObject;
+  economicEntryStatus?: JsonObject;
   forwardRunsByProgramId?: Record<string, JsonObject[]>;
   forwardDetailsById?: Record<string, JsonObject>;
   forwardModelMetricsByProgramId?: Record<string, JsonObject>;
@@ -832,6 +910,23 @@ async function mockAdvisoryApis(page: Page, options: {
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings/active`) && method === "GET") {
       const binding = (bindingsByProgramId[currentRouteProgramId] || []).find((item) => item.activation_status === "ACTIVE") || { ...activeBinding, program_id: currentRouteProgramId };
       return json(route, { ok: true, binding });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/entry-value/status`) && method === "GET") {
+      const target = url.searchParams.get("target_trade_date");
+      if (options.economicEntryStatus) {
+        const advice = (options.economicEntryStatus.advice as JsonObject[] || []).map((row) => ({ ...row,
+          prediction_input: { ...(row.prediction_input as JsonObject), target_date: target || "2026-06-09" } }));
+        return json(route, { ok: true, schema_version: "economic_entry_consumer_status_v1", program_id: currentRouteProgramId,
+          role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY", target_date: target, resolved_target_date: target || "2026-06-09",
+          research_namespace_configured: true, ...options.economicEntryStatus, advice });
+      }
+      return json(route, { ok: true, schema_version: "economic_entry_consumer_status_v1", program_id: currentRouteProgramId,
+        role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY", status: "NOT_CONFIGURED", target_date: url.searchParams.get("target_trade_date"),
+        evidence_state: "UNCONFIRMED", deployable: false, advice: [], reason_code: "NO_QUALIFIED_ENTRY_VALUE_ROLE_BOUND",
+        qualification_gaps: ["independent_economic_confirmation"], automatic_capture_enabled: false, research_namespace_configured: true });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/entry-value/research`) && method === "GET") {
+      return json(route, { ok: true, ...options.economicEntryResearch });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/model-shadow`) && method === "GET") {
       const configured = options.modelShadowByProgramId?.[currentRouteProgramId];
