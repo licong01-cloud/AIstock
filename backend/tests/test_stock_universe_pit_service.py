@@ -50,6 +50,65 @@ def test_canonical_source_fingerprint_uses_builder_terminal_evidence_contract() 
 QE_SNAPSHOT_KEY = "shsz_st_pit_qe_dataset_test_20180801_20260630_v1"
 
 
+@pytest.mark.parametrize("missing_schema", [False, True])
+def test_existing_schema_service_never_bootstraps(monkeypatch, missing_schema) -> None:
+    service = StockUniversePitService(existing_schema_only=True)
+    observed = []
+    monkeypatch.setattr(
+        service, "get_status_readonly",
+        lambda **kwargs: observed.append(kwargs) or (
+            {"reason": "schema_contract_missing"} if missing_schema else {"status": "missing"}
+        ),
+    )
+    if missing_schema:
+        with pytest.raises(StockUniversePitError, match="schema contract is missing"):
+            service.ensure_tables()
+    else:
+        service.ensure_tables()
+    assert observed == [{"universe_key": CANONICAL_PIT_UNIVERSE_KEY}]
+
+
+def test_rebuild_propagates_existing_schema_mode_to_nested_builder(monkeypatch) -> None:
+    service = StockUniversePitService(existing_schema_only=True)
+    captured = []
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(service, "get_status", lambda **_kwargs: {})
+    monkeypatch.setattr(service, "compute_source_fingerprint", lambda **_kwargs: {})
+    monkeypatch.setattr(service, "_set_building", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "_set_failed", lambda *_args, **_kwargs: None)
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return self
+
+        def execute(self, sql, _params):
+            assert sql.startswith("SELECT pg_")
+
+        def fetchone(self):
+            return (True,)
+
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", Connection)
+
+    def observe_builder(args):
+        captured.append(args)
+        raise RuntimeError("nested builder observed without any writes")
+
+    monkeypatch.setattr(pit_builder, "build", observe_builder)
+    with pytest.raises(RuntimeError, match="nested builder observed"):
+        service.rebuild_canonical_pit_universe(
+            start_date=dt.date(2018, 8, 1), end_date=dt.date(2026, 9, 30),
+        )
+    assert len(captured) == 1
+    assert captured[0].existing_schema_only is True
+    assert captured[0].universe_key == CANONICAL_PIT_UNIVERSE_KEY
+
+
 def test_st_pit_namespace_contract_is_bidirectional() -> None:
     assert require_live_st_pit_universe_key(DEFAULT_ST_PIT_UNIVERSE_KEY) == DEFAULT_ST_PIT_UNIVERSE_KEY
     assert require_qe_immutable_st_pit_universe_key(QE_SNAPSHOT_KEY) == QE_SNAPSHOT_KEY

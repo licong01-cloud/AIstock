@@ -2,8 +2,9 @@
 
 > 日期：2026-08-10
 > Feature tier：F2
-> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v2.6
-> 当前阶段：`M4B_SOURCE_IMPLEMENTED_DEPLOYMENT_PENDING`
+> 父级蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` v3.59
+> 当前阶段：`HISTORICAL_V1_V2_IMPLEMENTATION_SUPERSEDED_FOR_NEW_WORK`
+> 当前权威后继：`docs/architecture/advisory_daily_price_envelope_v1_f2_design_20260914.md` v1.1；本文只保存既有四头 M4 v1/v2 的实现与证据，不再指导新训练、业务合同或激活
 > 适用范围：学术研究与历史回测参考，不构成实时投资建议或交易执行
 
 ## 1. Background / 背景

@@ -524,6 +524,10 @@ def test_prepare_factors_missing_configured_output_fails_closed(
 def test_ma_e16_in_memory_compose_keeps_observation_panel_out_of_strategy_kwargs(
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        "backend.services.quantevolver.config_composer.load_active_qe_profile",
+        lambda: None,
+    )
     composer = ConfigComposer()
     factor_names = ["BaseA", "BaseB", "Candidate"]
     monkeypatch.setattr(

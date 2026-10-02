@@ -48,6 +48,10 @@ from ..services.data_completeness import DATASET_TABLE_MAP
 from ..services.data_refresh_audit import DataRefreshAuditRepository
 from ..services.data_health_alerter import DataHealthAlerter, classify_retry_alert
 from ..services.data_sync_targets import DataSyncAttemptRecord, DataSyncTargetRecord, DataSyncTargetRepository
+from ..services.suspend_d_coverage import (
+    SCHEMA_VERSION as SUSPEND_D_COVERAGE_SCHEMA_VERSION,
+    audit_suspend_d_coverage,
+)
 
 _logger = logging.getLogger(__name__)
 _SCHEDULE_TZ_NAME = "Asia/Shanghai"
@@ -90,6 +94,7 @@ _NEXT_DAY_RECOVERY_DEADLINE_DATASETS = frozenset(
 )
 _MODE_INSENSITIVE_SCHEDULE_DATASETS = frozenset({"stock_basic"})
 _HIGH_FREQUENCY_REVIEW_DATASETS = frozenset({"suspend_d", "anns_metadata"})
+_SW2021_L1_PUBLISHED_COUNT = 31
 
 # TDX datasets whose incremental mode should go through Go backend API (not ingest_incremental.py)
 _GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
@@ -1804,6 +1809,22 @@ class TDXScheduler:
                 self._run_targeted_tushare_refresh,
                 run_id, schedule_id, ds_lower, mode, triggered_by, options,
             )
+        # adj_factor owns a mandatory full-history reconciliation contract in
+        # its dedicated ingestion script.  Do not let registry membership
+        # silently downgrade scheduled/retry runs to the generic date-only
+        # TushareSyncEngine path.
+        elif ds_lower == "adj_factor":
+            cmd_opts = options.copy()
+            cmd = self._build_ingestion_command(dataset, mode, cmd_opts)
+            future = self._executor.submit(
+                self._run_ingestion_process,
+                run_id,
+                schedule_id,
+                dataset,
+                mode,
+                triggered_by,
+                cmd,
+            )
         # Route engine-supported datasets through TushareSyncEngine
         elif ds_lower in _ENGINE_DATASETS and not options.get("script"):
             future = self._executor.submit(
@@ -2433,16 +2454,27 @@ class TDXScheduler:
 
         if mode == "incremental":
             if dataset == "adj_factor":
-                # Tushare adj_factor init: date range + optional truncate + job id
-                args += ["--mode", "init"]
+                # Daily adj_factor ingestion also performs mandatory per-symbol
+                # full-history reconciliation inside the dedicated script.
+                args += ["--mode", "incremental"]
                 if options.get("start_date"):
                     args += ["--start-date", str(options["start_date"])]
                 if options.get("end_date"):
                     args += ["--end-date", str(options["end_date"])]
-                if options.get("truncate"):
-                    args += ["--truncate"]
                 if options.get("job_id"):
                     args += ["--job-id", str(options["job_id"])]
+                history_options = {
+                    "history_reconcile_workers": "--history-reconcile-workers",
+                    "history_reconcile_rate_per_minute": "--history-reconcile-rate-per-minute",
+                    "history_reconcile_max_pages": "--history-reconcile-max-pages",
+                    "history_reconcile_symbol": "--history-reconcile-symbol",
+                }
+                for option_name, argument_name in history_options.items():
+                    option_value = options.get(option_name)
+                    if option_value is not None:
+                        args += [argument_name, str(option_value)]
+                if options.get("history_reconcile_dry_run"):
+                    args += ["--history-reconcile-dry-run"]
             elif dataset == "index_daily":
                 # 指数日线行情增量：直接透传起止日期和市场过滤 + job_id
                 args += ["--mode", "incremental"]
@@ -2885,26 +2917,43 @@ class TDXScheduler:
                     job_id=child_job_id,
                 )
 
-                # sw_daily zero-row detection: API may return 0 rows if data
-                # not yet published (T+1 delay). Schedule a 1-hour delayed retry.
-                if ds_name == "sw_daily" and result.ok and result.inserted_rows == 0:
-                    _logger.warning(
-                        "sw_sector: sw_daily sync succeeded but inserted 0 rows — "
-                        "API data may not be available yet, scheduling delayed retry"
-                    )
-                    self._schedule_delayed_retry(
-                        "sw_sector", mode, delay_minutes=60,
-                        reason="sw_daily 0 rows — API data not yet published",
-                    )
+                coverage = None
+                retry_reason = None
+                if ds_name == "sw_daily" and result.ok:
+                    try:
+                        coverage = self._sw_daily_level_coverage(end_date)
+                    except Exception as exc:  # noqa: BLE001
+                        coverage = {
+                            "status": "unavailable",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    retry_reason = self._sw_daily_retry_reason(result.inserted_rows, coverage)
+                    if retry_reason:
+                        _logger.warning(
+                            "sw_sector: sw_daily publish incomplete (%s); "
+                            "recording warning and scheduling delayed retry",
+                            retry_reason,
+                        )
+                        self._schedule_delayed_retry(
+                            "sw_sector",
+                            mode,
+                            delay_minutes=60,
+                            reason=retry_reason,
+                        )
 
                 # 更新子 job 完成状态
                 if child_job_id:
                     child_status = "success" if result.ok else "failed"
                     try:
-                        summary_patch = json.dumps(
-                            {"inserted_rows": result.inserted_rows, "dataset": ds_name, "mode": ds_mode},
-                            ensure_ascii=False, default=str,
-                        )
+                        child_summary = {
+                            "inserted_rows": result.inserted_rows,
+                            "dataset": ds_name,
+                            "mode": ds_mode,
+                        }
+                        if coverage is not None:
+                            child_summary["level_coverage"] = coverage
+                            child_summary["coverage_warning"] = retry_reason is not None
+                        summary_patch = json.dumps(child_summary, ensure_ascii=False, default=str)
                         self._execute(
                             """UPDATE market.ingestion_jobs
                                   SET status=%s, finished_at=NOW(),
@@ -2952,6 +3001,92 @@ class TDXScheduler:
             self._update_ingestion_schedule(
                 schedule_id, last_run=start_ts, last_status=overall_status, last_error=None,
             )
+
+    def _sw_daily_level_coverage(
+        self,
+        requested_end_date: Optional[dt.date],
+    ) -> Dict[str, Any]:
+        """Return published SW2021 L1/L2 close coverage for one trading day.
+
+        The result is observability for the existing ``sw_sector`` job, not a
+        new blocking gate.  A missing L1 row schedules the existing delayed
+        retry while the composite job keeps its normal success semantics.
+        """
+
+        rows = self._fetchall(
+            """
+            WITH target AS (
+                SELECT MAX(cal_date)::date AS trade_date
+                  FROM market.trading_calendar
+                 WHERE is_trading = TRUE
+                   AND cal_date <= COALESCE(%s::date, CURRENT_DATE)
+            )
+            SELECT target.trade_date,
+                   classify.level,
+                   COUNT(*)::integer AS expected,
+                   COUNT(daily.ts_code) FILTER (
+                       WHERE daily.close IS NOT NULL
+                   )::integer AS present,
+                   COALESCE(
+                       ARRAY_AGG(classify.index_code ORDER BY classify.index_code)
+                           FILTER (
+                               WHERE daily.ts_code IS NULL OR daily.close IS NULL
+                           ),
+                       ARRAY[]::text[]
+                   ) AS missing_codes
+              FROM target
+              JOIN market.sw_index_classify AS classify
+                ON classify.level IN ('L1', 'L2')
+               AND classify.src = 'SW2021'
+               AND classify.is_pub = '1'
+              LEFT JOIN market.sw_daily AS daily
+                ON daily.ts_code = classify.index_code
+               AND daily.trade_date = target.trade_date
+             GROUP BY target.trade_date, classify.level
+             ORDER BY classify.level
+            """,
+            (requested_end_date,),
+        )
+        levels: Dict[str, Dict[str, Any]] = {}
+        trade_date = None
+        for row in rows:
+            trade_date = row.get("trade_date") or trade_date
+            level = str(row.get("level") or "").upper()
+            if not level:
+                continue
+            levels[level] = {
+                "expected": int(row.get("expected") or 0),
+                "present": int(row.get("present") or 0),
+                "missing_codes": sorted(str(code) for code in (row.get("missing_codes") or [])),
+            }
+        return {
+            "status": "ok",
+            "trade_date": trade_date,
+            "levels": levels,
+        }
+
+    @staticmethod
+    def _sw_daily_retry_reason(
+        inserted_rows: int,
+        coverage: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Describe why the non-blocking SW daily delayed retry is needed."""
+
+        if int(inserted_rows or 0) == 0:
+            return "sw_daily_zero_rows_provider_not_ready"
+        if not coverage or coverage.get("status") != "ok":
+            return "sw_daily_l1_coverage_unavailable"
+        l1 = dict((coverage.get("levels") or {}).get("L1") or {})
+        expected = int(l1.get("expected") or 0)
+        present = int(l1.get("present") or 0)
+        if expected != _SW2021_L1_PUBLISHED_COUNT or present != expected:
+            trade_date = coverage.get("trade_date") or "unknown"
+            return (
+                "sw_daily_l1_incomplete "
+                f"trade_date={trade_date} catalog_expected={expected} "
+                f"present={present} required={_SW2021_L1_PUBLISHED_COUNT}"
+            )
+        return None
 
     def _run_sector_data_build(
         self,
@@ -3228,11 +3363,23 @@ class TDXScheduler:
             floor = self._recent_trading_floor(30)
             if floor is not None and start_date < floor:
                 start_date = floor
+        quality_projection = ""
+        if dataset == "daily_basic":
+            quality_projection = """,
+                   COUNT(*) FILTER (
+                       WHERE turnover_rate_f IS NOT NULL
+                         AND turnover_rate_f::text NOT IN ('NaN', 'Infinity', '-Infinity')
+                   )::bigint AS required_turnover_rate_f_count,
+                   COUNT(*) FILTER (
+                       WHERE volume_ratio IS NOT NULL
+                         AND volume_ratio::text NOT IN ('NaN', 'Infinity', '-Infinity')
+                   )::bigint AS required_volume_ratio_count"""
         rows = self._fetchall(
             f"""
             SELECT {date_col}::date AS trade_date,
                    COUNT(*)::bigint AS row_count,
                    MAX({date_col}) AS data_max_at
+                   {quality_projection}
             FROM {table_name}
             WHERE {date_col} >= %s
               AND {date_col} < %s
@@ -3242,6 +3389,14 @@ class TDXScheduler:
         )
         counts = {r["trade_date"]: int(r["row_count"] or 0) for r in rows}
         max_at = {r["trade_date"]: r.get("data_max_at") for r in rows}
+        daily_basic_required_counts = {
+            r["trade_date"]: {
+                "turnover_rate_f": int(r.get("required_turnover_rate_f_count") or 0),
+                "volume_ratio": int(r.get("required_volume_ratio_count") or 0),
+            }
+            for r in rows
+            if dataset == "daily_basic"
+        }
         target_dates = self._fetchall(
             """
             SELECT cal_date
@@ -3263,32 +3418,97 @@ class TDXScheduler:
                 data_max_at = max_at.get(trade_date)
                 if not isinstance(data_max_at, dt.datetime):
                     data_max_at = None
-                if row_count > 0:
+                row_metadata = dict(base_metadata)
+                quality_status = "ok"
+                failure_category = None
+                if dataset == "daily_basic" and row_count > 0:
+                    required_counts = daily_basic_required_counts.get(
+                        trade_date,
+                        {"turnover_rate_f": 0, "volume_ratio": 0},
+                    )
+                    fields = {
+                        field: {
+                            "finite_count": required_counts[field],
+                            "row_count": row_count,
+                            "ratio": required_counts[field] / row_count,
+                            "required_ratio": 0.95,
+                        }
+                        for field in ("turnover_rate_f", "volume_ratio")
+                    }
+                    # Keep the v1 turnover receipt for older health readers while
+                    # persisting the complete two-field contract for current audits.
+                    row_metadata["required_field_coverage"] = {
+                        "schema_version": "daily_basic_required_field_coverage_v1",
+                        "field": "turnover_rate_f",
+                        **fields["turnover_rate_f"],
+                    }
+                    row_metadata["required_field_coverages"] = {
+                        "schema_version": "daily_basic_required_field_coverages_v2",
+                        "fields": fields,
+                    }
+                    if any(value["ratio"] < 0.95 for value in fields.values()):
+                        quality_status = "low_coverage"
+                        failure_category = "required_field_low_coverage"
+                if row_count > 0 and quality_status == "ok":
                     repo.record_success(
                         dataset=dataset,
                         trade_date=trade_date,
                         row_count=row_count,
                         job_id=str(job_id) if job_id else None,
                         data_source=data_source,
-                        metadata=base_metadata,
+                        metadata=row_metadata,
                         data_max_at=data_max_at,
                         written_rows=row_count,
-                        quality_status="ok",
+                        quality_status=quality_status,
                         conn=conn,
                     )
                 else:
+                    error_message = f"{dataset} has 0 rows in {table_name} for {trade_date}"
+                    if row_count > 0:
+                        coverages = row_metadata["required_field_coverages"]["fields"]
+                        failing = [
+                            (field, value)
+                            for field, value in coverages.items()
+                            if value["ratio"] < value["required_ratio"]
+                        ]
+                        coverage_text = "; ".join(
+                            f"field={field} finite_count={value['finite_count']} "
+                            f"row_count={row_count} ratio={value['ratio']:.6f} required=0.950000"
+                            for field, value in failing
+                        )
+                        error_message = (
+                            "daily_basic required field coverage is below contract: "
+                            f"trade_date={trade_date} {coverage_text}"
+                        )
                     repo.record_failure(
                         dataset=dataset,
                         trade_date=trade_date,
-                        error_message=f"{dataset} has 0 rows in {table_name} for {trade_date}",
+                        error_message=error_message,
                         job_id=str(job_id) if job_id else None,
                         data_source=data_source,
-                        metadata=base_metadata,
-                        written_rows=0,
-                        quality_status="empty_invalid",
-                        failure_category="empty_invalid",
+                        metadata=row_metadata,
+                        written_rows=row_count,
+                        quality_status=quality_status if row_count > 0 else "empty_invalid",
+                        failure_category=failure_category or "empty_invalid",
                         conn=conn,
                     )
+
+    def _retry_range_for_health_failure(
+        self,
+        dataset: str,
+        *,
+        target_date: Optional[dt.date],
+        failure_category: Optional[str],
+    ) -> Tuple[Optional[dt.date], Optional[dt.date]]:
+        """Anchor repairable same-date quality failures to their exact partition."""
+
+        if target_date is not None and failure_category in {
+            "required_field_low_coverage",
+            "required_field_coverage_unproven",
+            "required_source_field_unpublished",
+        }:
+            return target_date, target_date
+        return self._compute_auto_range(dataset)
 
     def _run_data_freshness_check(
         self,
@@ -3328,8 +3548,39 @@ class TDXScheduler:
                     stale.append(r.dataset)
 
             expected_date = check_results[0].expected_date if check_results else None
-            overall = "ok" if not stale else "partial"
-            job_status = "success" if overall == "ok" else "partial"
+            suspend_coverage: Dict[str, Any]
+            coverage_failed = False
+            try:
+                coverage_end = self._latest_completed_trading_day()
+                if coverage_end is None:
+                    raise RuntimeError("trading calendar has no completed trading day")
+                full_history = self._suspend_d_full_history_due(
+                    _now().astimezone(_CN_TZ).date()
+                )
+                with _get_conn(self._db_cfg) as conn:
+                    suspend_coverage = audit_suspend_d_coverage(
+                        conn,
+                        start_date=dt.date(2018, 8, 1) if full_history else None,
+                        end_date=coverage_end,
+                        lookback_trading_days=None if full_history else 60,
+                        max_findings=500 if full_history else 200,
+                        statement_timeout_ms=600_000 if full_history else 300_000,
+                    )
+                coverage_failed = not suspend_coverage["summary"]["coverage_complete"]
+            except Exception as exc:  # noqa: BLE001 - retain structured fail-closed evidence.
+                coverage_failed = True
+                suspend_coverage = {
+                    "schema_version": SUSPEND_D_COVERAGE_SCHEMA_VERSION,
+                    "summary": {"coverage_complete": False},
+                    "error": str(exc),
+                    "database_write_performed": False,
+                }
+                _logger.exception("suspend_d coverage audit failed during freshness check: %s", exc)
+            if coverage_failed:
+                stale.append("suspend_d_coverage")
+
+            overall = "ok" if not stale else ("failed" if coverage_failed else "partial")
+            job_status = "success" if overall == "ok" else overall
 
             target_ids = self._record_freshness_retry_targets(check_results)
 
@@ -3338,6 +3589,7 @@ class TDXScheduler:
                 "expected_date": str(expected_date) if expected_date else None,
                 "results": results, "overall": overall,
                 "stale_datasets": stale,
+                "suspend_d_coverage": suspend_coverage,
                 "retry_target_ids": target_ids,
                 "alert_gate": "deferred_until_retry_final_state",
             }
@@ -3386,6 +3638,12 @@ class TDXScheduler:
             self._update_ingestion_schedule(
                 schedule_id, last_run=start_ts, last_status=job_status, last_error=None,
             )
+
+    @staticmethod
+    def _suspend_d_full_history_due(today: Optional[dt.date] = None) -> bool:
+        """Use Saturday's existing freshness run for the weekly historical pass."""
+
+        return (today or dt.datetime.now(_CN_TZ).date()).weekday() == 5
 
     def _record_freshness_retry_targets(self, check_results: Iterable[Any]) -> List[str]:
         target_ids: List[str] = []
@@ -3680,7 +3938,11 @@ class TDXScheduler:
                             entry["retry_status"] = "skipped_duplicate_recent"
                             break
                         try:
-                            ar_start, ar_end = self._compute_auto_range(ds)
+                            ar_start, ar_end = self._retry_range_for_health_failure(
+                                ds,
+                                target_date=target_date,
+                                failure_category=entry.get("failure_category"),
+                            )
                             if ar_start is not None and ar_end is not None:
                                 retry_opts["start_date"] = ar_start.isoformat()
                                 retry_opts["end_date"] = ar_end.isoformat()

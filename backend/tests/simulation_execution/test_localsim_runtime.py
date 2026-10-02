@@ -663,6 +663,77 @@ def test_localsim_realtime_submission_persists_waiting_state_before_first_causal
     assert state.last_processed_bar_time is None
 
 
+def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_peer() -> None:
+    blocked_input = _make_market_input("000001.SZ", bar_count=2)
+    first_blocked_bar = blocked_input.minute_bars[0].model_copy(
+        update={"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0}
+    )
+    blocked_input = replace(
+        blocked_input,
+        minute_bars=[first_blocked_bar, blocked_input.minute_bars[1]],
+    )
+    healthy_input = _make_market_input("000002.SZ", bar_count=2, open_price=20.0)
+    provider = ObservedMarketDataProvider(
+        inputs_by_symbol={
+            "000001.SZ": blocked_input,
+            "000002.SZ": healthy_input,
+        }
+    )
+    backend, _, _ = _build_backend(
+        initial_cash=1_000_000,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_twap_limit_wait",
+            "policy_sha256": "sha_twap_limit_wait",
+            "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 2}},
+        },
+    )
+    backend.configure_execution_runtime(run_id="run_limit_wait", binding_id="binding_limit_wait")
+    cursor = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=30)
+    blocked_intent = _buy_intent(backend, symbol="000001.SZ", quantity=200)
+    healthy_intent = _buy_intent(backend, symbol="000002.SZ", quantity=200)
+    plan = SimpleNamespace(
+        plan_id="plan_limit_wait",
+        target_trade_date=TRADE_DATE,
+        intents=(blocked_intent, healthy_intent),
+        plan_payload_json={"local_sim_execution_causality": {"eligible_bar_after": cursor.isoformat()}},
+    )
+    backend.bind_execution_plan(plan=plan, as_of_time=cursor)
+    blocked_handle = backend.submit_order_intent(blocked_intent)
+    healthy_handle = backend.submit_order_intent(healthy_intent)
+
+    first_handles = backend.advance_realtime_execution(as_of_time=cursor + timedelta(minutes=1))
+    first_snapshot = backend.export_execution_snapshot(handles=first_handles)
+    first_states = {state.symbol: state for state in first_snapshot["execution_states"]}
+
+    assert first_states["000001.SZ"].runtime_status.value == "WAITING_FOR_MARKET_STATE"
+    assert first_states["000001.SZ"].waiting_reason_code == "LIMIT_UP_BUY_BLOCKED"
+    assert first_states["000001.SZ"].last_processed_bar_time == first_blocked_bar.bar_time
+    assert first_states["000001.SZ"].filled_quantity == 0
+    assert first_states["000002.SZ"].runtime_status.value == "ACTIVE"
+    assert first_states["000002.SZ"].filled_quantity == 100
+    assert {fill.symbol for fill in first_snapshot["fills"]} == {"000002.SZ"}
+    assert any(
+        event.order_id == first_states["000001.SZ"].order_id
+        and event.event_type == OrderEventType.NO_FILL
+        and event.reason == "LIMIT_UP_BUY_BLOCKED"
+        for event in first_snapshot["events"]
+    )
+
+    second_handles = backend.advance_realtime_execution(as_of_time=cursor + timedelta(minutes=2))
+    second_snapshot = backend.export_execution_snapshot(handles=second_handles)
+    second_states = {state.symbol: state for state in second_snapshot["execution_states"]}
+
+    assert second_states["000001.SZ"].runtime_status.value == "FILLED"
+    assert second_states["000001.SZ"].filled_quantity == 200
+    assert second_states["000002.SZ"].runtime_status.value == "FILLED"
+    assert second_states["000002.SZ"].filled_quantity == 200
+    assert all(state.last_processed_bar_time == cursor + timedelta(minutes=2) for state in second_states.values())
+    assert backend.query_status(blocked_handle).state == "filled"
+    assert backend.query_status(healthy_handle).state == "filled"
+
+
 def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplicate_fill() -> None:
     historical = _make_market_input("000001.SZ", bar_count=4)
     provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": historical})

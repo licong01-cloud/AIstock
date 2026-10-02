@@ -33,7 +33,9 @@ def ensure_loop_fixed_seed(loop: dict[str, Any], *, context: str, trainable: boo
     """
 
     if trainable is None:
-        trainable = not bool(loop.get("backtest_only"))
+        trainable = not (
+            bool(loop.get("backtest_only")) or bool(loop.get("prediction_replay"))
+        )
 
     runtime_flags = dict(loop.get("runtime_flags") or {})
     seed_value = _pop_seed_aliases(runtime_flags, prefer_existing=runtime_flags.get("random_seed"))

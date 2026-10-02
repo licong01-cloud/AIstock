@@ -163,6 +163,15 @@ class RuntimeAssetManifest(BaseModel):
     alpha158: Alpha158SchemaAsset = Field(default_factory=lambda: Alpha158SchemaAsset(enabled=False))
 
 
+class FittedPreprocessorAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_ref: str
+    sha256: str
+    size_bytes: int = Field(gt=0)
+    source_uri: str | None = None
+
+
 class ModelAsset(BaseModel):
     model_id: str
     model_ref: str | None = None
@@ -173,6 +182,14 @@ class ModelAsset(BaseModel):
     source_uri: str | None = None
     model_code_required: bool = False
     model_code_assets: list[ModelCodeAsset] = Field(default_factory=list)
+    preprocessor_asset: FittedPreprocessorAsset | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_optional_preprocessor(self, handler):
+        payload = handler(self)
+        if self.preprocessor_asset is None:
+            payload.pop("preprocessor_asset", None)
+        return payload
 
 
 class UniversePolicy(BaseModel):

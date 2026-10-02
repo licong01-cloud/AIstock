@@ -54,7 +54,7 @@ def _repo_with_stale_pr_base(tmp_path: Path) -> tuple[Path, str, str, str]:
     return repo, old_base, current_base, feature_head
 
 
-def test_pull_request_uses_current_base_ref_when_event_base_sha_is_stale(tmp_path: Path) -> None:
+def test_pull_request_uses_pinned_source_diff_when_main_advances(tmp_path: Path) -> None:
     repo, old_base, current_base, feature_head = _repo_with_stale_pr_base(tmp_path)
 
     changed, receipt = build_changed_files(
@@ -66,9 +66,57 @@ def test_pull_request_uses_current_base_ref_when_event_base_sha_is_stale(tmp_pat
 
     assert changed == ["docs/hmm.md", "tests/aistock_validation/bugs/BUG.json"]
     assert "backend/services/quantevolver/unrelated.py" not in changed
-    assert receipt["base_source"] == "current_base_ref"
-    assert receipt["base_commit"] == current_base
+    assert receipt["base_source"] == "pinned_pr_base_sha"
+    assert receipt["base_commit"] == old_base
     assert receipt["event_base_sha"] == old_base
+    assert _git(repo, "rev-parse", "main") == current_base
+
+
+def test_synthetic_merge_checkout_does_not_attribute_later_main_files(tmp_path: Path) -> None:
+    repo, old_base, current_base, feature_head = _repo_with_stale_pr_base(tmp_path)
+    _git(repo, "merge", "--no-ff", "feature", "-m", "synthetic PR merge")
+    integration_head = _git(repo, "rev-parse", "HEAD")
+
+    prepared = prepare_pr_merge_base(
+        repo_root=repo, base_ref="main", base_sha=old_base,
+        checkout_ref="refs/heads/main", source_head_sha=feature_head,
+    )
+    changed, receipt = build_changed_files(
+        repo_root=repo, base_ref="main", base_sha=old_base, head_sha=feature_head,
+    )
+    contaminated, _ = build_changed_files(repo_root=repo, base_sha=old_base, head_sha=integration_head)
+
+    assert changed == ["docs/hmm.md", "tests/aistock_validation/bugs/BUG.json"]
+    assert "backend/services/quantevolver/unrelated.py" in contaminated
+    assert (repo / "backend/services/quantevolver/unrelated.py").is_file()
+    assert prepared["head_commit"] == integration_head
+    assert prepared["source_head_commit"] == receipt["head_commit"] == feature_head
+    assert prepared["base_commit"] == receipt["base_commit"] == old_base
+    assert prepared["merge_base"] == old_base
+    # A later ref movement cannot change a commit-bound scope result.
+    _git(repo, "update-ref", "refs/remotes/origin/main", current_base)
+    assert build_changed_files(
+        repo_root=repo, base_ref="main", base_sha=old_base, head_sha=feature_head,
+    )[0] == changed
+
+
+@pytest.mark.parametrize("source", ["main", "f" * 40])
+def test_pr_preparation_rejects_invalid_or_unavailable_source(tmp_path: Path, source: str) -> None:
+    repo, old_base, _, _ = _repo_with_stale_pr_base(tmp_path)
+    with pytest.raises(ChangedFilesError):
+        prepare_pr_merge_base(
+            repo_root=repo, base_ref="main", base_sha=old_base,
+            checkout_ref="refs/heads/main", source_head_sha=source, attempts=1,
+        )
+
+
+def test_pr_preparation_rejects_source_not_contained_in_checkout(tmp_path: Path) -> None:
+    repo, old_base, _, feature_head = _repo_with_stale_pr_base(tmp_path)
+    with pytest.raises(ChangedFilesError, match="--is-ancestor"):
+        prepare_pr_merge_base(
+            repo_root=repo, base_ref="main", base_sha=old_base,
+            checkout_ref="refs/heads/main", source_head_sha=feature_head,
+        )
 
 
 def test_push_uses_event_before_sha_without_a_base_ref(tmp_path: Path) -> None:
@@ -94,7 +142,7 @@ def test_explicit_pull_request_base_ref_fails_closed_when_missing(tmp_path: Path
         build_changed_files(
             repo_root=repo,
             base_ref="missing-base",
-            base_sha=old_base,
+            base_sha="",
             head_sha=feature_head,
         )
 
@@ -126,7 +174,7 @@ def test_prepare_pr_merge_base_fetches_only_exact_refs_with_bounded_deepening(
     head_sha = "b" * 40
 
     def fake_commit(repo_root: Path, revision: str, field: str) -> str:
-        if revision == "HEAD":
+        if revision in {"HEAD", head_sha}:
             return head_sha
         if revision == base_sha and fetched:
             return base_sha
@@ -173,15 +221,64 @@ def test_prepare_pr_merge_base_fetches_only_exact_refs_with_bounded_deepening(
 def test_pull_request_workflows_use_shared_current_base_resolver() -> None:
     workflow_paths = (
         Path(".github/workflows/test.yml"),
-        Path(".github/workflows/codeql.yml"),
         Path(".github/workflows/semgrep.yml"),
         Path(".github/workflows/dependency-update-validate.yml"),
         Path(".github/workflows/pr-quality.yml"),
     )
     for path in workflow_paths:
         source = path.read_text(encoding="utf-8")
-        yaml.safe_load(source)
-        assert "--prepare-pr-merge-base-only" in source
-        assert "github.event.pull_request.base.sha" in source
-        assert "github.event.pull_request.base.ref" in source or "github.base_ref" in source
-        assert "scripts/ci_changed_files.py" in source
+        from scripts.ci_workflow_policy_scan import has_event_bound_base_preparation
+        document = yaml.safe_load(source)
+        manual = path.name != "test.yml"
+        assert has_event_bound_base_preparation(source, manual=manual)
+        if manual:
+            assert "base_sha" in document.get("on", document.get(True))["workflow_dispatch"]["inputs"]
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+def test_manual_event_compares_complete_branch_and_pins_identities(tmp_path: Path, pinned: bool) -> None:
+    repo, old_base, current_base, feature_head = _repo_with_stale_pr_base(tmp_path)
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "checkout", "feature")
+    prepared = prepare_pr_merge_base(
+        repo_root=repo, base_ref="main", base_sha=old_base if pinned else "",
+        checkout_ref="refs/heads/feature", source_head_sha=feature_head,
+        resolve_current_base=True,
+    )
+    assert prepared["base_commit"] == (old_base if pinned else current_base)
+    assert prepared["event_mode"] == "workflow_dispatch"
+    assert prepared["fetch_used"] is not pinned
+    changed, _ = build_changed_files(
+        repo_root=repo, base_ref="main", base_sha=str(prepared["base_commit"]), head_sha=feature_head,
+    )
+    assert changed == ["docs/hmm.md", "tests/aistock_validation/bugs/BUG.json"]
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"base_sha": "", "source_head_sha": ""},
+    {"base_sha": "main", "source_head_sha": ""},
+])
+def test_pr_event_still_rejects_missing_or_symbolic_base(tmp_path: Path, kwargs: dict) -> None:
+    repo, _, _, _ = _repo_with_stale_pr_base(tmp_path)
+    with pytest.raises(ChangedFilesError, match="base_sha must be"):
+        prepare_pr_merge_base(repo_root=repo, base_ref="main", checkout_ref="refs/heads/main", **kwargs)
+
+
+def test_main_ci_uses_one_pinned_source_diff_for_all_scope_consumers() -> None:
+    steps = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))["jobs"]["ci-verdict"]["steps"]
+    by_name = {step.get("name"): step for step in steps}
+    prepare = by_name["Fetch current PR base ref only"]
+    changed = by_name["Build changed-file list"]
+    quality = by_name["Run PR quality enforcement"]
+    assert prepare["env"]["SOURCE_HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    assert '--source-head-sha "${SOURCE_HEAD_SHA}"' in prepare["run"]
+    assert "github.event.pull_request.head.sha" in changed["env"]["HEAD_SHA"]
+    assert "github.event.pull_request.base.sha" in changed["env"]["BASE_SHA"]
+    assert quality["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    assert quality["env"]["BASE_SHA"] == prepare["env"]["BASE_SHA"]
+    assert '--head "${HEAD_SHA}"' in quality["run"]
+    assert '${BASE_COMMIT}...${HEAD_SHA}' in quality["run"]
+    assert '${BASE_COMMIT}...HEAD' not in quality["run"]
+    # Selection and actual changed-test coverage reuse the classified source list.
+    backend = next(step for step in steps if step.get("id") == "backend_validation")
+    assert backend["env"]["AISTOCK_CI_CLASSIFIER_SUMMARY"].endswith("ci_change_classifier/summary.json")

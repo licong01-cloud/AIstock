@@ -1,33 +1,50 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-08-30"
+updated_at: "2026-09-15"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
   post_restart_verify_mode: read_only
   tracked_artifact_writes: forbidden
 non_runtime_source_paths:
+  - backend/services/advisory_model_first/qe_alpha_generator_contracts.py
+  - backend/services/advisory_model_first/qe_alpha_generator_pipeline.py
+  - backend/services/advisory_model_first/historical_price_replay.py
+  - backend/services/advisory_model_first/historical_price_replay_cli.py
+  - backend/services/advisory_model_first/historical_price_replay_contracts.py
+  - backend/services/advisory_model_first/score_hmm_admission_pipeline.py
+  - backend/services/advisory_model_first/selection_liability_gate_pipeline.py
+  - backend/services/advisory_model_first/turnover_constrained_utility_training.py
+  - backend/services/advisory_phase0b/audit_service.py
+  - backend/services/advisory_phase0b/snapshot_reader.py
+  - backend/services/announcements/title_classifier.py
+  - backend/services/dataset_release/direct_monthly.py
+  - backend/services/dataset_release/daily_basic_history_repair.py
+  - backend/services/event_signal/st_announcement_adapter.py
+  - backend/services/hmm_risk/rotation_l1_gbdt.py
+  - backend/services/hmm_risk/rotation_l1_input_bundle.py
+  - backend/services/hmm_risk/stock_fact_repository.py
+  - backend/services/position_timing/action_value_corporate_actions.py
+  - backend/services/position_timing/pattern_research.py
+  - backend/services/position_timing/pattern_universe_benchmark.py
+  - backend/services/validation/catalog_integrity.py
+  - backend/services/validation/plan_catalog.py
+  - noxfile.py
   - scripts/aistock_runner_health.py
-  - scripts/build_industry_pit_candidates.py
-  - scripts/build_sector_data_candidate.py
-  - scripts/backfill_tushare_daily_basic_fields.py
-  - scripts/cleanup_simulation_history.py
   - scripts/configure_aistock_github_runner.ps1
-  - scripts/ingest_tushare_daily_basic.py
-  - scripts/localsim_history_prune_core.py
-  - scripts/prune_localsim_history.py
-  - scripts/localsim_product_validation.py
-  - scripts/prepare_localsim_successor_cutover.py
-  - scripts/prepare_canonical_pit_monthly.py
-  - scripts/qe_alpha_candidates/sector_rotation/ma_e19_semantic_equivalence_audit.py
-  - scripts/qe_alpha_candidates/sector_rotation/p0_d2_sector_oracle.py
-  - scripts/qe_alpha_candidates/sector_rotation/p0_d3_benchmark_brinson.py
-  - scripts/qlib_authoritative_bin_export.py
-  - scripts/repair_announcement_event_signal_issuer_binding.py
-  - scripts/seed_dataset_refresh_audit.py
-  - scripts/simulation_history_cleanup_core.py
-  - scripts/stale_simulation_run_terminalization_core.py
-  - scripts/sync_stock_namechange.py
-  - scripts/terminalize_stale_simulation_runs.py
+  - scripts/start_aistock_github_runner.ps1
+  - scripts/supervise_aistock_github_runner.ps1
+source_role_rules:
+  - rule_id: offline-operator-scripts
+    role: non_runtime
+    source_globs:
+      - scripts/**/*.py
+      - scripts/**/*.ps1
+      - scripts/nightly_adaptive_scheduler.py
+  - rule_id: offline-backend-research-families
+    role: non_runtime
+    source_globs:
+      - backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_*.py
+      - backend/services/hmm_risk/market_relative_*.py
 targets:
   backend-main:
     runtime_kind: backend
@@ -80,7 +97,10 @@ targets:
       - backend/services/dataset_release/artifact_ready_source.py
       - backend/services/dataset_release/build_processor.py
       - backend/services/dataset_release/build_stage.py
+      - backend/services/dataset_release/candidate_validator.py
       - backend/services/dataset_release/canonical_stock_transformer.py
+      - backend/services/dataset_release/factor_materializer.py
+      - backend/services/dataset_release/source_fact_history.py
       - backend/services/dataset_release/index_contract.py
       - backend/services/dataset_release/index_sources.py
       - backend/services/dataset_release/minute_overlay.py
@@ -96,6 +116,10 @@ targets:
       - backend/services/dataset_release/component_artifact_manifest.py
       - backend/services/dataset_release/component_manifest_producer.py
       - backend/services/dataset_release/mixed_planner.py
+      - backend/services/dataset_release/monthly_consumer_layout.py
+      - backend/services/dataset_release/monthly_local_validation.py
+      - backend/services/dataset_release/monthly_worker_nodes.py
+      - backend/services/dataset_release/monthly_worker_runtime.py
       - backend/services/dataset_release/stk_limit_overlay.py
       - backend/services/dataset_release/worker.py
       - backend/services/dataset_release/windows_job.py
@@ -116,6 +140,33 @@ targets:
       business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
       database_readback_ref: bug_record.runtime_contract.database_readback_ref
     probe_routes:
+      - route_id: monthly_release_worker_process
+        source_globs:
+          - backend/services/dataset_release/artifact_ready_build_source.py
+          - backend/services/dataset_release/build_stage.py
+          - backend/services/dataset_release/candidate_validator.py
+          - backend/services/dataset_release/factor_materializer.py
+          - backend/services/dataset_release/source_fact_history.py
+          - backend/services/dataset_release/monthly_consumer_layout.py
+          - backend/services/dataset_release/monthly_local_validation.py
+          - backend/services/dataset_release/monthly_worker_nodes.py
+          - backend/services/dataset_release/monthly_worker_runtime.py
+        required_source_globs:
+          - backend/services/dataset_release/monthly_consumer_layout.py
+          - backend/services/dataset_release/monthly_local_validation.py
+          - backend/services/dataset_release/monthly_worker_nodes.py
+          - backend/services/dataset_release/monthly_worker_runtime.py
+        probe_mode: monthly_release_worker_process
+        local_probe:
+          worker_script: scripts/monthly_unified_dataset_release_worker.py
+          worker_mode: --serve
+          parent_module: backend.main:app
+          parent_port: 8001
+        probes:
+          health_ref: monthly_worker_process.health
+          identity_ref: http://127.0.0.1:8001/api/v1/runtime-identity
+          business_smoke_ref: monthly_worker_process.supervision
+          database_readback_ref: not_required
       - route_id: dataset_release_worker_heartbeat
         source_globs:
           - backend/services/dataset_release/a_share_limit_rule.py
@@ -123,7 +174,10 @@ targets:
           - backend/services/dataset_release/artifact_ready_source.py
           - backend/services/dataset_release/build_processor.py
           - backend/services/dataset_release/build_stage.py
+          - backend/services/dataset_release/candidate_validator.py
           - backend/services/dataset_release/canonical_stock_transformer.py
+          - backend/services/dataset_release/factor_materializer.py
+          - backend/services/dataset_release/source_fact_history.py
           - backend/services/dataset_release/index_contract.py
           - backend/services/dataset_release/index_sources.py
           - backend/services/dataset_release/minute_overlay.py

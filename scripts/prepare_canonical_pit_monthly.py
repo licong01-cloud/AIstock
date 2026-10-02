@@ -96,6 +96,7 @@ OPERATOR_CONTRACT = {
     "start_date": DEFAULT_ST_PIT_START_DATE.isoformat(),
     "knowledge_policy": "canonical_source_fingerprint_exact",
     "production_requires_matching_dev_apply_receipt": True,
+    "database_schema_policy": "existing_schema_only_no_bootstrap_v1",
     "pointer_activation": False,
 }
 OPERATOR_CONTRACT_DIGEST = _digest(OPERATOR_CONTRACT)
@@ -326,7 +327,7 @@ def main(
     *,
     profile_loader: Callable[[str], Any] = load_dataset_profile,
     config_loader: Callable[[str, Path], DatabaseConfig] = _load_database_config,
-    service_factory: Callable[[], StockUniversePitService] = StockUniversePitService,
+    service_factory: Callable[[], StockUniversePitService] | None = None,
 ) -> int:
     args = _parser().parse_args(argv)
     cutoff = dt.date.fromisoformat(args.cutoff)
@@ -345,7 +346,10 @@ def main(
         )
 
     with _database_target_environment(target):
-        service = service_factory()
+        service = service_factory() if service_factory else StockUniversePitService(
+            reports_dir=Path(profile.control_root) / "operator_reports",
+            existing_schema_only=True,
+        )
         preflight = service.plan_canonical_pit_universe(
             start_date=DEFAULT_ST_PIT_START_DATE,
             end_date=cutoff,

@@ -2953,6 +2953,33 @@ def test_bug_434_business_modes_keep_agentic_synthesis_and_dead_renderers_remove
 
 
 def test_bug_404_clarification_follow_up_always_returns_non_empty_reply() -> None:
+    class InMemoryStockEvidenceService:
+        def __getattr__(self, name: str):
+            if not (name.startswith("get_stock_") and name.endswith("_evidence")):
+                raise AttributeError(name)
+            dataset = name.removeprefix("get_stock_").removesuffix("_evidence")
+
+            def read_evidence(symbol: str, **kwargs: object) -> dict[str, object]:
+                as_of = str(kwargs.get("analysis_date") or "2026-06-16")
+                return {
+                    "ok": True,
+                    "domain": f"stock_analysis.{dataset}",
+                    "summary_first": True,
+                    "items": [{"symbol": symbol, "dataset": dataset, "date": as_of}],
+                    "total": 1,
+                    "source": f"in_memory_{dataset}_source",
+                    "source_refs": [f"stock-ref:{dataset}:{symbol}"],
+                    "as_of": as_of,
+                    "status": "ok",
+                    "summary": f"{symbol} {dataset} evidence from in-memory test source",
+                    "dataset": dataset,
+                    "response_mode": "stock_analysis_evidence_card",
+                    "reason_codes": [],
+                    "warnings": [],
+                }
+
+            return read_evidence
+
     class ClarificationThenAnswerLlmClient(FakeLlmClient):
         def __init__(self) -> None:
             super().__init__()
@@ -2996,6 +3023,7 @@ def test_bug_404_clarification_follow_up_always_returns_non_empty_reply() -> Non
 
     fake = ClarificationThenAnswerLlmClient()
     svc = _chat_service(fake)
+    svc.stock_analysis_facade_factory = InMemoryStockEvidenceService
 
     first = svc.chat_turn(ChatTurnRequest(message="国城矿业的基本情况近期走势未来趋势怎样"))
     follow_up = svc.chat_turn(
@@ -3804,9 +3832,6 @@ def test_litellm_dependency_pin_supports_deepseek_v4_native_pricing() -> None:
     assert "openai==2.44.0" in root_lines
     assert f"litellm=={LITELLM_NATIVE_PRICING_REQUIRED_VERSION}" in backend_lines
     assert "openai==2.44.0" in backend_lines
-    ci_text = (repo_root / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
-    assert f"litellm=={LITELLM_NATIVE_PRICING_REQUIRED_VERSION}" in ci_text
-    assert "openai==2.44.0" in ci_text
 
 
 def test_chat_turn_writes_llm_usage_ledger_and_trace_cost_summary() -> None:

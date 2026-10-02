@@ -1,0 +1,350 @@
+{
+  "actual": "MA-E23 preflight proved CustomEvoLoopConfig.sector_blacklist is persisted and displayed, but config_composer classifies it as non-strategy metadata and no QE execution path materializes the blacklist into the run-scoped PIT stock pool. P01/P11 therefore execute identically to P00 while UI may report blacklist enabled. Preserve frozen direct-v2/PIT data-plane rules, apply the submitted blacklist to the run-scoped executable universe before prediction/backtest, keep P00 byte-equivalent, fail closed on missing PIT industry mapping, and report requested/effective/excluded counts without database fallback.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/payload_summary.py",
+    "backend/services/quantevolver/qe_active_dataset_profile.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+    "backend/tests/quantevolver/test_payload_summary.py",
+    "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+    "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+    "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+    "scripts/qrun_limit_minute.py",
+    "tests/aistock_validation/bugs/20260914_BUG-1508-qe-sector-blacklist-policy-is-persisted-but-not-enforced-in-executable-s.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1508",
+  "closed_at": "2026-09-15T05:56:52.036492Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-14T19:33:20.480710Z",
+  "description": "MA-E23 preflight proved CustomEvoLoopConfig.sector_blacklist is persisted and displayed, but config_composer classifies it as non-strategy metadata and no QE execution path materializes the blacklist into the run-scoped PIT stock pool. P01/P11 therefore execute identically to P00 while UI may report blacklist enabled. Preserve frozen direct-v2/PIT data-plane rules, apply the submitted blacklist to the run-scoped executable universe before prediction/backtest, keep P00 byte-equivalent, fail closed on missing PIT industry mapping, and report requested/effective/excluded counts without database fallback.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260914-f5bd7992e663",
+      "timestamp": "2026-09-14T19:33:20.480692Z"
+    },
+    {
+      "action": "root_cause_and_fix_validated",
+      "actor": "codex",
+      "note": "Materialize the requested SW L2 blacklist from hash-pinned PIT membership spans into the run-scoped v3 stock-pool sidecar; direct prediction replay now intersects the frozen prediction with the executable dataset index. P00 remains unchanged and P01/P11 fail closed until the release supplies complete pinned policy inputs.",
+      "timestamp": "2026-09-14T21:15:00Z"
+    },
+    {
+      "action": "source_pr_opened",
+      "actor": "codex",
+      "note": "PR #4738 opened with Refs #4733; merge and backend restart remain separately authorized.",
+      "timestamp": "2026-09-14T21:20:00Z"
+    },
+    {
+      "action": "ci_test_ownership_corrected",
+      "actor": "codex",
+      "note": "Consolidated the sector blacklist policy cases into the existing qe_sector_risk_overlay_direct_v2_dataset_binding suite so the owned QE test plan executes them; no classifier or CI policy was relaxed.",
+      "timestamp": "2026-09-14T21:36:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "P01/P11 must execute against a hash-pinned PIT universe with blacklisted SW L2 membership removed, direct prediction replay must obey that universe, P00 must retain existing semantics, and missing or incomplete frozen policy inputs must fail closed without database fallback.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py"
+    ],
+    "changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_payload_summary.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1508-qe-sector-blacklist-policy-is-persisted-but-not-enforced-in-executable-s.json"
+    ],
+    "changed_files_source": "root_cause_analysis",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_payload_summary.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/services/quantevolver/qe_active_dataset_profile.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_sector_blacklist_policy.py",
+      "backend/tests/quantevolver/test_payload_summary.py",
+      "backend/tests/quantevolver/test_qe_active_dataset_profile.py",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "scripts/qrun_limit_minute.py"
+    ]
+  },
+  "first_seen_at": "2026-09-14T19:33:20.480710Z",
+  "fix_branch": "bug/BUG-1508-qe-sector-blacklist-policy-is-persisted-but-not-20260914",
+  "fix_commit": "7207f4450b351307135dc2dc309a89401767d07e",
+  "fixed_at": "2026-09-14T21:17:00Z",
+  "github_issue_number": 4733,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4733",
+  "last_seen_at": "2026-09-14T19:33:20.480710Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4738",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest -q backend/tests/quantevolver/test_qe_sector_blacklist_policy.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh_process_pytest_sector_blacklist_profile_composer_and_pred_replay=75_passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1508\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1508",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "8ff2b67a2ebdc235f9632217439f8a44b29be84cb73134c6c6529a7c093456ca",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "7207f4450b351307135dc2dc309a89401767d07e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-15T05:52:51.876596Z",
+      "mode": "read_only",
+      "observed_identity": "ac4b61eadb0f4cd1d93060958747a567bf4be087",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f4750857992e71eb11369e96cb32385854b55e6016a4bd4c5834a05001d7c2d4",
+      "receipt_sha256": "8dd903938c6da624211e013340e56d7efae0faa3ecc8ed996c53f5a272748a02",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6a58de0fe3261ec15a157125416d3d4f6a281e4563affd51957cb775fd2ef267",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1508",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a312d180a59c81f5",
+    "recorded_at": "2026-09-15T05:14:47.098744Z",
+    "runtime_contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c09098fd18e1f26b55d787b8f5cacb4036e25125",
+    "source_merge_commit": "7207f4450b351307135dc2dc309a89401767d07e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4738",
+    "validation_evidence": [
+      "final head c09098fd1: qe_sector_risk_overlay_backend 100 passed; l0 passed; diff-check clean; CI verdict success"
+    ],
+    "validation_evidence_digest": "be062156362eb71a51ec2ae8ffd66fbf6e60980008d27c0b4997cc2e0d8a7d68"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE sector blacklist policy is persisted but not enforced in executable stock pool",
+  "trigger_condition": {
+    "fingerprint": "f5bd7992e663193522ef38ce",
+    "source_event_id": "FE-20260914-f5bd7992e663"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/P11",
+    "ui_routes": [
+      "/P11"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m pytest -q backend/tests/quantevolver/test_qe_sector_blacklist_policy.py backend/tests/quantevolver/test_qe_active_dataset_profile.py backend/tests/quantevolver/test_qe_sector_risk_overlay_direct_v2_dataset_binding.py backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -> 75 passed",
+    "python -m pytest -q backend/tests/quantevolver/test_qe_active_dataset_profile_api.py backend/tests/quantevolver/test_qe_registered_submission.py backend/tests/quantevolver/test_qe_universe_comparison.py backend/tests/unified_engine/test_qe_config_truth.py -> 196 passed, 38 skipped",
+    "python -m nox -s qe_sector_risk_overlay_backend qe_read_backend validation_module_registry_l0 -> 676 passed, 1 skipped",
+    "python -m nox -s l0 -> passed",
+    "python -m ruff check changed Python files and python -m py_compile runtime entrypoints -> passed",
+    "git diff --check -> passed",
+    "final head c09098fd1: qe_sector_risk_overlay_backend 100 passed; l0 passed; diff-check clean; CI verdict success"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

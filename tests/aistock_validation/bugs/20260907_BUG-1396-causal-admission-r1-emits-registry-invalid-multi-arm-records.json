@@ -1,0 +1,241 @@
+{
+  "actual": "The bundle contains two records with the same experiment_id, attempt_id, and research_stage, so append_batch fails with ADVISORY_RESEARCH_REGISTRY_CONFLICT before registry or route delivery.",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+    "backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py",
+    "tests/aistock_validation/bugs/20260907_BUG-1396-causal-admission-r1-emits-registry-invalid-multi-arm-records.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1396",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-07T11:51:05.625078Z",
+  "description": "The bundle contains two records with the same experiment_id, attempt_id, and research_stage, so append_batch fails with ADVISORY_RESEARCH_REGISTRY_CONFLICT before registry or route delivery.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260907-780a7d750003",
+      "timestamp": "2026-09-07T11:51:05.625064Z"
+    }
+  ],
+  "evidence_uris": [
+    "bundle:6c41f2fee21b4c1c11348b97edad590c902e31401abe836c27c3a3c93a3fe7fa; reason_code:ADVISORY_RESEARCH_REGISTRY_CONFLICT"
+  ],
+  "expected": "Represent the frozen two-arm learnability audit as one aggregate registry record with planned/evaluated trial count 2, selected count 0 or 1, and all consumed windows, preserving exact-retry idempotence.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+      "backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+      "backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+        "backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py"
+      ],
+      "impacted_modules": [
+        "advisory.model_first"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+        "backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+      "backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/causal_admission_v2_pipeline.py",
+      "backend/tests/advisory_model_first/test_causal_admission_v2_delivery.py"
+    ]
+  },
+  "first_seen_at": "2026-09-07T11:51:05.625078Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4403,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4403",
+  "last_seen_at": "2026-09-07T11:51:05.625078Z",
+  "module": "advisory_modeling",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "wsl.exe -e /home/lc999/miniconda3/envs/rdagent-gpu/bin/python /mnt/f/Dev/AIstock/scripts/advisory_causal_admission_v2_mve.py run --request /mnt/f/Dev/AIstock_model_artifacts/advisory_n3_causal_admission_v21_20260907/request.json",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "fresh_process_evidence": [
+      "isolated registry append and exact retry test -> passed: one append then one duplicate noop"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory_modeling"
+  ],
+  "title": "Causal Admission R1 emits registry-invalid multi-arm records",
+  "trigger_condition": {
+    "fingerprint": "780a7d750003dd6722621e7f",
+    "source_event_id": "FE-20260907-780a7d750003"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

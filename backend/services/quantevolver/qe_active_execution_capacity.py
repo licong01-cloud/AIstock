@@ -18,6 +18,7 @@ from psycopg2.extras import RealDictCursor
 from backend.db.pg_pool import get_conn
 from backend.services.qe_archive.models import normalize_json
 
+from .node_execution import MAX_QE_NODE_PARALLELISM
 from .qe_execution_reservation import (
     ACTIVE_RESERVATION_STATUSES,
     CapacityWaitRecorder,
@@ -28,6 +29,7 @@ from .qe_execution_reservation import (
     QEExecutionReservationToken,
     SourceClaim,
 )
+from .qe_run_registry import QE_RUN_DEFAULT_CONSUMER, normalize_qe_run_consumer_id
 from .qe_workspace_client import (
     QEWorkspaceSubmissionContractError,
     QEWorkspaceSubmissionInspection,
@@ -40,11 +42,15 @@ from .qe_workspace_client import (
 
 DEFAULT_WSL_NODE_ID = "wsl2-5080"
 NONCANONICAL_LOCAL_WSL_NODE_ALIASES = frozenset({"wsl", "local"})
-# One local WSL training slot is the host-responsiveness contract.  A single
-# GeneralPTNN Loop can own a large dataset/GPU working set; cross-task overlap
-# previously drove Windows into memory compression and paging stalls.  Remote
-# CPU execution remains independently parallel.
+# One local WSL slot is the fail-closed host-responsiveness baseline.  A
+# repository-proven same-task pure-backtest cohort may use the task's explicit
+# node_parallelism across the globally supported range.  Catalog-resolved
+# non-GAT training remains capped separately at two; unresolved, mixed-task,
+# and graph-model workloads retain the single-slot baseline.
 WSL_HARD_CAPACITY = 1
+WSL_BACKTEST_DEFAULT_CAPACITY = 2
+WSL_BACKTEST_HARD_CAPACITY = MAX_QE_NODE_PARALLELISM
+WSL_PARALLEL_TRAINING_HARD_CAPACITY = 2
 REMOTE_HARD_CAPACITY = 4
 # The coordinator starts immediately and performs a safety sweep at most every
 # 60 seconds.  Keeping durable execution leases below that bound guarantees a
@@ -102,9 +108,13 @@ class QEWorkspaceSubmissionSource:
     claim_source: SourceClaim
     record_waiting_capacity: CapacityWaitRecorder
     requested_node_capacity: int | None = None
+    backtest_only: bool = False
+    parallel_training_eligible: bool = False
     lease_seconds: int = DEFAULT_RESERVATION_LEASE_SECONDS
+    consumer_id: str = QE_RUN_DEFAULT_CONSUMER
 
     def __post_init__(self) -> None:
+        normalize_qe_run_consumer_id(self.consumer_id)
         lease_seconds = int(self.lease_seconds)
         if not 1 <= lease_seconds <= MAX_RESTART_SAFE_LEASE_SECONDS:
             raise QEWorkspaceSubmissionCoordinatorError(
@@ -150,6 +160,9 @@ class QEActiveExecutionCapacityService:
         *,
         wsl_node_id: str = DEFAULT_WSL_NODE_ID,
         wsl_hard_capacity: int = WSL_HARD_CAPACITY,
+        wsl_backtest_default_capacity: int = WSL_BACKTEST_DEFAULT_CAPACITY,
+        wsl_backtest_hard_capacity: int = WSL_BACKTEST_HARD_CAPACITY,
+        wsl_parallel_training_hard_capacity: int = WSL_PARALLEL_TRAINING_HARD_CAPACITY,
         remote_hard_capacity: int = REMOTE_HARD_CAPACITY,
     ) -> None:
         if not str(wsl_node_id or "").strip():
@@ -157,13 +170,25 @@ class QEActiveExecutionCapacityService:
                 "WSL node identity must not be empty",
                 reason_code="qe_execution_capacity_contract_invalid",
             )
-        if wsl_hard_capacity < 1 or remote_hard_capacity < 1:
+        if (
+            wsl_hard_capacity < 1
+            or wsl_backtest_default_capacity < wsl_hard_capacity
+            or wsl_backtest_hard_capacity < wsl_hard_capacity
+            or wsl_backtest_default_capacity > wsl_backtest_hard_capacity
+            or wsl_parallel_training_hard_capacity < wsl_hard_capacity
+            or remote_hard_capacity < 1
+        ):
             raise QEWorkspaceSubmissionCoordinatorError(
-                "QE node hard capacities must be positive",
+                "QE node capacity defaults and hard limits are inconsistent",
                 reason_code="qe_execution_capacity_contract_invalid",
             )
         self._wsl_node_id = str(wsl_node_id).strip().casefold()
         self._wsl_hard_capacity = int(wsl_hard_capacity)
+        self._wsl_backtest_default_capacity = int(wsl_backtest_default_capacity)
+        self._wsl_backtest_hard_capacity = int(wsl_backtest_hard_capacity)
+        self._wsl_parallel_training_hard_capacity = int(
+            wsl_parallel_training_hard_capacity
+        )
         self._remote_hard_capacity = int(remote_hard_capacity)
 
     def canonical_node_id(self, node_id: str) -> str:
@@ -184,15 +209,44 @@ class QEActiveExecutionCapacityService:
             return self._wsl_node_id
         return normalized_node_id
 
-    def resolve_node_capacity(self, node_id: str, requested_limit: int | None = None) -> int:
+    def is_wsl_node(self, node_id: str) -> bool:
+        return self.canonical_node_id(node_id) == self._wsl_node_id
+
+    def resolve_node_capacity(
+        self,
+        node_id: str,
+        requested_limit: int | None = None,
+        *,
+        backtest_only: bool = False,
+        parallel_training: bool = False,
+    ) -> int:
         normalized_node_id = self.canonical_node_id(node_id)
+        if backtest_only and parallel_training:
+            raise QEWorkspaceSubmissionCoordinatorError(
+                "QE capacity request cannot be both backtest-only and parallel training",
+                reason_code="qe_execution_capacity_contract_invalid",
+                context={"node_id": normalized_node_id},
+            )
+        default_capacity = (
+            self._wsl_backtest_default_capacity
+            if normalized_node_id == self._wsl_node_id and backtest_only
+            else None
+        )
         hard_cap = (
-            self._wsl_hard_capacity
+            (
+                self._wsl_backtest_hard_capacity
+                if backtest_only
+                else (
+                    self._wsl_parallel_training_hard_capacity
+                    if parallel_training
+                    else self._wsl_hard_capacity
+                )
+            )
             if normalized_node_id == self._wsl_node_id
             else self._remote_hard_capacity
         )
         if requested_limit is None:
-            return hard_cap
+            return default_capacity if default_capacity is not None else hard_cap
         if isinstance(requested_limit, bool):
             normalized_limit = 0
         else:
@@ -1014,6 +1068,7 @@ class QEWorkspaceSubmissionCoordinator:
         qe_task_id: str,
         qe_loop_id: str,
         submission_intent_hash: str,
+        consumer_id: str = QE_RUN_DEFAULT_CONSUMER,
     ) -> QEExecutionCapacityObservation:
         """Return a read-only admission snapshot for a durable waiting source."""
 
@@ -1021,6 +1076,7 @@ class QEWorkspaceSubmissionCoordinator:
             node_id,
             requested_node_capacity,
         )
+        capacity = self._effective_consumer_capacity(capacity, consumer_id)
         spec = QEExecutionReservationSpec(
             node_id=self._capacity_service.canonical_node_id(node_id),
             source_kind=source_kind,
@@ -1055,9 +1111,26 @@ class QEWorkspaceSubmissionCoordinator:
     ) -> QEWorkspaceSubmissionOutcome:
         self._validate_payload(payload)
         self._repository.preflight_schema(raise_on_error=True)
-        capacity = self._capacity_service.resolve_node_capacity(
+        same_task_backtest_cohort = (
+            source.backtest_only
+            and source.source_kind == "qe_evolution_loop"
+            and self._capacity_service.is_wsl_node(source.node_id)
+        )
+        same_task_parallel_training_cohort = (
+            not source.backtest_only
+            and source.parallel_training_eligible
+            and source.source_kind == "qe_evolution_loop"
+            and self._capacity_service.is_wsl_node(source.node_id)
+        )
+        physical_capacity = self._capacity_service.resolve_node_capacity(
             source.node_id,
             source.requested_node_capacity,
+            backtest_only=same_task_backtest_cohort,
+            parallel_training=same_task_parallel_training_cohort,
+        )
+        capacity = self._effective_consumer_capacity(
+            physical_capacity,
+            source.consumer_id,
         )
         capacity_node_id = self._capacity_service.canonical_node_id(source.node_id)
         spec = QEExecutionReservationSpec(
@@ -1084,6 +1157,11 @@ class QEWorkspaceSubmissionCoordinator:
                     queued,
                     detail={
                         "reason_code": "qe_capacity_node_queue_only",
+                        "consumer_id": normalize_qe_run_consumer_id(
+                            source.consumer_id
+                        ),
+                        "physical_node_capacity": physical_capacity,
+                        "effective_consumer_capacity": capacity,
                         "diagnostics": [
                             dict(item) for item in queue_only_diagnostics
                         ],
@@ -1092,13 +1170,32 @@ class QEWorkspaceSubmissionCoordinator:
         acquired = self._repository.reserve_execution_and_claim_source(
             spec,
             node_capacity=capacity,
+            allow_same_task_backtest_parallelism=(
+                same_task_backtest_cohort and capacity > WSL_HARD_CAPACITY
+            ),
+            allow_same_task_parallel_training=(
+                same_task_parallel_training_cohort
+                and capacity > WSL_HARD_CAPACITY
+            ),
             owner_id=source.owner_id,
             lease_seconds=source.lease_seconds,
             claim_source=source.claim_source,
             record_waiting_capacity=source.record_waiting_capacity,
         )
         if not acquired.acquired:
-            return self._capacity_wait_outcome(payload, spec, acquired)
+            return self._capacity_wait_outcome(
+                payload,
+                spec,
+                acquired,
+                detail={
+                    "reason_code": "qe_execution_capacity_full",
+                    "consumer_id": normalize_qe_run_consumer_id(
+                        source.consumer_id
+                    ),
+                    "physical_node_capacity": physical_capacity,
+                    "effective_consumer_capacity": capacity,
+                },
+            )
 
         reservation = dict(acquired.reservation or {})
         if not reservation:
@@ -1528,6 +1625,13 @@ class QEWorkspaceSubmissionCoordinator:
                 **dict(detail or {}),
             },
         )
+
+    @staticmethod
+    def _effective_consumer_capacity(node_capacity: int, consumer_id: str) -> int:
+        consumer = normalize_qe_run_consumer_id(consumer_id)
+        if consumer == "advisory":
+            return min(int(node_capacity), 1)
+        return int(node_capacity)
 
     def _unknown_outcome(
         self,
