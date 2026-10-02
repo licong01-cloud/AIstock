@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 import subprocess
 from pathlib import Path
@@ -11,6 +13,156 @@ import pytest
 
 import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
+
+
+@pytest.mark.parametrize("command", ["promote-ci-issue", "ci-issue-janitor"])
+def test_metadata_cli_starts_without_process_dependency(command):
+    import sys
+
+    code = (
+        "import importlib.abc, runpy, sys\n"
+        "class NoPsutil(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, fullname, path=None, target=None):\n"
+        "        if fullname == 'psutil':\n"
+        "            raise ModuleNotFoundError('No psutil in metadata runner', name='psutil')\n"
+        "sys.meta_path.insert(0, NoPsutil())\n"
+        f"sys.argv = ['aistock_issue_workflow.py', {command!r}, '--help']\n"
+        "runpy.run_path('scripts/aistock_issue_workflow.py', run_name='__main__')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert command in result.stdout
+
+
+def test_process_probe_fails_closed_without_prebuilt_psutil(monkeypatch):
+    monkeypatch.setattr(workflow, "psutil", None)
+    with pytest.raises(workflow.WorkflowError, match="requires the prebuilt psutil"):
+        workflow._monthly_release_worker_process_snapshot({})
+
+
+def _monthly_ready_payload() -> dict[str, Any]:
+    from backend.services.dataset_release.monthly_unified import STAGES
+    return {
+        "schema_version": "aistock_monthly_release_status_v1",
+        "data": {
+            "schema_version": "aistock_monthly_release_state_v1",
+            "operation_id": "dmr_" + "a" * 32,
+            "status": "READY_TO_ACTIVATE", "attempt": 1,
+            "plan_sha256": "b" * 64, "ready_receipt_sha256": "c" * 64,
+            "cancel_requested": False, "last_error": None, "current_stage": None,
+            "checkpoints": dict.fromkeys(STAGES, True),
+        },
+    }
+
+
+def _monthly_verdict(payload):
+    return workflow._evaluate_business_smoke_semantics(
+        "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32,
+        json.dumps(payload), response_sha256="d" * 64,
+    )[1]
+
+
+def test_monthly_ready_probe_requires_operation_bound_success() -> None:
+    verdict = _monthly_verdict(_monthly_ready_payload())
+    assert verdict["contract_id"] == "monthly_release_ready"
+    assert verdict["verdict"] == "passed"
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("operation_id", "dmr_" + "f" * 32), ("status", "FAILED"),
+    ("status", "SOURCE_READY"), ("status", "ACTIVATED_VERIFY_FAILED"),
+    ("status", []),
+    ("cancel_requested", True), ("cancel_requested", 0), ("attempt", True),
+    ("ready_receipt_sha256", ""), ("plan_sha256", "invalid"),
+    ("current_stage", "SOURCE"), ("last_error", {"code": "SOURCE_INCOMPLETE"}),
+])
+def test_monthly_probe_rejects_cross_operation_or_unready_state(key, value) -> None:
+    payload = _monthly_ready_payload()
+    payload["data"][key] = value
+    assert _monthly_verdict(payload)["verdict"] == "failed"
+
+
+@pytest.mark.parametrize("case", ["missing", "non_bool", "extra", "failed", "outer_schema", "state_schema"])
+def test_monthly_probe_checkpoint_and_schema_closure(case) -> None:
+    payload = _monthly_ready_payload()
+    points = payload["data"]["checkpoints"]
+    if case == "missing":
+        del points["SOURCE"]
+    elif case == "non_bool":
+        points["SOURCE"] = 1
+    elif case == "extra":
+        points["UNREVIEWED"] = True
+    elif case == "failed":
+        points["SOURCE"] = False
+    elif case == "outer_schema":
+        payload["schema_version"] = "other"
+    else:
+        payload["data"]["schema_version"] = "other"
+    assert _monthly_verdict(payload)["verdict"] == "failed"
+
+
+def test_monthly_read_only_probe_uses_scoped_operator_file(monkeypatch, tmp_path) -> None:
+    token = hashlib.sha256(b"monthly-probe-credential-fixture").hexdigest()
+    secret_file = tmp_path / "operator.token"
+    secret_file.write_text(token, encoding="utf-8")
+    monkeypatch.setenv("DATASET_RELEASE_OPERATOR_TOKEN_FILE", str(secret_file))
+    captured = []
+
+    def open_probe(request, **_kwargs):
+        captured.append(request)
+        return io.BytesIO(b'{"status":"FAILED"}')
+
+    monkeypatch.setattr(workflow, "_open_read_only_url", open_probe)
+    url = "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32
+    receipt = workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=["http://127.0.0.1:8001"])
+    assert captured[0].get_header("X-dataset-release-operator-token") == token
+    assert captured[0].method == "GET"
+    assert token not in json.dumps(receipt)
+    assert receipt["_response_body"] == '{"status":"FAILED"}'  # HTTP success is not business success.
+
+
+@pytest.mark.parametrize("url", [
+    "http://node1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32,
+    "http://127.0.0.1:8001/health",
+    "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "/activate",
+    "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "?redirect=evil",
+])
+def test_other_probes_never_read_or_forward_operator_secret(monkeypatch, url) -> None:
+    from scripts import monthly_unified_dataset_release as release
+    monkeypatch.setattr(release, "_token", lambda: pytest.fail("must not load secret"))
+    captured = []
+    monkeypatch.setattr(workflow, "_open_read_only_url", lambda request, **kw: (captured.append(request) or io.BytesIO(b"{}")))
+    origin = workflow._normalized_http_origin(url)
+    workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=[origin])
+    assert all(request.get_header("X-dataset-release-operator-token") is None for request in captured)
+
+
+def test_monthly_probe_missing_secret_fails_closed_before_network(monkeypatch) -> None:
+    monkeypatch.delenv("DATASET_RELEASE_OPERATOR_TOKEN_FILE", raising=False)
+    monkeypatch.setattr(workflow, "_open_read_only_url", lambda *a, **kw: pytest.fail("must not call API"))
+    url = "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32
+    receipt = workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=["http://127.0.0.1:8001"])
+    assert receipt["status"] == "blocked"
+
+
+@pytest.mark.parametrize("reflect_in_error", [False, True])
+def test_authenticated_probe_never_records_reflected_secret(monkeypatch, reflect_in_error) -> None:
+    from scripts import monthly_unified_dataset_release as release
+    import urllib.error
+    token = hashlib.sha256(b"monthly-probe-reflected-fixture").hexdigest()
+    monkeypatch.setattr(release, "_token", lambda: token)
+
+    def open_probe(*args, **kwargs):
+        if reflect_in_error:
+            raise urllib.error.URLError(token)
+        return io.BytesIO(json.dumps({"echo": token}).encode())
+
+    monkeypatch.setattr(workflow, "_open_read_only_url", open_probe)
+    url = "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "/receipts"
+    receipt = workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=["http://127.0.0.1:8001"])
+    assert receipt["status"] == "failed"
+    assert token not in json.dumps(receipt)
+    assert "_response_body" not in receipt
 
 
 def test_pre_pr_gate_reuses_exact_ci_classifier_and_blocks_before_push(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,6 +289,82 @@ def test_local_data_overview_rejects_malformed_summary(key: str, value: Any) -> 
 
 def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: int = 0) -> dict[str, Any]:
     return {"ok": ok, "stdout": stdout, "stderr": stderr, "returncode": returncode}
+
+
+_METRICS_PROBE = (
+    "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=sample&calc_batch_id=batch1"
+    "&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=pit_v2"
+    "&expected_return_horizon=1d&limit=1"
+)
+
+
+def _metrics_payload() -> dict[str, Any]:
+    return {"ok": True, "domain": "factor_metrics.result", "summary_first": True, "total": 1,
+            "items": [{"id": 1, "factor_name": "sample", "calc_batch_id": "batch1", "eval_window": "full",
+                       "snapshot_date": "2026-08-31", "universe": "pit_v2", "return_horizon": "1d",
+                       "coverage": .9, "n_trading_days": 100, "ic_mean": -.1, "rank_ic_mean": -.2,
+                       "icir": -2., "rank_icir": -3., "ic_positive_ratio": .4,
+                       "calculated_at": "2026-09-30T13:04:21+08:00"}],
+            "pagination": {"limit": 1, "offset": 0, "next_offset": 1, "total": 1, "has_more": False}}
+
+
+def test_factor_metrics_semantics_bind_real_results_without_profitability_threshold() -> None:
+    _, verdict = workflow._evaluate_business_smoke_semantics(
+        _METRICS_PROBE, json.dumps(_metrics_payload()), response_sha256="a" * 64
+    )
+    assert verdict["verdict"] == "passed" and verdict["contract_id"] == "factor_metrics_results"
+    assert verdict["facts"]["calc_batch_id"] == "batch1"
+    assert verdict["facts"]["acceptance_scope"] == "bound_metrics_readback_only"
+    assert verdict["facts"]["offline_algorithm_acceptance"] == "requires_separate_bug_specific_evidence"
+
+
+@pytest.mark.parametrize("query", [
+    "limit=1", "", "factor_name=sample&limit=1",
+    _METRICS_PROBE.split("?", 1)[1] + "&calc_batch_id=other",
+    _METRICS_PROBE.split("?", 1)[1].replace("batch1", "other"),
+    _METRICS_PROBE.split("?", 1)[1].replace("2026-08-31", "2026-8-31"),
+    _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=0"),
+    _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=" + "9" * 5000),
+    _METRICS_PROBE.split("?", 1)[1] + "&offset=1",
+])
+def test_factor_metrics_semantics_reject_unbound_or_conflicting_probe(query: str) -> None:
+    assert workflow._validate_factor_metrics_results(
+        _metrics_payload(), url=_METRICS_PROBE.split("?", 1)[0] + "?" + query
+    )[0] == "failed"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("factor_name", "other"), ("calc_batch_id", "old_batch"), ("eval_window", "2024"),
+    ("snapshot_date", "2026-06-30"), ("universe", "old_pool"), ("return_horizon", "20d"),
+    ("id", True), ("n_trading_days", 0), ("coverage", float("nan")), ("ic_mean", float("inf")),
+    ("rank_ic_mean", 2), ("ic_positive_ratio", -1), ("icir", None), ("rank_icir", "1"),
+    ("h20_ic_mean", float("nan")), ("ic_mean", 10 ** 500),
+    ("calculated_at", "2026-09-30T13:04:21"), ("calculated_at", "2026-08-30T13:04:21+08:00"),
+])
+def test_factor_metrics_semantics_reject_invalid_business_rows(field: str, value: Any) -> None:
+    payload = _metrics_payload()
+    payload["items"][0][field] = value
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("items", []), ("total", True), ("total", 0), ("ok", False), ("domain", "other"),
+    ("errors", ["failed"]), ("pagination", {}),
+    ("success", False), ("status", "failed"),
+    ("pagination", {"limit": 1, "offset": 0, "next_offset": 1, "total": 2, "has_more": False}),
+])
+def test_factor_metrics_semantics_reject_empty_or_contradictory_envelope(field: str, value: Any) -> None:
+    payload = _metrics_payload()
+    payload[field] = value
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
+
+
+def test_factor_metrics_semantics_reject_duplicate_persisted_rows() -> None:
+    payload = _metrics_payload()
+    payload["items"] *= 2
+    payload["total"] = 2
+    payload["pagination"].update(limit=2, next_offset=2, total=2)
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE.replace("limit=1", "limit=2"))[0] == "failed"
 
 
 def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
@@ -662,13 +890,18 @@ def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
     assert retired.isdisjoint(catalog["non_runtime_source_paths"])
 
 
-def test_runtime_classifier_surfaces_catalog_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture
+def invalid_runtime_catalog(monkeypatch: pytest.MonkeyPatch) -> str:
     message = "runtime target catalog contains one stale source"
 
     def fail_catalog(_root: Path | None = None) -> dict[str, Any]:
         raise workflow.WorkflowError(message)
 
     monkeypatch.setattr(workflow, "_load_runtime_target_catalog", fail_catalog)
+    return message
+
+
+def test_runtime_classifier_surfaces_catalog_validation_error(invalid_runtime_catalog: str) -> None:
 
     payload = workflow._classify_runtime_impact(
         ["backend/services/hmm_risk/contracts.py"]
@@ -676,17 +909,10 @@ def test_runtime_classifier_surfaces_catalog_validation_error(monkeypatch: pytes
 
     assert payload["runtime_impact"] == "unknown"
     assert payload["target_ids"] == ["backend-main"]
-    assert payload["catalog_error"] == message
+    assert payload["catalog_error"] == invalid_runtime_catalog
 
 
-def test_runtime_contract_blocks_on_catalog_validation_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    message = "runtime target catalog contains one stale source"
-
-    def fail_catalog(_root: Path | None = None) -> dict[str, Any]:
-        raise workflow.WorkflowError(message)
-
-    monkeypatch.setattr(workflow, "_load_runtime_target_catalog", fail_catalog)
-
+def test_runtime_contract_blocks_on_catalog_validation_error(invalid_runtime_catalog: str) -> None:
     contract = workflow.build_runtime_contract(
         record={
             "runtime_contract": {
@@ -699,9 +925,31 @@ def test_runtime_contract_blocks_on_catalog_validation_error(monkeypatch: pytest
     )
 
     assert contract["runtime_impact"] == "unknown"
-    assert contract["catalog_validation_error"] == message
-    assert f"runtime target catalog validation failed: {message}" in contract["blocking"]
+    assert contract["catalog_validation_error"] == invalid_runtime_catalog
+    assert f"runtime target catalog validation failed: {invalid_runtime_catalog}" in contract["blocking"]
     assert contract["pre_pr_ready"] is False
+
+
+@pytest.mark.parametrize("path,registered", [
+    ("/api/v1/audit-unregistered-contract", False),
+    ("/api/v1/factor-metrics/results", True),
+])
+def test_runtime_preflight_checks_semantic_registration_without_http(path, registered) -> None:
+    root = workflow.REPO_ROOT
+    runbook = next((root / "docs/operations").glob("*.md")).relative_to(root).as_posix()
+    contract = workflow.build_runtime_contract(
+        record={"runtime_contract": {
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "operator_runbook_ref": runbook,
+            "identity_ref": "http://127.0.0.1:8001/api/v1/runtime/identity",
+            "business_smoke_ref": "http://127.0.0.1:8001" + path,
+            "fresh_process_evidence": ["synthetic-contract-presence-only"],
+        }},
+        changed_files=["backend/main.py"],
+    )
+    semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
+    assert bool(semantic_errors) is not registered
+    assert contract["pre_pr_ready"] is registered
 
 
 def test_bug_1549_active_contract_consumers_remain_backend_main() -> None:
@@ -903,9 +1151,13 @@ def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch:
     assert emitted["close_sync_commit"]["workflow_gate"] == "deferred_runtime_verification"
 
 
+@pytest.mark.parametrize("pr_number,commit,accepted", [(199, "a", True), (200, "a", False), (199, "b", False)])
 def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    pr_number: int,
+    commit: str,
+    accepted: bool,
 ) -> None:
     issue = tmp_path / "tests" / "aistock_validation" / "bugs" / "BUG-199.json"
     issue.parent.mkdir(parents=True)
@@ -930,37 +1182,22 @@ def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
         tmp_path,
         "BUG-199",
         issue,
-        source_pr_url="https://github.example/pull/199",
-        merge_commit="a" * 40,
+        source_pr_url=f"https://github.example/pull/{pr_number}",
+        merge_commit=commit * 40,
     )
-
-    assert recovered is not None
-    assert recovered["path"] == "tests/aistock_validation/bugs/BUG-199.json"
-    assert (
-        workflow._recoverable_close_sync_dirty_record(
-            tmp_path,
-            "BUG-199",
-            issue,
-            source_pr_url="https://github.example/pull/200",
-            merge_commit="a" * 40,
-        )
-        is None
-    )
-    assert (
-        workflow._recoverable_close_sync_dirty_record(
-            tmp_path,
-            "BUG-199",
-            issue,
-            source_pr_url="https://github.example/pull/199",
-            merge_commit="b" * 40,
-        )
-        is None
-    )
+    if accepted:
+        assert recovered is not None
+        assert recovered["path"] == "tests/aistock_validation/bugs/BUG-199.json"
+    else:
+        assert recovered is None
 
 
+@pytest.mark.parametrize("recovery_number,accepted", [(199, True), (200, False)])
 def test_close_sync_apply_guard_allows_only_the_exact_recoverable_dirty_record(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    recovery_number: int,
+    accepted: bool,
 ) -> None:
     dirty_path = "tests/aistock_validation/bugs/BUG-199.json"
     monkeypatch.setattr(
@@ -975,26 +1212,21 @@ def test_close_sync_apply_guard_allows_only_the_exact_recoverable_dirty_record(
     monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
     recovery = {
         "bug_id": "BUG-199",
-        "path": dirty_path,
+        "path": f"tests/aistock_validation/bugs/BUG-{recovery_number}.json",
         "status": "fixed",
         "fix_commit": "a" * 40,
         "pr_url": "https://github.example/pull/199",
     }
 
-    accepted = workflow._validate_close_sync_apply_target(
+    result = workflow._validate_close_sync_apply_target(
         tmp_path,
         recoverable_dirty_record=recovery,
     )
-    rejected = workflow._validate_close_sync_apply_target(
-        tmp_path,
-        recoverable_dirty_record={**recovery, "path": "tests/aistock_validation/bugs/BUG-200.json"},
-    )
-
-    assert accepted["blocking"] == []
-    assert accepted["recoverable_dirty_record"] == recovery
-    assert rejected["blocking"] == [
-        "registry target is dirty (1 file(s)); start from a clean task worktree"
-    ]
+    if accepted:
+        assert result["blocking"] == []
+        assert result["recoverable_dirty_record"] == recovery
+    else:
+        assert result["blocking"] == ["registry target is dirty (1 file(s)); start from a clean task worktree"]
 
 
 def test_windows_process_scan_builds_full_caller_ancestor_exclusion(
@@ -1210,9 +1442,11 @@ def test_cleanup_pr_cache_mismatch_forces_exact_readback(
     assert readbacks == 1
 
 
-def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
+@pytest.mark.parametrize("stale", [False, True])
+def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    stale: bool,
 ) -> None:
     events: list[str] = []
     monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
@@ -1224,7 +1458,7 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
     monkeypatch.setattr(
         workflow,
         "_git_snapshot",
-        lambda root: {"branch": "main", "dirty": False, "head": "old", "origin_main": "new"},
+        lambda root: {"branch": "main", "dirty": False, "head": "same" if stale else "old", "origin_main": "same" if stale else "new"},
     )
     monkeypatch.setattr(
         workflow,
@@ -1239,11 +1473,9 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
         "_merge_commit_changed_files",
         lambda merge_commit, root: {
             "ok": True,
-            "files": [
-                ".codex/skills/aistock-merge-aftercare/SKILL.md",
-                ".claude/commands/aistock-task-router.md",
-                "docs/standards/README.md",
-            ],
+            "files": [".codex/skills/aistock-merge-aftercare/SKILL.md"] if stale else [
+                ".codex/skills/aistock-merge-aftercare/SKILL.md", ".claude/commands/aistock-task-router.md",
+                "docs/standards/README.md"],
         },
     )
 
@@ -1253,7 +1485,10 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
 
     monkeypatch.setattr(workflow, "build_client_install_plan", fake_install)
     monkeypatch.setattr(workflow, "_ClientInstallLock", lambda: workflow.contextlib.nullcontext())
-    monkeypatch.setattr(workflow, "_client_manifest", lambda: {})
+    monkeypatch.setattr(workflow, "_client_manifest", lambda: {
+        "codex_entries": {"merge_aftercare": {"status": "current"}, "validation_delegation": {"status": "stale"}},
+        "claude_entries": {"validation_delegation": {"status": "stale_global"}, "readonly_triage": {"status": "missing_global"}},
+    } if stale else {})
     monkeypatch.setattr(
         workflow,
         "_client_lane_verification",
@@ -1267,74 +1502,15 @@ def test_merge_aftercare_publishes_only_changed_client_lanes_before_close_sync(
     )
 
     assert result["workflow_gate"] == "installed_and_verified"
-    assert result["selected_lanes"] == ["merge_aftercare", "router"]
-    assert events == ["root_sync", "merge_containment", "install:merge_aftercare", "install:router"]
-    assert result["merge_commit_containment"]["ok"] is True
-
-
-def test_merge_aftercare_backfills_preexisting_stale_lanes_in_same_profile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    installed: list[str] = []
-    monkeypatch.setattr(workflow, "_canonical_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        workflow,
-        "_cleanup_preflight_fetch_origin",
-        lambda root, apply: {"status": "fetched", "result": _result()},
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_git_snapshot",
-        lambda root: {"branch": "main", "dirty": False, "head": "same", "origin_main": "same"},
-    )
-    monkeypatch.setattr(workflow, "_run_command", lambda args, **kwargs: _result())
-    monkeypatch.setattr(
-        workflow,
-        "_merge_commit_changed_files",
-        lambda merge_commit, root: {
-            "ok": True,
-            "files": [".codex/skills/aistock-merge-aftercare/SKILL.md"],
-        },
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_client_manifest",
-        lambda: {
-            "codex_entries": {
-                "merge_aftercare": {"status": "current"},
-                "validation_delegation": {"status": "stale"},
-            },
-            "claude_entries": {
-                "validation_delegation": {"status": "stale_global"},
-                "readonly_triage": {"status": "missing_global"},
-            },
-        },
-    )
-    monkeypatch.setattr(workflow, "_ClientInstallLock", lambda: workflow.contextlib.nullcontext())
-    monkeypatch.setattr(
-        workflow,
-        "build_client_install_plan",
-        lambda *, apply, selected_lane, **kwargs: (
-            installed.append(selected_lane) or {"workflow_gate": "installed", "blocking": []}
-        ),
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_client_lane_verification",
-        lambda manifest, selected_lane, verify_codex, verify_claude: {"ready": True, "blocking": []},
-    )
-
-    result = workflow._publish_changed_clients_after_merge(
-        merge_commit="e" * 40,
-        sync_root=True,
-        apply=True,
-    )
-
-    assert result["workflow_gate"] == "installed_and_verified"
-    assert result["changed_lanes"] == ["merge_aftercare"]
-    assert result["stale_lanes_before"] == ["readonly_triage", "validation_delegation"]
-    assert installed == ["merge_aftercare", "readonly_triage", "validation_delegation"]
+    if stale:
+        assert result["changed_lanes"] == ["merge_aftercare"]
+        assert result["stale_lanes_before"] == ["readonly_triage", "validation_delegation"]
+        assert [event for event in events if event.startswith("install:")] == [
+            "install:merge_aftercare", "install:readonly_triage", "install:validation_delegation"]
+    else:
+        assert result["selected_lanes"] == ["merge_aftercare", "router"]
+        assert events == ["root_sync", "merge_containment", "install:merge_aftercare", "install:router"]
+        assert result["merge_commit_containment"]["ok"] is True
 
 
 def test_merge_finalizer_stops_before_close_sync_when_client_publish_blocks(

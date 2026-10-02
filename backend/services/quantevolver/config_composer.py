@@ -280,9 +280,9 @@ def _requires_qe_custom_loaders(
     disable_alpha158: bool,
     custom_params: Optional[Dict[str, Any]],
 ) -> bool:
-    """Return whether the generated workspace needs qe_custom_loaders.py."""
-    label_horizon = normalize_label_horizon((custom_params or {}).get("label_horizon"))
-    return (has_custom_factors and disable_alpha158) or label_horizon >= 30
+    """Every generated learning path needs the label-boundary processor."""
+    normalize_label_horizon((custom_params or {}).get("label_horizon"))
+    return True
 
 
 def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
@@ -4593,11 +4593,7 @@ class ConfigComposer:
         _label_horizon = normalize_label_horizon((custom_params or {}).get("label_horizon"))
         _label_field = _LABEL_FIELDS[_label_type]
         _label_formula = f"Ref({_label_field}, -{_label_horizon + 1}) / Ref({_label_field}, -1) - 1"
-        _requires_label_maturity_purge = _label_horizon >= 30
-
         def _append_label_maturity_purge() -> None:
-            if not _requires_label_maturity_purge:
-                return
             lines.append("        - class: LongHorizonLabelMaturityPurge")
             lines.append("          module_path: qe_custom_loaders")
             lines.append("          kwargs:")
@@ -6237,7 +6233,7 @@ class ConfigComposer:
         """
         env_lines = []
         # Every generated workspace may contain QE-owned runtime modules such as
-        # the long-horizon label maturity processor.  Keep the workspace import
+        # the label maturity processor.  Keep the workspace import
         # path explicit instead of relying on the launcher's current directory.
         quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
         env_lines.append(

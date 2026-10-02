@@ -562,6 +562,15 @@ rules:
     layer: dev_quality_tooling
     risk_level: high
     ownership_reason: Open-source CI/CD and local quality tool configs define issue workflow automation gates.
+  - rule_id: ci_changed_files_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_changed_files.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Changed-file ancestry and scope tests execute scripts/ci_changed_files.py, owned by validation.guardrails, rather than generic workflow orchestration.
   - rule_id: ci_change_classifier_test_owner
     priority: 110
     include:
@@ -571,6 +580,15 @@ rules:
     layer: backend_test
     risk_level: high
     ownership_reason: The classifier regression suite belongs to the same guardrail subsystem as its production classifier and overrides broader workflow-test catch-alls.
+  - rule_id: ci_workflow_policy_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_workflow_policy_scan.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Policy contract tests execute the guardrail-owned ci_workflow_policy_scan.py and override generic workflow test rules.
   - rule_id: mcp_gateway_platform
     priority: 90
     include:
@@ -1187,6 +1205,7 @@ rules:
       - scripts/monthly_unified_dataset_release_worker.py
       - scripts/build_dataset_release_successor.py
       - scripts/repair_qe_adj_factor_candidate.py
+      - scripts/repair_qe_daily_basic_history.py
       - scripts/build_shared_sector_context_component.py
       - scripts/update_backtest_dataset_monthly.py
       - scripts/export_qe_qlib_candidate.py

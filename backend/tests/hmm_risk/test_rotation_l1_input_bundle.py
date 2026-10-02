@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sys
@@ -1870,6 +1871,86 @@ def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_windo
         subject.SOURCE_END,
         subject.DIRECT_V2_RELEASE_CUTOFF,
     }
+
+
+def test_frozen_successor_binding_does_not_read_or_forge_active_profile(tmp_path, monkeypatch):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    _stub_direct_source_preflights(monkeypatch)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state.update(generation="approved-frozen-successor", profile=subject.DIRECT_V2_PROFILE)
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    binding = {
+        "generation": state["generation"],
+        "release_id": state["release_id"],
+        "revision": state["revision"],
+        "cutoff": state["cutoff"],
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": state["manifest"]["file_sha256"],
+    }
+    before = _ACTIVE_PROFILE_PATH.read_bytes()
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: pytest.fail("active profile accessed"))
+    loaded = subject.load_rotation_l1_direct_v2_source_assets(
+        root,
+        security_identity_manifest=security,
+        provider_absence_manifest=provider,
+        frozen_release_binding=binding,
+    )
+    identity = loaded["release_identity"]
+    assert identity["frozen_release_generation"] == binding["generation"]
+    assert identity["frozen_release_binding_sha256"] == canonical_sha256(binding)
+    assert not any(key.startswith("active_") for key in identity)
+    assert "active_profile" not in identity["metadata_sha256"]
+    assert _ACTIVE_PROFILE_PATH.read_bytes() == before
+    for key in binding:
+        wrong = {**binding, key: "unapproved"}
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._require_frozen_direct_v2_profile(
+                root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=wrong
+            )
+
+
+def test_frozen_binding_cannot_fall_back_to_active_or_accept_rehashed_manifest(tmp_path, monkeypatch):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state.update(generation="approved-frozen-successor", profile=subject.DIRECT_V2_PROFILE)
+    binding = {
+        "generation": state["generation"],
+        "release_id": state["release_id"],
+        "revision": state["revision"],
+        "cutoff": state["cutoff"],
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": state["manifest"]["file_sha256"],
+    }
+    subject._require_frozen_direct_v2_profile(
+        root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=binding
+    )
+    for change in ("wrong_root", "missing_field", "status", "unknown_schema", "structural", "manifest_content"):
+        changed_state = copy.deepcopy(state)
+        changed_binding = dict(binding)
+        if change == "wrong_root":
+            changed_state["candidate_root"] = str(tmp_path / "old-active")
+        elif change == "missing_field":
+            changed_binding.pop("generation")
+        elif change == "status":
+            changed_state["status"] = "FAILED"
+        elif change == "unknown_schema":
+            changed_state["schema_version"] = "qe_direct_monthly_state_v999"
+        elif change == "structural":
+            changed_state["validation"]["structural"]["checks"]["daily_bin"] = 1
+        else:
+            path = root / "qe_dataset_manifest.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["revision"] = "forged"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            changed_state["revision"] = "forged"
+            changed_state["manifest"]["file_sha256"] = subject._sha256_file(path)
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._require_frozen_direct_v2_profile(
+                root=root,
+                state=changed_state,
+                release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+                binding=changed_binding,
+            )
 
 
 def test_direct_v2_selection_universe_may_be_a_pit_subset_of_provider_catalog(

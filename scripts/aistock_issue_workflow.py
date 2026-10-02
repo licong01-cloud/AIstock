@@ -6,6 +6,7 @@ import fnmatch
 import hashlib
 import io
 import json
+import math
 import os
 import platform
 import re
@@ -23,7 +24,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-import psutil
+try:
+    import psutil
+except ModuleNotFoundError as exc:
+    if exc.name != "psutil":
+        raise
+    psutil = None  # Metadata-only CI intake must not require process inspection.
 import yaml
 
 try:
@@ -2693,6 +2699,13 @@ def build_runtime_contract(
                             if probe_error:
                                 blocking.append(f"runtime target {target_id} {probe_error}")
                     database_ref = target["probes"].get("database_readback_ref")
+                    smoke_ref = target["probes"].get("business_smoke_ref")
+                    smoke_path = urllib.parse.urlsplit(str(smoke_ref or "")).path or "/"
+                    if smoke_ref and _business_smoke_semantic_contract(smoke_path) is None:
+                        blocking.append(
+                            f"runtime target {target_id} has no target-owned business-smoke "
+                            f"semantic contract registered for endpoint path: {smoke_path}"
+                        )
                     if database_ref:
                         probe_error = _validate_runtime_probe_ref(
                             "database_readback_ref",
@@ -2891,6 +2904,25 @@ def _payload_schema_evidence(body: bytes) -> dict[str, Any]:
 _READ_ONLY_HTTP_PROBE_MAX_BYTES = 8 * 1024 * 1024
 
 
+def _monthly_read_only_probe_headers(url: str) -> dict[str, str]:
+    """Never forward the operator credential outside the exact local GET routes."""
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        _normalized_http_origin(url) not in {
+            "http://127.0.0.1:8001", "http://localhost:8001"
+        }
+        or parsed.query or parsed.fragment
+        or not re.fullmatch(
+            r"/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}(?:/receipts)?",
+            parsed.path,
+        )
+    ):
+        return {}
+    from scripts.monthly_unified_dataset_release import TOKEN_HEADER, _token
+
+    return {TOKEN_HEADER: _token()}
+
+
 def _read_only_http_probe(
     name: str,
     url: str,
@@ -2921,18 +2953,39 @@ def _read_only_http_probe(
             "transport": {"status_code": None, "ok": False, "error": reason},
             "payload_schema": {"json": False, "kind": "none"},
         }
-    request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
+    try:
+        credential_headers = _monthly_read_only_probe_headers(url)
+    except (OSError, RuntimeError, ValueError):
+        reason = "monthly read-only probe operator credential is unavailable"
+        return {
+            "name": name, "url": url, "status": "blocked", "error": reason,
+            "transport": {"status_code": None, "ok": False, "error": reason},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    request = urllib.request.Request(
+        url, method="GET",
+        headers={"Accept": "application/json,text/plain,*/*", **credential_headers},
+    )
     try:
         with _open_read_only_url(request, timeout_seconds=timeout_seconds) as response:
             status_code = int(getattr(response, "status", 200))
             body = response.read(_READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # Credential-bearing transport errors must not reflect request headers.
+        error = "authenticated monthly read-only probe failed" if credential_headers else str(exc)
         return {
             "name": name,
             "url": url,
             "status": "failed",
-            "error": str(exc),
-            "transport": {"status_code": None, "ok": False, "error": str(exc)},
+            "error": error,
+            "transport": {"status_code": None, "ok": False, "error": error},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    if any(secret.encode("utf-8") in body for secret in credential_headers.values()):
+        reason = "monthly read-only probe response contains sensitive content"
+        return {
+            "name": name, "url": url, "status": "failed", "error": reason,
+            "transport": {"status_code": status_code, "ok": False, "error": reason},
             "payload_schema": {"json": False, "kind": "none"},
         }
     transport_ok = 200 <= status_code < 400
@@ -3121,6 +3174,8 @@ def _resolved_process_argument(argument: str, *, cwd: Path) -> Path | None:
 
 
 def _monthly_release_worker_process_snapshot(target: dict[str, Any]) -> dict[str, Any]:
+    if psutil is None:
+        raise WorkflowError("monthly Worker process enumeration requires the prebuilt psutil dependency")
     local_probe = target.get("local_probe") if isinstance(target.get("local_probe"), dict) else {}
     worker_script = (REPO_ROOT / str(local_probe.get("worker_script") or "")).resolve()
     worker_mode = str(local_probe.get("worker_mode") or "")
@@ -4015,6 +4070,89 @@ def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[st
     return "failed", f"correlation status payload reports unknown status: {normalized}", {}
 
 
+def _validate_factor_metrics_results(
+    payload: Any, *, url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Verify a bound metrics readback, not offline algorithm acceptance."""
+    if (not isinstance(payload, dict) or payload.get("ok") is not True
+            or payload.get("domain") != "factor_metrics.result" or payload.get("errors")
+            or payload.get("error") or payload.get("success") is False
+            or ("status" in payload and payload["status"] not in ("ok", "success", "completed"))
+            or payload.get("summary_first") is not True):
+        return "failed", "factor metrics results require a successful summary envelope", {}
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    bindings = {
+        "factor_name": "factor_name", "calc_batch_id": "calc_batch_id", "eval_window": "eval_window",
+        "snapshot_date": "expected_snapshot_date", "universe": "expected_universe",
+        "return_horizon": "expected_return_horizon",
+    }
+    expected: dict[str, str] = {}
+    for field, key in bindings.items():
+        values = query.get(key) or []
+        if len(values) != 1 or not values[0].strip():
+            return "failed", f"factor metrics probe requires exactly one non-empty {key}", {}
+        expected[field] = values[0]
+    try:
+        snapshot = datetime.strptime(expected["snapshot_date"], "%Y-%m-%d").date()
+    except ValueError:
+        return "failed", "factor metrics expected_snapshot_date must be an ISO date", {}
+    if snapshot.isoformat() != expected["snapshot_date"]:
+        return "failed", "factor metrics expected_snapshot_date must be an ISO date", {}
+    limits = query.get("limit") or []
+    offsets = query.get("offset", ["0"])
+    if (len(limits) != 1 or not re.fullmatch(r"[1-9][0-9]{0,2}", limits[0])
+            or not 1 <= int(limits[0]) <= 100 or offsets != ["0"]):
+        return "failed", "factor metrics probe requires limit=1..100 and offset=0", {}
+    limit = int(limits[0])
+    items, total, page = payload.get("items"), payload.get("total"), payload.get("pagination")
+    if not isinstance(items, list) or not items or type(total) is not int or total <= 0:
+        return "failed", "factor metrics readback must contain non-empty persisted results", {}
+    if not isinstance(page, dict):
+        return "failed", "factor metrics readback is missing pagination", {}
+    for field, value in {"limit": limit, "offset": 0, "next_offset": limit, "total": total}.items():
+        if type(page.get(field)) is not int or page[field] != value:
+            return "failed", f"factor metrics pagination.{field} contradicts the probe/results", {}
+    if page.get("has_more") is not (total > limit) or len(items) != min(limit, total):
+        return "failed", "factor metrics pagination contradicts item count", {}
+    row_ids: set[int] = set()
+    for row in items:
+        if not isinstance(row, dict):
+            return "failed", "factor metrics result must be an object", {}
+        for field, value in expected.items():
+            if row.get(field) != value:
+                return "failed", f"factor metrics {field} does not match the declared probe", {}
+        row_id, days = row.get("id"), row.get("n_trading_days")
+        if type(row_id) is not int or row_id <= 0 or row_id in row_ids:
+            return "failed", "factor metrics ids must be unique positive integers", {}
+        row_ids.add(row_id)
+        if type(days) is not int or days <= 0:
+            return "failed", "factor metrics n_trading_days must be positive", {}
+        for field, value in row.items():
+            if type(value) in {int, float} and (abs(value) > sys.float_info.max or not math.isfinite(value)):
+                return "failed", f"factor metrics {field} must be finite", {}
+        for field, bounds in {
+            "ic_mean": (-1, 1), "rank_ic_mean": (-1, 1),
+            "ic_positive_ratio": (0, 1), "coverage": (0, 1),
+            "icir": None, "rank_icir": None,
+        }.items():
+            value = row.get(field)
+            if (type(value) not in {int, float} or abs(value) > sys.float_info.max
+                    or not math.isfinite(value) or (bounds and not bounds[0] <= value <= bounds[1])):
+                return "failed", f"factor metrics {field} is missing, non-finite or out of range", {}
+        calculated_at = row.get("calculated_at")
+        try:
+            calculated = datetime.fromisoformat(calculated_at.replace("Z", "+00:00"))
+        except (AttributeError, TypeError, ValueError):
+            return "failed", "factor metrics calculated_at must be a timezone-aware timestamp", {}
+        if calculated.tzinfo is None or calculated.utcoffset() is None or calculated.date() < snapshot:
+            return "failed", "factor metrics calculated_at precedes the snapshot or lacks timezone", {}
+    return "passed", None, {
+        **expected, "row_ids": sorted(row_ids), "row_count": len(items), "total": total,
+        "acceptance_scope": "bound_metrics_readback_only",
+        "offline_algorithm_acceptance": "requires_separate_bug_specific_evidence",
+    }
+
+
 def _validate_factor_lifecycle_detail(
     payload: Any,
     *,
@@ -4332,7 +4470,45 @@ def _validate_local_data_freshness(payload: Any, *, url: str) -> tuple[str, str 
     return 'passed', None, facts
 
 
+def _validate_monthly_release_ready(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """A readable operation is not a successfully prepared monthly release."""
+    from backend.services.dataset_release.monthly_unified import STATE_SCHEMA, STAGES
+
+    if not isinstance(payload, dict) or payload.get("schema_version") != "aistock_monthly_release_status_v1":
+        return "failed", "monthly release status schema differs", {}
+    data = payload.get("data")
+    if not isinstance(data, dict) or data.get("schema_version") != STATE_SCHEMA:
+        return "failed", "monthly release state schema differs", {}
+    operation_id = urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
+    if data.get("operation_id") != operation_id:
+        return "failed", "monthly release operation identity differs", {}
+    facts = {"operation_id": operation_id, "status": data.get("status")}
+    if not isinstance(data.get("status"), str) or data["status"] not in {"READY_TO_ACTIVATE", "ACTIVATED_VERIFIED"}:
+        return "failed", "monthly release has not completed prepare/verification", facts
+    if (
+        data.get("cancel_requested") is not False
+        or "last_error" not in data or data["last_error"] not in (None, {})
+        or "current_stage" not in data or data["current_stage"] is not None
+        or type(data.get("attempt")) is not int or data["attempt"] < 0
+    ):
+        return "failed", "monthly release ready state contradicts cancellation/error/progress", facts
+    for key in ("plan_sha256", "ready_receipt_sha256"):
+        value = data.get(key)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            return "failed", "monthly release ready content identity missing", facts
+        facts[key] = value
+    checkpoints = data.get("checkpoints")
+    if (
+        not isinstance(checkpoints, dict) or set(checkpoints) != set(STAGES)
+        or any(value is not True for value in checkpoints.values())
+    ):
+        return "failed", "monthly release does not have all six successful checkpoints", facts
+    facts.update(attempt=data["attempt"], completed_stage_count=len(STAGES))
+    return "passed", None, facts
+
+
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}$"), "monthly_release_ready", _validate_monthly_release_ready),
     (re.compile(r"^/api/v1/local-data/(?:overview|data-stats)$"), "local_data_freshness", _validate_local_data_freshness),
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
@@ -4362,6 +4538,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/quantevolver/dataset-profile$"), "qe_dataset_profile", _validate_qe_dataset_profile),
     (re.compile(r"^/api/v1/position-timing/intents$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
+    (re.compile(r"^/api/v1/factor-metrics/results$"), "factor_metrics_results", _validate_factor_metrics_results),
     (
         re.compile(r"^/api/v1/factor-library/factors/[^/]+$"),
         "factor_lifecycle_detail",
@@ -4489,9 +4666,11 @@ def _evaluate_business_smoke_semantics(
     elif contract_id in {
         "scheduler_verification_status",
         "factor_lifecycle_detail",
+        "factor_metrics_results",
         "hmm_rotation_l2_overview",
         "advisory_entry_price_status",
         "local_data_freshness",
+        "monthly_release_ready",
     }:
         verdict, reason, facts = validator(payload, url=url)
     else:

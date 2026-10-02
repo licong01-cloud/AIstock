@@ -379,6 +379,52 @@ def test_codegraph_sync_bootstraps_missing_index_and_preserves_failed_state(tmp_
     assert payload["publish_ready"] is False
 
 
+def test_codegraph_oversized_critical_source_fails_before_wasted_reindex(tmp_path, monkeypatch):
+    critical = tmp_path / "scripts/aistock_issue_workflow.py"
+    critical.parent.mkdir()
+    critical.write_bytes(b"x" * (adapter.CODEGRAPH_MAX_SOURCE_BYTES + 1))
+    monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
+    monkeypatch.setattr(adapter, "_run_command", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not rebuild")))
+    payload = adapter.sync_codegraph_index(root=tmp_path)
+    assert payload["publish_ready"] is False
+    assert payload["failure_kind"] == "critical_source_size_limit"
+    assert payload["oversized_critical_files"] == [{
+        "file": "scripts/aistock_issue_workflow.py", "bytes": adapter.CODEGRAPH_MAX_SOURCE_BYTES + 1,
+        "limit": adapter.CODEGRAPH_MAX_SOURCE_BYTES,
+    }]
+    assert "split oversized source" in payload["command_result"]["stderr"]
+
+
+def test_graph_workflow_uses_lf_without_changing_global_git_and_retains_failures(tmp_path):
+    import os
+    import subprocess
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["refresh-after-main"]["steps"]
+    prepare = next(step for step in steps if step.get("name") == "Prepare exact main workspace")
+    env = {**os.environ, **workflow["env"], **prepare["env"]}
+    assert env["GIT_CONFIG_KEY_0"] == "http.version" and env["GIT_CONFIG_VALUE_0"] == "HTTP/1.1"
+    assert env["GIT_CONFIG_KEY_1"] == "core.autocrlf" and env["GIT_CONFIG_VALUE_1"] == "false"
+    def git(*args, input=None):
+        return subprocess.run(["git", *args], cwd=tmp_path, env=env, input=input,
+                              capture_output=True, check=True, timeout=15).stdout
+    git("init", "--quiet")
+    git("config", "--local", "core.autocrlf", "true")
+    content = b"# line\n" * 140000  # LF fits; CRLF exceeds the provider's bound.
+    assert len(content) <= adapter.CODEGRAPH_MAX_SOURCE_BYTES < len(content.replace(b"\n", b"\r\n"))
+    oid = git("hash-object", "-w", "--stdin", input=content).decode().strip()
+    git("update-index", "--add", "--cacheinfo", "100644", oid, "source.py")
+    git("checkout-index", "--all", "--force")
+    assert (tmp_path / "source.py").read_bytes() == content
+    report = next(step for step in steps if step.get("name") == "Report refresh status")
+    assert report["if"] == "always()"
+    assert "codegraph_failure_diagnostic=" in report["run"]
+    assert "oversized_critical_files" in report["run"] and "coverage_errors" in report["run"]
+    assert not any("artifact@" in step.get("uses", "") for step in steps)
+    assert any("--require-publish-ready" in step.get("run", "") for step in steps)
+
+
 def test_graph_refresh_commands_fail_when_publish_ready_is_required(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         adapter,

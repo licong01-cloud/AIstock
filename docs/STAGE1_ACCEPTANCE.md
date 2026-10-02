@@ -2,6 +2,8 @@
 
 分支/commit: codex/price-guard-stage1-20260602 / 实现 commit: 2141163e；验收文档 commit: 本文件所在 HEAD
 
+本文第1—5节保留 Stage1 原交付时点的验收范围，不代表当前系统或运行态的整体状态。2026-10-02 的证据订正及 follow-up #585 状态见第6节。
+
 ## 1. 功能清单完成度 (M1-M4)
 
 | 里程碑 | 状态 | 关键文件:行 | 测试名 |
@@ -26,7 +28,7 @@
 | S1-9 | 复权调整 stop/take；停牌 WAITING/carry | PASS | backend/tests/watchlist/test_advisory_lifecycle.py::test_s1_9_next_day_stop_rank_drop_factor_adjustment_and_suspend_carry; backend/tests/trading_core/test_exit_guard.py::test_s1_9_exit_guard_suspend_waiting_and_fail_fast_inputs |
 | S1-10 | advisory 路径零 OMS/broker/Paper ledger 写入 | PASS | backend/tests/watchlist/test_advisory_lifecycle.py::test_s1_10_advisory_lifecycle_has_no_oms_broker_or_paper_ledger_writes; `rg "create_order|submit_order|position_ledger|paper_v2\." backend/services/advisory_lifecycle.py backend/services/advisory_quality.py` 无命中 |
 | S1-11 | 质量报告 + 分桶 + post-decision diagnostics + 无未来函数 | PASS | backend/tests/watchlist/test_advisory_quality_report.py::test_s1_11_quality_report_metrics_buckets_and_parent_shrink; backend/tests/watchlist/test_advisory_quality_report.py::test_s1_11_quality_report_rejects_future_fields_in_decision_inputs; backend/tests/watchlist/test_advisory_quality_report.py::test_s1_11_quality_report_is_reproducible |
-| S1-12 | 无 silent fallback、缺输入 fail-fast、现状回归不变 | PASS | `python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1` -> findings=0; `pytest ...` -> 175 passed; backend/tests/selection_center/test_price_guidance.py::test_s1_12_price_guidance_disabled_returns_candidate_unchanged |
+| S1-12 | 无 silent fallback、缺输入 fail-fast、现状回归不变 | 范围内扫描已复核；历史软提示仍待确认 | 原 `--changed-only` 扫描0文件，其 findings=0 不能作为验收证据；原175项测试为历史记录，不冒充本次运行。2026-10-02 显式扫描原6个核心文件：files=6、findings=0、blocking=0；命令、源码修复和剩余限制见第6节。 |
 
 ## 3. 偏离设计之处 (如有) + 理由
 
@@ -39,7 +41,7 @@
 
 - `python -m compileall backend/services/trading_core/price_guard.py backend/services/trading_core/exit_guard.py backend/services/selection_center/price_guidance.py backend/services/advisory_lifecycle.py backend/services/advisory_quality.py backend/services/strategy_package/execution_policy.py backend/services/selection_center/models.py backend/services/selection_center/service.py backend/services/selection_center/repository.py backend/db/init_trading_core_v2_schema.py backend/db/init_watchlist_schema.py`
 - `pytest backend/tests/trading_core backend/tests/selection_center/test_price_guidance.py backend/tests/selection_center/test_result_enrichment.py backend/tests/selection_center/test_selection_center_api.py backend/tests/selection_center/test_runtime_selection.py backend/tests/strategy_package/test_execution_policy_price_guard.py backend/tests/strategy_package/test_validation_stability.py backend/tests/watchlist/test_advisory_lifecycle.py backend/tests/watchlist/test_advisory_quality_report.py backend/tests/watchlist/test_advisory_schema_contract.py -q -p no:cacheprovider`
-- `python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1`
+- `python scripts/aistock_guardrail_scan.py backend/services/trading_core/price_guard.py backend/services/trading_core/exit_guard.py backend/services/selection_center/price_guidance.py backend/services/advisory_lifecycle.py backend/services/advisory_quality.py backend/services/strategy_package/execution_policy.py --fail-on-severity P1`
 - `git diff --check`
 
 ## 5. 已知限制 / 下阶段衔接
@@ -49,3 +51,26 @@
 - 所有 Stage 1 guidance_status 均为 `rule_default`；没有任何 `qe_validated` 标识。
 - DDL 只产出迁移脚本与 init schema 更新，未应用生产库；production_ddl_gate=pending。
 - 未启动 backend/frontend/TDX 服务；production_frontend_dependency_gate=noop，production_backend_dependency_gate=noop。
+
+## 6. 2026-10-02 证据订正与 follow-up #585
+
+本次以 `origin/main` 的 `f031502f9` 为源码检查基准，只做只读扫描、现有定向测试和运行身份读回，没有数据库写入、服务控制或研究重跑。
+
+| follow-up条目 | 证据与结论 | 状态 |
+|---|---|---|
+| #585-1：S1-12 空扫描 | 第4节显式命令实际扫描6个文件，files=6、findings=0、blocking=0；不将规则扫描零问题等同于所有业务语义已验收 | 本文已订正 |
+| #585-2：watchlist 两处旧 silent fallback | BUG-1123 / PR #3587（merge `c0a89782e50faf942066dacc195844b82d78a104`）已为 TDX 失败和 xtquant 行解析失败增加聚合 warning；同时非法 PIT 日期 fail-fast、历史查询失败记录 warning。范围限于原两处 quote lookup，不宣称其他历史异常处理全部清零 | 源码已合入；定向测试通过 |
+| #585-3：两个软提示的意图 | 下述现存兼容行为已核对，但本次未改变或新增授权；不能因扫描通过就认定缺输入时严格价格/复权合同通过 | 仍待业务owner确认，不关闭整个 #585 |
+
+BUG-1123 定向命令：
+
+`rtk pytest -q -p no:cacheprovider --basetemp=X:/AIstock_temp/advisory/legacy-1123-20261002 backend/tests/selection_center/test_result_enrichment.py backend/tests/watchlist/test_realtime_amount_units.py`
+
+本次结果为 **23 passed**，覆盖非法 PIT 日期拒绝、历史查询失败审计、行情失败日志及已有日频数据库读取约束。运行态官方 `post-restart-verify` 对源 merge 身份的只读复验通过；其中 OpenAPI smoke 不是这些业务修复的单独证明，业务修复仍以该源提交和上述定向测试为依据。
+
+两项软提示的现状和限制：
+
+- `selection_center/price_guidance.py` 缺 previous_close 时使用 signal_ref_price 估算涨跌停边界，并输出 `limit_source=estimated_from_signal_ref_price_or_previous_close`、`guidance_status=rule_default`。这是历史规则提示，不是原生 previous_close 或模型预测，不可作为正式执行价格边界已验证的证据。
+- `advisory_lifecycle.adjust_price_for_factor` 任一复权因子缺失或非正时返回未调整原价。这不证明跨除权日价格可比，也不证明 stop/take 的复权有效性。是否保留此兼容行为、还是在相应业务路径拒绝缺失因子，仍需业务owner确认；本次不以文档订正替代源码修复或授权。
+
+因此，BUG-1123 的源码合入/测试/运行身份/源码树清理，与 #585 整体闭环分别报告。#585 第3项尚未确认时，不合入会将整个关联 Issue 自动关闭的 close-sync，也不将第1—5节的历史状态升级为当前全部完成。

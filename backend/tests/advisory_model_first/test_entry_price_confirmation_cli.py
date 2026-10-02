@@ -11,7 +11,7 @@ def test_success_exit_code_does_not_promote_negative_result(monkeypatch, capsys,
     monkeypatch.setattr(cli, "AdvisoryEntryPriceConfirmationService", Service)
     slot = tmp_path / "slot.json"
     slot.write_text("{}", encoding="utf-8")
-    assert cli.main(["evaluate", "--request", "request.json", "--model-root", str(tmp_path), "--output-root", str(tmp_path), "--qe-exclusive-slot", str(slot)]) == 0
+    assert cli.main(["evaluate", "--request", "request.json", "--model-root", str(tmp_path), "--output-root", str(tmp_path)]) == 0
     assert json.loads(capsys.readouterr().out)["evaluation"]["status"] == "NOT_CONFIRMED"
 
 

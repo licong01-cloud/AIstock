@@ -1469,6 +1469,7 @@ def _validate_factor_bundle(
             expected_columns=FACTOR_H5_SCHEMAS[dataset],
             expected_dtypes=FACTOR_H5_DTYPES[dataset],
             exact_expected_keys=(_iter_expected_pit_keys(expected_dates, spans) if dataset == "daily_pv" else None),
+            source_fact_dates=(frozenset(expected_dates) if dataset == "daily_basic" else None),
         )
         _match_artifact_receipt(path, expected, audit)
         datasets[dataset] = audit
@@ -1507,6 +1508,7 @@ def _audit_h5(
     expected_columns: Sequence[str],
     expected_dtypes: Mapping[str, str],
     exact_expected_keys: Iterable[tuple[pd.Timestamp, str]] | None,
+    source_fact_dates: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     rows = 0
     columns: tuple[str, ...] | None = None
@@ -1538,7 +1540,19 @@ def _audit_h5(
                     if expected_key is None or actual_key != expected_key:
                         raise CandidateValidationError(f"{path.name} differs from exact PIT trading-day keys")
                     expected_key = next(expected_iterator, None)
-            outside = _outside_pit(frame.index, spans)
+            if source_fact_dates is not None:
+                fact_dates = pd.DatetimeIndex(frame.index.get_level_values("datetime"))
+                if (
+                    fact_dates.hasnans or fact_dates.tz is not None
+                    or not fact_dates.equals(fact_dates.normalize())
+                ):
+                    raise CandidateValidationError("daily_basic contains non-daily fact dates")
+                outside = int((
+                    ~frame.index.get_level_values("instrument").isin(spans)
+                    | ~fact_dates.strftime("%Y-%m-%d").isin(source_fact_dates)
+                ).sum())
+            else:
+                outside = _outside_pit(frame.index, spans)
             if outside:
                 raise CandidateValidationError(f"H5 contains {outside} rows outside PIT: {path}")
             if collect_dates:

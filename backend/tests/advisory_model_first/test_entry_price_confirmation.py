@@ -54,31 +54,32 @@ def test_manual_interval_score_and_calendar_block_bootstrap():
     assert moving_block_interval([-0.02] * 20, request_hash="b" * 64, block_days=5, samples=5000) == pytest.approx([-0.02, -0.02])
 
 
-def test_exclusive_slot_and_qe_idle_are_both_required_without_mutating_qe():
+def test_replay_capacity_not_qe_history_controls_execution(monkeypatch, tmp_path):
     from datetime import datetime, timedelta, timezone
     from types import SimpleNamespace
-    from backend.services.advisory_model_first.entry_price_confirmation import require_entry_exclusive_execution
+    from backend.services.advisory_model_first.entry_price_confirmation import require_entry_replay_execution
+    from backend.services.advisory_model_first import entry_price_daily_service
     now = datetime(2026, 7, 1, tzinfo=timezone.utc)
-    request = SimpleNamespace(request_sha256="a" * 64)
+    request = SimpleNamespace(request_sha256="a" * 64, registry_path=tmp_path / "registry.jsonl")
     slot = dict(authorization_ref="QE-window-test-only", request_sha256=request.request_sha256,
                 starts_at=now - timedelta(minutes=1), expires_at=now + timedelta(hours=1))
-    class Guard:
-        busy = False
-        calls = 0
-        def check(self, budget):
-            self.calls += 1
-            return {"status": "WAITING_RESOURCE" if self.busy else "READ_SNAPSHOT_IDLE"}
-    guard = Guard()
-    for invalid in (None, dict(slot, request_sha256="b" * 64), dict(slot, expires_at=now)):
+    monkeypatch.setattr(entry_price_daily_service.QEEntryResourceGuard, "check",
+                        lambda *_a: pytest.fail("replay must not scan QE history or require idle QE"))
+    calls = []
+    def capacity(path):
+        calls.append(path)
+        return {"status": "REPLAY_CAPACITY_AVAILABLE"}
+    for invalid in (dict(slot, request_sha256="b" * 64), dict(slot, expires_at=now)):
         with pytest.raises(AdvisoryModelFirstError) as error:
-            require_entry_exclusive_execution(request, invalid, now=now, resource_guard=guard)
+            require_entry_replay_execution(request, invalid, now=now, capacity_probe=capacity)
         assert error.value.reason_code == "ADVISORY_ENTRY_RESOURCE_WAITING"
-    assert guard.calls == 0
-    require_entry_exclusive_execution(request, slot, now=now, resource_guard=guard)
-    guard.busy = True
+    assert not calls
+    require_entry_replay_execution(request, None, now=now, capacity_probe=capacity)
+    require_entry_replay_execution(request, slot, now=now, capacity_probe=capacity)
+    require_entry_replay_execution(request, None, capacity_probe=capacity, output_root=tmp_path / "other-volume")
     with pytest.raises(AdvisoryModelFirstError):
-        require_entry_exclusive_execution(request, slot, now=now, resource_guard=guard)
-    assert guard.calls == 2
+        require_entry_replay_execution(request, None, capacity_probe=lambda _p: {"status": "WAITING_RESOURCE"})
+    assert calls == [tmp_path, tmp_path, tmp_path / "other-volume"]
 
 
 @pytest.mark.parametrize("violation", [None, "quantile", "duplicate"])
@@ -134,14 +135,19 @@ def test_day_loader_metadata_mode_does_not_hide_inference_dependency_errors(monk
     from types import SimpleNamespace
     from backend.services.advisory_model_first.entry_price_confirmation import _cached_day_service
     from backend.services.advisory_model_first import model_bundle, price_range_runtime_bundle, entry_price_service
+    from backend.services.advisory_model_first import entry_price_replay_runtime
     from backend.services import advisory_program
 
     calls = []
     def loader(*, booster_factory=None, **kwargs):
         if booster_factory is None:
             raise AdvisoryModelFirstError("real inference dependency unavailable", reason_code="ADVISORY_MODEL_BUNDLE_INVALID")
+        booster = booster_factory("unused-model-path")
         calls.append(kwargs["bundle_id"])
-        return SimpleNamespace(booster=booster_factory("unused-model-path"))
+        return SimpleNamespace(booster=booster)
+    def unavailable_predictor(_path):
+        raise AdvisoryModelFirstError("real inference dependency unavailable", reason_code="ADVISORY_MODEL_BUNDLE_INVALID")
+    monkeypatch.setattr(entry_price_replay_runtime, "load_replay_booster", unavailable_predictor)
     monkeypatch.setattr(model_bundle, "load_frozen_research_bundle", loader)
     monkeypatch.setattr(price_range_runtime_bundle, "load_frozen_price_range_bundle", loader)
     monkeypatch.setattr(advisory_program, "AdvisoryProgramService", lambda **kwargs: object())
@@ -223,6 +229,31 @@ def test_future_or_foreign_prediction_rejected_not_omitted(tmp_path):
         evaluate_entry_price_confirmation(request, predictions, outcomes)
 
 
+@pytest.mark.parametrize("failure", ["capacity", "dependency"])
+def test_replay_preflight_failure_does_not_consume_window(tmp_path, monkeypatch, failure):
+    from backend.services.advisory_model_first import entry_price_confirmation as module
+    from backend.services.advisory_model_first import entry_price_replay_runtime as runtime
+
+    def reject(*_args, **_kwargs):
+        raise AdvisoryModelFirstError("preflight unavailable", reason_code=(
+            "ADVISORY_ENTRY_RESOURCE_WAITING" if failure == "capacity"
+            else "ADVISORY_ENTRY_REPLAY_DEPENDENCY_UNAVAILABLE"))
+
+    service = module.AdvisoryEntryPriceConfirmationService(
+        input_verifier=lambda *_a, **_kw: None,
+        execution_guard=reject if failure == "capacity" else lambda *_a: None)
+    monkeypatch.setattr(runtime, "validate_replay_dependencies", reject)
+    monkeypatch.setattr(module, "_authorize_or_resume", lambda *_a: pytest.fail("no window consumption"))
+    values = request_values(tmp_path, formal=False, dates=2)
+    request_path = service.prepare(spec=values, model_root=tmp_path, output_root=tmp_path)
+    registry = tmp_path / "registry.jsonl"
+    registered_before = registry.read_bytes()
+    with pytest.raises(AdvisoryModelFirstError):
+        service.predict(request_path=request_path, model_root=tmp_path, output_root=tmp_path)
+    assert not (request_path.parent / "consuming.json").exists()
+    assert registry.read_bytes() == registered_before
+
+
 def test_pipeline_freezes_all_predictions_before_outcomes_and_exact_retry(tmp_path):
     from dataclasses import replace
     from types import SimpleNamespace
@@ -287,16 +318,31 @@ def test_pipeline_freezes_all_predictions_before_outcomes_and_exact_retry(tmp_pa
     assert len(events) == 40
 
 
-def test_historical_outcome_source_preserves_unknown_and_suspended_rows():
+def _allow_historical_read_timeout(cursor, monkeypatch):
+    original_execute = cursor.execute
+
+    def execute(sql, params):
+        if sql == "SET LOCAL statement_timeout = %s":
+            assert params == (30_000,)
+            cursor.sql.append(sql)
+        else:
+            original_execute(sql, params)
+
+    monkeypatch.setattr(cursor, "execute", execute)
+
+
+def test_historical_outcome_source_preserves_unknown_and_suspended_rows(monkeypatch):
     from backend.services.advisory_model_first.entry_price_confirmation import PostgresEntryPriceConfirmationOutcomeSource
     from backend.tests.advisory_model_first.test_price_range_prospective_evaluation_boundaries import _source
 
-    old_source, conn, _ = _source(opens=[("000001.SZ", 10120)], suspends=[("000002.SZ", "S")])
+    old_source, conn, cursor = _source(opens=[("000001.SZ", 10120)], suspends=[("000002.SZ", "S")])
+    _allow_historical_read_timeout(cursor, monkeypatch)
     source = PostgresEntryPriceConfirmationOutcomeSource(connection_context_factory=old_source._connection_context_factory)
     outcome = source.load(symbols=("000001.SZ", "000002.SZ", "000003.SZ"), target_trade_date=date(2026, 9, 15))
     assert outcome.outcomes[0].raw_open == 10.12
     assert [row.market_status for row in outcome.outcomes] == ["AVAILABLE", "NOT_APPLICABLE", "UNAVAILABLE"]
     assert conn.session["readonly"] and conn.rollbacks == 1
+    assert cursor.sql[0] == "SET LOCAL statement_timeout = %s"
 
 
 @pytest.mark.parametrize("opens,suspends", [
@@ -305,10 +351,11 @@ def test_historical_outcome_source_preserves_unknown_and_suspended_rows():
     ([("000001.SZ", -1)], []),
     ([], [("000001.SZ", "S"), ("000001.SZ", "R")]),
 ])
-def test_historical_outcome_conflicts_are_not_normal_absences(opens, suspends):
+def test_historical_outcome_conflicts_are_not_normal_absences(opens, suspends, monkeypatch):
     from backend.services.advisory_model_first.entry_price_confirmation import PostgresEntryPriceConfirmationOutcomeSource
     from backend.tests.advisory_model_first.test_price_range_prospective_evaluation_boundaries import _source
-    old_source, conn, _ = _source(opens=opens, suspends=suspends)
+    old_source, conn, cursor = _source(opens=opens, suspends=suspends)
+    _allow_historical_read_timeout(cursor, monkeypatch)
     source = PostgresEntryPriceConfirmationOutcomeSource(connection_context_factory=old_source._connection_context_factory)
     with pytest.raises(AdvisoryModelFirstError):
         source.load(symbols=("000001.SZ",), target_trade_date=date(2026, 9, 15))

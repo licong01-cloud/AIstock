@@ -411,6 +411,12 @@ MA-E32 全市场 Top50、14 个自定义因子、不含 Alpha158、分钟 TWAP �
 
 来源预测 SHA256：L1=`f1c175d2cb2ef60f8bc77fea4c51e9a032a75eaba1c0ba0a16ac72c2ffc9f383`；L2=`34ea48d1ca3dc5380634bd5e89d87eb21bfc3b36eda43eaddc430bf8e6f41756`；L3=`ff59ade3fd809a73c240885cafd769e32c791f9cb7df22887444fa5703244d17`。三份源 prediction 起止均 `2024-07-01..2026-08-31`；改变交易池会派生不同 executable intersection，其 SHA 与来源 SHA 分列，禁止重新训练、推理或 refit。源数据末端 h60 标签尚未成熟，不影响同段信号/成交回测；该段 IC 使用实际成熟样本并报告不足，不填补未来标签，也不缩短 backtest_end。
 
+**同日启动增量。**蓝图初稿经四轮审核后已由 PR #5169 合入（merge=`a97639e52f5ef0fd70c14863efececdfe86e111e`）。MA-E33 新 task=`qe_20261001_052959_a6ab` 已通过配置预检、十二 Loop 参数 readback 和双节点 dataset-identity，正式提交，父状态 `running`；manifest=`2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc`，两端一致。运行日志已证明 `pred-backtest`、跳过 SignalRecord、每 Loop kernels=4，WSL 实际有四个 replay 进程；不把 running/配置上限当完成结果。
+
+初次尝试 L1 在下载源 prediction 时出现 `httpx.ReadError`、未提交计算节点；L2/L6/L10 的 CSI300 因本批配置漏带此前批准的 BUG-1609 执行数据排除合同，遇到 `601989.SH` 摘牌前22日分钟缺口。该遗漏属于本次任务准备，不是新的HMM故障或重新准备数据集的理由。原失败记录保留；只追加 L13（同配置单次有界传输恢复）与 L14～L16（恢复同一获批执行排除），总计 **12个逻辑比较、16个attempt行**，不自动再次重试。恢复合同引用已完成 MA-E27R `qe_20260928_145652_5e55`：`601989.SH`、full_backtest_window=`2024-07-01..2026-08-28`、reason=`minute_source_gap_confirmed_unfillable`、evidence SHA=`b7624516ad11771c4cde434895e8e0311d4d6e3d26d09870ef71a3d463e5d825`。它不是行业黑名单、不改变canonical PIT membership/模型/因子/seed/窗口，也不伪造报价；CSI300结果必须显示该执行资格限制，与无同样限制的基准比较时不能冒称纯股票池效应。
+
+阶段B的既有政策输入已通过resolver与配置预检，已向同一task追加L17～L25：每seed固定全市场Top50，追加P01+TAIL_BOOST、P00+TAIL_SUBSTITUTE、P01+TAIL_SUBSTITUTE，复用MA-E32的P00+默认TAIL_BOOST。它们不依赖阶段A选出的赢家，不构成测试窗上的追加搜索；按同一队列剩余槽位自动执行。当前总账为**21个非重复逻辑比较、25个attempt行（含4个初次失败）**；登记不等于已运行或成功。黑名单按冻结PIT membership仅从2024-07-01生效，训练/验证区间保持来源；HMM关闭。WSL本批实际4个running，node1本批3个running，另有旧task的1个reconciling reservation占用全局槽，不能把配置4+4写成实际8并行，也不得强制释放非本任务预约。
+
 ### 2.6 F-014 历史评价资产清单（冻结记录，旧执行顺序已取消）
 
 本节只保留 v5.10 时形成的资产分组，便于解释既有结论覆盖范围；它不是 v6.1 backlog。原定的 direct parser、`backtest_only/results_only rematerialize`、其余 R8B 与批量评价顺序已由 v5.24 终止，不再执行，也不因缺失指标形成补数、补账或平台任务。
@@ -1401,24 +1407,28 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 | 优先级 | 工作包 | 产物/结果触发 | 当前状态 |
 |---|---|---|---|
-| P0-0 | 蓝图同步与最小发起前核对 | 现有 source config、预测 SHA、active binding、节点健康及全局占用；只修真实阻断 | MA-E32 来源已回读，文档更新中；不宣称所有历史已盘点或 UI/运行态全验收 |
-| P0-1 / 阶段 A | 三种子×四交易配置一次登记 12 Loops | 全市场 Top20、CSI300 Top50、CSI500 Top50、STAR50 Top20；全部复用 MA-E32 L1～L3，不训练、不推理 | **待启动 MA-E33**；已有全市场 Top50 三种子作为基准，不重复计算 |
-| P0-2 / 阶段 B | 黑名单×尾盘处理直接回测 | 同 seed/prediction/pool/TopK 的 2×2：两者关闭、仅名单、仅尾盘、两者；复用精确相同 P00，不重复提交 | **条件待核对**：只用批准名单及既有 TAIL_SUBSTITUTE 语义；输入未闭合只阻断该阶段，HMM 本批关闭 |
+| P0-0 | 蓝图同步与最小发起前核对 | 现有 source config、预测 SHA、active binding、节点健康及全局占用；只修真实阻断 | 初稿已由PR #5169合入，启动增量随本次文档提交；不宣称所有历史已盘点或 UI/运行态全验收 |
+| P0-1 / 阶段 A | 三种子×四交易配置一次登记 12 Loops | 全市场 Top20、CSI300 Top50、CSI500 Top50、STAR50 Top20；全部复用 MA-E32 L1～L3，不训练、不推理 | **MA-E33 running**，task与初次失败/恢复详见2.5.6；12逻辑比较/16attempt行，已有全市场Top50基准不重跑 |
+| P0-2 / 阶段 B | 黑名单×尾盘处理直接回测 | 固定全市场Top50，同三seed/prediction的2×2：名单关闭/开启 × 既有TAIL_BOOST/TAIL_SUBSTITUTE；复用MA-E32三条P00默认基准，只追加9条非重复政策臂 | 名单沿用 `801125.SI/801181.SI/801183.SI`，resolver/预检通过，L17～L25已登记待槽位；替补沿用既有触发235/深度15，不调阈值，HMM关闭 |
 | P0-3 / 阶段 C | full/2026H1/7月/8月同口径比较 | CAGR、实际区间累计/主动收益、Sharpe/MDD/IR、成熟样本 IC/RankIC、成本/换手/资金利用；保存准确正负结果 | **待阶段结果**；低样本月度不凭年化率或最优 seed 判稳健，无法计算列明原因 |
 | P1-1 | 最有价值交易池的训练池配对 | 全市场训练→池U vs 池U训练→同池U，同特征/label/seed/费用/策略；标签边界修复生效后才新训受影响模型 | 条件待前序证据，本轮不预设池内训练更优 |
 | P1-2 | 新 Alpha/目标与条件组合 | 板块选择弱→soft top-down/lead-lag；右尾弱→LTR/quantile/trend-survival；陈旧→因果 refit；互补→OOF gate | 按真实瓶颈选最小批次，不追加无依据搜索 |
 | 并行移交 | LSTM 单 Alpha 包完整发布 | 已批准候选的模型、拟合处理器、特征顺序、窗口、政策与预测引用完整，创建时程序校验 | BUG-1639 source merged，正式运行态与发布未闭合；不阻断 MA-E33、不接管模拟盘/荐股实现 |
 | P2 | 多 Alpha / HMM 更新后对照 | 先强单腿，后固定预测组合+LOO+成本后增量；新 HMM 就绪后再 matched 对照 | 不提前堆腿、重训 HMM 或跨模块实现 |
 
-**MA-E33 发起、窗口与退出合同。**预计 12～16 小时是资源估计而非必须耗满的时限；12 Loops 预先登记并按槽自动派发，不逐 Loop 等待人工。train=`2018-08-01..2022-12-30`、valid=`2023-01-03..2024-06-28`、test/signal=`2024-07-01..2026-08-31`、backtest_end=`2026-08-28`，与来源不变；benchmark 固定 `000300.SH`，执行 `TWAP`，模型/14因子/seed/费用/n_drop/风险合同继承来源，HMM 关闭。每个 replay 钉 source task/loop/SHA，运行时从 resolver 取得统一 binding，禁止 fallback、自动 refit、改 seed/阈值或延长标签未来数据。发起前只读核对资源与新建配置；预测、组件身份或政策不符则停止该 arm，不盲目重试。两节点不得在 Windows 跑训练或回测。所有预注册 arm 终态并完成可计算比较即结束；没有新增证据时不为了运行时长追加实验。后续计划阶段可因政策未就绪明确停在 BLOCKED，不把整批写成全量完成。
+**MA-E33 发起、窗口与退出合同。**预计 12～16 小时是资源估计而非必须耗满的时限；阶段A的12个逻辑比较和阶段B的9个非重复政策臂均已登记，含有界恢复共25条attempt，按槽自动派发，不逐 Loop 等待人工。train=`2018-08-01..2022-12-30`、valid=`2023-01-03..2024-06-28`、test/signal=`2024-07-01..2026-08-31`、backtest_end=`2026-08-28`，与来源不变；benchmark 固定 `000300.SH`，执行 `TWAP`，模型/14因子/seed/费用/n_drop/风险合同继承来源，HMM 关闭。每个 replay 钉 source task/loop/SHA，运行时从 resolver 取得统一 binding，禁止 fallback、自动 refit、改 seed/阈值或延长标签未来数据。发起前只读核对资源与新建配置；预测、组件身份或政策不符则停止该 arm，不盲目重试。两节点不得在 Windows 跑训练或回测。所有预注册 arm 终态并完成可计算比较即结束；没有新增证据时不为了运行时长追加实验。后续计划阶段可因政策未就绪明确停在 BLOCKED，不把整批写成全量完成。
 
 **股票池效应可识别性。**STAR50 Top20 必须与全市场 Top20 配对；CSI300/500 Top50 与现有全市场 Top50 配对。同一 TopK/seed/source prediction 的差异才解释为交易池效应，跨 Top20/Top50 只作联合配置差异。三种子全部报告，不按本测试窗挑最佳 seed；最终晋级还需独立前向/模拟证据，不回称已见测试为 untouched OOS。
+
+**既有执行缺口例外。**本次CSI300仅恢复2.5.6所列已批准的单只601989.SH整窗执行排除，拒绝扩大名单或默认忽略其他缺口。相同预测/TopK不足以保证纯池归因，还须相同执行资格限制；不同限制的结果明确标为“池+执行资格差异”，无需为补比较重跑全部已完成基准。Source SHA、派生prediction SHA与排除合同SHA分列，失败恢复不进入参数搜索次数但保留attempt/失败原因，准确非重复恢复结果按正常规则入仓。
 
 **股票池合同。**未来科创50单一选股池（规范化star50及别名）只能Top20：未传值默认20，显式其他值拒绝而非静默改写，UI/MCP/Codex/Claude、custom_evo、multi-alpha、clone/retry、direct backtest及HMM/黑名单变体一致。多选PIT并集去重后仍只有科创50身份则20；更大并集不是纯科创50，不按某日股票数误判。历史Top50不改写且不进入新协议候选排名。Top20是目标选择数，不虚构卖出解决停牌/跌停滞留持仓。
 
 **训练与复用。**旧模型来源release与本次目标执行release分别记录；本次各输入组件统一目标release，旧模型兼容时补推理无需重训，不因追加日期改变文件hash就判必须重训，也不隐去历史数据修订。全市场训练可以在指数PIT选股池回测，不强制重训；但prediction必须覆盖全目标日期/股票，拟合预处理器和数据/模型身份一致。训练/推理/选股/持仓报价域分别冻结。只改执行政策/选股域用既有pred-backtest，改变训练池/特征/label/fit窗口才新增训练。训练池比较固定同一交易池/TopK/费用/策略与切分；小池训练样本更少可能过拟合，不能由池回测收益较高就判池内训练更好。不能在test重新fit处理器、用当前成分回填历史或缺prediction填零。
 
 **HMM与黑名单。**基准P00关闭两者，P10/P01/P11分别打开HMM/名单/两者；原始预测相同，冻结有效政策类型、版本、因果可见日期与应用顺序，记录requested/enabled/effective/trigger_count。score调整、entry-only保护TopK与仓位/退出并非同一政策。HMM必须为因果forward/filter，名单不得从当前配置重构成历史生效事实；未生效/未触发/未知三者不同。若保护Top30覆盖全部科创50Top20候选，明确no-action，先预注册有作用的政策再试验，不看收益调参；黑名单也报告匹配数量。缺文件只阻断相关臂，不阻断P00；不在测试集选择阈值或全样本HMM fit/smoothing。
+
+**尾盘政策不是布尔开关。**本批阶段A及MA-E32未显式传 `unfilled_handler`，但 `TailTWAPWithLimitStrategy` 实际默认 `TAIL_BOOST`；不得标成尾盘处理OFF。阶段B固定全市场Top50与三种子，比较名单无/有及BOOST/SUBSTITUTE，后者使用程序既有 trigger_minute=235（14:55）、backup_depth=15，费用、TWAP和其余参数不变。归因是替补相对加仓再分配的差异，不是相对无尾盘处理的收益；trigger/action/ffr/cash利用按实际产物报告，无分支级证据不伪称每笔订单已验证。本版只复用已批准功能，不研发新执行算法。
 
 **完整指标。**trajectory列表的每个loop显示训练池/选股池/benchmark、目标和实际TopK、release/cutoff、requested与实际预测/成交/标签窗口、模型/seed/特征、HMM/黑名单请求及有效状态；绝对累计/CAGR/Sharpe/MDD/Calmar/波动率、benchmark同窗累计/年化、扣费主动收益/IR/TE/相对财富、IC/ICIR/RankIC/RankICIR、Top-K收益/命中/decay/dispersion/覆盖、换手/费用/成交率/耗时等所有已产出字段可通过正常列组展开或滚动查询，不只详情页。未产出或无法核验显示原因及样本数，不用0、Sharpe代IR、混义MDD或两个年化相减兜底。科创50Top50标签诊断标不适用，不改变执行Top20。经济收益分段与h20成熟标签样本分别列出。
 
@@ -1591,7 +1601,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 ## 13. Implementation Plan / 实施计划
 
-当前实施顺序唯一见 §9.10。G0-A～H 是历史阶段与方向来源，不表示尚需全部开发；G0-I 引用本版活动计划。MA-E32 已有三种子 h60 强腿来源；MA-E33 尚待启动。BUG-1638/1639、入仓、资产发布分别记录，不把设计审查通过、HTTP ready 或父任务状态写成完整运行态/策略交付。
+当前实施顺序唯一见 §9.10。G0-A～H 是历史阶段与方向来源，不表示尚需全部开发；G0-I 引用本版活动计划。MA-E32 已有三种子 h60 强腿来源；MA-E33 已启动、未完成。BUG-1638/1639、入仓、资产发布分别记录，不把设计审查通过、HTTP ready 或父任务状态写成完整运行态/策略交付。
 
 ### Phase G0-A：研究设计与证据记录
 
@@ -1715,7 +1725,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 ## 15. Design Acceptance Matrix / 设计验收矩阵
 
-本矩阵中的 DESIGN_REVIEW_READY 只代表文档审查，不是代码或实验验收；当前待办在2.5.6/9.10/17明确保留，gap“无”仅指文档结构。历史VERIFIED只证明对应旧合同；source merge不证明运行态/UI或策略包已验收。F-027/F-029按v6.18，F-043～F-047沿用不冲突的关联设计；MA-E33未启动、标签修复未合入、资产发布未完成，均不标VERIFIED。
+本矩阵中的 DESIGN_REVIEW_READY 只代表文档审查，不是代码或实验验收；当前待办在2.5.6/9.10/17明确保留，gap“无”仅指文档结构。历史VERIFIED只证明对应旧合同；source merge不证明运行态/UI或策略包已验收。F-027/F-029按v6.18，F-043～F-047沿用不冲突的关联设计；MA-E33运行中、标签修复未合入、资产发布未完成，均不标VERIFIED。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -1848,6 +1858,8 @@ DESIGN-COMPLIANCE-001：①没有把部分结果或 source merge 简化冒充完
 | 2：因果与统计 | STAR50 Top20对全市场Top50会混入TopK效应；h20污染不能靠replay消除；h60末端标签不成熟不等于无可成交信号 | 增加全市场Top20 companion；三种子配对且不挑最佳seed；只用已核实h60来源，IC成熟样本与回测窗口分离，不填未来标签 |
 | 3：效率和资源 | 旧WSL2/node1默认2条款与用户纯回测4+4冲突；12～16小时可能被误读为必须跑满；HMM旧模型不应全局阻断 | F-029和§9.10统一纯回测请求4+4、kernels≤4与实际reservation下限；训练容量不放宽；终态即收口，HMM降优先级 |
 | 4：前后引用与权限 | 2.5/9.9/F-027/G0-I/验收矩阵/§17仍引用旧排期；文档授权、实验、数仓与清理容易混同 | 所有活动入口统一v6.18；历史快照保持原值；当前只授权文档合入与后续实验，正式资产/入仓走既有明确授权，删除/数据变更/进程控制不推导 |
+| 5：启动后配置与执行真值 | CSI300漏带已批准执行缺口例外；初次失败与恢复会被误算为新增比较；未指定尾盘handler容易误标OFF | 初次4失败和L13～L16单次恢复分列；CSI300标注执行资格差异；基准实际TAIL_BOOST，阶段B只比较BOOST/SUBSTITUTE，不虚构无尾盘处理基准 |
+| 6：政策排队与全局容量 | 阶段B已登记但原总账仍只有阶段A；node1另有旧reconciling预约，配置4不等于本批4运行 | L17～L25为三seed×三新增政策配置，来源/窗口/名单readback与预检闭合；21逻辑比较/25attempt行，登记与运行/成功分开；不强行释放其他task槽位 |
 
 DESIGN-COMPLIANCE-001：①没有把近端抽查冒充全历史盘点或把计划/临时资产冒充交付；②不可计算指标、短标签风险、政策未就绪与运行态未知显式报告；③历史结果、模型/因子/seed/费用/窗口保持，变化轴仅为预注册交易池/TopK与批准政策；④没有增加资产研究门禁、流水线审批或非QE平台前置。文档检查不代替本次实际配置、资源和执行验证。
 
@@ -1858,11 +1870,11 @@ DESIGN-COMPLIANCE-001：①没有把近端抽查冒充全历史盘点或把计�
 | 既有基础架构 | active profile=`20260928-v15-unified-moneyflow1`；backend ready身份=`878f5291…` | profile可读不等于节点占用、所有BUG语义或全部UI已验收；旧run不迁移 |
 | 本次docs | v6.18 主蓝图，用户授权审核通过后提交合入并执行长任务 | 文档合入与实验启动分开报告；未启动前不写完成 |
 | 新增代码 | BUG-1638/#5156 OPEN且现有CI失败；BUG-1639/#5161 source merged | 不改流水线、不合入失败PR；正式post-restart、close-sync和策略包发布分别收口 |
-| 实验 | MA-E32 6/6 completed；h60三种子强腿已核对；MA-E33阶段A预注册12 Loops、零训练 | 不声明全部历史重测完成、七八月稳定或策略包可部署；当前活动任务/槽位提交前再查 |
+| 实验 | MA-E32 6/6 completed；h60三种子强腿已核对；MA-E33阶段A运行、阶段B已排队；全批21逻辑比较/25attempt行、零训练 | 初次四失败与单次精确恢复分列；不声明全部成功、七八月稳定或策略包可部署，CSI300限制如实标注 |
 | Archive / cleanup | 本次文档0写仓、0删除；来源三预测有warehouse pointer | 后续准确非重复正负结果按既有长任务授权入仓；不推导文件/DB删除、全量历史补录或数据准备权限 |
 | dataset / DDL / dependency | 无变更 | 不接管数据准备、因子库、HMM训练、荐股或模拟盘 |
 | backend / node process control | false | 后端重启仍归用户，本轮节点API也不控制 |
-| 下一步 | 文档合入→当前节点/配置核对→新建MA-E33并按4+4纯回测槽自动执行，阶段B按政策就绪条件推进 | 不等待HMM/全部历史归档，不重复全市场Top50；失败不自动改参/重训，不恢复通用平台建设 |
+| 下一步 | MA-E33由调度按4+4纯回测配置继续执行；阶段B既有政策输入已闭合并排队，终态后分段比较 | 不等待HMM/全部历史归档，不重复全市场Top50；不超单次恢复、不自动改参/重训，不恢复通用平台建设 |
 
 ## 18. Research Sources / 一手研究来源
 

@@ -402,6 +402,33 @@ def validate_daily_minute_parity(
         "vol": sum(float(row["vol"]) for row in rows),
         "amount": sum(float(row["amount"]) for row in rows),
     }
+    validate_daily_minute_aggregates(
+        symbol=symbol,
+        daily=daily,
+        aggregates=aggregates,
+        price_tolerance=price_tolerance,
+        volume_tolerance=volume_tolerance,
+        amount_tolerance=amount_tolerance,
+    )
+    return {"status": "PASS", "bar_count": 240, "gap_count": 0, "aggregates": aggregates}
+
+
+def validate_daily_minute_aggregates(
+    *,
+    symbol: str,
+    daily: Mapping[str, float],
+    aggregates: Mapping[str, float],
+    price_tolerance: float = 1e-4,
+    volume_tolerance: float = 1e-4,
+    amount_tolerance: float = 1e-4,
+) -> None:
+    """Shared parity contract for list-based and streaming SOURCE readers."""
+    fields = ("open", "high", "low", "close", "vol", "amount")
+    if set(aggregates) != set(fields):
+        raise MonthlySourceAuditError("minute aggregate fields differ")
+    for values in (daily, aggregates):
+        if any(key not in values or not math.isfinite(float(values[key])) for key in fields):
+            raise MonthlySourceAuditError("daily/minute aggregates contain non-finite values")
     tolerances = {
         "open": price_tolerance,
         "high": price_tolerance,
@@ -417,7 +444,6 @@ def validate_daily_minute_parity(
     }
     if mismatches:
         raise MonthlySourceAuditError(f"daily/minute aggregate mismatch: {symbol} {mismatches}")
-    return {"status": "PASS", "bar_count": 240, "gap_count": 0, "aggregates": aggregates}
 
 
 def validate_daily_basic_rows(
@@ -524,6 +550,7 @@ __all__ = (
     "validate_daily_basic_rows",
     "validate_daily_rows",
     "validate_daily_minute_parity",
+    "validate_daily_minute_aggregates",
     "validate_six_pool_market_coverage",
     "validate_trading_calendar",
 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import io
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ class _Process:
     def __init__(self, *, running: bool = True, timeout_once: bool = False) -> None:
         self.pid = 321
         self.returncode = None if running else 2
+        self.stdin = io.BytesIO()
         self.timeout_once = timeout_once
         self.terminated = False
         self.killed = False
@@ -135,17 +137,20 @@ def test_enabled_supervisor_preflights_and_uses_fixed_worker_command(
         __import__("sys").executable,
         str(script),
         "--serve",
+        "--supervised",
         "--poll-seconds",
         "2.5",
     )
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
     assert kwargs["cwd"] == str(tmp_path)
-    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdin"] == subprocess.PIPE
+    assert process.stdin.getvalue() == b"START\n"
     assert "shell" not in kwargs
     assert supervisor.stop()["status"] == "STOPPED"
     assert process.terminated is True
     assert process.killed is False
+    assert process.stdin.closed
 
 
 def test_enabled_supervisor_fails_closed_before_process_start(
@@ -188,3 +193,21 @@ def test_supervisor_kills_child_after_bounded_shutdown_timeout(
     assert receipt["returncode"] == -9
     assert process.terminated is True
     assert process.killed is True
+
+
+def test_owner_handshake_failure_cleans_up_only_its_child(tmp_path: Path) -> None:
+    script = tmp_path / "scripts" / "monthly_unified_dataset_release_worker.py"
+    script.parent.mkdir()
+    script.write_text("# worker\n", encoding="utf-8")
+    process = _Process()
+    process.stdin.close()
+    process.stdin = None
+    supervisor = MonthlyWorkerProcessSupervisor(
+        project_root=tmp_path, config=MonthlyWorkerSupervisorConfig(enabled=True),
+        runtime_loader=lambda **_kwargs: _runtime(),
+        popen_factory=lambda *_args, **_kwargs: process,
+    )
+    with pytest.raises(MonthlyWorkerSupervisorError, match="owner handshake"):
+        supervisor.start()
+    assert process.terminated
+    assert supervisor.process is None

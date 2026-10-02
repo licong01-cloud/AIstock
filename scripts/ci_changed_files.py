@@ -45,10 +45,12 @@ def prepare_pr_merge_base(
     base_ref: str,
     base_sha: str,
     checkout_ref: str,
+    source_head_sha: str = "",
+    resolve_current_base: bool = False,
     attempts: int = 3,
     deepen_by: int = 64,
 ) -> dict[str, str | int | bool]:
-    """Prove PR base ancestry, deepening only exact base/checkout refs when needed."""
+    """Prove pinned PR source ancestry without attributing integration-only files."""
 
     root = repo_root.resolve()
     branch = base_ref.strip()
@@ -57,17 +59,24 @@ def prepare_pr_merge_base(
     if not branch:
         raise ChangedFilesError("base_ref is empty")
     _git(root, "check-ref-format", "--branch", branch)
-    if not _FULL_SHA_RE.fullmatch(pinned_base):
+    resolve_manual_base = resolve_current_base and not pinned_base
+    if not _FULL_SHA_RE.fullmatch(pinned_base) and not resolve_manual_base:
         raise ChangedFilesError("base_sha must be a full Git commit identity")
     if not source_ref.startswith("refs/"):
         raise ChangedFilesError("checkout_ref must be an exact refs/* name")
     _git(root, "check-ref-format", source_ref)
     head_commit = _commit(root, "HEAD", "head_sha")
+    pinned_source = source_head_sha.strip().lower()
+    if pinned_source and not _FULL_SHA_RE.fullmatch(pinned_source):
+        raise ChangedFilesError("source_head_sha must be a full Git commit identity")
+    if resolve_current_base and pinned_source != head_commit:
+        raise ChangedFilesError("manual source_head_sha must match the checked-out HEAD")
 
     def ready() -> bool:
         try:
             _commit(root, pinned_base, "base_sha")
-            _git(root, "merge-base", pinned_base, head_commit)
+            source_commit = _commit(root, pinned_source or head_commit, "source_head_sha")
+            _git(root, "merge-base", pinned_base, source_commit)
             return True
         except ChangedFilesError:
             return False
@@ -95,6 +104,8 @@ def prepare_pr_merge_base(
                 capture_output=True,
                 text=True,
             )
+            if result.returncode == 0 and resolve_manual_base and not pinned_base:
+                pinned_base = _commit(root, f"refs/remotes/origin/{branch}", "base_ref")
             if result.returncode == 0 and ready():
                 break
             if index + 1 < max(1, int(attempts)):
@@ -103,11 +114,16 @@ def prepare_pr_merge_base(
             detail = result.stderr.strip() or result.stdout.strip() or "merge base remains unavailable"
             raise ChangedFilesError(f"pinned PR base/head history preparation failed: {detail}")
     _git(root, "update-ref", f"refs/remotes/origin/{branch}", pinned_base)
-    merge_base = _git(root, "merge-base", pinned_base, head_commit).strip()
+    source_commit = _commit(root, pinned_source or head_commit, "source_head_sha")
+    if pinned_source:
+        _git(root, "merge-base", "--is-ancestor", source_commit, head_commit)
+    merge_base = _git(root, "merge-base", pinned_base, source_commit).strip()
     return {
         "schema_version": "aistock_ci_pr_merge_base_preparation_v1",
+        "event_mode": "workflow_dispatch" if resolve_current_base else "pull_request",
         "base_commit": pinned_base,
         "head_commit": head_commit,
+        "source_head_commit": source_commit,
         "merge_base": merge_base,
         "fetch_used": used_attempts > 0,
         "fetch_attempts": used_attempts,
@@ -141,14 +157,21 @@ def build_changed_files(
     head_sha: str = "HEAD",
     diff_filter: str = "",
 ) -> tuple[list[str], dict[str, str | int | None]]:
-    """Return changed paths, preferring the current PR base ref over stale event SHA."""
+    """Return source changes using pinned PR identities or the current manual base."""
 
     root = repo_root.resolve()
     head_commit = _commit(root, head_sha or "HEAD", "head_sha")
     normalized_base_sha = base_sha.strip()
     if base_ref.strip():
-        base_commit = _current_base_commit(root, base_ref)
-        base_source = "current_base_ref"
+        if normalized_base_sha:
+            if not _FULL_SHA_RE.fullmatch(normalized_base_sha):
+                raise ChangedFilesError("PR base_sha must be a full Git commit identity")
+            _git(root, "check-ref-format", "--branch", base_ref.strip())
+            base_commit = _commit(root, normalized_base_sha, "base_sha")
+            base_source = "pinned_pr_base_sha"
+        else:
+            base_commit = _current_base_commit(root, base_ref)
+            base_source = "current_base_ref"
     elif normalized_base_sha and set(normalized_base_sha) != {"0"}:
         base_commit = _commit(root, normalized_base_sha, "base_sha")
         base_source = "event_base_sha"
@@ -194,19 +217,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--head-sha", default="HEAD")
     parser.add_argument("--diff-filter", default="")
     parser.add_argument("--prepare-pr-merge-base-only", action="store_true")
+    parser.add_argument("--prepare-manual-merge-base-only", action="store_true")
     parser.add_argument("--checkout-ref", default="")
+    parser.add_argument("--source-head-sha", default="")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        if args.prepare_pr_merge_base_only:
+        if args.prepare_pr_merge_base_only and args.prepare_manual_merge_base_only:
+            raise ChangedFilesError("choose exactly one preparation event mode")
+        if args.prepare_pr_merge_base_only or args.prepare_manual_merge_base_only:
             receipt = prepare_pr_merge_base(
                 repo_root=Path(args.repo_root),
                 base_ref=args.base_ref,
                 base_sha=args.base_sha,
                 checkout_ref=args.checkout_ref,
+                source_head_sha=args.source_head_sha,
+                resolve_current_base=args.prepare_manual_merge_base_only,
             )
             print(json.dumps(receipt, sort_keys=True))
             return 0

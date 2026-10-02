@@ -44,7 +44,7 @@ const second = 2; // inline comment still belongs to code
     assert audit._effective_sloc(source, ".ts") == 2
 
 
-def test_build_audit_counts_tracked_code_once_by_primary_owner(tmp_path: Path) -> None:
+def test_build_audit_counts_tracked_code_once_by_primary_owner(tmp_path: Path, monkeypatch) -> None:
     paths = [
         "backend/services/example.py",
         "backend/tests/test_example.py",
@@ -92,6 +92,19 @@ def test_build_audit_counts_tracked_code_once_by_primary_owner(tmp_path: Path) -
     assert rows["docs"]["production_sloc"] == 1
     assert report["totals"]["test_only_bucket_count"] == 1
     assert all(row["module_id"] != "__unmapped__" for row in report["modules"])
+    read_sloc = audit._read_sloc
+    def selected_only(root, path):
+        assert catalog.match_path(path).primary_module == "example"
+        return read_sloc(root, path)
+    monkeypatch.setattr(audit, "_read_sloc", selected_only)
+    selected = audit.build_audit(repo_root=tmp_path, catalog=catalog, tracked_paths=paths,
+                                module_ids=["example"], top_files=1)
+    assert selected["modules"] == [rows["example"]]
+    assert selected["totals"]["skipped_unselected_module_files"] == 2
+    import pytest
+    with pytest.raises(ValueError, match="no executable tracked files"):
+        audit.build_audit(repo_root=tmp_path, catalog=catalog, tracked_paths=paths, module_ids=["missing"])
+    assert audit.main(["--module", "example", "--fail-test-only-owner", "tests.backend"]) == 2
 
 
 def test_test_path_detection_covers_helpers_and_language_conventions() -> None:
@@ -199,6 +212,7 @@ def test_workflow_automation_has_an_honest_production_denominator() -> None:
         tracked_paths=audit._git_tracked_paths(root),
         max_ratio=0.30,
         top_files=1,
+        module_ids=["validation.workflow_automation"],
     )
     workflow = next(
         row for row in report["modules"] if row["module_id"] == "validation.workflow_automation"
