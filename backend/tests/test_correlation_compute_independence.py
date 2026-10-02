@@ -318,21 +318,29 @@ def test_target_correlation_refresh_fails_closed_when_reference_cache_is_missing
         svc.run_target_correlation_refresh_local(target_factor_name="target")
 
 
-@pytest.mark.parametrize("bad_target", [False, True, "no_compatible_reference"])
+@pytest.mark.parametrize("bad_target", [False, True, "no_compatible_reference", "missing_fingerprint", "reference_fingerprint", "wrong_rule"])
 def test_target_refresh_uses_per_factor_binding_not_promoted_snapshot(monkeypatch, tmp_path, bad_target):
     from types import SimpleNamespace
     from backend.services.quantevolver import correlation_compute_service as svc
+    from backend.services.canonical_equity_pit import CANONICAL_PIT_RULE_VERSION
+    from backend.services.quantevolver.factor_universe_mask_service import OFFICIAL_FACTOR_INDEX_POLICY
 
     binding = dict(status="ok", as_of_date="2026-08-31", factor_data_dir="/release/new/factors",
                    moneyflow_unit_contract_version=svc.MONEYFLOW_UNIT_CONTRACT_VERSION,
-                   universe_key="aistock_equity_pit_canonical_v2", universe_rule_version="v2",
-                   universe_fingerprint_sha256="pit", index_policy="eligible", code_hash="current")
+                   universe_key="aistock_equity_pit_canonical_v2", universe_rule_version=CANONICAL_PIT_RULE_VERSION,
+                   universe_fingerprint_sha256="pit", index_policy=OFFICIAL_FACTOR_INDEX_POLICY, code_hash="current")
     factors = {"target": binding, "good": dict(binding),
                "old": dict(binding, factor_data_dir="/release/old/factors")}
     if bad_target is True:
         factors["target"] = dict(binding, code_hash="stale")
     elif bad_target == "no_compatible_reference":
         factors["good"] = dict(binding, code_hash="stale")
+    elif bad_target == "missing_fingerprint":
+        factors["target"] = {k: v for k, v in binding.items() if k != "universe_fingerprint_sha256"}
+    elif bad_target == "reference_fingerprint":
+        factors["old"] = dict(binding, universe_fingerprint_sha256="other_pit")
+    elif bad_target == "wrong_rule":
+        factors["target"] = dict(binding, universe_rule_version="wrong")
     (tmp_path / "_meta.json").write_text(json.dumps({"factor_data_dir": "/release/old/factors", "factors": factors}))
     (tmp_path / "single").mkdir()
     dates = pd.bdate_range("2025-08-01", "2026-08-31")
@@ -345,7 +353,11 @@ def test_target_refresh_uses_per_factor_binding_not_promoted_snapshot(monkeypatc
     monkeypatch.setenv("QE_QLIB_DATA_PATH", "/release/new/bin")
     monkeypatch.setattr(svc, "FactorEligibilityService", lambda: SimpleNamespace(list_eligible_factors=lambda **_: rows))
     monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: SimpleNamespace(_output_dir=tmp_path, get_cached_singles=lambda: rows))
-    monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: SimpleNamespace(metadata=lambda **_: binding))
+    # Historical caches remain bound to their recorded PIT, even when today's
+    # rolling state has advanced. This path must never read/bootstrap live PIT.
+    def forbidden_live_pit():
+        raise AssertionError("cached correlation must not consult advancing live PIT")
+    monkeypatch.setattr(svc, "FactorUniverseMaskService", forbidden_live_pit)
     loaded = []
     def read(name, *_):
         loaded.append(name)
@@ -354,8 +366,10 @@ def test_target_refresh_uses_per_factor_binding_not_promoted_snapshot(monkeypatc
     monkeypatch.setattr(svc, "CorrelationEngine", lambda _: SimpleNamespace(compute_selected_submatrix=lambda *_a, **_k: SimpleNamespace(records=lambda: [{"candidate": "target", "reference": "good", "status": "available", "correlation": 0.5}])))
     written = []
     monkeypatch.setattr(svc, "_persist_target_correlations", lambda **kwargs: written.extend(kwargs["records"]) or len(kwargs["records"]))
-    if bad_target:
-        reason = "cache_code_hash_mismatch" if bad_target is True else "no compatible reference caches"
+    if bad_target not in (False, "reference_fingerprint"):
+        reason = {True: "cache_code_hash_mismatch", "no_compatible_reference": "no compatible reference caches",
+                  "missing_fingerprint": "cache_universe_fingerprint_sha256_missing",
+                  "wrong_rule": "cache_universe_rule_version_mismatch"}[bad_target]
         with pytest.raises(ValueError, match=reason):
             svc.run_target_correlation_refresh_local(target_factor_name="target", as_of_date="2026-08-31")
         assert not written and not loaded
@@ -365,7 +379,9 @@ def test_target_refresh_uses_per_factor_binding_not_promoted_snapshot(monkeypatc
     assert len(written) == 1
     assert result["complete"] is False
     assert result["written_pair_count"] + result["unavailable_pair_count"] == result["eligible_reference_count"] == 2
-    assert result["unavailable_pairs"][0]["reason"] == "cache_factor_data_dir_mismatch"
+    reason = "cache_universe_fingerprint_sha256_mismatch" if bad_target == "reference_fingerprint" else "cache_factor_data_dir_mismatch"
+    assert result["unavailable_pairs"][0]["reason"] == reason
+    assert result["cache_binding"]["universe_fingerprint_sha256"] == "pit"
 
 
 @pytest.mark.parametrize("field", ["status", "as_of_date", "factor_data_dir", "moneyflow_unit_contract_version",
