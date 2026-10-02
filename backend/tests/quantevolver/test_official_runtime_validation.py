@@ -14,6 +14,42 @@ from backend.services.quantevolver.official_factor_batch_compute_service import 
 from backend.services.quantevolver.correlation_compute_service import _build_correlation_runtime_validation
 
 
+@pytest.mark.parametrize("code,source,category", [
+    ('frame["md_rzche"] - frame["md_rzmre"]', "money_flow", "MF"),
+    ('$md_rqye / $md_rzrqye + $md_rqyl', "money_flow", "MF"),
+    ('raw.md_rqmcl + raw.md_rqchl', "money_flow", "MF"),
+    ('$md_rzye + $db_pe', "cross_dataset", "MF"),
+    ('$md_unknown + $md_rzye_fake', "unknown", None),
+])
+def test_financing_margin_fields_use_shared_classification(code, source, category):
+    from backend.services.quantevolver import factor_analyst as module
+    assert module.classify_data_source(code) == source
+    actual, reason = module._classify_by_rules("unclassified_input", code_text=code)
+    assert actual == category
+    if category == "MF":
+        assert ("复合因子" if source == "cross_dataset" else "融资融券") in reason
+        description = module._generate_description_by_rules("unclassified_input", category, code_text=code)
+        assert "融资融券" in description and "主力资金" not in description
+
+
+def test_financing_rule_only_analysis_uses_existing_classification_writer(monkeypatch):
+    from types import SimpleNamespace
+    from backend.services.quantevolver import factor_analyst as module
+    root = Path(__file__).resolve().parents[3]
+    code = (root / "backend/services/quantevolver/net_repayment_tminus1_factor.py").read_text(encoding="utf-8")
+    monkeypatch.setattr(module, "_get_official_grade", lambda _: None)
+    monkeypatch.setattr(module, "_official_factor_value_loader", lambda: SimpleNamespace(load_single_factor=lambda _: None))
+    monkeypatch.setattr(module.FactorAnalyst, "_get_factor_info", lambda *_: {"code_text": code})
+    monkeypatch.setattr(module.FactorAnalyst, "_get_independent_metrics", lambda *_: {})
+    monkeypatch.setattr(module.FactorAnalyst, "_get_multi_window_metrics", lambda *_: {})
+    writes = []
+    monkeypatch.setattr(module.FactorAnalyst, "_upsert_classification", lambda _self, **kwargs: writes.append(kwargs))
+    result = module.FactorAnalyst().analyze_single_factor("neutral_test_name", "manual", use_llm=False)
+    assert result["ok"] and result["category"] == "MF"
+    assert len(writes) == 1 and writes[0]["data_source_group"] == "money_flow"
+    assert writes[0]["factor_name"] == "neutral_test_name"
+
+
 def test_official_factor_runtime_validation_reports_smoke_gate() -> None:
     service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
     cfg = BatchComputeConfig(

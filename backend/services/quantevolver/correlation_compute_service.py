@@ -27,10 +27,12 @@ from psycopg2.extras import execute_values
 
 from ...db.pg_pool import get_conn
 from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
-from ..canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
+from ..canonical_equity_pit import CANONICAL_PIT_RULE_VERSION, CANONICAL_PIT_UNIVERSE_KEY
 from .correlation_engine import CorrelationEngine, CorrelationResult
 from .factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
+    OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+    OFFICIAL_FACTOR_INDEX_POLICY,
     FactorUniverseMaskService,
 )
 from .factor_eligibility_service import FactorEligibilityService
@@ -473,6 +475,23 @@ def _persist_target_correlations(
     return len(seen)
 
 
+def _target_cache_mismatch(item: Any, binding: dict, code_hash: str | None) -> str | None:
+    """Compare individual cache provenance; a promoted panel is not its authority."""
+    if not isinstance(item, dict):
+        return "cache_metadata_missing"
+    for field in (
+        "status", "as_of_date", "factor_data_dir", "moneyflow_unit_contract_version",
+        "universe_key", "universe_rule_version", "universe_fingerprint_sha256", "index_policy",
+    ):
+        if not item.get(field):
+            return f"cache_{field}_missing"
+        if item[field] != binding.get(field):
+            return f"cache_{field}_mismatch"
+    if not code_hash or item.get("code_hash") != code_hash:
+        return "cache_code_hash_mismatch"
+    return None
+
+
 def run_target_correlation_refresh_local(
     *,
     target_factor_name: str,
@@ -527,7 +546,11 @@ def run_target_correlation_refresh_local(
             if not meta_path.is_file():
                 raise ValueError("official factor cache metadata is missing")
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            resolved_as_of = str(as_of_date or meta.get("as_of_date") or "").strip()
+            factor_meta = meta.get("factors") if isinstance(meta.get("factors"), dict) else {}
+            target_meta = factor_meta.get(target)
+            if not isinstance(target_meta, dict):
+                raise ValueError("target factor cache metadata is missing")
+            resolved_as_of = str(as_of_date or target_meta.get("as_of_date") or "").strip()
             if not resolved_as_of:
                 raise ValueError("target correlation refresh as_of_date is unavailable")
             try:
@@ -536,50 +559,69 @@ def run_target_correlation_refresh_local(
                 raise ValueError(
                     "target correlation refresh as_of_date is invalid"
                 ) from exc
-            if meta.get("as_of_date") != resolved_as_of:
-                raise ValueError("target correlation as_of_date differs from official cache")
-            if meta.get("moneyflow_unit_contract_version") != MONEYFLOW_UNIT_CONTRACT_VERSION:
-                raise ValueError("official factor cache moneyflow unit contract differs")
             expected_factor_dir = str(os.getenv("RDAGENT_FACTOR_DATA_WSL") or "").strip()
-            expected_qlib_path = str(os.getenv("QE_QLIB_DATA_PATH") or "").strip()
-            if expected_factor_dir and meta.get("factor_data_dir") != expected_factor_dir:
-                raise ValueError("official factor cache factor_data_dir differs from task binding")
-            if expected_qlib_path and meta.get("qlib_bin_path") != expected_qlib_path:
-                raise ValueError("official factor cache qlib_bin_path differs from task binding")
-
-            cache_universe_key = _official_cache_universe_key()
-            universe_metadata = FactorUniverseMaskService().metadata(
-                start_date="2018-08-01",
-                end_date=resolved_as_of,
-                universe_key=cache_universe_key,
-            )
-            for field in (
-                "universe_key",
-                "universe_rule_version",
-                "universe_fingerprint_sha256",
-                "index_policy",
-            ):
-                if meta.get(field) != universe_metadata.get(field):
-                    raise ValueError(f"official factor cache {field} differs from PIT authority")
-            factor_meta = meta.get("factors") if isinstance(meta.get("factors"), dict) else {}
-            for factor_name in [target, *references]:
-                item = factor_meta.get(factor_name)
-                if not isinstance(item, dict) or not item.get("as_of_date"):
-                    item = _infer_single_factor_cache_meta(pipeline, factor_name)
-                if item.get("as_of_date") != resolved_as_of:
-                    raise ValueError(
-                        f"factor cache as_of_date differs for {factor_name}: "
-                        f"{item.get('as_of_date')} != {resolved_as_of}"
-                    )
+            # This path correlates cached values, not Qlib prices. The global
+            # qlib_bin_path describes the last *full-panel* promotion only.
+            cache_universe_key = target_meta.get("universe_key")
+            if cache_universe_key not in {CANONICAL_PIT_UNIVERSE_KEY, OFFICIAL_FACTOR_UNIVERSE_KEY}:
+                raise ValueError("target factor cache universe authority is unavailable")
+            # Official cached values already record their PIT denominator.
+            # Comparing them must not replace that historical identity with
+            # today's rolling state (or bootstrap/rebuild a live universe).
+            universe_metadata = {
+                field: target_meta.get(field)
+                for field in (
+                    "universe_key", "universe_rule_version", "universe_scope",
+                    "universe_fingerprint_sha256", "stock_universe_mode",
+                    "snapshot_universe_mode", "index_policy", "coverage_semantics",
+                    "universe_start_date", "universe_end_date", "universe_generated_at",
+                )
+            }
+            binding = {
+                **universe_metadata, "status": "ok", "as_of_date": resolved_as_of,
+                "factor_data_dir": expected_factor_dir or target_meta.get("factor_data_dir"),
+                "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
+                "universe_rule_version": (
+                    CANONICAL_PIT_RULE_VERSION
+                    if cache_universe_key == CANONICAL_PIT_UNIVERSE_KEY
+                    else OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION
+                ),
+                "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
+            }
+            code_hashes = {row["factor_name"]: row.get("code_text_hash") for row in eligible_rows}
+            target_error = _target_cache_mismatch(target_meta, binding, code_hashes.get(target))
+            if target_error:
+                raise ValueError(f"target factor binding invalid: {target_error}")
+            eligible_reference_count = len(references)
+            unavailable_pairs = []
+            compatible_references = []
+            for name in references:
+                reason = _target_cache_mismatch(factor_meta.get(name), binding, code_hashes.get(name))
+                if reason:
+                    unavailable_pairs.append({"candidate": target, "reference": name,
+                                              "status": "unavailable", "reason": reason})
+                else:
+                    compatible_references.append(name)
+            if not compatible_references:
+                raise ValueError("target correlation refresh has no compatible reference caches")
+            references = compatible_references
             loader = get_correlation_factor_value_loader(source="single")
             engine = CorrelationEngine(loader)
-            trading_dates = loader.get_trading_dates("2000-01-01", resolved_as_of)
+            # Avoid deriving the target window from an arbitrary first cached
+            # factor, which can belong to another release or end on an older date.
+            target_index = pd.read_parquet(
+                meta_path.parent / "single" / f"{target}.parquet", columns=[],
+                filters=[("datetime", "<=", pd.Timestamp(resolved_as_of))],
+            ).index
+            trading_dates = sorted(target_index.get_level_values("datetime").unique())
+            trading_dates = [pd.Timestamp(day).strftime("%Y-%m-%d") for day in trading_dates]
             window_dates = trading_dates[-252:]
             if len(window_dates) < 126:
                 raise ValueError("target correlation refresh has insufficient trading dates")
+            del target_index, trading_dates
             records: list[dict[str, Any]] = []
             loaded_reference_count = 0
-            unavailable_pair_count = 0
+            unavailable_pair_count = len(unavailable_pairs)
             # Read through the loader's filtered, uncached path so the process
             # retains only one bounded 252-day reference batch at a time.
             reference_batch_size = 64
@@ -619,6 +661,7 @@ def run_target_correlation_refresh_local(
                 unavailable_pair_count += sum(
                     row["status"] != "available" for row in rows
                 )
+                unavailable_pairs.extend(row for row in rows if row["status"] != "available")
                 records.extend(
                     {
                         "factor_a": row["candidate"],
@@ -630,6 +673,8 @@ def run_target_correlation_refresh_local(
                     if row["status"] == "available"
                 )
                 del panel, result
+            if len(records) + unavailable_pair_count != eligible_reference_count:
+                raise ValueError("target correlation reference denominator is inconsistent")
             written = _persist_target_correlations(
                 target_factor_name=target,
                 records=records,
@@ -643,8 +688,12 @@ def run_target_correlation_refresh_local(
                 "mode": "target_only",
                 "target_factor_name": target,
                 "reference_count": loaded_reference_count,
+                "eligible_reference_count": eligible_reference_count,
+                "complete": unavailable_pair_count == 0,
                 "written_pair_count": written,
                 "unavailable_pair_count": unavailable_pair_count,
+                "unavailable_pairs": unavailable_pairs,
+                "cache_binding": binding,
                 "as_of_date": resolved_as_of,
                 "unrelated_rows_modified": 0,
             }

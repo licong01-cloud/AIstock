@@ -22,7 +22,7 @@ import unicodedata
 import uuid
 from bisect import bisect_right
 from collections import defaultdict, deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -1240,6 +1240,17 @@ def _require_active_direct_v2_profile(
     if profile["cutoff"] != release_cutoff or state.get("release_id") != profile["release_id"]:
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 release identity differs from the active dataset profile")
 
+    manifest_path, manifest = _require_direct_v2_manifest(
+        root=root, state=state, release_cutoff=release_cutoff, release_id=profile["release_id"]
+    )
+    return profile, manifest_path, manifest
+
+
+def _require_direct_v2_manifest(
+    *, root: Path, state: Mapping[str, Any], release_cutoff: date, release_id: str
+) -> tuple[Path, dict[str, Any]]:
+    """One manifest validator shared by active and explicitly frozen consumers."""
+
     manifest_binding = state.get("manifest")
     if not isinstance(manifest_binding, Mapping) or set(manifest_binding) != {
         "dataset_manifest_sha256",
@@ -1263,7 +1274,7 @@ def _require_active_direct_v2_profile(
     )
     if (
         manifest.get("schema_version") != DIRECT_V2_DATASET_MANIFEST_SCHEMA_VERSION
-        or manifest.get("release_id") != profile["release_id"]
+        or manifest.get("release_id") != release_id
         or manifest.get("cutoff_trade_date") != release_cutoff.isoformat()
         or manifest.get("availability_status") != "CANDIDATE_READY"
         or manifest.get("dataset_manifest_sha256") != dataset_manifest_sha256
@@ -1271,7 +1282,57 @@ def _require_active_direct_v2_profile(
         or state.get("revision") != manifest.get("revision")
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest identity differs")
-    return profile, manifest_path, manifest
+    return manifest_path, manifest
+
+
+def _require_frozen_direct_v2_profile(
+    *, root: Path, state: Mapping[str, Any], release_cutoff: date, binding: Mapping[str, str]
+) -> tuple[dict[str, Any], Path, dict[str, Any]]:
+    """Bind an explicitly approved immutable successor without touching active."""
+    fields = {"generation", "release_id", "revision", "cutoff", "manifest_sha256", "manifest_file_sha256"}
+    validation = state.get("validation")
+    structural = validation.get("structural") if isinstance(validation, Mapping) else None
+    checks = structural.get("checks") if isinstance(structural, Mapping) else None
+    if (
+        not isinstance(binding, Mapping)
+        or set(binding) != fields
+        or any(not isinstance(value, str) or not value or value != value.strip() for value in binding.values())
+        or state.get("profile") != DIRECT_V2_PROFILE
+        or state.get("schema_version") != DIRECT_V2_STATE_SCHEMA_VERSION
+        or state.get("status") != "CANDIDATE_READY"
+        or not isinstance(structural, Mapping)
+        or structural.get("status") != "PASS"
+        or not isinstance(checks, Mapping)
+        or not checks
+        or any(value is not True for value in checks.values())
+        or state.get("generation") != binding["generation"]
+        or state.get("release_id") != binding["release_id"]
+        or state.get("revision") != binding["revision"]
+        or state.get("cutoff") != binding["cutoff"]
+        or release_cutoff.isoformat() != binding["cutoff"]
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen release binding differs")
+    _require_sha256(binding["manifest_sha256"], "frozen manifest identity")
+    _require_sha256(binding["manifest_file_sha256"], "frozen manifest file hash")
+    if (
+        not root.is_absolute()
+        or any(_is_indirect_path(parent) for parent in (root, *root.parents))
+        or not root.is_dir()
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen root is invalid")
+    if _portable_external_locator(str(root), field="local_candidate_root") != _portable_external_locator(
+        state.get("candidate_root"), field="candidate_root"
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen state root differs")
+    manifest_path, manifest = _require_direct_v2_manifest(
+        root=root, state=state, release_cutoff=release_cutoff, release_id=binding["release_id"]
+    )
+    if (
+        manifest.get("dataset_manifest_sha256") != binding["manifest_sha256"]
+        or state["manifest"]["file_sha256"] != binding["manifest_file_sha256"]
+    ):
+        raise _fail(REASON_HASH_MISMATCH, "direct-v2 frozen manifest differs from approved pins")
+    return {**binding, "binding_sha256": canonical_sha256(binding)}, manifest_path, manifest
 
 
 def _require_direct_component_state(
@@ -1565,6 +1626,7 @@ def load_rotation_l1_direct_v2_source_assets(
     security_identity_manifest: Path,
     provider_absence_manifest: Path,
     data_window_end: date | None = None,
+    frozen_release_binding: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Bind one explicit qe_hmm_full_v2 candidate without legacy-path fallback."""
 
@@ -1573,6 +1635,8 @@ def load_rotation_l1_direct_v2_source_assets(
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate root must be absolute")
     if _is_indirect_path(unresolved_root):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate root cannot be a symlink or junction")
+    if frozen_release_binding is not None and any(_is_indirect_path(parent) for parent in unresolved_root.parents):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen candidate has an indirect ancestor")
     try:
         root = unresolved_root.resolve(strict=True)
     except OSError as exc:
@@ -1615,11 +1679,14 @@ def load_rotation_l1_direct_v2_source_assets(
         or any(value is not True for value in structural_checks.values())
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate state is not approved for HMM consumption")
-    active_profile, dataset_manifest_path, dataset_manifest = _require_active_direct_v2_profile(
-        root=root,
-        state=state,
-        release_cutoff=release_cutoff,
-    )
+    if frozen_release_binding is None:
+        release_binding, dataset_manifest_path, dataset_manifest = _require_active_direct_v2_profile(
+            root=root, state=state, release_cutoff=release_cutoff
+        )
+    else:
+        release_binding, dataset_manifest_path, dataset_manifest = _require_frozen_direct_v2_profile(
+            root=root, state=state, release_cutoff=release_cutoff, binding=frozen_release_binding
+        )
     declared_root = _normalized_external_locator(state.get("candidate_root"), field="candidate_root")
     release_id = root.name
     if not release_id or "/" in release_id or "\\" in release_id:
@@ -1777,7 +1844,6 @@ def load_rotation_l1_direct_v2_source_assets(
     )
     metadata_hashes = {
         "direct_state": _sha256_file(state_path),
-        "active_profile": active_profile["profile_sha256"],
         "dataset_manifest": _sha256_file(dataset_manifest_path),
         "daily_meta": _sha256_file(daily_meta_path),
         "factor_meta": _sha256_file(factor_meta_path),
@@ -1786,6 +1852,10 @@ def load_rotation_l1_direct_v2_source_assets(
         "security_identity": _sha256_file(resolved["security_identity"]),
         "provider_absence": _sha256_file(resolved["provider_absence"]),
     }
+    if frozen_release_binding is None:
+        metadata_hashes["active_profile"] = release_binding["profile_sha256"]
+    else:
+        metadata_hashes["frozen_release_binding"] = release_binding["binding_sha256"]
     component_hashes = {
         "index_context": _sha256_file(resolved["index_context"]),
         "suspend_data": _sha256_file(resolved["suspend_data"]),
@@ -1810,9 +1880,6 @@ def load_rotation_l1_direct_v2_source_assets(
     release_identity = {
         "schema_version": identity_schema_version,
         "release_id": release_id,
-        "active_release_id": active_profile["release_id"],
-        "active_profile_generation": active_profile["generation"],
-        "active_profile_sha256": active_profile["profile_sha256"],
         "dataset_manifest_sha256": dataset_manifest["dataset_manifest_sha256"],
         "dataset_revision": dataset_manifest["revision"],
         "profile": DIRECT_V2_PROFILE,
@@ -1822,6 +1889,18 @@ def load_rotation_l1_direct_v2_source_assets(
         "metadata_sha256": metadata_hashes,
         "component_sha256": component_hashes,
     }
+    if frozen_release_binding is None:
+        release_identity.update(
+            active_release_id=release_binding["release_id"],
+            active_profile_generation=release_binding["generation"],
+            active_profile_sha256=release_binding["profile_sha256"],
+        )
+    else:
+        release_identity.update(
+            frozen_release_id=release_binding["release_id"],
+            frozen_release_generation=release_binding["generation"],
+            frozen_release_binding_sha256=release_binding["binding_sha256"],
+        )
     if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
         release_identity["state_schema_version"] = state_schema_version
     inventory_body = {
@@ -2499,6 +2578,7 @@ def _build_stock_fact_aggregates(
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
     build_feature_domain_aggregates: bool = True,
+    day_rows_callback: Callable[[date, Sequence[Mapping[str, Any]]], None] | None = None,
 ) -> tuple[list[Any], list[Any], dict[tuple[date, str, str], str], dict[str, list[dict[str, Any]]]]:
     history: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     g2a_history: dict[str, deque[tuple[date, float]]] = defaultdict(lambda: deque(maxlen=20))
@@ -2812,6 +2892,8 @@ def _build_stock_fact_aggregates(
                 prices.append(qlib["close"])
                 g2a_history[symbol].append((day, qlib["close"]))
             advance_circ_state(through=day)
+            if day_rows_callback is not None:
+                day_rows_callback(day, day_rows)
             if build_feature_domain_aggregates:
                 _append_day_level_aggregates(
                     day_rows,

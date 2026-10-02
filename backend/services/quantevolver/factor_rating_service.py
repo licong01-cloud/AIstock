@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+from psycopg2.errors import UndefinedColumn, UndefinedTable
 
 from ...db.pg_pool import get_conn
 from .factor_analyst import classify_holding_period
@@ -15,7 +16,6 @@ from .llm_client import get_llm_kwargs
 
 logger = logging.getLogger("aistock.quantevolver.factor_rating_service")
 
-_SCHEMA_READY = False
 _RULES_SYNCED = False
 
 
@@ -24,65 +24,39 @@ class FactorRatingService:
     INDEX_FILE = RULES_ROOT / "index.json"
 
     def ensure_schema(self) -> None:
-        global _SCHEMA_READY
-        if _SCHEMA_READY:
-            return
+        """Consume provisioned rating tables; runtime calls never perform DDL.
 
-        ddl = [
+        Do not cache readiness process-wide: callers can select a different DB,
+        and a previous connection does not prove its schema is provisioned.
+        """
+        probes = (
             """
-            CREATE TABLE IF NOT EXISTS qe_rating_rule_versions (
-                rule_version TEXT PRIMARY KEY,
-                version_name TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'draft',
-                rule_file_path TEXT NOT NULL,
-                description_md TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                activated_at TIMESTAMPTZ
-            );
+            SELECT rule_version, version_name, status, rule_file_path,
+                   description_md, created_at, activated_at
+            FROM qe_rating_rule_versions LIMIT 0
             """,
             """
-            CREATE TABLE IF NOT EXISTS qe_factor_rating_runs (
-                run_id TEXT PRIMARY KEY,
-                rule_version TEXT NOT NULL REFERENCES qe_rating_rule_versions(rule_version) ON DELETE RESTRICT,
-                scope_type TEXT NOT NULL,
-                scope_payload JSONB,
-                snapshot_date DATE,
-                triggered_from TEXT NOT NULL DEFAULT 'ui_toolbar',
-                status TEXT NOT NULL DEFAULT 'pending',
-                summary JSONB,
-                error_message TEXT,
-                started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                finished_at TIMESTAMPTZ
-            );
+            SELECT run_id, rule_version, scope_type, scope_payload, snapshot_date,
+                   triggered_from, status, summary, error_message, started_at, finished_at
+            FROM qe_factor_rating_runs LIMIT 0
             """,
             """
-            CREATE TABLE IF NOT EXISTS qe_factor_official_ratings (
-                id BIGSERIAL PRIMARY KEY,
-                factor_catalog_id BIGINT NOT NULL REFERENCES aistock_factor_catalog(id) ON DELETE CASCADE,
-                rule_version TEXT NOT NULL REFERENCES qe_rating_rule_versions(rule_version) ON DELETE RESTRICT,
-                run_id TEXT NOT NULL REFERENCES qe_factor_rating_runs(run_id) ON DELETE CASCADE,
-                snapshot_date DATE,
-                official_score DOUBLE PRECISION NOT NULL,
-                official_grade TEXT NOT NULL,
-                dimension_scores JSONB NOT NULL DEFAULT '{}'::jsonb,
-                hard_gate_flags JSONB NOT NULL DEFAULT '{}'::jsonb,
-                grade_reason_structured JSONB NOT NULL DEFAULT '{}'::jsonb,
-                metrics_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
-                llm_audit_summary TEXT,
-                llm_risk_notes JSONB,
-                graded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE (factor_catalog_id, rule_version, snapshot_date)
-            );
+            SELECT id, factor_catalog_id, rule_version, run_id, snapshot_date,
+                   official_score, official_grade, dimension_scores, hard_gate_flags,
+                   grade_reason_structured, metrics_snapshot, llm_audit_summary,
+                   llm_risk_notes, graded_at
+            FROM qe_factor_official_ratings LIMIT 0
             """,
-            "CREATE INDEX IF NOT EXISTS idx_qe_factor_official_ratings_factor_version ON qe_factor_official_ratings(factor_catalog_id, rule_version);",
-            "CREATE INDEX IF NOT EXISTS idx_qe_factor_official_ratings_grade ON qe_factor_official_ratings(rule_version, official_grade);",
-            "CREATE INDEX IF NOT EXISTS idx_qe_factor_rating_runs_started_at ON qe_factor_rating_runs(started_at DESC);",
-        ]
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                for sql in ddl:
+        )
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                for sql in probes:
                     cur.execute(sql)
-        _SCHEMA_READY = True
+        except (UndefinedTable, UndefinedColumn) as exc:
+            raise RuntimeError(
+                "Factor rating schema is not provisioned or is incompatible; "
+                "apply the required schema migration separately with database authorization."
+            ) from exc
 
     def sync_rule_versions(self, force: bool = False) -> None:
         global _RULES_SYNCED
@@ -1265,8 +1239,8 @@ class FactorRatingService:
                 d_int = int(d)
                 if d_int in (-1, 0, 1):
                     return d_int
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Invalid official metric direction ignored: %s", exc)
         keys: List[str] = []
         best_horizon = full_metrics.get("best_horizon")
         if best_horizon is not None:
@@ -1274,8 +1248,8 @@ class FactorRatingService:
                 best_horizon_int = int(best_horizon)
                 if best_horizon_int in (1, 5, 10, 20):
                     keys.append(f"rank_ic_{best_horizon_int}d")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Invalid official metric best_horizon ignored: %s", exc)
         keys.extend(["rank_ic_mean", "ic_mean"])
         for key in keys:
             ic = full_metrics.get(key)
@@ -1337,16 +1311,16 @@ class FactorRatingService:
         if metrics.get("ic_mean") is not None:
             try:
                 values.append(abs(float(metrics["ic_mean"])))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Invalid core IC metric ignored: %s", exc)
         if best_horizon is not None:
             key = f"rank_ic_{int(best_horizon)}d"
             v = metrics.get(key)
             if v is not None:
                 try:
                     values.append(abs(float(v)))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Invalid best-horizon IC metric ignored: %s", exc)
         if not values:
             return None
         return max(values)
@@ -1515,8 +1489,8 @@ class FactorRatingService:
         if cluster_role and cluster_role in cluster_scores:
             try:
                 score += float(cluster_scores[cluster_role])
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Invalid configured cluster-role score ignored: %s", exc)
 
         sm = classification_meta.get("signal_mechanism")
         if sm and str(sm) != "unknown":
@@ -1537,8 +1511,8 @@ class FactorRatingService:
             try:
                 if abs(float(sec)) < 0.5:
                     score += float((sub.get("low_sector_exposure") or {}).get("max", 1))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Invalid sector-exposure score input ignored: %s", exc)
 
         return round(min(score, 15.0), 2)
 
