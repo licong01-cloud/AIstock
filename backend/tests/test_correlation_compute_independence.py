@@ -318,6 +318,70 @@ def test_target_correlation_refresh_fails_closed_when_reference_cache_is_missing
         svc.run_target_correlation_refresh_local(target_factor_name="target")
 
 
+@pytest.mark.parametrize("bad_target", [False, True, "no_compatible_reference"])
+def test_target_refresh_uses_per_factor_binding_not_promoted_snapshot(monkeypatch, tmp_path, bad_target):
+    from types import SimpleNamespace
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    binding = dict(status="ok", as_of_date="2026-08-31", factor_data_dir="/release/new/factors",
+                   moneyflow_unit_contract_version=svc.MONEYFLOW_UNIT_CONTRACT_VERSION,
+                   universe_key="aistock_equity_pit_canonical_v2", universe_rule_version="v2",
+                   universe_fingerprint_sha256="pit", index_policy="eligible", code_hash="current")
+    factors = {"target": binding, "good": dict(binding),
+               "old": dict(binding, factor_data_dir="/release/old/factors")}
+    if bad_target is True:
+        factors["target"] = dict(binding, code_hash="stale")
+    elif bad_target == "no_compatible_reference":
+        factors["good"] = dict(binding, code_hash="stale")
+    (tmp_path / "_meta.json").write_text(json.dumps({"factor_data_dir": "/release/old/factors", "factors": factors}))
+    (tmp_path / "single").mkdir()
+    dates = pd.bdate_range("2025-08-01", "2026-08-31")
+    index = pd.MultiIndex.from_product([dates, ["000001.SZ", "600000.SH"]], names=["datetime", "instrument"])
+    pd.DataFrame({"target": range(len(index))}, index=index).to_parquet(tmp_path / "single" / "target.parquet")
+    rows = [{"factor_name": name, "code_text_hash": "current"} for name in factors]
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda *_: None)
+    monkeypatch.setattr(svc, "_update_job_status", lambda *_: None)
+    monkeypatch.setenv("RDAGENT_FACTOR_DATA_WSL", binding["factor_data_dir"])
+    monkeypatch.setenv("QE_QLIB_DATA_PATH", "/release/new/bin")
+    monkeypatch.setattr(svc, "FactorEligibilityService", lambda: SimpleNamespace(list_eligible_factors=lambda **_: rows))
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: SimpleNamespace(_output_dir=tmp_path, get_cached_singles=lambda: rows))
+    monkeypatch.setattr(svc, "FactorUniverseMaskService", lambda: SimpleNamespace(metadata=lambda **_: binding))
+    loaded = []
+    def read(name, *_):
+        loaded.append(name)
+        return pd.DataFrame({name: range(len(index))}, index=index)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_loader", lambda **_: SimpleNamespace(_read_single_filtered=read))
+    monkeypatch.setattr(svc, "CorrelationEngine", lambda _: SimpleNamespace(compute_selected_submatrix=lambda *_a, **_k: SimpleNamespace(records=lambda: [{"candidate": "target", "reference": "good", "status": "available", "correlation": 0.5}])))
+    written = []
+    monkeypatch.setattr(svc, "_persist_target_correlations", lambda **kwargs: written.extend(kwargs["records"]) or len(kwargs["records"]))
+    if bad_target:
+        reason = "cache_code_hash_mismatch" if bad_target is True else "no compatible reference caches"
+        with pytest.raises(ValueError, match=reason):
+            svc.run_target_correlation_refresh_local(target_factor_name="target", as_of_date="2026-08-31")
+        assert not written and not loaded
+        return
+    result = svc.run_target_correlation_refresh_local(target_factor_name="target", as_of_date="2026-08-31")
+    assert loaded == ["target", "good"]
+    assert len(written) == 1
+    assert result["complete"] is False
+    assert result["written_pair_count"] + result["unavailable_pair_count"] == result["eligible_reference_count"] == 2
+    assert result["unavailable_pairs"][0]["reason"] == "cache_factor_data_dir_mismatch"
+
+
+@pytest.mark.parametrize("field", ["status", "as_of_date", "factor_data_dir", "moneyflow_unit_contract_version",
+                                   "universe_key", "universe_rule_version", "universe_fingerprint_sha256", "index_policy"])
+def test_target_cache_identity_missing_or_mismatched_is_explicit(field):
+    from backend.services.quantevolver.correlation_compute_service import _target_cache_mismatch
+    binding = {name: "value" for name in ("status", "as_of_date", "factor_data_dir", "moneyflow_unit_contract_version",
+                                         "universe_key", "universe_rule_version", "universe_fingerprint_sha256", "index_policy")}
+    item = dict(binding, code_hash="code")
+    assert _target_cache_mismatch(item, binding, "code") is None
+    item[field] = "different"
+    assert _target_cache_mismatch(item, binding, "code") == f"cache_{field}_mismatch"
+    del item[field]
+    assert _target_cache_mismatch(item, binding, "code") == f"cache_{field}_missing"
+
+
 def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
     from backend.services.quantevolver.factor_value_loader import _DEFAULT_PIPELINE_DIR
