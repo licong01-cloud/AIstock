@@ -227,11 +227,41 @@ def test_pull_request_workflows_use_shared_current_base_resolver() -> None:
     )
     for path in workflow_paths:
         source = path.read_text(encoding="utf-8")
-        yaml.safe_load(source)
-        assert "--prepare-pr-merge-base-only" in source
-        assert "github.event.pull_request.base.sha" in source
-        assert "github.event.pull_request.base.ref" in source or "github.base_ref" in source
-        assert "scripts/ci_changed_files.py" in source
+        from scripts.ci_workflow_policy_scan import has_event_bound_base_preparation
+        document = yaml.safe_load(source)
+        manual = path.name != "test.yml"
+        assert has_event_bound_base_preparation(source, manual=manual)
+        if manual:
+            assert "base_sha" in document.get("on", document.get(True))["workflow_dispatch"]["inputs"]
+
+
+@pytest.mark.parametrize("pinned", [False, True])
+def test_manual_event_compares_complete_branch_and_pins_identities(tmp_path: Path, pinned: bool) -> None:
+    repo, old_base, current_base, feature_head = _repo_with_stale_pr_base(tmp_path)
+    _git(repo, "remote", "add", "origin", str(repo))
+    _git(repo, "checkout", "feature")
+    prepared = prepare_pr_merge_base(
+        repo_root=repo, base_ref="main", base_sha=old_base if pinned else "",
+        checkout_ref="refs/heads/feature", source_head_sha=feature_head,
+        resolve_current_base=True,
+    )
+    assert prepared["base_commit"] == (old_base if pinned else current_base)
+    assert prepared["event_mode"] == "workflow_dispatch"
+    assert prepared["fetch_used"] is not pinned
+    changed, _ = build_changed_files(
+        repo_root=repo, base_ref="main", base_sha=str(prepared["base_commit"]), head_sha=feature_head,
+    )
+    assert changed == ["docs/hmm.md", "tests/aistock_validation/bugs/BUG.json"]
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"base_sha": "", "source_head_sha": ""},
+    {"base_sha": "main", "source_head_sha": ""},
+])
+def test_pr_event_still_rejects_missing_or_symbolic_base(tmp_path: Path, kwargs: dict) -> None:
+    repo, _, _, _ = _repo_with_stale_pr_base(tmp_path)
+    with pytest.raises(ChangedFilesError, match="base_sha must be"):
+        prepare_pr_merge_base(repo_root=repo, base_ref="main", checkout_ref="refs/heads/main", **kwargs)
 
 
 def test_main_ci_uses_one_pinned_source_diff_for_all_scope_consumers() -> None:
