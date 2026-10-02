@@ -44,7 +44,10 @@
     "production_apply": "noop",
     "activation": "BLOCKED：v15 manifest 仅绑定三字段执行股票池，未绑定正式五字段 FrozenPitSnapshot；投影为 5449 spans，与 DEV canonical 同截止 5658 spans 不同，97 frozen-only / 306 rolling-only。投影差异不冒充完整 PIT authority 差异；未签发独立 W8 PASS 或 READY_TO_ACTIVATE。",
     "parity_detail": "冻结选股 sidecar 为 5144 symbols。306 rolling-only 中 209 spans 对应冻结侧没有的 197 symbols，另 97 为已有股票区间差异；3 字段 eligibility projection 不冒充完整 5 字段 PIT 摘要，未擅自裁剪或补造。",
-    "source_delivery_status": "已按实际 import 图在正式 runtime catalog 精确登记四个 CLI-only 模块；完整变更集 runtime_impact=none。混入 canonical_equity_pit 保持 backend、candidate_validator 保持 worker_scheduler。源码 PR 待最终 gate；数据业务激活仍 BLOCKED。",
+    "source_delivery_status": "SOURCE_MERGED_BUSINESS_BLOCKED：PR #5293 已获授权合入，merge=2b7250e3467c1419e6faca41c5df2c702724a0ec；CI SUCCESS，main已fast-forward。精确离线运行角色已生效，不要求后端重启。实际冻结PIT迁移仍BLOCKED，Issue保持开放，不将源码交付当成数据激活。",
+    "source_merge_commit": "2b7250e3467c1419e6faca41c5df2c702724a0ec",
+    "source_pr": "https://github.com/licong01-cloud/AIstock/pull/5293",
+    "successor_scope": "接入既存9月唯一任务dmr_63a313d97fd046a38d5a876265565014；cutoff=2026-09-30。仅构建一个完整共享候选，保留v15，不伪装为8月历史候选。正式五字段PIT、六池、历史代码、消费者观测/预热、行情与共享行业权威均需闭合；从SOURCE实际证据推导组件动作，禁止只补JSON身份或扩池不验行情。",
     "formal_encoder_readback": "复用 pit.py 正式 FrozenPitSnapshot parser、canonicalize_pit_spans 与 pit_spans_sha256，支持 nullable reason 的 <NULL> 编码；不将逻辑摘要与文件字节 SHA 混用。",
     "review_rounds": [
       "第一轮身份审核：修复原始数组/文件 SHA 与正式逻辑 spans digest 混用；nullable reasons RED→GREEN，正式快照 count/cutoff/reason/authority 篡改 fail closed。",
@@ -270,6 +273,28 @@
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_ids": []
+  },
+  "source_merge_receipt": {
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "receipt_id": "6b79785dc0c7150c",
+    "bug_id": "BUG-1685",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5293",
+    "source_head_oid": "c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49",
+    "source_merge_commit": "2b7250e3467c1419e6faca41c5df2c702724a0ec",
+    "validation_evidence": [
+      "CI verdict SUCCESS; run=37012925468; head=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49",
+      "W6 43 passed; CI classifier 4 passed; catalog 16 passed"
+    ],
+    "validation_evidence_digest": "3c763fc440e9668b9d483ca864c95350ef75c38bac22fa61ef412b5acaebdca9",
+    "runtime_contract_digest": "abcdfefcbe9479797430832b2521e7df3fabcd1297bca3e1dabaafe38ca5f626",
+    "runtime_verification": "not_required",
+    "runtime_identity_match": "not_required",
+    "production_gates": {
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop",
+      "production_backend_dependency_gate": "noop"
+    },
+    "recorded_at": "2026-10-02T17:50:19.562767Z"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
