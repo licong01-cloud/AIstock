@@ -1360,13 +1360,60 @@ def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, A
         ):
             frozen_authority = authority["authority"]
             if (
-                frozen_authority.get("schema_version") != "hmm_risk_pit_mapping_manifest_v2"
+                frozen_authority.get("schema_version")
+                not in {"hmm_risk_pit_mapping_manifest_v2", "hmm_risk_pit_mapping_manifest_v3"}
                 or not _c010_valid_sha256(frozen_authority.get("classification_authority_receipt_hash"))
                 or not _c010_valid_sha256(frozen_authority.get("index_membership_authority_receipt_hash"))
                 or not str(frozen_authority.get("active_classification_basis") or "").strip()
                 or not isinstance(frozen_authority.get("non_as_known_taxonomy"), bool)
             ):
                 raise StateModelSetError("C-010 partition frozen industry PIT authority schema is invalid")
+            if frozen_authority["schema_version"] == "hmm_risk_pit_mapping_manifest_v3":
+                v3_hash_fields = {
+                    "source_classification_authority_receipt_hash",
+                    "classification_authority_receipt_hash",
+                    "index_membership_authority_receipt_hash",
+                    "classification_candidate_hash",
+                    "index_membership_candidate_hash",
+                    "candidate_bundle_hash",
+                    "candidate_preflight_canonical_hash",
+                    "research_basis_contract_sha256",
+                    "l1_code_projection_sha256",
+                    "l2_code_projection_sha256",
+                    "constituent_manifest_hash",
+                }
+                v3_fields = v3_hash_fields | {
+                    "schema_version",
+                    "universe_key",
+                    "source_window_start",
+                    "source_window_end",
+                    "canonical_l1_count",
+                    "canonical_l2_count",
+                    "stable_backcast_candidate_sha256",
+                    "active_classification_basis",
+                    "non_as_known_taxonomy",
+                }
+                backcast = frozen_authority.get("stable_backcast_candidate_sha256")
+                basis = frozen_authority.get("active_classification_basis")
+                if (
+                    set(frozen_authority) != v3_fields
+                    or any(not _c010_valid_sha256(frozen_authority.get(key)) for key in v3_hash_fields)
+                    or frozen_authority.get("canonical_l1_count") != 31
+                    or frozen_authority.get("canonical_l2_count") != 131
+                    or not str(frozen_authority.get("universe_key") or "").strip()
+                    or (backcast is not None and not _c010_valid_sha256(backcast))
+                    or basis not in {"as_published_pit", "stable_taxonomy_backcast"}
+                    or frozen_authority.get("non_as_known_taxonomy") is not (basis == "stable_taxonomy_backcast")
+                    or ((backcast is not None) != (basis == "stable_taxonomy_backcast"))
+                ):
+                    raise StateModelSetError("C-010 partition v3 industry PIT authority identity is invalid")
+                try:
+                    start = date.fromisoformat(frozen_authority["source_window_start"])
+                    end = date.fromisoformat(frozen_authority["source_window_end"])
+                except (TypeError, ValueError) as exc:
+                    raise StateModelSetError("C-010 partition v3 industry PIT source window is invalid") from exc
+                if not start <= train_start <= train_end <= end:
+                    raise StateModelSetError("C-010 partition v3 industry PIT source window is incomplete")
     entries = value.get("entries")
     if not isinstance(entries, list):
         raise StateModelSetError("C-010 provider-absence partition entries are missing")
