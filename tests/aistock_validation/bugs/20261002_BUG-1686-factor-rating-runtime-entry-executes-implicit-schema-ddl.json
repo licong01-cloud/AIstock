@@ -185,7 +185,9 @@
   },
   "validation_evidence": [
     "validation-receipt: id=3f4dadd1b46d42d6 commit=ab186783455267624edfee587805cba21abf13cd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
-    "validation-receipt: id=de4b3e79c4a7ffd1 commit=ab186783455267624edfee587805cba21abf13cd kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_factor_rating_service_schema.py -q` result=`passed, 8 tests`"
+    "validation-receipt: id=de4b3e79c4a7ffd1 commit=ab186783455267624edfee587805cba21abf13cd kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/quantevolver/test_factor_rating_service_schema.py -q` result=`passed, 8 tests`",
+    "python -m nox -s l0 -> passed, blocking=0",
+    "python -m nox -s qe_read_backend -> passed in CI run 37006500537, PR HEAD ab186783455267624edfee587805cba21abf13cd"
   ],
   "verification_budget": {
     "budget": "standard",
