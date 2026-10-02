@@ -34,20 +34,34 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_ci_changed_files.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/ci_changed_files.py",
       "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1677-shared-workflow-preflight-misses-ownership-event-and-semantic-contract-i.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/dependency-update-validate.yml",
       ".github/workflows/pr-quality.yml",
       ".github/workflows/semgrep.yml",
-      ".github/workflows/dependency-update-validate.yml",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "backend/tests/scripts/test_ci_changed_files.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/ci_changed_files.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1677-shared-workflow-preflight-misses-ownership-event-and-semantic-contract-i.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -245,10 +259,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
