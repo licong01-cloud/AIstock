@@ -46,6 +46,7 @@ def prepare_pr_merge_base(
     base_sha: str,
     checkout_ref: str,
     source_head_sha: str = "",
+    resolve_current_base: bool = False,
     attempts: int = 3,
     deepen_by: int = 64,
 ) -> dict[str, str | int | bool]:
@@ -58,7 +59,8 @@ def prepare_pr_merge_base(
     if not branch:
         raise ChangedFilesError("base_ref is empty")
     _git(root, "check-ref-format", "--branch", branch)
-    if not _FULL_SHA_RE.fullmatch(pinned_base):
+    resolve_manual_base = resolve_current_base and not pinned_base
+    if not _FULL_SHA_RE.fullmatch(pinned_base) and not resolve_manual_base:
         raise ChangedFilesError("base_sha must be a full Git commit identity")
     if not source_ref.startswith("refs/"):
         raise ChangedFilesError("checkout_ref must be an exact refs/* name")
@@ -67,6 +69,8 @@ def prepare_pr_merge_base(
     pinned_source = source_head_sha.strip().lower()
     if pinned_source and not _FULL_SHA_RE.fullmatch(pinned_source):
         raise ChangedFilesError("source_head_sha must be a full Git commit identity")
+    if resolve_current_base and pinned_source != head_commit:
+        raise ChangedFilesError("manual source_head_sha must match the checked-out HEAD")
 
     def ready() -> bool:
         try:
@@ -100,6 +104,8 @@ def prepare_pr_merge_base(
                 capture_output=True,
                 text=True,
             )
+            if result.returncode == 0 and resolve_manual_base and not pinned_base:
+                pinned_base = _commit(root, f"refs/remotes/origin/{branch}", "base_ref")
             if result.returncode == 0 and ready():
                 break
             if index + 1 < max(1, int(attempts)):
@@ -114,6 +120,7 @@ def prepare_pr_merge_base(
     merge_base = _git(root, "merge-base", pinned_base, source_commit).strip()
     return {
         "schema_version": "aistock_ci_pr_merge_base_preparation_v1",
+        "event_mode": "workflow_dispatch" if resolve_current_base else "pull_request",
         "base_commit": pinned_base,
         "head_commit": head_commit,
         "source_head_commit": source_commit,
@@ -210,6 +217,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--head-sha", default="HEAD")
     parser.add_argument("--diff-filter", default="")
     parser.add_argument("--prepare-pr-merge-base-only", action="store_true")
+    parser.add_argument("--prepare-manual-merge-base-only", action="store_true")
     parser.add_argument("--checkout-ref", default="")
     parser.add_argument("--source-head-sha", default="")
     return parser.parse_args()
@@ -218,13 +226,16 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        if args.prepare_pr_merge_base_only:
+        if args.prepare_pr_merge_base_only and args.prepare_manual_merge_base_only:
+            raise ChangedFilesError("choose exactly one preparation event mode")
+        if args.prepare_pr_merge_base_only or args.prepare_manual_merge_base_only:
             receipt = prepare_pr_merge_base(
                 repo_root=Path(args.repo_root),
                 base_ref=args.base_ref,
                 base_sha=args.base_sha,
                 checkout_ref=args.checkout_ref,
                 source_head_sha=args.source_head_sha,
+                resolve_current_base=args.prepare_manual_merge_base_only,
             )
             print(json.dumps(receipt, sort_keys=True))
             return 0

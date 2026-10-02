@@ -11,6 +11,7 @@ import yaml
 import noxfile
 from scripts.ci_workflow_policy_scan import (
     build_contract_evidence,
+    has_event_bound_base_preparation,
     scan_environment_contracts,
     scan_nox_text,
     scan_workflow_text,
@@ -33,6 +34,27 @@ def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary
     assert failure["env"]["L3_RESULT"] == "${{ needs.nightly-l3.result }}"
     assert failure["env"]["DR_RESULT"] == "${{ needs.dr-snapshot.result }}"
     assert failure["env"]["DR_VALIDATE_RESULT"] == "${{ needs.dr-validate.result }}"
+
+
+def test_policy_test_has_one_owner_matching_its_guardrail_source() -> None:
+    from backend.services.validation.file_ownership import FileOwnershipCatalog
+    catalog = FileOwnershipCatalog()
+    owner = catalog.match_path("backend/tests/scripts/test_ci_workflow_policy_scan.py")
+    assert owner.ownership_status == "mapped"
+    assert owner.primary_module == catalog.match_path("scripts/ci_workflow_policy_scan.py").primary_module
+
+
+@pytest.mark.parametrize("mutation", ["empty-base", "wrong-head", "pr-only-condition"])
+def test_manual_preparation_policy_rejects_event_input_regressions(mutation: str) -> None:
+    text = Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8")
+    assert has_event_bound_base_preparation(text, manual=True)
+    if mutation == "empty-base":
+        text = text.replace("inputs.base_sha", "github.event.pull_request.base.sha")
+    elif mutation == "wrong-head":
+        text = text.replace("SOURCE_HEAD_SHA: ${{ github.sha }}", "SOURCE_HEAD_SHA: ${{ github.event.before }}")
+    else:
+        text = text.replace("        id: quality_lane", "        if: github.event_name == 'pull_request'\n        id: quality_lane")
+    assert not has_event_bound_base_preparation(text, manual=True)
 
 
 def test_policy_scan_rejects_install_and_disposable_database() -> None:

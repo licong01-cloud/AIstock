@@ -580,6 +580,15 @@ rules:
     layer: backend_test
     risk_level: high
     ownership_reason: The classifier regression suite belongs to the same guardrail subsystem as its production classifier and overrides broader workflow-test catch-alls.
+  - rule_id: ci_workflow_policy_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_workflow_policy_scan.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Policy contract tests execute the guardrail-owned ci_workflow_policy_scan.py and override generic workflow test rules.
   - rule_id: mcp_gateway_platform
     priority: 90
     include:

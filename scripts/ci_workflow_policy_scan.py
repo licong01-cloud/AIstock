@@ -146,6 +146,36 @@ def _workflow_step_blocks(job_block: str) -> list[str]:
     return blocks
 
 
+def has_event_bound_base_preparation(text: str, *, manual: bool) -> bool:
+    """Check preparation step inputs, not unrelated strings elsewhere in a workflow."""
+    mode = "--prepare-manual-merge-base-only" if manual else "--prepare-pr-merge-base-only"
+    steps = [
+        step for job in _workflow_job_blocks(text) for step in _workflow_step_blocks(job)
+        if mode in step
+    ]
+    if len(steps) != 1:
+        return False
+    step = steps[0]
+    expected = {
+        "BASE_REF": "inputs.base_ref" if manual else "github.event.pull_request.base.ref",
+        "BASE_SHA": "inputs.base_sha" if manual else "github.event.pull_request.base.sha",
+        "SOURCE_HEAD_SHA": "github.sha" if manual else "github.event.pull_request.head.sha",
+        "CHECKOUT_REF": "github.ref",
+    }
+    for key, expression in expected.items():
+        match = re.search(rf"(?m)^          {key}:\s*(.+)$", step)
+        if not match or expression not in match.group(1):
+            return False
+    if manual and "github.event_name == 'pull_request'" in step:
+        return False
+    return all(
+        argument in step for argument in (
+            '--base-ref "${BASE_REF}"', '--base-sha "${BASE_SHA}"',
+            '--checkout-ref "${CHECKOUT_REF}"', '--source-head-sha "${SOURCE_HEAD_SHA}"',
+        )
+    )
+
+
 def _checkout_step_blocks(job_block: str) -> list[str]:
     return [block for block in _workflow_step_blocks(job_block) if CHECKOUT_ACTION_RE.search(block)]
 
@@ -548,7 +578,7 @@ def build_contract_evidence(
             for name in SUPERSEDED_RUN_WORKFLOWS
         ),
         "bounded_pr_base_fetch_retry": all(
-            "--prepare-pr-merge-base-only" in workflow_text.get(name, "")
+            has_event_bound_base_preparation(workflow_text.get(name, ""), manual=name != "test.yml")
             for name in BASE_FETCH_RETRY_WORKFLOWS
         )
         and "for index in range(max(1, int(attempts)))" in changed_files_text
