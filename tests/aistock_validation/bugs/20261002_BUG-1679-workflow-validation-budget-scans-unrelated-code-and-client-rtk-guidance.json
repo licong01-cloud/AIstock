@@ -1,6 +1,7 @@
 {
   "actual": "The workflow-only budget test reads all repository source despite requiring one module. Add explicit module filtering before content reads without changing the 30-percent limit or ownership denominator. Remove stale single-normal-runner wording and unsupported rtk nox examples through the authoritative client workflow; no global installs or unrelated client config edits.",
   "allowed_write_scope": [
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "scripts/aistock_validation_budget.py",
     "backend/tests/scripts/test_aistock_validation_budget.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
