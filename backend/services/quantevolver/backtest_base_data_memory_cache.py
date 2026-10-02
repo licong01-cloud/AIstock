@@ -96,6 +96,9 @@ class BacktestBaseDataMemoryCache:
                         "official margin_detail availability projection requires daily_pv.h5 trading calendar"
                     )
                 df = _project_margin_to_next_trading_day(df, trading_calendar)
+                # The index now denotes availability, not the source session.
+                # Factors with their own T-1 delay must not shift it again.
+                df.attrs["aistock_margin_availability"] = "next_trade_decision_date_v1"
             sliced_df = cache._slice_by_date(df)
             if name == _STATIC_DATA_FILE:
                 margin_columns = [

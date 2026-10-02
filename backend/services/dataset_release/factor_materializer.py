@@ -43,6 +43,7 @@ from .canonical import digest_named_fields, ensure_sha256
 from .canonical_stock_transformer import QfqDenominatorAuthority
 from .errors import DatasetReleaseError
 from .pit import FrozenPitSnapshot, filter_frame_to_pit_spans
+from .source_fact_history import SOURCE_HISTORY_CONTRACT, filter_source_fact_history
 from .streaming_artifacts import (
     ArtifactChunkTooLarge,
     ArtifactSchemaDrift,
@@ -158,6 +159,7 @@ FACTOR_H5_DENSITY_CONTRACTS: dict[str, str] = {
     dataset: ("dense_exact_pit_trading_day_keys_v1" if dataset == "daily_pv" else "sparse_unique_subset_of_pit_keys_v1")
     for dataset in FACTOR_H5_DATASETS
 }
+FACTOR_H5_DENSITY_CONTRACTS["daily_basic"] = SOURCE_HISTORY_CONTRACT
 FACTOR_SOURCE_SCHEMAS: dict[str, tuple[str, ...]] = {
     "daily_basic": tuple(_AUX_RENAMES["daily_basic"]),
     "moneyflow": tuple(MONEYFLOW_FIELD_MAP),
@@ -902,12 +904,18 @@ class FactorPartitionProducer:
                 read_chunk_rows=spec.row_group_rows,
             )
             frame = _normalize_aux_frame(raw_frame, dataset=dataset)
+            source_history = (
+                filter_source_fact_history(
+                    frame, codes=(span.ts_code for span in spec.pit_snapshot.spans),
+                    start=partition.start, end=partition.end,
+                ) if dataset == "daily_basic" else None
+            )
             frame, pit_receipts[dataset] = filter_frame_to_pit_spans(frame, spec.pit_snapshot)
             frame = frame.sort_index() if not frame.empty else frame
             artifact_frame = (
                 _moneyflow_source_identity_frame(frame, raw_frame)
                 if dataset == "moneyflow"
-                else frame
+                else source_history if source_history is not None else frame
             )
             static_frame, tail = _static_asof_frame(
                 dataset,
@@ -923,7 +931,11 @@ class FactorPartitionProducer:
                 source=dataset,
             )
             slow_tails[dataset] = tail
-            artifact_rows[dataset] = int(len(frame))
+            artifact_rows[dataset] = int(len(artifact_frame))
+            if source_history is not None:
+                pit_receipts[dataset]["source_history_contract"] = SOURCE_HISTORY_CONTRACT
+                pit_receipts[dataset]["source_history_rows"] = len(source_history)
+                pit_receipts[dataset]["outside_eligibility_fact_rows"] = len(source_history) - len(frame)
             artifact_receipts[dataset] = _write_produced_artifact(
                 working,
                 dataset=dataset,
@@ -937,7 +949,8 @@ class FactorPartitionProducer:
                 peak_retained_source_rows,
                 len(daily)
                 + sum(len(value) for value in retained_aux.values())
-                + (0 if dataset in retained_aux else len(frame)),
+                + (0 if dataset in retained_aux else len(frame))
+                + (len(source_history) if source_history is not None else 0),
             )
             if peak_retained_source_rows > spec.max_source_partition_rows * 4:
                 raise FactorMaterializationError("factor retained source rows exceed hard memory contract")

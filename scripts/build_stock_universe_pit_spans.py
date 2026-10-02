@@ -149,6 +149,19 @@ def _db_config() -> dict[str, Any]:
     }
 
 
+def _require_existing_tables(conn: Any) -> None:
+    """Validate the DML target without running schema or catalog bootstrap."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT to_regclass('market.stock_universe_pit_spans'), "
+            "to_regclass('market.stock_universe_pit_events')"
+        )
+        row = cur.fetchone()
+        if not row or len(row) != 2 or any(value is None for value in row):
+            raise RuntimeError("PIT schema contract is missing; schema bootstrap is disabled")
+
+
 def _ensure_tables(conn: Any) -> None:
     with conn.cursor() as cur:
         cur.execute("CREATE SCHEMA IF NOT EXISTS market;")
@@ -1432,6 +1445,9 @@ def _write_all_txt(path: Path, spans: Iterable[SpanRow]) -> None:
 
 
 def build(args: argparse.Namespace) -> dict[str, Any]:
+    existing_schema_only = getattr(args, "existing_schema_only", False)
+    if not isinstance(existing_schema_only, bool):
+        raise ValueError("existing_schema_only must be boolean")
     start_date = _parse_date(args.start_date)
     end_date = _parse_date(args.end_date) or dt.date.today()
     write_mode = getattr(args, "write_mode", "replace") or "replace"
@@ -1468,7 +1484,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     canonical_scope = scope == CANONICAL_PIT_SCOPE
 
     with psycopg2.connect(**_db_config()) as conn:
-        _ensure_tables(conn)
+        if existing_schema_only:
+            _require_existing_tables(conn)
+        else:
+            _ensure_tables(conn)
         scope_counts = _load_stock_basic_scope_counts(conn, active_as_of=end_date)
         stocks = _load_stock_basic(conn, active_only=st_only_active, active_as_of=end_date)
         exception_ledger = audit_canonical_stock_lifecycle(stocks) if canonical_scope else None
@@ -1657,6 +1676,7 @@ def main() -> None:
     )
     parser.add_argument("--reports-dir", default=str(PROJECT_ROOT / "reports" / "stock_universe_pit"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--existing-schema-only", action="store_true", help="Reject missing PIT schema; never bootstrap DDL")
     parser.add_argument("--write-all-txt", action="store_true")
     parser.add_argument("--write-mode", choices=["replace", "incremental"], default="replace")
     parser.add_argument("--incremental-from")
