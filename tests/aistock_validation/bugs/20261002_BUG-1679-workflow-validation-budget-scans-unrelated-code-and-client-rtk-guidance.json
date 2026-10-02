@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1679",
-  "closed_at": null,
+  "closed_at": "2026-10-02T05:57:32Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -126,8 +126,8 @@
   },
   "first_seen_at": "2026-10-02T05:22:16.534811Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "261a46b9c0f7df9a2beb8d400b3b8a58981f82a9",
+  "fixed_at": "2026-10-02T05:57:32Z",
   "github_issue_number": 5262,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5262",
   "last_seen_at": "2026-10-02T05:22:16.534811Z",
@@ -135,6 +135,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5264",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -153,6 +154,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -162,7 +164,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -171,6 +173,10 @@
     "fingerprint": "58e65b398d202d7f77049ce5",
     "source_event_id": "FE-20261002-58e65b398d20"
   },
+  "validation_evidence": [
+    "validation-receipt: id=76cb48a98c1ca4ac commit=80fb0d5ffc35b0b2dfc325afac53492a4de928d6 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed; 16 tests; findings=0`",
+    "validation-receipt: id=9576661f2e691b35 commit=80fb0d5ffc35b0b2dfc325afac53492a4de928d6 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_validation_budget.py -q` result=`8 passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
