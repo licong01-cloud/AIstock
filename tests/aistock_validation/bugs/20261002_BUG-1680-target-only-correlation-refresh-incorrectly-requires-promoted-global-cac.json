@@ -9,6 +9,22 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1680",
+  "post_restart_business_evidence": {
+    "observed_backend_identity": "f031502f9dc2ba35092ea13af95fcadc8887ec62",
+    "contains_source_merge_8673d433": true,
+    "bound_metrics_smoke": "passed, new corrected batch 9e622aba-7e46-4a14-8c03-aaab33dfc3bd",
+    "classification": "passed: MF/money_flow, analyzed 2026-10-02 19:29:46+08:00",
+    "target_correlation_dispatch": "84e632f3-6a65-4b97-a076-9673793af32f",
+    "target_correlation_result": "failed before SQL writes: rolling PIT fingerprint advanced after historical cache generation",
+    "followup_binding_fix": "BUG-1684 / Issue #5280 / PR #5284 merged d584377e933ef855e7960b4e381df2e658aee798",
+    "eligible_reference_metadata_preflight": {"expected": 595, "compatible": 0, "different_factor_data_dir": 480, "missing_status": 115},
+    "reference_cache_refresh": "not_authorized: current production scope only ID1545",
+    "rating_refresh": "not_run: normal entry may execute production schema bootstrap; old grade not treated as refreshed",
+    "closure": "not_complete: metrics HTTP success alone is not correlation business proof",
+    "production_ddl_gate": "noop",
+    "dataset_modification": false,
+    "service_control": false
+  },
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
