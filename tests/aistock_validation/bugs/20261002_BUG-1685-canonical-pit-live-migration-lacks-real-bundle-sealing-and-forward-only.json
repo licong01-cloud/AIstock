@@ -1,0 +1,362 @@
+{
+  "actual": "Canonical PIT target is ready through 2026-09-30 but current bundle producer accepts fixture only. Add real immutable asset readback and independent rolling/frozen parity; prepare DEV forward-only profiles through owning APIs without modifying old activations or native leases. Initial audit found v15 frozen 5449 spans versus DEV clipped 5658, 97 frozen-only and 306 DB-only; real sealing must remain blocked on actual drift, never claim fixture PASS. Production, global profile and services untouched.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+    "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+    "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+    "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "backend/services/dataset_release/canonical_pit_migration.py",
+    "scripts/prepare_canonical_pit_activation.py",
+    "tests/aistock_validation/bugs/20261002_BUG-1685-canonical-pit-live-migration-lacks-real-bundle-sealing-and-forward-only.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1685",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-02T11:51:28.418069Z",
+  "description": "Canonical PIT target is ready through 2026-09-30 but current bundle producer accepts fixture only. Add real immutable asset readback and independent rolling/frozen parity; prepare DEV forward-only profiles through owning APIs without modifying old activations or native leases. Initial audit found v15 frozen 5449 spans versus DEV clipped 5658, 97 frozen-only and 306 DB-only; real sealing must remain blocked on actual drift, never claim fixture PASS. Production, global profile and services untouched.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261002-d718abe99b18",
+      "timestamp": "2026-10-02T11:51:28.418069Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/business-data-audit-20261002/pit-dev-migration-preflight.json"
+  ],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/dataset_release/canonical_pit_migration.py",
+      "scripts/prepare_canonical_pit_activation.py"
+    ],
+    "changed_files": [
+      "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+      "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+      "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+        "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+        "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+        "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+        "noxfile.py",
+        "scripts/ci_change_classifier.py",
+        "backend/services/dataset_release/canonical_pit_migration.py",
+        "scripts/prepare_canonical_pit_activation.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "validation.runner",
+        "validation.center",
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend",
+        "platform.config",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "scripts/ci_change_classifier.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/services/dataset_release/canonical_pit_migration.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/prepare_canonical_pit_activation.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+        "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+        "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+        "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+        "noxfile.py",
+        "scripts/ci_change_classifier.py",
+        "backend/services/dataset_release/canonical_pit_migration.py",
+        "scripts/prepare_canonical_pit_activation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+      "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+      "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "backend/services/dataset_release/canonical_pit_migration.py",
+      "scripts/prepare_canonical_pit_activation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
+      "backend/services/dataset_release/canonical_pit_w8_attestation.py",
+      "backend/services/dataset_release/canonical_pit_activation_envelope.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "backend/services/dataset_release/canonical_pit_migration.py",
+      "scripts/prepare_canonical_pit_activation.py"
+    ]
+  },
+  "first_seen_at": "2026-10-02T11:51:28.418069Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5285,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5285",
+  "last_seen_at": "2026-10-02T11:51:28.418069Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "qlib_data_backend",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Canonical PIT live migration lacks real bundle sealing and forward-only DEV preparation",
+  "trigger_condition": {
+    "fingerprint": "d718abe99b185385c3488b5a",
+    "source_event_id": "FE-20261002-d718abe99b18"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
