@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.78
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.79
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-03
@@ -7,6 +7,7 @@
 > 当前价格/执行边界：Advisory只研发日频PIT价格分布、条件式买入价值和日频退出价值建议，不研发分钟线择时、最佳分钟买卖点、拆单或成交执行策略。收益型建议与开盘分布采用独立目标和证据，不以coverage证明盈利。未来QE、Paper或Execution可通过版本化只读合同独立消费建议，但执行研发和激活仍不属于本蓝图。
 > 最新接续：2026-10-02用户批准按调整后目标开始超过10小时长任务，计划12～16小时按§16.1顺序执行。20日恢复证据均非原生、其中三日完整成员未证明；完整候选和日期不变。新的[收益型买入设计](advisory_economic_entry_value_v1_f2_design_20261002.md)先明确价格条件化净价值、风险、真实观察点、支持域和matched比较，不以重新命名旧M4完成业务目标。
 > 2026-10-03当前接续：十小时任务已交付四字段F1 PR #5301、十三字段设计PR #5303，并实现六叶模块离线源码及一次真实study `advinfo_153e00c8509484155d3c8ae0`。同eligible九字段/十三字段2配置4头、1candidate，100日名义净收益9.6268%/19.0748%，baseline19.1729%；十三相对baseline日增量-0.1545bps、95%区间跨零，仍EXPLORATORY_NOT_CONFIRMED/NAVIGATION_ONLY。27笔实际模型TAKE（16正收益）与8笔UNKNOWN基线控制分开；不是独立OOS、沪深300超额或真实成交。旧消费者六项实际浏览器验收仍缺专用runner、尚未PR/合入；每日新family分派与原生资格另行交付，不以研究替代UI。完整实施证据见[十三字段设计§13](advisory_economic_entry_information_v4_f2_design_20261003.md)。旧v3及原生身份限制不改判，sealed/新binding/DB写入/服务控制均0。
+> 2026-10-03后续事实：离线源码PR #5304已经合入`dd92ba849b59a8ee5c80fd051e598f1f83ba009d`，必需CI run37070978918全绿，main ff-only/clean。当前新增[只读模型消费F1](advisory_information_v4_readonly_bundle_f1_20261003.md)独立验证已发布模型/阶段/registry，而非重入训练；普通CRLF树已读回原81D/1620行预测一致，14定向测试通过（含并发权重变更拒绝）。旧训练/续跑实现字节门禁不改，当前scope继续NAV/unproven/nondeploy；模型消费能力不等于每日API/UI或经济激活。精确研究树及旧未合入消费者树分别保留，不覆盖旧工件。
 > 2026-10-02风险接续：v2风险/每日身份设计PR #5233合入19719beb；独立标签审计及D网格内核27直接测试和L0通过，真实prepare保留7720条原候选。31条进入/退出开盘可执行性未证明，使原train/validation eligible变化22/2，因此按已审定合同停止旧return权重复用，新增研究模型0，不能声称v2模型失败或有效。后续优先显式审定同一entry-loss目标下双头eligible一致的新拟合方案，再做一次固定导航；日常API/UI尚未实现。无新alpha研究/数据库/服务操作，旧结果与原生身份限制不变。
 > 2026-10-02当前实施：v2内核PR #5242已合入ea659553；[一致监督集合双头v3设计](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)PR #5245已合入d638dc3d，离线源码多轮审核与唯一真实候选导航已完成。Top5 TAKE27/SKIP368/UNKNOWN10；实际模型进入16笔（10盈利），UNKNOWN控制9笔。模型/基线名义收益9.63%/19.17%、MDD -5.26%/-10.23%，配对日增量-8.888bps、固定block95%区间[-29.3835,12.0840]。有干预但增量未通过，停止本candidate、不改800/参数/窗口，不激活；完整经济D网格/API/UI仍待独立实施。旧v1模型TAKE0和v2复用generated0不改判。
 > 当前能力基线：Top5、收益/周期、价格范围和页面/API 均有真实实现与独立验证，但尚无当前同时提供四类输出的组合bundle。`AdvisoryDailyPriceEnvelopeV1`源码、v3三头真实训练 artifact `30e8a75b...` 和 v4 validation-only 校准 artifact `508fedfe...` 均已完成；validation/test 覆盖率分别为 `0.811702/0.733125`，校准扩张量为 0。PR #4732 / merge `3be76e742...` 已交付独立自然前向收集通道；首次正式 request `advprpros_405d704a7dbe866eb0b6ae0e` 和 prediction bundle `631d5011858684403d84d1d0975ec0e0642c1d8f52ebd62048829187a1e5435c` 在 T=`2026-09-15` 开盘前完成，20/20候选可用并通过exact retry，且零目标结果访问、零binding、零数据库写入、零sealed holdout消费。T日18:00后自然settlement `advprsett_14c46af1fa2bdb92088b425c` 已发布：20/20市场及模型可用，业务coverage `0.70`、lower/upper miss `0.25/0.05`、平均/中位宽度 `288.615/249.832 bps`、平均/中位mid误差 `116.422/63.188 bps`；单日只进入`ACCUMULATING`，不能选择或激活模型。PR #4785 / merge `8021790ab...` 又交付固定rolling-20D matured CQR历史导航审计；正式 request `advpradapt_8c81ea2bd2f70d75e1683fe9` 在已消费80日回放上selected=0，故保持静态v4、零新binding和零运行时激活，P0-D exact descriptor仍只绑定meta-label shadow，M3/M4 child typed unavailable。
@@ -1953,7 +1954,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 新模型推理仍需exact包候选及实际103特征。遇上游缺失只报告最小依赖给所属窗口；不修改QE/Selection公共代码。ENTRY_PRICE未确认为任何新包/新股票池可用前，其状态保持typed unavailable。
 
-2026-10-03路线优先级补充（当前事实，以上2026-10-02各检查点保留为历史状态）：①完成六叶模块v4离线源码多轮审核/CI/独立PR交付，记录一次NAV尚未形成可靠超额确认的结果，旧工件不覆盖；②旧经济消费者六场景真实UI验收有专用入口后完成独立PR，缺入口只暂停该动作，不借公共平台修复；③依§7另登记新family每日bundle/source/inference显式消费，验证十三/九严格隔离及D网格一致性；④训练/daily temporal parity、原生来源/合法未消费窗口具备后再规划独立经济确认，当前不等待固定实盘日期。最多一条价格研究主线，不重跑旧Exit/Alpha、不搜800/coverage阈值、不为凑十小时等待或归档。新信息使旧模型改善但尚无可靠基线超额，优先真实业务消费，不因导航结果自动启用或加开同族搜索。
+2026-10-03路线优先级补充（当前事实，以上2026-10-02各检查点保留为历史状态）：①离线v4 #5304已交付，推进独立只读bundle的F1交付，解除普通checkout读取权重对旧producer字节的错误耦合，不放宽训练门禁；②旧经济消费者六场景真实UI验收有专用入口后完成独立PR，缺入口只暂停该动作，不借公共平台修复；③按独立每日消费详细方案登记新family source/inference显式消费，复用法规网格小helper、验证十三/九严格隔离及D网格一致性，不带未验收旧F2偷渡合入；④训练/daily temporal parity、原生来源/合法未消费窗口具备后再规划独立经济确认，当前不等待固定实盘日期。最多一条价格研究主线，不重跑旧Exit/Alpha、不搜800/coverage阈值、不为凑十小时等待或归档。新信息使旧模型改善但尚无可靠基线超额，优先真实业务消费，不因导航结果自动启用或加开同族搜索。
 
 ### 16.2 被动观察（零研发排期）
 
