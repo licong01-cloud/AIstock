@@ -930,6 +930,28 @@ def test_runtime_contract_blocks_on_catalog_validation_error(invalid_runtime_cat
     assert contract["pre_pr_ready"] is False
 
 
+@pytest.mark.parametrize("path,registered", [
+    ("/api/v1/audit-unregistered-contract", False),
+    ("/api/v1/factor-metrics/results", True),
+])
+def test_runtime_preflight_checks_semantic_registration_without_http(path, registered) -> None:
+    root = workflow.REPO_ROOT
+    runbook = next((root / "docs/operations").glob("*.md")).relative_to(root).as_posix()
+    contract = workflow.build_runtime_contract(
+        record={"runtime_contract": {
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "operator_runbook_ref": runbook,
+            "identity_ref": "http://127.0.0.1:8001/api/v1/runtime/identity",
+            "business_smoke_ref": "http://127.0.0.1:8001" + path,
+            "fresh_process_evidence": ["synthetic-contract-presence-only"],
+        }},
+        changed_files=["backend/main.py"],
+    )
+    semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
+    assert bool(semantic_errors) is not registered
+    assert contract["pre_pr_ready"] is registered
+
+
 def test_bug_1549_active_contract_consumers_remain_backend_main() -> None:
     payload = workflow._classify_runtime_impact(
         [
