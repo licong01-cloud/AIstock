@@ -371,8 +371,22 @@ def _missing_row_evidence(row: Mapping[str, Any], fields: Sequence[str]) -> dict
         if isinstance(provider_absence, Mapping):
             evidence["moneyflow_provider_absence"] = dict(provider_absence)
     if "prev_circ_mv_cny" in fields:
-        evidence["circ_mv_source_date"] = row.get("circ_mv_source_date")
+        source_date = row.get("circ_mv_source_date")
+        evidence["circ_mv_source_date"] = source_date.isoformat() if isinstance(source_date, date) else source_date
         evidence["circ_mv_staleness_trading_days"] = row.get("circ_mv_staleness_trading_days")
+        # Keep the reader's authoritative cause, including latest-invalid facts.
+        # Legacy callers need not provide lineage; absence must not invent a status.
+        for key in (
+            "circ_mv_fact_status",
+            "circ_mv_reason_code",
+            "circ_mv_history_start",
+            "circ_mv_pit_eligible_start",
+            "circ_mv_crossed_pit_entry_boundary",
+            "circ_mv_lookback_contract_version",
+        ):
+            if key in row:
+                value = row[key]
+                evidence[key] = value.isoformat() if isinstance(value, date) else value
     return evidence
 
 

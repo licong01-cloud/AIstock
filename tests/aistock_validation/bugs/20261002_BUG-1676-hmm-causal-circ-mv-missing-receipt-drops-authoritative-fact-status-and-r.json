@@ -100,7 +100,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview",
+    "fresh_process_evidence": [
+      "PYTHONPATH=BUG-1676 task worktree C:/Users/lc999/miniconda3/python.exe - (PowerShell here-string) -> PASS: stock_fact_observation, backend.routers.hmm_risk and backend.routers.health loaded from own worktree; socket.connect/create_connection and psycopg2.connect poisoned; supplied source_unavailable cause retained and strict JSON readback passed; source SHA256=783b15691d3eec611965c27971e934d9f5c08fde07024da30e5fdcece218809d"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -171,6 +177,29 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "fix_summary": {
+    "root_cause": "共享 HMM 缺数回执仅保留 source_date/staleness，丢失 reader 提供的 circ_mv fact status、reason 和来源窗口/PIT 边界；原始 date 对象也无法通过严格 JSON 序列化。",
+    "persistent_fix": "仅在 prev_circ_mv_cny 缺数时保留已提供的 cause/lineage，将日期规范为 ISO 日期；旧调用者不制造新的 status。",
+    "behavior_preserved": "缺数仍为 ObservationCoverageError/NA，保留成员分母；后续真实有效日期恢复。禁止旧值回退、窗口外事实、BLOCKED candidate、补零和默认值。",
+    "review_rounds": [
+      "第一轮：6 个 cause/lineage RED 用例转 GREEN；正式与 legacy 路径均保留原因，成员不被删除，后续真实权重恢复。",
+      "第二轮：发现 date 回执序列化风险，增加严格 JSON RED 用例并修复至 GREEN；未引入 permissive default 或新业务门禁。",
+      "第三轮：核对最终 diff、消费者、fail-closed、写入范围和 DESIGN-COMPLIANCE-001，未发现阻断问题。"
+    ],
+    "design_compliance": {
+      "no_simplified_delivery": "仅声明缺数原因链修复，不声明 v17 preflight 或正式模型验收通过。",
+      "no_silent_error": "source_unavailable/latest-invalid 原因保留；未知权重仍抛错；JSON 严格序列化测试通过。",
+      "no_business_logic_drift": "模型、特征、窗口、seed、阈值、PIT 和 C-010 分母逻辑不变。",
+      "no_unapproved_gate": "未新增门禁或审批，仅修复现有回执信息保真。"
+    },
+    "remaining_data_boundary": "v17 候选当前 BLOCKED；000792.SZ/2021-08-10 在批准来源窗口内无严格更早 circ_mv 事实。不改写候选或扩大窗口。",
+    "runtime_validation_boundary": "fresh-process 修复点验证与 router/health 导入为源码证据；rotation-l2 overview 为重启后产品回归探针，不冒充缺数回执本身的线上证据。重启及 post-restart 验证待用户。",
+    "database_write": false,
+    "dataset_write": false,
+    "active_profile_write": false,
+    "training_action": false,
+    "process_control": false
+  },
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
