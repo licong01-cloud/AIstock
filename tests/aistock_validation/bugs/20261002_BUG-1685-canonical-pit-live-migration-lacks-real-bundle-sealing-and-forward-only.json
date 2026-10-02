@@ -275,9 +275,9 @@
     "target_ids": []
   },
   "validation_evidence": [
-    "validation-receipt: id=2176f1e080fe2dca commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=pytest plan=direct status=passed command=python -m pytest backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q result=passed",
-    "validation-receipt: id=da096692559ef263 commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=nox plan=guardrail_changed_files status=passed command=python -m nox -s guardrail_changed_files --no-venv -- --changed-only result=passed",
-    "validation-receipt: id=f2cb1263fe204ddf commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=nox plan=validation_catalog_integrity status=passed command=python -m nox -s validation_catalog_integrity --no-venv result=passed"
+    "validation-receipt: id=2176f1e080fe2dca commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q` result=`passed`",
+    "validation-receipt: id=da096692559ef263 commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files --no-venv -- --changed-only` result=`passed`",
+    "validation-receipt: id=f2cb1263fe204ddf commit=c3a3a9857f6d0b7ea6dc0cd0120e1e1979cd2f49 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity --no-venv` result=`passed`"
   ],
   "source_merge_receipt": {
     "schema_version": "aistock_source_merge_receipt_v1",
