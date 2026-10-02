@@ -1,6 +1,7 @@
 {
   "actual": "2026-10-02 read-only audit reproduced three shared preflight inconsistencies: policy test has ambiguous ownership, manual PR Quality passes an empty PR base SHA, and an unregistered HTTP business smoke contract passes runtime preflight until post-restart. Fix shared event identities and semantic-contract presence, replace weak event assertions, preserve fail-closed and avoid business changes.",
   "allowed_write_scope": [
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "scripts/aistock_issue_workflow.py",
     "scripts/ci_changed_files.py",
     "scripts/ci_workflow_policy_scan.py",
