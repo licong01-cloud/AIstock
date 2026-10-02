@@ -14,7 +14,27 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-02T11:34:32.143836Z",
-  "description": "Production drift incorrectly invalidates the already-computed target before any SQL write.",
+  "description": "ID1545 target correlation dispatch 84e632f3-6a65-4b97-a076-9673793af32f failed before SQL writes: cache_universe_fingerprint_sha256_mismatch. Cache records Aug31 PIT a8015d9119b5, while rolling production PIT advanced to Sep30 with fingerprint 951f99260b2e. Bind target/reference correlation to recorded official cache identities at the requested cutoff, not live PIT; preserve code/profile/unit/rule/index checks and target-only transaction. Refs BUG-1680 Issue #5265 and BUG-1662 Issue #5217. No factor cache, dataset, PIT, original ID1341 or unrelated correlation rewrite.",
+  "review_evidence": [
+    "第一轮：RED 六个用例均在访问滚动 PIT 时失败；修复后 45 个合同测试通过；目标缺失身份、源码不符、规则不符继续拒绝写入，参考 PIT 不同明确 unavailable。",
+    "第二轮：只改历史缓存绑定，不改 SQL/writer/transaction、计算公式、股票范围或其他缓存；252 日窗口和分母闭合仍保留，未移除参考身份比较。",
+    "第三轮 DESIGN-COMPLIANCE-001：非简化/占位交付；部分配对显式 complete=false；未改变交易或因子语义；未新增门禁审批。Windows 3.13.5 / WSL 3.10.19 合成 fresh-process 均通过真实引擎；禁止 live PIT 和 DB 访问。生产配对刷新及 runtime 正式复验分别报告，不以 metrics HTTP 200 冒充完成。"
+  ],
+  "runtime_contract": {
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "runtime_impact": "backend",
+    "backend_restart_owner": "user",
+    "target_id": "backend-main",
+    "target_ids": ["backend-main"],
+    "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=9e622aba-7e46-4a14-8c03-aaab33dfc3bd&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "business_smoke_limitation": "Bound metrics readback is availability evidence only. Closure also requires historical target correlation to succeed without live PIT access and to disclose incompatible references/denominator; not full-library completion.",
+    "fresh_process_evidence": ["Windows Python 3.13.5 and WSL Ubuntu rdagent-gpu Python 3.10.19 loaded the BUG-1684 task worktree in fresh processes; actual correlation engine wrote one synthetic pair to stub and classified one different-PIT reference unavailable, denominator 2; live PIT and DB access forbidden. Zero production writes, dependencies or service control."],
+    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "pending_user_restart"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
