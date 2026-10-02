@@ -1959,6 +1959,8 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 当前追加源码审核检查点：确认consumer已实现已有N0合同/access/canonical consume-once收据的只读核验、同frontier换experiment拒绝、固定开发block功效重算与原TRAINED真实可用时钟，55定向测试通过（30.07秒；2项既有其它模块警告未越界修复）。真实旧bundle读回再次通过且model/batch hash不变；没有新确认、收益/sealed读取或数据激活，实际模型负增量不变。功效输入和确认producer的真实性/授权仍是后续独立步骤，不把合成确认链当业务通过。本地验证提交`d79d52254aa24fa2965cc5cd07e43dc0c1a00e08`已建立源码HEAD，未push/PR/合入；随后定点修复前端矛盾响应拒绝，四根TS类型/语法再次零错误、六场景重新收集，浏览器仍未运行。该修复不改模型判定或经济门槛；PARTIAL_UNKNOWN的零已知/执行未知合法组合保留。每日设计§13逐项区分源码/功能/展示/正式依赖，不把设计结构PASS或研究证据作为完整F2通过。六场景需只Advisory、无DB/后端启动/依赖安装、临时X的runner，现有generic Paper计划不满足精确边界；只提给验证所属窗口，不改公共平台。worktree main base为`6a63612aa485d9287691916741e05268f1c15ed3`；新增主线#5156/#5255仅QE标签和数据发布路径，无直接Advisory改动，后续正式集成再核对最新main，不由本窗口修改其公共源码。
 
+后续展示修复本地提交`26ad4cb4b3de1e34a8755ac5fe594443ee5b658a`后，消费者原生archive入口继续完成声明/实际size前置检查（同确认reader 32 MiB预算）并移除重复hash，公共Selection校验保留且源码不改；原生/合法空名单2个直接节点两轮通过，最终6.24秒，超限/size漂移提前拒绝、等长篡改仍被SHA拒绝，均不读行情。未重跑55项全套、不新增trial、不改旧81日产物或经济结论。验证中心当前实时catalog也没有Advisory专用UI runner，首次确认producer仍按独立获批设计留待后续，不在本轮扩成sealed研究运行。
+
 ### 16.2 被动观察（零研发排期）
 
 - 基线/P0-D自然observation继续由既有调度形成；价格独立CLI截至2026-09-28仅核验1日20行。EP4每日源码已加载，但ENTRY_PRICE未配置，当前没有该角色的自动价格积累；旧P0-D observation不得算入其确认。

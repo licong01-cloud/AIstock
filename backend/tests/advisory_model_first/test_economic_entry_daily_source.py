@@ -325,8 +325,30 @@ def test_native_reader_preserves_original_archive_and_one_readonly_snapshot(tmp_
     assert result["candidate_receipt"]["pit_generation_checked_at"] == "READONLY_SNAPSHOT_NOT_FRESH_POST_READ"
     assert result["source_members"] == members and result["selection_run_id"] == selection.run_id
     assert result["candidate_receipt"]["model_scope_qualified"] is False and result["candidate_receipt"]["native_receipt_created"] is False
+    from backend.services.selection_center import advisory_input_archive as archive_module
+    real_archive_reader = archive_module.validate_archive_reference
+    def must_not_read(*args, **kwargs):
+        pytest.fail("oversized or size-mismatched archive reached the public byte reader")
+    monkeypatch.setattr(archive_module, "validate_archive_reference", must_not_read)
+    oversized = {**reference, "reference": {**reference["reference"], "size_bytes": 33554433}}
+    selection.runtime_config["advisory_frozen_input_archive"] = oversized
+    version["summary_json"]["advisory_frozen_input_archive"] = oversized
+    with pytest.raises(AdvisoryModelFirstError, match="metadata size budget"):
+        source.load_day(program_id="unit-program", binding_version_id="unit-binding", target_date=T, projection=projection)
+    selection.runtime_config["advisory_frozen_input_archive"] = reference
+    version["summary_json"]["advisory_frozen_input_archive"] = reference
     archive_file.write_text(json.dumps({**payload, "full_source_universe_members": [members[0]]}), encoding="utf-8")
     with pytest.raises(AdvisoryModelFirstError, match="source identity changed"):
+        source.load_day(program_id="unit-program", binding_version_id="unit-binding", target_date=T, projection=projection)
+    # Removing the redundant private hash pass must not weaken content identity:
+    # equal-size tampering still fails in the retained public reader before quotes.
+    monkeypatch.setattr(archive_module, "validate_archive_reference", real_archive_reader)
+    raw = json.dumps(payload).encode("utf-8")
+    changed = raw.replace(b"unit-program", b"evil-program")
+    assert len(changed) == len(raw) and changed != raw
+    archive_file.write_bytes(changed)
+    from backend.services.trading_core.errors import RuntimeConfigInvalidError
+    with pytest.raises(RuntimeConfigInvalidError, match="file/run hash differs"):
         source.load_day(program_id="unit-program", binding_version_id="unit-binding", target_date=T, projection=projection)
     assert quote_loads == [0 if empty else 1]
 

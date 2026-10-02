@@ -96,6 +96,8 @@ power不是CONFIRMATORY字符串或自报整数：protocol内固定`DEVELOPMENT_
 
 日常自动捕获复用既有`AdvisoryForwardService`每轮完成后的辅助收集hook，新增独立entry_value结果；只扩展该Advisory service的依赖及完成后调用，不改scheduler生命周期/main启动。未配置合格角色时零行情查询/零产物发布；默认不启用，不根据本次负结果开启。配置后按真实D/T和原生已冻结名单捕获，候选未就绪/错过盘前时钟为DEFERRED/UNAVAILABLE，不能重选或倒填。新角色异常隔离，不回滚或修改已完成基线/旧entry_price任务，不通过此hook生成新的数据库写入。
 
+原生archive入口复用确认reader的32 MiB资源上限：先核对声明size、非C原始非跳转路径和实际文件size，再交已有Selection只读publication reader执行一次SHA/字节长度及run/program/binding/policy/名单/runtime合同核验；移除消费者先行的第二次文件hash，不改Selection实现。声明超限或物理size漂移在任何公共read_bytes前拒绝；等长篡改仍由保留的公共SHA校验拒绝。公共reader自身并非有界/严格重复键接口，本修复只证明消费者入口的前置资源检查，不宣称修改或完善了公共reader，也不把JSON语义读回当原生模型资格。
+
 ## 6. API / UI
 
 - 新GET `/api/v1/advisory/programs/{program_id}/entry-value/status`：只读当前角色身份、精确目标日/最新合法D产物、原因与剩余资格缺口，不生成预测；运行状态≠业务建议已确认。
@@ -220,6 +222,8 @@ design_accepted=true_design_pr_5250_merged；source_implementation=in_progress_w
 本地交付策略：只提交一个明确标注验证中的消费者源码检查点以绑定新HEAD，不据此请求完整F2合入。六个注册浏览器场景仍需安全runner；现有generic Paper UI计划会启动验证后端并运行整个tests/paper-v2范围，不适合本次仅Advisory且不写DB的约束；公共MCP runner又缺请求级TEMP覆盖。须由验证所属窗口提供只跑六场景、无后台/数据库、无安装、临时全X的可核验配置，本窗口不修改公共runner或其它模块。独立confirmation producer、合法新窗口和真实角色发布另行获批；本次只完成这些既有证据的consumer硬校验，不代办生成或激活。
 
 新增展示合同复核：拒绝PUBLISHED空名单、非空NOT_CAPTURED/NO_CANDIDATES、未知节点枚举、节点计数/可接受集合矛盾、非正净收益或超过原风险预算的“可接受”区间；前端只验证响应，不重新选价、不调整800固定合同。保留全部可估值节点仅为执行条件未知时的PARTIAL_UNKNOWN/UNAVAILABLE合法组合，不把未知变成拒绝。修改限原卡片/既有六个UI场景，复用同一fixture。类型错误已定点修正，四根TypeScript类型与语法检查均零错误，六场景重新收集成功；仍未运行浏览器，不能作为UI PASS。后端未变，55定向测试及真实81日证据不重复执行、不改判。
+
+随后两轮留档入口复核修复只修改daily_source及原有同一原生/合法空名单fixture，2节点最终6.24s PASS、Ruff/diff PASS：正向名单/空名单仍可读；声明超限及实际size漂移未触发公共读取，等长内容篡改仍由公共SHA拒绝，所有拒绝都未查询行情。55项是此前最终矩阵，未在此修复后全套重跑；本次重验其中2个直接受影响节点，不加计为57项。数据、模型和81日输出均不变。实时验证中心catalog只提供Advisory backend计划，没有可执行的Advisory专用UI计划；未分发generic计划、未起runner/服务。
 
 源码交付逐项复核（与§11的设计审核状态分开）：
 

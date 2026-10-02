@@ -25,7 +25,6 @@ from backend.services.strategy_package.runtime_variant import canonical_json_sha
 
 def _economic_native_archive_v1(*, version, selection, program_id, binding_version_id, projection, read_at):
     from backend.services.selection_center.advisory_input_archive import validate_archive_reference
-    from backend.services.advisory_model_first.economic_entry_pipeline import _verify_reference
     from backend.services.advisory_model_first.research_control_contracts import EvidenceReferenceV1
     from backend.services.advisory_model_first.model_inference import _resolve_decision_date
     summary = version.get("summary_json") or {}
@@ -38,7 +37,13 @@ def _economic_native_archive_v1(*, version, selection, program_id, binding_versi
     path = Path(original.artifact_uri)
     if not path.is_absolute() or path.resolve() != path.absolute() or path.drive.upper() == "C:":
         _fail("economic native archive must be its explicit non-C nonredirected original path")
-    _verify_reference(original)
+    # Bound both the declared and physical input before the public archive reader
+    # allocates bytes. Its existing SHA/size/publication checks remain authoritative;
+    # do not hash the same archive again through the private research reader.
+    if not 0 < original.size_bytes <= 33554432:
+        _fail("economic native archive exceeds its 32 MiB metadata size budget")
+    if not path.is_file() or path.stat().st_size != original.size_bytes:
+        _fail("economic source identity changed: SELECTION_EXECUTION_INPUTS")
     payload = validate_archive_reference(reference, run=selection, program_id=program_id,
         binding_version_id=binding_version_id, review_policy_sha256=projection.review_policy_sha256)
     decision = _resolve_decision_date(list_version=version, selection_run=selection)
