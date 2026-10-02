@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.82
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.83
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-02
@@ -1957,7 +1957,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 当前数据前置不再混淆QE离线profile与数据库活动PIT：本轮历史功能未消费QE profile，直接只读显式ready canonical组件 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`（clean、覆盖至2026-08-31、fingerprint a8015d91...）。活动authority仍DEPLOYED_LEGACY_PENDING_MIGRATION/generation0/key=shsz_st_pit_active_v1，故component_is_live=false，不能据此启用正式原生路径；该指针/lease依赖只提给所属窗口，Advisory不修改或激活。首次经济确认输入producer须独立于已激活角色，未消费窗口授权、MDE/frontier证据与真实角色发布仍分别待闭合，不以等待未来20日替代可做的历史功能验证。
 
-当前追加源码审核检查点：确认consumer已实现已有N0合同/access/canonical consume-once收据的只读核验、同frontier换experiment拒绝、固定开发block功效重算与原TRAINED真实可用时钟，55定向测试通过（30.07秒；2项既有其它模块警告未越界修复）。真实旧bundle读回再次通过且model/batch hash不变；没有新确认、收益/sealed读取或数据激活，实际模型负增量不变。功效输入和确认producer的真实性/授权仍是后续独立步骤，不把合成确认链当业务通过。源码拟保留验证中的本地提交以绑定新HEAD；没有完整F2 PR/合入。浏览器六场景需只Advisory、无DB/后端启动/依赖安装、临时X的runner，现有generic Paper计划不满足精确边界；只提给验证所属窗口，不改公共平台。当前main已ff至`6a63612aa485d9287691916741e05268f1c15ed3`（公共BUG-1672 close-sync，无Advisory业务差异）。
+当前追加源码审核检查点：确认consumer已实现已有N0合同/access/canonical consume-once收据的只读核验、同frontier换experiment拒绝、固定开发block功效重算与原TRAINED真实可用时钟，55定向测试通过（30.07秒；2项既有其它模块警告未越界修复）。真实旧bundle读回再次通过且model/batch hash不变；没有新确认、收益/sealed读取或数据激活，实际模型负增量不变。功效输入和确认producer的真实性/授权仍是后续独立步骤，不把合成确认链当业务通过。本地验证提交`d79d52254aa24fa2965cc5cd07e43dc0c1a00e08`已建立源码HEAD，未push/PR/合入；随后定点修复前端矛盾响应拒绝，四根TS类型/语法再次零错误、六场景重新收集，浏览器仍未运行。该修复不改模型判定或经济门槛；PARTIAL_UNKNOWN的零已知/执行未知合法组合保留。每日设计§13逐项区分源码/功能/展示/正式依赖，不把设计结构PASS或研究证据作为完整F2通过。六场景需只Advisory、无DB/后端启动/依赖安装、临时X的runner，现有generic Paper计划不满足精确边界；只提给验证所属窗口，不改公共平台。worktree main base为`6a63612aa485d9287691916741e05268f1c15ed3`；新增主线#5156/#5255仅QE标签和数据发布路径，无直接Advisory改动，后续正式集成再核对最新main，不由本窗口修改其公共源码。
 
 ### 16.2 被动观察（零研发排期）
 

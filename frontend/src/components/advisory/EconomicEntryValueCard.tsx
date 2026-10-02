@@ -26,6 +26,34 @@ const roleStateLabels = {
 };
 const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 
+function validPriceSummary(row: AdvisoryEconomicEntryProjection) {
+  const counts = row.node_status_counts;
+  const intervals = row.acceptable_price_intervals;
+  if (!counts || !Array.isArray(intervals)
+      || Object.entries(counts).some(([key, count]) =>
+        !["ACCEPTABLE", "REJECTED", "OUT_OF_SUPPORT", "EXECUTABILITY_UNPROVEN", "RISK_CONTRACT_UNCONFIGURED"].includes(key)
+        || !Number.isInteger(count) || count < 0)) return false;
+  const accepted = counts.ACCEPTABLE || 0;
+  const known = accepted + (counts.REJECTED || 0);
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  if (total !== row.query_node_count || intervals.reduce((sum, interval) => sum + interval.node_count, 0) !== accepted
+      || row.availability !== (total > 0 && known === total ? "COMPLETE" : known > 0 ? "PARTIAL" : "UNAVAILABLE")) return false;
+  if (intervals.some((interval, index) =>
+    interval.expected_net_return_min_bps <= 0 || interval.expected_net_return_min_bps > interval.expected_net_return_max_bps
+    || interval.entry_net_max_loss_q90_max_bps < 0 || interval.entry_net_max_loss_q90_max_bps > 800
+    || !row.risk_budget || !Number.isFinite(row.risk_budget.maximum_loss_bps)
+    || interval.entry_net_max_loss_q90_max_bps > row.risk_budget.maximum_loss_bps
+    || Math.abs((interval.maximum_cny - interval.minimum_cny) / interval.grid_step_cny - (interval.node_count - 1)) > 1e-6
+    || (index > 0 && intervals[index - 1].maximum_cny >= interval.minimum_cny))) return false;
+  // Verify response consistency only; the browser never selects prices or changes model gates.
+  if ((row.recommendation_status === "ACCEPTABLE_PRICE_SET") !== (accepted > 0)) return false;
+  if (row.recommendation_status === "NO_ACCEPTABLE_PRICE") return total > 0 && known === total;
+  if (row.recommendation_status === "PARTIAL_UNKNOWN") return total > 0 && known < total;
+  if (row.recommendation_status === "QUERY_DOMAIN_UNAVAILABLE") return total === 0;
+  if (["UNAVAILABLE", "RISK_CONTRACT_UNCONFIGURED"].includes(row.recommendation_status)) return known === 0;
+  return true;
+}
+
 function validEconomicRow(row: AdvisoryEconomicEntryProjection, programId: string, target: string, formal = false) {
   return row?.schema_version === "economic_entry_daily_projection_v1" && row.role === "ENTRY_VALUE"
     && row.objective_contract === "RISK_MANAGED_ADVISORY" && row.deployable === formal
@@ -50,7 +78,7 @@ function validEconomicRow(row: AdvisoryEconomicEntryProjection, programId: strin
       && Number.isInteger(value.node_count) && value.node_count > 0)
     && Number.isInteger(row.query_node_count) && row.query_node_count >= 0 && row.query_node_count <= 5000
     && row.node_status_counts != null && Object.values(row.node_status_counts).every((count) => Number.isInteger(count) && count >= 0)
-    && Object.values(row.node_status_counts).reduce((sum, count) => sum + count, 0) === row.query_node_count;
+    && validPriceSummary(row);
 }
 
 function validRoleStatus(value: AdvisoryEconomicEntryStatus, programId: string, target?: string) {
@@ -71,7 +99,8 @@ function validRoleStatus(value: AdvisoryEconomicEntryStatus, programId: string, 
   return value.decision_use === "ADVISORY_ONLY" && digest(value.original_batch_sha256) && !!value.resolved_target_date
     && value.advice.every((row) => validEconomicRow(row, programId, value.resolved_target_date!, true)
       && row.role_binding_sha256 === value.role_binding_sha256 && row.prediction_input.binding_version_id === value.binding_version_id)
-    && (value.status !== "NO_CANDIDATES" || value.advice.length === 0);
+    && (value.status !== "NO_CANDIDATES" || value.advice.length === 0)
+    && (value.status !== "PUBLISHED" || value.advice.length > 0);
 }
 
 function EconomicRows({ rows }: { rows: AdvisoryEconomicEntryProjection[] }) {
@@ -133,6 +162,7 @@ export function EconomicEntryValueCard({ programId, targetTradeDate }: { program
           || !Array.isArray(value.advice) || value.advice.length > 20
           || new Set(value.advice.map((row) => row?.prediction_input?.instrument)).size !== value.advice.length
           || new Set(value.advice.map((row) => row?.prediction_input?.selection_rank)).size !== value.advice.length
+          || (value.status === "RESEARCH_NAVIGATION" ? value.advice.length === 0 : value.advice.length !== 0)
           || (value.status !== "NOT_CAPTURED" && (value.evidence_state !== "RESEARCH_NAVIGATION" || value.decision_use !== "NAVIGATION_ONLY"))
           || value.advice.some((row) => !validEconomicRow(row, programId, researchTarget))) {
         throw new Error("研究价格产物身份或证据不一致");

@@ -1,4 +1,4 @@
-# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.11
+# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.12
 
 > 日期2026-10-02；状态DESIGN_REVIEWED_IMPLEMENTATION_IN_PROGRESS。父设计：[经济进入价值](advisory_economic_entry_value_v1_f2_design_20261002.md)、[风险与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)、[一致双头v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)。本设计把离线数值内核接到完整日频条件网格、只读消费者/API与Advisory展示，不新增模型搜索，不研发分钟执行。
 
@@ -218,6 +218,27 @@ design_accepted=true_design_pr_5250_merged；source_implementation=in_progress_w
 最新稳定门禁为55 passed、30.07秒（51消费者叶+4 API/hook；2项既有其它模块告警未越界修复）。两轮审核新增既有canonical窗口/access/一次性收据只读核验、同frontier不同experiment拒绝、开发block功效/MDE重算及真实TRAINED登记可用时钟；12项授权/功效/双时钟定向节点曾单独通过，全部使用X盘合成工件，不是独立经济确认。新代码重新加载实际旧v3研究bundle，TRAINED真实recorded_at=`2026-10-01T21:44:06.190923+00:00`；20条真实batch投影及旧manifest/batch hash不变、正式NOT_CONFIGURED，零新fit/新收益/sealed读取。§7的81日只读功能证据保持，浏览器/CI及正式启用仍未完成。Ruff/diff通过，四根TypeScript此前通过；最终设计结构须复核，并以实际新增源码HEAD绑定宽验证，不拿设计base冒充源码证据。
 
 本地交付策略：只提交一个明确标注验证中的消费者源码检查点以绑定新HEAD，不据此请求完整F2合入。六个注册浏览器场景仍需安全runner；现有generic Paper UI计划会启动验证后端并运行整个tests/paper-v2范围，不适合本次仅Advisory且不写DB的约束；公共MCP runner又缺请求级TEMP覆盖。须由验证所属窗口提供只跑六场景、无后台/数据库、无安装、临时全X的可核验配置，本窗口不修改公共runner或其它模块。独立confirmation producer、合法新窗口和真实角色发布另行获批；本次只完成这些既有证据的consumer硬校验，不代办生成或激活。
+
+新增展示合同复核：拒绝PUBLISHED空名单、非空NOT_CAPTURED/NO_CANDIDATES、未知节点枚举、节点计数/可接受集合矛盾、非正净收益或超过原风险预算的“可接受”区间；前端只验证响应，不重新选价、不调整800固定合同。保留全部可估值节点仅为执行条件未知时的PARTIAL_UNKNOWN/UNAVAILABLE合法组合，不把未知变成拒绝。修改限原卡片/既有六个UI场景，复用同一fixture。类型错误已定点修正，四根TypeScript类型与语法检查均零错误，六场景重新收集成功；仍未运行浏览器，不能作为UI PASS。后端未变，55定向测试及真实81日证据不重复执行、不改判。
+
+源码交付逐项复核（与§11的设计审核状态分开）：
+
+| 设计条款 | 实现位置 | 实际证据与结论 | 剩余影响/下一步 |
+|---|---|---|---|
+| F-570 | serving_bundle | 旧真实权重/hash/可用时钟读回；研究消费者通过 | 原生训练资格未证明，禁止启用 |
+| F-571 | daily_contracts/source | 叶测试核验D/T/身份/缺失保留 | 正式活动PIT与原始lease由所属窗口闭合 |
+| F-572 | daily_inference/service | 81日413,698同核格点完成；零新fit | 不证明模型经济有效 |
+| F-573 | daily_inference、UI卡片 | 多段/未知/预算叶测试通过；展示矛盾已修复 | 浏览器展示待验收 |
+| F-574 | daily_inference | 原D格点精确消费与T绑定测试通过 | 不做分钟择时、订单或成交证明 |
+| F-575 | daily_source | 实际只读canonical组件消费，非活动身份限制保留 | 仅提数据所属需求，不激活/补写 |
+| F-576 | daily_service | 81日exact retry零DB/推理、hash不变；原子和资格叶测试通过 | 首次独立确认producer未交付 |
+| F-577 | advisory router/API | 三个真实batch GET投影及定向API测试通过 | 未合入/重启，用户运行时未验收 |
+| F-578 | EconomicEntryValueCard | 四根TS检查/六场景收集通过 | 无浏览器收据，不能报告UI完整交付 |
+| F-579 | daily_service/历史功能plan | 81日1,620原候选受限功能通过 | 仅NAVIGATION_ONLY，未读独立确认窗口 |
+| F-580 | 自有worktree/设计/精确diff | 边界、真实负结果和证据等级复核通过 | 不推送/合入完整F2的部分实现 |
+| F-581 | advisory_forward hook | 四个定向API/hook节点通过，默认未配置 | 新源码加载与用户重启后语义验证待交付 |
+
+DESIGN-COMPLIANCE-001复核结论：完整交付仍pending，未把局部实现/mock UI视为完成；矛盾响应明确拒绝、未知保留；原排名/模型/成本/风险/窗口不变；未新增审批或等待交易日门禁，现有窗口授权与验证执行安全边界按已批准设计执行。当前有局部源码修复进展，但没有满足完整F2合入条件。
 
 源码按用户既有授权、多轮审核及必需CI后可提交合入；新API加载等待用户重启，之后只读identity/business smoke。没有合格ENTRY_VALUE模型不生产绑定；未来正式角色须同时满足模型确认与scope/输入证据合同，不能用本工程PR绕过。
 

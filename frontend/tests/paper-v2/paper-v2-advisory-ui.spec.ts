@@ -46,7 +46,7 @@ for (const state of ["PUBLISHED", "STALE", "IDENTITY_CONFLICT"] as const) {
     await mockShellApis(page);
     const roleSha = "a".repeat(64);
     const status = state === "IDENTITY_CONFLICT" ? "PUBLISHED" : state;
-    const { calls } = await mockAdvisoryApis(page, { economicEntryStatus: {
+    const economicStatus: JsonObject = {
       status, evidence_state: "CONFIRMED_ENTRY_VALUE", deployable: status === "PUBLISHED", decision_use: "ADVISORY_ONLY",
       automatic_capture_enabled: true, qualification_gaps: [], role_binding_sha256: roleSha, pointer_sha256: "b".repeat(64),
       bundle_id: "advecserve_" + "c".repeat(24), binding_version_id: "unit-only-binding", original_batch_sha256: "d".repeat(64),
@@ -62,12 +62,27 @@ for (const state of ["PUBLISHED", "STALE", "IDENTITY_CONFLICT"] as const) {
         node_status_counts: { ACCEPTABLE: 3, OUT_OF_SUPPORT: 1 }, query_node_count: 4,
         risk_budget: { maximum_loss_bps: 800, reference_use: "EXPLICIT_BUSINESS_CONFIGURATION", configuration_sha256: "e".repeat(64) },
         model_bundle_sha256: "b".repeat(64), original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }],
-    } });
+    };
+    const { calls } = await mockAdvisoryApis(page, { economicEntryStatus: economicStatus });
     await page.goto("/paper-v2/advisory");
     const card = page.getByTestId("advisory-economic-entry-value");
     if (state === "IDENTITY_CONFLICT") {
       await expect(card.getByTestId("economic-entry-status-error")).toContainText("身份或证据不一致");
       await expect(card).not.toContainText("9.95");
+      const validRow: JsonObject = { ...(economicStatus.advice as JsonObject[])[0], role_binding_sha256: roleSha };
+      const interval = (validRow.acceptable_price_intervals as JsonObject[])[0];
+      // Reuse the same presentation fixture: contradictory economics/counts and empty
+      // PUBLISHED must fail closed, without adding another fixture or research trial.
+      for (const advice of [
+        [],
+        [{ ...validRow, acceptable_price_intervals: [{ ...interval, expected_net_return_min_bps: -1 }] }],
+        [{ ...validRow, node_status_counts: { ACCEPTABLE: 3, INVENTED_STATE: 1 } }],
+      ]) {
+        economicStatus.advice = advice;
+        await page.reload();
+        await expect(card.getByTestId("economic-entry-status-error")).toContainText("身份或证据不一致");
+        await expect(card).not.toContainText("9.95");
+      }
     } else {
       await expect(card.getByTestId("economic-entry-role-status")).toContainText(state);
       await expect(card).toContainText("9.95～9.97 CNY");
