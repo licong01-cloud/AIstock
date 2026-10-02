@@ -119,8 +119,8 @@
   },
   "first_seen_at": "2026-09-30T06:51:26.783537Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "195eb519828d23f940fdcc12ea4637a395d57d73",
+  "fixed_at": "2026-10-02T04:30:49Z",
   "github_issue_number": 5142,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5142",
   "last_seen_at": "2026-09-30T06:51:26.783537Z",
@@ -128,6 +128,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5156",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -157,6 +158,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -168,7 +170,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1638",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7776875dcf854c19",
+    "recorded_at": "2026-10-02T04:32:19.241998Z",
+    "runtime_contract_digest": "861d369a9b945ef2f48a76df7d524e8249d43677e8def20e271cd0cc7704ff94",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cabea5fda2926a0c20f648c4884e8a21ddbe6ac2",
+    "source_merge_commit": "195eb519828d23f940fdcc12ea4637a395d57d73",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5156",
+    "validation_evidence": [
+      "nox -s l0 -> passed",
+      "python -m pytest backend/tests/unified_engine/test_label_horizon.py -q -> passed 56 tests"
+    ],
+    "validation_evidence_digest": "68a459d49acc30b5f8c80c94bc3abb99b2002b84e0079cde014ef7cab65417cc"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -177,6 +201,10 @@
     "fingerprint": "824efb002e8a0863f802246c",
     "source_event_id": "FE-20260930-824efb002e8a"
   },
+  "validation_evidence": [
+    "nox -s l0 -> passed",
+    "python -m pytest backend/tests/unified_engine/test_label_horizon.py -q -> passed 56 tests"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
