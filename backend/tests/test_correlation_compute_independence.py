@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -60,6 +61,341 @@ def test_correlation_wsl_runner_no_args_returns_structured_usage() -> None:
     assert payload["type"] == "result"
     assert payload["data"]["success"] is False
     assert "usage:" in payload["data"]["error"]
+
+
+def test_correlation_wsl_runner_routes_target_only_mode(monkeypatch, tmp_path, capsys) -> None:
+    from backend.scripts import run_correlation_compute_wsl as runner
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    payload_path = tmp_path / "payload.json"
+    payload_path.write_text(
+        json.dumps(
+            {
+                "mode": "target_only",
+                "target_factor_name": "factor_target",
+                "as_of_date": "2026-08-31",
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+    monkeypatch.setattr(runner, "assert_wsl_runtime", lambda _operation: None)
+    monkeypatch.setattr(
+        svc,
+        "run_target_correlation_refresh_local",
+        lambda **kwargs: captured.update(kwargs) or {"success": True},
+    )
+    monkeypatch.setattr(
+        svc,
+        "run_correlation_compute_local",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("full reset must not run")),
+    )
+    monkeypatch.setattr(sys, "argv", [str(RUNNER), str(payload_path)])
+
+    assert runner.main() == 0
+    assert captured["target_factor_name"] == "factor_target"
+    assert json.loads(capsys.readouterr().out.strip())["data"]["success"] is True
+
+
+def test_target_correlation_persistence_replaces_only_target_pairs(monkeypatch) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    statements = []
+    inserted = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=None):
+            statements.append((" ".join(sql.split()), params))
+
+        def fetchall(self):
+            return [(1, 2)]
+
+    class Conn:
+        committed = False
+        rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    conn = Conn()
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "reference"},
+                {"id": 3, "factor_name": "unrelated"},
+            ]
+
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        svc,
+        "execute_values",
+        lambda _cur, _sql, values, **_kwargs: inserted.extend(values),
+    )
+
+    written = svc._persist_target_correlations(
+        target_factor_name="target",
+        records=[
+            {
+                "factor_a": "target",
+                "factor_b": "reference",
+                "correlation": 0.25,
+                "method": "spearman_ewma",
+            }
+        ],
+        as_of_date="2026-08-31",
+        universe_metadata={"universe_key": "aistock_equity_pit_canonical_v2"},
+    )
+
+    assert written == 1
+    assert conn.committed is True
+    assert conn.rolled_back is False
+    assert inserted[0][:2] == (1, 2)
+    assert statements[0][1] == (1, 1)
+    assert all("TRUNCATE" not in sql for sql, _params in statements)
+    assert statements[1][1] == ([2],)
+    assert statements[-1][1] == (1, 1)
+
+
+def test_target_correlation_persistence_rolls_back_before_replacing_state(
+    monkeypatch,
+) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, _sql, _params=None):
+            return None
+
+        def fetchall(self):
+            return [(1, 2)]
+
+    class Conn:
+        committed = False
+        rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            self.rolled_back = True
+
+    conn = Conn()
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "reference"},
+            ]
+
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        svc,
+        "execute_values",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("insert failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        svc._persist_target_correlations(
+            target_factor_name="target",
+            records=[
+                {
+                    "factor_a": "target",
+                    "factor_b": "reference",
+                    "correlation": 0.25,
+                }
+            ],
+            as_of_date="2026-08-31",
+            universe_metadata={},
+        )
+
+    assert conn.committed is False
+    assert conn.rolled_back is True
+
+
+def test_target_correlation_route_submits_explicit_profile_without_full_reset(
+    monkeypatch,
+) -> None:
+    from backend.routers import quantevolver_evolution as router
+
+    submitted = {}
+
+    class Lock:
+        def locked(self):
+            return False
+
+    class Eligibility:
+        def get_eligible_factor_names(self, **_kwargs):
+            return ["target"]
+
+    class Executor:
+        def submit(self, fn, **kwargs):
+            submitted["fn"] = fn
+            submitted.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(router, "_computing_lock", Lock())
+    monkeypatch.setattr(router, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(router, "_compute_executor", Executor())
+    monkeypatch.setattr(
+        router._correlation_compute_service,
+        "get_correlation_factor_cache_status",
+        lambda: {"as_of_date": "2026-08-31"},
+    )
+
+    result = router.refresh_target_correlations(
+        router.CorrelationTargetRefreshRequest(
+            target_factor_name="target",
+            as_of_date="2026-08-31",
+            dataset_profile_path="X:/profiles/r8.json",
+        )
+    )
+
+    assert result["status"] == "accepted"
+    assert result["unrelated_rows_reset"] is False
+    assert submitted["target_factor_name"] == "target"
+    assert submitted["dataset_profile_path"] == "X:/profiles/r8.json"
+
+
+def test_target_correlation_refresh_fails_closed_when_reference_cache_is_missing(
+    monkeypatch,
+) -> None:
+    from backend.services.quantevolver import correlation_compute_service as svc
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [
+                {"id": 1, "factor_name": "target"},
+                {"id": 2, "factor_name": "missing_reference"},
+            ]
+
+    class Pipeline:
+        def get_cached_singles(self):
+            return [{"factor_name": "target"}]
+
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda _operation: None)
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", Pipeline)
+    monkeypatch.setattr(svc, "_update_job_status", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(ValueError, match="missing from the cache"):
+        svc.run_target_correlation_refresh_local(target_factor_name="target")
+
+
+@pytest.mark.parametrize("bad_target", [False, True, "no_compatible_reference", "missing_fingerprint", "reference_fingerprint", "wrong_rule"])
+def test_target_refresh_uses_per_factor_binding_not_promoted_snapshot(monkeypatch, tmp_path, bad_target):
+    from types import SimpleNamespace
+    from backend.services.quantevolver import correlation_compute_service as svc
+    from backend.services.canonical_equity_pit import CANONICAL_PIT_RULE_VERSION
+    from backend.services.quantevolver.factor_universe_mask_service import OFFICIAL_FACTOR_INDEX_POLICY
+
+    binding = dict(status="ok", as_of_date="2026-08-31", factor_data_dir="/release/new/factors",
+                   moneyflow_unit_contract_version=svc.MONEYFLOW_UNIT_CONTRACT_VERSION,
+                   universe_key="aistock_equity_pit_canonical_v2", universe_rule_version=CANONICAL_PIT_RULE_VERSION,
+                   universe_fingerprint_sha256="pit", index_policy=OFFICIAL_FACTOR_INDEX_POLICY, code_hash="current")
+    factors = {"target": binding, "good": dict(binding),
+               "old": dict(binding, factor_data_dir="/release/old/factors")}
+    if bad_target is True:
+        factors["target"] = dict(binding, code_hash="stale")
+    elif bad_target == "no_compatible_reference":
+        factors["good"] = dict(binding, code_hash="stale")
+    elif bad_target == "missing_fingerprint":
+        factors["target"] = {k: v for k, v in binding.items() if k != "universe_fingerprint_sha256"}
+    elif bad_target == "reference_fingerprint":
+        factors["old"] = dict(binding, universe_fingerprint_sha256="other_pit")
+    elif bad_target == "wrong_rule":
+        factors["target"] = dict(binding, universe_rule_version="wrong")
+    (tmp_path / "_meta.json").write_text(json.dumps({"factor_data_dir": "/release/old/factors", "factors": factors}))
+    (tmp_path / "single").mkdir()
+    dates = pd.bdate_range("2025-08-01", "2026-08-31")
+    index = pd.MultiIndex.from_product([dates, ["000001.SZ", "600000.SH"]], names=["datetime", "instrument"])
+    pd.DataFrame({"target": range(len(index))}, index=index).to_parquet(tmp_path / "single" / "target.parquet")
+    rows = [{"factor_name": name, "code_text_hash": "current"} for name in factors]
+    monkeypatch.setattr(svc, "assert_wsl_runtime", lambda *_: None)
+    monkeypatch.setattr(svc, "_update_job_status", lambda *_: None)
+    monkeypatch.setenv("RDAGENT_FACTOR_DATA_WSL", binding["factor_data_dir"])
+    monkeypatch.setenv("QE_QLIB_DATA_PATH", "/release/new/bin")
+    monkeypatch.setattr(svc, "FactorEligibilityService", lambda: SimpleNamespace(list_eligible_factors=lambda **_: rows))
+    monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: SimpleNamespace(_output_dir=tmp_path, get_cached_singles=lambda: rows))
+    # Historical caches remain bound to their recorded PIT, even when today's
+    # rolling state has advanced. This path must never read/bootstrap live PIT.
+    def forbidden_live_pit():
+        raise AssertionError("cached correlation must not consult advancing live PIT")
+    monkeypatch.setattr(svc, "FactorUniverseMaskService", forbidden_live_pit)
+    loaded = []
+    def read(name, *_):
+        loaded.append(name)
+        return pd.DataFrame({name: range(len(index))}, index=index)
+    monkeypatch.setattr(svc, "get_correlation_factor_value_loader", lambda **_: SimpleNamespace(_read_single_filtered=read))
+    monkeypatch.setattr(svc, "CorrelationEngine", lambda _: SimpleNamespace(compute_selected_submatrix=lambda *_a, **_k: SimpleNamespace(records=lambda: [{"candidate": "target", "reference": "good", "status": "available", "correlation": 0.5}])))
+    written = []
+    monkeypatch.setattr(svc, "_persist_target_correlations", lambda **kwargs: written.extend(kwargs["records"]) or len(kwargs["records"]))
+    if bad_target not in (False, "reference_fingerprint"):
+        reason = {True: "cache_code_hash_mismatch", "no_compatible_reference": "no compatible reference caches",
+                  "missing_fingerprint": "cache_universe_fingerprint_sha256_missing",
+                  "wrong_rule": "cache_universe_rule_version_mismatch"}[bad_target]
+        with pytest.raises(ValueError, match=reason):
+            svc.run_target_correlation_refresh_local(target_factor_name="target", as_of_date="2026-08-31")
+        assert not written and not loaded
+        return
+    result = svc.run_target_correlation_refresh_local(target_factor_name="target", as_of_date="2026-08-31")
+    assert loaded == ["target", "good"]
+    assert len(written) == 1
+    assert result["complete"] is False
+    assert result["written_pair_count"] + result["unavailable_pair_count"] == result["eligible_reference_count"] == 2
+    reason = "cache_universe_fingerprint_sha256_mismatch" if bad_target == "reference_fingerprint" else "cache_factor_data_dir_mismatch"
+    assert result["unavailable_pairs"][0]["reason"] == reason
+    assert result["cache_binding"]["universe_fingerprint_sha256"] == "pit"
+
+
+@pytest.mark.parametrize("field", ["status", "as_of_date", "factor_data_dir", "moneyflow_unit_contract_version",
+                                   "universe_key", "universe_rule_version", "universe_fingerprint_sha256", "index_policy"])
+def test_target_cache_identity_missing_or_mismatched_is_explicit(field):
+    from backend.services.quantevolver.correlation_compute_service import _target_cache_mismatch
+    binding = {name: "value" for name in ("status", "as_of_date", "factor_data_dir", "moneyflow_unit_contract_version",
+                                         "universe_key", "universe_rule_version", "universe_fingerprint_sha256", "index_policy")}
+    item = dict(binding, code_hash="code")
+    assert _target_cache_mismatch(item, binding, "code") is None
+    item[field] = "different"
+    assert _target_cache_mismatch(item, binding, "code") == f"cache_{field}_mismatch"
+    del item[field]
+    assert _target_cache_mismatch(item, binding, "code") == f"cache_{field}_missing"
 
 
 def test_correlation_factor_cache_uses_offline_backtest_dir() -> None:
@@ -527,7 +863,8 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
     assert result["cache_root"].endswith("factor_values")
 
 
-def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("failure_stage", [None, "preflight", "matrix"])
+def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch, tmp_path, failure_stage) -> None:
     from backend.services.quantevolver import correlation_compute_service as svc
     from backend.services.quantevolver.correlation_engine import CorrelationResult
 
@@ -545,10 +882,17 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
         encoding="utf-8",
     )
 
+    statements = []
+    old_snapshot = tmp_path / "data" / "correlation_matrices" / "corr_20260410.h5"
+    old_snapshot.parent.mkdir(parents=True)
+    old_snapshot.write_bytes(b"existing published snapshot")
+
     class FakePipeline:
         _output_dir = str(tmp_path)
 
         def validate_meta_integrity(self):
+            if failure_stage == "preflight":
+                raise RuntimeError("preflight failure")
             return {
                 "ok": True,
                 "factor_count": 2,
@@ -567,7 +911,8 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def execute(self, *_args, **_kwargs):
+        def execute(self, sql, *_args, **_kwargs):
+            statements.append(str(sql))
             return None
 
     class FakeConn:
@@ -588,6 +933,9 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
             self.loader = loader
 
         def compute_full_matrix(self, factor_names, **kwargs):
+            if failure_stage == "matrix":
+                raise RuntimeError("matrix failure")
+            assert kwargs["save_hdf5"] is False
             assert factor_names == ["factor_a", "factor_b"]
             assert kwargs["expected_as_of_date"] == "2026-04-10"
             return CorrelationResult(
@@ -604,6 +952,7 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
             )
 
     monkeypatch.setattr(svc, "assert_wsl_runtime", lambda operation: None)
+    monkeypatch.setattr(svc, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(svc, "get_correlation_factor_value_pipeline", lambda: FakePipeline())
     monkeypatch.setattr(svc, "CORRELATION_FACTOR_VALUE_CACHE_DIR", tmp_path)
     monkeypatch.setattr(svc, "get_conn", lambda: FakeConn())
@@ -625,10 +974,15 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     monkeypatch.setattr(svc, "CorrelationEngine", FakeCorrelationEngine)
     monkeypatch.setattr(svc.FactorValueLoader, "invalidate_single_cache", lambda factor_name=None: None)
     monkeypatch.setattr(svc.FactorValueLoader, "invalidate_merged_cache", lambda pipeline_dir=None: None)
-    monkeypatch.setattr("glob.glob", lambda pattern: [])
 
     result = svc.run_correlation_compute_local(["factor_a", "factor_b"])
 
+    assert not statements, "Preflight/computation must not mutate published DB state"
+    assert old_snapshot.read_bytes() == b"existing published snapshot"
+    if failure_stage:
+        assert result["success"] is False
+        assert result["error"] == f"{failure_stage} failure"
+        return
     assert result["success"] is True
     assert result["requested_factor_count"] == 2
     assert result["success_factor_count"] == 2
@@ -636,6 +990,90 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     assert result["as_of_date"] is None
     assert result["cache_source"] == "offline_research_backtest_factor_values"
     assert result["cache_root"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("failure_stage", [None, "insert", "catalog", "metadata", "h5", "replace", "commit"])
+def test_full_correlation_publication_preserves_previous_state_on_failure(monkeypatch, tmp_path, failure_stage):
+    from backend.services.quantevolver import correlation_compute_service as svc
+    from backend.services.quantevolver.correlation_engine import CorrelationResult
+
+    target = tmp_path / "corr_20260410.h5"
+    target.write_bytes(b"previous H5")
+    other = tmp_path / "corr_20260409.h5"
+    other.write_bytes(b"other date")
+    result = CorrelationResult(np.array([[1.0, 0.42], [0.42, 1.0]]),
+                               ["factor_a", "factor_b"], "2026-04-10", 252, 0.01,
+                               {"hdf5_path": str(target)})
+    events = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, *_args):
+            stage = "metadata" if "INSERT INTO qe_correlation_metadata" in sql else "catalog"
+            events.append(sql)
+            if failure_stage == stage:
+                raise RuntimeError(stage)
+
+    class Conn:
+        def cursor(self):
+            return Cursor()
+
+    @contextmanager
+    def connect(**options):
+        assert options == {"autocommit": False, "manage_transaction": True}
+        try:
+            yield Conn()
+            if failure_stage == "commit":
+                raise RuntimeError("commit")
+            events.append("COMMIT")
+        except Exception:
+            events.append("ROLLBACK")
+            raise
+
+    def insert(*_args, **_kwargs):
+        events.append("INSERT PAIRS")
+        if failure_stage == "insert":
+            raise RuntimeError("insert")
+
+    original_replace = os.replace
+
+    def replace(source, destination):
+        if failure_stage == "replace" and Path(source).name.startswith(".corr-stage-"):
+            raise RuntimeError("replace")
+        original_replace(source, destination)
+
+    class Eligibility:
+        def list_eligible_factors(self, **_kwargs):
+            return [{"id": 1, "factor_name": "factor_a"}, {"id": 2, "factor_name": "factor_b"}]
+
+    monkeypatch.setattr(svc, "get_conn", connect)
+    monkeypatch.setattr(svc, "execute_values", insert)
+    monkeypatch.setattr(svc, "FactorEligibilityService", Eligibility)
+    monkeypatch.setattr(svc.os, "replace", replace)
+    if failure_stage == "h5":
+        monkeypatch.setattr(result, "to_hdf5", lambda _path: (_ for _ in ()).throw(RuntimeError("h5")))
+    records = [{"factor_a": "factor_a", "factor_b": "factor_b", "correlation": 0.42,
+                "method": "spearman_ewma", "data_period": "252d_as_of_2026-04-10"}]
+    if failure_stage:
+        with pytest.raises(RuntimeError, match=failure_stage):
+            svc._persist_correlations_batch(records, replace_all=True, correlation_result=result)
+        assert target.read_bytes() == b"previous H5"
+        assert "COMMIT" not in events
+        if failure_stage != "h5":
+            assert events[-1] == "ROLLBACK"
+    else:
+        assert svc._persist_correlations_batch(records, replace_all=True, correlation_result=result) == 1
+        assert events[0] == "TRUNCATE TABLE qe_factor_correlations"
+        assert events[-1] == "COMMIT"
+        assert any("INSERT INTO qe_correlation_metadata" in sql for sql in events)
+        assert np.array_equal(CorrelationResult.from_hdf5(str(target)).matrix, result.matrix)
+    assert other.read_bytes() == b"other date"
+    assert sorted(path.name for path in tmp_path.iterdir()) == [other.name, target.name]
 
 
 def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(monkeypatch, tmp_path) -> None:
@@ -724,6 +1162,8 @@ def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(
 
     def fake_persist_records(records, **_kwargs):
         persisted_records.extend(records)
+        assert _kwargs["replace_all"] is True
+        persisted_metadata.append(dict(_kwargs["correlation_result"].metadata))
         return len(records)
 
     def fake_persist_metadata(result):

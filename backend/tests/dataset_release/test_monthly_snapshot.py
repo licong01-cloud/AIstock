@@ -119,6 +119,30 @@ def test_unrelated_repairs_do_not_invalidate_snapshot() -> None:
         snapshot.assert_no_overlapping_repairs()
 
 
+def test_typed_source_block_retains_reason_and_invalidates_attempt() -> None:
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseSourceBlocked
+
+    connections: list[Connection] = []
+
+    def factory() -> Connection:
+        connection = Connection()
+        connections.append(connection)
+        return connection
+
+    error = MonthlyReleaseSourceBlocked('PIT cutoff unavailable', context={'state_end': '2026-08-31'})
+    with MonthlySnapshotCoordinator(
+        factory, repair_watermark_reader=lambda _connection: 'watermark',
+        overlapping_repair_reader=lambda _connection, _watermark: (),
+    ) as snapshot:
+        with pytest.raises(MonthlyReleaseSourceBlocked) as caught:
+            snapshot.read(lambda *_args: (_ for _ in ()).throw(error))
+        assert caught.value is error
+        assert caught.value.context == {'state_end': '2026-08-31'}
+        with pytest.raises(MonthlySnapshotError, match='not available'):
+            snapshot.read(lambda *_args: None)
+    assert all(connection.closed and connection.rollback_count == 1 for connection in connections)
+
+
 def test_production_factory_owns_managed_journal_callbacks() -> None:
     class Journal:
         def initial_watermark(self, _connection: Connection) -> str:
@@ -134,3 +158,57 @@ def test_production_factory_owns_managed_journal_callbacks() -> None:
         assert snapshot.identity is not None
         assert snapshot.identity.initial_repair_watermark == "repair-watermark-12"
         snapshot.assert_no_overlapping_repairs()
+
+
+@pytest.mark.parametrize("snapshot_id", ["0000000C-0016AC39-1", "000000af-000001bc-12"])
+def test_hexadecimal_snapshot_identity_is_shared_by_coordinator_and_source_readers(
+    monkeypatch: pytest.MonkeyPatch, snapshot_id: str
+) -> None:
+    from backend.services.dataset_release.source_authority import imported_source_session_factory
+
+    monkeypatch.setattr(
+        Cursor, "fetchone", lambda _self: (snapshot_id, datetime(2026, 10, 1, tzinfo=UTC))
+    )
+    connections: list[Connection] = []
+
+    def factory() -> Connection:
+        value = Connection()
+        connections.append(value)
+        return value
+
+    with MonthlySnapshotCoordinator(
+        factory,
+        repair_watermark_reader=lambda _connection: "repair-hex",
+        overlapping_repair_reader=lambda _connection, _watermark: (),
+    ) as snapshot:
+        assert snapshot.read(lambda _connection, identity: identity.snapshot_id) == snapshot_id
+        assert callable(imported_source_session_factory(snapshot_id))
+    assert connections[1].commands[1] == f"SET TRANSACTION SNAPSHOT '{snapshot_id}'"
+    assert all(connection.closed and connection.rollback_count for connection in connections)
+
+
+@pytest.mark.parametrize(
+    "snapshot_id",
+    ["", "0000000G-0016AC39-1", "0000000C-0016AC39--1", "0000000C-0016AC39-1\n",
+     "0000000C-0016AC39-1'; SELECT 1; --", "0000000C-0016AC39-１"],
+)
+def test_malformed_snapshot_is_rejected_before_import_and_connection_is_closed(
+    monkeypatch: pytest.MonkeyPatch, snapshot_id: str
+) -> None:
+    from backend.services.dataset_release.source_authority import imported_source_session_factory
+
+    monkeypatch.setattr(
+        Cursor, "fetchone", lambda _self: (snapshot_id, datetime(2026, 10, 1, tzinfo=UTC))
+    )
+    connection = Connection()
+    with pytest.raises(MonthlySnapshotError, match="invalid snapshot identity"):
+        with MonthlySnapshotCoordinator(
+            lambda: connection,
+            repair_watermark_reader=lambda _connection: "repair-hex",
+            overlapping_repair_reader=lambda _connection, _watermark: (),
+        ):
+            pytest.fail("invalid identity must fail before any imported reader")
+    with pytest.raises(ValueError, match="snapshot identity is invalid"):
+        imported_source_session_factory(snapshot_id)
+    assert connection.closed and connection.rollback_count == 1
+    assert not any(command.startswith("SET TRANSACTION SNAPSHOT") for command in connection.commands)

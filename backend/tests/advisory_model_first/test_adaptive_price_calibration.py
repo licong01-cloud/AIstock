@@ -128,6 +128,7 @@ def _make_source_replay(
         decision_end_trade_date=decisions[-1],
         replay_as_of_date=targets[-1] + timedelta(days=7),
         pit_universe_key="canonical-pit-v1",
+        projection_producer_version="advisory_entry_price_core_v2",
     )
     AdvisoryHistoricalPriceReplayService(
         data_source=source or _DailySource(),

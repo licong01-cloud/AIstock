@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH
 from backend.services.dataset_release.canonical import digest_named_fields
 from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_store import ControlStore
@@ -216,6 +217,13 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         if not path.exists():
             path.write_bytes(dataset.encode("ascii"))
     (factor_root / "static_factors.parquet").write_bytes(b"static")
+    (factor_root / "security_source_identity.json").write_bytes(
+        DEFAULT_MANIFEST_PATH.read_bytes()
+    )
+    (factor_root / "moneyflow_alias_coverage_v1.json").write_text(
+        '{"schema_version":"qe_moneyflow_alias_coverage_receipt_v1","status":"PASS"}\n',
+        encoding="utf-8",
+    )
     index_root = staging / "index_context"
     index_root.mkdir()
     (index_root / "index_daily.h5").write_bytes(b"index")

@@ -1,7 +1,6 @@
 """Reviewed candidate scripts in fresh processes; reuse the existing metric engine."""
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
@@ -16,6 +15,7 @@ from .models import ResearchError, encode, identifier, json_object
 
 CANONICAL_UNIVERSE = "aistock_equity_pit_canonical_v2"
 REPO_ROOT = Path(__file__).resolve().parents[3]
+CANDIDATE_SUBPROCESS = Path(__file__).with_name("candidate_subprocess.py")
 
 
 def validate_spec(value):
@@ -196,6 +196,8 @@ def execute(spec, output, *, prepare=None, compute=None):
     ctx = None
     results = []
     full_evaluation_windows = None
+    instruments_path = output / "scope_instruments.json"
+    write_json(instruments_path, spec["instruments"])
     for candidate in spec["candidates"]:
         name = candidate["factor_name"]
         folder = output / name
@@ -203,9 +205,10 @@ def execute(spec, output, *, prepare=None, compute=None):
         script = folder / "factor.py"
         shutil.copyfile(candidate["script"], script)
         result_path = folder / "values.h5"
-        command = [sys.executable, str(script), "--data-dir", spec["data_dir"],
+        command = [sys.executable, str(CANDIDATE_SUBPROCESS), "--script", str(script),
+                   "--data-dir", spec["data_dir"],
                    "--output", str(result_path), "--start-date", spec["read_start"],
-                   "--end-date", spec["read_end"], "--instruments", json.dumps(spec["instruments"])]
+                   "--end-date", spec["read_end"], "--instruments-file", str(instruments_path)]
         # Logs belong only to this attempt; no capture of huge subprocess output in RAM.
         with (folder / "stdout.log").open("x", encoding="utf-8") as stdout, (
                 folder / "stderr.log").open("x", encoding="utf-8") as stderr:

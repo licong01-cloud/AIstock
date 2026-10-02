@@ -1,7 +1,17 @@
 name: Dependency Update Validate
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Base branch for the complete changed-file comparison.
+        required: false
+        default: main
+        type: string
+      base_sha:
+        description: Optional full base commit; otherwise resolve the remote base once.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -91,15 +101,20 @@ jobs:
           }
           "interrupted_git_pack_cleanup count=$($fragments.Count) bytes=$([long]$removedBytes)"
 
-      - name: Fetch current PR base ref only
-        if: github.event_name == 'pull_request'
+      - name: Prepare pinned manual comparison
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ inputs.base_ref || 'main' }}
+          BASE_SHA: ${{ inputs.base_sha || '' }}
+          SOURCE_HEAD_SHA: ${{ github.sha }}
           CHECKOUT_REF: ${{ github.ref }}
         run: |
-          python scripts/ci_changed_files.py --prepare-pr-merge-base-only \
-            --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}"
+          mkdir -p tmp/validation/dependency_update
+          python scripts/ci_changed_files.py --prepare-manual-merge-base-only \
+            --base-ref "${BASE_REF}" --base-sha "${BASE_SHA}" --checkout-ref "${CHECKOUT_REF}" \
+            --source-head-sha "${SOURCE_HEAD_SHA}" > tmp/validation/dependency_update/base-head.json
+          BASE_COMMIT=$(python -c "import json; print(json.load(open('tmp/validation/dependency_update/base-head.json'))['base_commit'])")
+          echo "AISTOCK_MANUAL_BASE_SHA=${BASE_COMMIT}" >> "${GITHUB_ENV}"
+          echo "AISTOCK_MANUAL_HEAD_SHA=${SOURCE_HEAD_SHA}" >> "${GITHUB_ENV}"
 
       - name: Verify prebuilt AIstock-CI tooling
         shell: powershell
@@ -108,9 +123,9 @@ jobs:
       - name: Detect and select the changed dependency surface
         id: changes
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
-          BASE_SHA: ${{ github.event.before || '' }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_REF: ${{ inputs.base_ref || 'main' }}
+          BASE_SHA: ${{ env.AISTOCK_MANUAL_BASE_SHA }}
+          HEAD_SHA: ${{ env.AISTOCK_MANUAL_HEAD_SHA }}
         run: |
           mkdir -p tmp/validation/dependency_update
           python scripts/ci_changed_files.py \

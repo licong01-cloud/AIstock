@@ -42,6 +42,23 @@ class _Programs:
         return []
 
 
+@pytest.mark.parametrize("hour", [15, 19])
+def test_optional_entry_failure_is_reported_after_baseline_and_never_changes_it(hour):
+    events = []
+    class Prices:
+        def run_once(self):
+            events.append("entry")
+            raise RuntimeError("unit-only price failure")
+    service = AdvisoryForwardService(repository=_Repository(), program_service=_Programs(), model_service=SimpleNamespace(),
+        calendar=_Calendar(), now_provider=lambda: datetime(2026, 8, 14, hour, tzinfo=ZoneInfo("Asia/Shanghai")),
+        entry_price_service=Prices())
+    service._retry_one_model_observation = lambda _results: events.append("baseline")
+    result = service.run_once()
+    assert events == ["baseline", "entry"]
+    assert result["results"] == [] and result["publication_due"] == (hour == 19)
+    assert result["entry_price"]["status"] == "FAILED"
+
+
 class _PendingRepository(_Repository):
     def pending_settlements(self, *, on_or_before: date):
         assert on_or_before == date(2026, 8, 14)

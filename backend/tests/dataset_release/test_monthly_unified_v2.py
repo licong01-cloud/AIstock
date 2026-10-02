@@ -23,6 +23,7 @@ from backend.services.dataset_release.monthly_unified import (
     MonthlyReleaseRequest,
     MonthlyReleaseRequestInvalid,
     MonthlyReleaseService,
+    MonthlyReleaseSourceBlocked,
     REQUIRED_CONSUMERS,
     REQUIRED_NODES,
     SOURCE_GATES,
@@ -285,6 +286,156 @@ def _request(*, key: str = "monthly-202609") -> MonthlyReleaseRequest:
     )
 
 
+def _adoptable_successor(
+    tmp_path: Path, service: MonthlyReleaseService
+) -> dict[str, Any]:
+    release_root = tmp_path / "releases"
+    profile_root = tmp_path / "profiles"
+    release_root.mkdir()
+    profile_root.mkdir()
+    candidate = release_root / "v15-candidate"
+    reports = candidate / "reports"
+    reports.mkdir(parents=True)
+    manifest_identity = "b" * 64
+    manifest = candidate / "qe_dataset_manifest.json"
+    _canonical(
+        manifest,
+        {
+            "dataset_manifest_sha256": manifest_identity,
+            "cutoff_trade_date": "2026-08-31",
+            "release_id": "qe_hmm_full_v2_20260831",
+            "revision": "20260928-r8-unified-moneyflow1",
+        },
+    )
+    alias = reports / "moneyflow_alias_coverage_v1.json"
+    _canonical(
+        alias,
+        {
+            "schema_version": "qe_moneyflow_alias_coverage_receipt_v1",
+            "status": "PASS",
+            "expected": 120,
+            "resolved": 120,
+            "provider_absence": 0,
+            "unknown": 0,
+            "nonfinite": 0,
+            "mismatched": 0,
+            "database_write": False,
+        },
+    )
+    hmm = reports / "hmm_l2_file_preflight_moneyflow1.json"
+    _canonical(
+        hmm,
+        {
+            "schema_version": "hmm_risk_rotation_l2_input_bundle_v1",
+            "status": "PASS",
+            "identity": {"manifest_sha256": manifest_identity},
+        },
+    )
+    profile = profile_root / "profile-v15.json"
+    _canonical(
+        profile,
+        {
+            "schema_version": "aistock_active_dataset_profile_v3",
+            "generation": "20260928-v15-unified-moneyflow1",
+            "release_id": "qe_hmm_full_v2_20260831",
+            "cutoff": "2026-08-31",
+            "controller_paths": {"candidate_root": str(candidate.absolute())},
+            "node_bindings": {
+                "wsl2-5080": {"candidate_root": "/mnt/releases/v15-candidate"},
+                "rdagent-node1": {"candidate_root": "/home/releases/v15-candidate"},
+            },
+            "components": {
+                "dataset_manifest_sha256": manifest_identity,
+                "dataset_manifest_file_sha256": _sha(manifest),
+            },
+        },
+    )
+    return {
+        "idempotency_key": "adopt-v15",
+        "product_profile": "qe_hmm_full_v2",
+        "target_cutoff": date(2026, 8, 31),
+        "candidate_root": candidate.absolute(),
+        "profile_candidate": profile.absolute(),
+        "predecessor_profile_sha256": _sha(service.active_profile),
+        "target_profile_sha256": _sha(profile),
+        "dataset_manifest_sha256": manifest_identity,
+        "dataset_manifest_file_sha256": _sha(manifest),
+        "node_manifest_file_sha256": {
+            node: _sha(manifest) for node in REQUIRED_NODES
+        },
+        "evidence_refs": [
+            {
+                "relative_path": "reports/moneyflow_alias_coverage_v1.json",
+                "sha256": _sha(alias),
+                "schema_version": "qe_moneyflow_alias_coverage_receipt_v1",
+            },
+            {
+                "relative_path": "reports/hmm_l2_file_preflight_moneyflow1.json",
+                "sha256": _sha(hmm),
+                "schema_version": "hmm_risk_rotation_l2_input_bundle_v1",
+            },
+        ],
+        "controller_release_root": release_root.absolute(),
+        "profile_candidate_root": profile_root.absolute(),
+        "expected_node_roots": {
+            "wsl2-5080": "/mnt/releases/v15-candidate",
+            "rdagent-node1": "/home/releases/v15-candidate",
+        },
+        "principal": "dataset-operator:test",
+    }
+
+
+def test_existing_successor_adoption_issues_exact_authorization_and_activates(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, Pipeline())
+    values = _adoptable_successor(tmp_path, service)
+    adopted = service.adopt_existing_successor(**values)
+    repeated = service.adopt_existing_successor(**values)
+    assert adopted["status"] == "READY_TO_ACTIVATE"
+    assert repeated["operation_id"] == adopted["operation_id"]
+    assert _sha(Path(values["profile_candidate"])) == values["target_profile_sha256"]
+
+    authorization = service.issue_action_authorization(
+        adopted["operation_id"],
+        authorization_store=ActionAuthorizationStore((tmp_path / "authorizations").absolute()),
+        action="ACTIVATE",
+        principal="dataset-operator:test",
+    )
+    activated = service.activate(
+        adopted["operation_id"],
+        authorization_store=ActionAuthorizationStore((tmp_path / "authorizations").absolute()),
+        authorization_ref=authorization["authorization_id"],
+        principal="dataset-operator:test",
+        verify_after=lambda ready: {
+            "status": "PASS",
+            "dataset_manifest_sha256": ready["dataset_manifest_sha256"],
+        },
+    )
+    assert activated["status"] == "ACTIVATED_VERIFIED"
+    assert _sha(service.active_profile) == values["target_profile_sha256"]
+
+
+def test_existing_successor_adoption_rejects_drift_and_incomplete_evidence(
+    tmp_path: Path,
+) -> None:
+    service = _service(tmp_path, Pipeline())
+    values = _adoptable_successor(tmp_path, service)
+    values["node_manifest_file_sha256"] = {
+        **values["node_manifest_file_sha256"],
+        "rdagent-node1": "c" * 64,
+    }
+    with pytest.raises(MonthlyReleaseConflict, match="node manifest"):
+        service.adopt_existing_successor(**values)
+
+    values["node_manifest_file_sha256"] = {
+        node: values["dataset_manifest_file_sha256"] for node in REQUIRED_NODES
+    }
+    values["evidence_refs"] = values["evidence_refs"][:1]
+    with pytest.raises(monthly_subject.MonthlyReleaseNotReady, match="required release gates"):
+        service.adopt_existing_successor(**values)
+
+
 def _authorization(
     path: Path,
     *,
@@ -377,6 +528,65 @@ def test_cancel_is_observed_at_stage_boundary(tmp_path: Path) -> None:
     operation_id = service.submit(_request())["operation_id"]
     service.cancel(operation_id)
     assert service.run(operation_id)["status"] == "CANCELLED"
+
+
+def test_source_blocked_waits_for_explicit_resume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pipeline = Pipeline()
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+    producer = pipeline.run_stage
+
+    def blocked(**kwargs: Any) -> Mapping[str, Any]:
+        pipeline.calls.append(str(kwargs["stage"]))
+        raise MonthlyReleaseSourceBlocked("PIT cutoff is stale", context={"reason_code": "BLOCKED_PIT_STATE_NOT_READY"})
+
+    monkeypatch.setattr(pipeline, "run_stage", blocked)
+    worker = MonthlyReleaseWorker(service)
+    first = worker.run_once()
+    assert first is not None and first["status"] == "SOURCE_BLOCKED"
+    for _ in range(10):
+        assert worker.run_once() is None
+    assert service.run(operation_id) == first  # A stale queue observation cannot bypass resume.
+    assert pipeline.calls == ["SOURCE"]
+    assert service.store.pending_operation_ids() == ()
+    service.allowed_cutoff_resolver = lambda: date(2026, 10, 30)
+    with pytest.raises(MonthlyReleaseConflict, match="another monthly operation"):
+        service.submit(MonthlyReleaseRequest(date(2026, 10, 30), "qe_hmm_full_v2", "october"))
+    monkeypatch.setattr(pipeline, "run_stage", producer)
+    assert service.resume(operation_id)["status"] == "PLANNED"
+    assert service.store.pending_operation_ids() == (operation_id,)
+    final = worker.run_once()
+    assert final is not None and final["status"] == "READY_TO_ACTIVATE"
+    assert final["attempt"] == first["attempt"] + 1
+    assert pipeline.calls.count("SOURCE") == 2
+
+
+@pytest.mark.parametrize("cancel_during_failure", [False, True])
+def test_blocked_cancel_finishes_without_another_source_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_during_failure: bool
+) -> None:
+    pipeline = Pipeline()
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+
+    def blocked(**kwargs: Any) -> Mapping[str, Any]:
+        pipeline.calls.append(str(kwargs["stage"]))
+        if cancel_during_failure:
+            service.cancel(operation_id)
+        raise MonthlyReleaseSourceBlocked("source unavailable")
+
+    monkeypatch.setattr(pipeline, "run_stage", blocked)
+    worker = MonthlyReleaseWorker(service)
+    first = worker.run_once()
+    assert first is not None and first["status"] == "SOURCE_BLOCKED"
+    if cancel_during_failure:
+        assert worker.run_once()["status"] == "CANCELLED"
+    else:
+        assert service.cancel(operation_id)["status"] == "CANCELLED"
+    assert worker.run_once() is None
+    assert service.status(operation_id)["attempt"] == first["attempt"]
+    assert pipeline.calls == ["SOURCE"]
+    assert service.resume(operation_id)["status"] == "PLANNED"
 
 
 def test_activation_requires_exact_authorization_and_supports_safe_rollback(tmp_path: Path) -> None:

@@ -185,6 +185,7 @@ rules:
       - backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py
       - scripts/build_qe_sector_risk_overlay.py
       - scripts/qe_sector_risk_overlay*.py
+      - scripts/qe_suspend_filter.py
       - scripts/qrun_limit.py
       - scripts/qrun_limit_minute.py
       - scripts/score_weighted_strategy_v2.py
@@ -561,6 +562,15 @@ rules:
     layer: dev_quality_tooling
     risk_level: high
     ownership_reason: Open-source CI/CD and local quality tool configs define issue workflow automation gates.
+  - rule_id: ci_changed_files_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_changed_files.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Changed-file ancestry and scope tests execute scripts/ci_changed_files.py, owned by validation.guardrails, rather than generic workflow orchestration.
   - rule_id: ci_change_classifier_test_owner
     priority: 110
     include:
@@ -570,6 +580,15 @@ rules:
     layer: backend_test
     risk_level: high
     ownership_reason: The classifier regression suite belongs to the same guardrail subsystem as its production classifier and overrides broader workflow-test catch-alls.
+  - rule_id: ci_workflow_policy_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_workflow_policy_scan.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Policy contract tests execute the guardrail-owned ci_workflow_policy_scan.py and override generic workflow test rules.
   - rule_id: mcp_gateway_platform
     priority: 90
     include:
@@ -670,6 +689,9 @@ rules:
   - rule_id: qe_services
     priority: 80
     include:
+      - backend/scripts/run_correlation_compute_wsl.py
+      - backend/scripts/run_official_evaluation_wsl.py
+      - backend/scripts/run_official_factor_full_compute_wsl.py
       - backend/services/quantevolver/**
       - backend/routers/quantevolver*.py
       - backend/tests/quantevolver/test_factor_emit_hook.py
@@ -1116,6 +1138,19 @@ rules:
     layer: model_runtime
     risk_level: high
     ownership_reason: HMM snapshots and coefficients affect model scoring and runtime decisions.
+  - rule_id: qlib_moneyflow_source_identity
+    priority: 111
+    include:
+      - backend/data_service/security_source_identity.py
+      - backend/data_service/manifests/security_source_identity_v1.json
+      - backend/tests/data_service/test_security_source_identity.py
+      - backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py
+      - scripts/audit_qe_moneyflow_alias_coverage.py
+    primary_module: qlib_data
+    impact_modules: [local_data, qe.core, hmm]
+    layer: data_pipeline
+    risk_level: critical
+    ownership_reason: Shared historical security-code identity and its frozen moneyflow audit are part of the unified Qlib release boundary.
   - rule_id: qlib_data_pipeline
     priority: 75
     include:
@@ -1154,6 +1189,7 @@ rules:
       - backend/routers/monthly_dataset_releases.py
       - backend/deps.py
       - backend/tests/dataset_release/**
+      - backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py
       - backend/tests/routers/test_dataset_releases.py
       - backend/tests/routers/test_monthly_dataset_releases.py
       - backend/tests/routers/test_managed_dataset_preparations.py
@@ -1168,6 +1204,8 @@ rules:
       - scripts/monthly_unified_dataset_release.py
       - scripts/monthly_unified_dataset_release_worker.py
       - scripts/build_dataset_release_successor.py
+      - scripts/repair_qe_adj_factor_candidate.py
+      - scripts/repair_qe_daily_basic_history.py
       - scripts/build_shared_sector_context_component.py
       - scripts/update_backtest_dataset_monthly.py
       - scripts/export_qe_qlib_candidate.py
@@ -1200,6 +1238,8 @@ rules:
       - backend/routers/ingestion.py
       - scripts/ingest_tushare_adj_factor.py
       - scripts/validate_etf_share_size_source.py
+      - scripts/prepare_etf_share_size_deployment.py
+      - backend/tests/scripts/test_prepare_etf_share_size_deployment.py
       - backend/tests/ingestion/test_tdx_scheduler_adj_factor.py
       - backend/tests/services/test_adj_factor_history_reconciler.py
       - backend/tests/test_tushare_sync_engine.py
@@ -1305,6 +1345,12 @@ rules:
       - frontend/src/app/local-data/**
       - frontend/src/app/qlib/**
       - scripts/repair_minute_via_minute_api.py
+      - scripts/repair_suspended_minute_placeholders.py
+      - scripts/ingest_incremental.py
+      - scripts/ingest_full_minute.py
+      - backend/services/minute_data_session_contract.py
+      - backend/tests/ingestion/test_minute_data_session_contract.py
+      - backend/tests/ingestion/test_ingest_incremental_minute.py
       - scripts/repair_suspend_688766.py
       - backend/tests/scripts/test_repair_suspend_688766.py
       - backend/services/suspend_d_coverage.py

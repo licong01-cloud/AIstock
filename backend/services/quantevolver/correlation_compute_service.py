@@ -9,23 +9,30 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
 import traceback
+from contextlib import contextmanager, nullcontext
+import shutil
+import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import pandas as pd
 from psycopg2.extras import execute_values
 
 from ...db.pg_pool import get_conn
 from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
-from ..canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
+from ..canonical_equity_pit import CANONICAL_PIT_RULE_VERSION, CANONICAL_PIT_UNIVERSE_KEY
 from .correlation_engine import CorrelationEngine, CorrelationResult
 from .factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
+    OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+    OFFICIAL_FACTOR_INDEX_POLICY,
     FactorUniverseMaskService,
 )
 from .factor_eligibility_service import FactorEligibilityService
@@ -357,6 +364,344 @@ def _current_correlation_eligible_factor_ids(include_disabled: bool = False) -> 
     return factor_ids
 
 
+def _persist_target_correlations(
+    *,
+    target_factor_name: str,
+    records: List[Dict[str, Any]],
+    as_of_date: str,
+    universe_metadata: Dict[str, Any],
+) -> int:
+    """Atomically replace only correlation rows involving one target factor."""
+
+    catalog_rows = FactorEligibilityService().list_eligible_factors(include_disabled=True)
+    name_to_id = {
+        str(row["factor_name"]): int(row["id"])
+        for row in catalog_rows
+        if row.get("id") is not None and row.get("factor_name")
+    }
+    target_id = name_to_id.get(target_factor_name)
+    if target_id is None:
+        raise RuntimeError(f"target factor is absent from catalog: {target_factor_name}")
+    seen: dict[tuple[int, int], tuple[Any, ...]] = {}
+    for record in records:
+        factor_a = str(record.get("factor_a") or "")
+        factor_b = str(record.get("factor_b") or "")
+        if target_factor_name not in {factor_a, factor_b}:
+            raise RuntimeError("target-only correlation payload contains an unrelated pair")
+        other_name = factor_b if factor_a == target_factor_name else factor_a
+        other_id = name_to_id.get(other_name)
+        if other_id is None or other_id == target_id:
+            raise RuntimeError(f"target-only correlation reference is invalid: {other_name}")
+        correlation = float(record["correlation"])
+        if not math.isfinite(correlation) or correlation < -1.0 or correlation > 1.0:
+            raise RuntimeError("target-only correlation value is invalid")
+        pair = (min(target_id, other_id), max(target_id, other_id))
+        if pair in seen:
+            raise RuntimeError("target-only correlation payload contains duplicate pairs")
+        seen[pair] = (
+            pair[0],
+            pair[1],
+            correlation,
+            str(record.get("method") or "spearman_ewma"),
+            as_of_date,
+            252,
+            universe_metadata.get("universe_key"),
+            universe_metadata.get("universe_rule_version"),
+            universe_metadata.get("universe_fingerprint_sha256"),
+            universe_metadata.get("index_policy"),
+        )
+    if not seen:
+        raise RuntimeError("target-only correlation refresh produced no valid pairs")
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM qe_factor_correlations
+                    WHERE factor_a_id = %s OR factor_b_id = %s
+                    RETURNING factor_a_id, factor_b_id
+                    """,
+                    (target_id, target_id),
+                )
+                deleted_pairs = list(cur.fetchall())
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO qe_factor_correlations
+                        (factor_a_id, factor_b_id, correlation, method,
+                         as_of_date, data_window_days, universe, universe_rule_version,
+                         universe_fingerprint_sha256, index_policy, computed_at)
+                    VALUES %s
+                    """,
+                    list(seen.values()),
+                    template="(%s, %s, %s, %s, %s::DATE, %s, %s, %s, %s, %s, NOW())",
+                    page_size=2000,
+                )
+                affected_reference_ids = sorted(
+                    {
+                        factor_id
+                        for pair in [*deleted_pairs, *seen.keys()]
+                        for factor_id in pair
+                        if factor_id != target_id
+                    }
+                )
+                if affected_reference_ids:
+                    cur.execute(
+                        """
+                        UPDATE aistock_factor_catalog c
+                        SET correlation_pair_count = (
+                            SELECT COUNT(*)
+                            FROM qe_factor_correlations q
+                            WHERE q.factor_a_id = c.id OR q.factor_b_id = c.id
+                        )
+                        WHERE c.id = ANY(%s)
+                        """,
+                        (affected_reference_ids,),
+                    )
+                cur.execute(
+                    """
+                    UPDATE aistock_factor_catalog
+                    SET correlation_computed_at = NOW(),
+                        correlation_pair_count = %s
+                    WHERE id = %s
+                    """,
+                    (len(seen), target_id),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return len(seen)
+
+
+def _target_cache_mismatch(item: Any, binding: dict, code_hash: str | None) -> str | None:
+    """Compare individual cache provenance; a promoted panel is not its authority."""
+    if not isinstance(item, dict):
+        return "cache_metadata_missing"
+    for field in (
+        "status", "as_of_date", "factor_data_dir", "moneyflow_unit_contract_version",
+        "universe_key", "universe_rule_version", "universe_fingerprint_sha256", "index_policy",
+    ):
+        if not item.get(field):
+            return f"cache_{field}_missing"
+        if item[field] != binding.get(field):
+            return f"cache_{field}_mismatch"
+    if not code_hash or item.get("code_hash") != code_hash:
+        return "cache_code_hash_mismatch"
+    return None
+
+
+def run_target_correlation_refresh_local(
+    *,
+    target_factor_name: str,
+    as_of_date: str | None = None,
+    job_id: str | None = None,
+    data_date: str | None = None,
+) -> Dict[str, Any]:
+    """Compute target x eligible-reference correlations and replace only target rows."""
+
+    del data_date
+    assert_wsl_runtime("correlation_target_refresh_local")
+    target = str(target_factor_name or "").strip()
+    if not target:
+        raise ValueError("target_factor_name is required")
+    with _computing_lock:
+        _update_job_status(job_id, "running")
+        try:
+            eligible_rows = FactorEligibilityService().list_eligible_factors(
+                include_disabled=False
+            )
+            eligible_names = sorted(
+                {
+                    str(row.get("factor_name") or "").strip()
+                    for row in eligible_rows
+                    if str(row.get("factor_name") or "").strip()
+                }
+            )
+            if target not in eligible_names:
+                raise ValueError(f"target factor is not official-eligible: {target}")
+            pipeline = get_correlation_factor_value_pipeline()
+            cached_names = {
+                str(item.get("factor_name") or "")
+                for item in pipeline.get_cached_singles()
+            }
+            if target not in cached_names:
+                raise ValueError(f"target factor has no official single cache: {target}")
+            missing_references = sorted(
+                name
+                for name in eligible_names
+                if name != target and name not in cached_names
+            )
+            if missing_references:
+                raise ValueError(
+                    "official eligible references are missing from the cache: "
+                    f"{missing_references[:10]}"
+                )
+            references = [name for name in eligible_names if name != target]
+            if not references:
+                raise ValueError("target correlation refresh has no eligible cached references")
+
+            meta_path = Path(str(pipeline._output_dir)) / "_meta.json"
+            if not meta_path.is_file():
+                raise ValueError("official factor cache metadata is missing")
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            factor_meta = meta.get("factors") if isinstance(meta.get("factors"), dict) else {}
+            target_meta = factor_meta.get(target)
+            if not isinstance(target_meta, dict):
+                raise ValueError("target factor cache metadata is missing")
+            resolved_as_of = str(as_of_date or target_meta.get("as_of_date") or "").strip()
+            if not resolved_as_of:
+                raise ValueError("target correlation refresh as_of_date is unavailable")
+            try:
+                datetime.strptime(resolved_as_of, "%Y-%m-%d")
+            except ValueError as exc:
+                raise ValueError(
+                    "target correlation refresh as_of_date is invalid"
+                ) from exc
+            expected_factor_dir = str(os.getenv("RDAGENT_FACTOR_DATA_WSL") or "").strip()
+            # This path correlates cached values, not Qlib prices. The global
+            # qlib_bin_path describes the last *full-panel* promotion only.
+            cache_universe_key = target_meta.get("universe_key")
+            if cache_universe_key not in {CANONICAL_PIT_UNIVERSE_KEY, OFFICIAL_FACTOR_UNIVERSE_KEY}:
+                raise ValueError("target factor cache universe authority is unavailable")
+            # Official cached values already record their PIT denominator.
+            # Comparing them must not replace that historical identity with
+            # today's rolling state (or bootstrap/rebuild a live universe).
+            universe_metadata = {
+                field: target_meta.get(field)
+                for field in (
+                    "universe_key", "universe_rule_version", "universe_scope",
+                    "universe_fingerprint_sha256", "stock_universe_mode",
+                    "snapshot_universe_mode", "index_policy", "coverage_semantics",
+                    "universe_start_date", "universe_end_date", "universe_generated_at",
+                )
+            }
+            binding = {
+                **universe_metadata, "status": "ok", "as_of_date": resolved_as_of,
+                "factor_data_dir": expected_factor_dir or target_meta.get("factor_data_dir"),
+                "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
+                "universe_rule_version": (
+                    CANONICAL_PIT_RULE_VERSION
+                    if cache_universe_key == CANONICAL_PIT_UNIVERSE_KEY
+                    else OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION
+                ),
+                "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
+            }
+            code_hashes = {row["factor_name"]: row.get("code_text_hash") for row in eligible_rows}
+            target_error = _target_cache_mismatch(target_meta, binding, code_hashes.get(target))
+            if target_error:
+                raise ValueError(f"target factor binding invalid: {target_error}")
+            eligible_reference_count = len(references)
+            unavailable_pairs = []
+            compatible_references = []
+            for name in references:
+                reason = _target_cache_mismatch(factor_meta.get(name), binding, code_hashes.get(name))
+                if reason:
+                    unavailable_pairs.append({"candidate": target, "reference": name,
+                                              "status": "unavailable", "reason": reason})
+                else:
+                    compatible_references.append(name)
+            if not compatible_references:
+                raise ValueError("target correlation refresh has no compatible reference caches")
+            references = compatible_references
+            loader = get_correlation_factor_value_loader(source="single")
+            engine = CorrelationEngine(loader)
+            # Avoid deriving the target window from an arbitrary first cached
+            # factor, which can belong to another release or end on an older date.
+            target_index = pd.read_parquet(
+                meta_path.parent / "single" / f"{target}.parquet", columns=[],
+                filters=[("datetime", "<=", pd.Timestamp(resolved_as_of))],
+            ).index
+            trading_dates = sorted(target_index.get_level_values("datetime").unique())
+            trading_dates = [pd.Timestamp(day).strftime("%Y-%m-%d") for day in trading_dates]
+            window_dates = trading_dates[-252:]
+            if len(window_dates) < 126:
+                raise ValueError("target correlation refresh has insufficient trading dates")
+            del target_index, trading_dates
+            records: list[dict[str, Any]] = []
+            loaded_reference_count = 0
+            unavailable_pair_count = len(unavailable_pairs)
+            # Read through the loader's filtered, uncached path so the process
+            # retains only one bounded 252-day reference batch at a time.
+            reference_batch_size = 64
+            for offset in range(0, len(references), reference_batch_size):
+                reference_batch = references[offset : offset + reference_batch_size]
+                columns = []
+                for factor_name in [target, *reference_batch]:
+                    frame = loader._read_single_filtered(
+                        factor_name,
+                        window_dates[0],
+                        window_dates[-1],
+                    )
+                    if frame is None or frame.empty:
+                        raise ValueError(
+                            f"official single cache is unreadable or empty: {factor_name}"
+                        )
+                    columns.append(frame.iloc[:, 0].rename(factor_name))
+                panel = pd.concat(columns, axis=1, join="outer").sort_index()
+                del columns
+                if target not in panel.columns:
+                    raise ValueError("target factor is absent from the loaded official panel")
+                loaded_references = [
+                    name for name in reference_batch if name in panel.columns
+                ]
+                if len(loaded_references) != len(reference_batch):
+                    missing = sorted(set(reference_batch) - set(loaded_references))
+                    raise ValueError(
+                        f"eligible references disappeared during panel loading: {missing[:10]}"
+                    )
+                result = engine.compute_selected_submatrix(
+                    panel[[target]],
+                    panel[loaded_references],
+                    as_of_date=resolved_as_of,
+                )
+                rows = result.records()
+                loaded_reference_count += len(loaded_references)
+                unavailable_pair_count += sum(
+                    row["status"] != "available" for row in rows
+                )
+                unavailable_pairs.extend(row for row in rows if row["status"] != "available")
+                records.extend(
+                    {
+                        "factor_a": row["candidate"],
+                        "factor_b": row["reference"],
+                        "correlation": row["correlation"],
+                        "method": "spearman_ewma",
+                    }
+                    for row in rows
+                    if row["status"] == "available"
+                )
+                del panel, result
+            if len(records) + unavailable_pair_count != eligible_reference_count:
+                raise ValueError("target correlation reference denominator is inconsistent")
+            written = _persist_target_correlations(
+                target_factor_name=target,
+                records=records,
+                as_of_date=resolved_as_of,
+                universe_metadata=universe_metadata,
+            )
+            _update_job_status(job_id, "success")
+            return {
+                "success": True,
+                "status": "success",
+                "mode": "target_only",
+                "target_factor_name": target,
+                "reference_count": loaded_reference_count,
+                "eligible_reference_count": eligible_reference_count,
+                "complete": unavailable_pair_count == 0,
+                "written_pair_count": written,
+                "unavailable_pair_count": unavailable_pair_count,
+                "unavailable_pairs": unavailable_pairs,
+                "cache_binding": binding,
+                "as_of_date": resolved_as_of,
+                "unrelated_rows_modified": 0,
+            }
+        except Exception as exc:
+            _update_job_status(job_id, "failed", str(exc))
+            raise
+
+
 def _reconcile_correlation_state(reset_all: bool = False) -> Dict[str, int]:
     """清理相关性历史脏状态，确保 DB 与当前 official 准入规则一致。"""
     stats = {
@@ -463,55 +808,9 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             phase2_elapsed = 0.0
             phase3_elapsed = 0.0
 
-            # ═══ 先收敛历史脏状态，保证当前 official 准入规则和 DB 一致 ═══
-            reconcile_stats = _reconcile_correlation_state(reset_all=True)
-            _correlation_logs.append(
-                "[收敛] 清理历史相关性状态: "
-                f"eligible={reconcile_stats['eligible_factors']}, "
-                f"deleted_pairs={reconcile_stats['deleted_pairs']}, "
-                f"reset_ineligible={reconcile_stats['reset_ineligible_catalog']}, "
-                f"reset_orphan={reconcile_stats['reset_orphan_catalog']}, "
-                f"reset_all={reconcile_stats['reset_all_catalog']}"
-            )
-
-            # ═══ 清空所有历史相关性数据（每次计算前必须清空）═══
-            import glob as _glob
-            _correlation_logs.append("[清空] 清空所有历史相关性数据...")
-
-            # 1. TRUNCATE qe_factor_correlations
-            try:
-                with get_conn() as _conn:
-                    with _conn.cursor() as _cur:
-                        _cur.execute("TRUNCATE TABLE qe_factor_correlations")
-                        _cur.execute(
-                            """
-                            UPDATE aistock_factor_catalog
-                            SET correlation_computed_at = NULL,
-                                correlation_pair_count = 0
-                            WHERE correlation_computed_at IS NOT NULL
-                               OR COALESCE(correlation_pair_count, 0) <> 0
-                            """
-                        )
-                    _conn.commit()
-                _correlation_logs.append("[清空] DB: qe_factor_correlations 与 catalog correlation 状态已清空")
-            except Exception as e:
-                _correlation_logs.append(f"[清空] DB 清空失败，终止计算: {e}", "ERROR")
-                logger.error(f"TRUNCATE 失败: {e}")
-                _correlation_progress.finish("failed", f"DB 清空失败: {e}")
-                _update_job_status(job_id, "failed")
-                return {
-                    "success": False,
-                    "status": "failed",
-                    "error": f"DB 清空失败: {e}",
-                }
-
-            # 2. 删除 HDF5 相关性矩阵缓存
-            _hdf5_dir = os.path.normpath(str(REPO_ROOT / "data" / "correlation_matrices"))
-            for _h5 in _glob.glob(os.path.join(_hdf5_dir, "corr_*.h5")):
-                os.remove(_h5)
-                _correlation_logs.append(f"[清空] 删除 HDF5: {os.path.basename(_h5)}")
-
-            # 3. 清除内存缓存
+            # Only replace published DB/H5 state after successful computation.
+            _correlation_logs.append("[保护] 校验与计算期间保留已发布 DB 和 HDF5 结果")
+            # Invalidate process-local caches, not persistent state.
             FactorValueLoader.invalidate_single_cache()
             FactorValueLoader.invalidate_merged_cache(str(CORRELATION_FACTOR_VALUE_CACHE_DIR))
             _correlation_logs.append("[清空] 内存缓存已清除")
@@ -756,7 +1055,7 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
             result = engine.compute_full_matrix(
                 matrix_factors,
                 as_of_date=as_of_date,
-                save_hdf5=True,
+                save_hdf5=False,
                 on_progress=_matrix_progress,
                 stop_event=_stop_event,
                 expected_as_of_date=_aod_value,
@@ -765,7 +1064,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 expected_universe_fingerprint_sha256=universe_metadata.get("universe_fingerprint_sha256"),
                 expected_index_policy=universe_metadata.get("index_policy"),
             )
-            _latest_result = result
             _correlation_progress.advance(done=1)
             records = result.to_db_records(threshold=0)
             no_valid_pair_factors = sorted(result.get_no_valid_pair_factors())
@@ -790,22 +1088,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 if high_pairs:
                     _correlation_logs.append(f"  发现 {len(high_pairs)} 对高相关因子 (|r|>0.7)")
 
-            # Phase 3: 写 DB
-            _correlation_progress.advance(phase="db_persist", phase_label="写入数据库", done=0, total=1)
-            _correlation_logs.append(f"[阶段3/3] 写入数据库 ({len(records)} 条记录)")
-            phase3_t0 = time.time()
-            if records:
-                _persist_correlations_batch(records, universe_metadata=universe_metadata)
-            if _latest_result:
-                _persist_correlation_metadata(_latest_result)
-            _correlation_progress.advance(done=1)
-            phase3_elapsed = round(time.time() - phase3_t0, 1)
-            _correlation_logs.append(f"阶段3完成: DB 写入耗时 {phase3_elapsed}s")
-
-            _correlation_progress.finish("success")
-            _update_job_status(job_id, "success")
-            total_elapsed = _correlation_progress.snapshot().get("elapsed_sec", 0)
-
             # ── 成功响应: 显式汇报成功/失败因子数 + 排除原因分类 ──
             # 排除来源两类 (互斥):
             # 1) missing_from_cache: Phase 1 缺独立指标缓存 (missing_factors)
@@ -827,6 +1109,34 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 f"no_valid_pairs={len(_no_valid_pair_factors)})"
             )
 
+            runtime_validation = _build_correlation_runtime_validation(
+                requested_count=_requested_count, success_count=_success_count,
+                failed_count=_failed_count, missing_factors=missing_factors,
+                degenerate_factors=_degenerate_factors,
+                no_valid_pair_factors=_no_valid_pair_factors, record_count=len(records),
+                as_of_date=as_of_date, cache_root=CORRELATION_FACTOR_VALUE_CACHE_DIR,
+                integrity=integrity, universe_metadata=universe_metadata,
+            )
+            # Publish only after the existing result invariants have been evaluated.
+            _correlation_progress.advance(phase="db_persist", phase_label="写入数据库", done=0, total=1)
+            phase3_t0 = time.time()
+            if records:
+                result.metadata.setdefault(
+                    "hdf5_path",
+                    str(Path(getattr(engine, "_hdf5_dir", REPO_ROOT / "data" / "correlation_matrices"))
+                        / f"corr_{result.as_of_date.replace('-', '')}.h5"),
+                )
+                _persist_correlations_batch(
+                    records, universe_metadata=universe_metadata,
+                    replace_all=True, correlation_result=result,
+                )
+                _latest_result = result
+            _correlation_progress.advance(done=1)
+            phase3_elapsed = round(time.time() - phase3_t0, 1)
+            _correlation_progress.finish("success")
+            _update_job_status(job_id, "success")
+            total_elapsed = _correlation_progress.snapshot().get("elapsed_sec", 0)
+
             # --- 完整汇总日志 ---
             _correlation_logs.append("=" * 50)
             _correlation_logs.append("计算完成汇总")
@@ -845,19 +1155,6 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                 f"success={_success_count}, failed={_failed_count}, "
                 f"no_valid_pairs={len(_no_valid_pair_factors)}, "
                 f"records={len(records)}, elapsed={total_elapsed}s"
-            )
-            runtime_validation = _build_correlation_runtime_validation(
-                requested_count=_requested_count,
-                success_count=_success_count,
-                failed_count=_failed_count,
-                missing_factors=missing_factors,
-                degenerate_factors=_degenerate_factors,
-                no_valid_pair_factors=_no_valid_pair_factors,
-                record_count=len(records),
-                as_of_date=as_of_date,
-                cache_root=CORRELATION_FACTOR_VALUE_CACHE_DIR,
-                integrity=integrity,
-                universe_metadata=universe_metadata,
             )
             return {
                 "success": True,
@@ -919,9 +1216,57 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
 
 # ── 相关性 DB 持久化辅助函数 ──
 
+@contextmanager
+def _correlation_snapshot_publication(result: Optional[CorrelationResult]):
+    """Restore the previous H5 when publication or DB commit raises."""
+    if result is None:
+        yield lambda: None
+        return
+    target = Path(result.metadata["hdf5_path"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = backup = None
+    replaced = False
+    restore_completed = True
+    had_previous = target.exists()
+    try:
+        fd, name = tempfile.mkstemp(prefix=".corr-stage-", suffix=".h5", dir=target.parent)
+        os.close(fd)
+        staged = Path(name)
+        result.to_hdf5(str(staged))
+        if had_previous:
+            fd, name = tempfile.mkstemp(prefix=".corr-rollback-", suffix=".h5", dir=target.parent)
+            os.close(fd)
+            backup = Path(name)
+            shutil.copyfile(target, backup)
+
+        def publish():
+            nonlocal replaced
+            os.replace(staged, target)
+            replaced = True
+
+        yield publish
+    except BaseException:
+        if replaced:
+            restore_completed = False
+            if had_previous:
+                os.replace(backup, target)
+            else:
+                target.unlink()
+            restore_completed = True
+        raise
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        if backup is not None and restore_completed:
+            backup.unlink(missing_ok=True)
+
+
 def _persist_correlations_batch(
     records: List[Dict[str, Any]],
     universe_metadata: Optional[Dict[str, Any]] = None,
+    *,
+    replace_all: bool = False,
+    correlation_result: Optional[CorrelationResult] = None,
 ) -> int:
     """批量写入相关性记录到 qe_factor_correlations 表。
 
@@ -943,7 +1288,10 @@ def _persist_correlations_batch(
     if not catalog_name_to_id:
         raise RuntimeError("catalog 中无可用于写入相关性的因子")
 
-    with get_conn() as conn:
+    # Outer file context also receives errors raised by the inner DB commit.
+    with _correlation_snapshot_publication(correlation_result) as publish, get_conn(
+        autocommit=False, manage_transaction=True,
+    ) as conn:
         with conn.cursor() as cur:
             # 预处理: 构建去重的 (a_id, b_id) -> row 映射.
             # 如果某一侧因子在 catalog 里查不到 id (异常状态), 记 WARN 并 skip.
@@ -981,6 +1329,14 @@ def _persist_correlations_batch(
             if not values:
                 raise RuntimeError(
                     f"相关性结果全部无法映射到 catalog id, 拒绝写入, skip={skipped_unknown} 条"
+                )
+
+            if replace_all:
+                cur.execute("TRUNCATE TABLE qe_factor_correlations")
+                cur.execute(
+                    "UPDATE aistock_factor_catalog SET correlation_computed_at = NULL, "
+                    "correlation_pair_count = 0 WHERE correlation_computed_at IS NOT NULL "
+                    "OR COALESCE(correlation_pair_count, 0) <> 0"
                 )
 
             execute_values(
@@ -1033,7 +1389,9 @@ def _persist_correlations_batch(
                 WHERE c.id = sub.factor_id
             """, (computed_id_list, computed_id_list))
 
-        conn.commit()
+        if correlation_result is not None:
+            _persist_correlation_metadata(correlation_result, connection=conn)
+        publish()
 
     written = len(values)
     logger.info(
@@ -1042,9 +1400,11 @@ def _persist_correlations_batch(
     return written
 
 
-def _persist_correlation_metadata(result: CorrelationResult) -> None:
+def _persist_correlation_metadata(result: CorrelationResult, *, connection=None) -> None:
     """写入相关性计算元数据。"""
-    with get_conn() as conn:
+    with (nullcontext(connection) if connection is not None else get_conn(
+        autocommit=False, manage_transaction=True,
+    )) as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO qe_correlation_metadata
@@ -1081,6 +1441,7 @@ def _persist_correlation_metadata(result: CorrelationResult) -> None:
 # Public aliases used by scripts/router code. The leading-underscore functions
 # are kept because existing call sites and tests may still reference them.
 run_correlation_compute_local = _run_correlation_compute_local
+persist_target_correlations = _persist_target_correlations
 persist_correlations_batch = _persist_correlations_batch
 persist_correlation_metadata = _persist_correlation_metadata
 current_correlation_eligible_factor_ids = _current_correlation_eligible_factor_ids

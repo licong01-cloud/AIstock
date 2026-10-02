@@ -272,10 +272,12 @@ def test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_ru
         def __init__(self) -> None:
             self.runtime_config = None
             self.trade_date = None
+            self.archive_context = None
 
-        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config, advisory_archive_context=None):
             self.trade_date = trade_date
             self.runtime_config = dict(runtime_config)
+            self.archive_context = advisory_archive_context
             return SelectionRun(
                 mode=mode,
                 trade_date=trade_date,
@@ -333,6 +335,8 @@ def test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_ru
     }
     assert fake_selection.runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-09"
     assert fake_selection.runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
+    assert fake_selection.archive_context["program_id"] == program_id
+    assert fake_selection.archive_context["decision_as_of_trade_date"] == "2026-06-09"
     payload = review.json()["review"]
     assert payload["trade_date"] == "2026-06-10"
     assert payload["change_summary"]["advisory_date_context"]["selection_as_of_trade_date"] == "2026-06-09"

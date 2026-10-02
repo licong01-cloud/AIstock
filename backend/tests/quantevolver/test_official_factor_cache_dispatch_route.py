@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import sys
@@ -121,6 +122,56 @@ def test_official_full_compute_dispatch_preserves_explicit_universe_key() -> Non
 
     assert result["ok"] is True
     assert captured["payload"]["universe_key"] == "aistock_equity_pit_canonical_v2"
+
+
+def test_official_full_compute_binds_explicit_profile_paths_once(monkeypatch) -> None:
+    from backend.services.quantevolver import (
+        official_factor_full_compute_dispatch_service as service_mod,
+    )
+
+    captured = {}
+    frozen = {
+        "profile_sha256": "a" * 64,
+        "cutoff": "2026-08-31",
+    }
+
+    class _FakeDispatchService:
+        async def create_and_submit_task(self, payload):
+            captured.update(payload)
+            return {"task_id": "official-r8", "status": "queued"}
+
+    monkeypatch.setattr(
+        service_mod,
+        "freeze_explicit_dataset_task_binding",
+        lambda **_kwargs: frozen,
+    )
+    monkeypatch.setattr(
+        service_mod,
+        "frozen_dataset_environment",
+        lambda _binding: {
+            "RDAGENT_FACTOR_DATA_WSL": "/releases/r8/components/factor_h5_static_candidate_v2",
+            "QE_QLIB_DATA_PATH": "/releases/r8/components/daily_bin_candidate",
+        },
+    )
+
+    result = service_mod.OfficialFactorFullComputeDispatchService(
+        _FakeDispatchService()
+    ).submit(
+        factor_names=["factor_a"],
+        factor_data_dir=None,
+        start_date="2018-08-01",
+        end_date="2026-08-31",
+        dataset_profile_path="X:/profiles/r8.json",
+        expected_profile_sha256="a" * 64,
+    )
+
+    assert captured["dataset_binding"] is frozen
+    assert captured["payload"]["factor_data_dir"].endswith(
+        "/factor_h5_static_candidate_v2"
+    )
+    assert captured["payload"]["qlib_bin_path"].endswith("/daily_bin_candidate")
+    assert captured["payload"]["universe_key"] == "aistock_equity_pit_canonical_v2"
+    assert result["payload"]["dataset_profile_sha256"] == "a" * 64
 
 
 def test_cache_status_sort_keeps_numeric_scores_comparable():
@@ -376,6 +427,31 @@ def test_official_evaluation_wsl_runner_delegates_full_compute_payload(monkeypat
     assert emitted["type"] == "result"
     assert emitted["data"]["success"] is True
     assert captured["payload"] == payload
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    [
+        "run_correlation_compute_wsl.py",
+        "run_official_evaluation_wsl.py",
+        "run_official_factor_full_compute_wsl.py",
+    ],
+)
+def test_wsl_factor_runners_never_override_explicit_task_environment(script_name: str) -> None:
+    script_path = Path(__file__).resolve().parents[3] / "backend" / "scripts" / script_name
+    tree = ast.parse(script_path.read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "load_dotenv"
+    ]
+
+    assert len(calls) == 1
+    override = next((item.value for item in calls[0].keywords if item.arg == "override"), None)
+    assert isinstance(override, ast.Constant)
+    assert override.value is False
 
 
 def test_factor_metrics_scheduler_submits_official_full_compute_dispatch(monkeypatch):

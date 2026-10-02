@@ -44,34 +44,8 @@ def score_price_range_bundle(
     review_policy_sha256: str,
     target_trade_date,
 ) -> list[dict[str, Any]]:
-    model_names = set(bundle.models)
-    supported_model_sets = {
-        frozenset(PRICE_RANGE_MODEL_NAMES),
-        frozenset(PRICE_RANGE_QUANTILE_MODEL_NAMES),
-    }
-    if frozenset(model_names) not in supported_model_sets:
-        raise AdvisoryModelFirstError(
-            "price-range inference bundle does not contain a supported exact model set",
-            reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
-        )
-    matrix = _prepare_matrix(bundle, features)
-    predictions = {
-        name: _predict_head(bundle.models[name], matrix, head=name)
-        for name in PRICE_RANGE_QUANTILE_MODEL_NAMES
-    }
+    predictions, calibrated_predictions = predict_entry_quantiles(bundle, features)
     calibration_spec = bundle.calibration_spec
-    calibrated_predictions: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
-    if calibration_spec is not None:
-        from backend.services.advisory_model_first.price_range_calibration import (
-            apply_entry_gap_interval_adjustment,
-        )
-
-        calibrated_predictions = apply_entry_gap_interval_adjustment(
-            q10=predictions["entry_gap_q10"],
-            q50=predictions["entry_gap_q50"],
-            q90=predictions["entry_gap_q90"],
-            delta=float(calibration_spec["delta"]),
-        )
     outcomes = {str(item.get("symbol")): item for item in outcome_candidates}
     if len(outcomes) != len(outcome_candidates):
         raise AdvisoryModelFirstError(
@@ -220,18 +194,48 @@ def unavailable_price_range_candidate(
     ).model_dump(mode="json")
 
 
-def _project_candidate(
-    *,
-    symbol: str,
-    context: PriceRangeRealtimeContext,
+def predict_entry_quantiles(
+    bundle: LoadedAdvisoryPriceRangeBundle, features: pd.DataFrame,
+) -> tuple[dict[str, np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray] | None]:
+    """Shared frozen-head inference; never loads an outcome/ranking model."""
+    model_names = set(bundle.models)
+    supported_model_sets = {
+        frozenset(PRICE_RANGE_MODEL_NAMES),
+        frozenset(PRICE_RANGE_QUANTILE_MODEL_NAMES),
+    }
+    if frozenset(model_names) not in supported_model_sets:
+        raise AdvisoryModelFirstError(
+            "price-range inference bundle does not contain a supported exact model set",
+            reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
+        )
+    matrix = _prepare_matrix(bundle, features)
+    predictions = {
+        name: _predict_head(bundle.models[name], matrix, head=name)
+        for name in PRICE_RANGE_QUANTILE_MODEL_NAMES
+    }
+    calibration_spec = bundle.calibration_spec
+    calibrated_predictions: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+    if calibration_spec is not None:
+        from backend.services.advisory_model_first.price_range_calibration import (
+            apply_entry_gap_interval_adjustment,
+        )
+
+        calibrated_predictions = apply_entry_gap_interval_adjustment(
+            q10=predictions["entry_gap_q10"],
+            q50=predictions["entry_gap_q50"],
+            q90=predictions["entry_gap_q90"],
+            delta=float(calibration_spec["delta"]),
+        )
+    return predictions, calibrated_predictions
+
+
+def project_entry_price(
+    *, symbol: str, context: PriceRangeRealtimeContext,
     entry_gaps: tuple[float, float, float],
     calibrated_entry_gaps: tuple[float, float, float] | None,
-    calibration_spec: Mapping[str, Any] | None,
-    outcome: Mapping[str, Any],
-    review_policy: Mapping[str, Any],
-    review_policy_sha256: str,
-    target_trade_date,
+    calibration_spec: Mapping[str, Any] | None, target_trade_date,
 ) -> dict[str, Any]:
+    """Shared entry-only projection, independent of policy path/holding outputs."""
     regulatory = resolve_regulatory_price_range(
         context,
         target_trade_date=target_trade_date,
@@ -253,6 +257,47 @@ def _project_candidate(
             "mid": calibrated_mid,
             "high": calibrated_high,
         }
+    return {
+        "decision_reference_price": context.decision_raw_close,
+        "decision_price_trade_date": context.decision_price_trade_date,
+        "target_raw_price_multiplier": context.target_raw_price_multiplier,
+        "entry_price_range": {
+            "condition": DAILY_ENTRY_CONDITION,
+            "low": entry_low, "mid": entry_mid, "high": entry_high,
+        },
+        "calibrated_entry_price_range": calibrated_entry_price,
+        "entry_gap_calibration": {
+            "state": "CALIBRATED" if calibration_spec is not None else "UNCALIBRATED",
+            "method": calibration_spec.get("method") if calibration_spec is not None else None,
+            "delta": calibration_spec.get("delta") if calibration_spec is not None else None,
+            "nominal_coverage": (
+                float(calibration_spec.get("nominal_coverage", 0.8))
+                if calibration_spec is not None else 0.8
+            ),
+        },
+        "tick_size": context.tick_size,
+        "regulatory_price_range": regulatory.as_dict(),
+    }
+
+
+def _project_candidate(
+    *,
+    symbol: str,
+    context: PriceRangeRealtimeContext,
+    entry_gaps: tuple[float, float, float],
+    calibrated_entry_gaps: tuple[float, float, float] | None,
+    calibration_spec: Mapping[str, Any] | None,
+    outcome: Mapping[str, Any],
+    review_policy: Mapping[str, Any],
+    review_policy_sha256: str,
+    target_trade_date,
+) -> dict[str, Any]:
+    entry_projection = project_entry_price(
+        symbol=symbol, context=context, entry_gaps=entry_gaps,
+        calibrated_entry_gaps=calibrated_entry_gaps,
+        calibration_spec=calibration_spec, target_trade_date=target_trade_date,
+    )
+    entry_mid = entry_projection["entry_price_range"]["mid"]
 
     holding = outcome.get("holding_period")
     if not isinstance(holding, Mapping):
@@ -369,26 +414,7 @@ def _project_candidate(
         "status": "EXPERIMENTAL_SHADOW",
         "availability_status": "AVAILABLE",
         "projection_condition": DAILY_PROJECTION_CONDITION,
-        "decision_reference_price": context.decision_raw_close,
-        "decision_price_trade_date": context.decision_price_trade_date,
-        "target_raw_price_multiplier": context.target_raw_price_multiplier,
-        "entry_price_range": {
-            "condition": DAILY_ENTRY_CONDITION,
-            "low": entry_low,
-            "mid": entry_mid,
-            "high": entry_high,
-        },
-        "calibrated_entry_price_range": calibrated_entry_price,
-        "entry_gap_calibration": {
-            "state": "CALIBRATED" if calibration_spec is not None else "UNCALIBRATED",
-            "method": calibration_spec.get("method") if calibration_spec is not None else None,
-            "delta": calibration_spec.get("delta") if calibration_spec is not None else None,
-            "nominal_coverage": (
-                float(calibration_spec.get("nominal_coverage", 0.8))
-                if calibration_spec is not None
-                else 0.8
-            ),
-        },
+        **entry_projection,
         "take_profit_price": {
             "low": take_profit_low,
             "high": take_profit_high,
@@ -401,8 +427,6 @@ def _project_candidate(
             "high": stop_high,
             "hard_stop_price": hard_stop_price,
         },
-        "tick_size": context.tick_size,
-        "regulatory_price_range": regulatory.as_dict(),
         "review_policy": {
             "review_policy_sha256": review_policy_sha256,
             "stop_loss_bps": stop_loss_bps,

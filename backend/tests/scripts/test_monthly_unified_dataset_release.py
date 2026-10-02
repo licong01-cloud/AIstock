@@ -93,6 +93,61 @@ def test_run_can_request_exact_auto_activation_and_repair_authorizations(
     assert calls[0]["body"]["repair_authorization_refs"] == [repair_ref]
 
 
+def test_adopt_and_authorize_commands_preserve_exact_release_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _capture(monkeypatch)
+    digest = "d" * 64
+    assert (
+        cli.main(
+            [
+                "adopt",
+                "--cutoff",
+                "2026-08-31",
+                "--idempotency-key",
+                "adopt-v15",
+                "--candidate-root",
+                r"X:\releases\v15-candidate",
+                "--profile-candidate",
+                r"F:\profiles\v15.json",
+                "--predecessor-profile-sha256",
+                digest,
+                "--target-profile-sha256",
+                digest,
+                "--dataset-manifest-sha256",
+                digest,
+                "--dataset-manifest-file-sha256",
+                digest,
+                "--node-manifest",
+                f"controller={digest}",
+                "--node-manifest",
+                f"wsl2-5080={digest}",
+                "--node-manifest",
+                f"rdagent-node1={digest}",
+                "--evidence-ref",
+                f"reports/alias.json|{digest}|qe_moneyflow_alias_coverage_receipt_v1",
+                "--evidence-ref",
+                f"reports/hmm.json|{digest}|hmm_risk_rotation_l2_input_bundle_v1",
+            ]
+        )
+        == 0
+    )
+    assert calls[0]["suffix"] == "/adopt"
+    assert calls[0]["idempotency"] == "adopt-v15"
+    assert calls[0]["body"]["node_manifest_file_sha256"] == {
+        "controller": digest,
+        "wsl2-5080": digest,
+        "rdagent-node1": digest,
+    }
+
+    assert cli.main(["authorize", "--operation-id", OPERATION_ID]) == 0
+    assert calls[1]["suffix"] == f"/{OPERATION_ID}/authorizations"
+    assert calls[1]["body"] == {
+        "schema_version": "aistock_monthly_authorization_issue_request_v1",
+        "action": "ACTIVATE",
+    }
+
+
 @pytest.mark.parametrize(
     "arguments",
     (

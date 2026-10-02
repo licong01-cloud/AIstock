@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,61 @@ from scripts.build_stock_universe_pit_spans import (
     is_authoritative_st_name,
     reconstruct_missing_st_snapshot,
 )
+
+
+@pytest.mark.parametrize("missing_schema", [False, True])
+def test_existing_schema_builder_checks_only_selects(missing_schema) -> None:
+    queries = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql):
+            queries.append(sql)
+            assert sql.lstrip().upper().startswith("SELECT")
+
+        def fetchone(self):
+            return (None, None) if missing_schema else ("market.stock_universe_pit_spans", "market.stock_universe_pit_events")
+
+    connection = SimpleNamespace(cursor=Cursor)
+    if missing_schema:
+        with pytest.raises(RuntimeError, match="schema contract is missing"):
+            pit_builder._require_existing_tables(connection)
+    else:
+        pit_builder._require_existing_tables(connection)
+    assert len(queries) == 1
+
+
+def test_build_existing_schema_mode_does_not_call_bootstrap(monkeypatch) -> None:
+    checked = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(pit_builder, "_db_config", lambda: {})
+    monkeypatch.setattr(pit_builder.psycopg2, "connect", lambda **_kwargs: Connection())
+    monkeypatch.setattr(pit_builder, "_require_existing_tables", lambda conn: checked.append(conn))
+    monkeypatch.setattr(pit_builder, "_ensure_tables", lambda _conn: pytest.fail("DDL is forbidden"))
+
+    def observe_source(*_args, **_kwargs):
+        assert len(checked) == 1
+        raise RuntimeError("source reached after read-only schema validation")
+
+    monkeypatch.setattr(pit_builder, "_load_stock_basic_scope_counts", observe_source)
+    args = SimpleNamespace(
+        start_date="2018-08-01", end_date="2026-09-30", rule_version=None,
+        universe_key="test", ipo_filter_days=365, existing_schema_only=True,
+    )
+    with pytest.raises(RuntimeError, match="source reached"):
+        pit_builder.build(args)
 
 
 def test_classify_st_event_restore_vs_still_risky() -> None:

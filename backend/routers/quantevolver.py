@@ -4509,6 +4509,13 @@ class FactorCacheComputeRequest(BaseModel):
     force: bool = Field(False, description="强制重算（忽略已覆盖的缓存）")
     strict_backtest_data: bool = Field(True, description="严格使用 QE 默认历史 factor_data_dir 数据（用于全局因子值缓存）")
     auto_sync_remote: bool = Field(True, description="本地缓存计算成功后自动同步到远端执行节点")
+    dataset_profile_path: Optional[str] = Field(
+        None,
+        description=(
+            "Optional absolute canonical dataset profile selected by the control plane; "
+            "does not change the active profile pointer"
+        ),
+    )
 
 
 class FactorCacheRetryFailedRequest(BaseModel):
@@ -4555,9 +4562,13 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         node_id = exp_record.get("node_id") or None
 
     rdagent_cfg = cc._fetch_workspace_config(node_id)
-    factor_data_dir = rdagent_cfg.get("factor_data_dir")
-    qlib_bin_path = rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
-    if req.strict_backtest_data and not factor_data_dir:
+    factor_data_dir = None if req.dataset_profile_path else rdagent_cfg.get("factor_data_dir")
+    qlib_bin_path = (
+        None
+        if req.dataset_profile_path
+        else rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
+    )
+    if req.strict_backtest_data and not factor_data_dir and not req.dataset_profile_path:
         raise HTTPException(400, "failed to resolve QE factor_data_dir")
 
     if not resolved_start or not resolved_end:
@@ -4584,6 +4595,7 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
             qlib_bin_path=qlib_bin_path,
             node_id=node_id,
             task_id=task_id,
+            dataset_profile_path=req.dataset_profile_path,
         )
     except Exception as e:
         logger.exception("failed to submit official factor full-compute dispatch")
@@ -4606,8 +4618,12 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "data_source_mode": "official_offline_backtest_factor_data",
         "cache_source": "official_offline_backtest_factor_data",
         "code_source": "code_text",
-        "factor_data_dir": factor_data_dir,
-        "qlib_bin_path": qlib_bin_path,
+        "factor_data_dir": dispatch_result.get("payload", {}).get("factor_data_dir"),
+        "qlib_bin_path": dispatch_result.get("payload", {}).get("qlib_bin_path"),
+        "dataset_profile_path": req.dataset_profile_path,
+        "dataset_profile_sha256": dispatch_result.get("payload", {}).get(
+            "dataset_profile_sha256"
+        ),
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
         "cache_root": dispatch_result.get("cache_root"),
@@ -4624,8 +4640,12 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
         "include_disabled": bool(req.factor_names and req.include_disabled),
-        "factor_data_dir": factor_data_dir,
-        "qlib_bin_path": qlib_bin_path,
+        "factor_data_dir": dispatch_result.get("payload", {}).get("factor_data_dir"),
+        "qlib_bin_path": dispatch_result.get("payload", {}).get("qlib_bin_path"),
+        "dataset_profile_path": req.dataset_profile_path,
+        "dataset_profile_sha256": dispatch_result.get("payload", {}).get(
+            "dataset_profile_sha256"
+        ),
         "node_id": dispatch_result.get("node_id") or node_id,
         "cache_source": "official_offline_backtest_factor_data",
         "code_source": "code_text",
@@ -4696,6 +4716,8 @@ def factor_cache_retry_failed(task_id: str, req: FactorCacheRetryFailedRequest):
         node_id=str(task_detail.get("node_id") or "") or None,
         task_id=worker_task_id,
         resumed_from_task_id=task_id,
+        dataset_profile_path=payload.get("dataset_profile_path"),
+        expected_profile_sha256=payload.get("dataset_profile_sha256"),
     )
     dispatch_task_id = str(dispatch_result.get("dispatch_task_id") or dispatch_result.get("task_id") or worker_task_id)
     _active_cache_tasks[dispatch_task_id] = {

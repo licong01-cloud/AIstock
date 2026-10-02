@@ -43,6 +43,21 @@ def _parser() -> argparse.ArgumentParser:
         command = commands.add_parser(name)
         command.add_argument("--operation-id", required=True)
         command.add_argument("--authorization-ref", required=True)
+    adopt = commands.add_parser("adopt")
+    adopt.add_argument("--cutoff", type=date.fromisoformat, required=True)
+    adopt.add_argument("--profile", choices=("qe_hmm_full_v2",), default="qe_hmm_full_v2")
+    adopt.add_argument("--idempotency-key", required=True)
+    adopt.add_argument("--candidate-root", required=True)
+    adopt.add_argument("--profile-candidate", required=True)
+    adopt.add_argument("--predecessor-profile-sha256", required=True)
+    adopt.add_argument("--target-profile-sha256", required=True)
+    adopt.add_argument("--dataset-manifest-sha256", required=True)
+    adopt.add_argument("--dataset-manifest-file-sha256", required=True)
+    adopt.add_argument("--node-manifest", action="append", required=True)
+    adopt.add_argument("--evidence-ref", action="append", required=True)
+    authorize = commands.add_parser("authorize")
+    authorize.add_argument("--operation-id", required=True)
+    authorize.add_argument("--action", choices=("ACTIVATE",), default="ACTIVATE")
     return parser
 
 
@@ -127,6 +142,56 @@ def _validate_args(args: argparse.Namespace) -> None:
     if args.command == "run":
         if args.activate != (args.authorization_ref is not None):
             raise ValueError("--activate and --authorization-ref must be supplied together")
+    if args.command == "adopt":
+        hashes = (
+            args.predecessor_profile_sha256,
+            args.target_profile_sha256,
+            args.dataset_manifest_sha256,
+            args.dataset_manifest_file_sha256,
+        )
+        if any(re.fullmatch(r"[0-9a-f]{64}", value) is None for value in hashes):
+            raise ValueError("adoption identity hash is invalid")
+        _parse_node_manifests(args.node_manifest)
+        _parse_evidence_refs(args.evidence_ref)
+
+
+def _parse_node_manifests(values: Sequence[str]) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values:
+        node, separator, sha256 = value.partition("=")
+        if (
+            not separator
+            or node not in {"controller", "wsl2-5080", "rdagent-node1"}
+            or re.fullmatch(r"[0-9a-f]{64}", sha256) is None
+            or node in parsed
+        ):
+            raise ValueError("node-manifest must uniquely bind NODE=SHA256")
+        parsed[node] = sha256
+    if set(parsed) != {"controller", "wsl2-5080", "rdagent-node1"}:
+        raise ValueError("node-manifest must cover all release nodes")
+    return parsed
+
+
+def _parse_evidence_refs(values: Sequence[str]) -> list[dict[str, str]]:
+    parsed: list[dict[str, str]] = []
+    paths: set[str] = set()
+    for value in values:
+        parts = value.split("|", maxsplit=2)
+        if (
+            len(parts) != 3
+            or not parts[0]
+            or parts[0] in paths
+            or re.fullmatch(r"[0-9a-f]{64}", parts[1]) is None
+            or not parts[2]
+        ):
+            raise ValueError("evidence-ref must uniquely bind PATH|SHA256|SCHEMA")
+        paths.add(parts[0])
+        parsed.append(
+            {"relative_path": parts[0], "sha256": parts[1], "schema_version": parts[2]}
+        )
+    if len(parsed) < 2:
+        raise ValueError("at least two adoption evidence refs are required")
+    return parsed
 
 
 def _release_body(args: argparse.Namespace) -> dict[str, Any]:
@@ -141,6 +206,22 @@ def _release_body(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _adoption_body(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "schema_version": "aistock_monthly_existing_successor_adoption_v1",
+        "target_cutoff": args.cutoff.isoformat(),
+        "product_profile": args.profile,
+        "candidate_root": args.candidate_root,
+        "profile_candidate": args.profile_candidate,
+        "predecessor_profile_sha256": args.predecessor_profile_sha256,
+        "target_profile_sha256": args.target_profile_sha256,
+        "dataset_manifest_sha256": args.dataset_manifest_sha256,
+        "dataset_manifest_file_sha256": args.dataset_manifest_file_sha256,
+        "node_manifest_file_sha256": _parse_node_manifests(args.node_manifest),
+        "evidence_refs": _parse_evidence_refs(args.evidence_ref),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     _validate_args(args)
@@ -151,6 +232,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             suffix="/plan" if args.command == "plan" else "",
             body=_release_body(args),
             idempotency=args.idempotency_key,
+        )
+    elif args.command == "adopt":
+        result = _call(
+            root=args.api_root,
+            method="POST",
+            suffix="/adopt",
+            body=_adoption_body(args),
+            idempotency=args.idempotency_key,
+        )
+    elif args.command == "authorize":
+        result = _call(
+            root=args.api_root,
+            method="POST",
+            suffix=f"/{urllib.parse.quote(args.operation_id, safe='')}/authorizations",
+            body={
+                "schema_version": "aistock_monthly_authorization_issue_request_v1",
+                "action": args.action,
+            },
+            idempotency=None,
         )
     elif args.command == "status":
         result = _call(

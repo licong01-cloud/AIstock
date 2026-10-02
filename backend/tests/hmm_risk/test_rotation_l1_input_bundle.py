@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sys
@@ -1750,6 +1751,66 @@ def test_direct_v2_factor_table_layout_inventory_and_window_are_formally_readabl
     assert loaded.equals(frame.loc[pd.IndexSlice[pd.Timestamp("2026-08-31"), :], :])
 
 
+def test_table_h5_physical_row_order_is_not_industry_or_date_authority(tmp_path: Path) -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2024-06-28", "2024-07-01", "2026-08-31"]), ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"value": np.arange(6, dtype=np.float32)}, index=index)
+    path = tmp_path / "moneyflow.h5"
+    # A validated immutable release may append corrections/aliases out of order.
+    frame.iloc[[5, 0, 3, 1, 4, 2]].to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    before = subject._sha256_file(path)
+    inventory = subject._fixed_h5_inventory(path, expected_columns=("value",), expected_dtype="<f4")
+    assert (inventory["date_min"], inventory["date_max"], inventory["row_count"]) == (
+        "2024-06-28",
+        "2026-08-31",
+        6,
+    )
+    loaded = subject._load_fixed_h5_window(
+        path,
+        expected_columns=("value",),
+        expected_dtype="<f4",
+        start=date(2024, 6, 28),
+        end=date(2024, 7, 1),
+    )
+    assert loaded.equals(frame.loc[pd.IndexSlice[: pd.Timestamp("2024-07-01"), :], :])
+    assert subject._sha256_file(path) == before
+
+
+def test_unordered_table_h5_keeps_duplicate_and_invalid_date_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "moneyflow.h5"
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2024-07-01"), "000001.SZ"),
+            (pd.Timestamp("2024-06-28"), "000001.SZ"),
+            (pd.Timestamp("2024-07-01"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"value": np.ones(3, dtype=np.float32)}, index=index)
+    frame.to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    with pytest.raises(subject.RotationL1InputBundleError, match="duplicated"):
+        subject._load_fixed_h5_window(
+            path,
+            expected_columns=("value",),
+            expected_dtype="<f4",
+            start=date(2024, 6, 28),
+            end=date(2024, 7, 1),
+        )
+    frame.index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2024-07-01 12:00"), "000001.SZ"),
+            (pd.NaT, "000002.SZ"),
+            (pd.Timestamp("2024-06-28"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame.to_hdf(path, key="data", mode="w", format="table", data_columns=["datetime", "instrument"])
+    with pytest.raises(subject.RotationL1InputBundleError, match="date"):
+        subject._fixed_h5_inventory(path, expected_columns=("value",), expected_dtype="<f4")
+
+
 def _stub_direct_source_preflights(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subject, "_fixed_h5_inventory", _stub_direct_factor_inventory)
     monkeypatch.setattr(
@@ -1810,6 +1871,86 @@ def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_windo
         subject.SOURCE_END,
         subject.DIRECT_V2_RELEASE_CUTOFF,
     }
+
+
+def test_frozen_successor_binding_does_not_read_or_forge_active_profile(tmp_path, monkeypatch):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    _stub_direct_source_preflights(monkeypatch)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state.update(generation="approved-frozen-successor", profile=subject.DIRECT_V2_PROFILE)
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    binding = {
+        "generation": state["generation"],
+        "release_id": state["release_id"],
+        "revision": state["revision"],
+        "cutoff": state["cutoff"],
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": state["manifest"]["file_sha256"],
+    }
+    before = _ACTIVE_PROFILE_PATH.read_bytes()
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: pytest.fail("active profile accessed"))
+    loaded = subject.load_rotation_l1_direct_v2_source_assets(
+        root,
+        security_identity_manifest=security,
+        provider_absence_manifest=provider,
+        frozen_release_binding=binding,
+    )
+    identity = loaded["release_identity"]
+    assert identity["frozen_release_generation"] == binding["generation"]
+    assert identity["frozen_release_binding_sha256"] == canonical_sha256(binding)
+    assert not any(key.startswith("active_") for key in identity)
+    assert "active_profile" not in identity["metadata_sha256"]
+    assert _ACTIVE_PROFILE_PATH.read_bytes() == before
+    for key in binding:
+        wrong = {**binding, key: "unapproved"}
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._require_frozen_direct_v2_profile(
+                root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=wrong
+            )
+
+
+def test_frozen_binding_cannot_fall_back_to_active_or_accept_rehashed_manifest(tmp_path, monkeypatch):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state.update(generation="approved-frozen-successor", profile=subject.DIRECT_V2_PROFILE)
+    binding = {
+        "generation": state["generation"],
+        "release_id": state["release_id"],
+        "revision": state["revision"],
+        "cutoff": state["cutoff"],
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": state["manifest"]["file_sha256"],
+    }
+    subject._require_frozen_direct_v2_profile(
+        root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=binding
+    )
+    for change in ("wrong_root", "missing_field", "status", "unknown_schema", "structural", "manifest_content"):
+        changed_state = copy.deepcopy(state)
+        changed_binding = dict(binding)
+        if change == "wrong_root":
+            changed_state["candidate_root"] = str(tmp_path / "old-active")
+        elif change == "missing_field":
+            changed_binding.pop("generation")
+        elif change == "status":
+            changed_state["status"] = "FAILED"
+        elif change == "unknown_schema":
+            changed_state["schema_version"] = "qe_direct_monthly_state_v999"
+        elif change == "structural":
+            changed_state["validation"]["structural"]["checks"]["daily_bin"] = 1
+        else:
+            path = root / "qe_dataset_manifest.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["revision"] = "forged"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            changed_state["revision"] = "forged"
+            changed_state["manifest"]["file_sha256"] = subject._sha256_file(path)
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._require_frozen_direct_v2_profile(
+                root=root,
+                state=changed_state,
+                release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+                binding=changed_binding,
+            )
 
 
 def test_direct_v2_selection_universe_may_be_a_pit_subset_of_provider_catalog(

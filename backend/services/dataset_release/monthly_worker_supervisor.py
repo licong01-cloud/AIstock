@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, BinaryIO, Callable, Mapping, Protocol, Sequence
 
 from .monthly_worker_runtime import MonthlyWorkerRuntime, build_monthly_worker_runtime
 
@@ -36,6 +36,7 @@ class MonthlyWorkerSupervisorError(RuntimeError):
 class WorkerProcess(Protocol):
     pid: int
     returncode: int | None
+    stdin: BinaryIO | None
 
     def poll(self) -> int | None: ...
 
@@ -150,6 +151,8 @@ class MonthlyWorkerProcessSupervisor:
             if previous_returncode is None:
                 raise MonthlyWorkerSupervisorError("monthly worker is already running")
             self._process.wait(timeout=0)
+            if self._process.stdin is not None:
+                self._process.stdin.close()
             self._process = None
 
         runtime = self._runtime_loader(project_root=self._project_root)
@@ -167,13 +170,16 @@ class MonthlyWorkerProcessSupervisor:
             sys.executable,
             str(script),
             "--serve",
+            "--supervised",
             "--poll-seconds",
             str(self._config.poll_seconds),
         )
         kwargs: dict[str, Any] = {
             "cwd": str(self._project_root),
             "env": os.environ.copy(),
-            "stdin": subprocess.DEVNULL,
+            # Only this owner holds the write end. A crash/forced backend exit
+            # closes it at the OS boundary, independently of lifespan cleanup.
+            "stdin": subprocess.PIPE,
             "close_fds": True,
         }
         if os.name == "nt":
@@ -182,10 +188,20 @@ class MonthlyWorkerProcessSupervisor:
         returncode = process.poll()
         if returncode is not None:
             process.wait(timeout=0)
+            if process.stdin is not None:
+                process.stdin.close()
             raise MonthlyWorkerSupervisorError(
                 f"monthly worker exited during startup with code {returncode}"
             )
         self._process = process
+        try:
+            if process.stdin is None:
+                raise OSError("monthly worker owner pipe is unavailable")
+            process.stdin.write(b"START\n")
+            process.stdin.flush()
+        except OSError as exc:
+            self.stop()
+            raise MonthlyWorkerSupervisorError("monthly worker owner handshake failed") from exc
         self._preflight = dict(preflight)
         LOGGER.info(
             "Monthly release worker started pid=%s poll_seconds=%s",
@@ -204,6 +220,11 @@ class MonthlyWorkerProcessSupervisor:
         if process is None:
             return {"status": "NOT_STARTED", "pid": None, "forced": False}
         self._process = None
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except OSError:
+                LOGGER.warning("Monthly worker owner pipe was already broken pid=%s", process.pid)
         returncode = process.poll()
         if returncode is not None:
             process.wait(timeout=0)

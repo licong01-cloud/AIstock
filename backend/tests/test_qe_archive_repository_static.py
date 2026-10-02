@@ -886,11 +886,87 @@ def test_source_assembler_builds_loop_payload_for_archive_service() -> None:
     assert payload["run_type"] == "evolution_loop"
     assert payload["factor_list"] == ["factor_a"]
     assert payload["config"]["data_context"]["freq"] == "day"
+    assert payload["config"]["data_context"]["label_horizon"] == 3
+    assert extracted.data_contexts[0].label_horizon == 3
     assert extracted.run.research_valid is False
     assert extracted.config.config_capture_complete is True
     assert extracted.data_contexts[0].backtest_start.isoformat() == "2025-01-02"
     assert extracted.data_contexts[0].backtest_end.isoformat() == "2025-01-02"
     assert any(curve.curve_key == "drawdown_series" for curve in extracted.curves)
+
+
+def test_source_assembler_prefers_loop_label_horizon_over_mixed_horizon_task() -> None:
+    payload = QEArchiveSourceAssembler.build_loop_payload(
+        {
+            "loop_id": "task_mixed_Loop4",
+            "task_id": "task_mixed",
+            "loop_index": 4,
+            "config_json": {
+                "factor_list": ["factor_a"],
+                "label_horizon": 20,
+                "model_params": {"label_horizon": 20},
+                "model_type": "LGBModel",
+            },
+            "metrics_json": {"IC": 0.051},
+            "status": "completed",
+        },
+        {
+            "task_id": "task_mixed",
+            "task_name": "mixed horizon custom evo",
+            "label_horizon": 60,
+        },
+    )
+
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system=payload["source_system"],
+        source_id=payload["source_id"],
+        source_sub_id=payload["source_sub_id"],
+    )
+
+    assert payload["config"]["data_context"]["label_horizon"] == 20
+    assert extracted.data_contexts[0].label_horizon == 20
+
+
+def test_source_assembler_uses_task_label_horizon_only_for_legacy_loop() -> None:
+    payload = QEArchiveSourceAssembler.build_loop_payload(
+        {
+            "loop_id": "task_legacy_Loop1",
+            "task_id": "task_legacy",
+            "loop_index": 1,
+            "config_json": {"factor_list": ["factor_a"], "model_type": "LSTM"},
+            "metrics_json": {"IC": 0.041},
+            "status": "completed",
+        },
+        {"task_id": "task_legacy", "label_horizon": 60},
+    )
+
+    assert payload["config"]["data_context"]["label_horizon"] == 60
+
+
+def test_source_assembler_rejects_conflicting_loop_label_horizons() -> None:
+    try:
+        QEArchiveSourceAssembler.build_loop_payload(
+            {
+                "loop_id": "task_conflict_Loop1",
+                "task_id": "task_conflict",
+                "loop_index": 1,
+                "config_json": {
+                    "factor_list": ["factor_a"],
+                    "label_horizon": 20,
+                    "model_params": {"label_horizon": 60},
+                    "model_type": "LGBModel",
+                },
+                "metrics_json": {"IC": 0.031},
+                "status": "completed",
+            },
+            {"task_id": "task_conflict", "label_horizon": 20},
+        )
+    except ValueError as exc:
+        assert "qe_archive_loop_label_horizon_conflict" in str(exc)
+    else:
+        raise AssertionError("conflicting per-loop label horizons must fail closed")
 
 
 def test_source_assembler_merges_posthoc_experiment_metrics_into_evolution_lineage() -> None:

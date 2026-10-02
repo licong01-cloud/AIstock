@@ -319,13 +319,11 @@ jobs:
 
   nightly-l3:
     name: Nightly L3 (paper_v2 + qe_archive + qe_read)
-    # Sequential chain per Codex Lane A r3 review (drawer a25cd473):
-    # dr-snapshot -> dr-validate -> nightly-l3 -> paper-v2-live ->
-    # full-summary. Previously dr-snapshot and dr-validate ran in
-    # parallel with nightly-l3, which let a failing snapshot still
-    # produce green L3/live reports.
-    needs: [runner-preflight, dr-validate]
-    if: always() && needs.runner-preflight.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3) && (needs.dr-validate.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.run_dr))
+    # Research validation has no dependency on operational backup artifacts.
+    # DR keeps its own verdict; full-summary still waits for and reports both
+    # branches. A passing L3 job never asserts that DR passed.
+    needs: [runner-preflight]
+    if: always() && needs.runner-preflight.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3)
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 120
     defaults:
@@ -348,6 +346,7 @@ jobs:
       - name: Verify prebuilt AIstock-CI and frontend dependencies
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
+          AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
         run: |
           if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
             Write-Host "::error::conda not on PATH on this self-hosted runner"
@@ -493,9 +492,17 @@ jobs:
             --github-env-file "${env:GITHUB_ENV}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
+      - name: Verify prebuilt AIstock-CI and isolated test storage
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+          AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
+        run: |
+          conda run -n AIstock-CI python scripts/ci_environment_verify.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: nox -s paper_v2_live
         run: |
-          conda run -n AIstock python -m nox -s paper_v2_live
+          conda run -n AIstock-CI python -m nox -s paper_v2_live
 
       - name: Print paper-v2 live evidence manifest
         if: always()

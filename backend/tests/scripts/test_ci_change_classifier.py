@@ -1258,6 +1258,23 @@ def position_timing_backend(session):
     }
 
 
+def test_qe_changed_test_with_unmapped_sources_retains_static_plan_coverage() -> None:
+    root = Path(__file__).resolve().parents[3]
+    test_path = "backend/tests/unified_engine/test_label_horizon.py"
+    payload = classifier.classify_changed_files(
+        [
+            "backend/services/quantevolver/config_composer.py",
+            "backend/services/quantevolver/qe_custom_loaders.py",
+            test_path,
+        ],
+        repo_root=root,
+    )
+
+    assert payload["workflow_gate"] == "passed"
+    assert payload["changed_test_plan_coverage"]["coverage"][test_path] == ["qe_read_backend"]
+    assert payload["unexecuted_test_files"] == []
+
+
 def test_arbitrary_dynamic_fallback_does_not_claim_test_coverage(tmp_path: Path) -> None:
     test_path = "backend/tests/position_timing/test_dynamic_contract.py"
     _write_test_file(tmp_path, test_path)
@@ -2067,7 +2084,7 @@ def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
     assert all("registry_sync != '1'" in str(step.get("if") or "") for step in normal_lane_steps)
 
 
-def test_pr_quality_proves_merge_base_and_boundedly_deepens_exact_pr_refs() -> None:
+def test_manual_pr_quality_proves_merge_base_and_reuses_pinned_identities() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
@@ -2075,13 +2092,18 @@ def test_pr_quality_proves_merge_base_and_boundedly_deepens_exact_pr_refs() -> N
     detect = next(step for step in steps if step.get("name") == "Detect PR quality lane")
     run = str(detect["run"])
 
-    assert detect["env"]["BASE_SHA"] == "${{ github.event.pull_request.base.sha || '' }}"
+    assert detect["env"]["BASE_SHA"] == "${{ inputs.base_sha || '' }}"
+    assert detect["env"]["SOURCE_HEAD_SHA"] == "${{ github.sha }}"
     assert detect["env"]["CHECKOUT_REF"] == "${{ github.ref || '' }}"
     assert "python scripts/ci_changed_files.py" in run
-    assert "--prepare-pr-merge-base-only" in run
+    assert "--prepare-manual-merge-base-only" in run
     assert '--base-sha "${BASE_SHA}"' in run
     assert '--checkout-ref "${CHECKOUT_REF}"' in run
-    assert run.index("--prepare-pr-merge-base-only") < run.index('git diff --name-only "${BASE_COMMIT}...HEAD"')
+    assert '--source-head-sha "${SOURCE_HEAD_SHA}"' in run
+    assert run.index("--prepare-manual-merge-base-only") < run.index("--output tmp/validation/pr_quality/changed_files.txt")
+    summary = next(step for step in steps if step.get("name") == "Build AIstock PR quality summary")
+    assert '--head "${AISTOCK_MANUAL_HEAD_SHA}"' in summary["run"]
+    assert "git fetch" not in summary["run"]
 
 
 def test_codeql_runs_one_daily_nightly_full_scan() -> None:

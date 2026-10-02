@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from datetime import date
 
+import pandas as pd
 import pytest
 
+from backend.data_service.security_source_identity import (
+    load_default_security_source_identity_manifest,
+)
 from backend.services.dataset_release import candidate_validator
 from backend.services.dataset_release.candidate_validator import CandidateValidationError
 
@@ -70,3 +74,20 @@ def test_minute_overlay_contract_is_complete_nonmutating_and_serial() -> None:
 
     with pytest.raises(CandidateValidationError, match="concurrency"):
         candidate_validator._validate_minute_overlay({**evidence, "provider_concurrency": 2})
+
+
+def test_moneyflow_validation_canonicalizes_pinned_historical_source_code() -> None:
+    frame = pd.DataFrame(
+        {"mf_net_amt": [12.0]},
+        index=pd.MultiIndex.from_tuples(
+            [(pd.Timestamp("2024-08-13"), "300114.SZ")],
+            names=["datetime", "instrument"],
+        ),
+    )
+
+    canonical = candidate_validator._canonical_moneyflow_frame(
+        frame,
+        identity=load_default_security_source_identity_manifest(),
+    )
+
+    assert canonical.index.tolist() == [(pd.Timestamp("2024-08-13"), "302132.SZ")]

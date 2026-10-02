@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from backend.services.dataset_release.active_task_binding import (
     FrozenDatasetTaskBindingError,
     freeze_active_dataset_task_binding,
+    freeze_explicit_dataset_task_binding,
     frozen_dataset_environment,
     require_frozen_dataset_task_binding,
 )
@@ -124,4 +127,55 @@ def test_freeze_normalizes_invalid_active_sha_error() -> None:
                 **_resolved(**kwargs),
                 "profile_sha256": "not-a-sha",
             },
+        )
+
+
+def test_explicit_v3_profile_freezes_factor_research_without_active_pointer(
+    monkeypatch,
+) -> None:
+    profile = SimpleNamespace(
+        raw={
+            "schema_version": "aistock_active_dataset_profile_v3",
+            "components": {"dataset_manifest_sha256": MANIFEST},
+            "node_bindings": {"wsl2-5080": {"candidate_root": "/releases/r8"}},
+        },
+        profile_sha256=PROFILE,
+        generation="20260920-v14-unified",
+        release_id="qe_hmm_full_v2_20260831",
+        cutoff=date(2026, 8, 31),
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.active_task_binding.load_qe_profile",
+        lambda _path: profile,
+    )
+
+    frozen = freeze_explicit_dataset_task_binding(
+        profile_path="X:/profiles/r8.json",
+        consumer_id="factor_research",
+        node_id="wsl2-5080",
+    )
+
+    assert frozen["generation"] == "20260920-v14-unified"
+    assert frozen["profile_sha256"] == PROFILE
+    assert frozen["binding"]["binding_mode"] == "explicit_profile_v3"
+    assert frozen_dataset_environment(frozen)["RDAGENT_FACTOR_DATA_WSL"] == (
+        "/releases/r8/components/factor_h5_static_candidate_v2"
+    )
+
+
+def test_explicit_v3_profile_rejects_non_research_consumer(monkeypatch) -> None:
+    profile = SimpleNamespace(
+        raw={"schema_version": "aistock_active_dataset_profile_v3"},
+        profile_sha256=PROFILE,
+    )
+    monkeypatch.setattr(
+        "backend.services.dataset_release.active_task_binding.load_qe_profile",
+        lambda _path: profile,
+    )
+
+    with pytest.raises(FrozenDatasetTaskBindingError, match="only support"):
+        freeze_explicit_dataset_task_binding(
+            profile_path="X:/profiles/r8.json",
+            consumer_id="selection",
+            node_id="wsl2-5080",
         )

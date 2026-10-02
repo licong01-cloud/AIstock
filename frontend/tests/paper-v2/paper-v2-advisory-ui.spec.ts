@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import type { AdvisoryEntryPrice } from "../../src/lib/api/advisory";
 
 type JsonObject = Record<string, unknown>;
 
@@ -78,7 +79,7 @@ function priceRangeCandidate(symbol: string) {
     decision_reference_price: 10,
     decision_price_trade_date: "2026-08-12",
     target_raw_price_multiplier: 1,
-    entry_price_range: { condition: "NEXT_TRADING_DAY_VALID_OPEN", low: 9.9, mid: 10, high: 10.1 },
+    entry_price_range: { condition: "NEXT_TRADING_DAY_VALID_OPEN" as const, low: 9.9, mid: 10, high: 10.1 },
     calibrated_entry_price_range: null,
     entry_gap_calibration: {
       state: "UNCALIBRATED",
@@ -98,11 +99,11 @@ function priceRangeCandidate(symbol: string) {
     stop_loss_price: { status: "AVAILABLE", low: 9.2, high: 9.6, hard_stop_price: 9.2 },
     tick_size: 0.01,
     regulatory_price_range: {
-      status: "LIMITED",
+      status: "LIMITED" as const,
       low: 9,
       high: 11,
       rule_id: "MAIN_10PCT_V1",
-      source: "DECISION_TIME_BOARD_ST_RULE",
+      source: "DECISION_TIME_BOARD_ST_RULE" as const,
     },
     review_policy: {
       review_policy_sha256: "review_hash",
@@ -120,13 +121,13 @@ function calibratedPriceRangeCandidate(symbol: string) {
   return {
     ...priceRangeCandidate(symbol),
     calibrated_entry_price_range: {
-      condition: "NEXT_TRADING_DAY_VALID_OPEN",
+      condition: "NEXT_TRADING_DAY_VALID_OPEN" as const,
       low: 9.8,
       mid: 10,
       high: 10.2,
     },
     entry_gap_calibration: {
-      state: "CALIBRATED",
+      state: "CALIBRATED" as const,
       method: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
       delta: 0.01,
       nominal_coverage: 0.8,
@@ -1503,7 +1504,9 @@ test("Advisory calibrated daily entry interval keeps the raw interval visible", 
 });
 
 
-test("Advisory model unavailability remains isolated from the persisted rule list", async ({ page }) => {
+test("Advisory model unavailability preserves independent entry prices and the persisted rule list", async ({ page }) => {
+  const price = calibratedPriceRangeCandidate("000001.SZ");
+  const auxiliary = { status: "UNAVAILABLE" as const, payload: null, source_identity: null, reason_code: "OUTCOME_ROLE_UNAVAILABLE" };
   const badResponses: string[] = [];
   page.on("response", (response) => {
     if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
@@ -1525,6 +1528,27 @@ test("Advisory model unavailability remains isolated from the persisted rule lis
         hmm_unavailable: [],
         reason_code: "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
         message: "model root is not configured",
+        entry_price: {
+          schema_version: "advisory_entry_price_envelope_v2", role: "ENTRY_PRICE",
+          projection_producer_version: "advisory_entry_price_core_v1",
+          objective_contract: "RISK_MANAGED_ADVISORY", evidence_state: "CONFIRMED_PRICE_DISTRIBUTION",
+          availability_status: "AVAILABLE", auxiliary_availability: "UNAVAILABLE",
+          program_id: PROGRAM_ID, binding_version_id: activeBinding.binding_version_id, package_id: "pkg_codex_smoke",
+          package_manifest_sha256: "a".repeat(64), style_profile_hash: "b".repeat(64), review_policy_sha256: "c".repeat(64),
+          universe_identity_sha256: "d".repeat(64), candidate_projection_sha256: "e".repeat(64), feature_schema_sha256: "f".repeat(64),
+          training_lineage: { parent_bundle_id: "1".repeat(64), outcome_bundle_id: "2".repeat(64) },
+          role_binding_sha256: "3".repeat(64), price_range_bundle_id: "4".repeat(64), price_range_bundle_manifest_sha256: "5".repeat(64),
+          decision_as_of_trade_date: "2026-06-04", price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          nominal_coverage: 0.8, calibration_state: "CALIBRATED_INTERVAL", reason_code: null, message: null,
+          target_trade_date: "2026-06-05", candidate_count: 1, available_count: 1, unavailable_count: 0,
+          candidates: [{
+            symbol: "000001.SZ", decision_reference_price: 10, decision_price_trade_date: "2026-06-04",
+            target_raw_price_multiplier: 1, tick_size: 0.01, regulatory_price_range: price.regulatory_price_range,
+            entry_price: { status: "AVAILABLE", raw_range: price.entry_price_range, calibrated_range: price.calibrated_entry_price_range,
+              calibration: price.entry_gap_calibration, reason_code: null, message: null },
+            take_profit: auxiliary, protective: auxiliary, stop_loss: auxiliary,
+          }],
+        } satisfies AdvisoryEntryPrice,
       },
     },
   });
@@ -1536,6 +1560,9 @@ test("Advisory model unavailability remains isolated from the persisted rule lis
   );
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("000001.SZ");
   await expect(page.getByTestId("advisory-model-shadow-table")).toHaveCount(0);
+  await expect(page.getByTestId("advisory-entry-price-row")).toContainText("9.80 - 10.20 / 10.00");
+  await expect(page.getByTestId("advisory-entry-evidence")).toContainText("不代表收益验证通过");
+  await expect(page.getByTestId("advisory-entry-price-row")).toContainText("止盈未验证");
   expect(badResponses).toEqual([]);
 });
 

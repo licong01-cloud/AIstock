@@ -39,6 +39,34 @@ logger = logging.getLogger("aistock.quantevolver.executors.backtest")
 _PRECOMPUTED_HMM_COEFF_JSON_PARAM = "_precomputed_hmm_coefficients_json"
 
 
+def _strip_prediction_replay_factor_preparation(command: str) -> str:
+    """Remove the custom-factor materialization step from replay commands.
+
+    Prediction replay consumes an immutable prediction panel.  Its Qlib runner
+    rebuilds a label-only dataset from the frozen provider, so executing the
+    normal ``prepare_factors.py`` chain is both unnecessary and unsafe: it can
+    create a multi-gigabyte ``combined_factors_df.parquet`` before a replay
+    reaches the actual backtest.  Remove only the exact two-command chain
+    emitted by ConfigComposer and fail closed if either marker survives.
+    """
+
+    stripped, count = re.subn(
+        r"python\s+prepare_factors\.py\s*&&\s*\.\s+\./?\.factor_env\s*&&\s*",
+        "",
+        command,
+    )
+    if count > 1:
+        raise ValueError(
+            "PREDICTION_REPLAY received more than one custom-factor preparation chain"
+        )
+    forbidden_markers = ("prepare_factors.py", ".factor_env")
+    if any(marker in stripped for marker in forbidden_markers):
+        raise ValueError(
+            "PREDICTION_REPLAY could not isolate the custom-factor preparation chain"
+        )
+    return stripped
+
+
 class BacktestMode(str, Enum):
     FULL_TRAIN = "full_train"        # 完整训练 + 回测（Path 1/2/4）
     BACKTEST_ONLY = "backtest_only"  # 复用已训练模型，仅回测（Path 3）
@@ -290,6 +318,10 @@ class BacktestExecutor(BaseExecutor):
             forbidden_flags = ("--backtest-only", "--train-only", "--pred-backtest")
             if any(flag in wsl_command for flag in forbidden_flags):
                 raise ValueError("PREDICTION_REPLAY received an incompatible pre-existing runner flag")
+            wsl_command = _strip_prediction_replay_factor_preparation(wsl_command)
+            # Keep factor/model provenance in rdagent_config, but do not stage
+            # an executable script that replay mode is forbidden to run.
+            experiment_files.pop("prepare_factors.py", None)
             wsl_command, replacement_count = re.subn(
                 r"(python\s+qrun_limit_minute\.py\s+\S+\.ya?ml)",
                 r"\1 --pred-backtest frozen_prediction.pkl",

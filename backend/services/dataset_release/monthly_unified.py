@@ -36,6 +36,7 @@ CONSUMER_VALIDATION_BINDING_SCHEMA = (
     "aistock_monthly_consumer_validation_binding_v1"
 )
 READY_SCHEMA = "aistock_monthly_ready_v2"
+ADOPTED_READY_SCHEMA = "aistock_monthly_adopted_ready_v1"
 ACTIVATION_SCHEMA = "aistock_monthly_activation_v2"
 AUTHORIZATION_SCHEMA = "aistock_dataset_action_authorization_v1"
 OPERATION_ID_RE = re.compile(r"^dmr_[0-9a-f]{32}$")
@@ -681,7 +682,7 @@ class MonthlyOperationStore:
         return None
 
     def pending_operation_ids(self) -> tuple[str, ...]:
-        """Return resumable operations in deterministic creation order."""
+        """Return runnable operations; blocked sources wait for explicit resume."""
 
         pending: list[tuple[str, str]] = []
         if not self.operations.is_dir():
@@ -692,6 +693,8 @@ class MonthlyOperationStore:
                 continue
             state = _read_json(state_path, label="monthly state")
             status = ReleaseState(str(state["status"]))
+            if status == ReleaseState.SOURCE_BLOCKED and state.get("cancel_requested") is not True:
+                continue
             if status == ReleaseState.READY_TO_ACTIVATE:
                 request = _read_json(child / "request.json", label="monthly request")
                 if request.get("activation_mode") != "activate_when_ready":
@@ -734,10 +737,19 @@ class MonthlyOperationStore:
             return state
 
     def request_cancel(self, operation_id: str) -> dict[str, Any]:
-        state = self.read_state(operation_id)
-        if ReleaseState(state["status"]) in TERMINAL_STATES:
+        root = self.operation_root(operation_id)
+        with _exclusive_lock(root / ".operation.lock"):
+            state = self.read_state(operation_id)
+            status = ReleaseState(state["status"])
+            if status in TERMINAL_STATES:
+                return state
+            state["cancel_requested"] = True
+            if status == ReleaseState.SOURCE_BLOCKED:
+                state["status"] = ReleaseState.CANCELLED.value
+                state["current_stage"] = None
+            state["updated_at"] = datetime.now(UTC).isoformat()
+            _replace_json(root / "state.json", state)
             return state
-        return self.update_state(operation_id, cancel_requested=True)
 
     def write_checkpoint(
         self,
@@ -1083,6 +1095,347 @@ class MonthlyReleaseService:
             "runtime_action_performed": False,
         }
 
+    def adopt_existing_successor(
+        self,
+        *,
+        idempotency_key: str,
+        product_profile: str,
+        target_cutoff: date,
+        candidate_root: Path,
+        profile_candidate: Path,
+        predecessor_profile_sha256: str,
+        target_profile_sha256: str,
+        dataset_manifest_sha256: str,
+        dataset_manifest_file_sha256: str,
+        node_manifest_file_sha256: Mapping[str, str],
+        evidence_refs: Sequence[Mapping[str, str]],
+        controller_release_root: Path,
+        profile_candidate_root: Path,
+        expected_node_roots: Mapping[str, str],
+        principal: str,
+    ) -> dict[str, Any]:
+        """Adopt a verified immutable v3 hotfix without rebuilding its bytes."""
+
+        if not idempotency_key.strip() or len(idempotency_key) > 256:
+            raise MonthlyReleaseRequestInvalid("adoption idempotency key is invalid")
+        if product_profile != "qe_hmm_full_v2":
+            raise MonthlyReleaseRequestInvalid("adoption product profile is invalid")
+        if not principal.strip():
+            raise MonthlyReleaseAuthorizationError("adoption principal is empty")
+        predecessor = ActiveProfileSnapshot.read(self.active_profile)
+        expected_predecessor = ensure_sha256(
+            predecessor_profile_sha256, field="predecessor_profile_sha256"
+        )
+        if predecessor.file_sha256 != expected_predecessor:
+            raise MonthlyReleaseConflict("active profile differs from the adoption predecessor")
+        if target_cutoff != predecessor.cutoff:
+            raise MonthlyReleaseConflict(
+                "legacy successor adoption is limited to a same-cutoff immutable hotfix"
+            )
+
+        candidate = candidate_root.expanduser().absolute()
+        profile_path = profile_candidate.expanduser().absolute()
+        controller_parent = controller_release_root.resolve(strict=True)
+        profile_parent = profile_candidate_root.resolve(strict=True)
+        _require_plain_existing_chain(candidate, label="adopted candidate root")
+        _require_plain_existing_chain(profile_path, label="adopted profile candidate")
+        if (
+            not candidate.is_dir()
+            or candidate.resolve(strict=True).parent != controller_parent
+            or not profile_path.is_file()
+            or profile_path.resolve(strict=True).parent != profile_parent
+        ):
+            raise MonthlyReleaseConflict("adoption target escaped the registered release roots")
+
+        target_profile_hash = ensure_sha256(target_profile_sha256, field="target_profile_sha256")
+        manifest_identity = ensure_sha256(
+            dataset_manifest_sha256, field="dataset_manifest_sha256"
+        )
+        manifest_file_hash = ensure_sha256(
+            dataset_manifest_file_sha256, field="dataset_manifest_file_sha256"
+        )
+        if _file_sha256(profile_path) != target_profile_hash:
+            raise MonthlyReleaseConflict("adopted profile hash differs")
+        manifest_path = candidate / "qe_dataset_manifest.json"
+        _require_plain_existing_chain(manifest_path, label="adopted dataset manifest")
+        if not manifest_path.is_file() or _file_sha256(manifest_path) != manifest_file_hash:
+            raise MonthlyReleaseConflict("adopted manifest file hash differs")
+        profile = _read_json(profile_path, label="adopted profile candidate")
+        manifest = _read_json(manifest_path, label="adopted dataset manifest")
+        components = profile.get("components")
+        controller_paths = profile.get("controller_paths")
+        node_bindings = profile.get("node_bindings")
+        if (
+            profile.get("schema_version") != "aistock_active_dataset_profile_v3"
+            or not isinstance(components, Mapping)
+            or not isinstance(controller_paths, Mapping)
+            or not isinstance(node_bindings, Mapping)
+            or profile.get("cutoff") != target_cutoff.isoformat()
+            or components.get("dataset_manifest_sha256") != manifest_identity
+            or components.get("dataset_manifest_file_sha256") != manifest_file_hash
+            or Path(str(controller_paths.get("candidate_root") or "")).expanduser().absolute()
+            != candidate
+        ):
+            raise MonthlyReleaseConflict("adopted profile identity is incomplete or inconsistent")
+        if (
+            manifest.get("dataset_manifest_sha256") != manifest_identity
+            or manifest.get("cutoff_trade_date") != target_cutoff.isoformat()
+            or manifest.get("release_id") != profile.get("release_id")
+        ):
+            raise MonthlyReleaseConflict("adopted manifest identity differs from the profile")
+        if set(expected_node_roots) != {"wsl2-5080", "rdagent-node1"}:
+            raise MonthlyReleaseConflict("configured adoption node roots are incomplete")
+        actual_node_roots = {
+            node: str((node_bindings.get(node) or {}).get("candidate_root") or "")
+            for node in ("wsl2-5080", "rdagent-node1")
+        }
+        if actual_node_roots != dict(expected_node_roots):
+            raise MonthlyReleaseConflict("adopted profile node roots differ from configuration")
+        node_hashes = {
+            node: ensure_sha256(value, field=f"node_manifest_file_sha256.{node}")
+            for node, value in node_manifest_file_sha256.items()
+        }
+        if set(node_hashes) != set(REQUIRED_NODES) or set(node_hashes.values()) != {
+            manifest_file_hash
+        }:
+            raise MonthlyReleaseConflict("adopted release node manifest hashes differ")
+
+        normalized_evidence: list[dict[str, Any]] = []
+        schemas: set[str] = set()
+        for raw in evidence_refs:
+            relative = str(raw.get("relative_path") or "")
+            relative_path = Path(relative)
+            if (
+                not relative
+                or relative_path.is_absolute()
+                or ".." in relative_path.parts
+                or relative_path.as_posix() != relative.replace("\\", "/")
+            ):
+                raise MonthlyReleaseConflict("adoption evidence path is invalid")
+            path = candidate / relative_path
+            _require_plain_existing_chain(path, label="adoption evidence")
+            if not path.is_file():
+                raise MonthlyReleaseConflict("adoption evidence is unavailable")
+            expected_hash = ensure_sha256(str(raw.get("sha256") or ""), field="evidence sha256")
+            if _file_sha256(path) != expected_hash:
+                raise MonthlyReleaseConflict("adoption evidence hash differs")
+            value = _read_json(path, label="adoption evidence")
+            schema = str(raw.get("schema_version") or "")
+            if value.get("schema_version") != schema:
+                raise MonthlyReleaseConflict("adoption evidence schema differs")
+            if value.get("status") not in {None, "PASS"}:
+                raise MonthlyReleaseNotReady("adoption evidence is not PASS")
+            if schema == "qe_moneyflow_alias_coverage_receipt_v1" and (
+                int(value.get("unknown", -1)) != 0
+                or int(value.get("nonfinite", -1)) != 0
+                or int(value.get("mismatched", -1)) != 0
+                or int(value.get("expected", -1))
+                != int(value.get("resolved", -2)) + int(value.get("provider_absence", -3))
+                or value.get("database_write") is not False
+            ):
+                raise MonthlyReleaseNotReady("moneyflow alias adoption evidence is incomplete")
+            if schema == "hmm_risk_rotation_l2_input_bundle_v1" and (
+                not isinstance(value.get("identity"), Mapping)
+                or value["identity"].get("manifest_sha256") != manifest_identity
+            ):
+                raise MonthlyReleaseNotReady("HMM adoption evidence binds another manifest")
+            schemas.add(schema)
+            normalized_evidence.append(
+                {
+                    "id": relative_path.as_posix(),
+                    "sha256": expected_hash,
+                    "size": path.stat().st_size,
+                    "schema_version": schema,
+                }
+            )
+        required_schemas = {
+            "qe_moneyflow_alias_coverage_receipt_v1",
+            "hmm_risk_rotation_l2_input_bundle_v1",
+        }
+        if not required_schemas.issubset(schemas):
+            raise MonthlyReleaseNotReady("adoption evidence does not cover required release gates")
+
+        semantic = {
+            "schema_version": "aistock_monthly_existing_successor_adoption_v1",
+            "target_cutoff": target_cutoff.isoformat(),
+            "product_profile": product_profile,
+            "candidate_root": str(candidate),
+            "profile_candidate": str(profile_path),
+            "predecessor_profile_sha256": expected_predecessor,
+            "target_profile_sha256": target_profile_hash,
+            "dataset_manifest_sha256": manifest_identity,
+            "dataset_manifest_file_sha256": manifest_file_hash,
+            "node_manifest_file_sha256": dict(sorted(node_hashes.items())),
+            "evidence_refs": normalized_evidence,
+        }
+        semantic_digest = _digest(semantic)
+        observed = datetime.now(UTC)
+        self.store.operations.mkdir(parents=True, exist_ok=True)
+        self.store.locks.mkdir(parents=True, exist_ok=True)
+        with _exclusive_lock(self.store.locks / f"{product_profile}.lock"):
+            for child in self.store.operations.iterdir():
+                request_path = child / "request.json"
+                if not request_path.is_file():
+                    continue
+                existing = _read_json(request_path, label="existing request")
+                if (
+                    existing.get("product_profile") == product_profile
+                    and existing.get("idempotency_key") == idempotency_key
+                ):
+                    if existing.get("semantic_digest") != semantic_digest:
+                        raise MonthlyReleaseConflict("adoption idempotency key is already bound")
+                    return self.store.read_state(str(existing["operation_id"]))
+                if (
+                    existing.get("product_profile") == product_profile
+                    and existing.get("target_cutoff") == target_cutoff.isoformat()
+                ):
+                    raise MonthlyReleaseConflict("target cutoff is already bound to another operation")
+
+            operation_id = f"dmr_{uuid.uuid4().hex}"
+            root = self.store.operation_root(operation_id)
+            root.mkdir(parents=False, exist_ok=False)
+            (root / "checkpoints").mkdir()
+            (root / "receipts").mkdir()
+            (root / "logs").mkdir()
+            request_payload = {
+                **semantic,
+                "operation_id": operation_id,
+                "idempotency_key": idempotency_key,
+                "semantic_digest": semantic_digest,
+                "requested_by": principal,
+                "created_at": observed.isoformat(),
+            }
+            adoption = {
+                "schema_version": "aistock_monthly_existing_successor_adoption_receipt_v1",
+                "operation_id": operation_id,
+                "predecessor_profile_ref": {
+                    "id": predecessor.path.name,
+                    "sha256": predecessor.file_sha256,
+                    "size": predecessor.path.stat().st_size,
+                },
+                "target_profile_ref": _content_ref(profile_path, ref_id=profile_path.name),
+                "dataset_manifest_ref": _content_ref(
+                    manifest_path, ref_id="qe_dataset_manifest.json"
+                ),
+                "node_manifest_file_sha256": dict(sorted(node_hashes.items())),
+                "evidence_refs": normalized_evidence,
+                "candidate_write_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+            }
+            adoption["canonical_sha256"] = _digest(adoption)
+            _write_exclusive(root / "receipts" / "adoption.json", adoption)
+            predecessor_ref = adoption["predecessor_profile_ref"]
+            plan = {
+                "schema_version": PLAN_SCHEMA,
+                "operation_id": operation_id,
+                "plan_state": "ADOPTED_VERIFIED_SUCCESSOR",
+                "target_cutoff": target_cutoff.isoformat(),
+                "cutoff": target_cutoff.isoformat(),
+                "product_profile": product_profile,
+                "generation": str(profile["generation"]),
+                "revision": str(manifest.get("revision") or "legacy-hotfix"),
+                "release_id": str(profile["release_id"]),
+                "predecessor": {
+                    "profile_path": str(predecessor.path),
+                    "profile_sha256": predecessor.file_sha256,
+                    "generation": predecessor.generation,
+                    "release_id": predecessor.release_id,
+                    "cutoff": predecessor.cutoff.isoformat(),
+                    "dataset_manifest_sha256": predecessor.dataset_manifest_sha256,
+                    "candidate_root": predecessor.candidate_root,
+                },
+                "predecessor_profile_ref": predecessor_ref,
+                "candidate_root": str(candidate),
+                "profile_candidate": str(profile_path),
+                "node_roots": actual_node_roots,
+                "target_roots": {"controller": str(candidate), **actual_node_roots},
+                "required_consumers": list(REQUIRED_CONSUMERS),
+                "actions": {component: ComponentAction.REUSE.value for component in COMPONENTS},
+                "adoption_ref": _content_ref(
+                    root / "receipts" / "adoption.json", ref_id="receipts/adoption.json"
+                ),
+            }
+            ready = {
+                "schema_version": ADOPTED_READY_SCHEMA,
+                "operation_id": operation_id,
+                "status": ReleaseState.READY_TO_ACTIVATE.value,
+                "request_digest": semantic_digest,
+                "plan_digest": _digest(plan),
+                "dataset_manifest_sha256": manifest_identity,
+                "generation": str(profile["generation"]),
+                "release_id": str(profile["release_id"]),
+                "cutoff": target_cutoff.isoformat(),
+                "candidate_root": str(candidate),
+                "profile_candidate": str(profile_path),
+                "candidate_profile_ref": adoption["target_profile_ref"],
+                "predecessor_profile_ref": predecessor_ref,
+                "adoption_ref": plan["adoption_ref"],
+                "node_manifest_file_sha256": dict(sorted(node_hashes.items())),
+                "unresolved_count": 0,
+                "candidate_write_performed": False,
+                "database_write_performed": False,
+                "production_ddl_performed": False,
+                "production_dml_performed": False,
+                "runtime_action_performed": False,
+                "active_profile_write": False,
+            }
+            ready["canonical_sha256"] = _digest(ready)
+            state = {
+                "schema_version": STATE_SCHEMA,
+                "operation_id": operation_id,
+                "status": ReleaseState.READY_TO_ACTIVATE.value,
+                "attempt": 0,
+                "current_stage": None,
+                "cancel_requested": False,
+                "last_error": None,
+                "created_at": observed.isoformat(),
+                "updated_at": observed.isoformat(),
+                "plan_sha256": _digest(plan),
+                "candidate_root": str(candidate),
+                "profile_candidate": str(profile_path),
+            }
+            _write_exclusive(root / "request.json", request_payload)
+            _write_exclusive(root / "plan.json", plan)
+            _write_exclusive(root / "receipts" / "ready.json", ready)
+            _write_exclusive(root / "state.json", state)
+            return state
+
+    def issue_action_authorization(
+        self,
+        operation_id: str,
+        *,
+        authorization_store: "ActionAuthorizationStore",
+        action: str,
+        principal: str,
+    ) -> dict[str, Any]:
+        if action != "ACTIVATE":
+            raise MonthlyReleaseAuthorizationError("only ACTIVATE can be issued here")
+        state = self.store.read_state(operation_id)
+        if state.get("status") != ReleaseState.READY_TO_ACTIVATE.value:
+            raise MonthlyReleaseNotReady("operation is not ready for authorization")
+        plan = self.store.read_plan(operation_id)
+        ready = _read_json(
+            self.store.operation_root(operation_id) / "receipts" / "ready.json",
+            label="ready receipt",
+        )
+        if ready.get("operation_id") != operation_id or ready.get("status") != state.get("status"):
+            raise MonthlyReleaseConflict("ready receipt differs from operation state")
+        predecessor_hash = str(plan["predecessor"]["profile_sha256"])
+        if _file_sha256(self.active_profile) != predecessor_hash:
+            raise MonthlyReleaseConflict("active profile changed before authorization")
+        target_hash = _file_sha256(Path(str(plan["profile_candidate"])))
+        if target_hash != str(ready["candidate_profile_ref"]["sha256"]):
+            raise MonthlyReleaseConflict("target profile changed before authorization")
+        return authorization_store.issue(
+            operation_id=operation_id,
+            action=action,
+            principal=principal,
+            target_cutoff=str(plan["target_cutoff"]),
+            predecessor_profile_sha256=predecessor_hash,
+            target_profile_sha256=target_hash,
+        )
+
     def status(self, operation_id: str) -> dict[str, Any]:
         state = self.store.read_state(operation_id)
         checkpoints = {
@@ -1175,6 +1528,14 @@ class MonthlyReleaseService:
             request = self.store.read_request(operation_id)
             plan = self.store.read_plan(operation_id)
             state = self.store.read_state(operation_id)
+            if ReleaseState(state["status"]) == ReleaseState.SOURCE_BLOCKED:
+                # A stale queue observation must not turn a blocked source into
+                # an implicit retry. A concurrent cancellation needs no producer.
+                if state.get("cancel_requested") is True:
+                    return self.store.update_state(
+                        operation_id, status=ReleaseState.CANCELLED.value, current_stage=None
+                    )
+                return state
             if ReleaseState(state["status"]) in {
                 ReleaseState.READY_TO_ACTIVATE,
                 ReleaseState.ACTIVATED,
@@ -1462,6 +1823,16 @@ class MonthlyReleaseService:
                 raise MonthlyReleaseNotReady("operation is not ready for activation")
             plan = self.store.read_plan(operation_id)
             ready = _read_json(root / "receipts" / "ready.json", label="ready receipt")
+            ready_canonical = str(ready.get("canonical_sha256") or "")
+            ready_without_digest = dict(ready)
+            ready_without_digest.pop("canonical_sha256", None)
+            if (
+                ready.get("schema_version") not in {READY_SCHEMA, ADOPTED_READY_SCHEMA}
+                or ready.get("operation_id") != operation_id
+                or ready.get("status") != ReleaseState.READY_TO_ACTIVATE.value
+                or ready_canonical != _digest(ready_without_digest)
+            ):
+                raise MonthlyReleaseConflict("ready receipt identity is invalid")
             profile_candidate = Path(str(plan["profile_candidate"]))
             candidate_profile_ref = _content_ref(
                 profile_candidate, ref_id=profile_candidate.name
@@ -1717,6 +2088,49 @@ class ActionAuthorizationStore:
             raise ValueError("authorization root must be absolute")
         self.root = root
 
+    def issue(
+        self,
+        *,
+        operation_id: str,
+        action: str,
+        principal: str,
+        target_cutoff: str,
+        predecessor_profile_sha256: str,
+        target_profile_sha256: str,
+    ) -> dict[str, Any]:
+        if not OPERATION_ID_RE.fullmatch(operation_id):
+            raise MonthlyReleaseAuthorizationError("operation id is invalid")
+        if action not in {"ACTIVATE", "ROLLBACK"} or not principal.strip():
+            raise MonthlyReleaseAuthorizationError("authorization scope is invalid")
+        self.root.mkdir(parents=True, exist_ok=True)
+        _require_plain_existing_chain(self.root, label="action authorization root")
+        authorization_id = f"dsauth_{uuid.uuid4().hex}"
+        value = {
+            "schema_version": AUTHORIZATION_SCHEMA,
+            "authorization_id": authorization_id,
+            "operation_id": operation_id,
+            "action": action,
+            "principal": principal,
+            "target_cutoff": target_cutoff,
+            "predecessor_profile_sha256": ensure_sha256(
+                predecessor_profile_sha256, field="predecessor_profile_sha256"
+            ),
+            "target_profile_sha256": ensure_sha256(
+                target_profile_sha256, field="target_profile_sha256"
+            ),
+            "status": "APPROVED",
+            "approved_at": datetime.now(UTC).isoformat(),
+        }
+        value["canonical_sha256"] = _digest(value)
+        path = self.root / f"{authorization_id}.json"
+        _write_exclusive(path, value)
+        return {
+            "authorization_id": authorization_id,
+            "authorization_file_sha256": _file_sha256(path),
+            "canonical_sha256": value["canonical_sha256"],
+            "principal": principal,
+        }
+
     def require(
         self,
         authorization_ref: str,
@@ -1809,6 +2223,7 @@ def _atomic_copy_cas(
 
 
 __all__: Sequence[str] = (
+    "ADOPTED_READY_SCHEMA",
     "ACTIVATION_SCHEMA",
     "AUTHORIZATION_SCHEMA",
     "ActionAuthorizationStore",

@@ -7,6 +7,21 @@ import pytest
 
 from scripts import ci_failure_issue_summary as summary
 
+def _ci_summary(failed_jobs, *, run_id="26378872481", commit="62dc1b12", **overrides):
+    return summary.finalize_summary({
+        "schema_version": "aistock_ci_failure_summary_v1", "severity": "P1",
+        "workflow": "AIstock CI", "run_id": run_id,
+        "run_url": f"https://github.com/licong01-cloud/AIstock/actions/runs/{run_id}",
+        "branch": "main", "commit": commit, "failed_jobs": failed_jobs,
+        "extraction_errors": [], **overrides,
+    })
+
+
+def _log_cli_args(log_path):
+    return ["--log-file", str(log_path), "--job-name", "Backend tests (paper_v2_backend)",
+            "--source-name", "AIstock CI", "--branch", "main", "--commit", "62dc1b12"]
+
+
 
 CI_LOG = """
 Backend tests (paper_v2_backend)\tUNKNOWN STEP\t2026-05-25T01:43:38.5513821Z nox > Running session paper_v2_backend
@@ -98,18 +113,11 @@ def test_finalize_summary_uses_actionable_failed_job_for_mixed_nightly_scope() -
         "suspected_files": [],
     }
     qe_job = summary.parse_job_log(MIXED_NIGHTLY_LOG, job_name="Nightly L3 (paper_v2 + qe_archive + qe_read)")
-    payload = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "severity": "P1",
-            "workflow": "AIstock Nightly L3 + DR",
-            "run_id": "28334737223",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/28334737223",
-            "branch": "main",
-            "commit": "a4897918",
-            "failed_jobs": [infra_job, qe_job],
-            "extraction_errors": [],
-        }
+    payload = _ci_summary(
+        [infra_job, qe_job],
+        workflow="AIstock Nightly L3 + DR",
+        run_id="28334737223",
+        commit="a4897918",
     )
     issue_payload = summary.build_github_issue_payload(payload)
     context_pack = summary.build_context_pack(payload, github_issue_number=1723)
@@ -126,19 +134,7 @@ def test_finalize_summary_uses_actionable_failed_job_for_mixed_nightly_scope() -
 
 def test_finalize_summary_builds_fingerprint_title_and_reproduce_command() -> None:
     parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
-    payload = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "severity": "P1",
-            "workflow": "AIstock CI",
-            "run_id": "26378872481",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
-            "branch": "main",
-            "commit": "62dc1b12",
-            "failed_jobs": [parsed],
-            "extraction_errors": [],
-        }
-    )
+    payload = _ci_summary([parsed])
 
     assert payload["diagnostic_status"] == "complete"
     assert payload["fingerprint"].startswith("ci-")
@@ -154,19 +150,7 @@ def test_finalize_summary_builds_fingerprint_title_and_reproduce_command() -> No
 
 def test_render_issue_markdown_contains_actionable_sections() -> None:
     parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
-    payload = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "severity": "P1",
-            "workflow": "AIstock CI",
-            "run_id": "26378872481",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
-            "branch": "main",
-            "commit": "62dc1b12",
-            "failed_jobs": [parsed],
-            "extraction_errors": [],
-        }
-    )
+    payload = _ci_summary([parsed])
 
     markdown = summary.render_issue_markdown(payload)
 
@@ -181,19 +165,7 @@ def test_render_issue_markdown_contains_actionable_sections() -> None:
 
 def test_context_pack_is_agent_neutral_and_compact() -> None:
     parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
-    payload = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "severity": "P1",
-            "workflow": "AIstock CI",
-            "run_id": "26378872481",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
-            "branch": "main",
-            "commit": "62dc1b12",
-            "failed_jobs": [parsed],
-            "extraction_errors": [],
-        }
-    )
+    payload = _ci_summary([parsed])
 
     context_pack = summary.build_context_pack(payload, github_issue_number=197)
     markdown = summary.render_context_pack_markdown(context_pack)
@@ -214,16 +186,7 @@ def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.C
     log_path.write_text(CI_LOG, encoding="utf-8")
 
     assert summary.main([
-        "--log-file",
-        str(log_path),
-        "--job-name",
-        "Backend tests (paper_v2_backend)",
-        "--source-name",
-        "AIstock CI",
-        "--branch",
-        "main",
-        "--commit",
-        "62dc1b12",
+        *_log_cli_args(log_path),
         "--output",
         str(output_path),
         "--markdown-output",
@@ -249,19 +212,7 @@ def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.C
 
 def test_github_issue_payload_contains_dedupe_marker_and_labels() -> None:
     parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
-    payload = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "severity": "P1",
-            "workflow": "AIstock CI",
-            "run_id": "26378872481",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/26378872481",
-            "branch": "main",
-            "commit": "62dc1b12",
-            "failed_jobs": [parsed],
-            "extraction_errors": [],
-        }
-    )
+    payload = _ci_summary([parsed])
 
     issue_payload = summary.build_github_issue_payload(payload)
 
@@ -286,18 +237,9 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     log_path.write_text(CI_LOG, encoding="utf-8")
 
     assert summary.main([
-        "--log-file",
-        str(log_path),
-        "--job-name",
-        "Backend tests (paper_v2_backend)",
-        "--source-name",
-        "AIstock CI",
+        *_log_cli_args(log_path),
         "--run-id",
         "26378872481",
-        "--branch",
-        "main",
-        "--commit",
-        "62dc1b12",
         "--github-issue-payload-output",
         str(issue_payload_path),
     ]) == 0
@@ -308,8 +250,9 @@ def test_cli_writes_github_issue_payload(tmp_path: Path, capsys: pytest.CaptureF
     assert "aistock-ci-failure-fingerprint" in issue_payload["body"]
 
 
-def test_cli_llm_kill_switch_still_writes_deterministic_issue_payload(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("mode", ["off", "opt_in_auto_file"])
+def test_cli_llm_rollout_preserves_deterministic_issue_payload(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], mode: str
 ) -> None:
     log_path = tmp_path / "job.log"
     issue_payload_path = tmp_path / "issue-payload.json"
@@ -317,20 +260,12 @@ def test_cli_llm_kill_switch_still_writes_deterministic_issue_payload(
 
     assert summary.main(
         [
-            "--log-file",
-            str(log_path),
-            "--job-name",
-            "Backend tests (paper_v2_backend)",
-            "--source-name",
-            "AIstock CI",
+            *_log_cli_args(log_path),
             "--run-id",
             "26378872481",
-            "--branch",
-            "main",
-            "--commit",
-            "62dc1b12",
             "--llm-triage-mode",
-            "off",
+            mode,
+            *(["--llm-auto-file-opt-in"] if mode == "opt_in_auto_file" else []),
             "--github-issue-payload-output",
             str(issue_payload_path),
             "--stdout-format",
@@ -340,51 +275,18 @@ def test_cli_llm_kill_switch_still_writes_deterministic_issue_payload(
 
     stdout_payload = json.loads(capsys.readouterr().out)
     issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
-    assert stdout_payload["llm_guarded_rollout"]["workflow_gate"] == "off"
     assert stdout_payload["artifacts"]["github_issue_payload"] == str(issue_payload_path)
-    assert issue_payload["llm_enhancement"]["allowed"] is False
-    assert issue_payload["llm_enhancement"]["fallback"] == "deterministic_issue_workflow"
-    assert issue_payload["llm_enhancement"]["deterministic_issue_creation_unaffected"] is True
     assert "## Failure Summary" in issue_payload["body"]
-
-
-def test_cli_opt_in_rollout_allows_llm_issue_enhancement(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    log_path = tmp_path / "job.log"
-    issue_payload_path = tmp_path / "issue-payload.json"
-    log_path.write_text(CI_LOG, encoding="utf-8")
-
-    assert summary.main(
-        [
-            "--log-file",
-            str(log_path),
-            "--job-name",
-            "Backend tests (paper_v2_backend)",
-            "--source-name",
-            "AIstock CI",
-            "--run-id",
-            "26378872481",
-            "--branch",
-            "main",
-            "--commit",
-            "62dc1b12",
-            "--llm-triage-mode",
-            "opt_in_auto_file",
-            "--llm-auto-file-opt-in",
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
-
-    stdout_payload = json.loads(capsys.readouterr().out)
-    issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
-    assert stdout_payload["llm_guarded_rollout"]["workflow_gate"] == "ready"
-    assert stdout_payload["llm_guarded_rollout"]["auto_file_allowed"] is True
-    assert issue_payload["llm_enhancement"]["allowed"] is True
-    assert issue_payload["llm_enhancement"]["mode"] == "opt_in_auto_file"
+    if mode == "off":
+        assert stdout_payload["llm_guarded_rollout"]["workflow_gate"] == "off"
+        assert issue_payload["llm_enhancement"]["allowed"] is False
+        assert issue_payload["llm_enhancement"]["fallback"] == "deterministic_issue_workflow"
+        assert issue_payload["llm_enhancement"]["deterministic_issue_creation_unaffected"] is True
+    else:
+        assert stdout_payload["llm_guarded_rollout"]["workflow_gate"] == "ready"
+        assert stdout_payload["llm_guarded_rollout"]["auto_file_allowed"] is True
+        assert issue_payload["llm_enhancement"]["allowed"] is True
+        assert issue_payload["llm_enhancement"]["mode"] == "opt_in_auto_file"
 
 
 def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -609,6 +511,53 @@ def test_nightly_single_group_uses_module_identity_and_preserves_one_time_legacy
     )
 
 
+def test_nightly_validation_runner_incident_dedupes_with_or_without_session_receipt() -> None:
+    invalid_plan_summary = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure"},
+            "run_id": "9012",
+            "nightly_session_results": [
+                {
+                    "session": "nightly_execution_plan",
+                    "result": "failure",
+                    "failure_kind": "invalid_plan",
+                    "error": "Nightly execution plan selected change-scoped sessions without changed_files: l0",
+                }
+            ],
+        }
+    )
+    missing_receipt_summary = summary.summarize_nightly_status(
+        {"statuses": {"nightlyL3": "failure"}, "run_id": "9013"}
+    )
+
+    invalid_plan_payload = summary.build_github_issue_payloads(invalid_plan_summary)[0]
+    missing_receipt_payload = summary.build_github_issue_payloads(missing_receipt_summary)[0]
+
+    assert invalid_plan_summary["nightly_failure_groups"][0]["failure_kinds"] == ["invalid_plan"]
+    assert missing_receipt_summary["nightly_failure_groups"][0]["failure_kinds"] == [
+        "missing_session_receipt"
+    ]
+    assert invalid_plan_payload["dedupe"]["nightly_marker"] == missing_receipt_payload["dedupe"]["nightly_marker"]
+    assert "change-scoped sessions without changed_files" in invalid_plan_payload["body"]
+    assert "missing_session_receipt" in missing_receipt_payload["title"]
+
+
+def test_nightly_missing_session_receipt_does_not_hide_other_failed_stages() -> None:
+    payload = summary.summarize_nightly_status(
+        {
+            "statuses": {"nightlyL3": "failure", "drValidate": "failure"},
+            "run_id": "9014",
+        }
+    )
+
+    assert payload["nightly_failed_stages"] == ["dr_validate", "nightly_l3"]
+    assert payload["nightly_failure_groups"] == []
+    issue_payload = summary.build_github_issue_payloads(payload)[0]
+    assert "dr=failure/failure" not in issue_payload["title"]
+    assert "dr=unknown/failure" in issue_payload["title"]
+    assert "missing_session_receipt" not in issue_payload["body"]
+
+
 def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:
     sessions = [
         "factor_research_backend",
@@ -734,19 +683,11 @@ def test_cli_persists_tmp_failure_candidate_history(
 
 def test_candidate_history_persistence_dedupes_by_fingerprint(tmp_path: Path) -> None:
     history_dir = tmp_path / "tests" / "aistock_validation" / "history" / "issue_candidates"
-    first = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "generated_at": "2026-06-02T00:00:00Z",
-            "severity": "P1",
-            "workflow": "AIstock CI",
-            "run_id": "1001",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/1001",
-            "branch": "main",
-            "commit": "abc",
-            "failed_jobs": [],
-            "extraction_errors": [],
-        }
+    first = _ci_summary(
+        [],
+        generated_at="2026-06-02T00:00:00Z",
+        run_id="1001",
+        commit="abc",
     )
     second = dict(first)
     second["run_id"] = "1002"
@@ -1019,29 +960,22 @@ def test_cli_deferred_summary_skips_github_issue_payload(
 
 
 def test_partial_unactionable_summary_blocks_payload_and_bug_promotion() -> None:
-    payload = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "generated_at": "2026-06-02T00:00:00Z",
-            "severity": "P1",
-            "workflow": "AIstock CI",
-            "run_id": "301",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/301",
-            "branch": "main",
-            "commit": "abcdef1234567890",
-            "failed_jobs": [
-                {
-                    "job_name": "Backend tests (paper_v2_backend)",
-                    "nox_session": "paper_v2_backend",
-                    "failed_tests": [],
-                    "error_signature": None,
-                    "key_log_excerpt": [],
-                    "suspected_module": "paper_v2",
-                    "suspected_files": [],
-                }
-            ],
-            "extraction_errors": ["job log was unavailable or incomplete"],
-        }
+    payload = _ci_summary(
+        [
+            {
+                "job_name": "Backend tests (paper_v2_backend)",
+                "nox_session": "paper_v2_backend",
+                "failed_tests": [],
+                "error_signature": None,
+                "key_log_excerpt": [],
+                "suspected_module": "paper_v2",
+                "suspected_files": [],
+            }
+        ],
+        generated_at="2026-06-02T00:00:00Z",
+        run_id="301",
+        commit="abcdef1234567890",
+        extraction_errors=["job log was unavailable or incomplete"],
     )
 
     assert payload["diagnostic_status"] == "partial"
@@ -1107,18 +1041,10 @@ Backend tests (rl_execution_smoke)\tUNKNOWN STEP\t2026-06-02T07:40:02Z nox > Ses
 
 
 def test_locate_last_green_run_finds_previous_success() -> None:
-    payload = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "severity": "P1",
-            "workflow": "AIstock CI",
-            "run_id": "200",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/200",
-            "branch": "main",
-            "commit": "abcdef1234567890",
-            "failed_jobs": [],
-            "extraction_errors": [],
-        }
+    payload = _ci_summary(
+        [],
+        run_id="200",
+        commit="abcdef1234567890",
     )
 
     def fake_run(args: list[str], **_: object) -> dict[str, object]:
@@ -1200,26 +1126,18 @@ def test_locate_last_green_run_transport_failure_uses_rest() -> None:
 
 def test_regression_locator_is_rendered_and_carried_to_context_pack() -> None:
     parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
-    payload = summary.finalize_summary(
-        {
-            "schema_version": "aistock_ci_failure_summary_v1",
-            "severity": "P1",
-            "workflow": "AIstock CI",
-            "run_id": "200",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/200",
-            "branch": "main",
-            "commit": "abcdef1234567890",
-            "failed_jobs": [parsed],
-            "extraction_errors": [],
-            "last_green_locator": {
-                "schema_version": "aistock_ci_last_green_locator_v1",
-                "status": "found",
-                "blocking_for_issue_workflow": False,
-                "commit_range": "1234567890ab..abcdef123456",
-                "previous_success_run": {"run_id": "198", "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/198"},
-                "warnings": [],
-            },
-        }
+    payload = _ci_summary(
+        [parsed],
+        run_id="200",
+        commit="abcdef1234567890",
+        last_green_locator={
+            "schema_version": "aistock_ci_last_green_locator_v1",
+            "status": "found",
+            "blocking_for_issue_workflow": False,
+            "commit_range": "1234567890ab..abcdef123456",
+            "previous_success_run": {"run_id": "198", "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/198"},
+            "warnings": [],
+        },
     )
 
     markdown = summary.render_issue_markdown(payload)
@@ -1345,7 +1263,8 @@ def test_nightly_status_cli_keeps_generic_stage_local_until_run_completes(
     assert payload["failed_jobs"][0]["error_signature"] == "Nightly failed: nightly_l3=failure"
     assert payload["failed_jobs"][0]["failed_tests"] == []
     assert payload["reproduce_command"] == "gh run view 28973219723 --repo licong01-cloud/AIstock"
-    assert "Nightly failed: nightly_l3=failure" in body
+    assert "Nightly L3 failed without a durable session result" in body
+    assert "[P1][validation.runner] Nightly failed: missing_session_receipt" == issue_payload["title"]
     assert "LIVE_INFERENCE_PREFLIGHT_FAILED" not in body
 
 

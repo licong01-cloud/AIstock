@@ -1389,14 +1389,45 @@ def _failed_nightly_sessions(payload: dict[str, Any]) -> list[str]:
 
 
 def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    groups: dict[str, list[str]] = {}
-    for session in _failed_nightly_sessions(payload):
-        module = _test_plan_module_for_nox_session(session) or "validation.runner"
-        groups.setdefault(module, []).append(session)
-    return [
-        {"module": module, "sessions": sorted(set(sessions)), "session_count": len(set(sessions))}
-        for module, sessions in sorted(groups.items())
+    raw = payload.get("nightly_session_results")
+    rows = raw if isinstance(raw, list) else [raw] if isinstance(raw, dict) else []
+    failed_rows = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and _status_value(row.get("result")) in NIGHTLY_FAILURE_STATUSES
+        and str(row.get("session") or "").strip()
     ]
+    groups: dict[str, dict[str, Any]] = {}
+    for row in failed_rows:
+        session = str(row.get("session") or "").strip()
+        module = _test_plan_module_for_nox_session(session) or "validation.runner"
+        group = groups.setdefault(module, {"sessions": [], "failure_kinds": [], "errors": []})
+        group["sessions"].append(session)
+        if str(row.get("failure_kind") or "").strip():
+            group["failure_kinds"].append(str(row["failure_kind"]).strip())
+        if str(row.get("error") or "").strip():
+            group["errors"].append(str(row["error"]).strip())
+    failed_stages = _nightly_failed_keys(_nightly_statuses_from_payload(payload))
+    if not groups and failed_stages == ["nightly_l3"]:
+        groups["validation.runner"] = {
+            "sessions": [],
+            "failure_kinds": ["missing_session_receipt"],
+            "errors": ["Nightly L3 failed without a durable session result"],
+        }
+    normalized_groups: list[dict[str, Any]] = []
+    for module, details in sorted(groups.items()):
+        sessions = sorted(set(details["sessions"]))
+        normalized_groups.append(
+            {
+                "module": module,
+                "sessions": sessions,
+                "session_count": len(sessions),
+                "failure_kinds": sorted(set(details["failure_kinds"])),
+                "errors": _unique(details["errors"]),
+            }
+        )
+    return normalized_groups
 
 
 def _bounded_nightly_failure_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1453,7 +1484,11 @@ def _nightly_group_summaries(summary: dict[str, Any]) -> list[dict[str, Any]]:
         job["nox_session"] = sessions[0] if len(sessions) == 1 else None
         job["failed_step"] = sessions[0] if len(sessions) == 1 else "nightly_module_group"
         job["failed_tests"] = []
-        job["error_signature"] = "Nightly failed sessions: " + ", ".join(sessions)
+        failure_kinds = sorted({str(item) for item in group.get("failure_kinds") or [] if str(item).strip()})
+        errors = [str(item) for item in group.get("errors") or [] if str(item).strip()]
+        failure_label = ", ".join(sessions) or ", ".join(failure_kinds) or "missing session identity"
+        job["error_signature"] = errors[0] if errors else "Nightly failed sessions: " + failure_label
+        job["key_log_excerpt"] = _unique([*job.get("key_log_excerpt", []), *errors])
         scoped["failed_jobs"] = [job]
         # A module group must keep one durable Issue while its failing session
         # membership changes between Nightly runs.  Session identities remain
@@ -1468,7 +1503,7 @@ def _nightly_group_summaries(summary: dict[str, Any]) -> list[dict[str, Any]]:
         scoped["fingerprint"] = f"ci-{group_hash}"
         scoped["issue_title"] = (
             f"[{scoped.get('severity') or 'P1'}][{module}] Nightly failed: "
-            + (", ".join(sessions) or "module group has no session identity")
+            + failure_label
         )[:240]
         scoped["manual_summary"] = scoped["issue_title"]
         scoped["reproduce_command"] = (

@@ -239,6 +239,8 @@ def _model_code_contract(manifest: StrategyPackageManifest) -> list[dict[str, An
                 }
                 for asset in sorted(model.model_code_assets, key=lambda item: (item.relative_path, item.module_name))
             ],
+            **({"preprocessor_asset": model.preprocessor_asset.model_dump(mode="json")}
+               if model.preprocessor_asset is not None else {}),
         }
         for model in sorted(model_assets, key=lambda item: item.model_id)
     ]
@@ -255,6 +257,47 @@ class FrozenRuntimeModelProbeResult:
     expected_features: int
     backend: str
     metadata: dict[str, Any]
+
+
+def frozen_model_probe_payload(model_path: Path) -> dict[str, Any]:
+    """Probe weights and the fitted preprocessing contract in the consumer process."""
+    from backend import inference_engine
+    _model, kind, inner, features = inference_engine.load_model_from_pkl(model_path)
+    payload: dict[str, Any] = {
+        "ok": True, "model_kind": kind, "model_expected_features": int(features or 0),
+        "inner_model_type": type(inner).__name__ if inner is not None else None,
+    }
+    dataset_path = model_path.parent / "dataset"
+    if dataset_path.is_file():
+        dataset = inference_engine._load_admitted_strategy_package_pickle(dataset_path)
+        processors = list(getattr(getattr(dataset, "handler", None), "infer_processors", []) or [])
+        if not processors:
+            raise ValueError("frozen fitted dataset declares no inference processors")
+        columns = inference_engine._saved_qe_feature_order(processors)
+        if columns:
+            import pandas as pd
+            frame = pd.DataFrame(0.0, index=range(2), columns=columns)
+            processed = inference_engine._apply_saved_qe_infer_processors(
+                frame, task_dir=model_path.parent,
+                primary_assets={"dataset_processor_relpath": "dataset"},
+            )
+            if processed.shape != frame.shape or list(processed.columns) != columns:
+                raise ValueError("frozen fitted preprocessor changed the admitted feature schema")
+            payload["fitted_feature_order"] = columns
+        payload["fitted_preprocessor_count"] = len(processors)
+        payload["sequence_length"] = inference_engine._saved_qe_step_len(
+            model_path.parent, {"dataset_processor_relpath": "dataset"},
+        )
+    return payload
+
+
+def _validate_fitted_feature_schema(probe: FrozenRuntimeModelProbeResult, factor_order: list[str]) -> None:
+    columns = probe.metadata.get("probe_payload", {}).get("fitted_feature_order")
+    if columns is not None and (len(columns) != len(factor_order) or set(columns) != set(factor_order)):
+        raise StrategyPackageValidationError(
+            "frozen fitted feature schema differs from the package factor schema",
+            context={"reason_code": "strategy_package_fitted_feature_schema_mismatch"},
+        )
 
 
 class WslFrozenRuntimeModelProbe:
@@ -277,17 +320,18 @@ class WslFrozenRuntimeModelProbe:
         with tempfile.TemporaryDirectory(prefix="sp_frozen_self_check_") as tmp:
             output_path = Path(tmp) / "model_probe.json"
             args = [
-                "scripts/strategy_package_frozen_self_check.py",
-                "--model-params-path",
+                "-c",
+                "import json,sys; from pathlib import Path; "
+                "from backend.services.strategy_package.frozen_runtime_self_check import frozen_model_probe_payload; "
+                "Path(sys.argv[2]).write_text(json.dumps(frozen_model_probe_payload(Path(sys.argv[1]))), encoding='utf-8')",
                 win_to_wsl_path(str(model_params_path)),
-                "--output-path",
                 win_to_wsl_path(str(output_path)),
             ]
             command = (
                 f"source {self.conda_sh} && "
                 f"conda activate {self.conda_env} && "
                 f"cd {win_to_wsl_path(str(self.repo_root))} && "
-                "PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1 AISTOCK_STRICT_INFERENCE=1 "
+                "CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=2 PYTHONIOENCODING=utf-8 PYTHONDONTWRITEBYTECODE=1 AISTOCK_STRICT_INFERENCE=1 "
                 + "python "
                 + " ".join(_shell_quote(arg) for arg in args)
             )
@@ -411,6 +455,7 @@ class FrozenRuntimeSelfCheckService:
         dynamic_count = len(prepared.dynamic_factors)
         alpha_count = len(prepared.alpha158_factors)
         factor_order_count = len(prepared.factor_order)
+        _validate_fitted_feature_schema(probe, prepared.factor_order)
         delta = int(expected_features or 0) - factor_order_count
         context = {
             "reason_code": "strategy_package_frozen_self_check_feature_count_mismatch",
@@ -493,6 +538,7 @@ class FrozenRuntimeSelfCheckService:
                 probe = self._probe_model(prepared.model_params_path)
                 expected_features = int(probe.expected_features or 0)
                 factor_order_count = len(prepared.factor_order)
+                _validate_fitted_feature_schema(probe, prepared.factor_order)
                 delta = expected_features - factor_order_count
                 context = {
                     "reason_code": "multi_alpha_parent_leg_feature_count_mismatch",
@@ -608,14 +654,12 @@ class FrozenRuntimeSelfCheckService:
         if backend == "wsl" or (backend == "auto" and os.name == "nt"):
             return self.wsl_model_probe.probe(model_params_path)
         try:
-            from backend import inference_engine
-
-            _model, model_kind, _inner_model, expected_features = inference_engine.load_model_from_pkl(model_params_path)
+            payload = frozen_model_probe_payload(model_params_path)
             return FrozenRuntimeModelProbeResult(
-                model_kind=str(model_kind),
-                expected_features=int(expected_features or 0),
+                model_kind=str(payload["model_kind"]),
+                expected_features=int(payload["model_expected_features"]),
                 backend="local",
-                metadata={},
+                metadata={"probe_payload": payload},
             )
         except ModuleNotFoundError:
             if backend == "auto":
