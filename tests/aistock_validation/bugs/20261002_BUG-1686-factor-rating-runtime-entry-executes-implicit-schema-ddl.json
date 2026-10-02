@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-02T12:13:15.189063Z",
-  "description": "ensure_schema executes six CREATE statements",
+  "description": "普通评级/读入口首次调用隐式执行六条 DDL，修复为既有 schema 只读验证。关联 BUG-1680、BUG-1684。审核中发现同文件六处历史 except/pass，改为显式 warning；不改变原有评分/方向选择/缺失处理语义，不修改评级规则或数据库 schema。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,7 +23,18 @@
       "timestamp": "2026-10-02T12:13:15.189036Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": ["X:/AIstock_factor_research/r8-timing-and-research-20261002/production/rating_schema_readonly.py", "X:/AIstock_factor_research/r8-timing-and-research-20261002/production/rating_schema_fresh_smoke.py"],
+  "review_results": {
+    "round_1": "RED 4 cases reproduced runtime CREATE; replaced six DDL statements with existing-schema SELECT LIMIT 0; removed process-wide readiness cache.",
+    "round_2": "DEV then production READ ONLY transaction schema readback passed. Reviewed 6 existing silent except/pass branches exposed by line-shift-sensitive L0; added warning only, unchanged returned direction/core IC/fitness verified in 3 cases.",
+    "round_3": "Final source/scope review: 8 focused schema/writer/error/legacy-behavior tests plus existing non-v2 rule rejection passed; Windows 3.13.5 and WSL 3.10.19 fresh source load passed; no rating rules/metric engine/factor catalog/dataset changes.",
+    "DESIGN-COMPLIANCE-001": {
+      "no_simplified_delivery": "Actual runtime entry fixed, real existing DEV/production schema tested; source fix not claimed as completed production ID1545 rating.",
+      "no_silent_errors": "Missing table/column reports authorized migration required; permission/connection exceptions propagate. Existing ignored malformed metric branches now logged without changing score semantics.",
+      "no_business_semantic_change": "v2.0.0 rules, scope resolution, rating writer, direction, classification and independent metrics algorithms unchanged.",
+      "no_new_gate": "No new approval, quality threshold or runtime restriction; ordinary calls consume previously required schema without auto-DDL. Existing missing-schema boundary remains explicit."
+    }
+  },
   "expected": "普通运行入口不执行 DDL；缺失 schema 明确报告需要独立迁移",
   "file_scope_contract": {
     "added_files": [
@@ -113,11 +124,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_limitation": "Bound metrics proves availability only. Closure additionally requires rating schema readback in PostgreSQL read-only transaction and successful selected ID1545 rating without runtime DDL after user restart.",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=9e622aba-7e46-4a14-8c03-aaab33dfc3bd&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "fresh_process_evidence": [
+      "Windows Python 3.13.5 and WSL rdagent-gpu Python 3.10.19 loaded persistent BUG-1686 source; two schema calls executed six SELECT LIMIT 0 statements, no database access/DDL in synthetic smoke. Real DEV and production PostgreSQL read-only transactions passed schema readback; no DDL/DML.",
+      "Windows 3.13.5 and WSL 3.10.19 -> passed persistent task source read-only schema smoke"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
