@@ -28,14 +28,20 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "scripts/aistock_validation_budget.py",
+    "actual_changed_files": [
       "backend/tests/scripts/test_aistock_validation_budget.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "scripts/aistock_issue_workflow.py"
+      "scripts/aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1679-workflow-validation-budget-scans-unrelated-code-and-client-rtk-guidance.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "scripts/aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1679-workflow-validation-budget-scans-unrelated-code-and-client-rtk-guidance.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_validation_budget.py",
@@ -142,10 +148,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
