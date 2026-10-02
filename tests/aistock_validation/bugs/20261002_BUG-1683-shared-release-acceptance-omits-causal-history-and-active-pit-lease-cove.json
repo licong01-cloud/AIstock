@@ -1,6 +1,9 @@
 {
   "actual": "Monthly PIT readiness checks state coverage but not live pointer; v17 BLOCKED only reports a legal000792 warmup key, comprehensive consumer coverage not established.",
   "allowed_write_scope": [
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "backend/services/dataset_release/monthly_frozen_source_audit.py",
     "backend/services/dataset_release/daily_basic_history_repair.py",
     "backend/services/dataset_release/shared_consumer_coverage.py",
@@ -31,16 +34,32 @@
   ],
   "expected": "Shared consumer field/window coverage closes facts and typed legal NA before monthly publication; active PIT identity matches native Selection lease without rewriting historical leases.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261002_BUG-1683-shared-release-acceptance-omits-causal-history-and-active-pit-lease-cove.json",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "backend/services/dataset_release/shared_consumer_coverage.py",
+      "backend/tests/dataset_release/test_shared_consumer_coverage.py",
+      "scripts/audit_shared_dataset_consumer_coverage.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/shared_consumer_coverage.py",
       "scripts/audit_shared_dataset_consumer_coverage.py",
       "backend/tests/dataset_release/test_shared_consumer_coverage.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261002_BUG-1683-shared-release-acceptance-omits-causal-history-and-active-pit-lease-cove.json",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/services/dataset_release/daily_basic_history_repair.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "backend/services/dataset_release/shared_consumer_coverage.py",
+      "backend/tests/dataset_release/test_shared_consumer_coverage.py",
+      "scripts/audit_shared_dataset_consumer_coverage.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_frozen_source_audit.py",
@@ -123,6 +142,9 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/daily_basic_history_repair.py",
       "backend/services/dataset_release/shared_consumer_coverage.py",
@@ -131,6 +153,9 @@
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/daily_basic_history_repair.py",
       "backend/services/dataset_release/shared_consumer_coverage.py",
@@ -161,11 +186,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": [
+      "AIstock Python fresh process: test_shared_consumer_coverage.py + test_monthly_postgres_source.py => 55 passed; temporary files only X drive; no DB writes or services.",
+      "audit_shared_dataset_consumer_coverage.py --target dev/production: read-only native pointer/Selection identity readback both BLOCKED_CANONICAL_AUTHORITY_ACTIVATION_REQUIRED; never claimed runtime activation.",
+      "Review rounds: causal denominator/latest-invalid/alias boundaries; native Selection evidence versus hypothetical leases; integration fixture fields and artifact count. Ruff and git diff check passed."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
