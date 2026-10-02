@@ -8,6 +8,23 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1662",
+  "production_correction_evidence": {
+    "factor_catalog_id": 1545,
+    "factor_name": "m_md_net_repay_rate_10d_tminus1",
+    "official_dispatch_task_id": "4d2ab4f4-f470-4989-a77b-d76c6a755bc0",
+    "corrected_calc_batch_id": "9e622aba-7e46-4a14-8c03-aaab33dfc3bd",
+    "cache_code_hash": "5fe998ad6afa4c22",
+    "production_source_and_asset_readback": "passed",
+    "original_id1341_source_and_asset_unchanged": true,
+    "fresh_process_raw_t1_cache_parity": {"windows_python": "3.13.5", "wsl_python": "3.10.19", "finite_points_each": 3912, "max_abs_difference_each": 0.0},
+    "official_full_rank_ic": {"1d": 0.013244352089153, "5d": 0.022695478410251, "10d": 0.028451597898401, "20d": 0.030067359725492},
+    "classification_refresh": "passed: MF/money_flow, 2026-10-02",
+    "correlation_refresh": "not_complete: separate BUG-1684 rolling-PIT binding regression, failed before SQL write",
+    "rating_refresh": "not_run: prevent unapproved production schema bootstrap; existing grade is not a refreshed result",
+    "production_ddl_gate": "noop",
+    "dataset_writes": false,
+    "backend_process_control": false
+  },
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -73,7 +90,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_limitation": "Existing metrics binding checks read-path availability only, not corrected T-1 values. Closure additionally requires authorized production code/cache correction, raw T-1 parity and a new official batch readback; old batch is not correction evidence.",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=9e622aba-7e46-4a14-8c03-aaab33dfc3bd&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
     "fresh_process_evidence": [
       "Windows Python 3.13.5 and WSL Python 3.10.19 loaded current task source; each compared 3912 real R8 points: raw T-1 == projected official executor, maximum difference 0; no release/production writes",
       "Windows Python 3.13.5 and WSL Python 3.10.19 fresh processes loaded 5c694a0d9 task source; R8 raw T-1 and official executor equal at 3912 points, max difference 0; DEV save existing ID21 readback passed"
