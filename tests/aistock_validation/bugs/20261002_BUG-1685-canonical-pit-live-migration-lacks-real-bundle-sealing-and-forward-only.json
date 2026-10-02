@@ -32,7 +32,31 @@
   "evidence_uris": [
     "X:/AIstock_temp/business-data-audit-20261002/pit-dev-migration-preflight.json"
   ],
-  "expected": "Expected behavior should be restored.",
+  "expected": "真实 bundle 显式验证文件与五字段 PIT 身份，fixture 不能升级为生产证据；DEV 仅通过 owner API 创建前向新版本，计划与正式规范化后的 readback 一致，旧版本、历史激活与 Selection lease 不改写。数据 parity 或独立 W8 不满足时保持 BLOCKED，不自动激活。",
+  "fix_verification": {
+    "root_cause": "既有 W6 producer 仅支持 fixture；DEV owning API 对旧配置补入有效默认字段，旧纯函数计划未绑定规范化后的目标 hash，真实演练正确回滚。",
+    "dev_validation": "95 个 READY portfolio 的计划均验证：先规范化再迁移与先迁移再规范化结果相同；非 PIT 有效业务语义零漂移。95 个新版本回滚演练通过。",
+    "dev_apply": "已授权的既存 aistock_dev:5433 中创建 95 个版本，配置版本总数 96 -> 191；只更新对应当前版本指针及 owner 审计，不改历史配置。",
+    "dev_readback": "独立 fresh process 确认 95 个当前版本 NO_OP_ALREADY_CANONICAL；原版本、94 条历史 activation 与 Selection native configs 指纹不变；PIT singleton 仍 legacy/generation=0。",
+    "production_authorization": "none",
+    "production_apply": "noop",
+    "activation": "BLOCKED：v15 冻结 5449 spans 与 DEV canonical 同截止 5658 spans 不同，97 frozen-only / 306 rolling-only。未签发独立 W8 PASS 或 READY_TO_ACTIVATE。",
+    "parity_detail": "冻结选股 sidecar 为 5144 symbols。306 rolling-only 中 209 spans 对应冻结侧没有的 197 symbols，另 97 为已有股票区间差异；3 字段 eligibility projection 不冒充完整 5 字段 PIT 摘要，未擅自裁剪或补造。",
+    "source_delivery_status": "未创建 PR 或合入：正式 finish gate 要求为该新路径登记 target-owned 业务语义 probe，目前 /api/v1/paper-v2/canonical-pit/inventory 尚无登记。未跨越 allowed_write_scope 修改运行角色/探针 catalog，不用无关 HTTP 200 替代。",
+    "global_profile_sha256": "56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f",
+    "outcomes_read": false,
+    "candidate_write": false,
+    "active_profile_write": false,
+    "production_database_write": false,
+    "ddl_performed": false,
+    "runtime_action": false,
+    "design_compliance": {
+      "no_partial_as_complete": "只交付数据准备能力和 DEV 前向配置准备；真实 canonical PIT 激活及 HMM v17 READY 未完成。",
+      "no_silent_error": "PIT parity 真实差异、hash/CAS 漂移、非 PIT 语义变化及 fixture 独立证明均 fail closed。",
+      "business_semantics_unchanged": "不修改 Selection/Paper/HMM/QE 业务代码，通过现有 owner API 新建版本；历史身份不倒填。",
+      "no_unapproved_gates": "复用既有 bundle、W8、W9 和 owner 契约，不恢复月更 source-freeze、全历史 source hash 或 sample/resource 前置门禁。"
+    }
+  },
   "file_scope_contract": {
     "added_files": [
       "backend/services/dataset_release/canonical_pit_migration.py",
@@ -224,7 +248,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/paper-v2/canonical-pit/inventory",
+    "fresh_process_evidence": [
+      "独立 Python -B CLI 从 BUG-1685 worktree 导入：DEV rollback/apply/readback 95 个 owning API 新版本，95 NO_OP；历史 hash 相同，singleton generation=0。未启动或重启服务。"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
