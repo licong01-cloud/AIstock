@@ -117,9 +117,13 @@ def build_audit(
     tracked_paths: Iterable[str] | None = None,
     max_ratio: float = 0.30,
     top_files: int = 20,
+    module_ids: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     if not 0 < max_ratio <= 1:
         raise ValueError("max_ratio must be within (0, 1]")
+    selected_modules = frozenset(module_ids) if module_ids is not None else None
+    if selected_modules is not None and not selected_modules:
+        raise ValueError("module_ids must not be empty")
     paths = list(tracked_paths) if tracked_paths is not None else _git_tracked_paths(repo_root)
     modules: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -132,13 +136,17 @@ def build_audit(
     )
     totals = {"production_sloc": 0, "test_sloc": 0, "production_files": 0, "test_files": 0}
     skipped_non_code = 0
+    skipped_unselected_module = 0
     for relative_path in sorted(dict.fromkeys(path.replace("\\", "/") for path in paths)):
         if not _is_executable_source(relative_path):
             skipped_non_code += 1
             continue
-        sloc = _read_sloc(repo_root, relative_path)
         ownership = catalog.match_path(relative_path)
         module_id = ownership.primary_module or f"__{ownership.ownership_status}__"
+        if selected_modules is not None and module_id not in selected_modules:
+            skipped_unselected_module += 1
+            continue
+        sloc = _read_sloc(repo_root, relative_path)
         ownership_layer = str(ownership.layer or "").lower()
         is_test = _is_test_path(relative_path) or "test" in ownership_layer
         kind = "test" if is_test else "production"
@@ -149,6 +157,8 @@ def build_audit(
         if is_test and sloc:
             modules[module_id]["largest_test_files"].append({"path": relative_path, "sloc": sloc})
 
+    if selected_modules is not None and selected_modules - modules.keys():
+        raise ValueError(f"requested modules have no executable tracked files: {sorted(selected_modules - modules.keys())}")
     rows: list[dict[str, Any]] = []
     for module_id, values in modules.items():
         production_sloc = int(values["production_sloc"])
@@ -180,6 +190,7 @@ def build_audit(
         "schema_version": SCHEMA_VERSION,
         "policy": {
             "max_ratio": max_ratio,
+            "selected_modules": sorted(selected_modules) if selected_modules is not None else None,
             "tracked_files_only": True,
             "test_helpers_and_fixtures_count_as_test": True,
             "excluded_prefixes": list(EXCLUDED_PREFIXES),
@@ -193,6 +204,7 @@ def build_audit(
             "over_budget_module_count": sum(1 for row in rows if row["over_budget"]),
             "test_only_bucket_count": sum(1 for row in rows if row["test_only_bucket"]),
             "skipped_non_code_files": skipped_non_code,
+            "skipped_unselected_module_files": skipped_unselected_module,
         },
         "modules": rows,
     }
@@ -209,6 +221,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--module-registry", type=Path, default=None)
     parser.add_argument("--file-ownership", type=Path, default=None)
     parser.add_argument("--max-ratio", type=float, default=0.30)
+    parser.add_argument("--module", action="append", default=[], help="Audit only these primary modules; omit for the full audit.")
     parser.add_argument("--top-files", type=int, default=20)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--json", action="store_true", help="Print the complete JSON report instead of a compact summary.")
@@ -237,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
             catalog=catalog,
             max_ratio=args.max_ratio,
             top_files=max(0, args.top_files),
+            module_ids=(args.module or None),
         )
     except (FileOwnershipError, ModuleRegistryError, OSError, RuntimeError, ValueError) as exc:
         print(f"test debt audit failed: {exc}", file=sys.stderr)
