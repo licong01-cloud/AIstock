@@ -1,5 +1,17 @@
 {
   "actual": "ensure_schema executes six CREATE statements",
+  "post_restart_business_validation": {
+    "runtime_identity": "c2829a49c5e42ea2220e3e13a6849bf3ae310e55",
+    "dev_schema_readback": "passed in PostgreSQL READ ONLY transaction",
+    "dev_rating": {"factor_name": "m_md_net_repay_rate_10d_tminus1", "catalog_id": 21, "run_id": "44557cd4-b30d-41bf-b27c-15dbbfef838d", "success_count": 1, "failed_count": 0},
+    "production_rating": {"factor_name": "m_md_net_repay_rate_10d_tminus1", "catalog_id": 1545, "run_id": "8fa2451a-01af-4cae-afad-5112e548fd5b", "scope_type": "selected", "success_count": 1, "failed_count": 0, "snapshot_date": "2026-08-31", "grade": "D", "score": 51.65},
+    "official_metrics_batch_unchanged": "9e622aba-7e46-4a14-8c03-aaab33dfc3bd",
+    "original_1341_source_asset_unchanged": true,
+    "production_ddl_gate": "noop",
+    "production_dml_gate": "authorized ID1545 selected rating applied after DEV verification; existing rule-version synchronization only, no factor source/cache/metrics/classification writes",
+    "optional_llm_audit": "DEV optional LLM review failed due provider insufficient balance; deterministic rating succeeded. No provider/config change or forced retry.",
+    "remaining_target_correlation": "not completed: 595 reference caches, 480 different factor_data_dir and 115 missing valid status; do not claim availability probe closes correlation business validation"
+  },
   "allowed_write_scope": [
     "backend/services/quantevolver/factor_rating_service.py",
     "backend/tests/quantevolver/test_factor_rating_service_schema.py",
