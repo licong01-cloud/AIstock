@@ -19,6 +19,11 @@ non_runtime_source_paths:
   - backend/services/announcements/title_classifier.py
   - backend/services/dataset_release/direct_monthly.py
   - backend/services/dataset_release/daily_basic_history_repair.py
+  # CLI-only canonical PIT evidence/preparation: no server/worker entrypoint.
+  - backend/services/dataset_release/canonical_pit_candidate_bundle.py
+  - backend/services/dataset_release/canonical_pit_w8_attestation.py
+  - backend/services/dataset_release/canonical_pit_activation_envelope.py
+  - backend/services/dataset_release/canonical_pit_migration.py
   - backend/services/event_signal/st_announcement_adapter.py
   - backend/services/hmm_risk/rotation_l1_gbdt.py
   - backend/services/hmm_risk/rotation_l1_input_bundle.py

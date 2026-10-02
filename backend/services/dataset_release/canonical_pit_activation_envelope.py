@@ -39,7 +39,7 @@ def build_activation_envelope(
     w8_receipt: Mapping[str, Any],
     expected_pointer_generation: int,
     expected_pointer_key: str,
-    expected_pointer_envelope_digest: str,
+    expected_pointer_envelope_digest: str | None,
     expected_source_commit: str,
     inactive_distribution_readback: Mapping[str, Any],
     node_readback: Mapping[str, Any],
@@ -67,7 +67,7 @@ def build_activation_envelope(
         "w8_independent_receipt_digest": receipt.digest,
         "expected_pointer_generation": _generation(expected_pointer_generation),
         "expected_pointer_key": _identifier(expected_pointer_key),
-        "expected_pointer_envelope_digest": _sha(expected_pointer_envelope_digest),
+        "expected_pointer_envelope_digest": _previous_digest(expected_pointer_envelope_digest, expected_pointer_generation),
         "expected_source_commit": _identifier(expected_source_commit),
         "inactive_distribution_readback": _readback(inactive_distribution_readback),
         "node_readback": _readback(node_readback),
@@ -116,7 +116,7 @@ def validate_activation_envelope(value: Mapping[str, Any]) -> CanonicalPitActiva
     _sha(payload["w8_independent_receipt_digest"])
     _generation(payload["expected_pointer_generation"])
     _identifier(payload["expected_pointer_key"])
-    _sha(payload["expected_pointer_envelope_digest"])
+    _previous_digest(payload["expected_pointer_envelope_digest"], payload["expected_pointer_generation"])
     _identifier(payload["expected_source_commit"])
     for field in ("inactive_distribution_readback", "node_readback", "session_drain_readiness", "rollback_target"):
         _readback(payload[field])
@@ -158,6 +158,12 @@ def _sha(value: Any) -> str:
     if not _SHA256.fullmatch(text):
         raise CanonicalPitActivationEnvelopeError("activation digest must be lowercase SHA-256")
     return text
+
+
+def _previous_digest(value: Any, generation: int) -> str | None:
+    if value is None and type(generation) is int and generation == 0:
+        return None
+    return _sha(value)
 
 
 def _identifier(value: Any) -> str:
