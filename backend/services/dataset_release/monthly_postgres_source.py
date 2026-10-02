@@ -39,6 +39,7 @@ from .source_authority import (
     FrozenSourceAuthoritySnapshot,
     MonthlySourceAuthority,
     SOURCE_REUSE_MANIFEST_SCHEMA,
+    MONTHLY_SECTOR_SOURCE_POLICY,
     imported_source_session_factory,
     seal_source_stage_receipt,
 )
@@ -46,7 +47,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "3"
+POSTGRES_SOURCE_ADAPTER_VERSION = "4"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
 _CHANGE_DATASET_ALIASES = {
@@ -228,6 +229,7 @@ class PostgresMonthlySourceAdapter:
                 "profile": self.profile.profile,
                 "semantic_profile_digest": self.profile.semantic_profile_digest,
                 "source_authority_policy": "dataset_release_source_authority_v1",
+                "sector_source_policy": MONTHLY_SECTOR_SOURCE_POLICY,
                 "artifact_ready_contract": "dataset_release_artifact_ready_contract_v1",
                 "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
                 "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
@@ -282,6 +284,7 @@ class PostgresMonthlySourceAdapter:
                 connection_factory=independent_postgres_connection_factory,
             ),
             mvcc_reuse_capability=self.mvcc_partition_reuse,
+            sector_source_policy=MONTHLY_SECTOR_SOURCE_POLICY,
         )
         frozen = authority.freeze(
             cutoff=target_cutoff,
