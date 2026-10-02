@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1309",
-  "closed_at": null,
+  "closed_at": "2026-10-02T07:43:20.919636Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -157,10 +157,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1309/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1309",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "d2bf34010849411b1f7b4bd12d3df5a79319ecabfe512b17a39a0672896d3939",
+      "contract_digest": "e14681dbe12998302af440b971cd84ea31e0d832515222de090d5b19c586b492",
+      "expected_identity": "fa536b2caf6c625bd550816b3910d27a94a9c724",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-02T07:36:44.600921Z",
+      "mode": "read_only",
+      "observed_identity": "04b1968c6f91fede3bfc4a6161cb58125562616e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "edeff38df63a0eaafcff04bd7f96eb152bc677ed8e6d1808620b1d5967850df6",
+      "receipt_sha256": "1492b7b8ed4c0916f6c854261ef90ad34a2039a17939e2beb314434f348b0aee",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b101f9548a4b69a353df0b4d9f3cd5e5ef14db94a87677c674999c3b07e466ca",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": true,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -193,7 +215,7 @@
     ],
     "validation_evidence_digest": "490ee05f808103559be193242004d237f4f5a328ba1ac3b02f5da884ca6865ff"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -205,7 +227,8 @@
   "validation_evidence": [
     "rtk nox -s hmm_risk_backend -> passed; 676 passed; coverage 76.26%",
     "CI verdict -> passed",
-    "CodeQL verdict -> passed"
+    "CodeQL verdict -> passed",
+    "PR #4155 final CI success; source receipt 2369decc3a9fbc98; existing 676 passed; current post-restart identity descendant and C010/A5 v2 contract fields readback verified"
   ],
   "verification_budget": {
     "budget": "standard",
