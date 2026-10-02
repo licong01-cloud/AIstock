@@ -24,7 +24,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "SOURCE_BLOCKED 不进入自动领取队列；只有显式 resume 才重新执行同一 operation。取消等待任务不调用 producer、不增加 attempt；仍保留产品互斥及 fail-closed。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -109,7 +109,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "新 Python 进程的真实 MonthlyReleaseWorker/MonthlyReleaseService 文件状态测试 RED 3 项失败，GREEN 3 项通过：连续十次 poll 无重领、直接 stale run 无重试、跨月产品互斥保持、显式恢复同一 operation、暂停取消和 SOURCE 报错/取消交叠均无额外 source attempt。仅测试私有 X 盘临时状态，无数据库访问、candidate 导出、profile 激活或服务控制。",
+      "三轮自审核：调度与显式恢复；取消状态更新原子性和报错/取消交叠；产品锁、幂等、原发布语义及源码范围。未将 SOURCE_BLOCKED 加入 TERMINAL_STATES，避免释放产品 owner。"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
