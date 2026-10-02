@@ -544,7 +544,6 @@ rules:
       - .github/ISSUE_TEMPLATE/*.yml
       - .github/workflows/*.yml
       - scripts/ci_changed_files.py
-      - backend/tests/scripts/test_ci_changed_files.py
       - scripts/ci_change_classifier.py
       - backend/tests/scripts/test_ci_change_classifier.py
       - scripts/ci_workflow_policy_scan.py

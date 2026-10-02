@@ -1,6 +1,7 @@
 {
   "actual": "PR #5156 run 36923790572 compares stale event base with synthetic merge HEAD, reporting 11 files instead of 4; PR quality rejects unrelated main changes. Pin event source head and base consistently for scope, classification, ownership and test slicing while retaining integration checkout and fail-closed guards.",
   "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "scripts/ci_changed_files.py",
     ".github/workflows/test.yml",
     "noxfile.py",
