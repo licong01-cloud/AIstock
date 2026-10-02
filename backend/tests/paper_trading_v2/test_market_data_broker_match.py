@@ -1,6 +1,6 @@
 """Tests for BrokerBackend <-> MinuteDataSource strong binding.
 
-Strategy Engine design 2026-05-08 §3.6.4 (R-Q9 D3) requires that minute data
+Strategy Engine design 2026-05-08 搂3.6.4 (R-Q9 D3) requires that minute data
 sources are strongly bound to broker backends. Cross-pairing must fail fast
 with a typed BrokerMarketSourceMismatchError; no silent fallback.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.simulation_data.contracts import (
     ALLOWED_MARKET_SOURCES,
     MinuteDataSource,
     assert_broker_market_source_match,
@@ -39,9 +39,7 @@ def test_allowed_market_sources_matches_design_3_6_4() -> None:
         ("minqmt_live", MinuteDataSource.MINIQMT_REALTIME),
     ],
 )
-def test_assert_broker_market_source_match_accepts_allowed_pairs(
-    broker_id: str, source: MinuteDataSource
-) -> None:
+def test_assert_broker_market_source_match_accepts_allowed_pairs(broker_id: str, source: MinuteDataSource) -> None:
     assert_broker_market_source_match(broker_id, source)
 
 
@@ -55,9 +53,7 @@ def test_assert_broker_market_source_match_accepts_allowed_pairs(
         ("minqmt_live", MinuteDataSource.DB_HISTORICAL),
     ],
 )
-def test_assert_broker_market_source_match_rejects_cross_pairing(
-    broker_id: str, source: MinuteDataSource
-) -> None:
+def test_assert_broker_market_source_match_rejects_cross_pairing(broker_id: str, source: MinuteDataSource) -> None:
     with pytest.raises(BrokerMarketSourceMismatchError) as exc_info:
         assert_broker_market_source_match(broker_id, source)
     err = exc_info.value

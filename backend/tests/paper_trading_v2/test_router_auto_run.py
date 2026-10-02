@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import paper_trading_v2
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 
 
 class _FakeMutationWindowService:

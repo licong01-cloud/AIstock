@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import (
     IntradaySnapshot,
     OrderExecutionState,
@@ -24,8 +24,19 @@ from backend.services.strategy_package.selection_artifact import (
     SelectionScoreArtifact,
     selection_artifact_runtime_hash,
 )
-from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
-from backend.services.trading_core.models import Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType, RunStatus
+from backend.services.strategy_package.live_inference import (
+    AUTHORITATIVE_SELECTION_SCOPE,
+    AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+)
+from backend.services.trading_core.models import (
+    Order,
+    OrderEvent,
+    OrderEventType,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+    RunStatus,
+)
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -133,13 +144,19 @@ def test_live_dashboard_aggregates_signal_minute_execution_and_snapshots() -> No
         run_id=run.run_id,
         event_type="TARGETS_GENERATED",
         message="targets",
-        context={"target_count": 1, "targets": [{"symbol": "000001.SZ", "rank": 1, "target_quantity": 1000, "target_weight": 0.05}]},
+        context={
+            "target_count": 1,
+            "targets": [{"symbol": "000001.SZ", "rank": 1, "target_quantity": 1000, "target_weight": 0.05}],
+        },
     )
     repo.save_run_event(
         run_id=run.run_id,
         event_type="ORDER_INTENTS_GENERATED",
         message="intents",
-        context={"order_intent_count": 1, "intents": [{"intent_id": "intent_1", "symbol": "000001.SZ", "side": "BUY", "quantity": 1000}]},
+        context={
+            "order_intent_count": 1,
+            "intents": [{"intent_id": "intent_1", "symbol": "000001.SZ", "side": "BUY", "quantity": 1000}],
+        },
     )
     order = Order(
         order_id="ord_live_dash",

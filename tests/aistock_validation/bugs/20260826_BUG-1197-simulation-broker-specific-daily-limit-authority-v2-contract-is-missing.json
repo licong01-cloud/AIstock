@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1197",
-  "closed_at": null,
+  "closed_at": "2026-08-29T19:33:25.511177Z",
   "closure_requirements": [
     "Implement F-130/F-131 P1-A immutable V2 contracts, strict V1 read-only discrimination, broker/source matrix, symbol failure state and mixed-source hash closure.",
     "Implement the versioned pure TDX live-reference A-share limit rule without adjustment-factor fabrication or runtime source wiring.",
@@ -75,8 +75,8 @@
   },
   "first_seen_at": "2026-08-26T04:50:47.126714Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1",
+  "fixed_at": "2026-08-26T06:49:54Z",
   "github_issue_number": 3813,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3813",
   "last_seen_at": "2026-08-26T04:50:47.126714Z",
@@ -87,6 +87,7 @@
     "Do not perform DDL/DML, dependency, config, broker or process operations.",
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3816",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -112,8 +113,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_source_merge",
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1197\\post-restart-verify-20260830.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1197",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eee21d776cd9960b4e2f28a37fad6fd2c26a02858155d4d8e970ba10770daf68",
+      "contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+      "expected_identity": "8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-29T19:23:50.961109Z",
+      "mode": "read_only",
+      "observed_identity": "19814d3e109092b0705f1762da21c762244558fc",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6f1c035db4900f0f66640f8025e1dd21f6a9317609f631d042994e27e264b81e",
+      "receipt_sha256": "33a95f9c29d6789e14a3802f787632579d14658fc1d900f54591b1809faaf18a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "fe8a8c49c47dec21425a0d0a1402f4430320cfa19089fba717deba72ea37eedc",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -123,7 +147,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1197",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8d7b0e68f57a44c1",
+    "recorded_at": "2026-08-26T07:00:53.387133Z",
+    "runtime_contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3bbc3d464a7efd8ea533656c9b82f8b71b667714",
+    "source_merge_commit": "8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/3816",
+    "validation_evidence": [
+      "python -m nox -s simulation_core_l2 -> 678 passed, 2 skipped; PR CI passed on source-equivalent tree"
+    ],
+    "validation_evidence_digest": "37ceb5613764ed5f5264e2f15f97439bce6f9dfd98c203b5d7e757408491ce62"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -132,6 +177,10 @@
     "fingerprint": "471b033e68d636b1d0d93a47",
     "source_event_id": "FE-20260826-471b033e68d6"
   },
+  "validation_evidence": [
+    "python -m nox -s simulation_core_l2 -> 678 passed, 2 skipped; PR CI passed on source-equivalent tree",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1197 --target backend-main --expected-identity 8e1aecf5c658a59ff2ebe26e5d039bac1ab0c3c1 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

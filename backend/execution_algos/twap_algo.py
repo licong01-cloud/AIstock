@@ -11,10 +11,13 @@ from .registry import register
 @register
 class TWAPAlgo(BaseExecutionAlgo):
     ALGO_CODE = "TWAP"
+    HANDLES_LIMIT_STATE = True
 
     def __init__(self, config: Dict[str, Any] | None = None) -> None:
         super().__init__(config)
         self.split_count = self.config.get("split_count", 6)
+        self._last_no_fill_reason: str | None = None
+        self._last_no_fill_context: dict[str, Any] = {}
 
     def compute_step(
         self,
@@ -22,6 +25,8 @@ class TWAPAlgo(BaseExecutionAlgo):
         bar_data: Dict[str, Any],
         market_context: Dict[str, Any],
     ) -> Optional[StepResult]:
+        self._last_no_fill_reason = None
+        self._last_no_fill_context = {}
         if self.is_complete(state):
             return None
 
@@ -71,10 +76,31 @@ class TWAPAlgo(BaseExecutionAlgo):
         if state.executed_quantity >= state.total_quantity:
             state.is_complete = True
 
+        if state.step <= self.split_count:
+            reason = f"TWAP step {state.step}/{self.split_count}"
+        else:
+            residual_attempt = state.step - self.split_count
+            reason = (
+                f"TWAP residual completion attempt {residual_attempt} "
+                f"after {self.split_count} planned steps"
+            )
+
         return StepResult(
             symbol=state.symbol,
             side=state.side,
             quantity=step_qty,
             price=price,
-            reason=f"TWAP step {state.step}/{self.split_count}",
+            reason=reason,
         )
+
+    def handle_limit_state_no_fill(
+        self,
+        state: OrderState,
+        *,
+        reason: str,
+        context: dict[str, Any],
+    ) -> None:
+        self._last_no_fill_reason = reason
+        self._last_no_fill_context = context
+        state.step += 1
+        return None

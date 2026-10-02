@@ -1,4 +1,4 @@
-﻿"""Paper Trading v2 API."""
+"""Paper Trading v2 API."""
 
 from __future__ import annotations
 
@@ -16,16 +16,24 @@ from backend.services.paper_trading_v2.coldstart_sentinel import ColdstartSentin
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.execution import list_minqmt_execution_quality_reports
 from backend.services.paper_trading_v2.live_dashboard import PaperTradingLiveDashboardService
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.paper_trading_v2.readiness import PaperTradingReadinessService
 from backend.services.paper_trading_v2.replay import PaperTradingHistoricalReplay
 from backend.services.paper_trading_v2.repository import PaperTradingV2Repository
-from backend.services.paper_trading_v2.models import BrokerBackendId, PaperSessionMode
+from backend.services.paper_trading_v2.models import PaperSessionMode
+from backend.services.simulation_execution.broker import BrokerBackendId
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.paper_trading_v2.session import PaperTradingSessionRunner, PaperTradingSessionService
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.trading_calendar_status import TradingCalendarStatusService
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, TradingCoreError, UnsupportedFeatureError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    InvalidStateTransitionError,
+    TradingCoreError,
+    UnsupportedFeatureError,
+)
+
 router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
@@ -381,10 +389,12 @@ def get_trading_day_defaults(
                 data_ready_dataset_dates: dict[str, date] = {}
                 data_ready_unavailable_datasets: list[str] = []
                 effective_end = as_of
-                data_ready_latest_date, data_ready_dataset_dates, data_ready_unavailable_datasets = _resolve_defaults_data_ready_end(
-                    cur,
-                    as_of=as_of,
-                    require_minute_data=require_minute_data,
+                data_ready_latest_date, data_ready_dataset_dates, data_ready_unavailable_datasets = (
+                    _resolve_defaults_data_ready_end(
+                        cur,
+                        as_of=as_of,
+                        require_minute_data=require_minute_data,
+                    )
                 )
                 if data_ready_unavailable_datasets:
                     raise DataUnavailableError(
@@ -393,8 +403,7 @@ def get_trading_day_defaults(
                             "as_of_date": as_of.isoformat(),
                             "missing_datasets": data_ready_unavailable_datasets,
                             "available_dataset_dates": {
-                                key: value.isoformat()
-                                for key, value in data_ready_dataset_dates.items()
+                                key: value.isoformat() for key, value in data_ready_dataset_dates.items()
                             },
                         },
                     )
@@ -404,24 +413,28 @@ def get_trading_day_defaults(
         all_days = calendar_service.list_trading_days(lookup_start, effective_end)
         dates = list(reversed(all_days[-lookback_trading_days:]))
     except Exception as exc:
-        _raise_http(DataUnavailableError(
-            "trading calendar defaults query failed",
-            context={
-                "as_of_date": as_of.isoformat(),
-                "lookback_trading_days": lookback_trading_days,
-                "require_minute_data": require_minute_data,
-                "error": str(exc),
-            },
-        ))
+        _raise_http(
+            DataUnavailableError(
+                "trading calendar defaults query failed",
+                context={
+                    "as_of_date": as_of.isoformat(),
+                    "lookback_trading_days": lookback_trading_days,
+                    "require_minute_data": require_minute_data,
+                    "error": str(exc),
+                },
+            )
+        )
     if not dates:
-        _raise_http(DataUnavailableError(
-            "trading calendar has no completed trading day for defaults",
-            context={
-                "as_of_date": as_of.isoformat(),
-                "lookback_trading_days": lookback_trading_days,
-                "require_minute_data": require_minute_data,
-            },
-        ))
+        _raise_http(
+            DataUnavailableError(
+                "trading calendar has no completed trading day for defaults",
+                context={
+                    "as_of_date": as_of.isoformat(),
+                    "lookback_trading_days": lookback_trading_days,
+                    "require_minute_data": require_minute_data,
+                },
+            )
+        )
     latest = dates[0]
     replay_start = dates[-1]
     return {
@@ -431,10 +444,7 @@ def get_trading_day_defaults(
         "lookback_trading_days": lookback_trading_days,
         "require_minute_data": require_minute_data,
         "data_ready_latest_date": data_ready_latest_date.isoformat() if data_ready_latest_date else None,
-        "data_ready_dataset_dates": {
-            key: value.isoformat()
-            for key, value in data_ready_dataset_dates.items()
-        },
+        "data_ready_dataset_dates": {key: value.isoformat() for key, value in data_ready_dataset_dates.items()},
         "data_ready_missing_datasets": data_ready_unavailable_datasets,
         "latest_trading_day": latest.isoformat(),
         "trading_days": [day.isoformat() for day in sorted(dates)],
@@ -850,9 +860,7 @@ def list_portfolio_runtime_profile_versions(
         _raise_http(exc)
 
 
-@router.post(
-    "/portfolios/{portfolio_id}/runtime-profiles/versions/{profile_version_id}/canonical-pit-migration"
-)
+@router.post("/portfolios/{portfolio_id}/runtime-profiles/versions/{profile_version_id}/canonical-pit-migration")
 def migrate_portfolio_runtime_profile_to_canonical_pit(
     portfolio_id: str,
     profile_version_id: str,
@@ -1398,7 +1406,10 @@ def list_positions(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
 @router.get("/portfolios/{portfolio_id}/daily-snapshots")
 def list_daily_snapshots(portfolio_id: str, limit: int = 500) -> dict[str, Any]:
     try:
-        return {"ok": True, "daily_snapshots": PaperTradingV2Repository().list_daily_snapshots(portfolio_id, limit=limit)}
+        return {
+            "ok": True,
+            "daily_snapshots": PaperTradingV2Repository().list_daily_snapshots(portfolio_id, limit=limit),
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 

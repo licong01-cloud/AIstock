@@ -49,9 +49,8 @@ from backend.services.miniqmt_execution_runtime.quote_ingress import (
     MiniQMTKernelProductIngressSuppression,
     kernel_product_pending_identity_sha256_v1,
 )
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.simulation_data.daily_context_provider import (
     DbEquityInstrumentMetadataProvider,
-    DbPreviousCloseProvider,
     DbSuspendStatusProvider,
 )
 from backend.services.trading_calendar_status import TradingCalendarStatusService
@@ -469,7 +468,6 @@ def _production_quote_context_adapter(
         trading_calendar_service=TradingCalendarStatusService(),
         suspend_status_provider=DbSuspendStatusProvider(),
         limit_price_provider=StkLimitPriceProvider(),
-        previous_close_provider=DbPreviousCloseProvider(),
         equity_metadata_provider=DbEquityInstrumentMetadataProvider(),
         runtime_symbol_spec_provider=instrument_provider.get_symbol_spec,
     )
@@ -679,9 +677,9 @@ class MiniQMTQuoteIngressActivation:
     _startup_schema_gate_reader: Callable[[], str] | None = field(default=None, repr=False)
     _startup_subscriber_factory: Callable[[], Any] | None = field(default=None, repr=False)
     _startup_qmt_client_factory: Callable[[], Any] | None = field(default=None, repr=False)
-    _startup_context_adapter_factory: Callable[
-        [QuoteEvaluationContextStore, Any], MiniQMTQuoteContextAuthorityAdapter
-    ] | None = field(default=None, repr=False)
+    _startup_context_adapter_factory: (
+        Callable[[QuoteEvaluationContextStore, Any], MiniQMTQuoteContextAuthorityAdapter] | None
+    ) = field(default=None, repr=False)
     _startup_recovery_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _shutdown: bool = False
     _shutdown_requested: bool = field(default=False, repr=False)
@@ -819,14 +817,10 @@ class MiniQMTQuoteIngressActivation:
         expected_lease = lease_snapshot.get("expected_lease") if isinstance(lease_snapshot, Mapping) else None
         actual_lease = lease_snapshot.get("actual_lease") if isinstance(lease_snapshot, Mapping) else None
         expected_identity = (
-            lease_snapshot.get("expected_owner_identity_sha256")
-            if isinstance(lease_snapshot, Mapping)
-            else None
+            lease_snapshot.get("expected_owner_identity_sha256") if isinstance(lease_snapshot, Mapping) else None
         )
         actual_identity = (
-            lease_snapshot.get("actual_owner_identity_sha256")
-            if isinstance(lease_snapshot, Mapping)
-            else None
+            lease_snapshot.get("actual_owner_identity_sha256") if isinstance(lease_snapshot, Mapping) else None
         )
         exact_physical_owner = bool(
             isinstance(lease_snapshot, Mapping)
@@ -1676,15 +1670,11 @@ class MiniQMTQuoteIngressActivation:
                 elif (
                     payload.get("operation") != entry.operation
                     or payload.get("lifecycle_generation") != entry.lifecycle_generation
-                    or (
-                        entry.operation == "SUPERVISOR_WATCHDOG"
-                        and payload.get("runtime_id") is not None
-                    )
+                    or (entry.operation == "SUPERVISOR_WATCHDOG" and payload.get("runtime_id") is not None)
                     or (
                         entry.operation in _KERNEL_RELEASE_OPERATIONS
                         and (
-                            type(payload.get("runtime_id")) is not str
-                            or payload.get("runtime_id") != exact_runtime_id
+                            type(payload.get("runtime_id")) is not str or payload.get("runtime_id") != exact_runtime_id
                         )
                     )
                 ):
@@ -2094,11 +2084,7 @@ class MiniQMTQuoteIngressActivation:
         """Attach one final KERNEL_V2 source publisher to the shared physical feed."""
 
         raw_runtime_id = getattr(runtime, "runtime_id", None)
-        if (
-            type(raw_runtime_id) is not str
-            or not raw_runtime_id
-            or raw_runtime_id != raw_runtime_id.strip()
-        ):
+        if type(raw_runtime_id) is not str or not raw_runtime_id or raw_runtime_id != raw_runtime_id.strip():
             raise TypeError("kernel product runtime_id must be an exact canonical string identity")
         runtime_id = raw_runtime_id
         sink = getattr(runtime, "observe_b0_quote_v1", None)
@@ -2249,8 +2235,7 @@ class MiniQMTQuoteIngressActivation:
                 except Exception as acquire_failure:
                     failure_context = getattr(acquire_failure, "context", None)
                     consumer_acquired = bool(
-                        isinstance(failure_context, Mapping)
-                        and failure_context.get("consumer_lease_retained") is True
+                        isinstance(failure_context, Mapping) and failure_context.get("consumer_lease_retained") is True
                     )
                     raise
                 else:
@@ -4016,9 +4001,7 @@ class MiniQMTQuoteIngressActivation:
             "ingress_sequence": pending.ingress_sequence,
             "pending_identity_sha256": pending.pending_identity_sha256,
             "replacement_market_data_id": replacement.market_data_id if replacement is not None else None,
-            "replacement_ingress_generation": (
-                replacement.ingress_generation if replacement is not None else None
-            ),
+            "replacement_ingress_generation": (replacement.ingress_generation if replacement is not None else None),
             "replacement_ingress_sequence": replacement.ingress_sequence if replacement is not None else None,
             "replacement_pending_identity_sha256": (
                 replacement.pending_identity_sha256 if replacement is not None else None

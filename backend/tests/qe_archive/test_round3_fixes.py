@@ -18,6 +18,85 @@ from backend.services.qe_archive.handlers.paper_v2_archive_handler import (
     PaperV2ArchiveHandler,
 )
 from backend.services.qe_archive.models import ArchiveJobRecord, ClaimedOutboxEvent
+from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
+from backend.services.quantevolver.runtime_contract import merge_qe_minute_runtime_contract
+from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
+
+
+def test_source_assembler_projects_retired_v25_experiment_as_history() -> None:
+    payload = QEArchiveSourceAssembler.build_experiment_payload(
+        {
+            "experiment_id": "qe_exp_v25_history",
+            "status": "completed",
+            "custom_params": {"execution_algo": "V25_TWO_STAGE"},
+        }
+    )
+
+    assert payload["freq"] == "1min"
+    assert payload["config"]["runtime_flags"]["execution_algo"] == "V25_TWO_STAGE"
+    assert payload["config"]["runtime_flags"]["runtime_contract_historical_read_only"] is True
+    assert payload["config"]["execution"]["historical_read_only"] is True
+    assert payload["config"]["execution"]["retirement"] == {
+        "retired": True,
+        "selectable": False,
+        "activatable": False,
+        "retirement_reason_code": "V25_EXECUTION_ALGO_RETIRED",
+        "historical_artifacts_readable": True,
+    }
+
+
+def test_source_assembler_reads_retired_v25_loop_without_reactivating_it() -> None:
+    payload = QEArchiveSourceAssembler.build_loop_payload(
+        {
+            "task_id": "qe_task_v25_history",
+            "loop_id": "Loop4",
+            "loop_index": 4,
+            "status": "completed",
+            "config_json": {
+                "runtime_flags": {"execution_algo": "V25_1_SMALL_CAP"},
+                "factor_list": ["alpha_001"],
+            },
+            "metrics_json": {"IC": 0.02},
+        },
+        {"task_id": "qe_task_v25_history", "label_horizon": 5},
+    )
+
+    assert payload["freq"] == "1min"
+    assert payload["config"]["runtime_flags"]["execution_algo"] == "V25_1_SMALL_CAP"
+    assert payload["config"]["execution"]["historical_read_only"] is True
+    assert payload["config"]["execution"]["retirement"]["retired"] is True
+
+
+def test_source_assembler_preserves_complete_retired_runtime_snapshot() -> None:
+    payload = QEArchiveSourceAssembler.build_experiment_payload(
+        {
+            "experiment_id": "qe_exp_v25_complete_history",
+            "status": "completed",
+            "custom_params": {
+                "execution_algo": "V25_TWO_STAGE",
+                "execution_algo_params": {"participation": 0.2},
+                "backtest_freq": "5min",
+                "runtime_mode": "legacy_observed_mode",
+                "runtime_contract_source": "legacy_snapshot",
+            },
+        }
+    )
+
+    runtime_flags = payload["config"]["runtime_flags"]
+    assert runtime_flags["backtest_freq"] == "5min"
+    assert runtime_flags["runtime_mode"] == "legacy_observed_mode"
+    assert runtime_flags["runtime_contract_source"] == "legacy_snapshot"
+    assert runtime_flags["execution_algo_params"] == {"participation": 0.2}
+    assert runtime_flags["execution_algo_retirement"]["historical_artifacts_readable"] is True
+
+
+def test_archive_history_projection_does_not_relax_new_work_retirement_gate() -> None:
+    with pytest.raises(ExecutionAlgoRetiredError, match="cannot create new executable work"):
+        merge_qe_minute_runtime_contract(
+            {"execution_algo": "V25_TWO_STAGE"},
+            source="new_executable_work_regression_guard",
+            require_minute=True,
+        )
 
 
 # ---------------------------------------------------------------------------

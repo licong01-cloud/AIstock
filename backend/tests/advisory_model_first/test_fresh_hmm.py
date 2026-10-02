@@ -2,8 +2,27 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from backend.services.advisory_model_first.fresh_hmm import continue_sector_hmm, fit_fresh_sector_hmm
+
+
+def test_continuation_budget_interrupts_between_blocks_without_changing_numerics():
+    from backend.services.advisory_model_first.fresh_hmm import _continue_causal_filter
+    args = dict(matrix=np.linspace(-1, 1, 128).reshape(-1, 1), previous_posterior=np.array([0.8, 0.2]),
+                transmat=np.array([[0.95, 0.05], [0.05, 0.95]]), means=np.array([[-1.0], [1.0]]),
+                covariances=np.array([[[1.0]], [[1.0]]]))
+    expected = _continue_causal_filter(**args)
+    np.testing.assert_array_equal(_continue_causal_filter(**args, deadline_check=lambda: None), expected)
+    checks = 0
+    def expired():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise TimeoutError("test budget expired")
+    with pytest.raises(TimeoutError, match="budget expired"):
+        _continue_causal_filter(**args, deadline_check=expired)
+    assert checks == 2
 
 
 def test_fresh_hmm_fits_file_observations_and_saves_continuation_state() -> None:

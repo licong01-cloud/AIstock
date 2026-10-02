@@ -2,15 +2,15 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ConfirmAction from "@/components/paper-v2/ConfirmAction";
-import CopyChip from "@/components/paper-v2/CopyChip";
-import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import MetricCard from "@/components/paper-v2/MetricCard";
-import NoticePanel from "@/components/paper-v2/NoticePanel";
-import PaperTable from "@/components/paper-v2/PaperTable";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
-import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
+import ConfirmAction from "@/components/trading-console/ConfirmAction";
+import CopyChip from "@/components/trading-console/CopyChip";
+import ErrorPanel from "@/components/trading-console/ErrorPanel";
+import MetricCard from "@/components/trading-console/MetricCard";
+import NoticePanel from "@/components/trading-console/NoticePanel";
+import PaperTable from "@/components/trading-console/PaperTable";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
+import WorkflowStepper from "@/components/trading-console/WorkflowStepper";
 import { strategyPackageApi } from "@/lib/paper-v2/api";
 import { formatPercent, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type {
@@ -611,7 +611,7 @@ export default function PaperV2PackagesPage() {
               <MetricCard label="模拟盘准入" value={assetEligible ? "可创建模拟盘" : "不可创建"} hint="不再需要旧的模拟盘启用状态或治理就绪状态。" tone={assetEligible ? "success" : "warning"} />
             </div>
             <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
-              <Link className={assetEligible ? "pv2-button-primary" : "pv2-button"} href={`/paper-v2/portfolios?package_id=${selected.package_id}&broker_backend=local_sim&top_k=${selectedTopK}`}>用此包创建 LocalSim 模拟盘</Link>
+              <Link className={assetEligible ? "pv2-button-primary" : "pv2-button"} href={`/simulation/localsim?package_id=${selected.package_id}&top_k=${selectedTopK}`}>用此包创建 LocalSIM 模拟盘</Link>
               <ConfirmAction label="退役策略包" confirmText={selected.package_id} onConfirm={retireSelected} danger disabled={busy || selectedStatus === "RETIRED"} testId="strategy-package-retire" mode="dialog" />
               <ConfirmAction label="彻底删除策略包" confirmText={selected.package_id} onConfirm={deleteSelected} danger disabled={busy || !canDelete} testId="strategy-package-delete" mode="dialog" />
             </div>
@@ -650,7 +650,7 @@ export default function PaperV2PackagesPage() {
                 </div>
                 <div className="pv2-row-actions" style={{ marginTop: 12 }}>
                     <button className="pv2-button" onClick={runMultiAlphaDryRun} disabled={busy} type="button">执行 paper-runtime-dry-run（可选诊断）</button>
-                  <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}&broker_backend=local_sim&top_k=${dryRunTopKFromVariant(multiAlphaDryRunVariant)}`}>进入 LocalSim 建组合</Link>
+                  <Link className="pv2-button-primary" href={`/simulation/localsim?package_id=${selected.package_id}&top_k=${dryRunTopKFromVariant(multiAlphaDryRunVariant)}`}>进入 LocalSIM 建账户</Link>
                 </div>
                 {multiAlphaDryRunBroker !== "local_sim" ? (
                   <NoticePanel title="MiniQMT 执行层门保留" tone="warning">

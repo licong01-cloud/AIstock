@@ -578,28 +578,29 @@ def test_report_bug_uses_registry_max_when_allocator_is_stale(mcp_module):
     assert allocator["last_allocated"] == 106
 
 
-def test_report_bug_uses_worktree_registry_max_when_allocator_is_stale(mcp_module):
+def test_report_bug_uses_shared_reservation_max_when_allocator_is_stale(mcp_module):
     mcp_module.BUG_ROOT.mkdir(parents=True, exist_ok=True)
     mcp_module._write_bug_id_allocator(12)
-    worktree_bug_root = (
-        Path(os.environ["AISTOCK_WORKTREE_ROOT"])
-        / "other-window"
-        / "tests"
-        / "aistock_validation"
-        / "bugs"
-    )
-    worktree_bug_root.mkdir(parents=True, exist_ok=True)
-    (worktree_bug_root / "20260528_BUG-136-other-window.json").write_text(
-        json.dumps({"schema_version": mcp_module.SCHEMA_VERSION, "bug_id": "BUG-136"}),
+    reservation_root = Path(os.environ["AISTOCK_BUG_ID_RESERVATION_ROOT"])
+    reservation_root.mkdir(parents=True, exist_ok=True)
+    (reservation_root / "BUG-136.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_bug_id_reservation_v1",
+                "bug_id": "BUG-136",
+                "status": "reserved",
+                "title": "other window reservation",
+            }
+        ),
         encoding="utf-8",
     )
 
     result = mcp_module.report_bug(
-        title="worktree registry ahead",
+        title="shared reservation ahead",
         severity="P3",
         module="allocator_mod",
         files=["bar.py"],
-        reproduce_command="cmd worktree registry",
+        reproduce_command="cmd shared reservation",
         expected="x",
         actual="y",
     )

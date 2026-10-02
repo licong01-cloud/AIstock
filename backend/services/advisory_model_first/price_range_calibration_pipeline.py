@@ -21,7 +21,10 @@ from backend.services.advisory_model_first.outcome_calibration_pipeline import (
 )
 from backend.services.advisory_model_first.outcome_pipeline import _resolve_wsl_repository_commit
 from backend.services.advisory_model_first.prediction_source import sha256_file
-from backend.services.advisory_model_first.price_range_bundle import read_price_range_bundle_manifest
+from backend.services.advisory_model_first.price_range_bundle import (
+    read_daily_price_envelope_bundle_manifest,
+    read_price_range_bundle_manifest,
+)
 from backend.services.advisory_model_first.price_range_calibration import (
     apply_entry_gap_interval_adjustment,
     fit_entry_gap_interval_adjustment,
@@ -29,11 +32,13 @@ from backend.services.advisory_model_first.price_range_calibration import (
     monotonic_triplet,
 )
 from backend.services.advisory_model_first.price_range_calibration_bundle import (
+    publish_calibrated_daily_price_envelope_bundle,
     publish_calibrated_price_range_bundle,
 )
 from backend.services.advisory_model_first.price_range_calibration_contracts import (
     CALIBRATION_POLICY_VERSION,
     FrozenAdvisoryPriceRangeCalibrationRequestV1,
+    FrozenAdvisoryPriceRangeCalibrationRequestV2,
 )
 
 KEYS = ("decision_as_of_trade_date", "target_trade_date", "instrument")
@@ -201,6 +206,197 @@ def run_price_range_calibration_pipeline(request_path: str | Path) -> dict[str, 
     return receipt
 
 
+def run_daily_price_envelope_calibration_pipeline(
+    request_path: str | Path,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    request = FrozenAdvisoryPriceRangeCalibrationRequestV2.model_validate_json(
+        Path(request_path).read_text(encoding="utf-8")
+    )
+    _verify_environment(request)
+    run_root = (
+        Path(request.output_root).resolve()
+        / "price_range_calibration_runs"
+        / request.request_id
+    )
+    run_root.mkdir(parents=True, exist_ok=True)
+    parent_root = Path(request.parent_bundle_root).resolve()
+    parent_manifest = read_daily_price_envelope_bundle_manifest(
+        parent_root, expected_bundle_id=request.parent_price_range_bundle_id
+    )
+    parent_missing_by_split = _validate_daily_request(
+        request, parent_root, parent_manifest
+    )
+    features = _read_bound_parquet(request.features_artifact)
+    _validate_descriptor(request.price_range_labels_artifact)
+    schema = _read_json(parent_root / "feature_schema.json")
+    models = _load_parent_quantile_models(parent_root)
+
+    validation = _read_split_labels(
+        request.price_range_labels_artifact.path, "validation"
+    )
+    validation_merged, validation_coverage = _project(
+        features=features, labels=validation, split="validation"
+    )
+    _validate_parent_coverage(
+        split="validation",
+        report=validation_coverage,
+        expected_missing=parent_missing_by_split["validation"],
+    )
+    validation_matrix = _prepare_matrix_from_schema(
+        validation_merged, feature_schema=schema
+    )
+    validation_raw = _predict_triplet(models, validation_matrix)
+    truth = pd.to_numeric(
+        validation_merged["entry_gap_return"], errors="raise"
+    ).to_numpy()
+    fitted = fit_entry_gap_interval_adjustment(
+        split="validation",
+        q10=validation_raw[0],
+        q50=validation_raw[1],
+        q90=validation_raw[2],
+        truth=truth,
+    )
+    spec = {
+        "schema_version": "advisory_daily_price_envelope_calibration_spec_v1",
+        "request_id": request.request_id,
+        "request_sha256": request.request_sha256,
+        "calibration_policy_version": CALIBRATION_POLICY_VERSION,
+        "state": fitted["state"],
+        "method": fitted["method"],
+        "nominal_coverage": fitted["nominal_coverage"],
+        "fit_split": fitted["fit_split"],
+        "row_count": fitted["row_count"],
+        "finite_sample_rank": fitted["finite_sample_rank"],
+        "delta": fitted["delta"],
+        "validation_projection_hash": _projection_hash(
+            validation_merged.loc[:, list(KEYS)]
+        ),
+        "validation_raw_quantile_crossing_count": _crossing_count(validation_raw),
+        "validation_metrics": fitted["validation_metrics"],
+        "validation_feature_coverage": validation_coverage,
+        "entry_admission_model_status": "RETIRED_NON_IDENTIFIABLE",
+    }
+    spec_path = run_root / "calibration_spec.json"
+    _write_json_atomic(spec_path, spec)
+    frozen_spec = _read_json(spec_path)
+    if frozen_spec != spec:
+        raise pipeline_error(
+            "daily price envelope frozen calibration spec readback differs"
+        )
+
+    del validation
+    gc.collect()
+    test = _read_split_labels(request.price_range_labels_artifact.path, "test")
+    test_merged, test_coverage = _project(
+        features=features, labels=test, split="test"
+    )
+    _validate_parent_coverage(
+        split="test",
+        report=test_coverage,
+        expected_missing=parent_missing_by_split["test"],
+    )
+    test_matrix = _prepare_matrix_from_schema(test_merged, feature_schema=schema)
+    test_raw = _predict_triplet(models, test_matrix)
+    test_truth = pd.to_numeric(
+        test_merged["entry_gap_return"], errors="raise"
+    ).to_numpy()
+    validation_metrics, _validation_predictions = _evaluate_daily_price_envelope(
+        merged=validation_merged,
+        raw=validation_raw,
+        truth=truth,
+        delta=float(frozen_spec["delta"]),
+    )
+    test_metrics, test_predictions = _evaluate_daily_price_envelope(
+        merged=test_merged,
+        raw=test_raw,
+        truth=test_truth,
+        delta=float(frozen_spec["delta"]),
+    )
+    metrics = {
+        "schema_version": "advisory_daily_price_envelope_calibration_metrics_v1",
+        "calibration_spec_sha256": sha256_file(spec_path),
+        "validation": validation_metrics,
+        "test": test_metrics,
+        "feature_coverage": {
+            "validation": validation_coverage,
+            "test": test_coverage,
+        },
+        # The consumed development test is report-only. It must not select or
+        # recommend runtime activation, even when calibration improves there.
+        "activation_recommended": False,
+        "activation_decision_basis": "FRESH_CONFIRMATION_REQUIRED",
+    }
+    log = {
+        "schema_version": "advisory_daily_price_envelope_calibration_log_v1",
+        "environment": {
+            "conda_environment": request.conda_environment,
+            "python_version": platform.python_version(),
+            "lightgbm_version": importlib.metadata.version("lightgbm"),
+            "numpy_version": importlib.metadata.version("numpy"),
+            "pyarrow_version": importlib.metadata.version("pyarrow"),
+        },
+        "algorithm": {
+            "method": request.calibration_method,
+            "nominal_coverage": request.nominal_coverage,
+        },
+    }
+    peak_before = _peak_rss_bytes()
+    if peak_before > request.resource_max_rss_bytes:
+        raise AdvisoryModelFirstError(
+            "daily price envelope calibration exceeded the approved RSS limit",
+            reason_code="ADVISORY_MODEL_TRAINING_MEMORY_LIMIT_EXCEEDED",
+            context={
+                "peak_rss_bytes": peak_before,
+                "limit_bytes": request.resource_max_rss_bytes,
+            },
+        )
+    bundle_id, bundle_path, manifest = (
+        publish_calibrated_daily_price_envelope_bundle(
+            request=request,
+            calibration_spec_path=spec_path,
+            metrics=metrics,
+            calibrated_test_predictions=test_predictions,
+            calibration_log=log,
+        )
+    )
+    del models, features, test, validation_matrix, test_matrix, validation_merged, test_merged
+    gc.collect()
+    final_peak = _peak_rss_bytes()
+    if final_peak > request.resource_max_rss_bytes:
+        raise AdvisoryModelFirstError(
+            "daily price envelope calibration exceeded the approved RSS limit",
+            reason_code="ADVISORY_MODEL_TRAINING_MEMORY_LIMIT_EXCEEDED",
+            context={
+                "peak_rss_bytes": final_peak,
+                "limit_bytes": request.resource_max_rss_bytes,
+            },
+        )
+    receipt = {
+        "schema_version": "advisory_daily_price_envelope_calibration_receipt_v1",
+        "status": "calibrated",
+        "request_id": request.request_id,
+        "request_sha256": request.request_sha256,
+        "parent_price_range_bundle_id": request.parent_price_range_bundle_id,
+        "calibration_spec_sha256": sha256_file(spec_path),
+        "price_range_bundle_id": bundle_id,
+        "bundle_path": str(bundle_path),
+        "manifest": manifest,
+        "metrics": metrics,
+        "resource_report": {
+            "wall_seconds": round(time.monotonic() - started, 3),
+            "peak_rss_bytes": final_peak,
+            "limit_bytes": request.resource_max_rss_bytes,
+        },
+        "price_range_binding_activated": False,
+        "activation_recommended": metrics["activation_recommended"],
+    }
+    _write_json_atomic(
+        run_root / "daily_price_envelope_calibration_receipt.json", receipt
+    )
+    return receipt
+
+
 def _project(
     *, features: pd.DataFrame, labels: pd.DataFrame, split: str
 ) -> tuple[pd.DataFrame, dict[str, int]]:
@@ -259,6 +455,28 @@ def _evaluate(*, merged, raw, truth, delta):
         output[f"entry_gap_calibrated_{name}"] = values
     output["entry_gap_calibration_state"] = "CALIBRATED"
     output["entry_executable_calibration_state"] = "UNCALIBRATED"
+    return metrics, output
+
+
+def _evaluate_daily_price_envelope(*, merged, raw, truth, delta):
+    lower, middle, upper = monotonic_triplet(*raw)
+    calibrated = apply_entry_gap_interval_adjustment(
+        q10=raw[0], q50=raw[1], q90=raw[2], delta=delta
+    )
+    metrics = interval_metrics(truth, lower, upper, delta=delta)
+    metrics.update(
+        {
+            "date_count": int(merged["decision_as_of_trade_date"].nunique()),
+            "raw_quantile_crossing_count": _crossing_count(raw),
+            "calibrated_quantile_crossing_count": 0,
+        }
+    )
+    output = merged.loc[:, [*KEYS, "entry_gap_return"]].reset_index(drop=True).copy()
+    for name, values in zip(("q10", "q50", "q90"), (lower, middle, upper)):
+        output[f"entry_gap_raw_{name}"] = values
+    for name, values in zip(("q10", "q50", "q90"), calibrated):
+        output[f"entry_gap_calibrated_{name}"] = values
+    output["entry_gap_calibration_state"] = "CALIBRATED"
     return metrics, output
 
 
@@ -337,6 +555,82 @@ def _validate_request(request, root: Path, manifest: Mapping[str, Any]) -> dict[
     if any(value < 0 for value in normalized_missing.values()):
         raise AdvisoryModelFirstError(
             "M5C parent M4 feature coverage values are negative",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        )
+    _validate_descriptor(request.features_artifact)
+    _validate_descriptor(request.price_range_labels_artifact)
+    return normalized_missing
+
+
+def _validate_daily_request(
+    request: FrozenAdvisoryPriceRangeCalibrationRequestV2,
+    root: Path,
+    manifest: Mapping[str, Any],
+) -> dict[str, int]:
+    expected = {
+        "schema_version": "advisory_price_range_bundle_v3",
+        "calibration_state": "UNCALIBRATED",
+        "request_id": request.parent_price_range_request_id,
+        "request_sha256": request.parent_price_range_request_sha256,
+        "package_id": request.package_id,
+        "manifest_sha256": request.manifest_sha256,
+        "style_profile_id": request.style_profile_id,
+        "style_profile_hash": request.style_profile_hash,
+        "feature_schema_version": request.feature_schema_version,
+        "feature_schema_hash": request.feature_schema_hash,
+        "label_policy_version": request.label_policy_version,
+        "output_schema_version": "advisory_daily_price_envelope_v1",
+        "model_names": ["entry_gap_q10", "entry_gap_q50", "entry_gap_q90"],
+    }
+    if (
+        {key: manifest.get(key) for key in expected} != expected
+        or sha256_file(root / "manifest.json")
+        != request.parent_price_range_manifest_file_sha256
+        or sha256_file(root / "split.json") != request.split_sha256
+    ):
+        raise AdvisoryModelFirstError(
+            "daily price envelope calibration request differs from parent bundle",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        )
+    parent_request = _read_json(root / "training_request.json")
+    frozen_features = parent_request.get("features_artifact")
+    if not isinstance(frozen_features, dict) or frozen_features != request.features_artifact.model_dump(
+        mode="json"
+    ):
+        raise AdvisoryModelFirstError(
+            "daily price envelope calibration features differ from parent request",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        )
+    expected_label_path = (
+        Path(request.output_root)
+        / "price_range_runs"
+        / request.parent_price_range_request_id
+        / "daily_price_envelope_labels.parquet"
+    )
+    if Path(request.price_range_labels_artifact.path) != expected_label_path:
+        raise AdvisoryModelFirstError(
+            "daily price envelope calibration labels do not come from parent run",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        )
+    parent_metrics = _read_json(root / "metrics.json")
+    missing_by_split = parent_metrics.get("feature_unavailable_rows_by_split")
+    if not isinstance(missing_by_split, dict):
+        raise AdvisoryModelFirstError(
+            "daily price envelope feature coverage contract is unavailable",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        )
+    try:
+        normalized_missing = {
+            split: int(missing_by_split[split]) for split in ("validation", "test")
+        }
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AdvisoryModelFirstError(
+            "daily price envelope feature coverage values are invalid",
+            reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
+        ) from exc
+    if any(value < 0 for value in normalized_missing.values()):
+        raise AdvisoryModelFirstError(
+            "daily price envelope feature coverage values are negative",
             reason_code="ADVISORY_PRICE_RANGE_CALIBRATION_PARENT_MISMATCH",
         )
     _validate_descriptor(request.features_artifact)

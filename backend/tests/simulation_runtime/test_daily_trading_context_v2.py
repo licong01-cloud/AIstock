@@ -9,7 +9,8 @@ from backend.services.simulation_runtime.daily_limit_authority import (
     DailyLimitAuthorityContractError,
     parse_daily_trading_context,
 )
-from backend.services.simulation_runtime.models import (
+from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.simulation_data.daily_context import (
     DAILY_LIMIT_AUTHORITY_BY_BROKER_V2,
     DAILY_LIMIT_RESOLVER_BY_BROKER_V2,
     DailyLimitAuthorityV2,
@@ -20,7 +21,6 @@ from backend.services.simulation_runtime.models import (
     DailyTradingSymbolFactV1,
     DailyTradingSymbolFactV2,
     SimulationBrokerBackend,
-    canonical_json_sha256,
 )
 
 

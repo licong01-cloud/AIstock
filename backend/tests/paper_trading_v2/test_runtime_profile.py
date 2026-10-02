@@ -1,11 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date
 
 import pytest
 
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
@@ -208,7 +209,10 @@ def test_runtime_profile_activation_replace_and_late_change_are_rejected() -> No
         reason="replace with audit",
     )
     assert second.activation_id != first.activation_id
-    assert {item.status.value for item in service.list_runtime_config_activations(portfolio.portfolio_id)} == {"ACTIVE", "SUPERSEDED"}
+    assert {item.status.value for item in service.list_runtime_config_activations(portfolio.portfolio_id)} == {
+        "ACTIVE",
+        "SUPERSEDED",
+    }
 
     paper_repo.create_run(
         PaperRun(
@@ -229,14 +233,16 @@ def test_runtime_profile_activation_replace_and_late_change_are_rejected() -> No
 
 
 def test_runtime_profile_accepts_platform_owned_event_signal_policy() -> None:
-    _package_repo, paper_repo, service, _manifest, portfolio = _portfolio_fixture(custom_params={
-        "event_signal_policy": {
-            "enabled": True,
-            "event_signal_profile_id": "evt_profile_001",
-            "asof_policy": "effective_trade_date",
-            "signal_merge_policy": "block_first",
+    _package_repo, paper_repo, service, _manifest, portfolio = _portfolio_fixture(
+        custom_params={
+            "event_signal_policy": {
+                "enabled": True,
+                "event_signal_profile_id": "evt_profile_001",
+                "asof_policy": "effective_trade_date",
+                "signal_merge_policy": "block_first",
+            }
         }
-    })
+    )
     config_json = {
         "runtime_profile": {
             "risk_policy": {

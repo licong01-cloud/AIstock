@@ -7,13 +7,13 @@ from typing import Any
 
 import pytest
 
-from backend.services.paper_trading_v2.broker import (
+from backend.services.simulation_execution.broker import (
     BrokerAccountSnapshot,
     OrderHandle,
     OrderHandleStatus,
 )
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun
 from backend.services.qmt_strategy_ledger.models import (
     PositionLotRecord,

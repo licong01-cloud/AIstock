@@ -20,6 +20,346 @@ class _DummyConn:
         return False
 
 
+def _daily_csv_frame(code: str, dates: list[date]) -> pd.DataFrame:
+    frame = pd.DataFrame(
+        {
+            "date": [value.isoformat() for value in dates],
+            "symbol": [code] * len(dates),
+        }
+    )
+    for column in authoritative.DAILY_REQUIRED_COLUMNS[2:]:
+        frame[column] = 1.0
+    return frame.loc[:, authoritative.DAILY_REQUIRED_COLUMNS]
+
+
+def _minute_csv_frame(code: str, timestamps: list[str], *, factor: float = 1.0) -> pd.DataFrame:
+    frame = pd.DataFrame({"date": timestamps, "symbol": [code] * len(timestamps)})
+    for column in authoritative.MINUTE_REQUIRED_COLUMNS[2:]:
+        frame[column] = factor if column == "factor" else 1.0
+    return frame.loc[:, authoritative.MINUTE_REQUIRED_COLUMNS]
+
+
+def test_minute_frame_does_not_load_history_or_st_when_limit_rows_are_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code = "600000.SH"
+    trade_day = date(2026, 8, 31)
+    raw = pd.DataFrame(
+        {
+            "trade_time": [pd.Timestamp("2026-08-31 15:00:00")],
+            "ts_code": [code],
+            "open_li": [10000],
+            "high_li": [10100],
+            "low_li": [9900],
+            "close_li": [10000],
+            "volume_hand": [100],
+            "amount_li": [1000000],
+        }
+    )
+    monkeypatch.setattr(
+        authoritative,
+        "_load_adj_factors",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {"ts_code": [code], "trade_date": [trade_day], "adj_factor": [1.0], "qfq_factor": [1.0]}
+        ),
+    )
+    monkeypatch.setattr(
+        authoritative,
+        "_load_limits",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {
+                "ts_code": [code],
+                "trade_date": [trade_day],
+                "prev_close": [9.9],
+                "up_limit_price": [10.89],
+                "down_limit_price": [8.91],
+            }
+        ),
+    )
+
+    def must_not_load(*_args, **_kwargs):
+        raise AssertionError("complete stk_limit rows must not load fallback history")
+
+    monkeypatch.setattr(authoritative, "_load_daily_close_history", must_not_load)
+    monkeypatch.setattr(authoritative, "_load_st_periods", must_not_load)
+
+    result = authoritative._build_minute_expected_frame(
+        code,
+        raw,
+        start=trade_day,
+        end=trade_day,
+        basis_start=trade_day,
+        basis_end=trade_day,
+        strict_limit=True,
+        connection=object(),
+    )
+
+    assert result.loc[0, "close"] == pytest.approx(10.0)
+    assert result.attrs["rule_derived_limit_rows"] == 0
+
+
+def test_minute_csv_resume_skips_complete_cutoff_without_database_query(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "600000.SH"
+    csv_dir = tmp_path / "snapshot" / "stock_minute_1min"
+    csv_dir.mkdir(parents=True)
+    _minute_csv_frame(code, ["2026-08-31 15:00:00"]).to_csv(csv_dir / f"{code}.csv", index=False)
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "get_conn", lambda: _DummyConn())
+    monkeypatch.setattr(
+        authoritative,
+        "_load_minute_raw",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("complete cutoff file must not query the database")
+        ),
+    )
+
+    summary = authoritative.export_stock_minute_csv(
+        snapshot_id="snapshot",
+        start=date(2024, 1, 2),
+        end=date(2026, 8, 31),
+        csv_root=tmp_path,
+        resume_csv=True,
+    )
+
+    assert summary.resumed_csv_files == 1
+    assert summary.csv_files == 1
+    assert summary.csv_rows == 0
+    assert summary.stocks_written == 0
+
+
+def test_minute_csv_resume_queries_only_gap_and_appends_new_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "000001.SZ"
+    csv_dir = tmp_path / "snapshot" / "stock_minute_1min"
+    csv_dir.mkdir(parents=True)
+    existing = _minute_csv_frame(code, ["2026-07-31 15:00:00"], factor=0.75)
+    existing.to_csv(csv_dir / f"{code}.csv", index=False)
+    query_calls: list[tuple[date, date]] = []
+    raw = pd.DataFrame(
+        {
+            "trade_time": [pd.Timestamp("2026-07-31 15:00:00"), pd.Timestamp("2026-08-03 09:31:00")],
+            "ts_code": [code, code],
+        }
+    )
+    expected = _minute_csv_frame(
+        code,
+        ["2026-07-31 15:00:00", "2026-08-03 09:31:00"],
+        factor=0.75,
+    )
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "get_conn", lambda: _DummyConn())
+
+    def fake_load(_code: str, start: date, end: date, **_kwargs) -> pd.DataFrame:
+        query_calls.append((start, end))
+        return raw
+
+    monkeypatch.setattr(authoritative, "_load_minute_raw", fake_load)
+    monkeypatch.setattr(authoritative, "_build_minute_expected_frame", lambda *_args, **_kwargs: expected)
+
+    summary = authoritative.export_stock_minute_csv(
+        snapshot_id="snapshot",
+        start=date(2024, 1, 2),
+        end=date(2026, 8, 31),
+        csv_root=tmp_path,
+        resume_csv=True,
+    )
+
+    assert query_calls == [(date(2026, 7, 31), date(2026, 8, 31))]
+    assert summary.resumed_csv_files == 1
+    assert summary.csv_rows == 1
+    assert pd.read_csv(csv_dir / f"{code}.csv")["date"].tolist() == [
+        "2026-07-31 15:00:00",
+        "2026-08-03 09:31:00",
+    ]
+
+
+def test_minute_csv_resume_rebuilds_only_symbol_when_qfq_basis_changed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "300001.SZ"
+    csv_dir = tmp_path / "snapshot" / "stock_minute_1min"
+    csv_dir.mkdir(parents=True)
+    _minute_csv_frame(code, ["2026-07-31 15:00:00"], factor=0.75).to_csv(
+        csv_dir / f"{code}.csv", index=False
+    )
+    query_starts: list[date] = []
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "get_conn", lambda: _DummyConn())
+
+    def fake_load(_code: str, start: date, _end: date, **_kwargs) -> pd.DataFrame:
+        query_starts.append(start)
+        return pd.DataFrame({"trade_time": [pd.Timestamp("2026-07-31 15:00:00")], "ts_code": [code]})
+
+    def fake_build(_code: str, _raw: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        timestamps = (
+            ["2024-01-02 09:31:00", "2026-07-31 15:00:00"]
+            if kwargs["start"] == date(2024, 1, 2)
+            else ["2026-07-31 15:00:00"]
+        )
+        return _minute_csv_frame(code, timestamps, factor=0.5)
+
+    monkeypatch.setattr(authoritative, "_load_minute_raw", fake_load)
+    monkeypatch.setattr(authoritative, "_build_minute_expected_frame", fake_build)
+
+    summary = authoritative.export_stock_minute_csv(
+        snapshot_id="snapshot",
+        start=date(2024, 1, 2),
+        end=date(2026, 8, 31),
+        csv_root=tmp_path,
+        resume_csv=True,
+    )
+
+    assert query_starts == [date(2026, 7, 31), date(2024, 1, 2)]
+    assert summary.resumed_csv_files == 0
+    assert pd.read_csv(csv_dir / f"{code}.csv")["factor"].tolist() == [0.5, 0.5]
+
+
+def test_minute_csv_resume_rebuilds_only_malformed_partial_tail(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "600001.SH"
+    csv_dir = tmp_path / "snapshot" / "stock_minute_1min"
+    csv_dir.mkdir(parents=True)
+    csv_path = csv_dir / f"{code}.csv"
+    csv_path.write_text(
+        ",".join(authoritative.MINUTE_REQUIRED_COLUMNS)
+        + "\n2026-07-31 15:00:00,600001.SH,1",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "get_conn", lambda: _DummyConn())
+    monkeypatch.setattr(
+        authoritative,
+        "_load_minute_raw",
+        lambda *_args, **_kwargs: pd.DataFrame(
+            {"trade_time": [pd.Timestamp("2026-08-03 09:31:00")], "ts_code": [code]}
+        ),
+    )
+    monkeypatch.setattr(
+        authoritative,
+        "_build_minute_expected_frame",
+        lambda *_args, **_kwargs: _minute_csv_frame(code, ["2026-08-03 09:31:00"]),
+    )
+
+    summary = authoritative.export_stock_minute_csv(
+        snapshot_id="snapshot",
+        start=date(2024, 1, 2),
+        end=date(2026, 8, 31),
+        csv_root=tmp_path,
+        resume_csv=True,
+    )
+
+    assert summary.resumed_csv_files == 0
+    assert pd.read_csv(csv_path)["date"].tolist() == ["2026-08-03 09:31:00"]
+
+
+def test_minute_csv_resume_rejects_file_beyond_requested_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "600002.SH"
+    csv_dir = tmp_path / "snapshot" / "stock_minute_1min"
+    csv_dir.mkdir(parents=True)
+    _minute_csv_frame(code, ["2026-09-01 09:31:00"]).to_csv(csv_dir / f"{code}.csv", index=False)
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "get_conn", lambda: _DummyConn())
+
+    with pytest.raises(RuntimeError, match="extends beyond requested cutoff"):
+        authoritative.export_stock_minute_csv(
+            snapshot_id="snapshot",
+            start=date(2024, 1, 2),
+            end=date(2026, 8, 31),
+            csv_root=tmp_path,
+            resume_csv=True,
+        )
+
+
+def test_daily_csv_resume_reuses_only_complete_atomic_physical_range(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "302132.SZ"
+    dates = [date(2026, 8, 28), date(2026, 8, 31)]
+    raw = pd.DataFrame({"trade_date": dates, "ts_code": [code, code]})
+    csv_dir = tmp_path / "snapshot" / "stock_daily"
+    csv_dir.mkdir(parents=True)
+    _daily_csv_frame(code, dates).to_csv(csv_dir / f"{code}.csv", index=False)
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "_load_daily_raw", lambda *_args, **_kwargs: raw)
+
+    def must_not_rebuild(*_args, **_kwargs):
+        raise AssertionError("complete atomic daily CSV must be reused")
+
+    monkeypatch.setattr(authoritative, "_build_daily_expected_frame", must_not_rebuild)
+
+    summary = authoritative.export_stock_daily_csv(
+        snapshot_id="snapshot",
+        start=dates[0],
+        end=dates[-1],
+        csv_root=tmp_path,
+        resume_csv=True,
+    )
+
+    assert summary.resumed_csv_files == 1
+    assert summary.csv_files == 1
+    assert summary.csv_rows == 2
+    assert summary.stocks_written == 1
+
+
+def test_daily_csv_resume_rebuilds_stale_or_incomplete_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    code = "302132.SZ"
+    dates = [date(2026, 8, 28), date(2026, 8, 31)]
+    raw = pd.DataFrame({"trade_date": dates, "ts_code": [code, code]})
+    csv_dir = tmp_path / "snapshot" / "stock_daily"
+    csv_dir.mkdir(parents=True)
+    _daily_csv_frame(code, dates[:1]).to_csv(csv_dir / f"{code}.csv", index=False)
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _config: [code])
+    monkeypatch.setattr(authoritative, "_load_daily_raw", lambda *_args, **_kwargs: raw)
+    monkeypatch.setattr(
+        authoritative,
+        "_build_daily_expected_frame",
+        lambda *_args, **_kwargs: _daily_csv_frame(code, dates),
+    )
+
+    summary = authoritative.export_stock_daily_csv(
+        snapshot_id="snapshot",
+        start=dates[0],
+        end=dates[-1],
+        csv_root=tmp_path,
+        resume_csv=True,
+    )
+
+    assert summary.resumed_csv_files == 0
+    assert summary.csv_files == 1
+    assert summary.csv_rows == 2
+    assert pd.read_csv(csv_dir / f"{code}.csv")["date"].tolist() == [
+        "2026-08-28",
+        "2026-08-31",
+    ]
+
+
+def test_daily_csv_rejects_overwrite_and_resume_together(tmp_path) -> None:
+    with pytest.raises(ValueError, match="cannot both be true"):
+        authoritative.export_stock_daily_csv(
+            snapshot_id="snapshot",
+            start=date(2026, 8, 1),
+            end=date(2026, 8, 31),
+            csv_root=tmp_path,
+            overwrite_csv=True,
+            resume_csv=True,
+        )
+
+
 def test_authoritative_stock_export_exchanges_are_sh_sz_only() -> None:
     assert authoritative.normalize_stock_export_exchanges(None) == ["sh", "sz"]
     assert authoritative.normalize_stock_export_exchanges(["sz", "sh", "sh"]) == ["sh", "sz"]
@@ -94,6 +434,139 @@ def test_authoritative_explicit_bj_codes_fail_fast() -> None:
                 ts_codes=["430047.BJ"],
             )
         )
+
+
+def test_missing_stk_limit_rows_use_versioned_board_and_st_rules() -> None:
+    required = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000001.SZ"],
+            "trade_date": [date(2024, 7, 23), date(2024, 7, 23)],
+        }
+    )
+    history = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000001.SZ"],
+            "trade_date": [date(2024, 7, 22), date(2024, 7, 22)],
+            "daily_close": [10.0, 10.0],
+        }
+    )
+    factors = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000622.SZ", "000001.SZ", "000001.SZ"],
+            "trade_date": [date(2024, 7, 22), date(2024, 7, 23)] * 2,
+            "adj_factor": [1.0, 1.0, 1.0, 1.0],
+        }
+    )
+    st_periods = pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "start_date": [date(2024, 7, 1)],
+            "end_date": [date(2024, 7, 31)],
+        }
+    )
+
+    completed, count = authoritative._complete_missing_limits_with_rules(
+        limits=pd.DataFrame(
+            columns=["ts_code", "trade_date", "prev_close", "up_limit_price", "down_limit_price"]
+        ),
+        daily_history=history,
+        adj_factors=factors,
+        st_periods=st_periods,
+        required_keys=required,
+    )
+
+    values = completed.set_index("ts_code")
+    assert count == 2
+    assert values.loc["000622.SZ", ["prev_close", "up_limit_price", "down_limit_price"]].tolist() == [
+        10.0,
+        11.0,
+        9.0,
+    ]
+    assert values.loc["000001.SZ", ["prev_close", "up_limit_price", "down_limit_price"]].tolist() == [
+        10.0,
+        10.5,
+        9.5,
+    ]
+
+
+def test_partial_stk_limit_preserves_existing_values_and_fills_only_missing_fields() -> None:
+    limits = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ"],
+            "trade_date": [date(2024, 7, 23)],
+            "prev_close": [10.0],
+            "up_limit_price": [12.0],
+            "down_limit_price": [None],
+        }
+    )
+    history = pd.DataFrame(
+        {"ts_code": ["000622.SZ"], "trade_date": [date(2024, 7, 22)], "daily_close": [10.0]}
+    )
+    factors = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000622.SZ"],
+            "trade_date": [date(2024, 7, 22), date(2024, 7, 23)],
+            "adj_factor": [1.0, 1.0],
+        }
+    )
+
+    completed, count = authoritative._complete_missing_limits_with_rules(
+        limits=limits,
+        daily_history=history,
+        adj_factors=factors,
+        st_periods=pd.DataFrame(columns=["ts_code", "start_date", "end_date"]),
+        required_keys=limits[["ts_code", "trade_date"]],
+    )
+
+    assert count == 1
+    assert completed.iloc[0]["up_limit_price"] == 12.0
+    assert completed.iloc[0]["down_limit_price"] == 9.0
+
+
+def test_missing_daily_close_uses_last_intraday_close_as_rule_reference() -> None:
+    minute = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000622.SZ", "000622.SZ"],
+            "trade_time": [
+                "2024-07-22 09:31:00",
+                "2024-07-22 15:00:00",
+                "2024-07-23 09:31:00",
+            ],
+            "close_li": [1600, 1630, 1640],
+        }
+    )
+    history = authoritative._augment_daily_history_from_price_rows(
+        pd.DataFrame(columns=["ts_code", "trade_date", "daily_close"]),
+        minute,
+    )
+    factors = pd.DataFrame(
+        {
+            "ts_code": ["000622.SZ", "000622.SZ"],
+            "trade_date": [date(2024, 7, 22), date(2024, 7, 23)],
+            "adj_factor": [2.525, 2.525],
+        }
+    )
+
+    completed, count = authoritative._complete_missing_limits_with_rules(
+        limits=pd.DataFrame(
+            {
+                "ts_code": ["000622.SZ"],
+                "trade_date": [date(2024, 7, 23)],
+                "prev_close": [None],
+                "up_limit_price": [1.79],
+                "down_limit_price": [1.47],
+            }
+        ),
+        daily_history=history,
+        adj_factors=factors,
+        st_periods=pd.DataFrame(columns=["ts_code", "start_date", "end_date"]),
+        required_keys=pd.DataFrame(
+            {"ts_code": ["000622.SZ"], "trade_date": [date(2024, 7, 23)]}
+        ),
+    )
+
+    assert count == 1
+    assert completed.iloc[0]["prev_close"] == 1.63
 
 
 def test_db_reader_base_universe_defaults_to_sh_sz_and_rejects_bj(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -279,8 +752,15 @@ def test_minute_cli_requests_physical_feature_authority_for_pit_rewrite(
     calls: list[dict[str, object]] = []
 
     class _FakePitService:
-        def ensure_st_pit_universe(self, **_kwargs):
-            return {"status": "ready"}
+        def get_status_readonly(self, **_kwargs):
+            return {
+                "status": "ready",
+                "dirty": False,
+                "rule_version": authoritative_cli.DEFAULT_ST_PIT_RULE_VERSION,
+                "scope": "sh_sz_a_ex_bj_st_excluded_pit",
+                "start_date": date(2018, 8, 1),
+                "end_date": date(2026, 8, 31),
+            }
 
     monkeypatch.setattr(authoritative_cli, "StockUniversePitService", _FakePitService)
     monkeypatch.setattr(authoritative_cli, "run_wsl_dump", lambda **_kwargs: {"ok": True, "returncode": 0})
@@ -318,6 +798,237 @@ def test_minute_cli_requests_physical_feature_authority_for_pit_rewrite(
     assert len(calls) == 1
     assert calls[0]["feature_frequency"] == "1min"
     assert calls[0]["allowed_bin_root"] == tmp_path / "bin"
+
+
+def test_daily_cli_forwards_resume_csv_to_exporter(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class Summary:
+        def __init__(self) -> None:
+            self.resumed_csv_files = 1
+
+    monkeypatch.setattr(
+        authoritative_cli,
+        "export_stock_daily_csv",
+        lambda **kwargs: calls.append(kwargs) or Summary(),
+    )
+
+    exit_code = authoritative_cli.main(
+        [
+            "--dataset",
+            "stock_daily",
+            "--stage",
+            "export",
+            "--snapshot-id",
+            "daily-candidate",
+            "--start",
+            "2026-08-01",
+            "--end",
+            "2026-08-31",
+            "--csv-root",
+            str(tmp_path / "csv"),
+            "--bin-root",
+            str(tmp_path / "bin"),
+            "--reports-dir",
+            str(tmp_path / "reports"),
+            "--resume-csv",
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["resume_csv"] is True
+
+
+def test_minute_cli_forwards_resume_and_can_skip_only_redundant_all_stage_validation(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export_calls: list[dict[str, object]] = []
+    validation_calls: list[dict[str, object]] = []
+
+    class Summary:
+        csv_dir = str(tmp_path / "csv" / "minute-candidate" / "stock_minute_1min")
+
+    monkeypatch.setattr(
+        authoritative_cli,
+        "export_stock_minute_csv",
+        lambda **kwargs: export_calls.append(kwargs) or Summary(),
+    )
+    monkeypatch.setattr(
+        authoritative_cli,
+        "validate_minute_bin_against_db",
+        lambda **kwargs: validation_calls.append(kwargs) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        authoritative_cli,
+        "run_wsl_dump",
+        lambda **_kwargs: {"ok": True, "returncode": 0},
+    )
+    monkeypatch.setattr(
+        authoritative_cli,
+        "rewrite_stock_all_txt_for_ipo_filter",
+        lambda **_kwargs: {"mode": "test"},
+    )
+    monkeypatch.setattr(authoritative_cli, "write_bin_meta", lambda **_kwargs: None)
+
+    exit_code = authoritative_cli.main(
+        [
+            "--dataset",
+            "stock_minute",
+            "--stage",
+            "all",
+            "--snapshot-id",
+            "minute-candidate",
+            "--start",
+            "2024-01-02",
+            "--end",
+            "2026-08-31",
+            "--csv-root",
+            str(tmp_path / "csv"),
+            "--bin-root",
+            str(tmp_path / "bin"),
+            "--reports-dir",
+            str(tmp_path / "reports"),
+            "--resume-csv",
+            "--skip-validation",
+        ]
+    )
+
+    assert exit_code == 0
+    assert export_calls[0]["resume_csv"] is True
+    assert validation_calls == []
+    report = tmp_path / "reports" / "minute-candidate_stock_minute_all.json"
+    assert '"reason": "explicit_skip_validation"' in report.read_text(encoding="utf-8")
+
+
+def test_cli_rejects_skipping_an_explicit_validation_stage() -> None:
+    with pytest.raises(ValueError, match="only valid with --stage all"):
+        authoritative_cli.main(
+            [
+                "--dataset",
+                "stock_minute",
+                "--stage",
+                "validate",
+                "--snapshot-id",
+                "minute-candidate",
+                "--start",
+                "2026-08-01",
+                "--end",
+                "2026-08-31",
+                "--skip-validation",
+            ]
+        )
+
+
+def test_cli_no_longer_exposes_compressed_chunk_any_export_path() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        authoritative_cli.build_parser().parse_args(
+            [
+                "--dataset",
+                "stock_minute",
+                "--snapshot-id",
+                "minute-candidate",
+                "--start",
+                "2026-08-01",
+                "--end",
+                "2026-08-31",
+                "--minute-chunked-export",
+            ]
+        )
+    assert exc_info.value.code == 2
+
+
+def test_backend_minute_export_uses_index_friendly_per_symbol_exporter(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    class Summary:
+        csv_dir = str(tmp_path / "minute")
+
+    monkeypatch.setenv("QLIB_CSV_ROOT_WIN", str(tmp_path))
+    monkeypatch.setattr(
+        qlib_router,
+        "export_stock_minute_csv",
+        lambda **kwargs: calls.append(kwargs) or Summary(),
+    )
+
+    result = qlib_router._export_minute_to_csv_for_dump_bin(
+        "snapshot",
+        date(2024, 1, 2),
+        date(2026, 8, 31),
+        ["sh", "sz"],
+        exclude_st=True,
+        exclude_delisted_or_paused=True,
+    )
+
+    assert result == tmp_path / "minute"
+    assert calls[0]["overwrite_csv"] is True
+    request = qlib_router.UnifiedBinExportRequestV2(
+        snapshot_id="snapshot",
+        start=date(2024, 1, 2),
+        end=date(2026, 8, 31),
+        datasets=["stock_minute"],
+    )
+    assert request.run_health_check is False
+
+
+def test_canonical_pit_export_preflight_is_readonly_and_never_rebuilds() -> None:
+    calls: list[str] = []
+
+    class _FakePitService:
+        def get_status_readonly(self, *, universe_key: str):
+            calls.append(universe_key)
+            return {
+                "status": "ready",
+                "dirty": False,
+                "rule_version": authoritative_cli.CANONICAL_PIT_RULE_VERSION,
+                "scope": authoritative_cli.CANONICAL_PIT_SCOPE,
+                "start_date": date(2018, 8, 1),
+                "end_date": date(2026, 8, 31),
+            }
+
+        def ensure_st_pit_universe(self, **_kwargs):
+            raise AssertionError("direct export must not rebuild PIT")
+
+        def ensure_canonical_pit_universe(self, **_kwargs):
+            raise AssertionError("direct export must not rebuild PIT")
+
+    receipt = authoritative_cli.require_readonly_pit_coverage(
+        _FakePitService(),
+        universe_key=authoritative_cli.CANONICAL_PIT_UNIVERSE_KEY,
+        start=date(2024, 1, 2),
+        end=date(2026, 8, 31),
+    )
+
+    assert calls == [authoritative_cli.CANONICAL_PIT_UNIVERSE_KEY]
+    assert receipt["read_only"] is True
+    assert receipt["source_scan"] is False
+    assert receipt["database_writes"] == 0
+    assert receipt["rule_version"] == authoritative_cli.CANONICAL_PIT_RULE_VERSION
+
+
+def test_canonical_pit_export_preflight_rejects_incomplete_coverage_without_write() -> None:
+    class _FakePitService:
+        def get_status_readonly(self, **_kwargs):
+            return {
+                "status": "ready",
+                "dirty": False,
+                "rule_version": authoritative_cli.CANONICAL_PIT_RULE_VERSION,
+                "scope": authoritative_cli.CANONICAL_PIT_SCOPE,
+                "start_date": date(2018, 8, 1),
+                "end_date": date(2026, 7, 31),
+            }
+
+    with pytest.raises(RuntimeError, match="not ready"):
+        authoritative_cli.require_readonly_pit_coverage(
+            _FakePitService(),
+            universe_key=authoritative_cli.CANONICAL_PIT_UNIVERSE_KEY,
+            start=date(2024, 1, 2),
+            end=date(2026, 8, 31),
+        )
 
 
 def test_backend_minute_finalize_passes_physical_range_root(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

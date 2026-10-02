@@ -82,21 +82,21 @@
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
-    "aistock-paper-v2-monitor": {
+    "aistock-simulation-runtime-monitor": {
       "command": "python",
       "args": [
         "scripts/aistock_mcp_gateway.py",
-        "--profile=paper_v2_monitor"
+        "--profile=simulation_runtime_monitor"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"
       }
     },
-    "aistock-paper-v2-stable": {
+    "aistock-simulation-stable": {
       "command": "python",
       "args": [
         "scripts/aistock_mcp_gateway.py",
-        "--profile=paper_v2_stable"
+        "--profile=simulation_stable"
       ],
       "env": {
         "AISTOCK_MCP_BASE_URL": "http://127.0.0.1:8001/api/v1"

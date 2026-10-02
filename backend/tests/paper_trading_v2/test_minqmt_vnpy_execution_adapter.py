@@ -6,14 +6,14 @@ from typing import Any
 
 import pytest
 
-from backend.services.paper_trading_v2.broker import (
+from backend.services.simulation_execution.broker import (
     BrokerAccountSnapshot,
     CancelAck,
     OrderHandle,
     OrderHandleStatus,
 )
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun
 from backend.services.miniqmt_execution_runtime import (
     InMemoryMiniQMTExecutionRuntimeRepository,
@@ -61,7 +61,10 @@ class VnpyRecordingMiniQMTBroker:
             rejection_reason=self._reject_msg if state == "rejected" else None,
             raw_status=57 if state == "rejected" else 56 if state == "filled" else 50,
             status_msg=self._reject_msg or "reported",
-            raw={"order_status": 57 if state == "rejected" else 56 if state == "filled" else 50, "status_msg": self._reject_msg or "reported"},
+            raw={
+                "order_status": 57 if state == "rejected" else 56 if state == "filled" else 50,
+                "status_msg": self._reject_msg or "reported",
+            },
         )
         if state == "filled":
             context = self.order_context(handle)
@@ -351,5 +354,3 @@ def test_event_loop_route_a_submits_parent_intent_through_callback_gateway() -> 
     assert algo.metadata["quote_source"] == "MINIQMT_REALTIME.broker_quote"
     child = runtime_repo.list_child_orders("mqrt_event_loop_route_a", active_only=False)[0]
     assert child.status.value == "SUBMITTED"
-
-

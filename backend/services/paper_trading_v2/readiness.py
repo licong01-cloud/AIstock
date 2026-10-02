@@ -7,7 +7,9 @@ from typing import Any, Callable
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository, DatasetRefreshStatus
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner, miniqmt_broker_kwargs_for_portfolio
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.canonical_pit_runtime import (
@@ -179,7 +181,9 @@ class PaperTradingReadinessService:
         )
 
         self.calendar_provider.ensure_trading_day(trade_date)
-        checks.append(PaperReadinessCheck(check_name="trading_calendar", context={"trade_date": trade_date.isoformat()}))
+        checks.append(
+            PaperReadinessCheck(check_name="trading_calendar", context={"trade_date": trade_date.isoformat()})
+        )
 
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:
@@ -192,7 +196,9 @@ class PaperTradingReadinessService:
                     "existing_status": existing_run.status.value,
                 },
             )
-        checks.append(PaperReadinessCheck(check_name="run_date_available", context={"trade_date": trade_date.isoformat()}))
+        checks.append(
+            PaperReadinessCheck(check_name="run_date_available", context={"trade_date": trade_date.isoformat()})
+        )
 
         if portfolio.broker_backend == "minqmt_sim":
             checks.extend(
@@ -352,7 +358,11 @@ class PaperTradingReadinessService:
             current_positions=current_positions,
             target_positions=targets,
         )
-        checks.append(PaperReadinessCheck(check_name="rebalance", context={"target_count": len(targets), "order_intent_count": len(intents)}))
+        checks.append(
+            PaperReadinessCheck(
+                check_name="rebalance", context={"target_count": len(targets), "order_intent_count": len(intents)}
+            )
+        )
 
         checked_symbols = sorted(set(current_positions) | {intent.symbol for intent in intents})
         if portfolio.broker_backend == "minqmt_sim":
@@ -372,7 +382,6 @@ class PaperTradingReadinessService:
                 execution_policy_json,
                 package_id=manifest.package_id,
             )
-            require_day_features = False
             if not checked_symbols:
                 raise DataUnavailableError(
                     "paper readiness produced no symbols to check",
@@ -385,7 +394,6 @@ class PaperTradingReadinessService:
                     source=portfolio.data_source,
                     min_bars=required_bars,
                     require_suspend_status=True,
-                    require_day_features=require_day_features,
                 )
                 if not market_input.minute_bars:
                     raise DataUnavailableError(
@@ -398,7 +406,6 @@ class PaperTradingReadinessService:
                     context={
                         "symbol_count": len(checked_symbols),
                         "min_required_bars": required_bars,
-                        "require_day_features": require_day_features,
                     },
                 )
             )
@@ -431,7 +438,10 @@ class PaperTradingReadinessService:
         if top_k is None:
             raise RuntimeConfigInvalidError(
                 "Paper v2 readiness requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
-                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+                context={
+                    "package_id": manifest.package_id,
+                    "manifest_version": getattr(manifest, "manifest_version", None),
+                },
             )
         return int(top_k)
 
@@ -527,7 +537,6 @@ class PaperTradingReadinessService:
                 source=MinuteDataSource.DB_HISTORICAL,
                 min_bars=1,
                 require_suspend_status=True,
-                require_day_features=False,
             )
             if not market_input.minute_bars:
                 raise DataUnavailableError(

@@ -24,7 +24,6 @@ from backend.services.trading_core.tca_sidecar import (
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 from .models import (
-    DailySelectionEvidence,
     ExecutionPlan,
     ExecutionPlanIntent,
     LocalSimEconomicReceiptV1,
@@ -42,6 +41,7 @@ from .models import (
     TradingRuleDecision,
     canonical_json_sha256,
 )
+from backend.services.simulation_signal.contracts import DailySelectionEvidence
 
 ConnFactory = Callable[[], Iterator[Any]]
 LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY = "local_sim_execution_states_v1"

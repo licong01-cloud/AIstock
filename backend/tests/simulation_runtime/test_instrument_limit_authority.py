@@ -6,17 +6,22 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.services.paper_trading_v2.market_data import DailyTradingContextProvider, PreTradeTradabilityProvider
+from backend.services.simulation_data.daily_context_provider import (
+    DailyTradingContextProvider,
+    PreTradeTradabilityProvider,
+)
 from backend.services.simulation_runtime.decision import ExecutionPlanCompiler, TradingRuleService
 from backend.services.simulation_runtime.miniqmt_daily_limit_authority import (
     MINIQMT_NO_DAILY_LIMIT_RULE_VERSION,
     MiniQMTDailyLimitAuthorityProvider,
 )
 from backend.services.simulation_runtime.models import (
+    canonical_json_sha256,
+)
+from backend.services.simulation_data.daily_context import (
     DailyLimitAuthorityV2,
     DailyTradingAuthorityStateV2,
     SimulationBrokerBackend,
-    canonical_json_sha256,
 )
 from backend.services.simulation_runtime.scheduler import (
     ProductionSimulationRunContextProvider,

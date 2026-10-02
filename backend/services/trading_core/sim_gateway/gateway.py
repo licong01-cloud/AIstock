@@ -16,11 +16,13 @@ from enum import Enum
 from typing import Callable
 
 from backend.services.paper_trading_v2.broker import (
+    LocalSimBackend,
+)
+from backend.services.simulation_execution.broker import (
     BrokerAccountSnapshot,
     BrokerBackend,
     CancelAck,
     FillEvent,
-    LocalSimBackend,
     OrderHandle,
     OrderHandleStatus,
     SubscriptionHandle,
@@ -53,9 +55,7 @@ class SimGateway:
 
     def __init__(self, backend: BrokerBackend) -> None:
         if not isinstance(backend, BrokerBackend):
-            raise TypeError(
-                f"SimGateway requires a BrokerBackend instance, got {type(backend)!r}"
-            )
+            raise TypeError(f"SimGateway requires a BrokerBackend instance, got {type(backend)!r}")
         self._backend = backend
         self._state = SimGatewayConnectionState.INIT
         self._lock = threading.RLock()
@@ -130,9 +130,7 @@ class SimGateway:
         return self._backend.query_positions()
 
     # ----- subscription surface -----
-    def subscribe_fill(
-        self, callback: Callable[[FillEvent], None]
-    ) -> SubscriptionHandle:
+    def subscribe_fill(self, callback: Callable[[FillEvent], None]) -> SubscriptionHandle:
         self._require_connected()
         return self._backend.subscribe_fill_callback(callback)
 

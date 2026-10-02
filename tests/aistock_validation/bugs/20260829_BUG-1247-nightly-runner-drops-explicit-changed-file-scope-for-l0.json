@@ -1,0 +1,231 @@
+{
+  "actual": "nightly_session_runner reduces the plan to selected_sessions and discards changed_files, so l0 performs local git discovery against a clean detached checkout and aborts.",
+  "allowed_write_scope": [
+    "scripts/nightly_session_runner.py",
+    "backend/tests/scripts/test_nightly_session_runner.py",
+    "tests/aistock_validation/bugs/20260829_BUG-1247-nightly-runner-drops-explicit-changed-file-scope-for-l0.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1247",
+  "closed_at": "2026-08-29T14:58:33Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-29T07:31:48.162461Z",
+  "description": "nightly_session_runner reduces the plan to selected_sessions and discards changed_files, so l0 performs local git discovery against a clean detached checkout and aborts.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260829-3183cc56905f",
+      "timestamp": "2026-08-29T07:31:48.162448Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/33227976428"
+  ],
+  "expected": "When Nightly selects change-scoped l0, the runner passes the normalized execution-plan changed_files as explicit Nox positional paths; a clean workspace must not make the selected gate fail spuriously.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/nightly_session_runner.py",
+      "backend/tests/scripts/test_nightly_session_runner.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "scripts/nightly_session_runner.py",
+        "backend/tests/scripts/test_nightly_session_runner.py"
+      ],
+      "impacted_modules": [
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/nightly_session_runner.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_nightly_session_runner.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "scripts/nightly_session_runner.py",
+        "backend/tests/scripts/test_nightly_session_runner.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/nightly_session_runner.py",
+      "backend/tests/scripts/test_nightly_session_runner.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/nightly_session_runner.py",
+      "backend/tests/scripts/test_nightly_session_runner.py"
+    ]
+  },
+  "first_seen_at": "2026-08-29T07:31:48.162461Z",
+  "fix_branch": null,
+  "fix_commit": "f951fd946049bf1bb49461e8c29adaaaa35fb237",
+  "fixed_at": "2026-08-29T15:03:16.383318Z",
+  "github_issue_number": 3950,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/3950",
+  "last_seen_at": "2026-08-29T07:31:48.162461Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/3956",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "python scripts/nightly_session_runner.py --plan tmp/validation/nightly_l3/execution-plan.json --output-json tmp/validation/nightly_l3/session-results.json --output-md tmp/validation/nightly_l3/session-results.md",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly runner drops explicit changed-file scope for l0",
+  "trigger_condition": {
+    "fingerprint": "3183cc56905f7a555442b828",
+    "source_event_id": "FE-20260829-3183cc56905f"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=11141706b6d1b875 commit=b764c10e6c95de77fa86b7dd18eed637b79e821f kind=pytest plan=direct status=passed command=rtk_pytest_targeted result=44_passed",
+    "validation-receipt: id=70b91abfab466aec commit=b764c10e6c95de77fa86b7dd18eed637b79e821f kind=nox plan=l0 status=passed command=python_-m_nox_-s_l0 result=passed_blocking_0",
+    "validation-receipt: id=cc53d946bceb9362 commit=b764c10e6c95de77fa86b7dd18eed637b79e821f kind=nox plan=guardrail_changed_files status=passed command=python_-m_nox_-s_guardrail_changed_files result=passed_blocking_0_ownership_20_20",
+    "validation-receipt: id=f2a73b76161ca24a commit=b764c10e6c95de77fa86b7dd18eed637b79e821f kind=nox plan=validation_catalog_integrity status=passed command=python_-m_nox_-s_validation_catalog_integrity result=passed_catalog_findings_0",
+    "validation-receipt: id=c20d5056625c563b commit=b764c10e6c95de77fa86b7dd18eed637b79e821f kind=nox plan=validation_module_registry_l0 status=passed command=python_-m_nox_-s_validation_module_registry_l0 result=passed_8_passed_ownership_14_14",
+    "validation-receipt: id=cf5c8fc227aacee1 commit=b764c10e6c95de77fa86b7dd18eed637b79e821f kind=workflow_smoke plan=direct status=passed command=batch-workflow-smoke result=passed_unexpected_dirty_paths_0"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

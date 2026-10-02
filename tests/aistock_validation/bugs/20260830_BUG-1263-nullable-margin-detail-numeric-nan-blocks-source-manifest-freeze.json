@@ -1,0 +1,281 @@
+{
+  "actual": "Source freeze stops after 2392 seconds with DATASET_RELEASE_SOURCE_MANIFEST_INVALID; exact message hash resolves to numeric value invalid for margin_detail rqye.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/source_authority.py",
+    "backend/tests/dataset_release/test_source_authority.py",
+    "tests/aistock_validation/bugs/20260830_BUG-1263-nullable-margin-detail-numeric-nan-blocks-source-manifest-freeze.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1263",
+  "closed_at": "2026-08-30T20:11:40.405023Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-08-30T19:44:51.324307Z",
+  "description": "Source freeze stops after 2392 seconds with DATASET_RELEASE_SOURCE_MANIFEST_INVALID; exact message hash resolves to numeric value invalid for margin_detail rqye.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260830-f4f07dc8103a",
+      "timestamp": "2026-08-30T19:44:51.324290Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:\\AIstock_dataset_release_control\\attempt_runs\\dsra_61ccb4ec7335467ab28b4d92ce3f110f-2\\resolution-source-freeze\\semantic_result.json"
+  ],
+  "expected": "Allowlisted PostgreSQL numeric non-finite markers in nullable margin_detail numeric fields must canonicalize to null with stable hashes, while arbitrary text and required fields remain fail-closed.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260830_BUG-1263-nullable-margin-detail-numeric-nan-blocks-source-manifest-freeze.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20260830_BUG-1263-nullable-margin-detail-numeric-nan-blocks-source-manifest-freeze.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/source_authority.py",
+        "backend/tests/dataset_release/test_source_authority.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/source_authority.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_source_authority.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/source_authority.py",
+        "backend/tests/dataset_release/test_source_authority.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ]
+  },
+  "first_seen_at": "2026-08-30T19:44:51.324307Z",
+  "fix_branch": null,
+  "fix_commit": "a62c0faeabd0b15e33e3ae5f11f303173b6ef5de",
+  "fixed_at": "2026-08-30T20:06:28Z",
+  "github_issue_number": 4011,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4011",
+  "last_seen_at": "2026-08-30T19:44:51.324307Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4012",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 events --submission-id dss_2ee715e7f4668cb3c5996e814e225052 --limit 50",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "fresh read-only production-shaped margin_detail partition validation passed: 240 rows; six 688981.SH rqye NaN values canonicalized to null; database_writes=0"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/qe_backtest_dataset_monthly_update_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1263\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1263",
+      "business_smoke_semantic": {
+        "contract_id": "dataset_release_worker_heartbeat",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "04e0fe173f8c70d5ea0327b541f6db96935bb383a8974abcff1667128f6d334b",
+      "contract_digest": "ad844661f46582a00bb6c92bf9b38c09a453093cd180590badcf0e250a7f9093",
+      "expected_identity": "a62c0faeabd0b15e33e3ae5f11f303173b6ef5de",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-08-30T20:10:49.397982Z",
+      "mode": "read_only",
+      "observed_identity": "a62c0faeabd0b15e33e3ae5f11f303173b6ef5de",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "44e9bb6e435f39b3945abbee6c64cb358f4860421343e9bc9aa484e546ec0348",
+      "receipt_sha256": "0d69129e4873a15de3725ad02c2ffcb38ba85fa31300586b65dbd2237a78a014",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "cb2c6ece86582dc4e13ab5e22fc4482e2bfeec293dbc975099b0a55a65609fe8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Nullable margin_detail numeric NaN blocks source manifest freeze",
+  "trigger_condition": {
+    "fingerprint": "f4f07dc8103a9282639915fe",
+    "source_event_id": "FE-20260830-f4f07dc8103a"
+  },
+  "validation_evidence": [
+    "PR #4012 CI -> passed: CI verdict, CodeQL, Semgrep, PR Quality, qlib_data_backend"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

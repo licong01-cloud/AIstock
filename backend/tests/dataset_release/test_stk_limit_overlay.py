@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
 from backend.services.dataset_release.pit import freeze_pit_snapshot
 from backend.services.dataset_release.stk_limit_overlay import (
+    LimitReferencePoint,
     StkLimitRuleOverlayError,
     build_stk_limit_rule_overlay,
 )
@@ -143,7 +145,6 @@ def test_incomplete_database_row_is_completed_when_non_null_values_match() -> No
         daily_rows=[_daily(DAY1, 10_000), _daily(DAY2, 10_100), _daily(DAY3, 10_200)],
         adj_factor_rows=[_adj(DAY1, "1"), _adj(DAY2, "1"), _adj(DAY3, "1")],
     )
-
     assert result.database_rows == 3
     assert result.database_completion_rows == 1
     assert result.overlay_rows == (
@@ -155,6 +156,107 @@ def test_incomplete_database_row_is_completed_when_non_null_values_match() -> No
             "down_limit": "9.00",
         },
     )
+
+
+def test_zero_placeholder_uses_bounded_pre_span_reference_without_weakening_conflicts() -> None:
+    prior_day = date(2024, 7, 19)
+    calls: list[tuple[str, date]] = []
+
+    def resolve(code: str, required_day: date) -> LimitReferencePoint:
+        calls.append((code, required_day))
+        return LimitReferencePoint(
+            close=Decimal("10.00"),
+            close_adj_factor=Decimal("1"),
+            close_date=prior_day,
+            latest_adj_factor=Decimal("1"),
+            latest_adj_date=prior_day,
+        )
+
+    result = build_stk_limit_rule_overlay(
+        pit_snapshot=_pit(),
+        trading_dates=(DAY1, DAY2, DAY3),
+        partition_start=DAY1,
+        partition_end=DAY1,
+        database_limit_rows=[
+            {
+                "ts_code": CODE,
+                "trade_date": DAY1,
+                "pre_close": "0",
+                "up_limit": "11.00",
+                "down_limit": "9.00",
+            }
+        ],
+        daily_rows=[_daily(DAY1, 10_100)],
+        adj_factor_rows=[_adj(DAY1, "1")],
+        reference_resolver=resolve,
+    )
+
+    assert calls == [(CODE, DAY1)]
+    assert result.reference_seed_rows == 1
+    assert result.database_completion_rows == 1
+    assert result.overlay_rows == (
+        {
+            "ts_code": CODE,
+            "trade_date": DAY1.isoformat(),
+            "pre_close": "10.00",
+            "up_limit": "11.00",
+            "down_limit": "9.00",
+        },
+    )
+
+
+def test_negative_limit_placeholder_remains_invalid() -> None:
+    with pytest.raises(StkLimitRuleOverlayError, match="non-negative and finite"):
+        build_stk_limit_rule_overlay(
+            pit_snapshot=_pit(),
+            trading_dates=(DAY1, DAY2, DAY3),
+            partition_start=DAY1,
+            partition_end=DAY1,
+            database_limit_rows=[
+                {
+                    "ts_code": CODE,
+                    "trade_date": DAY1,
+                    "pre_close": "-1",
+                    "up_limit": "11.00",
+                    "down_limit": "9.00",
+                }
+            ],
+            daily_rows=[_daily(DAY1, 10_100)],
+            adj_factor_rows=[_adj(DAY1, "1")],
+        )
+
+
+def test_reference_seed_adj_factor_conflict_fails_closed() -> None:
+    prior_day = date(2024, 7, 19)
+
+    def resolve(_code: str, _required_day: date) -> LimitReferencePoint:
+        return LimitReferencePoint(
+            close=Decimal("10.00"),
+            close_adj_factor=Decimal("2"),
+            close_date=prior_day,
+            latest_adj_factor=Decimal("2"),
+            latest_adj_date=prior_day,
+        )
+
+    with pytest.raises(StkLimitRuleOverlayError, match="provider/database adj_factor differs"):
+        build_stk_limit_rule_overlay(
+            pit_snapshot=_pit(),
+            trading_dates=(DAY1, DAY2, DAY3),
+            partition_start=DAY1,
+            partition_end=DAY1,
+            database_limit_rows=[
+                {
+                    "ts_code": CODE,
+                    "trade_date": DAY1,
+                    "pre_close": "0",
+                    "up_limit": "11.00",
+                    "down_limit": "9.00",
+                }
+            ],
+            daily_rows=[_daily(DAY1, 10_100)],
+            adj_factor_rows=[_adj(prior_day, "1"), _adj(DAY1, "2")],
+            reference_resolver=resolve,
+        )
 
 
 def test_incomplete_database_non_null_conflict_fails_closed() -> None:

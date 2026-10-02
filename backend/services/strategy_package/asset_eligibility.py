@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.services.paper_trading_v2.models import BrokerBackendId
+from backend.services.simulation_execution.broker import BrokerBackendId
 from backend.services.trading_core.errors import PackageAssetInvalidError, StrategyPackageValidationError
 
 from .frozen_runtime_self_check import runtime_asset_admission_status
@@ -79,9 +79,7 @@ class StrategyPackageAssetEligibilityService:
         # must not consult the legacy paper dry-run admission repository.
         self.admission_reader = admission_reader
         self.selection_artifact_reader = (
-            selection_artifact_reader
-            if selection_artifact_reader is not None
-            else _DEFAULT_SELECTION_ARTIFACT_READER
+            selection_artifact_reader if selection_artifact_reader is not None else _DEFAULT_SELECTION_ARTIFACT_READER
         )
 
     def summarize(
@@ -357,7 +355,9 @@ def _normalized_legacy_status(status: str | None) -> str | None:
 def _alpha_core_shape_checks(manifest: Any) -> list[StrategyPackageAssetEligibilityCheck]:
     checks: list[StrategyPackageAssetEligibilityCheck] = []
     if not getattr(manifest, "factor_set", None):
-        checks.append(_check("factor_assets", "FAIL", "hard", "factor_set is required", {"package_id": manifest.package_id}))
+        checks.append(
+            _check("factor_assets", "FAIL", "hard", "factor_set is required", {"package_id": manifest.package_id})
+        )
     else:
         checks.append(
             _check(
@@ -374,7 +374,9 @@ def _alpha_core_shape_checks(manifest: Any) -> list[StrategyPackageAssetEligibil
     else:
         missing_model = model_asset is None
     if missing_model:
-        checks.append(_check("model_assets", "FAIL", "hard", "model_asset is required", {"package_id": manifest.package_id}))
+        checks.append(
+            _check("model_assets", "FAIL", "hard", "model_asset is required", {"package_id": manifest.package_id})
+        )
     else:
         count = len(model_asset) if isinstance(model_asset, list) else 1
         checks.append(
@@ -840,9 +842,7 @@ def _validate_selection_artifact(artifact: Any) -> dict[str, Any]:
             "context": {
                 **context,
                 "missing_metadata_fields": [
-                    key
-                    for key in ("target_weight_policy", "topk")
-                    if context.get(key) in (None, "")
+                    key for key in ("target_weight_policy", "topk") if context.get(key) in (None, "")
                 ],
             },
         }
@@ -874,7 +874,10 @@ def _legacy_structural_signal_smoke_checks(
         "hot_path_full_self_check_replayed": False,
     }
     top_authority = getattr(manifest, "source_evidence", {}) or {}
-    if not isinstance(top_authority, dict) or top_authority.get("authority") != "parent_package_asset_runtime_authority":
+    if (
+        not isinstance(top_authority, dict)
+        or top_authority.get("authority") != "parent_package_asset_runtime_authority"
+    ):
         return [
             _check(
                 MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED,
@@ -884,7 +887,9 @@ def _legacy_structural_signal_smoke_checks(
                 {
                     **context,
                     "reason_code": MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED,
-                    "source_evidence_authority": top_authority.get("authority") if isinstance(top_authority, dict) else None,
+                    "source_evidence_authority": top_authority.get("authority")
+                    if isinstance(top_authority, dict)
+                    else None,
                 },
             )
         ]
@@ -899,11 +904,15 @@ def _legacy_structural_signal_smoke_checks(
             )
         ]
     legs = multi_alpha.get("legs")
-    leg_ids = [
-        str(leg.get("leg_id") or "").strip()
-        for leg in legs
-        if isinstance(legs, list) and isinstance(leg, dict) and str(leg.get("leg_id") or "").strip()
-    ] if isinstance(legs, list) else []
+    leg_ids = (
+        [
+            str(leg.get("leg_id") or "").strip()
+            for leg in legs
+            if isinstance(legs, list) and isinstance(leg, dict) and str(leg.get("leg_id") or "").strip()
+        ]
+        if isinstance(legs, list)
+        else []
+    )
     component_ids = [
         str(component.alpha_id)
         for component in getattr(manifest, "alpha_components", [])

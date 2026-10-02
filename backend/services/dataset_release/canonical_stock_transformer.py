@@ -67,6 +67,7 @@ def _minute_session_times() -> tuple[time, ...]:
 
 
 MINUTE_SESSION_TIMES = _minute_session_times()
+MINUTE_OPENING_AUCTION_TIME = time(9, 30)
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,10 +521,36 @@ class CanonicalStockTransformer:
                 _missing_day("stk_limit", code, trading_day)
             suspend = _pop_group(suspends, target)
             full_day_suspend = _is_full_day_suspend(suspend)
-            day_rows = _pop_group(raw, target, hard_limit=240)
+            raw_day_rows = _pop_group(raw, target, hard_limit=241)
             report.peak_minute_stock_day_rows = max(
                 report.peak_minute_stock_day_rows,
-                len(day_rows),
+                len(raw_day_rows),
+            )
+            auction_rows = tuple(
+                row for row in raw_day_rows if row["trade_time"].time() == MINUTE_OPENING_AUCTION_TIME
+            )
+            if len(auction_rows) > 1:
+                raise CanonicalStockTransformError(
+                    "minute stock-day contains duplicate 09:30 auction rows",
+                    context={"ts_code": code, "trade_date": trading_day.isoformat()},
+                )
+            unexpected = tuple(
+                row["trade_time"].isoformat()
+                for row in raw_day_rows
+                if row["trade_time"].time() not in MINUTE_SESSION_TIMES
+                and row["trade_time"].time() != MINUTE_OPENING_AUCTION_TIME
+            )
+            if unexpected:
+                raise CanonicalStockTransformError(
+                    "minute stock-day contains an out-of-session row",
+                    context={
+                        "ts_code": code,
+                        "trade_date": trading_day.isoformat(),
+                        "unexpected": unexpected[:3],
+                    },
+                )
+            day_rows = tuple(
+                row for row in raw_day_rows if row["trade_time"].time() != MINUTE_OPENING_AUCTION_TIME
             )
             if not day_rows:
                 if not full_day_suspend:

@@ -45,7 +45,8 @@ def _one(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
 def _job(job_id: str) -> dict[str, Any] | None:
     return _one(
         """
-        SELECT job_id::text, job_type, status, created_at, started_at, completed_at, summary
+        SELECT job_id::text, job_type, status, created_at, started_at,
+               finished_at AS completed_at, summary
         FROM market.ingestion_jobs
         WHERE job_id::text = %s
         """,

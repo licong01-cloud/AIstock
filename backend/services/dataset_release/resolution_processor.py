@@ -64,7 +64,6 @@ from .source_authority import (
 )
 from .state_machine import AttestationObservationSpec, AttestationRenewalSpec
 from .worker import (
-    WORKER_ERROR_RECEIPT_SCHEMA,
     ProcessorResult,
     WorkResourceSpec,
     WorkerAttemptContext,
@@ -95,6 +94,53 @@ INITIAL_SOURCE_UNCOMPRESSED_ESTIMATE_BYTES = 512 * GIB
 INITIAL_SOURCE_GZIP_ADMISSION_BYTES = INITIAL_SOURCE_UNCOMPRESSED_ESTIMATE_BYTES // 2
 CANDIDATE_OUTPUT_PREDICTED_BYTES = 128 * GIB
 INITIAL_SOURCE_AND_CANDIDATE_PREDICTED_BYTES = INITIAL_SOURCE_GZIP_ADMISSION_BYTES + CANDIDATE_OUTPUT_PREDICTED_BYTES
+
+
+def monthly_build_fingerprints(profile: DatasetProfile) -> dict[str, str]:
+    """Return the shared immutable producer/artifact/validation identities.
+
+    The unified monthly release bridge and the legacy candidate-only resolver
+    compile the same frozen source into the same physical BUILD contract.  A
+    single helper prevents those production entrypoints from drifting while
+    they share the existing materializers.
+    """
+
+    values = {
+        "producer_fingerprint": digest_named_fields(
+            "dataset_release_monthly_producer_contract_v1",
+            {
+                "profile": profile.profile,
+                "semantic_profile_digest": profile.semantic_profile_digest,
+                "source_authority_policy": SOURCE_AUTHORITY_POLICY_VERSION,
+                "components": [item.value for item in profile.components],
+                "qlib_toolchain_profile_digest": profile.qlib_toolchain.digest,
+                "qlib_dump_script_sha256": profile.qlib_toolchain.dump_script_sha256,
+            },
+        ),
+        "artifact_fingerprint": digest_named_fields(
+            "dataset_release_monthly_artifact_contract_v1",
+            {
+                "profile": profile.profile,
+                "semantic_profile_digest": profile.semantic_profile_digest,
+                "moneyflow_contract": profile.moneyflow_contract,
+                "static_column_count": profile.static_column_count,
+                "qlib_stock_schema_digest": profile.qlib_stock_schema_digest,
+                "index_codes": list(profile.index_codes),
+            },
+        ),
+        "validation_fingerprint": digest_named_fields(
+            "dataset_release_monthly_validation_contract_v1",
+            {
+                "profile": profile.profile,
+                "semantic_profile_digest": profile.semantic_profile_digest,
+                "required_components": [item.value for item in profile.components],
+                "sample_policy": SAMPLE_POLICY,
+            },
+        ),
+    }
+    for field, value in values.items():
+        ensure_sha256(value, field=field)
+    return values
 
 _MONTHLY_FIELDS = frozenset(
     {
@@ -501,36 +547,15 @@ class MonthlyResolutionProcessor:
             else SupervisedResolutionSourceStage(profile, store, cas)
         )
         self._now = now
-        self.producer_fingerprint = producer_fingerprint or digest_named_fields(
-            "dataset_release_monthly_producer_contract_v1",
-            {
-                "profile": profile.profile,
-                "semantic_profile_digest": profile.semantic_profile_digest,
-                "source_authority_policy": SOURCE_AUTHORITY_POLICY_VERSION,
-                "components": [item.value for item in profile.components],
-                "qlib_toolchain_profile_digest": profile.qlib_toolchain.digest,
-                "qlib_dump_script_sha256": (profile.qlib_toolchain.dump_script_sha256),
-            },
+        shared_fingerprints = monthly_build_fingerprints(profile)
+        self.producer_fingerprint = (
+            producer_fingerprint or shared_fingerprints["producer_fingerprint"]
         )
-        self.artifact_fingerprint = artifact_fingerprint or digest_named_fields(
-            "dataset_release_monthly_artifact_contract_v1",
-            {
-                "profile": profile.profile,
-                "semantic_profile_digest": profile.semantic_profile_digest,
-                "moneyflow_contract": profile.moneyflow_contract,
-                "static_column_count": profile.static_column_count,
-                "qlib_stock_schema_digest": profile.qlib_stock_schema_digest,
-                "index_codes": list(profile.index_codes),
-            },
+        self.artifact_fingerprint = (
+            artifact_fingerprint or shared_fingerprints["artifact_fingerprint"]
         )
-        self.validation_fingerprint = validation_fingerprint or digest_named_fields(
-            "dataset_release_monthly_validation_contract_v1",
-            {
-                "profile": profile.profile,
-                "semantic_profile_digest": profile.semantic_profile_digest,
-                "required_components": [item.value for item in profile.components],
-                "sample_policy": SAMPLE_POLICY,
-            },
+        self.validation_fingerprint = (
+            validation_fingerprint or shared_fingerprints["validation_fingerprint"]
         )
         for field in (
             "producer_fingerprint",
@@ -550,7 +575,7 @@ class MonthlyResolutionProcessor:
             acquire_host=True,
             db_connections=1,
             io_class="dataset-release-resolution-readonly",
-            pressure_rung=self._resume_pressure_rung(str(submission.get("submission_id", ""))),
+            pressure_rung=0,
             predicted_new_bytes=self._predicted_new_bytes(submission),
             credential_env_allowlist=(
                 "TDX_DB_HOST",
@@ -590,63 +615,6 @@ class MonthlyResolutionProcessor:
             reference_value = _complete_cas_ref(self.cas, raw.get("rows_ref"), field="capacity.rows_ref")
             total += reference_value.size
         return total + CANDIDATE_OUTPUT_PREDICTED_BYTES
-
-    def _resume_pressure_rung(self, submission_id: str) -> int:
-        if not submission_id:
-            raise ResolutionResourceEvidenceInvalid("resolution submission id is missing for pressure recovery")
-        attempts = self.store._many(
-            """
-            SELECT ordinal,error_ref FROM resolution_attempts
-            WHERE submission_id=? AND state='RELEASED_WAITING'
-              AND error_ref IS NOT NULL
-            ORDER BY ordinal
-            """,
-            (submission_id,),
-        )
-        admissions = self.store._many(
-            """
-            SELECT event_id,payload_ref FROM events
-            WHERE submission_id=? AND type='RESOURCE_WAITING_SOURCE'
-              AND payload_ref IS NOT NULL
-            ORDER BY event_id
-            """,
-            (submission_id,),
-        )
-        sequences: list[list[int]] = [[], []]
-        for sequence, rows in zip(sequences, (admissions, attempts)):
-            for row in rows:
-                sequence.append(self._pressure_rung_from_receipt(submission_id, row))
-        if any(later < earlier for sequence in sequences for earlier, later in zip(sequence, sequence[1:])):
-            raise ResolutionResourceEvidenceInvalid("durable resolution pressure rung moved backwards")
-        latest = [sequence[-1] for sequence in sequences if sequence]
-        return max(latest) if latest else 0
-
-    def _pressure_rung_from_receipt(
-        self,
-        submission_id: str,
-        row: Mapping[str, Any],
-    ) -> int:
-        reference = str(row.get("payload_ref") or row.get("error_ref") or "")
-        receipt = self.cas.get_json_bounded(reference, max_bytes=1024 * 1024)
-        if (
-            not isinstance(receipt, Mapping)
-            or receipt.get("schema_version") != WORKER_ERROR_RECEIPT_SCHEMA
-            or receipt.get("target_id") != submission_id
-            or receipt.get("disposition") != "WAITING"
-            or receipt.get("kind") not in {"resolution", "resolution_resource_admission"}
-        ):
-            raise ResolutionResourceEvidenceInvalid("durable resolution pressure-rung receipt identity is invalid")
-        context = receipt.get("context")
-        if (
-            not isinstance(context, Mapping)
-            or context.get("data_scope_changed") is not False
-            or type(context.get("pressure_rung")) is not int
-        ):
-            raise ResolutionResourceEvidenceInvalid("durable resolution pressure-rung receipt context is invalid")
-        rung = int(context["pressure_rung"])
-        if not 0 <= rung < len(self.profile.pressure_ladder["h5_batch"]):
-            raise ResolutionResourceEvidenceInvalid("durable resolution pressure rung exceeds the profile ladder")
-        return rung
 
     def process(self, context: WorkerAttemptContext) -> ProcessorResult:
         if context.kind != "resolution" or context.store.root != self.store.root:
@@ -703,6 +671,7 @@ class MonthlyResolutionProcessor:
                 artifact_fingerprint=self.artifact_fingerprint,
                 sample_policy=SAMPLE_POLICY,
                 source_snapshot_catalog=catalog_spec,
+                artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
                 attestation_renewal=fresh_attestation.renewal,
                 now=self._aware_now(),
             )
@@ -726,6 +695,7 @@ class MonthlyResolutionProcessor:
                 sample_policy=SAMPLE_POLICY,
                 attestation_target_key=target.target_key,
                 source_snapshot_catalog=catalog_spec,
+                artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
                 now=self._aware_now(),
             )
             return ProcessorResult.durable_success()
@@ -750,6 +720,7 @@ class MonthlyResolutionProcessor:
             sample_policy=SAMPLE_POLICY,
             build_inputs=build_inputs,
             source_snapshot_catalog=catalog_spec,
+            artifact_ready_contract_ref=frozen.artifact_ready_contract_ref,
             now=self._aware_now(),
         )
         return ProcessorResult.durable_success()
@@ -1981,4 +1952,5 @@ __all__ = [
     "VersionedResolutionRequest",
     "SupervisedResolutionSourceStage",
     "build_resolution_processor",
+    "monthly_build_fingerprints",
 ]

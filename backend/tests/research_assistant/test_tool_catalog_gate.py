@@ -133,7 +133,7 @@ def test_agentic_function_tools_expose_full_read_only_manifest_domain() -> None:
     manifest_only_read_tool = ("aistock-local-data", "local_data_get_unack_alert_count")
     covered_local_data_tool = ("aistock-local-data", "local_data_get_preset_daily_status")
     covered_save_tool = ("aistock-external-research", "external_research_save_evidence")
-    manifest_only_write_tool = ("aistock-paper-v2-stable", "advisory_create_program_confirmed")
+    manifest_only_write_tool = ("aistock-simulation-stable", "advisory_create_program_confirmed")
     assert manifest_only_read_tool in manifest_read_only_pairs
     assert covered_local_data_tool in manifest_read_only_pairs
     assert offered_pairs == react_pairs == manifest_read_only_pairs | capability_backed_non_read_only_pairs

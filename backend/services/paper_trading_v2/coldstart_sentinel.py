@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.qe_archive.models import canonical_json_dumps, normalize_json, sha256_json
 from backend.services.trading_core.errors import (
     InvalidStateTransitionError,
@@ -375,7 +375,12 @@ class ColdstartSentinelService:
                 INSERT INTO paper_v2.run_events (run_id, event_type, message, context)
                 VALUES (%s, %s, %s, %s)
                 """,
-                (run_id, "COLDSTART_SENTINEL_ACCEPTED", "paper v2 coldstart sentinel accepted", _jsonb(evidence_payload)),
+                (
+                    run_id,
+                    "COLDSTART_SENTINEL_ACCEPTED",
+                    "paper v2 coldstart sentinel accepted",
+                    _jsonb(evidence_payload),
+                ),
             )
             cur.execute(
                 """
@@ -442,7 +447,9 @@ class ColdstartSentinelService:
                     "protected_asset_ledger_evidence",
                     asset_ref,
                     f"sha256:{sha256(canonical_json_dumps(artifact_payload).encode('utf-8')).hexdigest()}",
-                    _jsonb({**evidence_payload, "validation_run_id": validation_run_id, "outbox_event_id": outbox_event_id}),
+                    _jsonb(
+                        {**evidence_payload, "validation_run_id": validation_run_id, "outbox_event_id": outbox_event_id}
+                    ),
                     now,
                     "coldstart_sanity_evidence",
                     len(canonical_json_dumps(artifact_payload).encode("utf-8")),
@@ -576,7 +583,9 @@ def _is_daemon_running(process_name: str) -> bool:
 
         for proc in psutil.process_iter(["name", "cmdline"]):
             info = proc.info
-            haystack = " ".join([str(info.get("name") or ""), *[str(part) for part in (info.get("cmdline") or [])]]).lower()
+            haystack = " ".join(
+                [str(info.get("name") or ""), *[str(part) for part in (info.get("cmdline") or [])]]
+            ).lower()
             if needle in haystack:
                 return True
     with suppress(Exception):

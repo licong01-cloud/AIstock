@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import pytest
@@ -74,6 +74,24 @@ def _database(rows=239, day: date = DAY, code: str = CODE):
             for value in canonical_session_times(day)[:rows]
         ]
     )
+
+
+def _database_with_auction(rows=240, day: date = DAY, code: str = CODE):
+    auction = pd.DataFrame(
+        [
+            {
+                "trade_time": datetime.combine(day, datetime.min.time()).replace(hour=9, minute=30),
+                "ts_code": code,
+                "open_li": 9_800,
+                "high_li": 10_100,
+                "low_li": 9_700,
+                "close_li": 10_000,
+                "volume_hand": 50,
+                "amount_li": 50_000,
+            }
+        ]
+    )
+    return pd.concat([auction, _database(rows=rows, day=day, code=code)], ignore_index=True)
 
 
 class FakeCAS:
@@ -211,6 +229,40 @@ def test_duplicate_nonfinite_and_non240_rows_are_never_accepted() -> None:
     database.iloc[-1] = database.iloc[-2]
     with pytest.raises(MinuteProviderInvalid, match="duplicate"):
         normalize_database_rows(database, gap)
+
+
+def test_database_single_0930_auction_row_normalizes_to_same_240_core_session() -> None:
+    gap = MinuteGap(CODE, DAY)
+    core = normalize_database_rows(_database(rows=240), gap)
+    with_auction = normalize_database_rows(_database_with_auction(), gap)
+
+    pd.testing.assert_frame_equal(with_auction, core)
+    assert len(with_auction) == 240
+    assert with_auction.iloc[0]["trade_time"] == datetime(2026, 7, 31, 9, 31)
+
+
+def test_database_duplicate_auction_and_other_out_of_session_rows_fail_closed() -> None:
+    gap = MinuteGap(CODE, DAY)
+    duplicate_auction = pd.concat(
+        [_database_with_auction(rows=239), _database_with_auction(rows=0)],
+        ignore_index=True,
+    )
+    with pytest.raises(MinuteProviderInvalid, match="duplicate"):
+        normalize_database_rows(duplicate_auction, gap)
+
+    unexpected = _database(rows=240)
+    unexpected.loc[len(unexpected)] = {
+        "trade_time": datetime(2026, 7, 31, 13, 0),
+        "ts_code": CODE,
+        "open_li": 10_000,
+        "high_li": 11_000,
+        "low_li": 9_000,
+        "close_li": 10_500,
+        "volume_hand": 100,
+        "amount_li": 100_000,
+    }
+    with pytest.raises(MinuteProviderInvalid, match="out-of-session"):
+        normalize_database_rows(unexpected, gap)
 
 
 def test_tushare_40203_is_retryable_without_busy_loop() -> None:

@@ -33,9 +33,11 @@ from backend.services.paper_trading_v2.daemon import (
     PaperV2SimRunner,
 )
 from backend.services.paper_trading_v2.market_data import (
+    PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
     MinuteDataSource,
     MinuteExecutionMarketInput,
-    PaperV2MinuteMarketDataProvider,
 )
 from backend.services.strategy_package.execution_policy import (
     compute_execution_policy_sha256,
@@ -106,7 +108,6 @@ class _FakeProvider(PaperV2MinuteMarketDataProvider):
         trade_date: date,
         source: MinuteDataSource,
         min_bars: int = 1,
-        require_day_features: bool = False,
     ) -> MinuteExecutionMarketInput:
         if symbol in self._unknown:
             raise DataUnavailableError(

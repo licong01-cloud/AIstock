@@ -44,10 +44,13 @@ from backend.services.selection_center.prospective_evidence import (
     canonical_evidence_json_sha256,
 )
 from backend.services.strategy_package.models import AlphaMode, StrategyPackageManifest
-from backend.services.strategy_package.selection_artifact import SELECTION_SCORE_ARTIFACT_CONTRACT_V2, SelectionScoreArtifact
+from backend.services.strategy_package.selection_artifact import (
+    SELECTION_SCORE_ARTIFACT_CONTRACT_V2,
+    SelectionScoreArtifact,
+)
 
 if TYPE_CHECKING:
-    from backend.services.simulation_runtime.models import DailySelectionEvidence
+    from backend.services.simulation_signal.contracts import DailySelectionEvidence
 
 
 SERIALIZER_VERSION = "advisory_phase0a2c_canonical_v2"
@@ -84,7 +87,11 @@ class ProspectiveSelectionEvidenceAssembler:
             raise ProspectiveEvidenceValidationError(
                 REASON_VALID_NO_CANDIDATE_DECLARATION_FORBIDDEN,
                 "prospective evidence cannot be driven by a runtime no-candidate declaration",
-                context={"declared_keys": [key for key in ("valid_no_candidate", "no_candidate_reason") if key in runtime_config]},
+                context={
+                    "declared_keys": [
+                        key for key in ("valid_no_candidate", "no_candidate_reason") if key in runtime_config
+                    ]
+                },
             )
         self._require_artifact(artifact=artifact, manifest=manifest)
         self._require_historical_research_artifact(context=context, artifact=artifact)
@@ -189,7 +196,8 @@ class ProspectiveSelectionEvidenceAssembler:
                 "excluded_candidates": excluded_payload,
             }
         )
-        from backend.services.simulation_runtime.models import DailySelectionEvidence, canonical_json_sha256
+        from backend.services.simulation_runtime.models import canonical_json_sha256
+        from backend.services.simulation_signal.contracts import DailySelectionEvidence
 
         payload = payload_model.model_dump(mode="json")
         artifact_hash = canonical_json_sha256(payload)
@@ -265,14 +273,22 @@ class ProspectiveSelectionEvidenceAssembler:
     @staticmethod
     def _require_context(*, context: ProspectiveSelectionContext, selection_run_id: str) -> None:
         if context.capture_mode != EvidenceCaptureMode.PROSPECTIVE:
-            raise ProspectiveEvidenceValidationError(REASON_CONTEXT_MISSING, "prospective assembler requires capture_mode=PROSPECTIVE")
+            raise ProspectiveEvidenceValidationError(
+                REASON_CONTEXT_MISSING, "prospective assembler requires capture_mode=PROSPECTIVE"
+            )
         if context.selection_run_id != selection_run_id:
             raise ProspectiveEvidenceValidationError(
                 REASON_LINEAGE_MISMATCH,
                 "prospective context selection_run_id does not match the current SelectionRun",
                 context={"context_selection_run_id": context.selection_run_id, "selection_run_id": selection_run_id},
             )
-        for field_name in ("decision_clock_seed", "effective_config_seed", "policy_registry_ref", "binding_ref", "source_watermark_seed"):
+        for field_name in (
+            "decision_clock_seed",
+            "effective_config_seed",
+            "policy_registry_ref",
+            "binding_ref",
+            "source_watermark_seed",
+        ):
             if not getattr(context, field_name):
                 raise ProspectiveEvidenceValidationError(
                     REASON_CONTEXT_MISSING,
@@ -281,10 +297,17 @@ class ProspectiveSelectionEvidenceAssembler:
 
     @staticmethod
     def _require_artifact(*, artifact: SelectionScoreArtifact, manifest: StrategyPackageManifest) -> None:
-        if artifact.artifact_contract_version != SELECTION_SCORE_ARTIFACT_CONTRACT_V2 or not artifact.artifact_payload_sha256:
-            raise ProspectiveEvidenceValidationError(REASON_ARTIFACT_V2_REQUIRED, "prospective DSE requires a v2 score artifact")
+        if (
+            artifact.artifact_contract_version != SELECTION_SCORE_ARTIFACT_CONTRACT_V2
+            or not artifact.artifact_payload_sha256
+        ):
+            raise ProspectiveEvidenceValidationError(
+                REASON_ARTIFACT_V2_REQUIRED, "prospective DSE requires a v2 score artifact"
+            )
         if artifact.package_id != manifest.package_id or artifact.manifest_sha256 != manifest.manifest_sha256:
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "score artifact identity does not match manifest")
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "score artifact identity does not match manifest"
+            )
         metadata = artifact.metadata or {}
         candidate_outcome = str(metadata.get("candidate_outcome") or "").strip()
         if candidate_outcome not in {"CANDIDATES_PRESENT", "VALID_NO_CANDIDATE"}:
@@ -317,10 +340,21 @@ class ProspectiveSelectionEvidenceAssembler:
             )
         closure = metadata.get("asset_closure")
         if not isinstance(closure, list) or not closure:
-            raise ProspectiveEvidenceValidationError(REASON_ASSET_CLOSURE_INCOMPLETE, "artifact asset closure is missing")
-        semantic_closure = [{key: value for key, value in item.items() if key != "first_observed_at"} for item in closure if isinstance(item, dict)]
-        if len(semantic_closure) != len(closure) or canonical_evidence_json_sha256(semantic_closure) != artifact.asset_closure_hash:
-            raise ProspectiveEvidenceValidationError(REASON_ASSET_CLOSURE_INCOMPLETE, "artifact asset closure hash is invalid")
+            raise ProspectiveEvidenceValidationError(
+                REASON_ASSET_CLOSURE_INCOMPLETE, "artifact asset closure is missing"
+            )
+        semantic_closure = [
+            {key: value for key, value in item.items() if key != "first_observed_at"}
+            for item in closure
+            if isinstance(item, dict)
+        ]
+        if (
+            len(semantic_closure) != len(closure)
+            or canonical_evidence_json_sha256(semantic_closure) != artifact.asset_closure_hash
+        ):
+            raise ProspectiveEvidenceValidationError(
+                REASON_ASSET_CLOSURE_INCOMPLETE, "artifact asset closure hash is invalid"
+            )
 
     @staticmethod
     def _require_historical_research_artifact(
@@ -354,14 +388,20 @@ class ProspectiveSelectionEvidenceAssembler:
         try:
             return DecisionClockEvidenceV2.model_validate(context.decision_clock_seed)
         except Exception as exc:
-            raise ProspectiveEvidenceValidationError(REASON_DECISION_CLOCK_INVALID, "decision_clock_seed is incomplete or invalid") from exc
+            raise ProspectiveEvidenceValidationError(
+                REASON_DECISION_CLOCK_INVALID, "decision_clock_seed is incomplete or invalid"
+            ) from exc
 
     @staticmethod
-    def _config_chain(*, context: ProspectiveSelectionContext, runtime_config: dict[str, Any]) -> EffectiveConfigChainV2:
+    def _config_chain(
+        *, context: ProspectiveSelectionContext, runtime_config: dict[str, Any]
+    ) -> EffectiveConfigChainV2:
         try:
             chain = EffectiveConfigChainV2.model_validate(context.effective_config_seed)
         except Exception as exc:
-            raise ProspectiveEvidenceValidationError(REASON_CONFIG_CHAIN_INCOMPLETE, "effective_config_seed is incomplete or invalid") from exc
+            raise ProspectiveEvidenceValidationError(
+                REASON_CONFIG_CHAIN_INCOMPLETE, "effective_config_seed is incomplete or invalid"
+            ) from exc
         runtime_profile = runtime_config.get("runtime_profile")
         if runtime_profile != chain.selection_normalized_config:
             raise ProspectiveEvidenceValidationError(
@@ -379,28 +419,37 @@ class ProspectiveSelectionEvidenceAssembler:
     def _source_receipts(artifact: SelectionScoreArtifact) -> list[dict[str, Any]]:
         raw = (artifact.metadata or {}).get("source_read_receipts")
         if not isinstance(raw, list) or not raw:
-            raise ProspectiveEvidenceValidationError(REASON_SOURCE_RECEIPT_INCOMPLETE, "artifact source read receipts are missing")
+            raise ProspectiveEvidenceValidationError(
+                REASON_SOURCE_RECEIPT_INCOMPLETE, "artifact source read receipts are missing"
+            )
         try:
             receipts = [SourceReadReceipt.model_validate(item) for item in raw]
         except Exception as exc:
-            raise ProspectiveEvidenceValidationError(REASON_SOURCE_RECEIPT_INCOMPLETE, "artifact source read receipt is invalid") from exc
+            raise ProspectiveEvidenceValidationError(
+                REASON_SOURCE_RECEIPT_INCOMPLETE, "artifact source read receipt is invalid"
+            ) from exc
         payload = [item.model_dump(mode="json") for item in receipts]
         semantic_payload = [
-            {key: value for key, value in item.items() if key != "first_observed_at"}
-            for item in payload
+            {key: value for key, value in item.items() if key != "first_observed_at"} for item in payload
         ]
         if canonical_evidence_json_sha256(semantic_payload) != artifact.source_revision_set_hash:
-            raise ProspectiveEvidenceValidationError(REASON_SOURCE_RECEIPT_INCOMPLETE, "artifact source receipt hash is invalid")
+            raise ProspectiveEvidenceValidationError(
+                REASON_SOURCE_RECEIPT_INCOMPLETE, "artifact source receipt hash is invalid"
+            )
         return payload
 
     @staticmethod
-    def _validate_source_clock(*, source_receipts: list[dict[str, Any]], decision_clock: DecisionClockEvidenceV2) -> None:
+    def _validate_source_clock(
+        *, source_receipts: list[dict[str, Any]], decision_clock: DecisionClockEvidenceV2
+    ) -> None:
         observed = []
         for raw in source_receipts:
             receipt = SourceReadReceipt.model_validate(raw)
             observed.append(receipt.available_at or receipt.first_observed_at)
         if not observed or any(item is None for item in observed):
-            raise ProspectiveEvidenceValidationError(REASON_SOURCE_RECEIPT_INCOMPLETE, "source receipt availability is incomplete")
+            raise ProspectiveEvidenceValidationError(
+                REASON_SOURCE_RECEIPT_INCOMPLETE, "source receipt availability is incomplete"
+            )
         if max(item for item in observed if item is not None) != decision_clock.data_available_at:
             raise ProspectiveEvidenceValidationError(
                 REASON_DECISION_CLOCK_INVALID,
@@ -418,7 +467,9 @@ class ProspectiveSelectionEvidenceAssembler:
         try:
             universe = UniverseEvidenceV2.model_validate(raw)
         except Exception as exc:
-            raise ProspectiveEvidenceValidationError(REASON_UNIVERSE_RECEIPT_INCOMPLETE, "six-layer universe evidence is incomplete") from exc
+            raise ProspectiveEvidenceValidationError(
+                REASON_UNIVERSE_RECEIPT_INCOMPLETE, "six-layer universe evidence is incomplete"
+            ) from exc
         by_name = {item.layer: item for item in universe.layers}
         package_layer = by_name["package_eligible_universe"]
         if package_layer.output_count != artifact.universe_count:
@@ -438,14 +489,18 @@ class ProspectiveSelectionEvidenceAssembler:
             or risk_layer.output_count != stage_trace.risk_policy_adjusted.output_count
             or risk_layer.excluded_count != stage_trace.risk_policy_adjusted.excluded_count
         ):
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "risk universe layer does not match risk stage")
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "risk universe layer does not match risk stage"
+            )
         tradability_layer = by_name["tradability_industry_universe"]
         if (
             tradability_layer.input_count != stage_trace.selection_effective.input_count
             or tradability_layer.output_count != stage_trace.selection_effective.output_count
             or tradability_layer.excluded_count != stage_trace.selection_effective.excluded_count
         ):
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "tradability universe layer does not match effective stage")
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "tradability universe layer does not match effective stage"
+            )
         return universe
 
     @staticmethod
@@ -454,7 +509,9 @@ class ProspectiveSelectionEvidenceAssembler:
         metadata = stage_trace.hmm_metadata
         if receipt.status == StageReceiptStatus.NOT_APPLICABLE:
             if metadata.get("enabled") and metadata.get("generation_mode") not in {"NO_ALPHA_CANDIDATES"}:
-                raise ProspectiveEvidenceValidationError(REASON_HMM_RECEIPT_INCOMPLETE, "enabled HMM cannot be silently not applicable")
+                raise ProspectiveEvidenceValidationError(
+                    REASON_HMM_RECEIPT_INCOMPLETE, "enabled HMM cannot be silently not applicable"
+                )
             return
         if receipt.status != StageReceiptStatus.COMPLETE or metadata.get("enabled") is not True:
             raise ProspectiveEvidenceValidationError(REASON_HMM_RECEIPT_INCOMPLETE, "HMM stage receipt is incomplete")
@@ -476,15 +533,25 @@ class ProspectiveSelectionEvidenceAssembler:
             "freshness_lag",
         )
         if any(metadata.get(field) in (None, "") for field in required):
-            raise ProspectiveEvidenceValidationError(REASON_HMM_RECEIPT_INCOMPLETE, "HMM metadata is missing mandatory vintage fields")
+            raise ProspectiveEvidenceValidationError(
+                REASON_HMM_RECEIPT_INCOMPLETE, "HMM metadata is missing mandatory vintage fields"
+            )
         if metadata.get("generation_mode") != "EXACT_SNAPSHOT":
-            raise ProspectiveEvidenceValidationError(REASON_HMM_RECEIPT_INCOMPLETE, "prospective HMM requires an exact snapshot")
+            raise ProspectiveEvidenceValidationError(
+                REASON_HMM_RECEIPT_INCOMPLETE, "prospective HMM requires an exact snapshot"
+            )
         if str(metadata.get("coefficient_trade_date")) != decision_clock.decision_as_of_trade_date.isoformat():
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "HMM coefficient date does not match decision date")
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "HMM coefficient date does not match decision date"
+            )
         if str(metadata.get("as_of_trade_date")) != decision_clock.decision_as_of_trade_date.isoformat():
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "HMM as-of date does not match decision date")
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "HMM as-of date does not match decision date"
+            )
         if str(metadata.get("effective_trade_date")) != decision_clock.effective_entry_trade_date.isoformat():
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "HMM effective trade date does not match decision clock")
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "HMM effective trade date does not match decision clock"
+            )
 
     @staticmethod
     def _validate_stage_trace(
@@ -498,16 +565,24 @@ class ProspectiveSelectionEvidenceAssembler:
         alpha = stage_trace.alpha_raw
         if alpha.status != StageReceiptStatus.COMPLETE:
             raise ProspectiveEvidenceValidationError(REASON_STAGE_RECEIPT_INCOMPLETE, "alpha_raw stage is incomplete")
-        if alpha.candidates != canonical_candidate_rows([SelectionCandidate.model_validate(row) for row in artifact.scores_json]):
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "alpha_raw stage does not match score artifact rows")
+        if alpha.candidates != canonical_candidate_rows(
+            [SelectionCandidate.model_validate(row) for row in artifact.scores_json]
+        ):
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "alpha_raw stage does not match score artifact rows"
+            )
         for receipt in (
             stage_trace.risk_policy_adjusted,
             stage_trace.selection_effective,
         ):
             if receipt.status != StageReceiptStatus.COMPLETE:
-                raise ProspectiveEvidenceValidationError(REASON_STAGE_RECEIPT_INCOMPLETE, "executed stage receipt is incomplete")
+                raise ProspectiveEvidenceValidationError(
+                    REASON_STAGE_RECEIPT_INCOMPLETE, "executed stage receipt is incomplete"
+                )
         if stage_trace.selection_effective.candidates != canonical_candidate_rows(selected):
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "selection_effective stage does not match selected candidates")
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "selection_effective stage does not match selected candidates"
+            )
         expected_exclusions = [
             *stage_trace.hmm_adjusted.exclusions,
             *stage_trace.risk_policy_adjusted.exclusions,
@@ -518,9 +593,13 @@ class ProspectiveSelectionEvidenceAssembler:
             key=lambda item: (str(item["source"]), str(item["reason"]), int(item["rank"]), str(item["symbol"])),
         )
         if expected_exclusions != actual_exclusions:
-            raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "stage exclusions do not match selected execution exclusions")
+            raise ProspectiveEvidenceValidationError(
+                REASON_LINEAGE_MISMATCH, "stage exclusions do not match selected execution exclusions"
+            )
         if candidate_outcome == "CANDIDATES_PRESENT" and not selected:
-            raise ProspectiveEvidenceValidationError(REASON_STAGE_RECEIPT_INCOMPLETE, "candidate outcome contradicts selected candidates")
+            raise ProspectiveEvidenceValidationError(
+                REASON_STAGE_RECEIPT_INCOMPLETE, "candidate outcome contradicts selected candidates"
+            )
         if candidate_outcome == "VALID_NO_CANDIDATE":
             if selected:
                 raise ProspectiveEvidenceValidationError(
@@ -595,7 +674,9 @@ class ProspectiveSelectionEvidenceAssembler:
                 "weights",
             )
             if any(metadata.get(field) in (None, "", {}, []) for field in required):
-                raise ProspectiveEvidenceValidationError(REASON_LINEAGE_MISMATCH, "multi-alpha package lineage is incomplete")
+                raise ProspectiveEvidenceValidationError(
+                    REASON_LINEAGE_MISMATCH, "multi-alpha package lineage is incomplete"
+                )
             lineage["multi_alpha"] = {field: metadata[field] for field in required}
         return lineage
 
@@ -603,7 +684,9 @@ class ProspectiveSelectionEvidenceAssembler:
 def _selection_artifact_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
     value = runtime_config.get("selection_artifact_config", runtime_config.get("selection_artifact", {}))
     if not isinstance(value, dict):
-        raise ProspectiveEvidenceValidationError(REASON_CONFIG_CHAIN_INCOMPLETE, "selection artifact config must be an object")
+        raise ProspectiveEvidenceValidationError(
+            REASON_CONFIG_CHAIN_INCOMPLETE, "selection artifact config must be an object"
+        )
     return dict(value)
 
 
@@ -614,10 +697,6 @@ def _optional_text(value: Any) -> str | None:
 
 def _require_ref(value: Mapping[str, Any], *, label: str) -> None:
     identifiers = [key for key, item in value.items() if str(key).endswith("_id") and str(item or "").strip()]
-    hashes = [
-        key
-        for key, item in value.items()
-        if str(key).endswith("_hash") and len(str(item or "").strip()) == 64
-    ]
+    hashes = [key for key, item in value.items() if str(key).endswith("_hash") and len(str(item or "").strip()) == 64]
     if not identifiers or not hashes:
         raise ProspectiveEvidenceValidationError(REASON_CONTEXT_MISSING, f"{label} requires an id and sha256 hash")

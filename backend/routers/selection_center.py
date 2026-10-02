@@ -1,4 +1,4 @@
-﻿"""Selection Center API."""
+"""Selection Center API."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.advisory_lifecycle import (
     AdvisoryLifecycleService,
     AdvisoryMarketSnapshot,
@@ -22,7 +21,18 @@ from backend.services.advisory_quality import generate_quality_report
 from backend.services.selection_center.models import SelectionMode
 from backend.services.selection_center.industry_tree import SelectionIndustryTreeService
 from backend.services.selection_center.service import SelectionCenterService
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError, UnsupportedFeatureError
+from backend.services.simulation_runtime.localsim_dependencies import build_localsim_product_service
+from backend.services.simulation_runtime.localsim_product_control import (
+    LocalSimAccountCreateRequestV1,
+    LocalSimProductControlPlaneService,
+)
+from backend.services.simulation_runtime.selection_account_controller import SelectionLocalSimAccountController
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    StrategyPackageValidationError,
+    TradingCoreError,
+    UnsupportedFeatureError,
+)
 from backend.services.trading_core.exit_guard import ExitGuardPolicy
 
 router = APIRouter(prefix="/selection-center", tags=["selection-center"])
@@ -91,16 +101,6 @@ class AggregateExistingRunsRequest(BaseModel):
     runtime_config: dict[str, Any] = Field(default_factory=dict)
 
 
-class CreatePaperPortfolioFromSelectionRequest(BaseModel):
-    portfolio_name: str = Field(min_length=1)
-    initial_cash: float = Field(gt=0)
-    start_date: date
-    data_source: MinuteDataSource
-    fee_policy: dict[str, Any] | None = None
-    risk_policy: dict[str, Any] | None = None
-    execution_policy: dict[str, Any] | None = None
-
-
 class AddSelectionRunToWatchlistRequest(BaseModel):
     category_id: int | None = Field(default=None, gt=0)
     category_name: str | None = None
@@ -162,7 +162,9 @@ class AdvisoryQualityReportRequest(BaseModel):
 
 def _raise_http(exc: TradingCoreError) -> None:
     status_code = 400
-    if isinstance(exc, DataUnavailableError):
+    if str((exc.context or {}).get("reason_code") or "") == "LOCALSIM_CUTOVER_NOT_READY":
+        status_code = 503
+    elif isinstance(exc, DataUnavailableError):
         status_code = 404
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
@@ -376,7 +378,11 @@ def get_selection_aggregate_results(
 ) -> dict[str, Any]:
     try:
         run = service.get_run(run_id)
-        return {"ok": True, "run_id": run.run_id, "aggregate_results": [item.model_dump(mode="json") for item in run.aggregate_results]}
+        return {
+            "ok": True,
+            "run_id": run.run_id,
+            "aggregate_results": [item.model_dump(mode="json") for item in run.aggregate_results],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -414,8 +420,7 @@ def preview_multi_package_advisory_review(req: MultiPackageAdvisoryReviewPreview
                 for code, by_package in req.package_evidence_by_code.items()
             },
             market_by_code={
-                code: AdvisoryMarketSnapshot(**snapshot.model_dump())
-                for code, snapshot in req.market_by_code.items()
+                code: AdvisoryMarketSnapshot(**snapshot.model_dump()) for code, snapshot in req.market_by_code.items()
             },
             trade_date=req.trade_date,
             policy=ExitGuardPolicy.from_dict(req.exit_guard_policy),
@@ -453,40 +458,42 @@ def get_selection_excluded_results(
         _raise_http(exc)
 
 
-@router.post("/runs/{run_id}/create-paper-portfolio")
-def create_paper_portfolio_from_selection_run(
+def get_localsim_product_service() -> LocalSimProductControlPlaneService:
+    return build_localsim_product_service()
+
+
+@router.post("/runs/{run_id}/create-localsim-account")
+def create_localsim_account_from_selection_run(
     run_id: str,
-    req: CreatePaperPortfolioFromSelectionRequest,
+    req: LocalSimAccountCreateRequestV1,
     service: SelectionCenterService = Depends(get_selection_center_service),
+    product_service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
 ) -> dict[str, Any]:
     try:
-        result = service.create_paper_portfolio_from_run(
+        result, link = SelectionLocalSimAccountController(
+            selection_service=service,
+            product_service=product_service,
+        ).create_from_run(
             run_id=run_id,
-            portfolio_name=req.portfolio_name,
-            initial_cash=req.initial_cash,
-            start_date=req.start_date,
-            data_source=req.data_source,
-            fee_policy=req.fee_policy,
-            risk_policy=req.risk_policy,
-            execution_policy=req.execution_policy,
+            request=req,
+            created_by="selection_center_api",
         )
         return {
-            "ok": True,
-            "portfolio": result["portfolio"].model_dump(mode="json"),
-            "link": result["link"].model_dump(mode="json"),
-            "paper_runtime_config": result["paper_runtime_config"],
+            **result.model_dump(mode="json"),
+            "selection_link": link.model_dump(mode="json"),
         }
     except TradingCoreError as exc:
         _raise_http(exc)
 
 
-@router.get("/runs/{run_id}/paper-portfolio-links")
-def list_selection_paper_portfolio_links(
+@router.get("/runs/{run_id}/simulation-account-links")
+def list_selection_simulation_account_links(
     run_id: str,
     service: SelectionCenterService = Depends(get_selection_center_service),
 ) -> dict[str, Any]:
     try:
-        links = service.list_paper_portfolio_links(run_id)
+        service.repository.get_run(run_id)
+        links = service.repository.list_simulation_account_links(run_id)
         return {"ok": True, "run_id": run_id, "links": [link.model_dump(mode="json") for link in links]}
     except TradingCoreError as exc:
         _raise_http(exc)

@@ -11,9 +11,11 @@ import pytest
 from backend.services.simulation_runtime.models import (
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
-    SimulationBrokerBackend,
     SimulationReleaseBinding,
     canonical_json_sha256,
+)
+from backend.services.simulation_data.daily_context import (
+    SimulationBrokerBackend,
 )
 from backend.services.simulation_runtime.repository import InMemorySimulationRuntimeRepository
 from backend.services.simulation_runtime.service import StrategyRuntimeReleaseService

@@ -43,6 +43,8 @@ NOOP_RECEIPT_SCHEMA_VERSION = "dataset_release_noop_receipt_v1"
 RESOLUTION_PLAN_SCHEMA_VERSION = "dataset_release_resolution_plan_v2"
 BUILD_INPUTS_SCHEMA_VERSION = "dataset_release_build_inputs_v1"
 MAX_BUILD_INPUTS_EVIDENCE_BYTES = 32 * 1024 * 1024
+_ARTIFACT_READY_CONTRACT_SCHEMA = "dataset_release_artifact_ready_contract_v1"
+_SOURCE_PROVENANCE_RECEIPT_SCHEMA = "dataset_release_source_provenance_receipt_v1"
 
 
 @dataclass(frozen=True)
@@ -318,6 +320,7 @@ class ResolutionService:
         artifact_fingerprint: str,
         sample_policy: str,
         source_snapshot_catalog: SourceSnapshotCatalogSpec,
+        artifact_ready_contract_ref: CASRef | Mapping[str, Any] | str | None = None,
         attestation_renewal: AttestationRenewalSpec | None = None,
         now: datetime | None = None,
     ) -> ResolutionResult:
@@ -332,7 +335,12 @@ class ResolutionService:
             raise DecisionError("attestation is not eligible for no-op/reuse")
         self.cas.verify(probe.cas_ref)
         self.cas.verify(attestation.receipt_ref)
-        _validate_source_snapshot_catalog(source_snapshot_catalog, probe)
+        _validate_source_snapshot_catalog(
+            self.cas,
+            source_snapshot_catalog,
+            probe,
+            artifact_ready_contract_ref=artifact_ready_contract_ref,
+        )
         for reference in _source_snapshot_catalog_refs(source_snapshot_catalog):
             self.cas.verify(reference)
         if (
@@ -492,12 +500,18 @@ class ResolutionService:
         attestation_target_key: str | None = None,
         build_inputs: Mapping[str, Any] | None = None,
         source_snapshot_catalog: SourceSnapshotCatalogSpec,
+        artifact_ready_contract_ref: CASRef | Mapping[str, Any] | str | None = None,
         now: datetime | None = None,
     ) -> ResolutionResult:
         observed = _utc(now or datetime.now(UTC))
         if not probe.is_fresh(now=observed):
             raise DecisionError("source probe is not fresh", code="SOURCE_PROBE_EXPIRED")
-        _validate_source_snapshot_catalog(source_snapshot_catalog, probe)
+        _validate_source_snapshot_catalog(
+            self.cas,
+            source_snapshot_catalog,
+            probe,
+            artifact_ready_contract_ref=artifact_ready_contract_ref,
+        )
         for reference in _source_snapshot_catalog_refs(source_snapshot_catalog):
             self.cas.verify(reference)
         if all(item.action.value == "NOOP" for item in action_plan.actions):
@@ -876,8 +890,11 @@ def _zero_safety() -> dict[str, int]:
 
 
 def _validate_source_snapshot_catalog(
+    cas: CASStore,
     spec: SourceSnapshotCatalogSpec,
     probe: SourceProbeReceipt,
+    *,
+    artifact_ready_contract_ref: CASRef | Mapping[str, Any] | str | None = None,
 ) -> None:
     expected_observation_id = digest_named_fields(
         "dataset_release_source_snapshot_observation_v1",
@@ -896,14 +913,95 @@ def _validate_source_snapshot_catalog(
             "pit_snapshot_ref": spec.pit_snapshot_ref,
         },
     )
-    if (
-        spec.observation_id != expected_observation_id
-        or spec.source_content_root != probe.snapshot.source_content_root
-        or spec.source_provenance_root != probe.snapshot.source_provenance_root
-        or spec.pit_snapshot_digest != probe.snapshot.pit_snapshot_digest
-        or _utc(spec.observed_at) != probe.observed_at
-    ):
+    identity_matches = (
+        spec.observation_id == expected_observation_id
+        and spec.pit_snapshot_digest == probe.snapshot.pit_snapshot_digest
+        and _utc(spec.observed_at) == probe.observed_at
+    )
+    direct_roots_match = (
+        spec.source_content_root == probe.snapshot.source_content_root
+        and spec.source_provenance_root == probe.snapshot.source_provenance_root
+    )
+    if not identity_matches:
         raise IdentityConflictError("source snapshot catalog identity differs from the exact source probe")
+    if artifact_ready_contract_ref is None:
+        if not direct_roots_match:
+            raise IdentityConflictError(
+                "source snapshot catalog raw roots lack artifact-ready authority for the exact source probe"
+            )
+        return
+
+    try:
+        contract_ref = cas.verify(artifact_ready_contract_ref)
+        contract = cas.get_json_bounded(
+            contract_ref,
+            max_bytes=MAX_BUILD_INPUTS_EVIDENCE_BYTES,
+        )
+        provenance_ref = cas.verify(spec.source_provenance_ref)
+        provenance = cas.get_json_bounded(
+            provenance_ref,
+            max_bytes=MAX_BUILD_INPUTS_EVIDENCE_BYTES,
+        )
+    except CASStoreError as exc:
+        raise DecisionError("source snapshot catalog authority evidence is unavailable") from exc
+
+    if (
+        not isinstance(contract, Mapping)
+        or contract.get("schema_version") != _ARTIFACT_READY_CONTRACT_SCHEMA
+        or contract.get("profile") != spec.profile
+        or contract.get("cutoff") != spec.cutoff.isoformat()
+        or contract.get("source_content_root") != spec.source_content_root
+        or contract.get("artifact_ready_content_root") != probe.snapshot.source_content_root
+        or contract.get("artifact_ready_effective_content_root") != probe.snapshot.source_content_root
+        or contract.get("artifact_ready_provenance_root") != probe.snapshot.source_provenance_root
+        or contract.get("pit_snapshot_digest") != probe.snapshot.pit_snapshot_digest
+        or not _zero_only_safety(contract.get("safety"))
+    ):
+        raise IdentityConflictError(
+            "artifact-ready authority does not bind source catalog raw roots to the exact source probe"
+        )
+
+    expected_provenance = {
+        "profile": spec.profile,
+        "cutoff": spec.cutoff.isoformat(),
+        "source_content_root": spec.source_content_root,
+        "source_provenance_root": spec.source_provenance_root,
+        "stable_source_provenance_root": spec.stable_source_provenance_root,
+        "pit_snapshot_digest": spec.pit_snapshot_digest,
+    }
+    if (
+        not isinstance(provenance, Mapping)
+        or provenance.get("schema_version") != _SOURCE_PROVENANCE_RECEIPT_SCHEMA
+        or any(provenance.get(field) != expected for field, expected in expected_provenance.items())
+        or _cas_sha256(provenance.get("source_content_manifest_ref"))
+        != spec.source_content_manifest_ref
+        or _cas_sha256(provenance.get("source_reuse_manifest_ref"))
+        != spec.source_reuse_manifest_ref
+        or _cas_sha256(provenance.get("source_refresh_audit_ref"))
+        != spec.source_refresh_audit_ref
+        or _cas_sha256(provenance.get("pit_snapshot_ref")) != spec.pit_snapshot_ref
+        or not _zero_only_safety(provenance.get("safety"))
+    ):
+        raise IdentityConflictError(
+            "source provenance authority does not bind the source catalog raw identity"
+        )
+
+
+def _cas_sha256(value: Any) -> str | None:
+    if isinstance(value, Mapping):
+        candidate = value.get("sha256")
+    else:
+        candidate = value
+    text = str(candidate or "")
+    return text if len(text) == 64 else None
+
+
+def _zero_only_safety(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and all(value.get(field) == expected for field, expected in _zero_safety().items())
+        and all(type(item) is int and item == 0 for item in value.values())
+    )
 
 
 def _source_snapshot_catalog_refs(

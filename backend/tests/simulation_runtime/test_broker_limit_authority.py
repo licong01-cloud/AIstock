@@ -8,7 +8,7 @@ from backend.services.simulation_runtime.daily_limit_authority import (
     assert_daily_limit_authorities_for_broker,
     required_daily_limit_resolver,
 )
-from backend.services.simulation_runtime.models import (
+from backend.services.simulation_data.daily_context import (
     DailyLimitAuthorityV2,
     DailyLimitResolverV2,
     SimulationBrokerBackend,

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
@@ -19,10 +19,15 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccountStatus,
 )
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
-from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus, SignalSnapshot
+from backend.services.selection_center.models import (
+    SelectionCandidate,
+    SelectionMode,
+    SelectionRun,
+    SelectionRunStatus,
+    SignalSnapshot,
+)
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
-    DailySelectionEvidence,
     ExecutionPlanCompiler,
     InMemorySimulationRuntimeRepository,
     RebalanceIntentService,
@@ -30,8 +35,14 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
     TargetPositionService,
 )
+from backend.services.simulation_signal import (
+    DailySelectionEvidence,
+)
 from backend.services.simulation_runtime.models import canonical_json_sha256
-from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.live_inference import (
+    AUTHORITATIVE_SELECTION_SCOPE,
+    AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+)
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.selection_artifact import (
     InMemorySelectionScoreArtifactRepository,
@@ -276,7 +287,9 @@ def _runtime_repo_with_miniqmt_plan() -> tuple[InMemorySimulationRuntimeReposito
                 reason="daily_strategy_buy_or_retain",
             )
         ],
-        runtime_config={"runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}},
+        runtime_config={
+            "runtime_profile": {"selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}}
+        },
     )
     current_positions = {
         "300604.SZ": PositionLot(
@@ -389,7 +402,9 @@ def test_package_binding_router_records_daily_selection_without_replacing_active
     qmt_strategy_ledger.configure_dependencies(
         repository_factory=lambda: repo,
         client_factory=lambda: object(),
-        package_reader_factory=lambda: FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")),
+        package_reader_factory=lambda: FakePackageReader(
+            FakePackageRecord("pkg_a", PackageStatus.SELECTION_ENABLED, "sha_a")
+        ),
         selection_reader_factory=lambda: FakeSelectionReader(_selection_run("sel_b", date(2026, 5, 19))),
         artifact_repository_factory=lambda: _artifact_repo(date(2026, 5, 19)),
     )

@@ -9,7 +9,9 @@ from datetime import UTC, date, datetime
 from typing import Any, Callable
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.canonical_pit_runtime import (
@@ -73,7 +75,8 @@ from backend.services.trading_core.models import (
 )
 from backend.services.trading_core.oms import OMS
 
-from .broker import MiniQMTSimBackend, OrderHandle
+from .broker import MiniQMTSimBackend
+from backend.services.simulation_execution.broker import OrderHandle
 from .execution import build_minqmt_execution_quality_report
 from .auto_run import (
     MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
@@ -83,7 +86,11 @@ from .auto_run import (
     miniqmt_strategy_slot_id,
 )
 from .models import OrderExecutionState, PaperDayRunResult, PaperRun, PortfolioStatus
-from .repository import PaperTradingV2Repository, assert_orders_terminal_before_run_success, non_terminal_orders_for_run_success
+from .repository import (
+    PaperTradingV2Repository,
+    assert_orders_terminal_before_run_success,
+    non_terminal_orders_for_run_success,
+)
 from .risk_targets import overlay_risk_forced_exit_targets
 from .service import PaperTradingV2PortfolioService
 
@@ -129,7 +136,9 @@ def miniqmt_account_slot_context(repository: Any, portfolio: Any) -> dict[str, s
                 "required_runtime_owner": "MiniQMTExecutionRuntime",
             },
         )
-    account_id = str(binding.broker_account_id or ((portfolio.auto_run_config or {}).get("broker") or {}).get("account_id") or "")
+    account_id = str(
+        binding.broker_account_id or ((portfolio.auto_run_config or {}).get("broker") or {}).get("account_id") or ""
+    )
     account_group_id = binding.account_group_id or miniqmt_account_group_id(account_id)
     strategy_slot_id = binding.strategy_slot_id or miniqmt_strategy_slot_id(portfolio.portfolio_id)
     if not account_group_id or not strategy_slot_id:
@@ -472,8 +481,10 @@ class PaperTradingDayRunner:
                             "runtime_profile": runtime_profile.risk_policy.model_dump(mode="json"),
                         },
                     )
-            if not snapshot.valid_no_candidate and snapshot.candidates and (
-                runtime_profile.tradability.exclude_suspended or runtime_profile.industry_blacklist
+            if (
+                not snapshot.valid_no_candidate
+                and snapshot.candidates
+                and (runtime_profile.tradability.exclude_suspended or runtime_profile.industry_blacklist)
             ):
                 tradable, excluded = self.tradability_filter.filter_candidates(
                     candidates=snapshot.candidates,
@@ -587,7 +598,11 @@ class PaperTradingDayRunner:
                 if not ledger.positions:
                     raise ArtifactGenerationFailedError(
                         "rebalance produced no order intents and portfolio has no positions to mark",
-                        context={"portfolio_id": portfolio_id, "run_id": run.run_id, "trade_date": trade_date.isoformat()},
+                        context={
+                            "portfolio_id": portfolio_id,
+                            "run_id": run.run_id,
+                            "trade_date": trade_date.isoformat(),
+                        },
                     )
                 snapshot_prices, snapshot_time = self._load_snapshot_marks_for_held_positions(
                     symbols=list(ledger.positions),
@@ -625,7 +640,9 @@ class PaperTradingDayRunner:
                 self._assert_orders_terminal_before_success(run, [])
                 succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
                 ready_portfolio = self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.READY)
-                self.repository.save_run_event(run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 no-rebalance day run succeeded")
+                self.repository.save_run_event(
+                    run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 no-rebalance day run succeeded"
+                )
                 return PaperDayRunResult(
                     portfolio=ready_portfolio,
                     run=succeeded,
@@ -644,8 +661,6 @@ class PaperTradingDayRunner:
                 execution_policy_json,
                 package_id=manifest.package_id,
             )
-            require_day_features = False
-            day_feature_excluded_intents: list[dict[str, Any]] = []
             self._require_current_pit(config, phase="before_order_execution")
 
             for intent in intents:
@@ -656,12 +671,15 @@ class PaperTradingDayRunner:
                     source=portfolio.data_source,
                     min_bars=required_bars,
                     require_suspend_status=True,
-                    require_day_features=require_day_features,
                 )
                 if not market_input.minute_bars:
                     raise DataUnavailableError(
                         "market data provider returned no minute bars",
-                        context={"portfolio_id": portfolio_id, "symbol": intent.symbol, "trade_date": trade_date.isoformat()},
+                        context={
+                            "portfolio_id": portfolio_id,
+                            "symbol": intent.symbol,
+                            "trade_date": trade_date.isoformat(),
+                        },
                     )
                 self.repository.save_run_event(
                     run_id=run.run_id,
@@ -676,8 +694,6 @@ class PaperTradingDayRunner:
                         "limit_up": market_input.market_context.get("limit_up"),
                         "limit_down": market_input.market_context.get("limit_down"),
                         "suspend_status": market_input.market_context.get("suspend_status"),
-                        "day_features_schema_version": market_input.market_context.get("day_features_schema_version"),
-                        "day_features_trade_date": market_input.market_context.get("day_features_trade_date"),
                     },
                 )
                 order = self.oms.create_order(intent)
@@ -692,7 +708,7 @@ class PaperTradingDayRunner:
                 )
                 self._require_current_pit(config, phase="after_order_execution_before_fill_persistence")
                 # T6.1 capture wiring: intended_price from OrderIntent.limit_price
-                # (None for MARKET orders — that's structurally accurate, not a gap),
+                # (None for MARKET orders 鈥?that's structurally accurate, not a gap),
                 # fill_market_context from the same dict that the execution engine
                 # consumed, so the saved snapshot matches the matching context.
                 intended_price = intent.limit_price
@@ -736,8 +752,6 @@ class PaperTradingDayRunner:
                         "trade_date": trade_date.isoformat(),
                         "order_count": len(orders),
                         "order_event_count": len(events),
-                        "day_feature_excluded_intent_count": len(day_feature_excluded_intents),
-                        "day_feature_excluded_intents": day_feature_excluded_intents,
                     },
                 )
             missing_snapshot_symbols = [symbol for symbol in ledger.positions if symbol not in snapshot_prices]
@@ -772,14 +786,14 @@ class PaperTradingDayRunner:
                     "position_count": len(position_list),
                     "order_count": len(orders),
                     "fill_count": len(fills),
-                    "day_feature_excluded_intent_count": len(day_feature_excluded_intents),
-                    "day_feature_excluded_intents": day_feature_excluded_intents,
                 },
             )
             self._assert_orders_terminal_before_success(run, orders)
             succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
             ready_portfolio = self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.READY)
-            self.repository.save_run_event(run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 day run succeeded")
+            self.repository.save_run_event(
+                run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 day run succeeded"
+            )
             return PaperDayRunResult(
                 portfolio=ready_portfolio,
                 run=succeeded,
@@ -796,17 +810,25 @@ class PaperTradingDayRunner:
             self.repository.save_error(run_id=run.run_id, portfolio_id=portfolio_id, error=error)
             failed = self.repository.update_run_status(run, RunStatus.FAILED, error=error)
             self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.FAILED)
-            self.repository.save_run_event(run_id=run.run_id, event_type="RUN_FAILED", message=exc.message, context=exc.context)
+            self.repository.save_run_event(
+                run_id=run.run_id, event_type="RUN_FAILED", message=exc.message, context=exc.context
+            )
             run = failed
             raise
         except Exception as exc:
             if minqmt_broker is not None:
                 minqmt_broker.shutdown()
-            error = {"error_code": "PAPER_V2_RUN_ERROR", "message": str(exc), "context": {"portfolio_id": portfolio_id, "run_id": run.run_id}}
+            error = {
+                "error_code": "PAPER_V2_RUN_ERROR",
+                "message": str(exc),
+                "context": {"portfolio_id": portfolio_id, "run_id": run.run_id},
+            }
             self.repository.save_error(run_id=run.run_id, portfolio_id=portfolio_id, error=error)
             self.repository.update_run_status(run, RunStatus.FAILED, error=error)
             self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.FAILED)
-            self.repository.save_run_event(run_id=run.run_id, event_type="RUN_FAILED", message=str(exc), context=error["context"])
+            self.repository.save_run_event(
+                run_id=run.run_id, event_type="RUN_FAILED", message=str(exc), context=error["context"]
+            )
             raise
 
     def _require_current_pit(self, runtime_config: dict[str, Any], *, phase: str) -> None:
@@ -833,7 +855,10 @@ class PaperTradingDayRunner:
         if execution_policy_json is None:
             raise RuntimeConfigInvalidError(
                 "Paper v2 data readiness requires a validated execution policy snapshot",
-                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+                context={
+                    "package_id": manifest.package_id,
+                    "manifest_version": getattr(manifest, "manifest_version", None),
+                },
             )
         requirements = self._data_requirements_for_policy(
             execution_policy_json,
@@ -874,16 +899,18 @@ class PaperTradingDayRunner:
         if top_k is None:
             raise RuntimeConfigInvalidError(
                 "Paper v2 runtime_profile.selection.top_k is required; StrategyPackage manifest cannot provide runtime top_k",
-                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+                context={
+                    "package_id": manifest.package_id,
+                    "manifest_version": getattr(manifest, "manifest_version", None),
+                },
             )
         return int(top_k)
 
     @staticmethod
     def _selection_data_source(portfolio: Any, runtime_config: dict[str, Any]) -> str:
-        explicit = (
-            (runtime_config.get("selection_artifact_config") or {}).get("signal_data_source")
-            or runtime_config.get("signal_data_source")
-        )
+        explicit = (runtime_config.get("selection_artifact_config") or {}).get(
+            "signal_data_source"
+        ) or runtime_config.get("signal_data_source")
         if explicit:
             return str(explicit)
         if portfolio.broker_backend == "minqmt_sim":
@@ -976,7 +1003,9 @@ class PaperTradingDayRunner:
             "data_source": getattr(status, "data_source", None),
             "status": getattr(status, "status", None),
             "row_count": getattr(status, "row_count", None),
-            "refreshed_at": getattr(status, "refreshed_at").isoformat() if getattr(status, "refreshed_at", None) else None,
+            "refreshed_at": getattr(status, "refreshed_at").isoformat()
+            if getattr(status, "refreshed_at", None)
+            else None,
         }
 
     def _resolve_total_equity(
@@ -1030,7 +1059,6 @@ class PaperTradingDayRunner:
                 source=MinuteDataSource.DB_HISTORICAL,
                 min_bars=1,
                 require_suspend_status=True,
-                require_day_features=False,
             )
             if not market_input.minute_bars:
                 raise DataUnavailableError(
@@ -1095,7 +1123,6 @@ class PaperTradingDayRunner:
                 source=data_source,
                 min_bars=1,
                 require_suspend_status=True,
-                require_day_features=False,
             )
             if not market_input.minute_bars:
                 raise DataUnavailableError(
@@ -1134,7 +1161,10 @@ class PaperTradingDayRunner:
     def _required_minute_bars_for_manifest(manifest) -> int:
         raise RuntimeConfigInvalidError(
             "Paper v2 requires a validated execution policy snapshot; manifest minute policy is not runtime authority",
-            context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+            context={
+                "package_id": manifest.package_id,
+                "manifest_version": getattr(manifest, "manifest_version", None),
+            },
         )
 
     @staticmethod
@@ -1310,7 +1340,9 @@ class PaperTradingDayRunner:
             events.extend(terminal_events)
         if hasattr(self.repository, "get_session"):
             self._assert_orders_terminal_before_success(run, orders)
-        succeeded = run if run.status == RunStatus.SUCCEEDED else self.repository.update_run_status(run, RunStatus.SUCCEEDED)
+        succeeded = (
+            run if run.status == RunStatus.SUCCEEDED else self.repository.update_run_status(run, RunStatus.SUCCEEDED)
+        )
         ready_portfolio = self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
         self.repository.save_run_event(
             run_id=run.run_id,
@@ -1678,7 +1710,10 @@ class PaperTradingDayRunner:
             audit_after=audit_after,
             authority_source=authority_source,
         )
-        if broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED} and status.filled_quantity > order.filled_quantity:
+        if (
+            broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}
+            and status.filled_quantity > order.filled_quantity
+        ):
             update: dict[str, Any] = {
                 "status": broker_state,
                 "filled_quantity": min(status.filled_quantity, order.quantity),
@@ -2018,7 +2053,9 @@ class PaperTradingDayRunner:
             snapshot["positions"] = {
                 "count": len(positions),
                 "symbols": sorted(positions)[:50],
-                "market_value": sum(float(pos.quantity) * float(prices.get(symbol, 0.0)) for symbol, pos in positions.items()),
+                "market_value": sum(
+                    float(pos.quantity) * float(prices.get(symbol, 0.0)) for symbol, pos in positions.items()
+                ),
                 "missing_price_symbols": sorted(symbol for symbol in positions if symbol not in prices)[:50],
             }
         except Exception as exc:  # noqa: BLE001 - diagnostics must preserve query failure details.
@@ -2094,7 +2131,12 @@ class PaperTradingDayRunner:
     def _miniqmt_reconcile_fill_base_order(order: Any, existing_fill_rows: list[dict[str, Any]]) -> Any:
         if existing_fill_rows or not order.filled_quantity:
             return order
-        if order.status not in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.PARTIALLY_FILLED}:
+        if order.status not in {
+            OrderStatus.FILLED,
+            OrderStatus.CANCELLED,
+            OrderStatus.REJECTED,
+            OrderStatus.PARTIALLY_FILLED,
+        }:
             return order
         return order.model_copy(update={"status": OrderStatus.SUBMITTED, "filled_quantity": 0, "avg_fill_price": None})
 
@@ -2227,8 +2269,7 @@ class PaperTradingDayRunner:
         if total_quantity <= 0:
             return []
         total_amount = sum(
-            max(0, int(trade.get("traded_volume") or 0)) * float(trade.get("traded_price") or 0.0)
-            for trade in trades
+            max(0, int(trade.get("traded_volume") or 0)) * float(trade.get("traded_price") or 0.0) for trade in trades
         )
         avg_price = total_amount / total_quantity if total_quantity else 0.0
         trade_times = [cls._parse_minqmt_trade_time(trade_date, trade.get("traded_time")) for trade in trades]
@@ -2360,7 +2401,9 @@ class PaperTradingDayRunner:
         return f"fill_minqmt_{digest[:24]}"
 
     @staticmethod
-    def _miniqmt_fill_market_context(*, trade: dict[str, Any], native: dict[str, Any], trade_date: date) -> dict[str, Any]:
+    def _miniqmt_fill_market_context(
+        *, trade: dict[str, Any], native: dict[str, Any], trade_date: date
+    ) -> dict[str, Any]:
         price = float(trade.get("traded_price") or 0.0)
         quantity = int(trade.get("traded_volume") or 0)
         return {

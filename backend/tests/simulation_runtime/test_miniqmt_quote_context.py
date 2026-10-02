@@ -18,7 +18,7 @@ from backend.services.miniqmt_execution_runtime.quote_ingress import (
     PhaseOneRawQuoteSnapshotStore,
 )
 from backend.services.miniqmt_execution_runtime.quote_normalizer import capture_raw_quote_frame
-from backend.services.paper_trading_v2.market_data import DailySuspendStatus, EquityInstrumentMetadata, PreviousClose
+from backend.services.simulation_data.contracts import DailySuspendStatus, EquityInstrumentMetadata
 from backend.services.simulation_runtime.miniqmt_quote_context import (
     MiniQMTInstrumentQuoteSpecProvider,
     MiniQMTQuoteContextAuthorityAdapter,
@@ -29,26 +29,26 @@ from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 
 def _execution_policy() -> dict[str, object]:
     return {
-            "quote_contract": {
-                "schema_version": "miniqmt_quote_contract_policy_v2",
-                "control_revision": "B0_QUOTE_V2",
-                "required_capabilities": [
-                    "CALENDAR",
-                    "DEPTH_UNIT_SHARES",
-                    "EXCHANGE_TIMESTAMP",
-                    "FIVE_LEVEL_DEPTH",
-                    "RAW_PRICE_BASIS",
-                    "TRADABILITY",
-                ],
-                "max_receive_age_ms": 1000,
-                "max_source_lag_ms": 1000,
-                "max_exchange_age_ms": 1000,
-                "max_negative_skew_ms": 10,
-                "max_clock_age_divergence_ms": 10,
-                "max_dependency_group_skew_ms": 100,
-                "auction_mode": "OBSERVE_ONLY",
-            }
+        "quote_contract": {
+            "schema_version": "miniqmt_quote_contract_policy_v2",
+            "control_revision": "B0_QUOTE_V2",
+            "required_capabilities": [
+                "CALENDAR",
+                "DEPTH_UNIT_SHARES",
+                "EXCHANGE_TIMESTAMP",
+                "FIVE_LEVEL_DEPTH",
+                "RAW_PRICE_BASIS",
+                "TRADABILITY",
+            ],
+            "max_receive_age_ms": 1000,
+            "max_source_lag_ms": 1000,
+            "max_exchange_age_ms": 1000,
+            "max_negative_skew_ms": 10,
+            "max_clock_age_divergence_ms": 10,
+            "max_dependency_group_skew_ms": 100,
+            "auction_mode": "OBSERVE_ONLY",
         }
+    }
 
 
 def _policy() -> QuoteContractPolicy:
@@ -85,10 +85,6 @@ class _Providers:
             raise RuntimeError("market.stk_limit unavailable")
         return DailyLimitPrice(symbol=symbol, trade_date=trade_date, pre_close=10.0, up_limit=11.0, down_limit=9.0)
 
-    def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
-        self.calls += 1
-        return PreviousClose(symbol=symbol, trade_date=trade_date, previous_trade_date=trade_date, pre_close=10.0)
-
     def get_equity_metadata(self, symbol: str, trade_date: date) -> EquityInstrumentMetadata:
         self.calls += 1
         return EquityInstrumentMetadata(
@@ -115,7 +111,6 @@ def _adapter(
         trading_calendar_service=calendar or _Calendar(),
         suspend_status_provider=providers,
         limit_price_provider=providers,
-        previous_close_provider=providers,
         equity_metadata_provider=providers,
         runtime_symbol_spec_provider=runtime_symbol_spec_provider,
     )
@@ -310,8 +305,11 @@ def test_calendar_failure_is_loud_and_non_equity_or_halt_remains_explicit_state(
     non_trading = _adapter(store, providers, _Calendar(trading=False))
     with pytest.raises(QuoteContractError) as exc_info:
         non_trading.preload(
-            symbol_specs=[_spec()], policy=_policy(), clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
-            clock_monotonic_ns=1, clock_domain_id="context-test-domain",
+            symbol_specs=[_spec()],
+            policy=_policy(),
+            clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+            clock_monotonic_ns=1,
+            clock_domain_id="context-test-domain",
         )
     assert exc_info.value.reason_code.value == "ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID"
     assert store.snapshot() is None
@@ -319,8 +317,11 @@ def test_calendar_failure_is_loud_and_non_equity_or_halt_remains_explicit_state(
     providers.listed = False
     non_equity = _adapter(QuoteEvaluationContextStore(), providers)
     context = non_equity.preload(
-        symbol_specs=[_spec()], policy=_policy(), clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
-        clock_monotonic_ns=2, clock_domain_id="context-test-domain",
+        symbol_specs=[_spec()],
+        policy=_policy(),
+        clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        clock_monotonic_ns=2,
+        clock_domain_id="context-test-domain",
     )
     symbol_context = context.symbol_context("000001.SZ")
     assert symbol_context is not None and symbol_context.product_type_proven_equity is False
@@ -329,8 +330,10 @@ def test_calendar_failure_is_loud_and_non_equity_or_halt_remains_explicit_state(
     providers.listed = True
     halted = _adapter(QuoteEvaluationContextStore(), providers).preload(
         symbol_specs=[QuoteContextSymbolSpec(**{**_spec().__dict__, "intraday_halt": True})],
-        policy=_policy(), clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
-        clock_monotonic_ns=3, clock_domain_id="context-test-domain",
+        policy=_policy(),
+        clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        clock_monotonic_ns=3,
+        clock_domain_id="context-test-domain",
     )
     assert halted.symbol_context("000001.SZ").tradability.state.value == "INTRADAY_HALT"  # type: ignore[union-attr]
 

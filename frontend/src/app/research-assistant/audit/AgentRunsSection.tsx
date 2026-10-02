@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import SectionCard from "@/components/paper-v2/SectionCard";
+import SectionCard from "@/components/trading-console/SectionCard";
 import { AgentTeamsRunView } from "@/components/research-assistant/AgentTeamsRunView";
 import { ApiErrorBox } from "@/components/research-assistant/AssistantShared";
 import { researchAssistantApi, type AssistantAgentRun, type AssistantTraceEvent } from "@/lib/research-assistant/api";

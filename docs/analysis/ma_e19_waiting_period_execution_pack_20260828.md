@@ -1,11 +1,11 @@
 # MA-E19 数据等待期执行包：九臂信号分析、D2/D3 预注册与三臂恢复卡
 
 - 文档类型：QE-only `docs-fast-new` 执行包
-- 日期：2026-08-28
-- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.10
-- 执行方案：`docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md` v1.1
+- 日期：2026-08-30
+- 父蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` v6.12
+- 执行方案：`docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md` v1.2
 - 当前任务：`qe_20260825_031740_2457`
-- 当前状态：`MA_E19R2_PARTIAL_9_OF_12_WAITING_DATASET_SIGNOFF`
+- 当前状态：`MA_E19R2_PARTIAL_9_OF_12_WAITING_DATASET_SIGNOFF_TOOLING_ACTIVE`
 - 唯一目标：在不提交实验、不修改数据集和不访问数据库数据面的前提下，把数据就绪后的下一步压缩为可直接执行的最小工作包。
 
 ## 1. 边界
@@ -28,7 +28,11 @@
 
 ## 2. 当前事实冻结
 
-实时回读时间为 2026-08-28。任务 `qe_20260825_031740_2457` 状态为 `failed`，Loop1～9 `completed`，Loop10～12 `failed`；当前没有 running/queued 的 QE 主线任务。
+实时回读时间为 2026-08-30。任务 `qe_20260825_031740_2457` 状态为 `failed`，Loop1～9 `completed`，Loop10～12 `failed`；没有发现更新的 completed D1 task。BUG-1191 / Issue #3793 已完成 source/runtime/close-sync 并关闭，但该事实不等于数据 candidate 已签核或激活。
+
+回测数据集 durable workflow 的最新只读状态：profile `qe_hmm_full_v2`、submission `dss_43485e68b2645562430a12f8e7ce1620`、`submission_state=BLOCKED_CONTRACT`、`run_id/run_state/outcome=null`、worker `healthy/IDLE`、`production_activation=not_requested`。因此当前仍禁止提交依赖新数据的正式 QE task；worker 空闲不能替代 terminal receipt、catalog readback、candidate signoff 或 activation。
+
+等待期三个离线工具已分别通过 PR #3984（九臂语义等价）、#3986（D2 Sector Oracle）、#3988（D3 benchmark/Brinson）合入；该状态只代表 source/test ready，不代表已有真实 signoff 输入、研究 receipt 或实验结果。
 
 固定合同：LGBM、CE3、h20、seed 123、21 交易日 purge、Top50/n_drop1、`score_weighted_topk_v2`、`TWAP/1min`、node1 串行度 1、零数据库数据面。
 
@@ -86,6 +90,8 @@
 5. candidate signoff、node1 distribution、active activation 三个独立状态；
 6. QE subprocess 零数据库数据面证明。
 
+截至 2026-08-30，上述 signoff 尚未取得。BUG-1191 的 verified/closed、worker `healthy/IDLE` 和 `BLOCKED_CONTRACT` submission 均不能满足本节门禁；本执行包不创建新的 dataset intent，不构建、发布、分发或激活数据。
+
 仅观察到某个 active `all.txt` 的结束日期变化，不等于上述门禁完成。
 
 ## 5. 旧九臂等价性判定
@@ -103,6 +109,26 @@
 - 九臂全部 `SEMANTIC_EQUIVALENT`：只运行新的 2026H1 三臂；
 - 任一臂 `RERUN_REQUIRED` 或证据缺失：以新 dataset identity 完整重跑 12 臂；
 - 禁止把“窗口早于旧 all.txt 截止日”单独作为等价证明。
+
+### 5.1 文件型审计工具合同
+
+实现入口固定为 `scripts/qe_alpha_candidates/sector_rotation/ma_e19_semantic_equivalence_audit.py`，输入为两个 `qe_ma_e19_arm_set_manifest_v1` JSON 文件，输出为一个 `qe_ma_e19_semantic_equivalence_receipt_v1` JSON 文件。工具只使用 Python 标准库，不导入 backend、不访问 API/数据库、不启动任务或进程。
+
+每个 manifest 必须：
+
+1. 自身 `manifest_sha256` 与去除该字段后的 canonical JSON 匹配；
+2. 精确包含 2024H2、2025H1、2025H2 × fixed/expanding/rolling 九个 arm；2024H2 的 `fixed_anchor` 规范化为 `fixed`，不得出现重复规范键；
+3. 每臂包含 train/valid/test 窗口和 `dataset/calendar/universe/tradability/factor/label/prediction/order/strategy` 九个组件；
+4. 每个组件包含非空 `identity`、真实来源 `source_sha256` 和窗口/配置语义 `semantic_sha256`；来源 SHA 可因 immutable release 改变，但 `semantic_sha256` 必须逐组件相等才能复用；
+5. candidate manifest 额外包含非空且为 64 位 SHA256 的 `candidate_signoff_sha256`、`catalog_readback_sha256`、`node_distribution_sha256`、`active_activation_sha256`。缺任一项为 `NOT_COMPUTABLE`，不得把 worker healthy/IDLE 或 source/runtime receipt 代替数据证据。
+
+输出规则：
+
+- 输入 schema、manifest hash、九臂集合、窗口、组件或 release evidence 缺失/非法：整体 `NOT_COMPUTABLE`，返回稳定 `reason_code`，退出码 2；
+- 输入完整且任一臂窗口或组件 `semantic_sha256` 不同：该臂及整体 `RERUN_REQUIRED`，退出码 1；
+- 九臂窗口与九组件语义全部相同：整体 `SEMANTIC_EQUIVALENT`，退出码 0；
+- `identity/source_sha256` 变化只进入 provenance differences，不被静默忽略，也不在语义相同的情况下伪造重跑要求；
+- receipt 必须按规范键排序、包含两侧 manifest SHA、逐臂结果、计数、稳定 reason codes 和自校验 `receipt_sha256`；同输入重复运行必须逐字节相同。输出写入显式路径并原子替换，不扫描目录、不覆盖输入文件、不创建数据或实验制品。
 
 ## 6. MA-E19R 2026H1 三臂恢复任务卡（仅预注册，不提交）
 
@@ -152,6 +178,24 @@
 
 完成标识：`P0_D2_END_STATUS=FOUR_CELL_COMPUTABLE`。
 
+### 7.4 等待期离线工具合同
+
+实现入口固定为 `scripts/qe_alpha_candidates/sector_rotation/p0_d2_sector_oracle.py`。它只实现信号层四格上界诊断，不生成或冒充 TWAP portfolio；正式收益、成本、换手、成交与主动暴露继续等待 D1R 的冻结 holdings/execution receipt。
+
+输入由一个自校验 `qe_p0_d2_sector_oracle_input_v1` JSON manifest 和它唯一引用的 Parquet 面板组成。manifest 必须钉住 panel SHA256、dataset/taxonomy/prediction/label/execution-contract identity 与各自 SHA256；Parquet 精确包含 `datetime/instrument/score/label/l2_code_id/tradable`，键唯一、日期与代码规范、数值有限、`l2_code_id>0`、`tradable` 为布尔值。缺列、重复键、未映射板块、hash 漂移、非交易样本混入或单日板块/股票样本不足均 `NOT_COMPUTABLE`，不删行、不补零、不访问数据库。
+
+固定算法：
+
+1. reality sector = 每日板块内可交易股票 prediction score 均值；oracle sector = 同日板块内 future label 均值；
+2. reality stock = prediction score；oracle stock = future label；
+3. hard = 固定 Top-M sector 后在入选板块中按 stock score 取全局 Top-K；
+4. soft = sector score 的每日百分位 × stock score 的板块内百分位作为连续分数，再取全局 Top-K；
+5. 四格 × hard/soft 共八个 cell 使用相同日期、投资域、Top-M、Top-K 和 tail fraction；排序统一使用稳定 `(score desc, l2_code_id asc, instrument asc)` tie-break，不在评价期调参；
+6. 输出逐 cell 的 sector Recall@M/NDCG@M、top-tail sector capture、within-sector RankIC、stock tail recall、selected future-label mean/hit rate及固定 seed 的 moving-block bootstrap 区间；oracle cell 永久带 `QE_ONLY_FUTURE_INFORMATION_CEILING`，RR 才可标记 reality baseline；
+7. receipt 保存输入 manifest/panel SHA、参数、逐日样本计数、八格指标和自校验 SHA；同输入逐字节确定。`portfolio_status=NOT_COMPUTABLE_WAITING_D1R_TWAP` 是信息依赖，不得被 signal proxy 覆盖。
+
+退出码：成功计算八格为 0；输入/覆盖/合同不可计算为 2。该工具本身不提交实验、不读 API/数据库、不写 Parquet、不控制进程。
+
 ## 8. WP-D3 Benchmark-relative / Brinson 预注册
 
 ### 8.1 输入
@@ -172,6 +216,22 @@
 
 完成标识：`P0_D3_END_STATUS=ABSOLUTE_ACTIVE_BRINSON_RECONCILED`。
 
+### 8.3 等待期离线归因工具合同
+
+实现入口固定为 `scripts/qe_alpha_candidates/sector_rotation/p0_d3_benchmark_brinson.py`。输入为自校验 `qe_p0_d3_brinson_input_v1` manifest 和一个 SHA-pinned Parquet；面板精确包含 `datetime/l2_code_id/portfolio_weight/benchmark_weight/portfolio_sector_return/benchmark_sector_return`。manifest 钉住 dataset、taxonomy、portfolio holdings、benchmark 和 execution contract identity/SHA 及固定 bootstrap/resource 参数。
+
+每个日期必须显式包含 portfolio/benchmark 的同一 sector union，键唯一、`l2_code_id>0`、权重有限且位于 `[0,1]`、两侧权重和各自等于 1（固定 tolerance）、sector return 有限且大于 -1。缺 benchmark、当前权重回填、负权重、权重不守恒、hash/schema 漂移、benchmark 零方差、tracking error 为零或资源越界均 `NOT_COMPUTABLE`；不得删除异常行或改用等权隐式补齐。
+
+按日计算：
+
+- `portfolio_return = Σ wp * Rp_sector`；`benchmark_return = Σ wb * Rb_sector`；`active_return = portfolio_return - benchmark_return`；
+- `allocation = Σ (wp-wb)*(Rb_sector-Rb_total)`；
+- `selection = Σ wb*(Rp_sector-Rb_sector)`；
+- `interaction = Σ (wp-wb)*(Rp_sector-Rb_sector)`；
+- 每日 `active_return = allocation + selection + interaction` 必须在 tolerance 内闭合，否则 fail closed。
+
+receipt 输出 portfolio/benchmark cumulative return、active arithmetic/cumulative difference、annualized beta/tracking error/information ratio、三类 Brinson effect 的均值/总和与 moving-block bootstrap 区间、最大 reconciliation residual、逐日 rows/sectors 计数及 daily-attribution SHA。相同输入逐字节确定；不写 Parquet、不访问 API/数据库、不控制进程。成功且全部闭合的状态为 `ABSOLUTE_ACTIVE_BRINSON_RECONCILED`、退出码 0；否则 `NOT_COMPUTABLE`、退出码 2。
+
 ## 9. 等待期可继续的 Alpha 工作
 
 只允许日频文件型候选的源码、fixture、PIT 截断和单元测试，不做 catalog/数据库写入或正式 QE：
@@ -184,7 +244,7 @@
 
 ### 9.1 `sector_participation_gap_v2` 当前执行回执
 
-- 独立研究工作树已形成文件型候选源码、因子卡和 13 项聚焦测试；未提交 catalog、数据库或正式 QE。
+- 当前 `origin/main` 已包含文件型候选源码 `scripts/qe_alpha_candidates/sector_rotation/m_sector_participation_gap_v2.py`、因子卡和 13 项聚焦测试；未提交 catalog、数据库或正式 QE。
 - 旧调试文件快照的 H5/Parquet 真实计算通过，但仅覆盖 2018-08-28 至 2019-12-31，因此不形成收益结论。
 - 当前 `F:\Dev\RD-Agent-state\factor_data` 的行业 HDF 覆盖到 2026-04-30，但配套 `static_factors.parquet` 不含 PIT `l2_code_id`；2024H2～2025H2 h20 快筛在标签计算前 fail closed。
 - 候选读取器已支持日期有界 HDF 切片、19 交易日 rolling 预热、Parquet 日期过滤和 repo 外输出，避免为快筛加载 826 万行全历史；缺 `l2_code_id` 的 schema 检查先于 HDF 大文件加载。
@@ -205,6 +265,12 @@
 
 `WAITING_PACK_STATUS=READY_WITHOUT_EXPERIMENT_SUBMISSION`
 
+当前长任务状态：
+
+`QE_LT8H_01_STATUS=COMPLETE_DATASET_BLOCKED_TOOLS_READY_NO_EXPERIMENT_SUBMITTED`
+
+`QE_LT8H_01_RESUME=DATASET_SIGNOFF_AND_ACTIVATION_THEN_SEMANTIC_AUDIT`
+
 该标识只表示等待期分析和预注册已准备，不表示数据、D1、D2、D3、新 Alpha 或策略包已经完成。
 
 ## 11. 验收矩阵
@@ -214,9 +280,9 @@
 | W-01 九臂真实状态与指标 | §2～§3 | 8001 summary/full API readback | COMPLETE | 2026H1 三臂缺失 |
 | W-02 不提前裁决 D1 | §3 | 3 vintage delta 与停止条件 | COMPLETE | 等待 2026H1 |
 | W-03 数据 signoff 与 active 分离 | §4 | WSL 只读观察不冒充双节点签核 | COMPLETE | 正式 signoff 待数据窗口 |
-| W-04 旧九臂等价性 | §5 | 明确逐 arm 算法和 fail-closed 结果 | DESIGN_READY | 等待新 manifest |
+| W-04 旧九臂等价性 | §5～§5.1 | 标准库 CLI、21 项聚焦测试、三态/退出码、自校验 receipt、未知字段与大小写 SHA fail closed、精确 non-runtime/ownership 登记 | SOURCE_IMPLEMENTED_TESTED | 等待新 manifest 才能形成最终裁决；未提交实验 |
 | W-05 三臂任务卡 | §6 | 窗口/固定项/提交前条件 | DESIGN_READY | 不提交 task |
-| W-06 D2 四格 | §7 | 四格、oracle 标记、输出与触发 | DESIGN_READY | 等待 D1R |
-| W-07 D3 Brinson | §8 | 输入一致性、分解和缺失语义 | DESIGN_READY | 等待 D1R |
+| W-06 D2 四格 | §7～§7.4 | Parquet/manifest 文件型工具、25 项聚焦测试、八格指标、bootstrap、逐日计数、oracle 标记与 portfolio `NOT_COMPUTABLE` | SOURCE_IMPLEMENTED_TESTED | 等待真实冻结 panel 形成信号层 receipt；等待 D1R/TWAP 形成 portfolio 结论 |
+| W-07 D3 Brinson | §8 | 输入一致性、分解和缺失语义 | SOURCE_IMPLEMENTED_TESTED_ATTRIBUTION_RECEIPT_PENDING_REAL_PANEL | 28 项聚焦测试通过；等待 D1R 真实同 holdings/TWAP 面板才能形成归因结论 |
 | W-08 日频 Alpha 边界 | §9～§9.1 | 文件型、无 DB、无正式 QE；A-01 源码/13 tests/旧文件冒烟 | SOURCE_READY_DATA_BLOCKED | 等待含 PIT `l2_code_id` 的正式 signoff |
 | W-09 动作边界 | 全文 | process/DB/dataset/experiment 均 noop | COMPLETE | 无 |

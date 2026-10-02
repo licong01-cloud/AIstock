@@ -1,0 +1,280 @@
+{
+  "actual": "MA-E19R3 direct-v2 config pins market=stock_universe, but minute coverage and Qlib Exchange default to all when exchange_kwargs.codes is omitted. Since daily all.txt correctly catalogs 000300.SH while minute data remains stock-only, the pre-training minute coverage gate incorrectly requires 000300.SH minute bars and blocks the run. Fix the consumer contract without modifying Qlib or candidate data: the default exchange quote universe must bind to the configured market/stock pool, while explicit wider quote_universe_codes remains supported and fail-closed coverage validation remains intact.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+    "noxfile.py",
+    "scripts/qrun_limit_minute.py",
+    "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1357",
+  "closed_at": "2026-09-04T16:23:35.452789Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-04T13:52:11.869292Z",
+  "description": "MA-E19R3 direct-v2 config pins market=stock_universe, but minute coverage and Qlib Exchange default to all when exchange_kwargs.codes is omitted. Since daily all.txt correctly catalogs 000300.SH while minute data remains stock-only, the pre-training minute coverage gate incorrectly requires 000300.SH minute bars and blocks the run. Fix the consumer contract without modifying Qlib or candidate data: the default exchange quote universe must bind to the configured market/stock pool, while explicit wider quote_universe_codes remains supported and fail-closed coverage validation remains intact.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260904-f0b2f0670652",
+      "timestamp": "2026-09-04T13:52:11.869275Z"
+    },
+    {
+      "action": "root_cause_confirmed",
+      "actor": "codex",
+      "note": "ConfigComposer omitted exchange_kwargs.codes, so Qlib and the minute coverage guard defaulted to the daily all catalog containing benchmark-only 000300.SH. The direct-v2 minute catalog remains stock-only under all.txt and is separately hash-pinned.",
+      "timestamp": "2026-09-04T14:39:52Z"
+    },
+    {
+      "action": "real_candidate_contract_verified",
+      "actor": "codex",
+      "note": "WSL rdagent-gpu fresh-process smoke loaded the immutable 2026-08-31 candidate and verified codes=stock_universe while accepting minute all.txt only through exact direct-v2 selection and minute SHA pins; candidate writes remained zero.",
+      "timestamp": "2026-09-04T14:39:52Z"
+    }
+  ],
+  "evidence_uris": [
+    "rdagent_assets/qe_workspace/qe_mae19r3_20260904_142359_20260831/Loop01/run.log"
+  ],
+  "expected": "QE minute backtests bind the default Exchange quote universe to the configured market stock pool, while explicit wider quote_universe_codes remains authoritative and coverage mismatches still fail closed.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "noxfile.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+      "noxfile.py",
+      "scripts/qrun_limit_minute.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1357-qe-minute-coverage-defaults-to-all-and-includes-day-only-benchmark.json"
+    ]
+  },
+  "first_seen_at": "2026-09-04T13:52:11.869292Z",
+  "fix_branch": null,
+  "fix_commit": "ba359bf635693cac7212220255cfc82e44cdffff",
+  "fixed_at": "2026-09-04T16:02:58Z",
+  "github_issue_number": 4281,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4281",
+  "last_seen_at": "2026-09-04T13:52:11.869292Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4282",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -q",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qe_sector_risk_overlay_backend",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks",
+    "fresh_process_evidence": [
+      "BUG1357_REAL_CANDIDATE_COVERAGE_PASS: WSL rdagent-gpu fresh process loaded the final task-worktree runner against the immutable 2026-08-31 direct-v2 binding, resolved the stock-only minute catalog by exact SHA pins, and bound Qlib Exchange codes to stock_universe"
+    ],
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1357/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1357",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "482a415b14088acc5e1386ba087e4f2a791cb0a122626973cf9b64fdcad9e31b",
+      "contract_digest": "a97f3df59a5f46a78c343bba6e29c03868047128fa34aeacdaba4c5f877113c5",
+      "expected_identity": "ba359bf635693cac7212220255cfc82e44cdffff",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-04T16:15:56.833988Z",
+      "mode": "read_only",
+      "observed_identity": "996b6452b9c136ff1f426779dbbd837018ecd58e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "75aa40a2de7b38fc0ddab6bbb660e8cacf3c0371b64c6e594c675f9df4b62b2b",
+      "receipt_sha256": "44fe068b6ab3b121fb7bb9e0d645cad47b1d22a9cfbc198d055e9d5c12a3abd1",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a197b8ea29462101b98cabd4c4b2bb4a263486be4d51cd90fc8ae8110c03aef0",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1357",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8eaee5497fce74ab",
+    "recorded_at": "2026-09-04T16:04:50.045018Z",
+    "runtime_contract_digest": "a97f3df59a5f46a78c343bba6e29c03868047128fa34aeacdaba4c5f877113c5",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2069710087c2d07de18aaa23087824eeed6b6cac",
+    "source_merge_commit": "ba359bf635693cac7212220255cfc82e44cdffff",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4282",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership 14/14)",
+      "python -m nox -s validation_catalog_integrity -> passed (7 passed; findings=0)",
+      "python -m nox -s qe_read_backend -> passed (154 passed)",
+      "python -m nox -s qe_sector_risk_overlay_backend -> passed (87 passed)"
+    ],
+    "validation_evidence_digest": "25585b5a527634060a452f2e6bdd78b625a674123a708080c4269736e23b6b62"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE minute coverage defaults to all and includes day-only benchmark",
+  "trigger_condition": {
+    "fingerprint": "f0b2f06706524146f195d384",
+    "source_event_id": "FE-20260904-f0b2f0670652"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed; ownership 14/14)",
+    "python -m nox -s validation_catalog_integrity -> passed (7 passed; findings=0)",
+    "python -m nox -s qe_read_backend -> passed (154 passed)",
+    "python -m nox -s qe_sector_risk_overlay_backend -> passed (87 passed)",
+    "PR #4282 CI verdict and CodeQL verdict passed at final source head 2069710087c2d07de18aaa23087824eeed6b6cac"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

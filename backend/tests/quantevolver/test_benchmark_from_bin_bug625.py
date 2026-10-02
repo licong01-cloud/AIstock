@@ -12,6 +12,7 @@ faked ``qlib.data.D`` — no real qlib / bin needed.
 """
 from __future__ import annotations
 
+import ast
 import sys
 import types
 from pathlib import Path
@@ -113,8 +114,14 @@ def test_load_benchmark_leading_nan_tolerated(runner):
 def test_load_benchmark_does_not_read_parquet(runner):
     src = (REPO_ROOT / runner).read_text(encoding="utf-8")
     fn_src = src[src.index("def load_benchmark_series"): src.index("def inject_benchmark")]
-    assert "benchmark_sh000300.parquet" not in fn_src
-    assert "benchmark disabled" not in fn_src  # no silent-disable path
+    tree = ast.parse(fn_src)
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "read_parquet" not in called_attributes
+    assert "read_pickle" not in called_attributes
 
 
 def test_read_exp_res_excess_no_silent_parquet_fill():
@@ -122,3 +129,37 @@ def test_read_exp_res_excess_no_silent_parquet_fill():
     assert "reindex(_report_dates).fillna(0)" not in src  # old silent-fill fallback removed
     assert "excess_unavailable_reason" in src              # partial benchmark -> reason, not fabrication
     assert 'D.features(["000300.SH"], ["$close/Ref($close,1)-1"]' in src  # bin-sourced
+
+
+def test_read_exp_res_emits_same_window_benchmark_annualized_metric():
+    source = (REPO_ROOT / "backend/services/quantevolver/templates/read_exp_res.py").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("def _extract_return_curves")
+    end = source.index("def _positions_to_dict")
+    namespace = {"pd": pd, "_np": np}
+    exec(source[start:end], namespace)  # noqa: S102 - trusted first-party source slice
+
+    index = pd.to_datetime(["2026-08-03", "2026-08-04", "2026-08-05"])
+    report = pd.DataFrame(
+        {
+            "return": [0.02, -0.01, 0.03],
+            "bench": [0.01, -0.005, 0.02],
+        },
+        index=index,
+    )
+
+    class Recorder:
+        @staticmethod
+        def load_object(path):
+            assert path == "portfolio_analysis/report_normal_1day.pkl"
+            return report
+
+    result = namespace["_extract_return_curves"](Recorder())
+    gross = (1.01 * 0.995 * 1.02)
+    assert result["benchmark_n_trading_days"] == 3
+    assert result["benchmark_total_return"] == pytest.approx(round(gross - 1.0, 6))
+    assert result["benchmark_annualized_return"] == pytest.approx(
+        round(gross ** (252.0 / 3.0) - 1.0, 6)
+    )
+    assert "report_benchmark_same_window" in source

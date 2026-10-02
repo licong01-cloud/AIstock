@@ -95,7 +95,7 @@ python -m pytest -q backend/tests/test_validation_module_ownership.py backend/te
 | F-030 | docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md | validation-receipt: DR-F2-20260812-01..04; final-head F2/minimal gate; PR #3310 head/check/merge readback | verified_source_review | - |
 | F-031 | backend/services/dataset_release/component_artifact_manifest.py; canonical_lineage.py | validation-receipt: DR-F2-20260812-01; backend/tests/dataset_release/test_canonical_lineage.py | verified | - |
 | F-032 | docs/architecture/qe_monthly_dataset_release_productization_f2_design_20260811.md; docs/operations/qe_backtest_dataset_monthly_update_runbook.md | artifact: tests/aistock_validation/pit_v2/small_candidate_receipt.json; artifact: tests/aistock_validation/pit_v2/candidate_audit_receipt.json | approved_by_user | 用户明确批准: 2026-09-01凌晨启动截至2026-08-31的candidate-only更新为唯一P0；真实receipt仍需独立数据执行授权和实际运行 |
-| F-033 | backend/services/stock_universe_pit_service.py; planned scripts/prepare_canonical_pit_monthly.py | backend/tests/scripts/test_prepare_canonical_pit_monthly.py; DEV rollback and production readback receipts | approved_by_user | 用户明确批准: 目标cutoff数据更新为P0；operator源码尚待实现，生产DML仍保留精确目标独立授权 |
+| F-033 | backend/services/stock_universe_pit_service.py; scripts/prepare_canonical_pit_monthly.py | backend/tests/scripts/test_prepare_canonical_pit_monthly.py; DEV apply/readback and optional same-cutoff NO_OP; production readback receipt | implemented_tests_passed | approved_by_user: BUG-1243实现固定authority operator；可选幂等复核不构成新门禁，生产DML仍保留精确目标独立授权，真实receipt由后续获权执行产生 |
 
 ## DESIGN-COMPLIANCE-001 readback
 

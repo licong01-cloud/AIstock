@@ -16,7 +16,7 @@ from datetime import date
 
 import pytest
 
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperRun
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.quantevolver.qe_workspace_client import (
@@ -58,9 +58,7 @@ class _FakeNodeClient:
         if file_path == "factors/factor_a.py":
             return b"def calculate():\n    return None\n"
         if file_path == "model.py":
-            raise QEWorkspaceFileNotFound(
-                task_id, loop_id, file_path, "http://node/files/model.py"
-            )
+            raise QEWorkspaceFileNotFound(task_id, loop_id, file_path, "http://node/files/model.py")
         raise AssertionError(f"unexpected workspace file request: {file_path}")
 
     async def download_mlruns_params(self, task_id, loop_id):
@@ -73,9 +71,7 @@ def test_node_success_records_origin_node(tmp_path, monkeypatch) -> None:
     """Happy path: download_mlruns_params succeeds -> origin == 'node'."""
 
     client = _FakeNodeClient(params_tar=_params_archive())
-    monkeypatch.setattr(
-        QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: client)
-    )
+    monkeypatch.setattr(QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: client))
 
     resolver = QEExperimentRuntimeAssetResolver(cache_root=tmp_path / "runtime_cache")
     source_dir, model_params_origin = resolver._materialize_runtime_source_from_node(
@@ -121,9 +117,7 @@ def test_node_failure_propagates_by_default(tmp_path, monkeypatch) -> None:
 
     fetch_error = RuntimeError("node mlruns params endpoint returned 500")
     client = _FakeNodeClient(params_tar=None, params_exc=fetch_error)
-    monkeypatch.setattr(
-        QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: client)
-    )
+    monkeypatch.setattr(QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: client))
 
     resolver = QEExperimentRuntimeAssetResolver(cache_root=cache_root)
 
@@ -167,15 +161,11 @@ def test_explicit_cache_fallback_records_origin_cache(tmp_path, monkeypatch, cap
 
     fetch_error = RuntimeError("node mlruns params endpoint returned 404")
     client = _FakeNodeClient(params_tar=None, params_exc=fetch_error)
-    monkeypatch.setattr(
-        QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: client)
-    )
+    monkeypatch.setattr(QEWorkspaceClient, "for_node", staticmethod(lambda _node_id: client))
 
     resolver = QEExperimentRuntimeAssetResolver(cache_root=cache_root)
 
-    with caplog.at_level(
-        logging.WARNING, logger="backend.services.strategy_package.live_inference"
-    ):
+    with caplog.at_level(logging.WARNING, logger="backend.services.strategy_package.live_inference"):
         source_dir, model_params_origin = resolver._materialize_runtime_source_from_node(
             experiment_id="qe_cache_fallback_ok",
             qe_task_id="qe_task_node",
@@ -193,10 +183,7 @@ def test_explicit_cache_fallback_records_origin_cache(tmp_path, monkeypatch, cap
     assert copied[0].read_bytes() == b"cached model params"
 
     # A structured warning is emitted on the cache fallback path.
-    assert any(
-        "mlruns_params_cache_fallback" in record.getMessage()
-        for record in caplog.records
-    )
+    assert any("mlruns_params_cache_fallback" in record.getMessage() for record in caplog.records)
 
     # The origin propagates through the run record via update_run_model_params_origin.
     repo = InMemoryPaperTradingV2Repository()

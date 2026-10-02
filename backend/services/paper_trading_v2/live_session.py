@@ -14,7 +14,9 @@ from zoneinfo import ZoneInfo
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider, TradeCalendarProvider
+from backend.services.paper_trading_v2.market_data import PaperV2MinuteMarketDataProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_trading_day_selection_cutoff
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.canonical_pit_runtime import (
@@ -207,7 +209,9 @@ class PaperTradingLiveMinuteExecutor:
                 portfolio_id=session.portfolio_id,
                 trade_date=trade_date,
                 run_id=run.run_id if run else (existing_day.run_id if existing_day else None),
-                status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+                status=PaperSessionStatus.PAUSED
+                if self._manual_tick_only(session)
+                else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
                 phase=PaperSessionPhase.LIVE_INTRADAY,
                 data_source=session.live_data_source or MinuteDataSource.TDX_REALTIME,
                 expected_bar_count=existing_day.expected_bar_count if existing_day else None,
@@ -244,7 +248,9 @@ class PaperTradingLiveMinuteExecutor:
         self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
         updated = self.repository.update_session_status(
             session.session_id,
-            status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+            status=PaperSessionStatus.PAUSED
+            if self._manual_tick_only(session)
+            else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
             phase=PaperSessionPhase.LIVE_INTRADAY,
             started_at=session.started_at or datetime.now(UTC),
             last_error=exc.to_dict(),
@@ -321,7 +327,10 @@ class PaperTradingLiveMinuteExecutor:
         if session.historical_data_source != MinuteDataSource.DB_HISTORICAL:
             raise SessionConfigError(
                 "CATCHUP_THEN_LIVE currently requires DB_HISTORICAL for the historical catch-up role",
-                context={"session_id": session.session_id, "historical_data_source": str(session.historical_data_source)},
+                context={
+                    "session_id": session.session_id,
+                    "historical_data_source": str(session.historical_data_source),
+                },
             )
         replay_end = self._catchup_replay_end(session=session, as_of_time=as_of_time)
         completed_days = {
@@ -334,7 +343,9 @@ class PaperTradingLiveMinuteExecutor:
             missing_days = [item for item in trading_days if item not in completed_days]
             if missing_days:
                 opts = dict(session.runtime_config.get("paper_v2_session") or {})
-                catchup_status = PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.CATCHING_UP
+                catchup_status = (
+                    PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.CATCHING_UP
+                )
                 self.repository.update_session_status(
                     session.session_id,
                     status=catchup_status,
@@ -382,7 +393,9 @@ class PaperTradingLiveMinuteExecutor:
                 )
         return self.repository.update_session_status(
             session.session_id,
-            status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.SWITCHING_TO_LIVE,
+            status=PaperSessionStatus.PAUSED
+            if self._manual_tick_only(session)
+            else PaperSessionStatus.SWITCHING_TO_LIVE,
             phase=PaperSessionPhase.LIVE_INTRADAY,
             started_at=session.started_at or datetime.now(UTC),
         )
@@ -453,7 +466,11 @@ class PaperTradingLiveMinuteExecutor:
         elif run.status == RunStatus.FAILED:
             raise InvalidStateTransitionError(
                 "cannot continue a failed live paper run",
-                context={"session_id": session.session_id, "run_id": run.run_id, "trade_date": run.trade_date.isoformat()},
+                context={
+                    "session_id": session.session_id,
+                    "run_id": run.run_id,
+                    "trade_date": run.trade_date.isoformat(),
+                },
             )
 
         progress = self._process_live_run(session, run, as_of_time=as_of_time)
@@ -613,7 +630,9 @@ class PaperTradingLiveMinuteExecutor:
                     portfolio_id=session.portfolio_id,
                     trade_date=trade_date,
                     run_id=existing.run_id,
-                    status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+                    status=PaperSessionStatus.PAUSED
+                    if self._manual_tick_only(session)
+                    else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
                     phase=PaperSessionPhase.LIVE_INTRADAY,
                     data_source=MinuteDataSource.MINIQMT_REALTIME,
                 )
@@ -628,7 +647,9 @@ class PaperTradingLiveMinuteExecutor:
             self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
             self.repository.update_session_status(
                 session.session_id,
-                status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_RETRYING,
+                status=PaperSessionStatus.PAUSED
+                if self._manual_tick_only(session)
+                else PaperSessionStatus.LIVE_RETRYING,
                 phase=PaperSessionPhase.LIVE_INTRADAY,
                 started_at=session.started_at or datetime.now(UTC),
             )
@@ -819,7 +840,9 @@ class PaperTradingLiveMinuteExecutor:
         self.repository.update_portfolio_status(session.portfolio_id, PortfolioStatus.RUNNING)
         self.repository.update_session_status(
             session.session_id,
-            status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
+            status=PaperSessionStatus.PAUSED
+            if self._manual_tick_only(session)
+            else PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY,
             phase=PaperSessionPhase.WAITING_NEXT_DAY,
             started_at=session.started_at or datetime.now(UTC),
         )
@@ -833,7 +856,9 @@ class PaperTradingLiveMinuteExecutor:
         policy = self._miniqmt_trade_window_policy(session)
         now_time = local_as_of.time()
         prepare_start = self._parse_policy_time(policy.get("prepare_start", "08:50"), field_name="prepare_start")
-        final_cutoff = self._parse_policy_time(policy.get("final_submit_cutoff", "14:55"), field_name="final_submit_cutoff")
+        final_cutoff = self._parse_policy_time(
+            policy.get("final_submit_cutoff", "14:55"), field_name="final_submit_cutoff"
+        )
         submit_windows = []
         for raw_window in policy.get("submit_windows") or []:
             if not isinstance(raw_window, dict):
@@ -894,7 +919,9 @@ class PaperTradingLiveMinuteExecutor:
 
     def _miniqmt_is_before_final_cutoff(self, session: PaperTradingSession, local_as_of: datetime) -> bool:
         policy = self._miniqmt_trade_window_policy(session)
-        final_cutoff = self._parse_policy_time(policy.get("final_submit_cutoff", "14:55"), field_name="final_submit_cutoff")
+        final_cutoff = self._parse_policy_time(
+            policy.get("final_submit_cutoff", "14:55"), field_name="final_submit_cutoff"
+        )
         return local_as_of.time() <= final_cutoff
 
     def _miniqmt_platform_data_retry_throttle_context(
@@ -1233,27 +1260,43 @@ class PaperTradingLiveMinuteExecutor:
         config = deepcopy(session.runtime_config)
         config["validated_execution_policy"] = execution_policy_context
         config.setdefault("paper_v2_session", {})
-        config["paper_v2_session"]["signal_data_source"] = self._signal_data_source(session, portfolio_data_source=portfolio.data_source)
+        config["paper_v2_session"]["signal_data_source"] = self._signal_data_source(
+            session, portfolio_data_source=portfolio.data_source
+        )
         config["paper_v2_session"]["live_step_mode"] = capability.live_step_mode
-        config["paper_v2_session"]["live_data_source"] = session.live_data_source.value if session.live_data_source else None
+        config["paper_v2_session"]["live_data_source"] = (
+            session.live_data_source.value if session.live_data_source else None
+        )
         self._ensure_live_selection_cutoff(config, trade_date=trade_date)
         config = normalize_runtime_config_with_backtest_contract(
             manifest,
             config,
-            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "trade_date": trade_date.isoformat(),
+                "check": "live_session",
+            },
             include_contract=True,
         )
         config = refresh_generated_runtime_profile_binding(config)
         validate_runtime_profile_binding(
             config,
-            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "trade_date": trade_date.isoformat(),
+                "check": "live_session",
+            },
         )
         runtime_profile = parse_selection_runtime_profile(config)
         runtime_contract = validate_runtime_profile_matches_backtest_contract(
             manifest,
             runtime_profile,
             runtime_config=config,
-            context={"portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat(), "check": "live_session"},
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "trade_date": trade_date.isoformat(),
+                "check": "live_session",
+            },
         )
         effective_manifest = apply_runtime_variant_to_manifest(manifest, config)
         config["qe_backtest_runtime_contract"] = runtime_contract
@@ -1325,8 +1368,10 @@ class PaperTradingLiveMinuteExecutor:
                     },
                 }
             )
-        if not snapshot.valid_no_candidate and snapshot.candidates and (
-            runtime_profile.tradability.exclude_suspended or runtime_profile.industry_blacklist
+        if (
+            not snapshot.valid_no_candidate
+            and snapshot.candidates
+            and (runtime_profile.tradability.exclude_suspended or runtime_profile.industry_blacklist)
         ):
             tradable, excluded = self.tradability_filter.filter_candidates(
                 candidates=snapshot.candidates,
@@ -1392,12 +1437,16 @@ class PaperTradingLiveMinuteExecutor:
             data_source=session.live_data_source or MinuteDataSource.TDX_REALTIME,
             runtime_config=config,
         )
-        latest_prepared_bar_time = self._latest_available_time_for_symbols(
-            symbols=[intent.symbol for intent in intents],
-            trade_date=trade_date,
-            live_data_source=session.live_data_source,
-            as_of_time=as_of_time,
-        ) if intents else None
+        latest_prepared_bar_time = (
+            self._latest_available_time_for_symbols(
+                symbols=[intent.symbol for intent in intents],
+                trade_date=trade_date,
+                live_data_source=session.live_data_source,
+                as_of_time=as_of_time,
+            )
+            if intents
+            else None
+        )
         strict_live_start_bar_time = self._live_causality_cursor(as_of_time) if intents else None
         self.repository.create_run(run)
         self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
@@ -1455,15 +1504,15 @@ class PaperTradingLiveMinuteExecutor:
                 "algo_code": execution_policy_json.get("algo_code"),
                 "live_step_mode": capability.live_step_mode,
                 "latest_prepared_bar_time": latest_prepared_bar_time.isoformat() if latest_prepared_bar_time else None,
-                "strict_live_start_bar_time": strict_live_start_bar_time.isoformat() if strict_live_start_bar_time else None,
+                "strict_live_start_bar_time": strict_live_start_bar_time.isoformat()
+                if strict_live_start_bar_time
+                else None,
                 "live_causality_mode": "strict_no_backfill",
             },
         )
         if not intents:
             no_rebalance_reason = (
-                "valid_no_candidate"
-                if snapshot.valid_no_candidate
-                else "target_positions_equal_current_positions"
+                "valid_no_candidate" if snapshot.valid_no_candidate else "target_positions_equal_current_positions"
             )
             prices = (
                 self._snapshot_prices_for_positions(
@@ -1563,7 +1612,9 @@ class PaperTradingLiveMinuteExecutor:
                         "is_complete": False,
                         "live_causality_mode": "strict_no_backfill",
                         "order_created_at": order.created_at.isoformat(),
-                        "strict_live_start_bar_time": strict_live_start_bar_time.isoformat() if strict_live_start_bar_time else None,
+                        "strict_live_start_bar_time": strict_live_start_bar_time.isoformat()
+                        if strict_live_start_bar_time
+                        else None,
                     },
                     filled_quantity=0,
                     remaining_quantity=order.quantity,
@@ -1593,7 +1644,9 @@ class PaperTradingLiveMinuteExecutor:
         )
         self.repository.update_session_status(
             session.session_id,
-            status=PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
+            status=PaperSessionStatus.PAUSED
+            if self._manual_tick_only(session)
+            else PaperSessionStatus.LIVE_WAITING_FOR_BAR,
             phase=PaperSessionPhase.LIVE_INTRADAY,
             started_at=session.started_at or datetime.now(UTC),
         )
@@ -1605,7 +1658,10 @@ class PaperTradingLiveMinuteExecutor:
         if top_k is None:
             raise RuntimeConfigInvalidError(
                 "Paper v2 live session requires runtime_profile.selection.top_k; StrategyPackage manifest cannot provide runtime top_k",
-                context={"package_id": manifest.package_id, "manifest_version": getattr(manifest, "manifest_version", None)},
+                context={
+                    "package_id": manifest.package_id,
+                    "manifest_version": getattr(manifest, "manifest_version", None),
+                },
             )
         return int(top_k)
 
@@ -1674,7 +1730,9 @@ class PaperTradingLiveMinuteExecutor:
         message: str,
         context: dict[str, Any],
     ) -> PaperTradingSession:
-        status = PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR
+        status = (
+            PaperSessionStatus.PAUSED if self._manual_tick_only(session) else PaperSessionStatus.LIVE_WAITING_FOR_BAR
+        )
         self.repository.save_session_day(
             PaperSessionDay(
                 session_id=session.session_id,
@@ -1709,8 +1767,9 @@ class PaperTradingLiveMinuteExecutor:
         self._require_current_pit(run.runtime_config)
         portfolio = self.repository.get_portfolio(session.portfolio_id)
         policy_json = run.runtime_config["validated_execution_policy"]["policy_json"]
-        capability = require_execution_algo_supports_mode(policy_json, mode="LIVE_ONLY", package_id=portfolio.package_id)
-        require_day_features = False
+        capability = require_execution_algo_supports_mode(
+            policy_json, mode="LIVE_ONLY", package_id=portfolio.package_id
+        )
         algo_config = dict(policy_json.get("algo_config") or {})
         states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
         if not states:
@@ -1718,8 +1777,12 @@ class PaperTradingLiveMinuteExecutor:
                 "live run has no persisted order execution state",
                 context={"session_id": session.session_id, "run_id": run.run_id},
             )
-        active_states = [state for state in states if state.status not in FINAL_ORDER_STATUSES and state.remaining_quantity > 0]
-        latest_available = self._latest_available_time_for_states(active_states or states, session.live_data_source, as_of_time)
+        active_states = [
+            state for state in states if state.status not in FINAL_ORDER_STATUSES and state.remaining_quantity > 0
+        ]
+        latest_available = self._latest_available_time_for_states(
+            active_states or states, session.live_data_source, as_of_time
+        )
         if not active_states:
             current_last_processed = self._max_processed(states)
             latest_available, last_processed = self._mark_to_market_without_active_orders(
@@ -1767,7 +1830,6 @@ class PaperTradingLiveMinuteExecutor:
                 source=session.live_data_source or MinuteDataSource.TDX_REALTIME,
                 until_time=as_of_time,
                 require_suspend_status=True,
-                require_day_features=require_day_features,
             )
             if market_input.minute_bars:
                 touched_prices[state.symbol] = market_input.minute_bars[-1].close
@@ -1830,7 +1892,9 @@ class PaperTradingLiveMinuteExecutor:
                     "latest_available_bar_time": latest_available.isoformat() if latest_available else None,
                 },
             )
-            self._save_live_day_cursor(session, run, latest_available=latest_available, last_processed=self._max_processed(states))
+            self._save_live_day_cursor(
+                session, run, latest_available=latest_available, last_processed=self._max_processed(states)
+            )
             self.repository.update_session_status(
                 session.session_id,
                 status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
@@ -1918,7 +1982,9 @@ class PaperTradingLiveMinuteExecutor:
         policy_json = run.runtime_config["validated_execution_policy"]["policy_json"]
         allow_partial_fill = bool((policy_json.get("algo_config") or {}).get("allow_partial_fill", True))
         states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
-        remaining_states = [state for state in states if state.remaining_quantity > 0 and state.status not in FINAL_ORDER_STATUSES]
+        remaining_states = [
+            state for state in states if state.remaining_quantity > 0 and state.status not in FINAL_ORDER_STATUSES
+        ]
         if remaining_states:
             error = InvalidStateTransitionError(
                 "live minute execution left unfilled quantity at market close",
@@ -1927,7 +1993,11 @@ class PaperTradingLiveMinuteExecutor:
                     "session_id": session.session_id,
                     "run_id": run.run_id,
                     "remaining_orders": [
-                        {"order_id": state.order_id, "symbol": state.symbol, "remaining_quantity": state.remaining_quantity}
+                        {
+                            "order_id": state.order_id,
+                            "symbol": state.symbol,
+                            "remaining_quantity": state.remaining_quantity,
+                        }
                         for state in remaining_states
                     ],
                 },
@@ -1949,7 +2019,8 @@ class PaperTradingLiveMinuteExecutor:
             portfolio_id=portfolio.portfolio_id,
             cash=latest_cash,
             market_value=sum(position.quantity * prices[position.symbol] for position in latest_positions.values()),
-            nav=latest_cash + sum(position.quantity * prices[position.symbol] for position in latest_positions.values()),
+            nav=latest_cash
+            + sum(position.quantity * prices[position.symbol] for position in latest_positions.values()),
             snapshot_time=as_of_time,
         )
         self._require_current_pit(run.runtime_config)
@@ -2248,7 +2319,11 @@ class PaperTradingLiveMinuteExecutor:
             if not market_input.minute_bars:
                 raise DataUnavailableError(
                     "live snapshot price requires at least one observed minute bar",
-                    context={"symbol": symbol, "trade_date": trade_date.isoformat(), "as_of_time": as_of_time.isoformat()},
+                    context={
+                        "symbol": symbol,
+                        "trade_date": trade_date.isoformat(),
+                        "as_of_time": as_of_time.isoformat(),
+                    },
                 )
             prices[symbol] = market_input.minute_bars[-1].close
         return prices
@@ -2313,11 +2388,7 @@ class PaperTradingLiveMinuteExecutor:
             "order_created_at",
             "strict_live_start_bar_time",
         }
-        preserved = {
-            key: value
-            for key, value in (previous_state.algo_state or {}).items()
-            if key in preserved_keys
-        }
+        preserved = {key: value for key, value in (previous_state.algo_state or {}).items() if key in preserved_keys}
         if not preserved:
             return updated_state
         return updated_state.model_copy(update={"algo_state": {**updated_state.algo_state, **preserved}})

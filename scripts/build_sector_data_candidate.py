@@ -336,6 +336,30 @@ def _producer_guarded_days(days, *, expected_producer: Mapping[str, Any]):
         raise SectorDataBuildContractError("producer worktree changed during candidate construction")
 
 
+def _candidate_scope(
+    denominator: FrozenDenominator,
+    *,
+    selected_dates: Sequence[date],
+    selected_symbols: frozenset[str],
+    max_trading_days: int | None,
+    expected_opportunities: int,
+) -> str:
+    """Classify physical scope from resolved content, not CLI omission.
+
+    The monthly runbook intentionally passes the frozen authority boundaries
+    explicitly.  Those arguments still describe a full candidate when the
+    resolved dates and opportunity denominator are exact.
+    """
+
+    full_scope = (
+        not selected_symbols
+        and max_trading_days is None
+        and tuple(selected_dates) == denominator.trading_dates
+        and expected_opportunities == denominator.total_opportunities
+    )
+    return "full" if full_scope else "sample"
+
+
 def build(args: argparse.Namespace) -> Mapping[str, Any]:
     producer = _git_identity()
     if not args.dry_run and producer["dirty"]:
@@ -371,12 +395,12 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
         )
         expected = sum(len(values) for values in symbols_by_date.values())
         expected_opportunity_digest = _opportunity_digest(symbols_by_date)
-        full_scope = (
-            not selected_symbols
-            and args.start_date is None
-            and args.end_date is None
-            and args.max_trading_days is None
-            and expected == denominator.total_opportunities
+        candidate_scope = _candidate_scope(
+            denominator,
+            selected_dates=selected_dates,
+            selected_symbols=selected_symbols,
+            max_trading_days=args.max_trading_days,
+            expected_opportunities=expected,
         )
         source_days = _source_days(
             conn,
@@ -406,7 +430,7 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
                 raise SectorDataBuildContractError("dry-run denominator closure failed")
             return {
                 "status": "PASS_DRY_RUN",
-                "candidate_scope": "full" if full_scope else "sample",
+                "candidate_scope": candidate_scope,
                 "artifact_written": False,
                 "expected_opportunities": expected,
                 "assignment_rows": assignments,
@@ -427,7 +451,7 @@ def build(args: argparse.Namespace) -> Mapping[str, Any]:
             days=_producer_guarded_days(candidate_days, expected_producer=producer),
             expected_opportunities=expected,
             expected_opportunity_digest=expected_opportunity_digest,
-            candidate_scope="full" if full_scope else "sample",
+            candidate_scope=candidate_scope,
             producer_commit=str(producer["commit"]),
             producer_tree=str(producer["tree"]),
         )

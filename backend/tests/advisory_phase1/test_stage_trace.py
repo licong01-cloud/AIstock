@@ -54,7 +54,7 @@ from backend.services.selection_center.prospective_evidence import (
     StageReceiptStatus,
     build_stage_receipt,
 )
-from backend.services.simulation_runtime.selection import StrategyPackageSelectionService
+from backend.services.simulation_signal.strategy_package_selection import StrategyPackageSelectionService
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
 
 
@@ -178,7 +178,9 @@ def _manifest() -> SimpleNamespace:
     )
 
 
-def _artifact(*, candidate: SelectionCandidate | None = None, candidates: list[SelectionCandidate] | None = None) -> SimpleNamespace:
+def _artifact(
+    *, candidate: SelectionCandidate | None = None, candidates: list[SelectionCandidate] | None = None
+) -> SimpleNamespace:
     candidate = candidate or _candidate()
     candidates = candidates or [candidate]
     component_hashes = {"leg_a": LEG_A_HASH, "leg_b": LEG_B_HASH}
@@ -321,7 +323,10 @@ def test_multi_alpha_exclusions_keep_component_provenance_in_trace_envelope() ->
 def test_missing_leg_rank_is_partial_without_changing_parent_candidate() -> None:
     candidate = _candidate(include_rank=False)
     result = build_component_evidence(
-        manifest=_manifest(), artifact=_artifact(candidate=candidate), candidate=candidate.model_dump(mode="json"), runtime_config={}
+        manifest=_manifest(),
+        artifact=_artifact(candidate=candidate),
+        candidate=candidate.model_dump(mode="json"),
+        runtime_config={},
     )
 
     assert result.capability is ComponentCapability.PARTIAL
@@ -334,7 +339,10 @@ def test_missing_leg_rank_is_partial_without_changing_parent_candidate() -> None
 def test_missing_component_payload_is_unavailable_without_changing_parent_candidate() -> None:
     candidate = _candidate().model_copy(update={"component_scores": {}})
     result = build_component_evidence(
-        manifest=_manifest(), artifact=_artifact(candidate=candidate), candidate=candidate.model_dump(mode="json"), runtime_config={}
+        manifest=_manifest(),
+        artifact=_artifact(candidate=candidate),
+        candidate=candidate.model_dump(mode="json"),
+        runtime_config={},
     )
 
     assert result.capability is ComponentCapability.UNAVAILABLE
@@ -373,7 +381,9 @@ def test_sink_copies_immutable_payload_and_enforces_candidate_bound() -> None:
 
     assert result.state is TraceCaptureState.ENVELOPE_READY
     assert result.envelope is not None
-    before = result.envelope.trace_content["raw_score_artifact"]["scores_json"][0]["component_scores"]["leg_a"]["raw_score"]
+    before = result.envelope.trace_content["raw_score_artifact"]["scores_json"][0]["component_scores"]["leg_a"][
+        "raw_score"
+    ]
     candidate.component_scores["leg_a"]["raw_score"] = 999.0
     assert float(before) == 1.0
 
@@ -624,7 +634,9 @@ def test_capture_service_persists_exact_envelope_without_rerunning_selection() -
         writer=repository,
         failure_handler=lambda **kwargs: failures.append(kwargs),
     )
-    service = Phase1TraceCaptureService(binding=_binding(), sink=BoundedSelectionStageTraceSink(), outbox_writer=dispatcher)
+    service = Phase1TraceCaptureService(
+        binding=_binding(), sink=BoundedSelectionStageTraceSink(), outbox_writer=dispatcher
+    )
     kwargs = {
         "selection_run_id": "selection-run-1",
         "package_id": PACKAGE_ID,
@@ -688,7 +700,9 @@ def test_async_writer_failure_is_not_mislabeled_as_crash_reconciliation_loss() -
         writer=InMemoryTraceOutboxRepository(),
         failure_handler=lambda **kwargs: failures.append(kwargs),
     )
-    service = Phase1TraceCaptureService(binding=_binding(), sink=BoundedSelectionStageTraceSink(), outbox_writer=dispatcher)
+    service = Phase1TraceCaptureService(
+        binding=_binding(), sink=BoundedSelectionStageTraceSink(), outbox_writer=dispatcher
+    )
 
     result = service.capture_package(
         selection_run_id="selection-run-1",
@@ -894,15 +908,8 @@ def test_capture_receipt_preserves_fail_closed_admission_reason() -> None:
 def test_trace_module_has_no_runtime_or_io_imports() -> None:
     path = "backend/services/advisory_phase1/stage_trace.py"
     tree = ast.parse(open(path, encoding="utf-8").read())
-    imports = [
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
-        for alias in node.names
-    ] + [
-        node.module or ""
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
+    imports = [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names] + [
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
     ]
     forbidden = ("psycopg2", "requests", "http", "paper", "simulation", "qmt", "broker", "hmm")
     assert not [name for name in imports if any(token in name.lower() for token in forbidden)]
@@ -916,7 +923,10 @@ def test_phase1_migration_enforces_trace_outbox_and_delivery_chain() -> None:
     assert "CREATE TABLE IF NOT EXISTS app.advisory_selection_stage_trace_delivery_event" in migration
     assert "CREATE TABLE IF NOT EXISTS app.advisory_phase1_control_binding_event" in migration
     assert "fk_advisory_stage_trace_outbox_control_binding" in migration
-    assert "UNIQUE (selection_run_id, package_id, manifest_sha256, decision_as_of_trade_date, capture_policy_hash)" in migration
+    assert (
+        "UNIQUE (selection_run_id, package_id, manifest_sha256, decision_as_of_trade_date, capture_policy_hash)"
+        in migration
+    )
     assert "ux_advisory_stage_trace_delivery_one_successor" in migration
     assert "ADVISORY_PHASE1_TRACE_DELIVERY_CHAIN_INVALID" in migration
     assert "BEFORE UPDATE OR DELETE ON app.advisory_selection_stage_trace_outbox" in migration

@@ -25,7 +25,6 @@ from .models import (
     FIXED_STRATEGY_COUNT_GATE_KEYS,
     AlphaSignalBook,
     AlphaSignalItem,
-    DailySelectionEvidence,
     ExecutionPathNotCanonicalError,
     ExecutionPlan,
     ExecutionPlanIntent,
@@ -44,7 +43,6 @@ from .models import (
     assert_alpha_signal_payload_boundary,
     assert_canonical_miniqmt_runtime_gate,
     assert_no_fixed_strategy_count_gate,
-    assert_selection_only_payload_boundary,
 )
 from .performance import (
     MergedPositionReconciliation,
@@ -66,7 +64,6 @@ from .scheduler import (
     simulation_lifecycle_background_scheduler,
     simulation_lifecycle_scheduler,
 )
-from .selection import DailySelectionSignalService, StrategyPackageSelectionResult, StrategyPackageSelectionService
 from .service import StrategyRuntimeReleaseService
 from .tail import TailHandlingOrderResult, TailHandlingPolicyService, TailHandlingResult
 
@@ -77,10 +74,8 @@ __all__ = [
     "FIXED_STRATEGY_COUNT_GATE_KEYS",
     "AlphaSignalBook",
     "AlphaSignalItem",
-    "DailySelectionEvidence",
     "ExecutionPathNotCanonicalError",
     "ProductionSimulationRunContextProvider",
-    "DailySelectionSignalService",
     "ExecutionPlan",
     "ExecutionPlanCompiler",
     "ExecutionPlanIntent",
@@ -122,8 +117,6 @@ __all__ = [
     "StrategyRuntimeReleaseService",
     "StrategyPerformanceProjection",
     "StrategyPerformanceProjectionService",
-    "StrategyPackageSelectionResult",
-    "StrategyPackageSelectionService",
     "StrategyPositionProjection",
     "StaticSimulationRunContextProvider",
     "TargetPositionService",
@@ -135,7 +128,6 @@ __all__ = [
     "assert_alpha_signal_payload_boundary",
     "assert_canonical_miniqmt_runtime_gate",
     "assert_no_fixed_strategy_count_gate",
-    "assert_selection_only_payload_boundary",
     "build_simulation_lifecycle_scheduler_from_env",
     "simulation_lifecycle_background_scheduler",
     "simulation_lifecycle_scheduler",

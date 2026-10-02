@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 import pytest
 from pydantic import ValidationError
 
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
@@ -214,7 +214,10 @@ def test_alpha_core_paper_portfolio_derives_or_accepts_explicit_execution_policy
         data_source=MinuteDataSource.DB_HISTORICAL,
     )
     assert derived_portfolio.execution_policy["validated_execution_policy_id"].startswith("platform_manifest_")
-    assert derived_portfolio.execution_policy["source_backtest_id"] == f"strategy_package_manifest:{manifest.manifest_sha256}"
+    assert (
+        derived_portfolio.execution_policy["source_backtest_id"]
+        == f"strategy_package_manifest:{manifest.manifest_sha256}"
+    )
     assert derived_portfolio.execution_policy["algo_code"] == "TWAP"
 
     policy = StrategyPackageService(repository=package_repo).create_execution_policy(

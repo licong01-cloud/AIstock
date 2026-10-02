@@ -35,7 +35,8 @@ from backend.services.selection_center.canonical_pit_runtime import (
     require_canonical_pit_runtime_binding,
 )
 
-from .market_data import MinuteDataSource, TradeCalendarProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from .models import (
     PaperReplayResult,
     PaperSessionDay,
@@ -495,7 +496,11 @@ class PaperTradingSessionService:
                 "only paused paper v2 sessions can be resumed",
                 context={"session_id": session_id, "status": session.status.value},
             )
-        resumed_status = PaperSessionStatus.REPLAYING if session.mode == PaperSessionMode.REPLAY_ONLY else PaperSessionStatus.LIVE_WAITING_FOR_BAR
+        resumed_status = (
+            PaperSessionStatus.REPLAYING
+            if session.mode == PaperSessionMode.REPLAY_ONLY
+            else PaperSessionStatus.LIVE_WAITING_FOR_BAR
+        )
         resumed = self.repository.update_session_status(session_id, status=resumed_status)
         self.repository.save_session_event(
             session_id=session_id,
@@ -521,7 +526,9 @@ class PaperTradingSessionService:
             message="paper v2 trade session stopped without deleting persisted artifacts",
         )
         portfolio = self.repository.get_portfolio(session.portfolio_id)
-        if portfolio.status in {PortfolioStatus.RUNNING, PortfolioStatus.PAUSED} and not self._has_running_run(portfolio.portfolio_id):
+        if portfolio.status in {PortfolioStatus.RUNNING, PortfolioStatus.PAUSED} and not self._has_running_run(
+            portfolio.portfolio_id
+        ):
             self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
         return stopped
 
@@ -549,7 +556,10 @@ class PaperTradingSessionService:
 
     def _has_running_run(self, portfolio_id: str) -> bool:
         try:
-            return any(str(row.get("status") or "").upper() == "RUNNING" for row in self.repository.list_runs(portfolio_id, limit=10_000))
+            return any(
+                str(row.get("status") or "").upper() == "RUNNING"
+                for row in self.repository.list_runs(portfolio_id, limit=10_000)
+            )
         except (DataUnavailableError, TradingCoreError) as exc:
             raise SessionConfigError(
                 "paper v2 session could not verify running day-run state",
@@ -596,7 +606,11 @@ class PaperTradingSessionService:
         except ValueError as exc:
             raise SessionSourceUnsupportedError(
                 "unsupported Paper v2 minute data source",
-                context={"field": field_name, "source": str(source), "supported_sources": [item.value for item in MinuteDataSource]},
+                context={
+                    "field": field_name,
+                    "source": str(source),
+                    "supported_sources": [item.value for item in MinuteDataSource],
+                },
             ) from exc
 
     @staticmethod
@@ -610,7 +624,10 @@ class PaperTradingSessionService:
         if start_date < portfolio_start_date:
             raise SessionConfigError(
                 "session start_date cannot be before portfolio start_date",
-                context={"start_date": start_date.isoformat(), "portfolio_start_date": portfolio_start_date.isoformat()},
+                context={
+                    "start_date": start_date.isoformat(),
+                    "portfolio_start_date": portfolio_start_date.isoformat(),
+                },
             )
         if mode == PaperSessionMode.REPLAY_ONLY and end_date is None:
             raise SessionConfigError("REPLAY_ONLY session requires end_date")
@@ -662,7 +679,9 @@ class PaperTradingSessionService:
                 return
         elif mode == PaperSessionMode.CATCHUP_THEN_LIVE:
             if historical_data_source is None or live_data_source is None:
-                raise SessionConfigError("CATCHUP_THEN_LIVE session requires both historical_data_source and live_data_source")
+                raise SessionConfigError(
+                    "CATCHUP_THEN_LIVE session requires both historical_data_source and live_data_source"
+                )
             if broker_backend != "local_sim":
                 raise SessionSourceUnsupportedError(
                     "catch-up then live is not implemented for this broker backend",
@@ -916,7 +935,11 @@ class PaperTradingSessionRunner:
         except Exception as exc:
             wrapped = TradingCoreError(
                 "paper v2 session replay failed",
-                context={"session_id": session.session_id, "portfolio_id": session.portfolio_id, "reason": f"{type(exc).__name__}: {exc}"},
+                context={
+                    "session_id": session.session_id,
+                    "portfolio_id": session.portfolio_id,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                },
             )
             self._mark_failed(session, wrapped)
             raise wrapped from exc

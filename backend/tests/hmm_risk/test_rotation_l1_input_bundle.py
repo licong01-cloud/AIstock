@@ -1,0 +1,2954 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+
+import h5py
+import numpy as np
+import pandas as pd
+import pytest
+
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID,
+    CANONICAL_PIT_RULE_VERSION,
+    CANONICAL_PIT_SNAPSHOT_PREFIX,
+    canonical_rule_parameters_digest,
+)
+from backend.services.hmm_risk import rotation_l1_input_bundle as subject
+from backend.services.dataset_release.copy_on_write import tree_merkle
+from backend.services.dataset_release.stock_schema import qlib_stock_schema_digest
+from backend.services.hmm_risk.contracts import canonical_sha256
+from scripts.hmm_risk import build_rotation_l1_input_bundle as cli
+
+
+_ACTIVE_DIRECT_V2_ROOT: Path | None = None
+_ACTIVE_PROFILE_PATH: Path | None = None
+
+
+@pytest.fixture(autouse=True)
+def _active_direct_v2_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    global _ACTIVE_DIRECT_V2_ROOT, _ACTIVE_PROFILE_PATH
+    _ACTIVE_DIRECT_V2_ROOT = None
+    _ACTIVE_PROFILE_PATH = tmp_path / "active_dataset_profile.json"
+    monkeypatch.setenv(subject.ACTIVE_DATASET_PROFILE_ENV, str(_ACTIVE_PROFILE_PATH))
+    yield
+    _ACTIVE_DIRECT_V2_ROOT = None
+    _ACTIVE_PROFILE_PATH = None
+
+
+def _receipt(label: str) -> dict[str, object]:
+    body: dict[str, object] = {"schema_version": f"{label}_v1", "status": "complete", "count": 1}
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _panel(count: int, level: str, *, offset: float = 0.0) -> pd.DataFrame:
+    dates = (subject.SOURCE_START, subject.SOURCE_END)
+    codes = [f"{index:06d}.{level}" for index in range(count)]
+    rows: list[dict[str, object]] = []
+    for day_index, day in enumerate(dates):
+        for code_index, code in enumerate(codes):
+            row: dict[str, object] = {"trade_date": day, "sector_code": code}
+            for feature_index, feature in enumerate(subject.FEATURE_NAMES):
+                row[feature] = offset + day_index + code_index / 1000 + feature_index / 100
+            rows.append(row)
+    rows[0][subject.FEATURE_NAMES[-1]] = np.nan
+    return pd.DataFrame(rows).set_index(["trade_date", "sector_code"])
+
+
+def _mapping_manifest() -> dict[str, object]:
+    return {
+        "schema_version": subject.HMM_MAPPING_MANIFEST_SCHEMA,
+        "universe_key": f"{CANONICAL_PIT_SNAPSHOT_PREFIX}frozen-release",
+        "source_window_start": subject.SOURCE_START.isoformat(),
+        "source_window_end": subject.SOURCE_END.isoformat(),
+        "canonical_l1_count": 31,
+        "canonical_l2_count": 131,
+        "source_classification_authority_receipt_hash": "1" * 64,
+        "classification_authority_receipt_hash": "2" * 64,
+        "index_membership_authority_receipt_hash": "3" * 64,
+        "classification_candidate_hash": "4" * 64,
+        "stable_backcast_candidate_sha256": "5" * 64,
+        "index_membership_candidate_hash": "6" * 64,
+        "candidate_bundle_hash": "7" * 64,
+        "candidate_preflight_canonical_hash": "8" * 64,
+        "research_basis_contract_sha256": "9" * 64,
+        "active_classification_basis": "stable_taxonomy_backcast",
+        "non_as_known_taxonomy": True,
+        "l1_code_projection_sha256": "a" * 64,
+        "l2_code_projection_sha256": "c" * 64,
+        "constituent_manifest_hash": "b" * 64,
+    }
+
+
+def _inputs(*, offset: float = 0.0) -> dict[str, object]:
+    dates = (subject.SOURCE_START, subject.SOURCE_END)
+    return {
+        "panel": _panel(31, "L1", offset=offset),
+        "l2_panel": _panel(131, "L2", offset=offset),
+        "trading_dates": dates,
+        "dataset_manifest": {
+            "calendar_benchmark": {"rows": [[day.isoformat(), 0.001 + index / 1000] for index, day in enumerate(dates)]}
+        },
+        "mapping_manifest": _mapping_manifest(),
+        "security_identity_manifest": {"schema_version": "security_v1", "manifest_sha256": "a" * 64},
+        "provider_absence_manifest": {"schema_version": "absence_v1", "manifest_sha256": "b" * 64},
+        "feature_definition": {"schema_version": "feature_v1", "features": list(subject.FEATURE_NAMES)},
+        "l2_feature_definition": {"schema_version": "feature_v1", "features": list(subject.FEATURE_NAMES)},
+        "c010_diagnostic": {
+            "eligibility": _receipt("eligibility"),
+            "aggregate_evidence": _receipt("aggregate"),
+            "l1_cross_section_evidence": _receipt("cross_section"),
+        },
+        "source_build_resource_receipts": [
+            {"stage": stage, "elapsed_seconds": float(index + 1), "rss_bytes": 1024 * (index + 1)}
+            for index, stage in enumerate(subject.SOURCE_BUILD_STAGES)
+        ],
+        "input_bundle_evidence": {
+            "unavailable_reason": [
+                {
+                    "trade_date": subject.SOURCE_START.isoformat(),
+                    "level": "L1",
+                    "sector_code": "000000.L1",
+                    "field": subject.FEATURE_NAMES[-1],
+                    "reason_code": "hmm_risk_rotation_l1_feature_warmup",
+                    "source_observation_date": subject.SOURCE_START.isoformat(),
+                }
+            ],
+            "security_identity_intervals": [
+                {
+                    "canonical_security_id": "000001.SZ",
+                    "source_dataset": "market.daily_basic",
+                    "valid_from": subject.SOURCE_START.isoformat(),
+                    "valid_to": subject.SOURCE_END.isoformat(),
+                    "source_code": "000001.SZ",
+                },
+                {
+                    "canonical_security_id": "000001.SZ",
+                    "source_dataset": "market.moneyflow_ts",
+                    "valid_from": subject.SOURCE_START.isoformat(),
+                    "valid_to": subject.SOURCE_END.isoformat(),
+                    "source_code": "000001.SZ",
+                },
+            ],
+            "industry_projection_intervals": [
+                {
+                    "canonical_security_id": "000001.SZ",
+                    "effective_from": subject.SOURCE_START.isoformat(),
+                    "effective_to": subject.SOURCE_END.isoformat(),
+                    "l1_code": "000000.L1",
+                    "l2_code": "000000.L2",
+                }
+            ],
+            "source_status_intervals": [
+                {
+                    "canonical_security_id": "000001.SZ",
+                    "valid_from": subject.SOURCE_START.isoformat(),
+                    "valid_to": subject.SOURCE_END.isoformat(),
+                    "status": "available",
+                    "reason_code": "",
+                    "provider": "frozen_release",
+                }
+            ],
+        },
+    }
+
+
+def _release_identity(release_id: str = "frozen-release") -> dict[str, object]:
+    return {
+        "schema_version": "qe_formal_canonical_pit_dataset_binding_v1",
+        "usage_mode": "formal_training",
+        "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+        "rule_version": CANONICAL_PIT_RULE_VERSION,
+        "rule_parameters_digest": canonical_rule_parameters_digest(),
+        "release_id": release_id,
+        "cutoff": subject.SOURCE_END.isoformat(),
+        "frozen_snapshot_digest": "1" * 64,
+        "manifest_digest": "2" * 64,
+    }
+
+
+def _source() -> dict[str, object]:
+    return {
+        "source_start": subject.SOURCE_START.isoformat(),
+        "source_end": subject.SOURCE_END.isoformat(),
+        "source_revision": subject.SOURCE_REVISION,
+        "circ_mv_history_start": subject.SOURCE_START.isoformat(),
+        "universe_key": f"{CANONICAL_PIT_SNAPSHOT_PREFIX}frozen-release",
+        "universe_rule_version": CANONICAL_PIT_RULE_VERSION,
+    }
+
+
+def _source_identity() -> dict[str, object]:
+    return {
+        "release_identity": _release_identity(),
+        "source_inventory_sha256": "b" * 64,
+        "source_binding_manifest_sha256": "c" * 64,
+        "qlib_schema_version": subject.QLIB_STOCK_SCHEMA_VERSION,
+        "qlib_schema_sha256": qlib_stock_schema_digest(),
+        "c013_bundle_sha256": "e" * 64,
+    }
+
+
+def _write(tmp_path: Path, *, name: str = "bundle", offset: float = 0.0) -> tuple[Path, dict[str, object]]:
+    root = tmp_path / name
+    receipt = subject.write_rotation_l1_input_bundle(
+        inputs=_inputs(offset=offset),
+        source=_source(),
+        source_identity=_source_identity(),
+        output_root=root,
+        producer_commit="f" * 40,
+        forbidden_roots=(Path(__file__).resolve().parents[3],),
+    )
+    return root, receipt
+
+
+def _rewrite_manifest_and_receipt(root: Path, manifest: dict[str, object]) -> None:
+    body = {
+        key: value for key, value in manifest.items() if key not in {"manifest_body_sha256", "bundle_canonical_sha256"}
+    }
+    body_hash = canonical_sha256(body)
+    bundle_hash = canonical_sha256(
+        {
+            "schema_version": subject.MANIFEST_SCHEMA_VERSION,
+            "manifest_body_sha256": body_hash,
+            "h5_sha256": manifest["h5_file"]["sha256"],
+        }
+    )
+    manifest["manifest_body_sha256"] = body_hash
+    manifest["bundle_canonical_sha256"] = bundle_hash
+    (root / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    receipt = json.loads((root / "build.receipt.json").read_text(encoding="utf-8"))
+    receipt["manifest_body_sha256"] = body_hash
+    receipt["bundle_canonical_sha256"] = bundle_hash
+    receipt["receipt_sha256"] = canonical_sha256(
+        {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    )
+    (root / "build.receipt.json").write_text(
+        json.dumps(receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_bundle_round_trip_is_complete_and_restores_only_model_inputs(tmp_path: Path) -> None:
+    root, receipt = _write(tmp_path)
+    expected = _inputs()
+
+    loaded = subject.read_rotation_l1_input_bundle(
+        root,
+        forbidden_roots=(Path(__file__).resolve().parents[3],),
+    )
+
+    assert receipt["status"] == "success"
+    assert {item.name for item in root.iterdir()} == {
+        "rotation_l1_input.h5",
+        "manifest.json",
+        "build.receipt.json",
+    }
+    assert loaded["panel"].shape == (62, 9)
+    assert loaded["l2_panel"].shape == (262, 9)
+    pd.testing.assert_frame_equal(loaded["panel"], expected["panel"].sort_index())
+    pd.testing.assert_frame_equal(loaded["l2_panel"], expected["l2_panel"].sort_index())
+    assert loaded["trading_dates"] == (subject.SOURCE_START, subject.SOURCE_END)
+    assert np.isnan(loaded["panel"].iloc[0][subject.FEATURE_NAMES[-1]])
+    assert loaded["input_bundle_evidence"]["unavailable_reason"][0]["reason_code"] == (
+        "hmm_risk_rotation_l1_feature_warmup"
+    )
+    assert {row["source_dataset"] for row in loaded["input_bundle_evidence"]["security_identity_intervals"]} == {
+        "market.daily_basic",
+        "market.moneyflow_ts",
+    }
+    assert "database" not in loaded
+    assert set(loaded["input_bundle_identity"]) == {
+        "bundle_canonical_sha256",
+        "manifest_body_sha256",
+        "h5_sha256",
+    }
+
+
+def test_exact_existing_bundle_is_read_only_and_different_content_collides(tmp_path: Path) -> None:
+    root, first = _write(tmp_path)
+    before = {
+        item.name: (item.stat().st_mtime_ns, hashlib.sha256(item.read_bytes()).hexdigest()) for item in root.iterdir()
+    }
+
+    repeat_inputs = _inputs()
+    for receipt in repeat_inputs["source_build_resource_receipts"]:
+        receipt["elapsed_seconds"] += 10.0
+        receipt["rss_bytes"] += 4096
+    existing = subject.write_rotation_l1_input_bundle(
+        inputs=repeat_inputs,
+        source=_source(),
+        source_identity=_source_identity(),
+        output_root=root,
+        producer_commit="f" * 40,
+        forbidden_roots=(Path(__file__).resolve().parents[3],),
+    )
+
+    assert existing["status"] == "EXISTING_BUNDLE"
+    assert existing["bundle_canonical_sha256"] == first["bundle_canonical_sha256"]
+    assert before == {
+        item.name: (item.stat().st_mtime_ns, hashlib.sha256(item.read_bytes()).hexdigest()) for item in root.iterdir()
+    }
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.write_rotation_l1_input_bundle(
+            inputs=_inputs(offset=1.0),
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=root,
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert exc_info.value.reason_code == subject.REASON_COLLISION
+
+
+def test_holdout_rows_fail_before_final_bundle_write(tmp_path: Path) -> None:
+    inputs = _inputs()
+    panel = inputs["panel"].reset_index()
+    panel.loc[0, "trade_date"] = date(2026, 4, 1)
+    inputs["panel"] = panel.set_index(["trade_date", "sector_code"])
+    root = tmp_path / "bundle"
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.write_rotation_l1_input_bundle(
+            inputs=inputs,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=root,
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_HOLDOUT_CONTAMINATION
+    assert not root.exists()
+    failures = list(tmp_path.glob(".bundle.partial.*/build.failure.json"))
+    assert len(failures) == 1
+
+
+def test_h5_mutation_is_rejected_before_any_panel_is_returned(tmp_path: Path) -> None:
+    root, _ = _write(tmp_path)
+    with h5py.File(root / "rotation_l1_input.h5", "r+") as handle:
+        handle["l1_panel"][0] = handle["l1_panel"][1]
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.read_rotation_l1_input_bundle(root, forbidden_roots=(Path(__file__).resolve().parents[3],))
+
+    assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+
+def test_self_hashed_metadata_drift_is_rejected_by_independent_readback(tmp_path: Path) -> None:
+    root, _ = _write(tmp_path)
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    manifest["metadata"]["feature_definition"]["schema_version"] = "self_consistent_but_wrong"
+    _rewrite_manifest_and_receipt(root, manifest)
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.read_rotation_l1_input_bundle(root, forbidden_roots=(Path(__file__).resolve().parents[3],))
+
+    assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+
+def test_legacy_v1_bundle_manifest_is_rejected_without_silent_upgrade(tmp_path: Path) -> None:
+    root, _ = _write(tmp_path)
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    manifest["schema_version"] = "hmm_risk_rotation_l1_input_bundle_manifest_v1"
+    _rewrite_manifest_and_receipt(root, manifest)
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.read_rotation_l1_input_bundle(root, forbidden_roots=(Path(__file__).resolve().parents[3],))
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_missing_panel_key_and_resource_receipt_fail_closed(tmp_path: Path) -> None:
+    missing = _inputs()
+    missing["panel"] = missing["panel"].iloc[1:]
+    with pytest.raises(subject.RotationL1InputBundleError) as missing_exc:
+        subject.write_rotation_l1_input_bundle(
+            inputs=missing,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / "missing-key",
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert missing_exc.value.reason_code == subject.REASON_SOURCE_RANGE_INCOMPLETE
+
+    no_resource_receipt = _inputs()
+    no_resource_receipt["source_build_resource_receipts"] = []
+    with pytest.raises(subject.RotationL1InputBundleError) as resource_exc:
+        subject.write_rotation_l1_input_bundle(
+            inputs=no_resource_receipt,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / "missing-resource-receipt",
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert resource_exc.value.reason_code == subject.REASON_INCOMPLETE
+
+
+def test_repository_internal_output_is_rejected(tmp_path: Path) -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.write_rotation_l1_input_bundle(
+            inputs=_inputs(),
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=repository_root / "tmp" / "forbidden-bundle",
+            producer_commit="f" * 40,
+            forbidden_roots=(repository_root,),
+        )
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_invalid_c010_receipt_and_duplicate_panel_fail_closed(tmp_path: Path) -> None:
+    invalid = _inputs()
+    invalid["c010_diagnostic"]["eligibility"]["count"] = 2
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.write_rotation_l1_input_bundle(
+            inputs=invalid,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / "invalid",
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+    duplicate = _inputs()
+    panel = duplicate["panel"].reset_index()
+    duplicate["panel"] = pd.concat([panel, panel.iloc[[0]]], ignore_index=True).set_index(["trade_date", "sector_code"])
+    with pytest.raises(subject.RotationL1InputBundleError) as duplicate_exc:
+        subject.write_rotation_l1_input_bundle(
+            inputs=duplicate,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / "duplicate",
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert duplicate_exc.value.reason_code == subject.REASON_DUPLICATE_KEY
+
+    unknown = _inputs()
+    unknown["input_bundle_evidence"]["unavailable_reason"][0]["reason_code"] = "unknown_reason"
+    with pytest.raises(subject.RotationL1InputBundleError) as unknown_exc:
+        subject.write_rotation_l1_input_bundle(
+            inputs=unknown,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / "unknown-reason",
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert unknown_exc.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+    gap = _inputs()
+    gap["input_bundle_evidence"]["source_status_intervals"][0]["valid_to"] = subject.SOURCE_START.isoformat()
+    with pytest.raises(subject.RotationL1InputBundleError) as gap_exc:
+        subject.write_rotation_l1_input_bundle(
+            inputs=gap,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / "authority-gap",
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert gap_exc.value.reason_code == subject.REASON_AUTHORITY_AMBIGUOUS
+
+
+def test_fixed_h5_reader_is_bounded_and_rejects_column_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2020-07-30"), "000001.SZ"),
+            (pd.Timestamp("2020-07-31"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame(
+        np.arange(2 * len(subject._DAILY_BASIC_COLUMNS), dtype=np.float32).reshape(2, -1),
+        index=index,
+        columns=subject._DAILY_BASIC_COLUMNS,
+    )
+    path = tmp_path / "daily_basic.h5"
+    frame.to_hdf(path, key="data", format="fixed")
+
+    chunks = list(
+        subject._iter_fixed_h5_frames(
+            path,
+            expected_columns=subject._DAILY_BASIC_COLUMNS,
+            expected_dtype="<f4",
+            max_rows=1,
+        )
+    )
+
+    assert [len(item) for item in chunks] == [1, 1]
+    assert chunks[0].dtypes.tolist() == [np.dtype("float32")] * len(subject._DAILY_BASIC_COLUMNS)
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        list(
+            subject._iter_fixed_h5_frames(
+                path,
+                expected_columns=tuple(reversed(subject._DAILY_BASIC_COLUMNS)),
+                expected_dtype="<f4",
+            )
+        )
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+    monkeypatch.setattr(
+        subject,
+        "_iter_fixed_h5_frames",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("window reader rescanned the full H5")),
+    )
+    window = subject._load_fixed_h5_window(
+        path,
+        expected_columns=subject._DAILY_BASIC_COLUMNS,
+        expected_dtype="<f4",
+        start=date(2020, 7, 31),
+        end=date(2020, 7, 31),
+        max_rows=1,
+    )
+    assert window.index.tolist() == [(pd.Timestamp("2020-07-31"), "000001.SZ")]
+
+
+def test_fixed_h5_reader_preserves_index_float64_and_rejects_component_dtype_drift(tmp_path: Path) -> None:
+    columns = (
+        "idx_open_point",
+        "idx_high_point",
+        "idx_low_point",
+        "idx_close_point",
+        "idx_pre_close_point",
+        "idx_return_1d",
+        "idx_volume_hand_source",
+        "idx_volume_share_equiv",
+        "idx_amount_cny",
+    )
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2020-07-30"), "000300.SH")],
+        names=["datetime", "instrument"],
+    )
+    path = tmp_path / "index_daily.h5"
+    pd.DataFrame(np.ones((1, len(columns)), dtype=np.float64), index=index, columns=columns).to_hdf(
+        path, key="data", format="fixed"
+    )
+
+    inventory = subject._fixed_h5_inventory(path, expected_columns=columns, expected_dtype="<f8")
+    frame = subject._load_fixed_h5_window(
+        path,
+        expected_columns=columns,
+        expected_dtype="<f8",
+        start=date(2020, 7, 30),
+        end=date(2020, 7, 30),
+    )
+
+    assert inventory["dtype"] == "float64"
+    assert frame.dtypes.tolist() == [np.dtype("float64")] * len(columns)
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._fixed_h5_inventory(path, expected_columns=columns, expected_dtype="<f4")
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+def test_qlib_qfq_values_are_reconstructed_to_raw_units_and_invalid_factor_fails() -> None:
+    row = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    row["factor"] = 0.5
+    for field, value in {
+        "open": 5.0,
+        "high": 6.0,
+        "low": 4.0,
+        "close": 5.5,
+        "volume": 200.0,
+        "amount": 1000.0,
+        "prev_close": 10.0,
+        "up_limit_price": 11.0,
+        "down_limit_price": 9.0,
+        "limit_up": 0.0,
+        "limit_down": 0.0,
+    }.items():
+        row[field] = value
+
+    values = subject._raw_qlib_values(row)
+
+    assert values["open"] == 10.0
+    assert values["close"] == 11.0
+    assert values["volume"] == 100.0
+    assert values["prev_close"] == 10.0
+    row["factor"] = 0.0
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._raw_qlib_values(row)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+
+def test_qlib_row_accepts_only_all_field_na_as_missing_evidence() -> None:
+    missing = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        missing[field] = np.nan
+    assert subject._qlib_row_is_fully_missing(missing) is True
+
+    non_finite = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        non_finite[field] = np.inf
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._qlib_row_is_fully_missing(non_finite)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+    partial = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]
+    for field in subject.QLIB_STOCK_FIELDS:
+        partial[field] = 1.0
+    partial["factor"] = np.nan
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._qlib_row_is_fully_missing(partial)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+    assert subject._qlib_row_is_fully_missing(np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)[0]) is False
+
+
+def test_qlib_stock_reader_requires_all_twelve_aligned_float32_fields(tmp_path: Path) -> None:
+    qlib = tmp_path / "qlib"
+    feature_root = qlib / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    calendar = (subject.SOURCE_START, subject.SOURCE_END)
+    for index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        np.asarray([0.0, float(index), float(index + 1)], dtype="<f4").tofile(feature_root / f"{field}.day.bin")
+
+    rows = subject._read_qlib_stock_rows(
+        qlib,
+        symbol="000001.SZ",
+        calendar=calendar,
+        active_spans=((subject.SOURCE_START, subject.SOURCE_END),),
+    )
+
+    assert rows["trade_date"].tolist() == [20200730, 20260331]
+    assert rows["open"].tolist() == [1.0, 2.0]
+    (feature_root / "close.day.bin").unlink()
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._read_qlib_stock_rows(
+            qlib,
+            symbol="000001.SZ",
+            calendar=calendar,
+            active_spans=((subject.SOURCE_START, subject.SOURCE_END),),
+        )
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_COMPONENT_MISSING
+
+
+def test_qlib_stock_reader_vectorized_materialization_is_byte_exact_for_sparse_active_spans(tmp_path: Path) -> None:
+    qlib = tmp_path / "qlib"
+    feature_root = qlib / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    calendar = tuple(subject.SOURCE_START + timedelta(days=index) for index in range(6))
+    for field_index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        values = np.asarray(
+            [0.0, *(field_index * 100.0 + index for index in range(len(calendar)))],
+            dtype="<f4",
+        )
+        values.tofile(feature_root / f"{field}.day.bin")
+
+    rows = subject._read_qlib_stock_rows(
+        qlib,
+        symbol="000001.SZ",
+        calendar=calendar,
+        active_spans=((calendar[0], calendar[1]), (calendar[4], calendar[5])),
+    )
+
+    expected = np.zeros(4, dtype=subject._QLIB_SOURCE_DTYPE)
+    for output_index, calendar_index in enumerate((0, 1, 4, 5)):
+        expected[output_index]["trade_date"] = int(calendar[calendar_index].strftime("%Y%m%d"))
+        expected[output_index]["symbol"] = b"000001.SZ"
+        for field_index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+            expected[output_index][field] = field_index * 100.0 + calendar_index
+
+    assert rows.dtype == subject._QLIB_SOURCE_DTYPE
+    assert rows.flags.c_contiguous
+    assert rows.tobytes() == expected.tobytes()
+
+
+def test_qlib_stock_reader_validates_release_range_but_materializes_only_development_window(
+    tmp_path: Path,
+) -> None:
+    qlib = tmp_path / "qlib"
+    feature_root = qlib / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    tail_day = subject.SOURCE_END + timedelta(days=1)
+    calendar = (subject.SOURCE_START, subject.SOURCE_END, tail_day)
+    for field_index, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        np.asarray([0.0, float(field_index), float(field_index + 1), 999_999.0], dtype="<f4").tofile(
+            feature_root / f"{field}.day.bin"
+        )
+
+    rows = subject._read_qlib_stock_rows(
+        qlib,
+        symbol="000001.SZ",
+        calendar=calendar,
+        active_spans=((subject.SOURCE_START, tail_day),),
+    )
+
+    assert rows["trade_date"].tolist() == [20200730, 20260331]
+    assert 999_999.0 not in rows["close"].tolist()
+
+
+def test_fixed_h5_label_lower_bound_uses_bounded_scalar_reads() -> None:
+    class Labels:
+        shape = (8,)
+        values = (0, 0, 1, 1, 1, 3, 4, 4)
+
+        def __init__(self) -> None:
+            self.reads: list[int] = []
+
+        def __getitem__(self, index: int) -> int:
+            self.reads.append(index)
+            return self.values[index]
+
+    labels = Labels()
+
+    assert subject._fixed_h5_label_lower_bound(labels, 1) == 2
+    assert subject._fixed_h5_label_lower_bound(labels, 2) == 5
+    assert subject._fixed_h5_label_lower_bound(labels, 5) == 8
+    assert len(labels.reads) <= 12
+
+
+def test_day_level_grouping_preserves_symbol_order_and_projects_only_l2_after_l1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows = [
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000001.SZ",
+            "l1_code": "L1B",
+            "l1_name": "B",
+            "l2_code": "L2B",
+            "l2_name": "B2",
+        },
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000002.SZ",
+            "l1_code": "L1A",
+            "l1_name": "A",
+            "l2_code": "L2A",
+            "l2_name": "A2",
+        },
+        {
+            "trade_date": subject.SOURCE_START,
+            "symbol": "000003.SZ",
+            "l1_code": "L1B",
+            "l1_name": "B",
+            "l2_code": "L2A",
+            "l2_name": "A2",
+        },
+    ]
+    observed: list[tuple[str, list[tuple[str, str]]]] = []
+
+    def capture(group, *, level, **_kwargs):
+        observed.append((level, [(str(row["symbol"]), str(row["l1_code"])) for row in group]))
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._append_day_level_aggregates(
+        rows,
+        l1_aggregates=[],
+        l2_aggregates=[],
+        unavailable={},
+        contributor_eligibility={},
+    )
+
+    assert observed == [
+        ("L1", [("000002.SZ", "L1A")]),
+        ("L1", [("000001.SZ", "L1B"), ("000003.SZ", "L1B")]),
+        ("L2", [("000002.SZ", "L2A"), ("000003.SZ", "L2A")]),
+        ("L2", [("000001.SZ", "L2B")]),
+    ]
+
+
+def test_security_resolution_index_preserves_explicit_intervals_and_caches_identical_defaults() -> None:
+    explicit = SimpleNamespace(
+        source_dataset="market.daily_basic",
+        canonical_ts_code="000001.SZ",
+        source_ts_code="000001.OLD",
+        effective_start=date(2022, 1, 1),
+        effective_end=date(2022, 1, 31),
+    )
+
+    class Manifest:
+        rows = (explicit,)
+
+        def __init__(self) -> None:
+            self.resolve_calls: list[tuple[str, date, str]] = []
+
+        def resolve(self, symbol, day, dataset):
+            self.resolve_calls.append((symbol, day, dataset))
+            return SimpleNamespace(
+                source_dataset=dataset,
+                canonical_ts_code=symbol,
+                source_ts_code=symbol,
+                effective_start=None,
+                effective_end=None,
+            )
+
+        @staticmethod
+        def evidence():
+            return {"manifest": "evidence"}
+
+    manifest = Manifest()
+    index = subject._SecurityResolutionIndex(manifest)
+
+    assert index.resolve("000001.SZ", date(2022, 1, 3), "market.daily_basic") is explicit
+    first = index.resolve("000001.SZ", date(2022, 2, 1), "market.daily_basic")
+    second = index.resolve("000001.SZ", date(2022, 3, 1), "market.daily_basic")
+    assert first is second
+    assert manifest.resolve_calls == [("000001.SZ", date(2022, 2, 1), "market.daily_basic")]
+    assert index.evidence() == {"manifest": "evidence"}
+
+
+def test_industry_projection_index_uses_all_authority_transition_boundaries() -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(4))
+
+    class Resolver:
+        def __init__(self, transition):
+            self.transition = transition
+
+        def transition_dates(self, _symbol):
+            return (self.transition,)
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, date]] = []
+            self.classification_resolver = Resolver(dates[1])
+            self.index_membership_resolver = Resolver(dates[2])
+
+        def resolve(self, symbol, day):
+            self.calls.append((symbol, day))
+            code = "801010.SI" if day < dates[1] else ("801020.SI" if day < dates[2] else "801030.SI")
+            return SimpleNamespace(
+                status="resolved",
+                l1_code=code,
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+                reason_code=None,
+                classification_receipt_hash="a" * 64,
+                index_membership_receipt_hash="b" * 64,
+                classification_row_hashes=("c" * 64,),
+                index_membership_row_hashes=("d" * 64,),
+                alignment_state="aligned",
+                classification_research_basis="stable_taxonomy_backcast",
+                non_as_known_taxonomy=True,
+            )
+
+    adapter = Adapter()
+    index = subject._IndustryProjectionIndex(adapter, calendar=dates)
+
+    assert [index.resolve("000001.SZ", day).l1_code for day in dates] == [
+        "801010.SI",
+        "801020.SI",
+        "801030.SI",
+        "801030.SI",
+    ]
+    assert adapter.calls == [("000001.SZ", dates[0]), ("000001.SZ", dates[1]), ("000001.SZ", dates[2])]
+
+
+def test_canonical_sector_codes_use_c013_constituents_for_l2_not_l1_alias_lookup() -> None:
+    adapter = SimpleNamespace(
+        constituents={
+            "801010.SI": {"l1_code": "801010.SI", "l2_codes": ["801011.SI", "801012.SI"]},
+            "801020.SI": {"l1_code": "801020.SI", "l2_codes": ["801021.SI"]},
+        },
+        classification_lookup={("L1", "801010.SI"): {"index_code": "801010.SI"}},
+    )
+
+    assert subject._canonical_sector_codes(adapter) == (
+        ("801010.SI", "801020.SI"),
+        ("801011.SI", "801012.SI", "801021.SI"),
+    )
+
+
+def test_qlib_month_spool_vectorized_slices_preserve_symbol_and_date_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dates = (
+        date(2022, 1, 30),
+        date(2022, 1, 31),
+        date(2022, 2, 1),
+        date(2022, 2, 2),
+    )
+
+    def rows_for_symbol(_root, *, symbol, **_kwargs):
+        rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
+        rows["trade_date"] = [20220130, 20220131, 20220201, 20220202]
+        rows["symbol"] = symbol.encode("ascii")
+        rows["close"] = np.arange(len(dates), dtype=np.float32)
+        return rows
+
+    monkeypatch.setattr(subject, "_read_qlib_stock_rows", rows_for_symbol)
+    paths = subject._spool_qlib_months(
+        tmp_path / "qlib",
+        calendar=dates,
+        spans={"000002.SZ": ((dates[0], dates[-1]),), "000001.SZ": ((dates[0], dates[-1]),)},
+        spool_root=tmp_path / "spool",
+    )
+
+    assert [path.name for path in paths] == ["202201.bin", "202202.bin"]
+    january = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    february = np.fromfile(paths[1], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert january[["trade_date", "symbol"]].tolist() == [
+        (20220130, b"000001.SZ"),
+        (20220131, b"000001.SZ"),
+        (20220130, b"000002.SZ"),
+        (20220131, b"000002.SZ"),
+    ]
+    assert february[["trade_date", "symbol"]].tolist() == [
+        (20220201, b"000001.SZ"),
+        (20220202, b"000001.SZ"),
+        (20220201, b"000002.SZ"),
+        (20220202, b"000002.SZ"),
+    ]
+
+
+def test_qlib_month_spool_skips_symbols_without_rows_in_the_approved_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    day = date(2022, 1, 3)
+
+    def rows_for_symbol(_root, *, symbol, **_kwargs):
+        if symbol == "000001.SZ":
+            return np.zeros(0, dtype=subject._QLIB_SOURCE_DTYPE)
+        rows = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)
+        rows["trade_date"] = [20220103]
+        rows["symbol"] = symbol.encode("ascii")
+        return rows
+
+    monkeypatch.setattr(subject, "_read_qlib_stock_rows", rows_for_symbol)
+    paths = subject._spool_qlib_months(
+        tmp_path / "qlib",
+        calendar=(day,),
+        spans={"000001.SZ": ((day, day),), "000002.SZ": ((day, day),)},
+        spool_root=tmp_path / "spool",
+    )
+
+    assert [path.name for path in paths] == ["202201.bin"]
+    rows = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert rows[["trade_date", "symbol"]].tolist() == [(20220103, b"000002.SZ")]
+
+
+def test_qlib_month_spool_uses_full_calendar_for_bin_indices_and_bounds_output_window(tmp_path: Path) -> None:
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(100))
+    window = calendar[-44:]
+    qlib_root = tmp_path / "qlib"
+    feature_root = qlib_root / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    start_index = 10
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.asarray([float(start_index), *range(90)], dtype="<f4")
+        values.tofile(feature_root / f"{field}.day.bin")
+
+    paths = subject._spool_qlib_months(
+        qlib_root,
+        calendar=calendar,
+        spans={"000001.SZ": ((calendar[0], calendar[-1]),)},
+        spool_root=tmp_path / "spool",
+        window_start=window[0],
+        window_end=window[-1],
+    )
+
+    rows = np.concatenate([np.fromfile(path, dtype=subject._QLIB_SOURCE_DTYPE) for path in paths])
+    assert rows["trade_date"].tolist() == [int(day.strftime("%Y%m%d")) for day in window]
+
+
+def test_security_intervals_preserve_dataset_specific_source_aliases() -> None:
+    canonical = "302132.SZ"
+    start = subject.SOURCE_START
+    end = start + timedelta(days=2)
+
+    class Security:
+        rows = [
+            SimpleNamespace(
+                canonical_ts_code=canonical,
+                source_dataset=dataset,
+                effective_start=start,
+                effective_end=end,
+            )
+            for dataset in ("market.daily_basic", "market.moneyflow_ts")
+        ]
+
+        @staticmethod
+        def resolve(symbol: str, day: date, dataset: str) -> SimpleNamespace:
+            assert symbol == canonical
+            assert start <= day <= end
+            return SimpleNamespace(source_ts_code="300114.SZ" if dataset == "market.moneyflow_ts" else canonical)
+
+    assert subject._security_intervals(Security(), {canonical: [(start, end)]}) == [
+        {
+            "canonical_security_id": canonical,
+            "source_dataset": "market.daily_basic",
+            "valid_from": start.isoformat(),
+            "valid_to": end.isoformat(),
+            "source_code": canonical,
+        },
+        {
+            "canonical_security_id": canonical,
+            "source_dataset": "market.moneyflow_ts",
+            "valid_from": start.isoformat(),
+            "valid_to": end.isoformat(),
+            "source_code": "300114.SZ",
+        },
+    ]
+
+
+def test_security_interval_evidence_rejects_legacy_datasetless_rows(tmp_path: Path) -> None:
+    legacy = _inputs()
+    for row in legacy["input_bundle_evidence"]["security_identity_intervals"]:
+        row.pop("source_dataset")
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.write_rotation_l1_input_bundle(
+            inputs=legacy,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / "legacy-security-evidence",
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason_code"),
+    [
+        ("unknown_dataset", subject.REASON_SOURCE_SCHEMA_INVALID),
+        ("missing_dataset", subject.REASON_SOURCE_SCHEMA_INVALID),
+        ("per_symbol_missing_dataset", subject.REASON_AUTHORITY_AMBIGUOUS),
+        ("overlap", subject.REASON_AUTHORITY_AMBIGUOUS),
+    ],
+)
+def test_security_interval_evidence_rejects_dataset_scope_or_overlap(
+    tmp_path: Path, mutation: str, reason_code: str
+) -> None:
+    invalid = _inputs()
+    rows = invalid["input_bundle_evidence"]["security_identity_intervals"]
+    if mutation == "unknown_dataset":
+        rows[0]["source_dataset"] = "market.daily"
+    elif mutation == "missing_dataset":
+        rows.pop()
+    elif mutation == "per_symbol_missing_dataset":
+        rows.append({**rows[0], "canonical_security_id": "000002.SZ"})
+    else:
+        rows.append(
+            {
+                **rows[0],
+                "valid_from": (subject.SOURCE_START + timedelta(days=1)).isoformat(),
+                "source_code": "000002.SZ",
+            }
+        )
+        rows.sort(
+            key=lambda row: (
+                row["canonical_security_id"],
+                row["source_dataset"],
+                row["valid_from"],
+                row["source_code"],
+            )
+        )
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.write_rotation_l1_input_bundle(
+            inputs=invalid,
+            source=_source(),
+            source_identity=_source_identity(),
+            output_root=tmp_path / mutation,
+            producer_commit="f" * 40,
+            forbidden_roots=(Path(__file__).resolve().parents[3],),
+        )
+    assert exc_info.value.reason_code == reason_code
+
+
+def test_industry_unavailable_day_preserves_independent_price_and_circ_mv_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(7))
+    symbol = "000001.SZ"
+    source_rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
+    for index, day in enumerate(dates):
+        source_rows[index]["trade_date"] = int(day.strftime("%Y%m%d"))
+        source_rows[index]["symbol"] = symbol.encode("ascii")
+        for field in subject.QLIB_STOCK_FIELDS:
+            source_rows[index][field] = 0.0
+        source_rows[index]["factor"] = 1.0
+        source_rows[index]["open"] = 10.0 + index
+        source_rows[index]["high"] = 11.0 + index
+        source_rows[index]["low"] = 9.0 + index
+        source_rows[index]["close"] = 10.0 + index
+        source_rows[index]["prev_close"] = 9.0 + index
+        source_rows[index]["up_limit_price"] = 20.0 + index
+        source_rows[index]["down_limit_price"] = 5.0 + index
+    for field in subject.QLIB_STOCK_FIELDS:
+        source_rows[-2][field] = np.nan
+    month_path = tmp_path / "202201.bin"
+    source_rows.tofile(month_path)
+
+    index = pd.MultiIndex.from_arrays([pd.to_datetime(dates), [symbol] * len(dates)], names=["datetime", "instrument"])
+    basic = pd.DataFrame(1.0, index=index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
+    basic["db_total_mv"] = np.arange(200.0, 207.0, dtype=np.float32)
+    basic["db_circ_mv"] = np.arange(100.0, 107.0, dtype=np.float32)
+    moneyflow = pd.DataFrame(1.0, index=index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
+
+    def load_window(_path, *, expected_columns, **_kwargs):
+        return basic if tuple(expected_columns) == subject._DAILY_BASIC_COLUMNS else moneyflow
+
+    monkeypatch.setattr(subject, "_load_fixed_h5_window", load_window)
+
+    class Adapter:
+        @staticmethod
+        def resolve(_symbol, day):
+            if day in {dates[-3], dates[-2]}:
+                return SimpleNamespace(status="unavailable", reason_code="classification:missing")
+            return SimpleNamespace(
+                status="resolved",
+                reason_code=None,
+                l1_code="801010.SI",
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+            )
+
+    class Resolution:
+        source_ts_code = symbol
+
+        @staticmethod
+        def evidence():
+            return {"source_ts_code": symbol}
+
+    class Security:
+        @staticmethod
+        def resolve(_symbol, _day, _dataset):
+            return Resolution()
+
+    captured: list[dict[str, object]] = []
+
+    def capture(rows, *, level, **_kwargs):
+        if level == "L1":
+            captured.extend(dict(row) for row in rows)
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._build_stock_fact_aggregates(
+        month_paths=(month_path,),
+        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        calendar=dates,
+        spans={symbol: ((dates[0], dates[-1]),)},
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=SimpleNamespace(),
+        suspension_keys=frozenset(),
+        contributor_eligibility={symbol: True},
+    )
+
+    final = next(row for row in captured if row["trade_date"] == dates[-1])
+    assert final["prev_close_5_yuan"] == 10.0
+    assert final["prev_circ_mv_cny"] == 105.0 * 10_000.0
+
+
+def test_pit_entry_uses_prior_authoritative_circ_mv_without_future_fill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(3))
+    symbol = "000001.SZ"
+    active_dates = dates[1:]
+    source_rows = np.zeros(len(active_dates), dtype=subject._QLIB_SOURCE_DTYPE)
+    for index, day in enumerate(active_dates):
+        source_rows[index]["trade_date"] = int(day.strftime("%Y%m%d"))
+        source_rows[index]["symbol"] = symbol.encode("ascii")
+        for field in subject.QLIB_STOCK_FIELDS:
+            source_rows[index][field] = 1.0
+        source_rows[index]["factor"] = 1.0
+        source_rows[index]["open"] = 10.0 + index
+        source_rows[index]["high"] = 11.0 + index
+        source_rows[index]["low"] = 9.0 + index
+        source_rows[index]["close"] = 10.0 + index
+        source_rows[index]["prev_close"] = 9.0 + index
+        source_rows[index]["up_limit_price"] = 20.0 + index
+        source_rows[index]["down_limit_price"] = 5.0 + index
+    month_path = tmp_path / "202201.bin"
+    source_rows.tofile(month_path)
+
+    basic_index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime(dates), ["000001.OLD", symbol, symbol]], names=["datetime", "instrument"]
+    )
+    moneyflow_index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime(dates), [symbol] * len(dates)], names=["datetime", "instrument"]
+    )
+    basic = pd.DataFrame(1.0, index=basic_index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
+    basic["db_total_mv"] = np.asarray([200.0, 201.0, 202.0], dtype=np.float32)
+    basic["db_circ_mv"] = np.asarray([100.0, 101.0, 102.0], dtype=np.float32)
+    moneyflow = pd.DataFrame(1.0, index=moneyflow_index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
+
+    def load_window(_path, *, expected_columns, **_kwargs):
+        return basic if tuple(expected_columns) == subject._DAILY_BASIC_COLUMNS else moneyflow
+
+    monkeypatch.setattr(subject, "_load_fixed_h5_window", load_window)
+
+    class Adapter:
+        @staticmethod
+        def resolve(_symbol, _day):
+            return SimpleNamespace(
+                status="resolved",
+                reason_code=None,
+                l1_code="801010.SI",
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+            )
+
+    class Resolution:
+        def __init__(self, source_ts_code: str) -> None:
+            self.source_ts_code = source_ts_code
+
+        def evidence(self):
+            return {"source_ts_code": self.source_ts_code}
+
+    class Security:
+        @staticmethod
+        def resolve(_symbol, day, dataset):
+            if dataset == "market.daily_basic" and day == dates[0]:
+                return Resolution("000001.OLD")
+            return Resolution(symbol)
+
+    captured: list[dict[str, object]] = []
+
+    def capture(rows, *, level, **_kwargs):
+        if level == "L1":
+            captured.extend(dict(row) for row in rows)
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._build_stock_fact_aggregates(
+        month_paths=(month_path,),
+        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        calendar=dates,
+        spans={symbol: ((active_dates[0], active_dates[-1]),)},
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=SimpleNamespace(rows=()),
+        suspension_keys=frozenset(),
+        contributor_eligibility={symbol: True},
+    )
+
+    entry = next(row for row in captured if row["trade_date"] == active_dates[0])
+    assert entry["prev_circ_mv_cny"] == 100.0 * 10_000.0
+    assert entry["circ_mv_source_date"] == dates[0]
+    assert entry["circ_mv_staleness_trading_days"] == 1
+    assert entry["circ_mv_crossed_pit_entry_boundary"] is True
+    assert entry["circ_mv_fact_status"] == "available"
+    assert entry["circ_mv_reason_code"] is None
+
+
+def test_latest_invalid_circ_mv_is_not_silently_replaced_by_older_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dates = tuple(date(2022, 1, 3) + timedelta(days=index) for index in range(3))
+    symbol = "000001.SZ"
+    source_rows = np.zeros(1, dtype=subject._QLIB_SOURCE_DTYPE)
+    source_rows[0]["trade_date"] = int(dates[-1].strftime("%Y%m%d"))
+    source_rows[0]["symbol"] = symbol.encode("ascii")
+    for field in subject.QLIB_STOCK_FIELDS:
+        source_rows[0][field] = 1.0
+    source_rows[0]["factor"] = 1.0
+    source_rows[0]["open"] = 10.0
+    source_rows[0]["high"] = 11.0
+    source_rows[0]["low"] = 9.0
+    source_rows[0]["close"] = 10.0
+    source_rows[0]["prev_close"] = 9.0
+    source_rows[0]["up_limit_price"] = 20.0
+    source_rows[0]["down_limit_price"] = 5.0
+    month_path = tmp_path / "202201.bin"
+    source_rows.tofile(month_path)
+
+    index = pd.MultiIndex.from_arrays([pd.to_datetime(dates), [symbol] * len(dates)], names=["datetime", "instrument"])
+    basic = pd.DataFrame(1.0, index=index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
+    basic["db_total_mv"] = np.asarray([200.0, 201.0, 202.0], dtype=np.float32)
+    basic["db_circ_mv"] = np.asarray([100.0, np.nan, 102.0], dtype=np.float32)
+    moneyflow = pd.DataFrame(1.0, index=index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
+
+    def load_window(_path, *, expected_columns, **_kwargs):
+        return basic if tuple(expected_columns) == subject._DAILY_BASIC_COLUMNS else moneyflow
+
+    monkeypatch.setattr(subject, "_load_fixed_h5_window", load_window)
+
+    class Adapter:
+        @staticmethod
+        def resolve(_symbol, _day):
+            return SimpleNamespace(
+                status="resolved",
+                reason_code=None,
+                l1_code="801010.SI",
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+            )
+
+    class Resolution:
+        source_ts_code = symbol
+
+        @staticmethod
+        def evidence():
+            return {"source_ts_code": symbol}
+
+    class Security:
+        @staticmethod
+        def resolve(_symbol, _day, _dataset):
+            return Resolution()
+
+    captured: list[dict[str, object]] = []
+
+    def capture(rows, *, level, **_kwargs):
+        if level == "L1":
+            captured.extend(dict(row) for row in rows)
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._build_stock_fact_aggregates(
+        month_paths=(month_path,),
+        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        calendar=dates,
+        spans={symbol: ((dates[-1], dates[-1]),)},
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=SimpleNamespace(rows=()),
+        suspension_keys=frozenset(),
+        contributor_eligibility={symbol: True},
+    )
+
+    entry = captured[0]
+    assert entry["prev_circ_mv_cny"] is None
+    assert entry["circ_mv_source_date"] == dates[1]
+    assert entry["circ_mv_fact_status"] == "latest_value_non_finite"
+    assert entry["circ_mv_reason_code"] == "hmm_risk_stock_fact_circ_mv_latest_value_non_finite"
+
+
+def test_csi300_benchmark_return_is_recomputed_from_frozen_close_and_preclose(tmp_path: Path) -> None:
+    columns = (
+        "idx_open_point",
+        "idx_high_point",
+        "idx_low_point",
+        "idx_close_point",
+        "idx_pre_close_point",
+        "idx_return_1d",
+        "idx_volume_hand_source",
+        "idx_volume_share_equiv",
+        "idx_amount_cny",
+    )
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp(subject.SOURCE_START), "000300.SH"),
+            (pd.Timestamp(subject.SOURCE_END), "000300.SH"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame(np.ones((2, len(columns)), dtype=np.float64), index=index, columns=columns)
+    frame["idx_close_point"] = np.asarray([110.0, 90.0], dtype=np.float64)
+    frame["idx_pre_close_point"] = np.asarray([100.0, 100.0], dtype=np.float64)
+    frame["idx_return_1d"] = np.asarray([9.0, 9.0], dtype=np.float64)
+    path = tmp_path / "index.h5"
+    frame.to_hdf(path, key="data", format="fixed")
+
+    values = subject._load_benchmark_returns(path, calendar=(subject.SOURCE_START, subject.SOURCE_END))
+
+    assert values[subject.SOURCE_START] == pytest.approx(0.1)
+    assert values[subject.SOURCE_END] == pytest.approx(-0.1)
+
+
+def _asset_binding(tmp_path: Path) -> tuple[Path, Path]:
+    release = tmp_path / "release"
+    qlib = release / "daily_bin"
+    (qlib / "calendars").mkdir(parents=True)
+    (qlib / "instruments").mkdir()
+    (qlib / "features" / "000001.sz").mkdir(parents=True)
+    (qlib / "calendars" / "day.txt").write_text(
+        f"{subject.SOURCE_START.isoformat()}\n{subject.SOURCE_END.isoformat()}\n",
+        encoding="utf-8",
+    )
+    (qlib / "instruments" / "all.txt").write_text(
+        f"000001.SZ\t{subject.SOURCE_START.isoformat()}\t{subject.SOURCE_END.isoformat()}\n",
+        encoding="utf-8",
+    )
+    for field in subject.QLIB_STOCK_FIELDS:
+        np.asarray([0.0, 1.0, 1.0], dtype="<f4").tofile(qlib / "features" / "000001.sz" / f"{field}.day.bin")
+    files: dict[str, dict[str, str]] = {}
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp(subject.SOURCE_START), "000001.SZ"),
+            (pd.Timestamp(subject.SOURCE_END), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    index_context_index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp(subject.SOURCE_START), "000300.SH"),
+            (pd.Timestamp(subject.SOURCE_END), "000300.SH"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    for name, columns, frame_index in (
+        ("daily_basic", subject._DAILY_BASIC_COLUMNS, index),
+        ("moneyflow", subject._MONEYFLOW_COLUMNS, index),
+        (
+            "index_context",
+            (
+                "idx_open_point",
+                "idx_high_point",
+                "idx_low_point",
+                "idx_close_point",
+                "idx_pre_close_point",
+                "idx_return_1d",
+                "idx_volume_hand_source",
+                "idx_volume_share_equiv",
+                "idx_amount_cny",
+            ),
+            index_context_index,
+        ),
+    ):
+        path = release / f"{name}.asset"
+        pd.DataFrame(
+            np.ones((2, len(columns)), dtype=np.float64 if name == "index_context" else np.float32),
+            index=frame_index,
+            columns=columns,
+        ).to_hdf(path, key="data", format="fixed")
+        files[name] = {"relative_path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    for name in (
+        "suspend_data",
+        "suspend_manifest",
+        "security_identity",
+        "provider_absence",
+    ):
+        path = release / f"{name}.asset"
+        path.write_bytes(name.encode("ascii"))
+        files[name] = {"relative_path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    _files, merkle = tree_merkle(qlib)
+    body = {
+        "schema_version": subject.SOURCE_ASSET_SCHEMA_VERSION,
+        "release_identity": _release_identity("fixture-release"),
+        "daily_bin": {
+            "relative_root": "daily_bin",
+            "tree_merkle_sha256": merkle,
+            "schema_version": subject.QLIB_STOCK_SCHEMA_VERSION,
+            "schema_sha256": qlib_stock_schema_digest(),
+        },
+        "files": files,
+        "source_end": subject.SOURCE_END.isoformat(),
+    }
+    manifest = {
+        **body,
+        "release_root": str(release.resolve()),
+        "manifest_body_sha256": canonical_sha256(body),
+    }
+    manifest_path = tmp_path / "release-binding.json"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    return manifest_path, release
+
+
+def _direct_v2_candidate(
+    tmp_path: Path,
+    *,
+    state_schema_version: str = subject.DIRECT_V2_STATE_SCHEMA_VERSION,
+    root_name: str = "20260831-qe_hmm_full_v2-direct-test-candidate",
+) -> tuple[Path, Path, Path]:
+    global _ACTIVE_DIRECT_V2_ROOT, _ACTIVE_PROFILE_PATH
+    root = (tmp_path / root_name).resolve()
+    _ACTIVE_DIRECT_V2_ROOT = root
+    assert _ACTIVE_PROFILE_PATH is not None
+    profile = {
+        "schema_version": "aistock_active_dataset_profile_v1",
+        "generation": "20260917-v9",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "controller_paths": {"candidate_root": str(root)},
+        "node_bindings": {"test-node": {"candidate_root": str(root)}},
+    }
+    _ACTIVE_PROFILE_PATH.write_bytes(subject.canonical_json_bytes(profile))
+    day = root / "components" / "daily_bin_candidate"
+    factor = root / "components" / "factor_h5_static_candidate_v2"
+    index_root = root / "components" / "index_context"
+    suspend = root / "components" / "suspend_d_daily_candidate_v2"
+    sw_l1 = root / "components" / "sw_l1_index_daily_candidate_v1"
+    paths = [day / "calendars", day / "instruments", factor, index_root, suspend]
+    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
+        paths.append(sw_l1)
+    for path in paths:
+        path.mkdir(parents=True, exist_ok=True)
+    (day / "calendars" / "day.txt").write_text(
+        "\n".join(
+            (
+                subject.SOURCE_START.isoformat(),
+                subject.SOURCE_END.isoformat(),
+                subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stock_row = f"000001.SZ\t{subject.SOURCE_START.isoformat()}\t{subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()}\n"
+    benchmark_row = (
+        f"000300.SH\t{subject.DIRECT_V2_RELEASE_START.isoformat()}\t{subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()}\n"
+    )
+    (day / "instruments" / "all.txt").write_text(
+        stock_row + (benchmark_row if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION else ""),
+        encoding="utf-8",
+    )
+    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
+        (day / "instruments" / "stock_universe.txt").write_text(stock_row, encoding="utf-8")
+        (day / "instruments" / "benchmark.txt").write_text(benchmark_row, encoding="utf-8")
+    (day / "meta_export.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "daily_bin_candidate",
+                "start": "2018-08-01",
+                "end": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+                "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
+                "rule_version": "shsz_a_252td_st_delist_asof_v2",
+                **(
+                    {
+                        "benchmark_only": {
+                            "code": "000300.SH",
+                            "selection_eligible": False,
+                            "provider_catalog": "instruments/all.txt",
+                            "selection_universe": "instruments/stock_universe.txt",
+                            "benchmark_universe": "instruments/benchmark.txt",
+                        }
+                    }
+                    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION
+                    else {}
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name in ("daily_basic.h5", "moneyflow.h5"):
+        (factor / name).write_bytes(name.encode("ascii"))
+    (factor / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": subject.DIRECT_V2_FACTOR_SCHEMA_VERSION,
+                "start": "2018-08-01",
+                "end": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+                "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
+            }
+        ),
+        encoding="utf-8",
+    )
+    index_rows = []
+    for day_value in (
+        subject.SOURCE_START - timedelta(days=1),
+        subject.SOURCE_START,
+        subject.SOURCE_END,
+        subject.DIRECT_V2_RELEASE_CUTOFF,
+    ):
+        for code_index, code in enumerate(subject.DIRECT_V2_INDEX_CODES):
+            close = 100.0 + code_index + (day_value - subject.SOURCE_START).days / 1000
+            index_rows.append(
+                {
+                    "trade_date": day_value.isoformat(),
+                    "ts_code": code,
+                    "open": close,
+                    "high": close,
+                    "low": close,
+                    "close": close,
+                    "volume": 1.0,
+                    "amount": 1.0,
+                }
+            )
+    pd.DataFrame(index_rows).to_hdf(index_root / "index_daily.h5", key="data", format="fixed")
+    (index_root / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": subject.DIRECT_V2_INDEX_SCHEMA_VERSION,
+                "start": "2018-08-01",
+                "end": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+                "benchmark": "000300.SH",
+                "codes": list(subject.DIRECT_V2_INDEX_CODES),
+            }
+        ),
+        encoding="utf-8",
+    )
+    suspend_frame = pd.DataFrame(
+        [
+            {
+                "trade_date": pd.Timestamp("2025-11-26"),
+                "ts_code": "688766.SH",
+                "suspend_type": "S",
+                "suspend_timing": "09:30-09:30",
+            },
+            {
+                "trade_date": pd.Timestamp("2026-01-16"),
+                "ts_code": "688005.SH",
+                "suspend_type": "S",
+                "suspend_timing": "09:30-09:30",
+            },
+            {
+                "trade_date": pd.Timestamp(subject.DIRECT_V2_RELEASE_CUTOFF),
+                "ts_code": "000001.SZ",
+                "suspend_type": "S",
+                "suspend_timing": None,
+            },
+        ]
+    )
+    suspend_frame.to_parquet(suspend / "suspend_d.parquet", index=False)
+    (suspend / "meta.json").write_text(
+        json.dumps(
+            {
+                "schema_version": subject.DIRECT_V2_SUSPEND_SCHEMA_VERSION,
+                "component": "suspend_d",
+                "start": "2018-08-01",
+                "end": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+                "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
+                "source_table": "market.suspend_d",
+                "suspend_type": "S",
+                "row_count": 3,
+                "stock_count": 3,
+                "daily_row_counts": {
+                    "2025-11-26": 1,
+                    "2026-01-16": 1,
+                    subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(): 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
+        sw_days = (subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF)
+        sw_rows = []
+        for day_value in sw_days:
+            for offset in range(31):
+                sector_code = f"{110000 + offset:06d}"
+                sw_rows.append(
+                    {
+                        "datetime": pd.Timestamp(day_value),
+                        "sector_code": sector_code,
+                        "index_code": f"{801000 + offset:06d}.SI",
+                        "close": float(100 + offset + (day_value - subject.SOURCE_START).days / 1000),
+                    }
+                )
+        pd.DataFrame(sw_rows).set_index(["datetime", "sector_code"]).to_hdf(
+            sw_l1 / "sector_data.h5",
+            key="data",
+            format="table",
+            data_columns=["datetime", "sector_code"],
+        )
+        (sw_l1 / "meta.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": subject.DIRECT_V2_SW_L1_SCHEMA_VERSION,
+                    "component": "sw_l1_index",
+                    "source_identity": subject.DIRECT_V2_SW_L1_SOURCE_IDENTITY,
+                    "columns": ["index_code", "close"],
+                    "start": subject.SOURCE_START.isoformat(),
+                    "end": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+                    "sector_count": 31,
+                    "open_days": len(sw_days),
+                    "rows": len(sw_rows),
+                    "source_freeze": False,
+                    "full_history_content_hash": False,
+                }
+            ),
+            encoding="utf-8",
+        )
+    declared_root = str(root)
+    components = {
+        "daily_bin": ("daily_bin_candidate", "daily_bin"),
+        "factor_h5_static": ("factor_h5_static_candidate_v2", "factor_h5_static"),
+        "index_context": ("index_context", "index_context"),
+        "minute_bin": ("minute_bin_candidate", "minute_bin"),
+        "suspend_d": ("suspend_d_daily_candidate_v2", "suspend_d"),
+    }
+    if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
+        components["sw_l1_index"] = ("sw_l1_index_daily_candidate_v1", "sw_l1_index")
+    dataset_manifest_sha256 = "d" * 64
+    dataset_manifest = {
+        "schema_version": subject.DIRECT_V2_DATASET_MANIFEST_SCHEMA_VERSION,
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff_trade_date": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "availability_status": "CANDIDATE_READY",
+        "dataset_manifest_sha256": dataset_manifest_sha256,
+        "deployment_snapshot_id": "qe_hmm_full_v2_20260831_test",
+        "revision": "20260917-r6-test",
+        "components": {},
+    }
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest_path.write_text(json.dumps(dataset_manifest, sort_keys=True), encoding="utf-8")
+    state = {
+        "schema_version": state_schema_version,
+        "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "release_id": "qe_hmm_full_v2_20260831",
+        "revision": dataset_manifest["revision"],
+        "status": "CANDIDATE_READY",
+        "candidate_root": declared_root,
+        "components": {name: {"status": "PASS", "action": "REUSE_BYTE_IDENTICAL_HARDLINK"} for name in components},
+        "manifest": {
+            "dataset_manifest_sha256": dataset_manifest_sha256,
+            "deployment_snapshot_id": dataset_manifest["deployment_snapshot_id"],
+            "file_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "path": "qe_dataset_manifest.json",
+        },
+        "validation": {
+            "structural": {
+                "status": "PASS",
+                "checks": {name: True for name in components},
+            }
+        },
+    }
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    security = tmp_path / "security.json"
+    provider = tmp_path / "provider.json"
+    security.write_text("{}", encoding="utf-8")
+    provider.write_text("{}", encoding="utf-8")
+    return root, security, provider
+
+
+def _stub_direct_factor_inventory(path: Path, *, expected_columns, expected_dtype) -> dict[str, object]:
+    assert path.name in {"daily_basic.h5", "moneyflow.h5"}
+    assert tuple(expected_columns) in {subject._DAILY_BASIC_COLUMNS, subject._MONEYFLOW_COLUMNS}
+    assert np.dtype(expected_dtype) == np.dtype("<f4")
+    return {
+        "columns": list(expected_columns),
+        "dtype": "float32",
+        "date_min": "2018-08-01",
+        "date_max": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "code_count": 1,
+        "row_count": 3,
+    }
+
+
+def test_direct_v2_factor_table_layout_inventory_and_window_are_formally_readable(tmp_path: Path) -> None:
+    path = tmp_path / "daily_basic.h5"
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2026-08-28", "2026-08-31"]), ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame(
+        {
+            "db_close": np.arange(4, dtype=np.float32) + 10,
+            "db_circ_mv": np.arange(4, dtype=np.float32) + 100,
+        },
+        index=index,
+    )
+    frame.to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+
+    inventory = subject._fixed_h5_inventory(
+        path,
+        expected_columns=("db_close", "db_circ_mv"),
+        expected_dtype="<f4",
+    )
+    loaded = subject._load_fixed_h5_window(
+        path,
+        expected_columns=("db_close", "db_circ_mv"),
+        expected_dtype="<f4",
+        start=date(2026, 8, 31),
+        end=date(2026, 8, 31),
+    )
+
+    assert inventory == {
+        "columns": ["db_close", "db_circ_mv"],
+        "dtype": "float32",
+        "layout": "pandas_table",
+        "date_min": "2026-08-28",
+        "date_max": "2026-08-31",
+        "code_count": 2,
+        "row_count": 4,
+    }
+    assert loaded.equals(frame.loc[pd.IndexSlice[pd.Timestamp("2026-08-31"), :], :])
+
+
+def test_table_h5_physical_row_order_is_not_industry_or_date_authority(tmp_path: Path) -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2024-06-28", "2024-07-01", "2026-08-31"]), ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"value": np.arange(6, dtype=np.float32)}, index=index)
+    path = tmp_path / "moneyflow.h5"
+    # A validated immutable release may append corrections/aliases out of order.
+    frame.iloc[[5, 0, 3, 1, 4, 2]].to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    before = subject._sha256_file(path)
+    inventory = subject._fixed_h5_inventory(path, expected_columns=("value",), expected_dtype="<f4")
+    assert (inventory["date_min"], inventory["date_max"], inventory["row_count"]) == (
+        "2024-06-28",
+        "2026-08-31",
+        6,
+    )
+    loaded = subject._load_fixed_h5_window(
+        path,
+        expected_columns=("value",),
+        expected_dtype="<f4",
+        start=date(2024, 6, 28),
+        end=date(2024, 7, 1),
+    )
+    assert loaded.equals(frame.loc[pd.IndexSlice[: pd.Timestamp("2024-07-01"), :], :])
+    assert subject._sha256_file(path) == before
+
+
+def test_unordered_table_h5_keeps_duplicate_and_invalid_date_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "moneyflow.h5"
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2024-07-01"), "000001.SZ"),
+            (pd.Timestamp("2024-06-28"), "000001.SZ"),
+            (pd.Timestamp("2024-07-01"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"value": np.ones(3, dtype=np.float32)}, index=index)
+    frame.to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    with pytest.raises(subject.RotationL1InputBundleError, match="duplicated"):
+        subject._load_fixed_h5_window(
+            path,
+            expected_columns=("value",),
+            expected_dtype="<f4",
+            start=date(2024, 6, 28),
+            end=date(2024, 7, 1),
+        )
+    frame.index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2024-07-01 12:00"), "000001.SZ"),
+            (pd.NaT, "000002.SZ"),
+            (pd.Timestamp("2024-06-28"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame.to_hdf(path, key="data", mode="w", format="table", data_columns=["datetime", "instrument"])
+    with pytest.raises(subject.RotationL1InputBundleError, match="date"):
+        subject._fixed_h5_inventory(path, expected_columns=("value",), expected_dtype="<f4")
+
+
+def _stub_direct_source_preflights(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(subject, "_fixed_h5_inventory", _stub_direct_factor_inventory)
+    monkeypatch.setattr(
+        subject,
+        "_preflight_qlib_feature_inventory",
+        lambda *_args, **_kwargs: {"stock_count": 1, "field_count": len(subject.QLIB_STOCK_FIELDS)},
+    )
+
+
+def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    monkeypatch.setattr(subject, "_fixed_h5_inventory", _stub_direct_factor_inventory)
+    monkeypatch.setattr(
+        subject,
+        "_preflight_qlib_feature_inventory",
+        lambda *_args, **_kwargs: {"stock_count": 1, "field_count": len(subject.QLIB_STOCK_FIELDS)},
+    )
+
+    loaded = subject.load_rotation_l1_direct_v2_source_assets(
+        root,
+        security_identity_manifest=security,
+        provider_absence_manifest=provider,
+    )
+
+    assert loaded["release_cutoff"] == subject.DIRECT_V2_RELEASE_CUTOFF
+    assert loaded["universe_key"] == subject.DIRECT_V2_UNIVERSE_KEY
+    assert loaded["source_window_end"] == subject.SOURCE_END
+    assert loaded["files"]["daily_basic"].is_relative_to(root)
+    assert loaded["files"]["moneyflow"].is_relative_to(root)
+    assert loaded["files"]["index_context"].is_relative_to(root)
+    assert loaded["files"]["suspend_data"].is_relative_to(root)
+    assert loaded["files"]["sw_l1_index"].is_relative_to(root)
+    assert loaded["files"]["sw_l1_meta"].is_relative_to(root)
+    assert loaded["files"]["sw_l1_index"].parent.name == "sw_l1_index_daily_candidate_v1"
+    assert all(
+        path.parent.name != "factor_h5_static_candidate_v2" or path.name in {"daily_basic.h5", "moneyflow.h5"}
+        for name, path in loaded["files"].items()
+        if name not in {"security_identity", "provider_absence"}
+    )
+    assert loaded["instrument_universe_path"].name == "stock_universe.txt"
+    assert "minute_bin" not in loaded["files"]
+    assert loaded["source_revision"] == subject.DIRECT_V2_SOURCE_REVISION
+    assert loaded["release_identity"]["release_id"] == root.name
+    assert loaded["release_identity"]["active_release_id"] == "qe_hmm_full_v2_20260831"
+    assert loaded["release_identity"]["active_profile_generation"] == "20260917-v9"
+    assert _ACTIVE_PROFILE_PATH is not None
+    assert (
+        loaded["release_identity"]["active_profile_sha256"]
+        == hashlib.sha256(_ACTIVE_PROFILE_PATH.read_bytes()).hexdigest()
+    )
+    assert loaded["release_identity"]["dataset_revision"] == "20260917-r6-test"
+    assert len(loaded["sector_index_code_by_sector"]) == 31
+    assert len(loaded["sector_index_close"]) == 31 * 3
+    assert set(loaded["benchmark_close"]) == {
+        subject.SOURCE_START,
+        subject.SOURCE_END,
+        subject.DIRECT_V2_RELEASE_CUTOFF,
+    }
+
+
+def test_direct_v2_selection_universe_may_be_a_pit_subset_of_provider_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    all_path = root / "components" / "daily_bin_candidate" / "instruments" / "all.txt"
+    with all_path.open("a", encoding="utf-8", newline="") as handle:
+        handle.write(
+            f"000018.SZ\t{subject.DIRECT_V2_RELEASE_START.isoformat()}\t"
+            f"{subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()}\n"
+        )
+    _stub_direct_source_preflights(monkeypatch)
+
+    loaded = subject.load_rotation_l1_direct_v2_source_assets(
+        root,
+        security_identity_manifest=security,
+        provider_absence_manifest=provider,
+    )
+
+    assert loaded["instrument_universe_path"].name == "stock_universe.txt"
+
+
+def test_direct_v2_schema_boundary_rejects_retired_v2_for_all_new_hmm_experiments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, security, provider = _direct_v2_candidate(
+        tmp_path, state_schema_version=subject.DIRECT_V2_STATE_SCHEMA_VERSION_V2
+    )
+    _stub_direct_source_preflights(monkeypatch)
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_rejects_unknown_state_schema(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state_path = root / "direct_monthly_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["schema_version"] = "qe_direct_monthly_state_v4"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_requires_active_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    monkeypatch.delenv(subject.ACTIVE_DATASET_PROFILE_ENV)
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_rejects_manifest_hash_drift(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["revision"] = "stale-revision"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+
+def test_direct_v2_source_binding_rejects_state_manifest_revision_drift(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state_path = root / "direct_monthly_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["revision"] = "stale-revision"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_candidate_root_must_be_absolute_and_direct(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(subject.RotationL1InputBundleError) as relative:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            Path("relative-candidate"),
+            security_identity_manifest=tmp_path / "security.json",
+            provider_absence_manifest=tmp_path / "provider.json",
+        )
+    assert relative.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    original = subject._is_indirect_path
+    monkeypatch.setattr(subject, "_is_indirect_path", lambda path: path == root or original(path))
+    with pytest.raises(subject.RotationL1InputBundleError) as indirect:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert indirect.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_v3_requires_sw_l1_component_and_valid_component_state(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path / "missing")
+    (root / "components" / "sw_l1_index_daily_candidate_v1" / "sector_data.h5").unlink()
+    with pytest.raises(subject.RotationL1InputBundleError) as missing:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert missing.value.reason_code == subject.REASON_SOURCE_COMPONENT_MISSING
+
+    root, security, provider = _direct_v2_candidate(tmp_path / "receipt")
+    state_path = root / "direct_monthly_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["components"]["sw_l1_index"]["action"] = ""
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(subject.RotationL1InputBundleError) as mismatch:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert mismatch.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_direct_source_preflights(monkeypatch)
+    candidates = []
+    for suffix in ("release-a", "release-b"):
+        root, security, provider = _direct_v2_candidate(tmp_path / suffix, root_name=f"candidate-{suffix}")
+        loaded = subject.load_rotation_l1_g2a_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+        assert loaded["release_identity"]["release_id"] == root.name
+        assert all(
+            path.is_relative_to(root)
+            for name, path in loaded["files"].items()
+            if name not in {"security_identity", "provider_absence"}
+        )
+        assert "20260902-candidate" not in json.dumps(loaded["release_identity"])
+        candidates.append((root, security, provider))
+    assert candidates[0][0] != candidates[1][0]
+    old_root, old_security, old_provider = candidates[0]
+    with pytest.raises(subject.RotationL1InputBundleError) as stale:
+        subject.load_rotation_l1_g2a_direct_v2_source_assets(
+            old_root,
+            security_identity_manifest=old_security,
+            provider_absence_manifest=old_provider,
+        )
+    assert stale.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+@pytest.mark.parametrize("contract_kind", ["rotation_v13", "rotation_v16", "risk_v1"])
+def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contract_kind: str
+) -> None:
+    deterministic_v16 = contract_kind == "rotation_v16"
+    risk_v1 = contract_kind == "risk_v1"
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(100))
+    trade_day = calendar[-1]
+    as_of = calendar[-2]
+    market_start = calendar[5]
+    codes = tuple(f"801{index:03d}.SI" for index in range(31))
+    candidate_root = (tmp_path / "explicit-direct-v2-candidate").resolve()
+    candidate_root.mkdir()
+    qlib_root = candidate_root / "qlib"
+    qlib_root.mkdir()
+    loader_calls: list[dict[str, object]] = []
+    spool_calls: list[dict[str, object]] = []
+
+    def load_assets(root, **kwargs):
+        loader_calls.append({"root": root, **kwargs})
+        source_days = calendar[: calendar.index(as_of) + 1]
+        return {
+            "qlib_root": qlib_root,
+            "instrument_universe_path": candidate_root / "stock_universe.txt",
+            "files": {
+                "security_identity": candidate_root / "security.json",
+                "provider_absence": candidate_root / "provider.json",
+                "suspend_data": candidate_root / "suspend.parquet",
+                "suspend_manifest": candidate_root / "suspend.json",
+            },
+            "release_cutoff": trade_day,
+            "data_window_end": kwargs["data_window_end"],
+            "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
+            "release_identity": {"schema_version": subject.DIRECT_V2_IDENTITY_SCHEMA_VERSION},
+            "inventory": {"inventory_sha256": "a" * 64},
+            "binding_manifest_sha256": "b" * 64,
+            "sector_index_close": {
+                (day, code): 100.0 + day_index for day_index, day in enumerate(source_days) for code in codes
+            },
+            "sector_index_code_by_sector": {code: code for code in codes},
+            "benchmark_close": {day: 3000.0 + index for index, day in enumerate(source_days)},
+        }
+
+    adapter = SimpleNamespace(
+        constituents={code: {"l1_code": code, "l2_codes": []} for code in codes},
+        classification_lookup={("L1", code): {"name": f"Sector {index}"} for index, code in enumerate(codes)},
+        mapping_manifest=lambda **_kwargs: {"schema_version": "mapping_v1", "codes": list(codes)},
+    )
+
+    def build_stock_inputs(*_args, **kwargs):
+        output = kwargs["g2a_l1_daily_output"]
+        required_days = 25 if deterministic_v16 else 20
+        for day in kwargs["calendar"][-required_days:]:
+            for code in codes:
+                output.append(
+                    {
+                        "source_date": day,
+                        "sector_code": code,
+                        "expected_non_suspended_count": 10,
+                        "breadth_valid_count": 10,
+                        "breadth_coverage": 1.0,
+                        "pit_breadth_above_ma20": 0.5,
+                        "breadth_reason_code": None,
+                        "moneyflow_valid_count": 10,
+                        "moneyflow_coverage": 1.0,
+                        "moneyflow_net_amount_cny": 1.0,
+                        "moneyflow_traded_amount_cny": 10.0,
+                        "moneyflow_reason_code": None,
+                    }
+                )
+        return [], [], {}, {"industry": [], "status": []}
+
+    monkeypatch.setattr(subject, "load_rotation_l1_g2a_direct_v2_source_assets", load_assets)
+    monkeypatch.setattr(subject, "_load_qlib_calendar", lambda _path: calendar)
+    monkeypatch.setattr(subject, "_parse_instrument_spans", lambda _path: {})
+    monkeypatch.setattr(subject, "_industry_adapter", lambda *_args, **_kwargs: adapter)
+    monkeypatch.setattr(subject, "_IndustryProjectionIndex", lambda value, **_kwargs: value)
+    monkeypatch.setattr(subject, "_read_json_object", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        subject, "load_security_source_identity_manifest", lambda *_args, **_kwargs: SimpleNamespace(rows=[])
+    )
+    monkeypatch.setattr(subject, "_SecurityResolutionIndex", lambda value: value)
+    monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_args, **_kwargs: SimpleNamespace(rows=[]))
+    monkeypatch.setattr(subject, "_load_suspend_keys", lambda *_args, **_kwargs: frozenset())
+
+    def spool_qlib_months(*_args, **kwargs):
+        spool_calls.append(kwargs)
+        return (tmp_path / "202603.bin",)
+
+    monkeypatch.setattr(subject, "_spool_qlib_months", spool_qlib_months)
+    monkeypatch.setattr(subject, "_build_stock_fact_aggregates", build_stock_inputs)
+
+    result = subject.build_rotation_l1_single_date_source_from_assets(
+        direct_v2_candidate_root=candidate_root,
+        security_identity_manifest=candidate_root / "security.json",
+        provider_absence_manifest=candidate_root / "provider.json",
+        industry_authority={},
+        forbidden_roots=(),
+        work_parent=tmp_path / "work",
+        trade_date=trade_day,
+        as_of_date=as_of,
+        market_start=None if deterministic_v16 or risk_v1 else market_start,
+        model_contract_version=(
+            "hmm_risk_rotation_l1_g2a_v1_6"
+            if deterministic_v16
+            else "hmm_risk_risk_l1_g2b_v1"
+            if risk_v1
+            else "hmm_risk_rotation_l1_g2a_v1_3"
+        ),
+    )
+
+    assert loader_calls == [
+        {
+            "root": candidate_root,
+            "security_identity_manifest": candidate_root / "security.json",
+            "provider_absence_manifest": candidate_root / "provider.json",
+            "data_window_end": as_of,
+        }
+    ]
+    assert result["feature_calendar"][-2:] == (as_of, trade_day)
+    assert len(spool_calls) == 1
+    assert spool_calls[0]["calendar"] == calendar
+    assert spool_calls[0]["window_start"] == calendar[-45 if deterministic_v16 else -40]
+    assert spool_calls[0]["window_end"] == as_of
+    if deterministic_v16:
+        assert result["schema_version"] == "hmm_risk_rotation_l1_single_date_source_v2"
+        assert result["model_contract_version"] == "hmm_risk_rotation_l1_g2a_v1_6"
+        assert result["benchmark_close"] == {}
+        assert result["sector_close"] == {}
+        assert len(result["feature_calendar"]) == 26
+        assert len(result["stock_daily_inputs"]) == 25 * 31
+        assert result["source_receipt"]["market_context_used_for_score"] is False
+        assert result["source_receipt"]["sector_close_used_for_score"] is False
+    else:
+        assert result["schema_version"] == (
+            "hmm_risk_risk_l1_single_date_source_v1" if risk_v1 else "hmm_risk_rotation_l1_single_date_source_v1"
+        )
+        if risk_v1:
+            assert result["model_contract_version"] == "hmm_risk_risk_l1_g2b_v1"
+        assert set(result["benchmark_close"]) == set(result["market_calendar"][:-1])
+        assert all(day <= as_of for day, _code in result["sector_close"])
+        assert len(result["sector_close"]) == 61 * 31
+        assert len(result["stock_daily_inputs"]) == 20 * 31
+    assert result["source_receipt"]["target_columns_read"] is False
+    assert result["source_receipt"]["receipt_sha256"] == subject.canonical_sha256(
+        {key: value for key, value in result["source_receipt"].items() if key != "receipt_sha256"}
+    )
+
+
+@pytest.mark.parametrize(
+    "unsupported_contract",
+    ["hmm_risk_rotation_l1_g2a_v1_4", "hmm_risk_rotation_l1_g2a_v1_5", "unknown"],
+)
+def test_single_date_source_rejects_non_productised_model_contracts(
+    tmp_path: Path,
+    unsupported_contract: str,
+) -> None:
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.build_rotation_l1_single_date_source_from_assets(
+            direct_v2_candidate_root=tmp_path / "unused-candidate",
+            security_identity_manifest=tmp_path / "security.json",
+            provider_absence_manifest=tmp_path / "provider.json",
+            industry_authority={},
+            forbidden_roots=(),
+            work_parent=tmp_path / "work",
+            trade_date=date(2026, 1, 5),
+            as_of_date=date(2026, 1, 2),
+            market_start=date(2025, 1, 1),
+            model_contract_version=unsupported_contract,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+def test_direct_v2_sw_l1_readback_is_order_independent(tmp_path: Path) -> None:
+    root, _security, _provider = _direct_v2_candidate(tmp_path)
+    sw_root = root / "components" / "sw_l1_index_daily_candidate_v1"
+    calendar = (subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF)
+    first = subject._load_direct_v2_sw_l1_index(
+        sw_root / "sector_data.h5",
+        sw_root / "meta.json",
+        expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        release_calendar=calendar,
+        calendar=calendar,
+    )
+    shuffled = pd.read_hdf(sw_root / "sector_data.h5").sample(frac=1.0, random_state=42)
+    shuffled.to_hdf(sw_root / "sector_data.h5", key="data", mode="w", format="fixed")
+    second = subject._load_direct_v2_sw_l1_index(
+        sw_root / "sector_data.h5",
+        sw_root / "meta.json",
+        expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        release_calendar=calendar,
+        calendar=calendar,
+    )
+
+    assert first == second
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason_code"),
+    (
+        ("missing_sector", subject.REASON_SOURCE_SCHEMA_INVALID),
+        ("duplicate", subject.REASON_DUPLICATE_KEY),
+        ("non_finite", subject.REASON_SOURCE_UNIT_INVALID),
+        ("non_positive", subject.REASON_SOURCE_UNIT_INVALID),
+        ("missing_date", subject.REASON_SOURCE_RANGE_INCOMPLETE),
+    ),
+)
+def test_direct_v2_sw_l1_readback_fails_closed_on_invalid_panel(
+    tmp_path: Path, mutation: str, reason_code: str
+) -> None:
+    root, _security, _provider = _direct_v2_candidate(tmp_path)
+    sw_root = root / "components" / "sw_l1_index_daily_candidate_v1"
+    path = sw_root / "sector_data.h5"
+    frame = pd.read_hdf(path).reset_index()
+    if mutation == "missing_sector":
+        frame = frame.loc[frame["sector_code"] != frame["sector_code"].iloc[0]]
+    elif mutation == "duplicate":
+        frame = pd.concat([frame, frame.iloc[[0]]], ignore_index=True)
+    elif mutation == "non_finite":
+        frame.loc[0, "close"] = np.nan
+    elif mutation == "non_positive":
+        frame.loc[0, "close"] = 0.0
+    elif mutation == "missing_date":
+        frame = frame.loc[frame["datetime"] != frame["datetime"].iloc[0]]
+    frame.set_index(["datetime", "sector_code"]).to_hdf(path, key="data", mode="w", format="fixed")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._load_direct_v2_sw_l1_index(
+            path,
+            sw_root / "meta.json",
+            expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+            release_calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
+            calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
+        )
+
+    assert exc_info.value.reason_code == reason_code
+
+
+def test_direct_v2_source_binding_rejects_cross_release_and_legacy_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    monkeypatch.setattr(subject, "_fixed_h5_inventory", _stub_direct_factor_inventory)
+    monkeypatch.setattr(
+        subject,
+        "_preflight_qlib_feature_inventory",
+        lambda *_args, **_kwargs: {"stock_count": 1, "field_count": len(subject.QLIB_STOCK_FIELDS)},
+    )
+    factor_meta = root / "components" / "factor_h5_static_candidate_v2" / "meta.json"
+    value = json.loads(factor_meta.read_text(encoding="utf-8"))
+    value["end"] = "2026-06-30"
+    factor_meta.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(subject.RotationL1InputBundleError) as cross_release:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert cross_release.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+    root, security, provider = _direct_v2_candidate(tmp_path / "fallback")
+    state_path = root / "direct_monthly_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["candidate_root"] = "/home/lc999/data/qlib_bin"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    with pytest.raises(subject.RotationL1InputBundleError) as legacy:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+    assert legacy.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_requires_every_hmm_component(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    monkeypatch.setattr(subject, "_fixed_h5_inventory", _stub_direct_factor_inventory)
+    monkeypatch.setattr(
+        subject,
+        "_preflight_qlib_feature_inventory",
+        lambda *_args, **_kwargs: {"stock_count": 1, "field_count": len(subject.QLIB_STOCK_FIELDS)},
+    )
+    (root / "components" / "factor_h5_static_candidate_v2" / "moneyflow.h5").unlink()
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_COMPONENT_MISSING
+
+
+def test_direct_v2_index_requires_12_codes_and_derives_csi300_return_without_future_data(tmp_path: Path) -> None:
+    root, _security, _provider = _direct_v2_candidate(tmp_path)
+    path = root / "components" / "index_context" / "index_daily.h5"
+
+    inventory, benchmark, benchmark_close = subject._load_direct_v2_index_context(
+        path,
+        expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        release_calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
+        calendar=(subject.SOURCE_START, subject.SOURCE_END),
+    )
+
+    assert inventory["code_count"] == 12
+    assert inventory["date_max"] == subject.SOURCE_END.isoformat()
+    assert inventory["release_cutoff"] == subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()
+    assert set(benchmark) == {subject.SOURCE_START, subject.SOURCE_END}
+    assert set(benchmark_close) == {subject.SOURCE_START, subject.SOURCE_END}
+    assert benchmark[subject.SOURCE_START] == pytest.approx((100.0 + 2) / (100.0 + 2 - 0.001) - 1.0)
+    frame = pd.read_hdf(path)
+    frame = frame.loc[frame["ts_code"] != subject.DIRECT_V2_INDEX_CODES[-1]]
+    frame.to_hdf(path, key="data", mode="w", format="fixed")
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._load_direct_v2_index_context(
+            path,
+            expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+            release_calendar=(subject.SOURCE_START, subject.SOURCE_END, subject.DIRECT_V2_RELEASE_CUTOFF),
+            calendar=(subject.SOURCE_START, subject.SOURCE_END),
+        )
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+def test_direct_v2_suspend_readback_closes_metadata_and_full_day_sentinels(tmp_path: Path) -> None:
+    root, _security, _provider = _direct_v2_candidate(tmp_path)
+    suspend = root / "components" / "suspend_d_daily_candidate_v2"
+
+    keys = subject._load_suspend_keys(
+        suspend / "suspend_d.parquet",
+        suspend / "meta.json",
+        calendar=(date(2025, 11, 26), date(2026, 1, 16), subject.DIRECT_V2_RELEASE_CUTOFF),
+        expected_release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+        expected_universe_key=subject.DIRECT_V2_UNIVERSE_KEY,
+    )
+
+    assert keys == frozenset(
+        {
+            (date(2025, 11, 26), "688766.SH"),
+            (date(2026, 1, 16), "688005.SH"),
+            (subject.DIRECT_V2_RELEASE_CUTOFF, "000001.SZ"),
+        }
+    )
+
+
+def test_direct_v2_bundle_identity_round_trip_preserves_candidate_universe(tmp_path: Path) -> None:
+    inputs = _inputs()
+    inputs["mapping_manifest"]["universe_key"] = subject.DIRECT_V2_UNIVERSE_KEY
+    source = {
+        **_source(),
+        "source_revision": subject.DIRECT_V2_SOURCE_REVISION,
+        "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
+        "universe_rule_version": "shsz_a_252td_st_delist_asof_v2",
+    }
+    release_identity = {
+        "schema_version": subject.DIRECT_V2_IDENTITY_SCHEMA_VERSION,
+        "release_id": "20260831-qe_hmm_full_v2-direct-test-candidate",
+        "profile": subject.DIRECT_V2_PROFILE,
+        "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "universe_key": subject.DIRECT_V2_UNIVERSE_KEY,
+        "rule_version": "shsz_a_252td_st_delist_asof_v2",
+        "state_schema_version": subject.DIRECT_V2_STATE_SCHEMA_VERSION,
+        "metadata_sha256": {
+            name: "abcdef"[index % 6] * 64
+            for index, name in enumerate(
+                (
+                    "direct_state",
+                    "daily_meta",
+                    "factor_meta",
+                    "index_meta",
+                    "suspend_meta",
+                    "sw_l1_meta",
+                    "security_identity",
+                    "provider_absence",
+                )
+            )
+        },
+        "component_sha256": {
+            "index_context": "1" * 64,
+            "suspend_data": "2" * 64,
+            "sw_l1_index": "3" * 64,
+        },
+    }
+    source_identity = {
+        **_source_identity(),
+        "release_identity": release_identity,
+        "source_binding_manifest_sha256": canonical_sha256(release_identity),
+    }
+
+    root = tmp_path / "direct-bundle"
+    subject.write_rotation_l1_input_bundle(
+        inputs=inputs,
+        source=source,
+        source_identity=source_identity,
+        output_root=root,
+        producer_commit="f" * 40,
+        forbidden_roots=(Path(__file__).resolve().parents[3],),
+    )
+    loaded = subject.read_rotation_l1_input_bundle(
+        root,
+        forbidden_roots=(Path(__file__).resolve().parents[3],),
+    )
+
+    assert loaded["source"]["source_revision"] == subject.DIRECT_V2_SOURCE_REVISION
+    assert loaded["source"]["universe_key"] == subject.DIRECT_V2_UNIVERSE_KEY
+    assert loaded["source_identity"]["release_identity"] == release_identity
+
+
+def test_builder_cli_routes_direct_v2_without_legacy_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    authority = tmp_path / "industry.json"
+    authority.write_text("{}", encoding="utf-8")
+    security = tmp_path / "security.json"
+    security.write_text("{}", encoding="utf-8")
+    provider = tmp_path / "provider.json"
+    provider.write_text("{}", encoding="utf-8")
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    captured = {}
+
+    def fail_build(**kwargs):
+        captured.update(kwargs)
+        raise subject.RotationL1InputBundleError(subject.REASON_SOURCE_COMPONENT_MISSING, "fixture")
+
+    monkeypatch.setattr(cli, "build_rotation_l1_inputs_from_assets", fail_build)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_rotation_l1_input_bundle.py",
+            "--direct-v2-candidate-root",
+            str(candidate),
+            "--security-identity-manifest",
+            str(security),
+            "--provider-absence-manifest",
+            str(provider),
+            "--industry-pit-authority",
+            str(authority),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--source-end",
+            subject.SOURCE_END.isoformat(),
+            "--producer-commit",
+            "f" * 40,
+        ],
+    )
+
+    assert cli.main() == 2
+    assert captured["dataset_release_manifest"] is None
+    assert captured["direct_v2_candidate_root"] == candidate
+    assert captured["security_identity_manifest"] == security
+    assert captured["provider_absence_manifest"] == provider
+
+
+def test_source_asset_binding_verifies_tree_files_and_excludes_locator_from_identity(tmp_path: Path) -> None:
+    manifest_path, release = _asset_binding(tmp_path)
+
+    loaded = subject.load_rotation_l1_source_assets(manifest_path)
+
+    assert loaded["release_root"] == release.resolve()
+    assert loaded["inventory"]["qlib"]["schema_version"] == subject.QLIB_STOCK_SCHEMA_VERSION
+    assert len(loaded["inventory"]["required_fields"]) == 22
+    assert loaded["binding_manifest_sha256"] == json.loads(manifest_path.read_text())["manifest_body_sha256"]
+    (release / "moneyflow.asset").write_bytes(b"tampered")
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_source_assets(manifest_path)
+    assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+
+def test_suspend_sidecar_uses_only_full_day_rows_and_preserves_intraday_observations(tmp_path: Path) -> None:
+    data_path = tmp_path / "suspend_d.parquet"
+    manifest_path = tmp_path / "manifest.json"
+    rows = pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": None,
+            },
+            {
+                "ts_code": "000002.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": "09:30-10:00",
+            },
+            {
+                "ts_code": "000003.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": " 09:30-09:30 ",
+            },
+            {
+                "ts_code": "000004.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": "S",
+                "suspend_timing": "   ",
+            },
+        ]
+    )
+    rows.to_parquet(data_path, index=False)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "suspend_d_dataset_manifest_v1",
+                "source": {"contract": "tushare_suspend_d_shsz_S_v1"},
+                "start": subject.SOURCE_START.isoformat(),
+                "end": subject.SOURCE_END.isoformat(),
+                "artifacts": {"suspend_d.parquet": {"sha256": hashlib.sha256(data_path.read_bytes()).hexdigest()}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    keys = subject._load_suspend_keys(data_path, manifest_path, calendar=(subject.SOURCE_START,))
+
+    assert keys == frozenset(
+        {
+            (subject.SOURCE_START, "000001.SZ"),
+            (subject.SOURCE_START, "000003.SZ"),
+            (subject.SOURCE_START, "000004.SZ"),
+        }
+    )
+
+
+def test_full_day_suspension_precedes_missing_evidence_and_price_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dates = (date(2026, 1, 16), date(2026, 1, 19))
+    symbol = "688005.SH"
+    source_rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
+    for index, day in enumerate(dates):
+        source_rows[index]["trade_date"] = int(day.strftime("%Y%m%d"))
+        source_rows[index]["symbol"] = symbol.encode("ascii")
+        for field in subject.QLIB_STOCK_FIELDS:
+            source_rows[index][field] = np.nan if index == 0 else 1.0
+        if index == 1:
+            source_rows[index]["limit_up"] = 0.0
+            source_rows[index]["limit_down"] = 0.0
+    month_path = tmp_path / "202601.bin"
+    source_rows.tofile(month_path)
+
+    index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime([dates[1]]), [symbol]],
+        names=["datetime", "instrument"],
+    )
+    basic = pd.DataFrame(1.0, index=index, columns=subject._DAILY_BASIC_COLUMNS, dtype=np.float32)
+    moneyflow = pd.DataFrame(1.0, index=index, columns=subject._MONEYFLOW_COLUMNS, dtype=np.float32)
+
+    def load_window(_path, *, expected_columns, **_kwargs):
+        return basic if tuple(expected_columns) == subject._DAILY_BASIC_COLUMNS else moneyflow
+
+    monkeypatch.setattr(subject, "_load_fixed_h5_window", load_window)
+
+    class Adapter:
+        @staticmethod
+        def resolve(_symbol, _day):
+            return SimpleNamespace(
+                status="resolved",
+                reason_code=None,
+                l1_code="801010.SI",
+                l1_name="L1",
+                l2_code="801011.SI",
+                l2_name="L2",
+            )
+
+    class Resolution:
+        source_ts_code = symbol
+
+        @staticmethod
+        def evidence():
+            return {"source_ts_code": symbol}
+
+    class Security:
+        @staticmethod
+        def resolve(_symbol, _day, _dataset):
+            return Resolution()
+
+    class ProviderAbsence:
+        @staticmethod
+        def resolve(**_kwargs):
+            raise AssertionError("suspension and available moneyflow must not consult provider absence")
+
+    captured: list[dict[str, object]] = []
+
+    def capture(day_rows, **_kwargs):
+        captured.extend(dict(row) for row in day_rows)
+
+    monkeypatch.setattr(subject, "_append_day_level_aggregates", capture)
+    subject._build_stock_fact_aggregates(
+        month_paths=(month_path,),
+        assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
+        calendar=dates,
+        spans={symbol: ((dates[0], dates[-1]),)},
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=ProviderAbsence(),
+        suspension_keys=frozenset({(dates[0], symbol)}),
+        contributor_eligibility={symbol: True},
+    )
+
+    suspended, resumed = captured
+    assert suspended["is_suspended"] is True
+    assert suspended["moneyflow_fact_status"] == "not_applicable_suspended"
+    assert resumed["is_suspended"] is False
+    assert resumed["prev_close_yuan"] is None
+    assert resumed["prev_close_5_yuan"] is None
+    assert resumed["prev_close_10_yuan"] is None
+
+
+@pytest.mark.parametrize(
+    ("suspend_type", "suspend_timing"),
+    (("R", None), ("S", 930)),
+)
+def test_suspend_sidecar_rejects_unknown_type_or_non_text_timing(
+    tmp_path: Path,
+    suspend_type: str,
+    suspend_timing: object,
+) -> None:
+    data_path = tmp_path / "suspend_d.parquet"
+    manifest_path = tmp_path / "manifest.json"
+    pd.DataFrame(
+        [
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": pd.Timestamp(subject.SOURCE_START),
+                "suspend_type": suspend_type,
+                "suspend_timing": suspend_timing,
+            }
+        ]
+    ).to_parquet(data_path, index=False)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "suspend_d_dataset_manifest_v1",
+                "source": {"contract": "tushare_suspend_d_shsz_S_v1"},
+                "start": subject.SOURCE_START.isoformat(),
+                "end": subject.SOURCE_END.isoformat(),
+                "artifacts": {"suspend_d.parquet": {"sha256": hashlib.sha256(data_path.read_bytes()).hexdigest()}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._load_suspend_keys(data_path, manifest_path, calendar=(subject.SOURCE_START,))
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+def test_builder_cli_persists_typed_failure_without_final_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority = tmp_path / "industry.json"
+    authority.write_text("{}", encoding="utf-8")
+    output = tmp_path / "bundle"
+
+    def fail_build(**_kwargs):
+        raise subject.RotationL1InputBundleError(
+            subject.REASON_SOURCE_COMPONENT_MISSING,
+            "missing frozen component",
+            context={"component": "daily_basic"},
+        )
+
+    monkeypatch.setattr(cli, "build_rotation_l1_inputs_from_assets", fail_build)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_rotation_l1_input_bundle.py",
+            "--dataset-release-manifest",
+            str(tmp_path / "release.json"),
+            "--industry-pit-authority",
+            str(authority),
+            "--output-root",
+            str(output),
+            "--source-end",
+            subject.SOURCE_END.isoformat(),
+            "--producer-commit",
+            "f" * 40,
+        ],
+    )
+
+    assert cli.main() == 2
+    assert not output.exists()
+    failures = list(tmp_path.glob(".bundle.failed.*/build.failure.json"))
+    assert len(failures) == 1
+    failure = json.loads(failures[0].read_text(encoding="utf-8"))
+    assert failure["primary_reason_code"] == subject.REASON_SOURCE_COMPONENT_MISSING
+    assert failure["database_read_performed"] is False
+    assert failure["model_write_performed"] is False
+
+
+def test_industry_adapter_rejects_legacy_authority_without_frozen_l2_projection(tmp_path: Path) -> None:
+    authority = {
+        "artifact_root": str(tmp_path.resolve()),
+        "identity": {},
+        "research_basis": {},
+        "l1_projection": {},
+    }
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._industry_adapter(authority, forbidden_roots=())
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_industry_adapter_binds_both_projection_authorities_before_use(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class Adapter:
+        @classmethod
+        def from_artifact_root(cls, **_kwargs):
+            calls.append("artifact")
+            return cls()
+
+        def bind_research_basis_contract(self, _authority):
+            calls.append("research")
+
+        def bind_l1_code_projection(self, _authority):
+            calls.append("l1")
+
+        def bind_l2_code_projection(self, _authority):
+            calls.append("l2")
+
+    monkeypatch.setattr(subject, "HMMIndustryPitAdapter", Adapter)
+    authority = {
+        "artifact_root": str(tmp_path.resolve()),
+        "identity": {},
+        "research_basis": {},
+        "l1_projection": {},
+        "l2_projection": {},
+    }
+
+    result = subject._industry_adapter(authority, forbidden_roots=())
+
+    assert isinstance(result, Adapter)
+    assert calls == ["artifact", "research", "l1", "l2"]
+
+
+def test_moneyflow_contributor_eligibility_is_frozen_train_only_not_day_local() -> None:
+    dates = tuple(date(2022, 1, 4) + timedelta(days=index) for index in range(10))
+    spans = {"000001.SZ": ((dates[0], dates[-1]),)}
+
+    class Adapter:
+        @staticmethod
+        def resolve(symbol, day):
+            return SimpleNamespace(status="resolved", canonical_symbol=symbol, trade_date=day)
+
+    class Security:
+        @staticmethod
+        def resolve(symbol, day, dataset):
+            assert dataset == "market.moneyflow_ts"
+            return SimpleNamespace(source_ts_code=symbol)
+
+    provider = SimpleNamespace(
+        rows=(SimpleNamespace(canonical_ts_code="000001.SZ", source_ts_code="000001.SZ", trade_date=dates[0]),)
+    )
+
+    eligibility, receipt = subject._build_train_only_contributor_eligibility(
+        spans=spans,
+        calendar=dates,
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=provider,
+        suspension_keys=frozenset(),
+    )
+
+    assert eligibility == {"000001.SZ": True}
+    assert receipt["eligible_count"] == 1
+    provider.rows = (
+        *provider.rows,
+        SimpleNamespace(canonical_ts_code="000001.SZ", source_ts_code="000001.SZ", trade_date=dates[1]),
+    )
+    eligibility, _receipt = subject._build_train_only_contributor_eligibility(
+        spans=spans,
+        calendar=dates,
+        adapter=Adapter(),
+        security=Security(),
+        provider_absence=provider,
+        suspension_keys=frozenset(),
+    )
+    assert eligibility == {"000001.SZ": False}
+
+
+def test_moneyflow_contributor_eligibility_rejects_provider_alias_drift() -> None:
+    trade_date = date(2022, 1, 4)
+
+    class Adapter:
+        @staticmethod
+        def resolve(symbol, day):
+            return SimpleNamespace(status="resolved", canonical_symbol=symbol, trade_date=day)
+
+    class Security:
+        @staticmethod
+        def resolve(symbol, day, dataset):
+            assert dataset == "market.moneyflow_ts"
+            return SimpleNamespace(source_ts_code="000001.SZ")
+
+    provider = SimpleNamespace(
+        rows=(
+            SimpleNamespace(
+                canonical_ts_code="000001.SZ",
+                source_ts_code="000001.OLD",
+                trade_date=trade_date,
+            ),
+        )
+    )
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._build_train_only_contributor_eligibility(
+            spans={"000001.SZ": ((trade_date, trade_date),)},
+            calendar=(trade_date,),
+            adapter=Adapter(),
+            security=Security(),
+            provider_absence=provider,
+            suspension_keys=frozenset(),
+        )
+    assert exc_info.value.reason_code == subject.REASON_AUTHORITY_AMBIGUOUS
+
+
+def test_g2a_l1_daily_inputs_preserve_coverage_failure_without_zero_fill() -> None:
+    day = date(2026, 3, 30)
+    rows = [
+        {
+            "trade_date": day,
+            "l1_code": "801010.SI",
+            "is_suspended": False,
+            "g2a_above_ma20": True if index < 4 else None,
+            "moneyflow_fact_status": "available" if index < 4 else "provider_absence",
+            "net_mf_amount_cny": 10.0 if index < 4 else None,
+            "amount_cny": 100.0 if index < 4 else None,
+        }
+        for index in range(10)
+    ]
+    output: list[dict[str, object]] = []
+
+    subject._append_g2a_l1_daily_inputs(rows, output=output)
+
+    assert len(output) == 1
+    assert output[0]["pit_breadth_above_ma20"] is None
+    assert output[0]["moneyflow_net_amount_cny"] is None
+    assert output[0]["moneyflow_traded_amount_cny"] is None
+    assert output[0]["breadth_reason_code"] == "hmm_risk_rotation_feature_contract_invalid"
+    assert output[0]["moneyflow_reason_code"] == "hmm_risk_rotation_feature_contract_invalid"
+
+
+def test_l2_aggregation_does_not_mutate_l1_identity_used_by_g2a(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {
+        "trade_date": date(2026, 3, 30),
+        "l1_code": "801010.SI",
+        "l1_name": "L1",
+        "l2_code": "801011.SI",
+        "l2_name": "L2",
+    }
+    observed: list[tuple[str, str]] = []
+
+    def capture(rows, *, level, **_kwargs):
+        observed.append((level, str(rows[0]["l1_code"])))
+
+    monkeypatch.setattr(subject, "_append_feature_domain_aggregate", capture)
+    subject._append_day_level_aggregates(
+        [row],
+        l1_aggregates=[],
+        l2_aggregates=[],
+        unavailable={},
+        contributor_eligibility={},
+    )
+
+    assert observed == [("L1", "801010.SI"), ("L2", "801011.SI")]
+    assert row["l1_code"] == "801010.SI"
+
+
+def test_g2a_sw_l1_taxonomy_codes_are_mapped_to_canonical_published_codes() -> None:
+    taxonomy = tuple(f"{index:02d}0000" for index in range(1, 32))
+    canonical = tuple(f"801{index:03d}.SI" for index in range(1, 32))
+    mapping = dict(zip(taxonomy, canonical, strict=True))
+    day = date(2026, 3, 31)
+
+    result = subject._published_l1_sector_close(
+        {(day, code): float(index) for index, code in enumerate(taxonomy, start=1)},
+        mapping,
+        canonical_codes=canonical,
+    )
+
+    assert set(code for _day, code in result) == set(canonical)
+    drifted = dict(mapping)
+    drifted[taxonomy[-1]] = canonical[0]
+    with pytest.raises(subject.RotationL1InputBundleError) as caught:
+        subject._published_l1_sector_close(
+            {(day, code): 1.0 for code in taxonomy},
+            drifted,
+            canonical_codes=canonical,
+        )
+    assert caught.value.reason_code == subject.REASON_AUTHORITY_AMBIGUOUS

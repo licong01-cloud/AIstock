@@ -40,11 +40,13 @@ from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     deterministic_market_data_id,
     phase_for_shanghai_time,
 )
-from backend.services.miniqmt_execution_runtime.quote_normalizer import capture_raw_quote_frame, normalize_raw_quote_frame
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.miniqmt_execution_runtime.quote_normalizer import (
+    capture_raw_quote_frame,
+    normalize_raw_quote_frame,
+)
+from backend.services.simulation_data.contracts import (
     DailySuspendStatus,
     EquityInstrumentMetadata,
-    PreviousClose,
 )
 from backend.services.simulation_runtime.miniqmt_quote_context import (
     MiniQMTQuoteContextAuthorityAdapter,
@@ -107,7 +109,9 @@ def _calendar_set(trade_date: date = date(2026, 7, 12)) -> CalendarSnapshotSet:
     )
 
 
-def _tradability(*, symbol: str = "000001.SZ", state: TradabilityState = TradabilityState.TRADABLE) -> TradabilitySnapshot:
+def _tradability(
+    *, symbol: str = "000001.SZ", state: TradabilityState = TradabilityState.TRADABLE
+) -> TradabilitySnapshot:
     return TradabilitySnapshot(
         schema_version="adaptive_is_tradability_snapshot_v1",
         tradability_id=f"tradability-{symbol}",
@@ -235,7 +239,9 @@ def _observation(*, context: QuoteEvaluationContext, frame=None) -> NormalizedQu
     )
 
 
-def _request(*, symbol: str = "000001.SZ", side: str = "BUY", group: str | None = None, policy: QuoteContractPolicy | None = None) -> ActionQuoteRequest:
+def _request(
+    *, symbol: str = "000001.SZ", side: str = "BUY", group: str | None = None, policy: QuoteContractPolicy | None = None
+) -> ActionQuoteRequest:
     policy = policy or _policy()
     return ActionQuoteRequest(
         runtime_id="runtime-1",
@@ -288,15 +294,6 @@ class _Limit:
         return DailyLimitPrice(symbol=symbol, trade_date=trade_date, pre_close=10.0, up_limit=11.0, down_limit=9.0)
 
 
-class _PreviousClose:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def get_previous_close(self, symbol: str, trade_date: date) -> PreviousClose:
-        self.calls += 1
-        return PreviousClose(symbol=symbol, trade_date=trade_date, previous_trade_date=trade_date, pre_close=10.0)
-
-
 class _Metadata:
     def __init__(self) -> None:
         self.calls = 0
@@ -330,11 +327,7 @@ def _symbol_spec() -> QuoteContextSymbolSpec:
 
 def test_quote_eligibility_core_has_no_db_fastapi_broker_or_scheduler_imports() -> None:
     source = Path("backend/services/miniqmt_execution_runtime/quote_eligibility.py").read_text(encoding="utf-8")
-    imported_modules = {
-        node.module or ""
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.ImportFrom)
-    }
+    imported_modules = {node.module or "" for node in ast.walk(ast.parse(source)) if isinstance(node, ast.ImportFrom)}
     forbidden = ("backend.db", "fastapi", "broker", "paper_trading", "simulation_runtime.scheduler", "xtquant")
     assert not [module for module in imported_modules if any(token in module for token in forbidden)]
 
@@ -347,7 +340,6 @@ def test_calendar_snapshot_uses_authoritative_checksum_and_all_markets() -> None
         trading_calendar_service=calendar,
         suspend_status_provider=_Suspend(),
         limit_price_provider=_Limit(),
-        previous_close_provider=_PreviousClose(),
         equity_metadata_provider=_Metadata(),
     )
 
@@ -361,7 +353,9 @@ def test_calendar_snapshot_uses_authoritative_checksum_and_all_markets() -> None
 
     assert calendar.calls == 1
     assert set(context.calendar_snapshot_set.snapshot_by_market) == set(MarketCode)
-    assert all("checksum-20260712" in item.source_version for item in context.calendar_snapshot_set.snapshot_by_market.values())
+    assert all(
+        "checksum-20260712" in item.source_version for item in context.calendar_snapshot_set.snapshot_by_market.values()
+    )
     assert context.clock.phase_schedule_version == "A_SHARE_EQUITY_PHASE_SCHEDULE_V1_20260706"
 
 
@@ -417,7 +411,9 @@ def test_clock_continuity_rejects_wall_rollback_domain_change_and_age_divergence
 
     context = _context(policy=_policy(max_clock_age_divergence_ms=1))
     observation = _observation(context=context, frame=_frame(received_monotonic_ns=1_000_000_000))
-    result = ActionQuoteEvaluator().evaluate(request=_request(policy=context.policy), context=context, observation=observation)
+    result = ActionQuoteEvaluator().evaluate(
+        request=_request(policy=context.policy), context=context, observation=observation
+    )
     assert result.eligibility.state == EligibilityState.STALE
     assert "clock_age_divergence_ms:STALE" in result.diagnostics
 
@@ -459,12 +455,33 @@ def test_same_exchange_time_changed_payload_is_audited_correction() -> None:
     tracker.activate_generation(1)
     first = _frame(sequence=1, last_price="10.00")
     correction = _frame(sequence=2, last_price="10.02")
-    first_quote = normalize_raw_quote_frame(first, clock_trade_date=context.clock.clock_trade_date, board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=_tradability())
-    correction_quote = normalize_raw_quote_frame(correction, clock_trade_date=context.clock.clock_trade_date, board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=_tradability())
+    first_quote = normalize_raw_quote_frame(
+        first,
+        clock_trade_date=context.clock.clock_trade_date,
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="unit-v1",
+        tradability=_tradability(),
+    )
+    correction_quote = normalize_raw_quote_frame(
+        correction,
+        clock_trade_date=context.clock.clock_trade_date,
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="unit-v1",
+        tradability=_tradability(),
+    )
     assert tracker.decide(frame=first, quote=first_quote).disposition.value == "ACCEPTED"
     assert tracker.decide(frame=correction, quote=correction_quote).disposition.value == "ACCEPTED_CORRECTION"
     same_sequence = _frame(sequence=2, last_price="10.03")
-    same_sequence_quote = normalize_raw_quote_frame(same_sequence, clock_trade_date=context.clock.clock_trade_date, board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=_tradability())
+    same_sequence_quote = normalize_raw_quote_frame(
+        same_sequence,
+        clock_trade_date=context.clock.clock_trade_date,
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="unit-v1",
+        tradability=_tradability(),
+    )
     assert tracker.decide(frame=same_sequence, quote=same_sequence_quote).disposition.value == "OUT_OF_ORDER"
     assert first_quote.normalized_quote_sha256 != correction_quote.normalized_quote_sha256
 
@@ -474,12 +491,33 @@ def test_out_of_order_and_stale_generation_never_overwrite_latest_accepted() -> 
     tracker = QuoteOrderingTracker()
     tracker.activate_generation(2)
     stale = _frame(generation=1)
-    stale_quote = normalize_raw_quote_frame(stale, clock_trade_date=context.clock.clock_trade_date, board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=_tradability())
+    stale_quote = normalize_raw_quote_frame(
+        stale,
+        clock_trade_date=context.clock.clock_trade_date,
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="unit-v1",
+        tradability=_tradability(),
+    )
     assert tracker.decide(frame=stale, quote=stale_quote).disposition.value == "STALE_GENERATION"
     latest = _frame(generation=2, sequence=2, source_time="09300100")
     older = _frame(generation=2, sequence=3, source_time="09300000")
-    latest_quote = normalize_raw_quote_frame(latest, clock_trade_date=context.clock.clock_trade_date, board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=_tradability())
-    older_quote = normalize_raw_quote_frame(older, clock_trade_date=context.clock.clock_trade_date, board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=_tradability())
+    latest_quote = normalize_raw_quote_frame(
+        latest,
+        clock_trade_date=context.clock.clock_trade_date,
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="unit-v1",
+        tradability=_tradability(),
+    )
+    older_quote = normalize_raw_quote_frame(
+        older,
+        clock_trade_date=context.clock.clock_trade_date,
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="unit-v1",
+        tradability=_tradability(),
+    )
     assert tracker.decide(frame=latest, quote=latest_quote).accepted
     assert tracker.decide(frame=older, quote=older_quote).disposition.value == "OUT_OF_ORDER"
 
@@ -490,10 +528,17 @@ def test_eligibility_precedence_is_total_and_deterministic() -> None:
     evaluator = ActionQuoteEvaluator()
     waiting = evaluator.evaluate(request=request, context=context, observation=None)
     assert waiting.eligibility.state == EligibilityState.WAITING_FIRST_QUOTE
-    invalid_clock = evaluator.evaluate(request=request, context=replace(context, continuity_valid=False), observation=_observation(context=context))
+    invalid_clock = evaluator.evaluate(
+        request=request, context=replace(context, continuity_valid=False), observation=_observation(context=context)
+    )
     assert invalid_clock.eligibility.state == EligibilityState.CLOCK_INVALID
     pre_open_context = _context(clock_at_utc=datetime(2026, 7, 12, 1, 16, tzinfo=UTC))
-    assert evaluator.evaluate(request=_request(policy=pre_open_context.policy), context=pre_open_context, observation=None).eligibility.state == EligibilityState.WRONG_SESSION
+    assert (
+        evaluator.evaluate(
+            request=_request(policy=pre_open_context.policy), context=pre_open_context, observation=None
+        ).eligibility.state
+        == EligibilityState.WRONG_SESSION
+    )
     wrong_session = evaluator.evaluate(
         request=_request(policy=pre_open_context.policy),
         context=pre_open_context,
@@ -501,9 +546,15 @@ def test_eligibility_precedence_is_total_and_deterministic() -> None:
     )
     assert wrong_session.eligibility.state == EligibilityState.WRONG_SESSION
     mismatch = _observation(context=context, frame=_frame(openint="CLOSED"))
-    assert evaluator.evaluate(request=request, context=context, observation=mismatch).eligibility.reason_code == QuoteContractReasonCode.MARKET_PHASE_MISMATCH
+    assert (
+        evaluator.evaluate(request=request, context=context, observation=mismatch).eligibility.reason_code
+        == QuoteContractReasonCode.MARKET_PHASE_MISMATCH
+    )
     domain_conflict = replace(mismatch, quote=replace(mismatch.quote, clock_domain_id="foreign-clock-domain"))
-    assert evaluator.evaluate(request=request, context=context, observation=domain_conflict).eligibility.state == EligibilityState.CLOCK_INVALID
+    assert (
+        evaluator.evaluate(request=request, context=context, observation=domain_conflict).eligibility.state
+        == EligibilityState.CLOCK_INVALID
+    )
 
 
 def test_openint_is_optional_cross_evidence_but_unregistered_present_value_is_loud() -> None:
@@ -526,7 +577,9 @@ def test_openint_is_optional_cross_evidence_but_unregistered_present_value_is_lo
 
 @pytest.mark.parametrize(("age_ms", "expected"), [(100, EligibilityState.READY), (101, EligibilityState.STALE)])
 def test_freshness_threshold_boundaries_are_fail_closed_at_plus_one_ms(age_ms: int, expected: EligibilityState) -> None:
-    policy = _policy(max_receive_age_ms=100, max_source_lag_ms=100, max_exchange_age_ms=100, max_clock_age_divergence_ms=1)
+    policy = _policy(
+        max_receive_age_ms=100, max_source_lag_ms=100, max_exchange_age_ms=100, max_clock_age_divergence_ms=1
+    )
     context = _context(policy=policy)
     observation = _observation(context=context)
     quote = replace(
@@ -549,7 +602,9 @@ def test_negative_skew_is_preserved_before_any_divergence_absolute_value() -> No
         received_monotonic_ns=context.clock.clock_monotonic_ns + 11_000_000,
         source_exchange_time_utc=context.clock.clock_at_utc + timedelta(milliseconds=11),
     )
-    result = ActionQuoteEvaluator().evaluate(request=_request(policy=context.policy), context=context, observation=replace(observation, quote=future))
+    result = ActionQuoteEvaluator().evaluate(
+        request=_request(policy=context.policy), context=context, observation=replace(observation, quote=future)
+    )
     assert result.eligibility.state == EligibilityState.STALE
     assert any("NEGATIVE_SKEW" in item for item in result.diagnostics)
 
@@ -569,15 +624,31 @@ def test_tradability_distinguishes_data_invalid_suspend_halt_limit_and_zero_dept
 ) -> None:
     context = _context(tradability=_tradability(state=state))
     frame = _frame()
-    quote = normalize_raw_quote_frame(frame, clock_trade_date=context.clock.clock_trade_date, board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=_tradability(state=state))
+    quote = normalize_raw_quote_frame(
+        frame,
+        clock_trade_date=context.clock.clock_trade_date,
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="unit-v1",
+        tradability=_tradability(state=state),
+    )
     quote = replace(
         quote,
         ask_prices=(Decimal(ask), Decimal(ask) + Decimal("0.01"), None, None, None),
         bid_prices=(Decimal(bid), Decimal(bid) - Decimal("0.01"), None, None, None),
     )
     tradability = context.symbol_context("000001.SZ").tradability  # type: ignore[union-attr]
-    observation = NormalizedQuoteObservation(frame=frame, quote=quote, tradability=tradability, context_id=context.context_id, market_data_id=f"md_{canonical_sha256({'case': state.value, 'side': side})}", ordering_disposition=OrderingDisposition.ACCEPTED)
-    result = ActionQuoteEvaluator().evaluate(request=_request(side=side, policy=context.policy), context=context, observation=observation)
+    observation = NormalizedQuoteObservation(
+        frame=frame,
+        quote=quote,
+        tradability=tradability,
+        context_id=context.context_id,
+        market_data_id=f"md_{canonical_sha256({'case': state.value, 'side': side})}",
+        ordering_disposition=OrderingDisposition.ACCEPTED,
+    )
+    result = ActionQuoteEvaluator().evaluate(
+        request=_request(side=side, policy=context.policy), context=context, observation=observation
+    )
     assert result.eligibility.state == expected
 
 
@@ -625,14 +696,29 @@ def test_xtquant_zeroed_empty_side_is_normalized_and_evaluated_by_order_side() -
 def test_dependency_group_failure_does_not_block_unrelated_symbols() -> None:
     context = _context()
     second_tradability = replace(_tradability(), symbol="000002.SZ", tradability_id="tradability-000002.SZ")
-    second_symbol = QuoteSymbolContext(symbol="000002.SZ", board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=second_tradability, product_type="EQUITY", product_type_proven_equity=True, authority_source_version="authority-v1")
+    second_symbol = QuoteSymbolContext(
+        symbol="000002.SZ",
+        board="MAIN",
+        depth_quantity_unit=DepthQuantityUnit.SHARES,
+        unit_evidence_version="unit-v1",
+        tradability=second_tradability,
+        product_type="EQUITY",
+        product_type_proven_equity=True,
+        authority_source_version="authority-v1",
+    )
     context = replace(context, symbols={**context.symbols, "000002.SZ": second_symbol})
     first = _observation(context=context)
     requests = {
         "000001.SZ": _request(group="parent-group", policy=context.policy),
         "000002.SZ": _request(symbol="000002.SZ", group="parent-group", policy=context.policy),
     }
-    batch = build_quote_snapshot_batch(batch_id="batch-1", runtime_id="runtime-1", context=context, requests=requests, observations={"000001.SZ": first})
+    batch = build_quote_snapshot_batch(
+        batch_id="batch-1",
+        runtime_id="runtime-1",
+        context=context,
+        requests=requests,
+        observations={"000001.SZ": first},
+    )
     assert batch.eligibility_by_symbol["000001.SZ"].state == EligibilityState.STALE
     assert batch.eligibility_by_symbol["000002.SZ"].state == EligibilityState.WAITING_FIRST_QUOTE
 

@@ -8,8 +8,8 @@ import pytest
 from backend.services.simulation_runtime.localsim_daily_limit_authority import (
     LocalSimDailyLimitAuthorityProvider,
 )
-from backend.services.paper_trading_v2.market_data import DailyTradingContextProvider
-from backend.services.simulation_runtime.models import (
+from backend.services.simulation_data.daily_context_provider import DailyTradingContextProvider
+from backend.services.simulation_data.daily_context import (
     DailyLimitAuthorityV2,
     DailyTradingAuthorityStateV2,
     SimulationBrokerBackend,

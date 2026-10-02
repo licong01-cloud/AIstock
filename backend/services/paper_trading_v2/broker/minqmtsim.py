@@ -15,7 +15,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from backend.infra.qmt_client import BaseQMTClient, QMTNotAvailableError, get_qmt_client_singleton
-from backend.services.paper_trading_v2.market_data import (
+from backend.services.simulation_data.contracts import (
     MinuteDataSource,
     TDX_REALTIME_QUOTE_MAX_AGE,
     assert_broker_market_source_match,
@@ -26,7 +26,7 @@ from backend.services.trading_core.errors import (
 )
 from backend.services.trading_core.models import OrderIntent, PositionLot
 
-from .base import (
+from backend.services.simulation_execution.broker import (
     BackendId,
     BrokerAccountSnapshot,
     BrokerBackend,
@@ -431,7 +431,9 @@ class MiniQMTSimBackend(BrokerBackend):
             raise BrokerConnectivityError(
                 "MiniQMT quote query failed",
                 context={
-                    "reason_code": _reason_code_from_error_text(str(exc), default="MINIQMT_REALTIME_QUOTE_FETCH_FAILED"),
+                    "reason_code": _reason_code_from_error_text(
+                        str(exc), default="MINIQMT_REALTIME_QUOTE_FETCH_FAILED"
+                    ),
                     "symbol": symbol,
                     "reason": str(exc),
                     "quote_feed_health": _safe_quote_feed_health(self._qmt_client),
@@ -685,7 +687,6 @@ def _decimal_from_optional(value: Any) -> Decimal | None:
     return parsed if parsed > 0 else None
 
 
-
 def _reason_code_from_error_text(value: str, *, default: str) -> str:
     prefix = str(value or "").split(":", 1)[0].strip()
     if prefix.startswith("MINIQMT_") or prefix.startswith("REALTIME_QUOTE_"):
@@ -702,6 +703,7 @@ def _safe_quote_feed_health(qmt_client: Any) -> dict[str, Any] | None:
     except Exception:  # noqa: BLE001 - health evidence must not mask quote result.
         return {"status": "health_unavailable", "reason_code": "MINIQMT_QUOTE_HEALTH_UNAVAILABLE"}
     return dict(payload) if isinstance(payload, dict) else None
+
 
 def _position_mark_price(row: dict[str, Any], *, quantity: int) -> float | None:
     for key in ("current_price", "last_price", "market_price"):

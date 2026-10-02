@@ -104,7 +104,8 @@ from backend.services.simulation_runtime.miniqmt_kernel_product import (
     build_simulation_miniqmt_product_runtime_v1,
 )
 from backend.services.simulation_runtime.miniqmt_quote_activation import build_miniqmt_quote_ingress_activation_from_env
-from backend.services.simulation_runtime.models import SimulationBrokerBackend, miniqmt_kernel_runtime_id
+from backend.services.simulation_runtime.models import miniqmt_kernel_runtime_id
+from backend.services.simulation_data.daily_context import SimulationBrokerBackend
 from backend.services.qmt_strategy_ledger.models import (
     VirtualAccount,
     VirtualAccountStatus,
@@ -1683,9 +1684,7 @@ def test_product_runtime_rejects_incomplete_components_hash_and_naive_time() -> 
 def _plan_reader_facts(*, algo_config: dict[str, object] | None = None):
     policy_json = {
         "algo_code": "SNIPER_MINIQMT",
-        "algo_config": (
-            algo_config if algo_config is not None else {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}
-        ),
+        "algo_config": (algo_config if algo_config is not None else {"price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE"}),
     }
     policy_hash = compute_execution_policy_sha256(policy_json)
     binding_hash = "b" * 64
@@ -2399,9 +2398,7 @@ def test_plan_authority_reader_keeps_non_emitted_reject_as_planning_subject() ->
         execution_plan_id=plan.plan_id,
     )
 
-    assert [request.parent_intent_id for request in authority.ordered_creation_requests] == [
-        "intent_plan_reader"
-    ]
+    assert [request.parent_intent_id for request in authority.ordered_creation_requests] == ["intent_plan_reader"]
     assert {decision.decision_id for decision in plan.trading_rule_decisions} == {
         "decision_plan_reader",
         "decision_rejected_subject",
@@ -2601,9 +2598,7 @@ def test_plan_authority_reader_keeps_legal_reject_partition_with_float_rules() -
         execution_plan_id=plan.plan_id,
     )
 
-    assert [request.parent_intent_id for request in authority.ordered_creation_requests] == [
-        "intent_plan_reader"
-    ]
+    assert [request.parent_intent_id for request in authority.ordered_creation_requests] == ["intent_plan_reader"]
     assert len(plan.trading_rule_decisions) == 2
 
 

@@ -5,8 +5,11 @@ from typing import Any
 
 from backend.services.selection_center.models import SelectionMode
 from backend.services.simulation_runtime import SimulationLifecycleScheduler, StaticSimulationRunContextProvider
-from backend.services.simulation_runtime.selection import DailySelectionSignalService
-from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.simulation_signal.strategy_package_selection import DailySelectionSignalService
+from backend.services.strategy_package.live_inference import (
+    AUTHORITATIVE_SELECTION_SCOPE,
+    AUTHORITATIVE_SELECTION_SOURCE_TYPE,
+)
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
@@ -43,7 +46,9 @@ class _FailingSelectionService:
             context={
                 "package_id": self.package_id,
                 "trade_date": kwargs["trade_date"].isoformat(),
-                "selection_mode": kwargs["mode"].value if isinstance(kwargs.get("mode"), SelectionMode) else kwargs.get("mode"),
+                "selection_mode": kwargs["mode"].value
+                if isinstance(kwargs.get("mode"), SelectionMode)
+                else kwargs.get("mode"),
             },
         )
 

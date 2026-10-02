@@ -12,7 +12,7 @@ from backend.services.paper_trading_v2.auto_run import (
     normalize_auto_run_config,
 )
 from backend.services.paper_trading_v2.day_runner import miniqmt_account_slot_context
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperSessionMode, PaperSessionStatus
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.scheduler import PaperTradingV2SessionScheduler

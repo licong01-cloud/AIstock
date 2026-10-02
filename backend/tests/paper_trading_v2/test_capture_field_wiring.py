@@ -8,7 +8,7 @@ NULL defaults.
 Strategy:
   - Subclass ``InMemoryPaperTradingV2Repository`` to record every
     ``save_fill`` invocation's kwargs. This is the same pattern T5 used
-    via ``fill_capture`` — we just additionally snapshot the *call* so
+    via ``fill_capture`` 鈥?we just additionally snapshot the *call* so
     we can assert what the production caller passed in.
   - Drive a fill through ``PaperTradingDayRunner.run_day`` using the
     same fixtures the existing day-runner integration test uses, so we
@@ -26,19 +26,16 @@ from typing import Any
 
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import (
-    MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
+    MinuteDataSource,
 )
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
-from backend.services.trading_core.models import (
-    AccountSnapshot,
-    Fill,
-    OrderSide,
-    PositionLot,
-)
+from backend.services.trading_core.models import Fill, OrderSide
 from backend.tests.paper_trading_v2.test_day_runner import (
     FakeCalendar,
     FakeLimitProvider,
@@ -108,9 +105,7 @@ def _run_day_with_recording_repo() -> tuple[RecordingInMemoryRepo, str]:
         repository=paper_repo,
         calendar_provider=FakeCalendar(),
         market_data_provider=provider,
-        runtime=runtime_with_authoritative_scores(
-            manifest, data_source=MinuteDataSource.TDX_REALTIME.value
-        ),
+        runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=refresh_audit,
     ).run_day(
@@ -126,7 +121,7 @@ def test_day_runner_save_fill_passes_intended_price_kwarg() -> None:
     """day_runner threads OrderIntent.limit_price through as intended_price.
 
     The default authoritative-scores runtime emits MARKET orders, so
-    OrderIntent.limit_price is None — but we still verify the kwarg is
+    OrderIntent.limit_price is None 鈥?but we still verify the kwarg is
     *passed* (not omitted) so the wiring contract holds, and that the
     capture record reflects it. If a future test seeds LIMIT intents
     here, this assertion automatically tightens.
@@ -139,7 +134,7 @@ def test_day_runner_save_fill_passes_intended_price_kwarg() -> None:
         # record. Default-MARKET path means value is None; that's the
         # structurally-correct value, not a wiring gap.
         assert "intended_price" in call
-        # Mirror in the InMemory side-channel — confirms the value made
+        # Mirror in the InMemory side-channel 鈥?confirms the value made
         # it through to the storage layer, not just the call site.
         capture = paper_repo.fill_capture[call["fill_id"]]
         assert capture["intended_price"] == call["intended_price"]
@@ -152,7 +147,7 @@ def test_day_runner_save_fill_passes_fill_market_context_kwarg() -> None:
     ``_build_market_context`` always emits: stock_id, trade_date,
     data_source, prev_close, limit_up, limit_down. (T5's report claimed
     bid/ask/best_volume/spread; the actual ``_build_market_context``
-    impl in market_data.py does NOT produce those — see capture wiring
+    impl in market_data.py does NOT produce those 鈥?see capture wiring
     findings. We assert against the keys the function actually emits.)
     """
 
@@ -207,12 +202,12 @@ def test_save_fill_market_context_dict_is_isolated() -> None:
     captured = repo.fill_capture[fill.fill_id]["fill_market_context"]
     assert captured == {"prev_close": 10.0, "limit_up": 11.0}
 
-    # Mutate caller dict — captured snapshot must not change.
+    # Mutate caller dict 鈥?captured snapshot must not change.
     caller_ctx["prev_close"] = 999.0
     captured_after_caller_mutation = repo.fill_capture[fill.fill_id]["fill_market_context"]
     assert captured_after_caller_mutation["prev_close"] == 10.0
 
-    # Mutate captured dict — caller dict must not change either (the
+    # Mutate captured dict 鈥?caller dict must not change either (the
     # capture is the canonical store, but we still want the side-channel
     # not to alias caller state).
     captured_after_caller_mutation["limit_up"] = 88.0
@@ -236,7 +231,7 @@ def test_save_fill_without_intended_price_still_succeeds() -> None:
         reason="t6_1_legacy_compat",
         metadata={},
     )
-    # No new kwargs — legacy call shape.
+    # No new kwargs 鈥?legacy call shape.
     repo.save_fill("run_legacy", fill)
 
     capture = repo.fill_capture[fill.fill_id]
@@ -247,17 +242,17 @@ def test_save_fill_without_intended_price_still_succeeds() -> None:
 def test_position_and_snapshot_writes_still_record_watermarks_in_day_runner() -> None:
     """Verification-only: T5 wired position_capture / snapshot_capture
     timestamps via now(). T6.1 didn't change those, but a real day_runner
-    run should still populate them — guards against accidental regression.
+    run should still populate them 鈥?guards against accidental regression.
     """
 
     paper_repo, run_id = _run_day_with_recording_repo()
 
-    # save_positions — keyed by run_id.
+    # save_positions 鈥?keyed by run_id.
     assert run_id in paper_repo.position_capture
     pos_cap = paper_repo.position_capture[run_id]
     assert pos_cap["created_at"] == pos_cap["updated_at"]
 
-    # save_daily_snapshot — keyed by (portfolio_id, trade_date).
+    # save_daily_snapshot 鈥?keyed by (portfolio_id, trade_date).
     snapshot_keys = list(paper_repo.snapshot_capture.keys())
     assert snapshot_keys, "expected at least one daily_snapshot capture entry"
     for key in snapshot_keys:

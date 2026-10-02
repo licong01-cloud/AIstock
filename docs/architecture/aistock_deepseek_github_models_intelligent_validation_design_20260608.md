@@ -1,10 +1,8 @@
 ﻿# AIstock GitHub Models / DeepSeek 智能验证与 Issue Intake 增强设计方案
 
-版本：v1.0
-日期：2026-06-08
-状态：设计方案待审阅
-目标分支：`docs/deepseek-github-models-validation-design-20260608`
-合入策略：本文档完成后先提交到独立设计分支，等待用户审阅确认后再合入 `main`。
+版本：v1.1
+日期：2026-06-08；2026-09-01 经 BUG-1295 更新模型/provider 合同
+状态：已实施；当前权威配置见 `configs/validation/llm_triage.yaml`
 
 ## 1. 执行结论
 
@@ -12,10 +10,10 @@ AIstock 后续应把 GitHub Models（配置 DeepSeek）和 AIstock 自有 DeepSe
 
 本方案的核心结论如下：
 
-1. GitHub Models + DeepSeek 只负责低成本智能 triage、失败摘要、Issue 草案、测试计划建议、夜间测试调度建议、验证结果解释和 prompt/evaluation 治理；默认模型配置使用 DeepSeek V4 Pro。
+1. GitHub Models + DeepSeek 只负责低成本智能 triage、失败摘要、Issue 草案、测试计划建议、夜间测试调度建议、验证结果解释和 prompt/evaluation 治理；当前默认 live provider/model 为 DeepSeek API `deepseek-v4-flash`。
 2. DeepSeek 不负责写代码、不负责合入 PR、不负责关闭 Issue、不直接判定最终验收通过、不执行任意 shell、不绕过 `test_plans.yaml`、Validation Center、BUG JSON、GitHub Actions、nox、production gates。
 3. “DeepSeek 调度测试”必须采用受控意图模式：模型只输出 `plan_key` / `reason` / `risk` / `budget` / `expected_evidence`，确定性 gate 校验后由 GitHub Actions、Validation Center 或 nox 执行固定 allowlist 命令。
-4. GitHub Models 作为 GitHub Actions 内部的首选 LLM provider；AIstock 后端和本地工具可使用同一个 provider adapter，并允许在显式配置下 fallback 到 DeepSeek 官方 API；API key 解析必须优先从环境变量读取，再从 AIstock 现有 LLM/API 配置读取，且不得打印密钥。
+4. GitHub Actions 使用 DeepSeek 官方 API；GitHub Models 仅保留禁用的 catalog 诊断兼容入口，不参与 fallback。API key 解析必须优先从既有环境合同读取，且不得打印密钥。
 5. 所有自动提交 GitHub Issue 的场景必须先生成可审计的 `FailureEvent`、`DeepSeekTriageAdvice`、`IssueCreationGate` 和精简 `LLMInvocationEvidence`，且默认不直接写 BUG JSON；正式 BUG 仍通过现有 workflow 在 clean registry worktree 中创建。
 6. CodeGraph / Understand Anything 必须作为 LLM 输入压缩和测试影响分析的上游证据源，给 DeepSeek 提供结构化图谱摘要，而不是让模型重新扫描全仓。
 7. 成功路径输出必须保持 compact；大 JSON、完整日志、完整 `statusCheckRollup`、模型完整 prompt 默认不写 tracked 文件，不粘贴到聊天窗口，失败或审计需要时才落到 ignored artifact。
@@ -45,8 +43,8 @@ AIstock 后续应把 GitHub Models（配置 DeepSeek）和 AIstock 自有 DeepSe
 | [GitHub Models overview](https://docs.github.com/en/github-models/about-github-models) | GitHub Models 提供模型目录、prompt 管理、`.prompt.yml`、评估和 REST API 集成能力，适合作为仓库内可审阅的 LLM prompt/evaluation 管理层。 |
 | [GitHub Issues REST docs](https://docs.github.com/en/rest/issues/issues) | 创建 Issue 需要 Issues write 权限，过快创建可能触发 secondary rate limit；自动提 Issue 必须做节流和 dedupe。 |
 | [GitHub Actions workflow syntax docs](https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions) | `on.schedule` 支持 POSIX cron，按 UTC 运行，计划任务运行在默认分支最新 commit；本方案的 nightly LLM job 必须符合这些调度边界。 |
-| [DeepSeek API quick start](https://api-docs.deepseek.com/) | DeepSeek API 兼容 OpenAI/Anthropic；本方案指定默认模型为 `deepseek-v4-pro`；`deepseek-chat` / `deepseek-reasoner` 将在 2026-07-24 15:59 UTC deprecated，后续实施不得再默认使用旧模型。 |
-| [DeepSeek pricing/model details](https://api-docs.deepseek.com/quick_start/pricing) | DeepSeek V4 Pro 支持 JSON Output 与 Tool Calls；本方案要求 provider adapter 读取可配置模型名，默认锁定 V4 Pro，只有用户显式授权成本模式时才允许降级到 Flash。 |
+| [DeepSeek API quick start](https://api-docs.deepseek.com/) | DeepSeek API 兼容 OpenAI/Anthropic；经 2026-09-01 用户显式授权，本验证方案默认模型改为 `deepseek-v4-flash`；`deepseek-chat` / `deepseek-reasoner` 不得作为默认模型。 |
+| [DeepSeek pricing/model details](https://api-docs.deepseek.com/quick_start/pricing) | DeepSeek V4 Flash 支持当前验证所需的 JSON Output 与 Tool Calls；provider adapter 必须读取权威配置中的模型名，不得静默回退到 V4 Pro 或已退役 GitHub Models 模型。 |
 | [DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/) 与 [Function Calling](https://api-docs.deepseek.com/guides/function_calling) | LLM 输出必须走 JSON schema / function calling 形式；严格 schema 校验失败时不得创建 Issue 或调度测试。 |
 
 ## 3. v1.0 不变原则
@@ -154,29 +152,29 @@ flowchart TD
 
 ```yaml
 schema_version: aistock_llm_triage_config_v1
-default_provider: github_models
+default_provider: deepseek_api
 providers:
   github_models:
-    enabled: true
+    enabled: false
     base_url: https://models.github.ai
     model_selector:
       publisher: DeepSeek
       required_capabilities:
         - tool-calling
-        - json-output
-      required_model_family: deepseek-v4-pro
+        - reasoning
+      required_model_family: deepseek-r1
       preferred_models:
-        - deepseek/deepseek-v4-pro
+        - deepseek/deepseek-r1
       allow_lower_tier_fallback: false
     auth:
       token_env: GITHUB_TOKEN
       required_permissions:
         - models:read
   deepseek_api:
-    enabled: false
+    enabled: true
     base_url_env: DEEPSEEK_BASE_URL
     default_base_url: https://api.deepseek.com
-    model: deepseek-v4-pro
+    model: deepseek-v4-flash
     auth:
       resolver: env_then_aistock_config
       env_api_key_names:
@@ -189,7 +187,7 @@ providers:
         - aistock_llm_api_configs provider/model config via backend.routers.rdagent_llm_config_v2
         - backend.services.quantevolver.llm_client provider fallback
       provider_id: deepseek
-      model_id: deepseek/deepseek-v4-pro
+      model_id: deepseek/deepseek-v4-flash
 limits:
   max_prompt_tokens: 12000
   max_output_tokens: 4000
@@ -208,10 +206,10 @@ redaction:
 
 说明：
 
-1. `deepseek/deepseek-v4-pro` 是目标模型族；GitHub Models provider 实施时必须调用 catalog 验证真实模型 ID 与能力，不得在未验证 ID 时静默切换到其它模型。
-2. DeepSeek 官方 API fallback 必须默认使用 `deepseek-v4-pro`；禁止新代码默认使用即将 deprecated 的 `deepseek-chat` / `deepseek-reasoner`，也不得在用户未授权时降级到 `deepseek-v4-flash`。
+1. `deepseek-v4-flash` 是 GitHub Actions 验证任务的目标模型；GitHub Models provider 仅保留为显式 catalog 诊断入口，默认禁用，且不得加入 live fallback 链。
+2. DeepSeek 官方 API 是默认且唯一启用的 live provider；禁止静默切换到 `deepseek-v4-pro`、`deepseek-chat`、`deepseek-reasoner` 或 GitHub Models 的 `deepseek-r1`。
 3. API key 解析顺序为：显式环境变量 `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL`，然后读取 AIstock 现有配置中的 DeepSeek provider/model API 配置；所有日志、artifact、Issue body 和 LLM evidence 只记录 key 来源与是否可用，不记录明文。
-4. GitHub Actions 内优先使用 GitHub Models + `GITHUB_TOKEN` 的 `models:read` 权限；如需调用 DeepSeek 官方 API，必须通过 GitHub Secrets 注入 `DEEPSEEK_API_KEY`，不得尝试访问生产 DB 配置。
+4. GitHub Actions 的 self-hosted LLM job 通过 `AISTOCK_LLM_ENV_FILE=F:/Dev/AIstock/.env` 读取既有 `DEEPSEEK_API_KEY`；不得把 key 复制到仓库、GitHub workflow、artifact 或日志，也不得访问生产 DB 配置。
 5. 所有 provider output 必须经过 JSON schema validator；schema 不通过时只保留 failure artifact，不创建 Issue、不调度测试。
 
 ### 7.3 Prompt 与 evaluation 管理
@@ -291,7 +289,7 @@ prompt_packs/validation_llm/
 {
   "schema_version": "aistock_deepseek_triage_advice_v1",
   "provider": "github_models|deepseek_api",
-  "model": "deepseek-v4-pro",
+  "model": "deepseek-v4-flash",
   "actionability": "actionable_bug|infra_only|flaky|triage_only|not_enough_information",
   "severity": "P0|P1|P2|P3",
   "confidence": 0.0,
@@ -775,7 +773,7 @@ DeepSeek 输入优先级：
    - `provider=deepseek_api`
    - `provider=deterministic`
 3. GitHub Models catalog discovery：列出 publisher/capabilities/model id。
-4. DeepSeek V4 Pro model config validation；验证 API key 可从 env 或 AIstock 现有配置解析，且 evidence 不泄露明文。
+4. DeepSeek V4 Flash model config validation；验证 API key 可从既有 env 合同解析，且 evidence 不泄露明文。
 5. Secret redaction unit tests。
 
 **验收标准**
@@ -783,8 +781,8 @@ DeepSeek 输入优先级：
 | ID | 验收项 | 验收方式 |
 | --- | --- | --- |
 | DS-GM-P1-F-001 | GitHub Models catalog 可发现 DeepSeek 候选模型 | dry-run 输出 model id、publisher、capabilities；不打印 token。 |
-| DS-GM-P1-F-002 | 不硬编码未验证模型 ID，但必须匹配 DeepSeek V4 Pro 模型族 | unit test mock catalog 返回 V4 Pro 不同真实 ID 时仍能选择；无 V4 Pro 时 fail-closed 或 deterministic fallback。 |
-| DS-GM-P1-F-003 | DeepSeek fallback 可配置但默认不启用，启用时使用 V4 Pro | config test 验证 `enabled=false`；启用 fixture 验证 `model=deepseek-v4-pro`。 |
+| DS-GM-P1-F-002 | 验证配置必须锁定 DeepSeek V4 Flash | API catalog readback 包含 `deepseek-v4-flash`；配置或调用偏离时 fail-closed。 |
+| DS-GM-P1-F-003 | DeepSeek API 默认启用且 GitHub Models fallback 默认禁用 | config test 验证 `default_provider=deepseek_api`、`model=deepseek-v4-flash`、`github_models.enabled=false`。 |
 | DS-GM-P1-F-004 | JSON schema invalid fail-closed | unit test 模拟 invalid JSON，不产生 issue draft。 |
 | DS-GM-P1-F-005 | secrets redaction 与 credential source evidence | fixture 含 token/db url，prompt input 不含原文；evidence 只显示 `env` / `aistock_config` 来源。 |
 
@@ -1026,7 +1024,7 @@ DeepSeek 输入优先级：
 | --- | --- | --- |
 | DS-GM-F-001 | DeepSeek/GitHub Models 是增强层 | 架构图和 role boundary 明确不替代现有组件。 |
 | DS-GM-F-002 | Provider adapter 支持 GitHub Models catalog discovery | mock + live dry-run。 |
-| DS-GM-F-003 | DeepSeek API fallback 可配置且默认使用 V4 Pro | config unit test；env 与 AIstock config 两种 key 来源 fixture。 |
+| DS-GM-F-003 | DeepSeek API 是默认 live provider，使用 V4 Flash，GitHub Models fallback 禁用 | config unit test；既有 env key 来源 fixture；live minimal JSON smoke。 |
 | DS-GM-F-004 | FailureEvent 标准化 | CI/Nightly/VC fixture。 |
 | DS-GM-F-005 | LLM triage schema 输出 | JSON schema test。 |
 | DS-GM-F-006 | Issue draft 质量完整 | snapshot test 检查必备章节。 |

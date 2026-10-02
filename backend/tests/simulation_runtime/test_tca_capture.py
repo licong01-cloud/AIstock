@@ -23,7 +23,7 @@ from backend.services.simulation_runtime.models import (
     canonical_json_sha256,
 )
 from backend.services.simulation_runtime.lifecycle import SimulationLifecycleOrchestrator
-from backend.services.simulation_runtime.models import SimulationBrokerBackend
+from backend.services.simulation_data.daily_context import SimulationBrokerBackend
 from backend.services.trading_core.models import OrderSide
 from backend.services.trading_core.tca_sidecar import merge_parent_first_write, new_run_tca_sidecar
 

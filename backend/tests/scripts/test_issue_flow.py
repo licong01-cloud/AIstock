@@ -83,7 +83,7 @@ def test_candidate_create_outputs_event_candidate_and_stable_fingerprint(tmp_pat
     assert first["candidate"]["schema_version"] == "aistock_issue_candidate_v1"
     assert first["candidate"]["fingerprint"] == second["candidate"]["fingerprint"]
     assert first["candidate"]["risk_level"] == "high"
-    assert "guardrail_changed_files" in first["candidate"]["suggested_validation"]
+    assert first["candidate"]["suggested_validation"] == ["l0", "validation_workflow_automation"]
     assert first["candidate"]["suggested_scope"] == ["scripts/issue_flow.py"]
 
 
@@ -314,6 +314,39 @@ def test_validation_select_maps_catalog_plans_and_production_gates(capsys: pytes
     }
 
 
+def test_validation_select_does_not_treat_dataset_release_plan_yaml_as_ddl(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert flow.main(
+        [
+            "validation-select",
+            "--changed-file",
+            "configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml",
+        ]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert "qlib_data" in payload["impacted_modules"]
+    assert payload["production_gates"]["ddl"] == "noop"
+    assert flow._requires_production_ddl("backend/migrations/example.sql") is True
+    assert flow._requires_production_ddl("backend/db/migrations/run_watchlist_migration.py") is True
+
+
+def test_hmm_validation_select_uses_slice_for_local_and_cross_contract_sources() -> None:
+    local = flow.select_validation(
+        [
+            "backend/services/hmm_risk/rotation_l1_prediction.py",
+            "backend/tests/hmm_risk/test_rotation_l1_prediction.py",
+        ]
+    )
+    critical = flow.select_validation(["backend/services/hmm_risk/state_model_set.py"])
+
+    assert "hmm_risk_pr_slice" in local["required_plans"]
+    assert "hmm_risk_backend" not in local["required_plans"]
+    assert "hmm_risk_backend" not in critical["required_plans"]
+    assert "hmm_risk_pr_slice" in critical["required_plans"]
+
+
 def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.CaptureFixture[str]) -> None:
     assert flow.main([
         "validation-select",
@@ -331,7 +364,8 @@ def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.Ca
     assert "watchlist" in payload["impacted_modules"]
     assert payload["ownership"]["unmatched_files"] == []
     assert "validation_center_backend" not in payload["required_plans"]
-    assert payload["required_plans"] == ["l0", "validation_module_registry_l0", "watchlist_backend"]
+    assert payload["required_plans"] == ["l0", "watchlist_backend"]
+    assert "validation_module_registry_l0" in payload["inapplicable_plans"]
 
 
 def test_validation_select_keeps_backend_only_changes_off_frontend_l3(capsys: pytest.CaptureFixture[str]) -> None:
@@ -405,14 +439,15 @@ def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys:
     assert payload["required_plans"] == []
 
 
-def test_validation_select_uses_module_hint_only_when_ownership_is_unmapped() -> None:
+def test_validation_select_prefers_owned_module_over_broad_module_hint() -> None:
     payload = flow.select_validation(
         ["scripts/aistock_issue_workflow.py"],
         module="validation",
     )
 
-    assert payload["primary_modules"] == ["validation.guardrails"]
-    assert "guardrail_changed_files" in payload["required_plans"]
+    assert payload["primary_modules"] == ["validation.workflow_automation"]
+    assert payload["required_plans"] == ["l0", "validation_workflow_automation"]
+    assert "guardrail_changed_files" not in payload["required_plans"]
     assert "validation_center_backend" not in payload["required_plans"]
 
 
@@ -454,6 +489,137 @@ def test_validation_select_marks_docs_controlled_as_normal_guardrails(capsys: py
     assert payload["docs_fast_tier"] is None
     assert payload["docs_controlled_required"] is True
     assert payload["required_plans"] == ["l0"]
+
+
+def test_validation_select_keeps_factor_skill_and_bug_metadata_off_business_and_dev_plans() -> None:
+    payload = flow.select_validation(
+        [
+            ".claude/commands/develop-factor.md",
+            ".claude/commands/factor-research.md",
+            ".codex/skills/develop-factor/SKILL.md",
+            ".codex/skills/factor-research/SKILL.md",
+            "docs/analysis/factor_research_methodology.md",
+            "docs/architecture/factor_research_comparison_supplement_20260909.md",
+            "docs/architecture/factor_research_evolution_blueprint_20260908.md",
+            "tests/aistock_validation/bugs/20260911_BUG-1430-issue.json",
+        ]
+    )
+
+    assert payload["required_plans"] == ["l0"]
+    assert "factor_research_backend" in payload["inapplicable_plans"]
+    assert "factor_research_dev_db" in payload["inapplicable_plans"]
+    assert "validation_module_registry_l0" in payload["inapplicable_plans"]
+    assert payload["skip_reasons"]["factor_research_dev_db"] == (
+        "module_owned_files_are_documentation_instruction_or_bug_metadata_only"
+    )
+    assert payload["plan_trigger_reasons"]["l0"]
+
+
+def test_validation_select_applies_factor_dev_plan_only_to_database_boundaries() -> None:
+    computation = flow.select_validation(["backend/services/factor_research/comparison.py"])
+    repository = flow.select_validation(["backend/services/factor_research/repository.py"])
+    mixed = flow.select_validation(
+        [
+            ".codex/skills/factor-research/SKILL.md",
+            "docs/analysis/factor_research_methodology.md",
+            "backend/services/factor_research/quality_repository.py",
+        ]
+    )
+
+    assert computation["required_plans"] == ["l0", "factor_research_backend"]
+    assert "factor_research_dev_db" in computation["inapplicable_plans"]
+    assert computation["skip_reasons"]["factor_research_dev_db"] == (
+        "factor_research_change_does_not_touch_repository_transaction_sql_migration_or_dev_contract"
+    )
+    assert repository["required_plans"] == ["l0", "factor_research_backend", "factor_research_dev_db"]
+    dev_reason = repository["plan_trigger_reasons"]["factor_research_dev_db"][0]
+    assert dev_reason["reason"] == "matched_plan_change_applicability"
+    assert dev_reason["matched_files"] == ["backend/services/factor_research/repository.py"]
+    assert mixed["required_plans"] == ["l0", "factor_research_backend", "factor_research_dev_db"]
+
+
+def test_validation_non_behavioral_classifier_does_not_hide_controlled_executables() -> None:
+    assert flow._is_non_behavioral_validation_path(".codex/skills/factor-research/SKILL.md") is True
+    assert flow._is_non_behavioral_validation_path(".claude/commands/factor-research.md") is True
+    assert flow._is_non_behavioral_validation_path(".codex/skills/factor-research/scripts/check.py") is False
+    assert flow._is_non_behavioral_validation_path(".codex/skills/factor-research/agents/openai.yaml") is False
+
+
+def test_validation_selects_only_changed_position_timing_lane() -> None:
+    backend = flow.select_validation(["backend/services/position_timing/service.py"])
+    frontend = flow.select_validation(["frontend/src/app/position-timing/page.tsx"])
+    mixed = flow.select_validation(
+        ["backend/services/position_timing/service.py", "frontend/src/app/position-timing/page.tsx"]
+    )
+
+    assert backend["required_plans"] == ["l0", "position_timing_backend"]
+    assert frontend["required_plans"] == ["l0", "position_timing_first_release"]
+    assert mixed["required_plans"] == ["l0", "position_timing_backend", "position_timing_first_release"]
+
+
+def test_validation_selects_only_changed_qe_long_trend_phase() -> None:
+    phase2 = flow.select_validation(["backend/services/quantevolver/long_trend_evaluator.py"])
+    phase3 = flow.select_validation(["backend/services/qe_archive/long_trend_repository.py"])
+    phase4 = flow.select_validation(
+        ["frontend/src/app/qe-archive/LongTrendComparisonPanel.tsx"]
+    )
+
+    assert phase2["required_plans"] == ["l0", "qe_long_trend_phase2_backend"]
+    assert phase3["required_plans"] == ["l0", "qe_long_trend_phase3_platform"]
+    assert phase4["required_plans"] == ["l0", "qe_long_trend_phase4_ui"]
+
+
+def test_validation_uses_one_active_dataset_plan_instead_of_three() -> None:
+    payload = flow.select_validation(["backend/services/quantevolver/qe_active_dataset_profile.py"])
+
+    assert payload["required_plans"] == ["l0", "qe_read_backend"]
+    assert "qe_sector_risk_overlay_backend" not in payload["required_plans"]
+    assert "qe_mcp_backend" not in payload["required_plans"]
+
+
+def test_validation_dev_db_plans_require_database_boundaries() -> None:
+    localsim_control = flow.select_validation(["backend/services/simulation_runtime/localsim_control.py"])
+    localsim_repository = flow.select_validation(
+        ["backend/services/simulation_runtime/successor_repository.py"]
+    )
+    advisory_readiness = flow.select_validation(["backend/services/advisory_phase1/readiness_plan.py"])
+
+    assert localsim_control["required_plans"] == ["l0", "simulation_core_l2"]
+    assert "localsim_successor_core_dev_db" in localsim_control["inapplicable_plans"]
+    assert localsim_repository["required_plans"] == [
+        "l0",
+        "simulation_core_l2",
+        "localsim_successor_core_dev_db",
+    ]
+    assert advisory_readiness["required_plans"] == ["l0"]
+    assert "advisory_dev_input_onboarding_backend" in advisory_readiness["inapplicable_plans"]
+
+
+def test_validation_research_assistant_phase_does_not_repeat_full_suite() -> None:
+    payload = flow.select_validation(["backend/services/research_assistant/memory_tree.py"])
+
+    assert payload["required_plans"] == ["l0", "ra_phase1_memory_tree"]
+    assert "research_assistant_backend" in payload["recommended_plans"]
+    assert "ra_phase0_baseline" not in payload["required_plans"]
+
+
+def test_nox_phase_plans_do_not_repeat_global_or_cross_phase_suites() -> None:
+    source = Path("noxfile.py").read_text(encoding="utf-8")
+    phase0 = source.split("def ra_phase0_baseline", 1)[1].split("def ra_phase1_memory_tree", 1)[0]
+    phase3 = source.split("def qe_long_trend_phase3_platform", 1)[1].split(
+        "def qe_long_trend_phase4_ui", 1
+    )[0]
+    position_ui = source.split("def position_timing_first_release", 1)[1].split(
+        "def rl_execution_smoke", 1
+    )[0]
+
+    assert '"backend/tests/research_assistant/test_phase0_blueprint_baseline.py"' in phase0
+    assert '"backend/tests/research_assistant",' not in phase0
+    assert "aistock_validation_catalog_integrity.py" not in phase0
+    assert "test_qe_long_trend_phase2_orchestration.py" not in phase3
+    assert '"backend/tests/position_timing"' not in position_ui
+    assert "compileall" not in position_ui
+    assert "--fail-on-warning" not in source
 
 
 def test_pr_check_reports_scope_and_dependency_gates(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1139,6 +1305,37 @@ def test_pr_quality_ruff_ignores_deleted_python_files() -> None:
     assert "xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude" in run
 
 
+def test_ci_workflow_keeps_scratch_targets_outside_checkout_and_semgrep_ignores_deleted_paths() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["ci-verdict"]["steps"]
+    runs = {str(step.get("name") or ""): str(step.get("run") or "") for step in steps}
+
+    semgrep_run = runs["Run Semgrep guardrails"]
+    assert 'if [ -f "${path}" ]; then' in semgrep_run
+    assert 'semgrep_files+=("${path}")' in semgrep_run
+    assert 'semgrep "${semgrep_files[@]}"' in semgrep_run
+    assert "xargs -a tmp/validation/ci_change_classifier/changed_files.txt semgrep" not in semgrep_run
+
+    assert "backend_sessions.txt" not in runs["Run selected backend sessions"]
+    assert "module_test_targets.txt" not in runs["Run selected frontend quality"]
+    assert "workflow_test_targets.txt" not in runs["Run focused workflow validation tests"]
+    assert "mapfile -t backend_sessions < <(" in runs["Run selected backend sessions"]
+    assert "mapfile -t module_test_targets < <(" in runs["Run selected frontend quality"]
+    assert "mapfile -t workflow_test_targets < <(" in runs["Run focused workflow validation tests"]
+
+
+def test_ci_frontend_quality_uses_verified_direct_entrypoints_without_bin_shims() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["ci-verdict"]["steps"]
+    frontend_run = str(next(step for step in steps if step.get("name") == "Run selected frontend quality")["run"])
+
+    assert "node node_modules/typescript/bin/tsc --noEmit --incremental false" in frontend_run
+    assert "node node_modules/next/dist/bin/next lint" in frontend_run
+    assert 'node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"' in frontend_run
+    assert "node_modules/.bin" not in frontend_run
+    assert "npm run" not in frontend_run
+
+
 def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
@@ -1199,9 +1396,23 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
     assert '"paths":{"scanned":[]}' in run
 
 
-def test_dependency_update_validate_covers_github_tooling_requirements() -> None:
+def test_dependency_update_validation_is_folded_into_unified_ci() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/dependency-update-validate.yml").read_text(encoding="utf-8"))
-    assert ".github/requirements/*.txt" in workflow[True]["pull_request"]["paths"]
+    triggers = workflow.get("on") or workflow.get(True)
+    assert triggers == {"workflow_dispatch": {}}
+
+    ci_workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    ci_steps = ci_workflow["jobs"]["ci-verdict"]["steps"]
+    dependency_step = next(step for step in ci_steps if step.get("name") == "Validate changed dependency surface")
+    dependency_run = str(dependency_step["run"])
+
+    assert "steps.classify.outputs.dependency_validation_required == 'true'" in dependency_step["if"]
+    assert dependency_step["env"]["DEPENDENCY_FILES"] == "${{ steps.classify.outputs.dependency_files }}"
+    assert ".github/requirements/*.txt" in dependency_run
+    assert "python scripts/validate_changed_requirements.py" in dependency_run
+    assert "python -m pip check" in dependency_run
+    assert "pip install" not in dependency_run
+
     steps = workflow["jobs"]["dependency-update-validate"]["steps"]
     runs = "\n".join(str(step.get("run") or "") for step in steps if isinstance(step, dict))
 

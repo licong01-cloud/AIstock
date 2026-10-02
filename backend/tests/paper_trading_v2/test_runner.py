@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
@@ -6,8 +6,10 @@ import pytest
 
 from backend.services.paper_trading_v2.runner import PaperTradingV2Runner
 from backend.services.paper_trading_v2.market_data import (
-    MinuteDataSource,
     PaperV2MinuteMarketDataProvider,
+)
+from backend.services.simulation_data.contracts import (
+    MinuteDataSource,
 )
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
@@ -23,9 +25,7 @@ from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
 def make_ready_manifest(algo_code: str = "TWAP"):
-    manifest = make_manifest(algo_code=algo_code).model_copy(
-        update={"package_status": PackageStatus.PAPER_ENABLED}
-    )
+    manifest = make_manifest(algo_code=algo_code).model_copy(update={"package_status": PackageStatus.PAPER_ENABLED})
     return freeze_manifest(manifest)
 
 

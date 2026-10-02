@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperPortfolio, PortfolioStatus
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
@@ -118,7 +118,7 @@ def test_create_portfolio_rejects_unknown_broker_backend() -> None:
 
 
 def test_create_portfolio_rejects_minqmt_live_through_paper_v2() -> None:
-    """minqmt_live is admission-flow only (main design 搂11), not creatable here."""
+    """minqmt_live is admission-flow only (main design 鎼?1), not creatable here."""
     package_repo, manifest = _seed_paper_enabled_package()
     paper_repo = InMemoryPaperTradingV2Repository()
     service = PaperTradingV2PortfolioService(
@@ -203,11 +203,9 @@ def test_broker_backend_immutable_after_create_via_status_update() -> None:
         data_source=MinuteDataSource.TDX_REALTIME,
         broker_backend="local_sim",
     )
-    # In-memory repo update_portfolio_status mirrors the SQL one 鈥?it must not
+    # In-memory repo update_portfolio_status mirrors the SQL one 閳?it must not
     # touch broker_backend.
-    paper_repo.portfolios[portfolio.portfolio_id] = portfolio.model_copy(
-        update={"status": PortfolioStatus.PAUSED}
-    )
+    paper_repo.portfolios[portfolio.portfolio_id] = portfolio.model_copy(update={"status": PortfolioStatus.PAUSED})
     assert paper_repo.portfolios[portfolio.portfolio_id].broker_backend == "local_sim"
 
 

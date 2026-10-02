@@ -17,6 +17,9 @@ from backend.services.dataset_release.control_service import (
 )
 from backend.services.dataset_release.control_store import ControlStore, IdempotencyConflict
 from backend.services.dataset_release.profile import load_initial_migration_plan
+from backend.services.dataset_release.sector_data_candidate_source import (
+    sector_candidate_scope_key,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -214,10 +217,23 @@ def test_initial_migration_submission_binds_fixed_plan_not_wall_clock_cutoff(tmp
     assert request["sample_instruments"] == [
         "000001.SZ",
         "300379.SZ",
+        "300741.SZ",
         "600462.SH",
         "600930.SH",
         "688981.SH",
     ]
+    assert sector_candidate_scope_key(request["sample_instruments"]) == (
+        "sample-554c8193b6f6de4c859b0f16881b1f34e6eb11c41a68f416b829801b941301d2"
+    )
+    assert sector_candidate_scope_key(request["sample_instruments"]) != sector_candidate_scope_key(
+        ["000001.SZ", "300379.SZ", "600462.SH", "600930.SH", "688981.SH"]
+    )
+    assert {
+        (item["instrument"], item["oracle"])
+        for item in request["event_windows"]
+    } >= {
+        ("300741.SZ", "p3a_classification_index_authority_alignment_boundary")
+    }
     assert binding.store._many("SELECT * FROM runs", ()) == []
 
 

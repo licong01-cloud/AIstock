@@ -1,7 +1,7 @@
 # Advisory P0-K Selection-Preserving Liability Gate F2 详细设计
 
 > 日期：2026-08-28
-> 状态：`SOURCE_IMPLEMENTED_LOCAL_VERIFIED_STAGE_A_NOT_RUN`
+> 状态：`STAGE_A_NEGATIVE_STOP_NOT_ADVANCED_NOT_ACTIVATED`
 > 类型：F2 / Advisory 离线模型 Stage A
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前序权威结果：P0-D exact baseline、P0-H `82afdb81...`、P0-I `2378358...`、P0-J `eb8ade9b...`
@@ -293,19 +293,18 @@ winner 和 Stage A 结果冻结后，才允许对 winner family/seed 在完整 3
 | F-253 | widest-Selection exact oracle；逐日 OOF/outer completeness；coverage receipt | `backend/tests/advisory_model_first/test_selection_liability_gate_training.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
 | F-254 | train-only threshold callback；outer one-shot；final OOF 不回写 Stage A | `backend/tests/advisory_model_first/test_selection_liability_gate_training.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
 | F-255 | public shared aliases；single liability wrapper；existing policy kernel | `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py`; `backend/tests/advisory_model_first/test_shadow_portfolio_policy.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-256 | `calculate_policy_pbo`; `compare_policy_arm_rows`; `build_policy_utility_advancement_receipt` | `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py`; formal numeric receipt follows source merge as experiment evidence | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-257 | `selection_liability_gate_bundle.py`; exact retry；8 GiB `PolicyUtilityProgress` | `backend/tests/advisory_model_first/test_selection_liability_gate_bundle.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-256 | `calculate_policy_pbo`; `compare_policy_arm_rows`; `build_policy_utility_advancement_receipt` | `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0k_selection_liability_gate_20260829/selection_liability_gate_bundles/fee9b561a287229d6890d478408cacfdee6ba351cf1152c81369a86cc276bbbc/advancement_receipt.json` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
+| F-257 | `selection_liability_gate_bundle.py`; exact retry；8 GiB `PolicyUtilityProgress` | `backend/tests/advisory_model_first/test_selection_liability_gate_bundle.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0k_selection_liability_gate_20260829/selection_liability_gate_bundles/fee9b561a287229d6890d478408cacfdee6ba351cf1152c81369a86cc276bbbc/resource_report.json` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
 | F-258 | P0-H/P0-I/P0-J artifact loaders；public alias compatibility；runtime/DB/API absence | `backend/tests/advisory_model_first/test_dual_head_output_constraint_bundle.py`; `backend/tests/advisory_model_first/test_grouped_rank_output_constraint_bundle.py`; `backend/tests/advisory_model_first/test_selection_prior_residual_bundle.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_pipeline.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
-| F-259 | `_publish_incomplete`; typed threshold/coverage/resource/final-refit stop | `backend/tests/advisory_model_first/test_selection_liability_gate_training.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_bundle.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-259 | `_publish_incomplete`; typed threshold/coverage/resource/final-refit stop | `backend/tests/advisory_model_first/test_selection_liability_gate_training.py`; `backend/tests/advisory_model_first/test_selection_liability_gate_bundle.py`; artifact: `F:/Dev/AIstock_model_artifacts/advisory_p0k_selection_liability_gate_20260829/selection_liability_gate_bundles/fee9b561a287229d6890d478408cacfdee6ba351cf1152c81369a86cc276bbbc/advancement_receipt.json` | STAGE_A_NEGATIVE_VERIFIED_NOT_ACTIVATED | none |
 | F-260 | 本文 §§13-16；production gates；changed-file gates | `python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_p0k_selection_preserving_liability_gate_f2_design_20260828.md --tier F2`; `backend/tests/scripts/test_aistock_feature_workflow.py` | SOURCE_IMPLEMENTED_LOCAL_VERIFIED | none |
 
 ## 19. Rollout / rollback
 
-1. 设计 PR 只冻结假设、边界、验收矩阵和父蓝图状态。
-2. 独立实现 worktree 已完成 contracts/training/pipeline/bundle/CLI/tests 和多轮本地审核；下一动作是提交源码 PR。
-3. 源码合入后冻结正式 request，运行一次 Stage A；exact retry 只验证 identity reuse。
-4. `NEGATIVE_STOP_INCOMPLETE_CPCV` 或 `NEGATIVE_STOP_NOT_ADVANCED` 均为完整终止；不得开发 Stage B。
-5. 只有 `ADVANCED_TO_STAGE_B` 才允许另行设计 runtime role、historical replay 和 descriptor；仍需用户独立授权激活。
+1. 设计、源码、PR/CI、合入和正式 Stage A 均已完成。
+2. 正式 request `advselgatereq_943f9e551d5fee35e57340cc`与bundle `fee9b561...`已冻结；exact retry只复用同一identity。
+3. `NEGATIVE_STOP_NOT_ADVANCED`为完整终止；不得开发P0-K Stage B、扩大阈值roster或把同结果用于runtime。
+4. 后续模型假设转入独立P0-L设计；P0-K源码与不可变bundle仅作为兼容/reference保留，不激活、不覆盖。
 
 设计和 Stage A 均无部署，回滚为普通文档/源码 revert；已有 P0-D runtime、自然前向和前序不可变 bundles 不变。
 
@@ -332,3 +331,4 @@ winner 和 Stage A 结果冻结后，才允许对 winner family/seed 在完整 3
 - Round 8（独立因果/完整性复审）：在不沿用 Round 7 结论的重新审核中发现两个阻断缺口并修复。其一，inner OOF threshold 的 shared-policy 回放曾把 calibration block 之后的持仓尾部日计入换手/coverage；若尾部跨入 outer validation，会破坏 train-only threshold 边界。现已让 exact P0-D budget 与 P0-K threshold 统一只向业务核传入冻结 matched calibration ranking context、只统计这些日期，并对缺日、重日、非有限状态和 active/cash 物理恒等式 typed fail，新增 tail poison、block 外日期不可见与 missing-day 回归。其二，bundle loader 曾允许同时删除 receipt 文件及其 `manifest.files` 条目；现已冻结完整 evidence file roster、descriptor schema、`identity_files` 映射以及 model/winner/stage-b terminal-state 边界。预测 schema 同时补齐 `target_trade_date` typed-fail。修订后 P0-K direct 为 `27 passed, 1 skipped`，完整 `advisory_modeling_backend` 为 `507 passed, 16 skipped`；skip 仍仅为可选训练依赖/环境差异，没有缩减 family、seed、path、date 或业务语义。
 - Round 9（远端 CI 环境一致性）：PR 首轮远端 `advisory_modeling_backend` 在已安装 LightGBM 的 `AIstock-CI` 环境暴露一个既有测试前提错误：`test_meta_label_training` 未模拟依赖缺失，却无条件期待 `ADVISORY_MODEL_TRAINING_REQUIRES_WSL`。现已在测试内显式隔离 `lightgbm` import，使其真正验证 fail-loud contract；生产训练代码、family/seed/path、业务语义及依赖策略均未改变。修复后默认环境定向测试与 `AIstock-CI` 定向测试均为 `1 passed`，显式 `AIstock-CI\\python.exe -m pytest backend/tests/advisory_modeling backend/tests/advisory_model_first` 为 `516 passed, 7 skipped`；只有远端复跑同样通过后才允许合入。
 - Round 10（首次正式 Stage A / BUG-1232）：request `advselgatereq_8a7ddfa0acae13ee693519b3` 在 merge commit `3f2b78b2...` 上完成 386 日/7,720 行特征构建后，首个 CORE/20260813 outer trial 因 block-reset tail 与另一 validation block 的 candidate date 重叠，被完整性 helper 误判为 duplicate date，0/168 停止并生成 evidence-only bundle `f98578d6...`。该结果是实现缺陷证据，不是策略负向结论。修复将 outer completeness 和 coverage receipt 严格限定为 `is_candidate_decision=true` 的冻结 validation dates；shared return/episode evaluator、tail 收益口径、threshold、family、seed、path 和 advancement 均不改变。旧 request/bundle 保留且不得覆盖；修复合入后必须以新 commit 生成新 request。
+- Round 11（修复后正式 Stage A）：新request `advselgatereq_943f9e551d5fee35e57340cc`在commit `89859b44...`完成168/168、exact retry和不可变bundle `fee9b561...`，耗时1173.362秒、峰值RSS约2.93GB。winner为CORE/20260813，liability日Spearman `0.254589`，但168条trial全部选择`0.4`且拒绝数为0，策略与Selection恒等。相对P0-D收益`-2.966049 bps`、path win`32.14%`、MDD差`-0.004162`、换手差`-0.068009`，故`NEGATIVE_STOP_NOT_ADVANCED`。六个arm的block score完全相同，`PBO=1.0`是tie-break退化而非普通PBO解释。Stage B/runtime/replay保持禁止。

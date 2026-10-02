@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 
 from backend.execution_algos.board_lot import board_lot_rule
 from backend.services.trading_core.errors import DataUnavailableError
-from backend.services.simulation_runtime.models import (
+from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.simulation_data.daily_context import (
     DAILY_LIMIT_AUTHORITY_BY_BROKER_V2,
     DailyLimitAuthorityV2,
     DailyLimitResolverV2,
@@ -19,7 +20,6 @@ from backend.services.simulation_runtime.models import (
     DailyTradingContextV2,
     DailyTradingSymbolFactV2,
     SimulationBrokerBackend,
-    canonical_json_sha256,
 )
 
 

@@ -1,4 +1,4 @@
-﻿"""Strategy Package Center API v1."""
+"""Strategy Package Center API v1."""
 
 from __future__ import annotations
 
@@ -18,9 +18,9 @@ from backend.services.strategy_package.asset_eligibility import StrategyPackageA
 from backend.services.strategy_package.components import StrategyPackageComponentService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
-from backend.services.paper_trading_v2.models import BrokerBackendId
-from backend.services.strategy_package.multi_alpha_paper_dry_run import (
-    MultiAlphaPaperDryRunValidator,
+from backend.services.simulation_execution.broker import BrokerBackendId
+from backend.services.strategy_package.multi_alpha_simulation_dry_run import (
+    MultiAlphaSimulationDryRunValidator,
 )
 from backend.services.strategy_package.multi_alpha_promotion import MultiAlphaPackagePromotionService
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
@@ -524,7 +524,9 @@ def get_strategy_package_manifest_integrity(limit: int = 500) -> dict[str, Any]:
 
 
 @router.post("/{package_id}/repair-manifest-hash")
-def repair_strategy_package_manifest_hash(package_id: str, req: RepairManifestHashRequest | None = None) -> dict[str, Any]:
+def repair_strategy_package_manifest_hash(
+    package_id: str, req: RepairManifestHashRequest | None = None
+) -> dict[str, Any]:
     try:
         record = StrategyPackageService().repair_manifest_hash(
             package_id,
@@ -770,7 +772,7 @@ def run_multi_alpha_paper_runtime_dry_run(
     req: MultiAlphaPaperRuntimeDryRunRequest,
 ) -> dict[str, Any]:
     try:
-        result = MultiAlphaPaperDryRunValidator().run(
+        result = MultiAlphaSimulationDryRunValidator().run(
             package_id=package_id,
             broker_backend=req.broker_backend,
             trade_date=req.trade_date,
@@ -815,7 +817,11 @@ def create_strategy_package_execution_policy(package_id: str, req: CreateExecuti
 def list_strategy_package_execution_policies(package_id: str) -> dict[str, Any]:
     try:
         policies = StrategyPackageService().list_execution_policies(package_id)
-        return {"ok": True, "package_id": package_id, "execution_policies": [_execution_policy_payload(policy) for policy in policies]}
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "execution_policies": [_execution_policy_payload(policy) for policy in policies],
+        }
     except TradingCoreError as exc:
         _raise_http(exc)
 

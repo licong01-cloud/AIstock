@@ -64,6 +64,12 @@ _CANONICAL_INITIAL_EVENT_WINDOWS = (
     ("300379.SZ", "2026-06-05", "2026-06-09", "long_suspension_restore_chinext_boundary"),
     ("000001.SZ", "2025-06-11", "2025-06-13", "main_board_normal_adjustment_boundary"),
     ("688981.SH", "2020-08-21", "2020-08-25", "star_market_twenty_percent_limit_boundary"),
+    (
+        "300741.SZ",
+        "2021-07-30",
+        "2021-08-02",
+        "p3a_classification_index_authority_alignment_boundary",
+    ),
 )
 _CANONICAL_INITIAL_INDEX_WINDOWS = (
     ("000688.SH", "2019-12-31", "2020-01-03", "required_from_excludes_2019_12_31"),
@@ -128,7 +134,14 @@ def load_initial_migration_plan(path: str | Path) -> InitialMigrationPlan:
     instruments = tuple(value.get("sample_instruments") or ())
     if scopes != ("sample", "full"):
         raise ProfileValidationError("initial migration plan scopes differ")
-    if instruments != ("000001.SZ", "300379.SZ", "600462.SH", "600930.SH", "688981.SH"):
+    if instruments != (
+        "000001.SZ",
+        "300379.SZ",
+        "300741.SZ",
+        "600462.SH",
+        "600930.SH",
+        "688981.SH",
+    ):
         raise ProfileValidationError("initial migration plan sample instruments differ")
     events = _migration_windows(value.get("event_windows"), field="event_windows", selector="instrument")
     indices = _migration_windows(value.get("index_windows"), field="index_windows", selector="selector")

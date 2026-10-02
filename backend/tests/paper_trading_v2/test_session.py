@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.paper_trading_v2.models import (
     PaperReplayDayResult,
     PaperReplayResult,
@@ -154,7 +154,9 @@ class FakeLiveExecutor:
             session.session_id,
             status=PaperSessionStatus.LIVE_WAITING_FOR_BAR,
         )
-        return PaperSessionProgress(session=updated, day_count=0, events=self.repo.list_session_events(session.session_id))
+        return PaperSessionProgress(
+            session=updated, day_count=0, events=self.repo.list_session_events(session.session_id)
+        )
 
 
 class FailingLiveExecutor:
@@ -307,9 +309,7 @@ def test_session_tick_fails_before_replay_when_canonical_pit_generation_drifts()
 
 def test_replay_session_admission_requires_lease_coverage_through_end_date() -> None:
     package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
-    pointer_config = migrate_runtime_config_to_canonical_pointer(
-        {"runtime_profile": {"selection": {"top_k": 20}}}
-    )
+    pointer_config = migrate_runtime_config_to_canonical_pointer({"runtime_profile": {"selection": {"top_k": 20}}})
 
     with pytest.raises(CanonicalPitRuntimeError, match="does not cover"):
         PaperTradingSessionService(
@@ -452,7 +452,9 @@ def test_live_terminal_failure_marks_current_run_failed() -> None:
     assert failed_run.completed_at is not None
     assert failed_run.error is not None
     assert failed_run.error["error_code"] == "DATA_UNAVAILABLE"
-    run_errors = [item for item in paper_repo.list_errors(portfolio.portfolio_id) if item.get("run_id") == failed_run.run_id]
+    run_errors = [
+        item for item in paper_repo.list_errors(portfolio.portfolio_id) if item.get("run_id") == failed_run.run_id
+    ]
     assert run_errors and run_errors[0]["error"]["context"]["symbol"] == "000001.SZ"
     run_events = paper_repo.list_run_events(portfolio.portfolio_id, run_id=failed_run.run_id)
     assert run_events[-1]["event_type"] == "RUN_FAILED"
@@ -917,7 +919,9 @@ def test_v2_scheduler_reapplies_failed_state_when_abandoned_worker_completes(mon
     updated = paper_repo.get_session(session.session_id)
     assert updated.status == PaperSessionStatus.FAILED
     assert paper_repo.get_portfolio(session.portfolio_id).status == PortfolioStatus.FAILED
-    assert any(item["event_type"] == "SESSION_TICK_TIMEOUT_STALE_WORKER_COMPLETED" for item in paper_repo.session_events)
+    assert any(
+        item["event_type"] == "SESSION_TICK_TIMEOUT_STALE_WORKER_COMPLETED" for item in paper_repo.session_events
+    )
 
 
 def test_v2_scheduler_auto_run_timeout_keeps_portfolio_recoverable_without_duplicate_session(monkeypatch) -> None:
@@ -990,8 +994,9 @@ def test_v2_scheduler_auto_run_recovers_next_session_after_stale_worker_complete
     assert recovered["auto_run_recovery"]["recovered"][0]["portfolio_id"] == portfolio.portfolio_id
     assert recovered["auto_run_recovery"]["blocked_portfolio_ids"] == []
     assert active_sessions and active_sessions[0].session_id != session.session_id
-    assert any(item["event_type"] == "SESSION_TICK_TIMEOUT_STALE_WORKER_COMPLETED" for item in paper_repo.session_events)
-
+    assert any(
+        item["event_type"] == "SESSION_TICK_TIMEOUT_STALE_WORKER_COMPLETED" for item in paper_repo.session_events
+    )
 
 
 def test_portfolio_pagination_and_bulk_lifecycle_use_runtime_state_only() -> None:

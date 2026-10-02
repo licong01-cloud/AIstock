@@ -15,6 +15,11 @@ from typing import Any
 
 
 SCHEMA_VERSION = "aistock_self_hosted_workspace_v1"
+REQUIRED_FRONTEND_ENTRYPOINTS = (
+    Path("@playwright/test/cli.js"),
+    Path("typescript/bin/tsc"),
+    Path("next/dist/bin/next"),
+)
 
 
 def _utc_now() -> str:
@@ -187,7 +192,6 @@ def _materialize_frontend_node_modules(source: Path, dest_root: Path) -> dict[st
     destination = dest_root / "frontend" / "node_modules"
     source_lock = source_root.parent / "package-lock.json"
     destination_lock = destination.parent / "package-lock.json"
-    playwright_marker = source_root / "@playwright" / "test" / "cli.js"
     if not source_root.is_dir():
         _fail(f"prebuilt frontend node_modules is missing: {source_root}", code="frontend_dependencies_missing")
     if not source_lock.is_file() or not destination_lock.is_file():
@@ -199,8 +203,13 @@ def _materialize_frontend_node_modules(source: Path, dest_root: Path) -> dict[st
             "prebuilt frontend node_modules does not match the checked-out package-lock.json",
             code="frontend_lock_mismatch",
         )
-    if not playwright_marker.is_file():
-        _fail(f"prebuilt frontend Playwright marker is missing: {playwright_marker}", code="frontend_playwright_missing")
+    missing_entrypoints = [path for path in REQUIRED_FRONTEND_ENTRYPOINTS if not (source_root / path).is_file()]
+    if missing_entrypoints:
+        _fail(
+            "prebuilt frontend direct entrypoints are missing: "
+            + ", ".join(path.as_posix() for path in missing_entrypoints),
+            code="frontend_entrypoints_missing",
+        )
     if destination.exists() or destination.is_symlink():
         _fail(f"frontend dependency destination already exists: {destination}", code="frontend_destination_exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -215,14 +224,19 @@ def _materialize_frontend_node_modules(source: Path, dest_root: Path) -> dict[st
     else:
         destination.symlink_to(source_root, target_is_directory=True)
         link_type = "symlink"
-    if not (destination / playwright_marker.relative_to(source_root)).is_file():
-        _fail("frontend node_modules link readback failed", code="frontend_link_readback_failed")
+    missing_readback = [path for path in REQUIRED_FRONTEND_ENTRYPOINTS if not (destination / path).is_file()]
+    if missing_readback:
+        _fail(
+            "frontend node_modules link readback failed for: "
+            + ", ".join(path.as_posix() for path in missing_readback),
+            code="frontend_link_readback_failed",
+        )
     return {
         "source": str(source_root),
         "destination": str(destination),
         "link_type": link_type,
         "package_lock_sha256": source_lock_sha256,
-        "playwright_marker": str(playwright_marker),
+        "direct_entrypoints": [str(source_root / path) for path in REQUIRED_FRONTEND_ENTRYPOINTS],
     }
 
 
@@ -330,6 +344,75 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
+def attach_frontend_dependencies(args: argparse.Namespace) -> dict[str, Any]:
+    """Attach lockfile-matched prebuilt dependencies to an existing clean checkout."""
+    source = _resolve(args.source)
+    dest = _resolve(args.dest)
+    expected_commit = args.expected_commit.strip()
+
+    if not source.exists() or not (source / ".git").exists():
+        _fail(f"source path is not a git checkout: {source}", code="invalid_source")
+    if not dest.exists():
+        _fail(f"destination checkout is missing: {dest}", code="missing_destination")
+    if not expected_commit:
+        _fail("--expected-commit is required", code="missing_expected_commit")
+    if not args.frontend_node_modules_source:
+        _fail(
+            "--frontend-node-modules-source is required with --attach-frontend-only",
+            code="frontend_dependencies_missing",
+        )
+
+    _validate_destination(dest, source, allow_any_dest=args.allow_any_dest)
+    remote_url = _git_stdout(["config", "--get", "remote.origin.url"], cwd=source)
+    if not _repo_matches(remote_url, args.repo):
+        _fail(
+            f"source repo remote {remote_url!r} does not match expected repository {args.repo!r}",
+            code="repo_mismatch",
+        )
+
+    checkout_root = _resolve(_git_stdout(["rev-parse", "--show-toplevel"], cwd=dest))
+    if checkout_root != dest:
+        _fail(
+            f"destination {dest} is not the checkout root {checkout_root}",
+            code="invalid_destination_checkout",
+        )
+    checked_out = _git_stdout(["rev-parse", "HEAD"], cwd=dest)
+    if checked_out != expected_commit:
+        _fail(
+            f"checked out {checked_out}, expected {expected_commit}",
+            code="frontend_checkout_commit_mismatch",
+        )
+    status = _git_stdout(["status", "--short"], cwd=dest)
+    if status:
+        _fail(f"destination checkout is not clean before dependency attach: {status}", code="dirty_workspace")
+
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": _utc_now(),
+        "workflow_gate": "ready",
+        "mode": "attach_frontend_only",
+        "source": str(source),
+        "source_head": _git_stdout(["rev-parse", "HEAD"], cwd=source),
+        "destination": str(dest),
+        "expected_commit": expected_commit,
+        "checked_out_commit": checked_out,
+        "repo": args.repo,
+        "remote_url": remote_url,
+        "root_worktree_written": False,
+        "frontend_node_modules": _materialize_frontend_node_modules(
+            _resolve(args.frontend_node_modules_source),
+            dest,
+        ),
+    }
+    if args.summary_json:
+        requested_summary_path = Path(args.summary_json)
+        summary_path = requested_summary_path if requested_summary_path.is_absolute() else dest / requested_summary_path
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        payload["summary_json"] = str(summary_path)
+    return payload
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare a self-hosted runner workspace from the local AIstock root.")
     parser.add_argument("--source", required=True, help="Synced local AIstock source checkout, e.g. F:/Dev/AIstock.")
@@ -352,6 +435,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--frontend-node-modules-source",
         help="Prebuilt frontend/node_modules directory to link after package-lock SHA-256 verification.",
     )
+    parser.add_argument(
+        "--attach-frontend-only",
+        action="store_true",
+        help="Attach verified frontend dependencies to an existing clean checkout without replacing it.",
+    )
     parser.add_argument("--allow-any-dest", action="store_true", help="Allow destinations outside RUNNER_WORKSPACE for local tests.")
     return parser
 
@@ -359,7 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    payload = prepare_workspace(args)
+    payload = attach_frontend_dependencies(args) if args.attach_frontend_only else prepare_workspace(args)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 

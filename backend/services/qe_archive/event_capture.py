@@ -1,7 +1,8 @@
-"""Disabled-by-default QE archive event capture helpers.
+"""Durable QE archive outbox capture helpers.
 
-This module is intentionally not wired into QE routers yet. It provides the
-next ingestion step while keeping current QE production request paths unchanged.
+The realtime facade explicitly enables this adapter after a formal QE terminal
+write.  The adapter itself remains opt-in when constructed directly so tests
+and diagnostic callers cannot create control-plane rows by accident.
 """
 
 from __future__ import annotations

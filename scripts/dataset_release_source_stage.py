@@ -31,6 +31,12 @@ from backend.services.dataset_release.artifact_ready_source import (  # noqa: E4
     load_artifact_ready_contract,
 )
 from backend.services.dataset_release.profile import load_dataset_profile  # noqa: E402
+from backend.services.dataset_release.index_sources import (  # noqa: E402
+    independent_postgres_connection_factory,
+)
+from backend.services.dataset_release.monthly_snapshot import (  # noqa: E402
+    managed_monthly_snapshot,
+)
 from backend.services.dataset_release.resource_gate import (  # noqa: E402
     ChildResourceCheckpoint,
     DiskSpaceGuard,
@@ -39,6 +45,7 @@ from backend.services.dataset_release.source_authority import (  # noqa: E402
     MAX_SOURCE_STAGE_ARTIFACT_BYTES,
     SOURCE_REUSE_MANIFEST_SCHEMA,
     build_source_authority,
+    imported_source_session_factory,
     seal_source_stage_receipt,
 )
 
@@ -128,6 +135,43 @@ def _write_result(
         temporary.unlink(missing_ok=True)
 
 
+def _freeze_managed_source(
+    *,
+    profile: Any,
+    cas: CASStore,
+    cutoff: date,
+    checkpoint: Any,
+    baseline: Sequence[Mapping[str, Any]],
+    predicted_new_bytes: int,
+    disk_checkpoint: Any,
+    pressure_rung: int,
+    sample_instruments: Sequence[str],
+) -> Any:
+    """Freeze all source partitions from one exported database snapshot."""
+
+    with managed_monthly_snapshot(independent_postgres_connection_factory) as source_view:
+        if source_view.identity is None:  # pragma: no cover - coordinator contract
+            raise RuntimeError("managed monthly source snapshot is unavailable")
+        snapshot = build_source_authority(
+            profile,
+            cas,
+            session_factory=imported_source_session_factory(
+                source_view.identity.snapshot_id,
+                connection_factory=independent_postgres_connection_factory,
+            ),
+        ).freeze(
+            cutoff=cutoff,
+            checkpoint=checkpoint,
+            baseline_partitions=baseline,
+            predicted_new_bytes=predicted_new_bytes,
+            disk_checkpoint=disk_checkpoint,
+            pressure_rung=pressure_rung,
+            sample_instruments=tuple(sample_instruments),
+        )
+        source_view.assert_no_overlapping_repairs()
+    return snapshot
+
+
 def _assert_plain_existing_chain(path: Path) -> None:
     resolved = path.resolve(strict=True)
     current = Path(resolved.anchor)
@@ -173,10 +217,15 @@ def _execute_stage(args: argparse.Namespace, *, profile: Any, control_root: Path
         args.baseline_reuse_ref,
         profile=profile.profile,
     )
-    snapshot = build_source_authority(profile, cas).freeze(
+    # Every partition, control bracket and MVCC readback imports the same
+    # exported PostgreSQL snapshot.  The fresh repair-journal read at seal time
+    # rejects any managed writer which overlapped the materialization window.
+    snapshot = _freeze_managed_source(
+        profile=profile,
+        cas=cas,
         cutoff=cutoff,
         checkpoint=checkpoint.checkpoint,
-        baseline_partitions=baseline,
+        baseline=baseline,
         predicted_new_bytes=args.predicted_new_bytes,
         disk_checkpoint=disk_guard.checkpoint,
         pressure_rung=args.pressure_rung,

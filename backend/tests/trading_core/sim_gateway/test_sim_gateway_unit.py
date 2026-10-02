@@ -12,7 +12,7 @@ from typing import Callable
 
 import pytest
 
-from backend.services.paper_trading_v2.broker import (
+from backend.services.simulation_execution.broker import (
     BrokerAccountSnapshot,
     BrokerBackend,
     BrokerBindCapacity,
@@ -23,8 +23,8 @@ from backend.services.paper_trading_v2.broker import (
     OrderHandleStatus,
     SubscriptionHandle,
 )
-from backend.services.paper_trading_v2.broker.base import BackendId
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.simulation_execution.broker import BackendId
+from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot
 from backend.services.trading_core.sim_gateway import (
     SimGateway,
@@ -66,7 +66,7 @@ class _StubBackend(BrokerBackend):
         )
 
     def subscribe_fill_callback(self, cb: Callable[[FillEvent], None]) -> SubscriptionHandle:
-        sub = SubscriptionHandle(subscription_id=f"sub_{len(self._subscribers)+1}", backend_id=self.backend_id)
+        sub = SubscriptionHandle(subscription_id=f"sub_{len(self._subscribers) + 1}", backend_id=self.backend_id)
         self._subscribers[sub.subscription_id] = cb
         return sub
 
@@ -105,6 +105,7 @@ class _StubBackend(BrokerBackend):
 
 def _intent() -> OrderIntent:
     from datetime import date
+
     return OrderIntent(
         package_id="pkg_x",
         portfolio_id="paper_x",

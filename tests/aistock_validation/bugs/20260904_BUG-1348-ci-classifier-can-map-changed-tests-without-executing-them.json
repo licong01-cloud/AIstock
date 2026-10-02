@@ -1,0 +1,310 @@
+{
+  "actual": "A newly added or modified test can satisfy file ownership and select a module CI plan while remaining absent from every selected nox session target list. Renaming the test to match an ownership wildcard therefore produces a false-green CI path: classification passes but the changed test is never collected. Require fail-closed proof that every changed test file is reachable from at least one selected executable CI plan, with explicit diagnostics and regression coverage.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_test_plan_coverage.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "scripts/ci_change_classifier.py",
+    "scripts/ci_plan_coverage.py",
+    "scripts/ci_workflow_policy_scan.py",
+    "tests/aistock_validation/bugs/20260904_BUG-1348-ci-classifier-can-map-changed-tests-without-executing-them.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1348",
+  "closed_at": "2026-09-04T06:54:11Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-04T06:00:01.841565Z",
+  "description": "A newly added or modified test can satisfy file ownership and select a module CI plan while remaining absent from every selected nox session target list. Renaming the test to match an ownership wildcard therefore produces a false-green CI path: classification passes but the changed test is never collected. Require fail-closed proof that every changed test file is reachable from at least one selected executable CI plan, with explicit diagnostics and regression coverage.",
+  "design_compliance_review": {
+    "no_business_semantic_drift": "passed: changes are limited to CI classification, pytest collection receipts, workflow policy evidence, standards, and their tests; no backend runtime, database, trading, model, or experiment semantics change",
+    "no_silent_error": "passed: missing static reachability, nox parse failures, missing selected sessions, and absent actual pytest collection produce explicit file-level diagnostics and non-zero fail-closed results",
+    "no_simplified_delivery": "passed: the repair combines early classifier reachability with an actual changed-test-only pytest collection receipt, covers exact file, nodeid, parent directory, wildcard rejection, dynamic targets, deleted files, Windows BOM, and unrelated-session cases",
+    "no_unrequested_gate_or_approval": "passed: this implements the user-requested correctness check inside the existing CI verdict and runner allocation; it adds no business gate, manual approval, extra job, artifact upload, dependency install, process control, or database action",
+    "schema_version": "aistock_design_compliance_review_v1"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260904-ad60a7f32441",
+      "timestamp": "2026-09-04T06:00:01.841549Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add the classifier, direct regression tests, policy scanner, and synchronized human/machine CI standard required for changed-test execution reachability enforcement.",
+      "timestamp": "2026-09-04T06:03:08.032740Z"
+    },
+    {
+      "action": "contract_allowed_write_scope",
+      "actor": "codex",
+      "note": "Keep noxfile.py unchanged; inject the receipt plugin once through the existing CI backend-step environment so direct and helper pytest calls share one mechanism.",
+      "timestamp": "2026-09-04T06:25:37.370729Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add an actual pytest collection receipt and CI post-session comparison so static nox reachability cannot be bypassed by dormant or misresolved target declarations.",
+      "timestamp": "2026-09-04T06:03:08.032740Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Every changed Python test that remains in the merge tree must be statically reachable from its own selected executable nox plan and must appear in the actual pytest collection receipt before CI verdict can pass.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_test_plan_coverage.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_change_classifier.py",
+      "scripts/ci_plan_coverage.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1348-ci-classifier-can-map-changed-tests-without-executing-them.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_test_plan_coverage.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_change_classifier.py",
+      "scripts/ci_plan_coverage.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1348-ci-classifier-can-map-changed-tests-without-executing-them.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_test_plan_coverage.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_change_classifier.py",
+      "scripts/ci_plan_coverage.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1348-ci-classifier-can-map-changed-tests-without-executing-them.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_test_plan_coverage.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_change_classifier.py",
+      "scripts/ci_plan_coverage.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260904_BUG-1348-ci-classifier-can-map-changed-tests-without-executing-them.json"
+    ]
+  },
+  "first_seen_at": "2026-09-04T06:00:01.841565Z",
+  "fix_branch": null,
+  "fix_commit": "04b4aa2cd581f3725d220dfd64d764b2f19f5a5e",
+  "fixed_at": "2026-09-04T06:54:11Z",
+  "github_issue_number": 4257,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4257",
+  "last_seen_at": "2026-09-04T06:00:01.841565Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4260",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/ci_change_classifier.py --changed-file backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1348",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6a7341da250624a6",
+    "recorded_at": "2026-09-04T06:57:50.567978Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a316c3c752056b5de657fb103d6ba167db1050fa",
+    "source_merge_commit": "04b4aa2cd581f3725d220dfd64d764b2f19f5a5e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4260",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 -> 8 passed; 14/14 mapped",
+      "python -m nox -s guardrail_changed_files -> 0 findings; 0 blocking",
+      "pytest related CI classifier and policy matrix -> 103 passed",
+      "ruff changed Python files -> passed",
+      "py_compile changed scripts -> passed",
+      "git diff --check origin/main...HEAD -> passed"
+    ],
+    "validation_evidence_digest": "3831b29759a7ad9c070798027a8eba1011f0982215dd870a9de6fdf65f9e7753"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI classifier can map changed tests without executing them",
+  "trigger_condition": {
+    "fingerprint": "ad60a7f324417edc51f26607",
+    "source_event_id": "FE-20260904-ad60a7f32441"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; 14/14 mapped",
+    "python -m nox -s guardrail_changed_files -> 0 findings; 0 blocking",
+    "pytest related CI classifier and policy matrix -> 103 passed",
+    "ruff changed Python files -> passed",
+    "py_compile changed scripts -> passed",
+    "git diff --check origin/main...HEAD -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "fix_ready"
+}

@@ -6,7 +6,8 @@ from datetime import date
 from typing import Any
 
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
-from backend.services.paper_trading_v2.market_data import MinuteDataSource, TradeCalendarProvider
+from backend.services.simulation_data.contracts import MinuteDataSource
+from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.trading_core.errors import (
     InvalidStateTransitionError,

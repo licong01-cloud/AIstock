@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from backend.services.paper_trading_v2.broker import (
+from backend.services.simulation_execution.broker import (
     FillEvent,
     OrderHandle,
     OrderHandleStatus,
@@ -72,10 +72,7 @@ class PaperV2SimRunner:
         manifest: StrategyPackageManifest,
     ) -> None:
         if gateway.state.value != "CONNECTED":
-            raise ValueError(
-                "PaperV2SimRunner requires a CONNECTED SimGateway; "
-                f"got state={gateway.state.value}"
-            )
+            raise ValueError(f"PaperV2SimRunner requires a CONNECTED SimGateway; got state={gateway.state.value}")
         self._gateway = gateway
         self._event_log = event_log
         self._manifest = manifest
@@ -161,11 +158,7 @@ class PaperV2SimRunner:
                 if status.state not in {"filled", "rejected", "cancelled"}
             ]
             result.terminal = not result.pending_handle_ids
-            event_type = (
-                DaemonEventType.RUN_COMPLETED
-                if result.terminal
-                else DaemonEventType.RUN_PENDING
-            )
+            event_type = DaemonEventType.RUN_COMPLETED if result.terminal else DaemonEventType.RUN_PENDING
             self._event_log.record(
                 event_type,
                 payload={
@@ -258,11 +251,7 @@ class PaperV2SimRunner:
             payload={
                 "state": status.state,
                 "filled_quantity": status.filled_quantity,
-                "avg_fill_price": (
-                    str(status.avg_fill_price)
-                    if status.avg_fill_price is not None
-                    else None
-                ),
+                "avg_fill_price": (str(status.avg_fill_price) if status.avg_fill_price is not None else None),
                 "rejection_reason": status.rejection_reason,
             },
             handle_id=handle.handle_id,

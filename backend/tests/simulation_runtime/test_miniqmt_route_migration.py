@@ -8,13 +8,17 @@ import pytest
 
 from backend.execution_algos.adaptive_is.contracts import ControlRevision
 from backend.services.simulation_runtime.models import (
-    DailySelectionEvidence,
     ExecutionPathNotCanonicalError,
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
-    SimulationBrokerBackend,
     SimulationReleaseBinding,
     canonical_json_sha256,
+)
+from backend.services.simulation_signal.contracts import (
+    DailySelectionEvidence,
+)
+from backend.services.simulation_data.daily_context import (
+    SimulationBrokerBackend,
 )
 from backend.services.miniqmt_execution_runtime.b0_quote_v2 import QuoteControlBindingV1
 from backend.services.miniqmt_execution_runtime.models import (
@@ -181,7 +185,10 @@ def test_new_miniqmt_binding_requires_exact_b0_while_historical_omitted_stays_re
     _source_release, source, target = _source_and_target(repository)
     service = StrategyRuntimeReleaseService(repository=repository)
 
-    assert QuoteControlBindingV1.from_binding_config(source.binding_config_json).control_revision is ControlRevision.LEGACY_B0
+    assert (
+        QuoteControlBindingV1.from_binding_config(source.binding_config_json).control_revision
+        is ControlRevision.LEGACY_B0
+    )
     with pytest.raises(RuntimeConfigInvalidError) as missing:
         service.create_binding(
             strategy_id=source.strategy_id,
@@ -259,7 +266,10 @@ def test_route_migration_is_atomic_rebuildable_and_idempotent() -> None:
     assert repository.get_simulation_release_binding(source.binding_id).effective_to == date(2026, 7, 15)
     target_binding = repository.get_simulation_release_binding(first.target_binding_id)
     assert target_binding.binding_hash == first.target_binding_hash
-    assert QuoteControlBindingV1.from_binding_config(target_binding.binding_config_json).control_revision is ControlRevision.B0_QUOTE_V2
+    assert (
+        QuoteControlBindingV1.from_binding_config(target_binding.binding_config_json).control_revision
+        is ControlRevision.B0_QUOTE_V2
+    )
 
 
 def test_active_parent_and_attributed_broker_order_each_block_with_zero_writes() -> None:
@@ -294,9 +304,12 @@ def test_active_parent_and_attributed_broker_order_each_block_with_zero_writes()
         _apply(service, source, target)
     assert active.value.context["reason_code"] == "MINIQMT_ROUTE_MIGRATION_ACTIVE_FACTS_PRESENT"
     assert repository.get_simulation_release_binding(source.binding_id).effective_to is None
-    assert repository.find_miniqmt_route_migration_target(
-        source_binding_id=source.binding_id, effective_trade_date=EFFECTIVE_DATE
-    ) is None
+    assert (
+        repository.find_miniqmt_route_migration_target(
+            source_binding_id=source.binding_id, effective_trade_date=EFFECTIVE_DATE
+        )
+        is None
+    )
 
     runtime_repository = InMemoryMiniQMTExecutionRuntimeRepository()
     service = _service(
@@ -345,9 +358,7 @@ def test_active_child_attribution_conflict_and_inventory_overflow_fail_before_wr
     )
     with pytest.raises(MiniQMTRouteMigrationError) as active_child:
         _apply(_service(repository, runtime_repository), source, target)
-    assert active_child.value.context["blockers"]["active_child_order_ids"] == [
-        "child-active-legacy"
-    ]
+    assert active_child.value.context["blockers"]["active_child_order_ids"] == ["child-active-legacy"]
     assert repository.get_simulation_release_binding(source.binding_id).effective_to is None
 
     with pytest.raises(MiniQMTRouteMigrationError) as attribution:
@@ -366,9 +377,7 @@ def test_active_child_attribution_conflict_and_inventory_overflow_fail_before_wr
             source,
             target,
         )
-    assert attribution.value.context["blockers"]["broker_attribution_conflicts"] == [
-        "broker-ambiguous-1"
-    ]
+    assert attribution.value.context["blockers"]["broker_attribution_conflicts"] == ["broker-ambiguous-1"]
     assert repository.get_simulation_release_binding(source.binding_id).effective_to is None
 
     overflow_runtime_repository = InMemoryMiniQMTExecutionRuntimeRepository()
@@ -495,14 +504,10 @@ def test_migration_hash_and_identity_tampering_fail_loud() -> None:
         target,
     )
     with pytest.raises(ValueError, match="receipt_sha256"):
-        type(receipt).model_validate(
-            {**receipt.model_dump(mode="python"), "receipt_sha256": "0" * 64}
-        )
+        type(receipt).model_validate({**receipt.model_dump(mode="python"), "receipt_sha256": "0" * 64})
 
     target_binding = repository.get_simulation_release_binding(receipt.target_binding_id)
-    tampered = target_binding.model_copy(
-        update={"capital_allocation": target_binding.capital_allocation + 1.0}
-    )
+    tampered = target_binding.model_copy(update={"capital_allocation": target_binding.capital_allocation + 1.0})
     from backend.services.simulation_runtime.miniqmt_route_migration import rebuild_receipt
 
     with pytest.raises(MiniQMTRouteMigrationError) as mismatch:
@@ -527,13 +532,9 @@ def test_inventory_marker_schema_and_preflight_invalid_inputs_fail_loud() -> Non
 
     inventory_payload = plan.inventory.model_dump(mode="python")
     with pytest.raises(ValueError, match="inventory_sha256"):
-        MiniQMTRouteMigrationInventoryV1.model_validate(
-            {**inventory_payload, "inventory_sha256": "0" * 64}
-        )
+        MiniQMTRouteMigrationInventoryV1.model_validate({**inventory_payload, "inventory_sha256": "0" * 64})
     with pytest.raises(ValueError, match="source_binding_id is required"):
-        MiniQMTRouteMigrationInventoryV1.model_validate(
-            {**inventory_payload, "source_binding_id": ""}
-        )
+        MiniQMTRouteMigrationInventoryV1.model_validate({**inventory_payload, "source_binding_id": ""})
     with pytest.raises(ValueError, match="timezone-aware"):
         MiniQMTRouteMigrationInventoryV1.model_validate(
             {**inventory_payload, "observed_at_utc": datetime(2026, 7, 15, 8, 0)}
@@ -541,13 +542,9 @@ def test_inventory_marker_schema_and_preflight_invalid_inputs_fail_loud() -> Non
 
     marker_payload = plan.marker.model_dump(mode="python")
     with pytest.raises(ValueError, match="source_effective_to"):
-        MiniQMTRouteMigrationMarkerV1.model_validate(
-            {**marker_payload, "source_effective_to": EFFECTIVE_DATE}
-        )
+        MiniQMTRouteMigrationMarkerV1.model_validate({**marker_payload, "source_effective_to": EFFECTIVE_DATE})
     with pytest.raises(ValueError, match="marker_sha256"):
-        MiniQMTRouteMigrationMarkerV1.model_validate(
-            {**marker_payload, "marker_sha256": "0" * 64}
-        )
+        MiniQMTRouteMigrationMarkerV1.model_validate({**marker_payload, "marker_sha256": "0" * 64})
 
     with pytest.raises(MiniQMTRouteMigrationError) as identity:
         build_inventory(
@@ -651,11 +648,7 @@ class _MigrationCursor:
             self._row = None
             return
         if normalized.startswith("SELECT *") and "WHERE binding_hash = %s" in normalized:
-            self._row = (
-                _binding_row(self.connection.target)
-                if self.connection.target_inserted
-                else None
-            )
+            self._row = _binding_row(self.connection.target) if self.connection.target_inserted else None
             return
         if normalized.startswith("INSERT INTO paper_v2.simulation_release_binding"):
             self.connection.target_inserted = True

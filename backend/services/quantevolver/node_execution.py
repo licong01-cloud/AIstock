@@ -6,6 +6,7 @@ silently fall back to the local RD-Agent API when a selected node is unavailable
 from __future__ import annotations
 
 import os
+import posixpath
 from typing import Any, Iterable
 
 from psycopg2.extras import RealDictCursor
@@ -32,6 +33,25 @@ class QENodePreflightError(RuntimeError):
             "message": self.message,
             "context": self.context,
         }
+
+
+def _canonical_workspace_root(value: Any) -> str | None:
+    """Return one canonical absolute POSIX workspace root or ``None``."""
+
+    raw = str(value or "").strip()
+    if (
+        not raw
+        or raw == "/"
+        or not raw.startswith("/")
+        or raw.startswith("//")
+        or "\\" in raw
+        or "\x00" in raw
+    ):
+        return None
+    normalized = posixpath.normpath(raw)
+    if normalized == "/" or raw.rstrip("/") != normalized:
+        return None
+    return normalized
 
 
 def resolve_default_qe_node_id() -> str:
@@ -175,6 +195,37 @@ async def preflight_qe_node(node_id: str) -> dict[str, Any]:
         ) from exc
 
     required = ["workspace_base", "factor_data_dir", "qlib_data_path", "qlib_minute_path", "qlib_rdagent_root"]
+    api_workspace_root = _canonical_workspace_root(workspace_config.get("workspace_base"))
+    if api_workspace_root is None:
+        raise QENodePreflightError(
+            "QE_NODE_WORKSPACE_ROOT_INVALID",
+            f"Node {node_id} QE API did not report a canonical absolute workspace root.",
+            {
+                "node_id": node_id,
+                "api_workspace_base": workspace_config.get("workspace_base"),
+            },
+        )
+    configured_workspace_root = _canonical_workspace_root(node.get("workspace_base"))
+    if node.get("workspace_base") and configured_workspace_root is None:
+        raise QENodePreflightError(
+            "QE_NODE_WORKSPACE_ROOT_INVALID",
+            f"Node {node_id} configured workspace root is not canonical.",
+            {"node_id": node_id, "configured_workspace_base": node.get("workspace_base")},
+        )
+    if configured_workspace_root and configured_workspace_root != api_workspace_root:
+        raise QENodePreflightError(
+            "QE_NODE_WORKSPACE_ROOT_MISMATCH",
+            f"Node {node_id} QE API workspace root differs from its configured execution root.",
+            {
+                "node_id": node_id,
+                "configured_workspace_base": configured_workspace_root,
+                "api_workspace_base": api_workspace_root,
+            },
+        )
+
+    workspace_config = dict(workspace_config)
+    workspace_config["workspace_base"] = api_workspace_root
+
     missing = [key for key in required if not workspace_config.get(key) and not node.get(key)]
     if missing:
         raise QENodePreflightError(

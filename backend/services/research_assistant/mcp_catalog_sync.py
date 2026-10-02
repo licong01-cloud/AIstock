@@ -95,19 +95,19 @@ SERVER_DISPLAY_METADATA: dict[str, dict[str, Any]] = {
         "domain": "trading_ops",
         "summary_zh": "StrategyPackage governance and execution policy library",
     },
-    "aistock-paper-v2-monitor": {
-        "title": "Paper v2 Monitor MCP",
+    "aistock-simulation-runtime-monitor": {
+        "title": "Simulation Runtime Monitor MCP",
         "display_name_zh": "模拟盘监控",
-        "business_aliases_zh": ["Paper v2监控", "MiniQMT监控", "持仓交易监控", "盈亏监控"],
-        "domain": "paper_v2_monitoring",
-        "summary_zh": "Read-only Paper Trading v2 and MiniQMT status, positions, trades, PnL and runtime monitoring",
+        "business_aliases_zh": ["LocalSIM监控", "MiniQMT监控", "持仓交易监控", "盈亏监控"],
+        "domain": "simulation_runtime_monitoring",
+        "summary_zh": "Read-only LocalSIM successor runtime and MiniQMT monitoring",
     },
-    "aistock-paper-v2-stable": {
-        "title": "Paper v2 Stable MCP",
+    "aistock-simulation-stable": {
+        "title": "Simulation Stable MCP",
         "display_name_zh": "模拟盘稳定能力",
         "business_aliases_zh": ["策略包管理", "选股中心", "荐股中心", "模拟盘稳定域"],
-        "domain": "paper_v2_stable",
-        "summary_zh": "Stable StrategyPackage, Selection Center, Advisory and read-only Paper v2 monitoring capabilities",
+        "domain": "simulation_stable",
+        "summary_zh": "Stable StrategyPackage, Selection Center, Advisory and successor runtime monitoring capabilities",
     },
     "aistock-external-research": {
         "title": "External Research MCP",

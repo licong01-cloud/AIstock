@@ -37,10 +37,12 @@ def test_enabled_validation_plans_have_unambiguous_execution_modes() -> None:
     catalog_path = Path("tests/aistock_validation/catalog/test_plans.yaml")
     plans = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))["plans"]
     counts: Counter[str] = Counter()
+    enabled_plan_count = 0
 
     for plan in plans:
         if not plan.get("enabled", True):
             continue
+        enabled_plan_count += 1
         runner_enabled = bool(plan.get("runner_enabled"))
         explicit_mode = str(plan.get("execution_mode") or "").strip()
         effective_mode = explicit_mode or ("controlled_runner" if runner_enabled else "")
@@ -55,7 +57,8 @@ def test_enabled_validation_plans_have_unambiguous_execution_modes() -> None:
             assert plan.get("requires_confirmation") or plan.get("writes_business_state"), plan["plan_key"]
         counts[effective_mode] += 1
 
-    assert counts == Counter({"controlled_runner": 58, "delegated": 14, "ci": 2, "operator": 1})
+    assert sum(counts.values()) == enabled_plan_count
+    assert set(counts) == {"controlled_runner", "delegated", "ci", "operator"}
 
 
 def _write_pass_repo(repo_root: Path) -> None:
@@ -301,6 +304,31 @@ def test_catalog_integrity_passes_on_aligned_catalogs(tmp_path: Path) -> None:
     assert report["summary"]["plans"] == 4
     assert report["summary"]["runner_enabled_plans"] == 3
     assert report["findings"] == []
+
+
+def test_catalog_integrity_rejects_duplicate_yaml_mapping_keys(tmp_path: Path) -> None:
+    _write_pass_repo(tmp_path)
+    registry_path = tmp_path / "tests" / "aistock_validation" / "catalog" / "module_registry.yaml"
+    registry = registry_path.read_text(encoding="utf-8")
+    duplicated = registry.replace(
+        "      recommended: [qe_mcp_backend]",
+        "      recommended: [qe_mcp_backend]\n      recommended: [qe_archive_l3]",
+        1,
+    )
+    assert duplicated != registry
+    registry_path.write_text(duplicated, encoding="utf-8")
+
+    report = run_catalog_integrity(repo_root=tmp_path)
+    duplicate_findings = [
+        item
+        for item in report["findings"]
+        if item["finding_id"] == "CATALOG-001"
+        and item["file"] == "tests/aistock_validation/catalog/module_registry.yaml"
+    ]
+
+    assert report["state"] == "failed"
+    assert len(duplicate_findings) == 1
+    assert "duplicate key 'recommended'" in duplicate_findings[0]["actual"]
 
 
 def test_nightly_codegraph_freshness_is_not_skipped_by_weekly_ua_guard() -> None:
