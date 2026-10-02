@@ -131,7 +131,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
     "fresh_process_evidence": [
       "PYTHONPATH=BUG-1676 task worktree C:/Users/lc999/miniconda3/python.exe - (PowerShell here-string) -> PASS: stock_fact_observation, backend.routers.hmm_risk and backend.routers.health loaded from own worktree; socket.connect/create_connection and psycopg2.connect poisoned; supplied source_unavailable cause retained and strict JSON readback passed; source SHA256=783b15691d3eec611965c27971e934d9f5c08fde07024da30e5fdcece218809d",
       "HEAD=1a3c429715e9b0ef7513cd6d3f1bb2fbf9a368e1; AIstock-CI python -I imports stock_fact_observation/formal_state_input/backend.routers.hmm_risk/backend.routers.health own_worktree=true network_database_poison=true PASS; no backend restart"
