@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1677",
-  "closed_at": null,
+  "closed_at": "2026-10-02T06:07:45Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -236,8 +236,8 @@
   },
   "first_seen_at": "2026-10-02T05:20:40.317643Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8aead1f81b10a256c150b8618d5ef6fab0dbb572",
+  "fixed_at": "2026-10-02T06:07:45Z",
   "github_issue_number": 5260,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5260",
   "last_seen_at": "2026-10-02T05:20:40.317643Z",
@@ -245,6 +245,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5263",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -264,6 +265,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -273,7 +275,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1677",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9d2fe409c03b1d8f",
+    "recorded_at": "2026-10-02T06:08:48.042824Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b32d375193732f4c6a3d1e7cac6b2f28305573ed",
+    "source_merge_commit": "8aead1f81b10a256c150b8618d5ef6fab0dbb572",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5263",
+    "validation_evidence": [
+      "validation-receipt: id=f498a7a55f814f5c commit=f4e788d621d894190c5a943ea605923867745a52 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed; 8 tests; 14/14 mapped`",
+      "validation-receipt: id=3fc139f5b09dfb81 commit=f4e788d621d894190c5a943ea605923867745a52 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; blocking=0; 11/11 mapped`",
+      "validation-receipt: id=585d2a69c9365664 commit=f4e788d621d894190c5a943ea605923867745a52 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_changed_files.py backend/tests/scripts/test_ci_workflow_policy_scan.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -q` result=`216 passed`"
+    ],
+    "validation_evidence_digest": "14ef5a2537209d38af996708d1a3a9daa84616c2197f7ab58e07d41c4210f443"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -282,6 +307,11 @@
     "fingerprint": "f1ea9a5856dc46680e73a792",
     "source_event_id": "FE-20261002-f1ea9a5856dc"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f498a7a55f814f5c commit=f4e788d621d894190c5a943ea605923867745a52 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed; 8 tests; 14/14 mapped`",
+    "validation-receipt: id=3fc139f5b09dfb81 commit=f4e788d621d894190c5a943ea605923867745a52 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; blocking=0; 11/11 mapped`",
+    "validation-receipt: id=585d2a69c9365664 commit=f4e788d621d894190c5a943ea605923867745a52 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_changed_files.py backend/tests/scripts/test_ci_workflow_policy_scan.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -q` result=`216 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
