@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.prepare_canonical_pit_monthly import _load_database_config
 from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.canonical_pit_migration import (
-    audit_eligibility_intervals, plan_forward_profiles, prepare_dev_forward_profiles,
+    audit_canonical_pit_readiness, audit_eligibility_intervals, plan_forward_profiles, prepare_dev_forward_profiles,
     read_forward_profile_records, read_sealed_json, seal_real_activation, _plain_file,
 )
 
@@ -107,7 +107,7 @@ def _execute(args, parser):
                 cutoff = date.fromisoformat(manifest["cutoff_trade_date"])
                 member = manifest["st_pit_manifest"]["selection_universe"]
                 relative = Path(member["path"])
-                if relative.is_absolute() or ".." in relative.parts:
+                if relative.drive or relative.is_absolute() or ".." in relative.parts:
                     raise ValueError("frozen membership path escapes candidate")
                 source = _plain_file(args.candidate_root / relative)
                 raw = source.read_bytes()
@@ -115,11 +115,11 @@ def _execute(args, parser):
                     raise ValueError("frozen membership file identity differs")
                 frozen = [line.split() for line in raw.decode("utf-8").splitlines() if line.strip()]
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT ts_code,eligible_start,eligible_end FROM market.stock_universe_pit_spans "
+                    cursor.execute("SELECT ts_code,eligible_start,eligible_end,entry_reason,exit_reason FROM market.stock_universe_pit_spans "
                         "WHERE universe_key=%s AND rule_version=%s AND eligible_start<=%s AND eligible_end>=%s "
                         "ORDER BY ts_code,eligible_start,eligible_end", ("aistock_equity_pit_canonical_v2",
                         "shsz_a_252td_st_delist_asof_v2", cutoff, args.start))
-                    rolling = [tuple(map(str, row)) for row in cursor.fetchall()]
+                    rolling = cursor.fetchall()
 
                 @contextmanager
                 def factory():
@@ -129,11 +129,15 @@ def _execute(args, parser):
                 result = {"schema_version": "local_data_dev_pit_activation_audit_v1",
                           "target": "aistock_dev:5433", "candidate_root": str(args.candidate_root.absolute()),
                           "dataset_manifest_sha256": manifest["dataset_manifest_sha256"],
-                          "membership_audit": audit_eligibility_intervals(frozen, rolling, start=args.start, cutoff=cutoff),
+                          "membership_audit": audit_eligibility_intervals(frozen, [row[:3] for row in rolling], start=args.start, cutoff=cutoff),
+                          # A direct-v2 stock_universe.txt is a three-field
+                          # execution projection, not a FrozenPitSnapshot.
+                          "canonical_pit_identity_audit": audit_canonical_pit_readiness(rolling, start=args.start, cutoff=cutoff),
+                          "frozen_source_kind": "three_field_execution_projection",
                           "forward_profile_plan": plan_forward_profiles(repository, read_forward_profile_records(conn)),
                           "database_read": True, "database_write": False,
                           "production_write": False, "runtime_action": False}
-                status = result["membership_audit"]["status"]
+                status = result["canonical_pit_identity_audit"]["status"]
         except BaseException:
             conn.rollback()
             raise

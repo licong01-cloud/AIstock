@@ -40,6 +40,19 @@ from backend.services.canonical_equity_pit import (
 SHA = "a" * 64
 
 
+def test_pit_operator_roles_are_exact_and_do_not_downgrade_runtime_sources():
+    from scripts.aistock_issue_workflow import _classify_runtime_impact
+    root = Path(__file__).resolve().parents[3]
+    operators = [f"backend/services/dataset_release/{name}.py" for name in (
+        "canonical_pit_candidate_bundle", "canonical_pit_w8_attestation",
+        "canonical_pit_activation_envelope", "canonical_pit_migration")]
+    assert _classify_runtime_impact(operators, root=root)["runtime_impact"] == "none"
+    mixed = _classify_runtime_impact(operators + ["backend/services/canonical_equity_pit.py"], root=root)
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["target_ids"] == ["backend-main"]
+    assert _classify_runtime_impact(["backend/services/dataset_release/candidate_validator.py"], root=root)["runtime_impact"] == "worker_scheduler"
+
+
 def _real_bundle_payload():
     value = _bundle().as_dict()
     value["candidate_identity"].update(scope="full", production_eligible=True, training_eligible=True)
@@ -167,7 +180,7 @@ def test_real_evidence_rejects_ambiguous_or_malformed_json(tmp_path, content):
         read_sealed_json(source)
 
 
-def _real_file_bundle(tmp_path, rows=None):
+def _real_file_bundle(tmp_path, rows=None, *, raw_rows=False):
     """Test-only files; never emit an independent receipt or production asset."""
     import hashlib
     from backend.services.dataset_release.canonical import canonical_json_bytes
@@ -188,7 +201,17 @@ def _real_file_bundle(tmp_path, rows=None):
     metadata = persist("metadata.json", {"test_only": True})
     value = replace(_real_bundle_payload(), SHA, metadata)
     rows = rows if rows is not None else [["000001.SZ", "2018-08-01", "2026-07-31", "IPO_ELIGIBLE", None]]
-    row_digest = persist("snapshot.json", rows)
+    if not raw_rows:
+        from backend.services.dataset_release.pit import freeze_pit_snapshot
+        snapshot = freeze_pit_snapshot(rows, universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            rule_version=CANONICAL_PIT_RULE_VERSION, scope_start=date(2018, 8, 1),
+            cutoff=date(2026, 7, 31), state_identity=metadata,
+            source_fingerprint_sha256=metadata, parameter_hash=metadata)
+        persist("snapshot.json", snapshot.as_dict())
+        row_digest = snapshot.spans_sha256
+        files[row_digest] = tmp_path / "snapshot.json"
+    else:
+        row_digest = persist("snapshot.json", rows)
     value["pit_identity"].update(frozen_snapshot_digest=row_digest, rolling_at_cutoff_digest=row_digest)
     value["frozen_release"]["pit_snapshot_digest"] = row_digest
     value["rolling_observation"].update(digest=row_digest, row_count=len(rows))
@@ -196,6 +219,43 @@ def _real_file_bundle(tmp_path, rows=None):
         "status": "PASS", "frozen_snapshot_digest": row_digest,
         "rolling_cutoff_spans_sha256": row_digest, "row_count": len(rows), "cutoff": "2026-07-31"})
     return value, files
+
+
+def test_real_bundle_uses_official_snapshot_encoding_with_nullable_reasons(tmp_path):
+    from backend.services.dataset_release.canonical_pit_migration import build_real_candidate_validation_bundle
+    value, files = _real_file_bundle(tmp_path, [["000001.SZ", "2018-08-01", "2026-07-31", None, None]])
+    assert build_real_candidate_validation_bundle(value, evidence_files=files).payload["rolling_observation"]["row_count"] == 1
+
+
+def test_full_pit_audit_cannot_pass_from_projection_or_equal_dates_only(tmp_path):
+    from backend.services.dataset_release.canonical_pit_migration import audit_canonical_pit_readiness
+    rows = [["000001.SZ", "2018-08-01", "2026-07-31", None, None]]
+    value, files = _real_file_bundle(tmp_path, rows)
+    snapshot = json.loads(files[value["pit_identity"]["frozen_snapshot_digest"]].read_bytes())
+    window = {"start": date(2018, 8, 1), "cutoff": date(2026, 7, 31)}
+    assert audit_canonical_pit_readiness(rows, **window)["reason"] == "FULL_FROZEN_PIT_NOT_BOUND"
+    assert audit_canonical_pit_readiness(rows, frozen_snapshot=snapshot, **window)["status"] == "PASS"
+    rows[0][3] = "OTHER_REASON"
+    assert audit_canonical_pit_readiness(rows, frozen_snapshot=snapshot, **window)["reason"] == "FULL_PIT_IDENTITY_DIFFERS"
+
+
+@pytest.mark.parametrize("mutation", ["count", "cutoff", "reason", "identity"])
+def test_real_bundle_rejects_tampered_formal_snapshot(tmp_path, mutation):
+    from backend.services.dataset_release.canonical_pit_migration import build_real_candidate_validation_bundle
+    value, files = _real_file_bundle(tmp_path)
+    path = files[value["pit_identity"]["frozen_snapshot_digest"]]
+    snapshot = json.loads(path.read_bytes())
+    if mutation == "count":
+        snapshot["span_count"] += 1
+    elif mutation == "cutoff":
+        snapshot["spans"][0]["eligible_end"] = "2026-08-31"
+    elif mutation == "reason":
+        snapshot["spans"][0]["entry_reason"] = "OTHER_REASON"
+    else:
+        snapshot["universe_key"] = LEGACY_PIT_UNIVERSE_KEY
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    with pytest.raises(ValueError):
+        build_real_candidate_validation_bundle(value, evidence_files=files)
 
 
 def test_real_bundle_reads_full_logical_rows_and_independent_oracle(tmp_path):
@@ -216,7 +276,7 @@ def test_real_bundle_reads_full_logical_rows_and_independent_oracle(tmp_path):
 ])
 def test_real_bundle_rejects_incomplete_ambiguous_or_postcutoff_rows(tmp_path, rows):
     from backend.services.dataset_release.canonical_pit_migration import build_real_candidate_validation_bundle
-    value, files = _real_file_bundle(tmp_path, rows)
+    value, files = _real_file_bundle(tmp_path, rows, raw_rows=True)
     with pytest.raises(ValueError):
         build_real_candidate_validation_bundle(value, evidence_files=files)
 

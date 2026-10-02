@@ -18,6 +18,9 @@ from .canonical import canonical_json_bytes
 from .canonical_pit_candidate_bundle import validate_candidate_validation_bundle
 from .canonical_pit_w8_attestation import bind_real_w8_attestation
 from .canonical_pit_activation_envelope import build_activation_envelope, validate_activation_envelope
+from .pit import (PitSnapshotError, canonicalize_pit_spans,
+                  frozen_pit_snapshot_from_mapping, pit_spans_sha256,
+                  require_canonical_source_snapshot)
 
 
 class PitMigrationError(ValueError):
@@ -108,6 +111,30 @@ def audit_eligibility_intervals(frozen: Iterable, rolling: Iterable, *, start: d
             "frozen_only": [list(x) for x in only_lhs], "rolling_only": [list(x) for x in only_rhs]}
 
 
+def audit_canonical_pit_readiness(rolling: Iterable, *, start: date, cutoff: date,
+                                 frozen_snapshot: Mapping | None = None) -> dict:
+    """Audit full PIT parity only; never infer it from an execution projection."""
+    if type(start) is not date or type(cutoff) is not date or start > cutoff:
+        raise PitMigrationError("invalid canonical PIT coverage window")
+    frame = canonicalize_pit_spans(rolling, scope_start=start, cutoff=cutoff)
+    if frame.empty:
+        raise PitMigrationError("empty canonical PIT denominator")
+    result = {"status": "BLOCKED", "reason": "FULL_FROZEN_PIT_NOT_BOUND",
+              "encoding": "canonical_pit_spans_v2", "start": start.isoformat(),
+              "cutoff": cutoff.isoformat(), "rolling_span_count": len(frame),
+              "rolling_symbol_count": int(frame.ts_code.nunique()),
+              "rolling_spans_sha256": pit_spans_sha256(frame)}
+    if frozen_snapshot is not None:
+        snapshot = frozen_pit_snapshot_from_mapping(frozen_snapshot)
+        require_canonical_source_snapshot(snapshot)
+        matches = (snapshot.scope_start == start and snapshot.cutoff == cutoff
+                   and snapshot.spans_sha256 == result["rolling_spans_sha256"])
+        result.update(status="PASS" if matches else "BLOCKED",
+                      reason="FULL_PIT_PARITY" if matches else "FULL_PIT_IDENTITY_DIFFERS",
+                      frozen_span_count=len(snapshot.spans), frozen_spans_sha256=snapshot.spans_sha256)
+    return result
+
+
 def build_real_candidate_validation_bundle(payload: Mapping[str, Any], *, evidence_files: Mapping[str, Path]):
     """Seal a real bundle only after reading every referenced immutable digest.
 
@@ -131,7 +158,20 @@ never upgraded. This API does not create an independent W8 PASS.
                 value["rolling_observation"]["state_source_digest"]}
     if not required.issubset(evidence_files):
         raise PitMigrationError("real bundle is missing referenced immutable evidence")
-    for digest in sorted(required):
+    frozen_digest = value["pit_identity"]["frozen_snapshot_digest"]
+    # The PIT reference is a logical span digest, not the JSON file digest.
+    # Reuse the official parser (including nullable-reason <NULL> encoding).
+    try:
+        snapshot = frozen_pit_snapshot_from_mapping(read_sealed_json(Path(evidence_files[frozen_digest])))
+        require_canonical_source_snapshot(snapshot)
+    except PitSnapshotError as exc:
+        raise PitMigrationError("real PIT artifact identity/encoding is invalid") from exc
+    if (snapshot.spans_sha256 != frozen_digest
+            or snapshot.spans_sha256 != value["rolling_observation"]["digest"]
+            or snapshot.cutoff.isoformat() != value["cutoff"]["effective"]
+            or len(snapshot.spans) != value["rolling_observation"]["row_count"]):
+        raise PitMigrationError("real PIT logical digest/cutoff/row-count differs")
+    for digest in sorted(required - {frozen_digest}):
         path = _plain_file(Path(evidence_files[digest]))
         before = path.stat()
         sha = hashlib.sha256()
@@ -144,24 +184,11 @@ never upgraded. This API does not create an independent W8 PASS.
             # Content-addressed JSON ignores a terminal newline, never values.
             if hashlib.sha256(canonical_json_bytes(read_sealed_json(path))).hexdigest() != digest:
                 raise PitMigrationError("real bundle referenced asset digest differs")
-    rows = read_sealed_json(Path(evidence_files[value["pit_identity"]["frozen_snapshot_digest"]]))
-    if not isinstance(rows, list) or len(rows) != value["rolling_observation"]["row_count"]:
-        raise PitMigrationError("real bundle PIT row-count identity differs")
-    if any(not isinstance(row, list) or len(row) != 5 for row in rows):
-        raise PitMigrationError("real PIT snapshot requires the full five-field encoding")
-    if (any(not isinstance(row[3], str) or not row[3] or (row[4] is not None and not isinstance(row[4], str)) for row in rows)
-            or rows != sorted(rows, key=lambda row: (row[0], row[1], row[2]))):
-        raise PitMigrationError("real PIT ordered span/reason encoding differs")
-    audit_eligibility_intervals([row[:3] for row in rows], [row[:3] for row in rows],
-        start=min(date.fromisoformat(row[1]) for row in rows), cutoff=date.fromisoformat(value["cutoff"]["effective"]))
-    if (any(date.fromisoformat(row[2]) > date.fromisoformat(value["cutoff"]["effective"]) for row in rows)
-            or hashlib.sha256(canonical_json_bytes(rows)).hexdigest() != value["pit_identity"]["frozen_snapshot_digest"]):
-        raise PitMigrationError("real PIT logical digest/cutoff differs")
     # Require independent oracle's actual denominator/digest, not a generic ACK.
     oracle = read_sealed_json(Path(evidence_files[value["validation"]["independent_pit_receipt"]]))
     if (not isinstance(oracle, Mapping) or oracle.get("status") != "PASS" or oracle.get("frozen_snapshot_digest") != value["pit_identity"]["frozen_snapshot_digest"]
             or oracle.get("rolling_cutoff_spans_sha256") != value["rolling_observation"]["digest"]
-            or oracle.get("row_count") != len(rows) or oracle.get("cutoff") != value["cutoff"]["effective"]):
+            or oracle.get("row_count") != len(snapshot.spans) or oracle.get("cutoff") != value["cutoff"]["effective"]):
         raise PitMigrationError("independent PIT oracle identity differs or is not PASS")
     return bundle
 

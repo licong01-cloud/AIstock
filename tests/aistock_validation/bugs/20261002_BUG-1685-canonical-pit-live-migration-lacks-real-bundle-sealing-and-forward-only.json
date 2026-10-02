@@ -1,6 +1,7 @@
 {
   "actual": "Canonical PIT target is ready through 2026-09-30 but current bundle producer accepts fixture only. Add real immutable asset readback and independent rolling/frozen parity; prepare DEV forward-only profiles through owning APIs without modifying old activations or native leases. Initial audit found v15 frozen 5449 spans versus DEV clipped 5658, 97 frozen-only and 306 DB-only; real sealing must remain blocked on actual drift, never claim fixture PASS. Production, global profile and services untouched.",
   "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "backend/services/dataset_release/canonical_pit_candidate_bundle.py",
     "backend/services/dataset_release/canonical_pit_w8_attestation.py",
     "backend/services/dataset_release/canonical_pit_activation_envelope.py",
@@ -34,15 +35,25 @@
   ],
   "expected": "真实 bundle 显式验证文件与五字段 PIT 身份，fixture 不能升级为生产证据；DEV 仅通过 owner API 创建前向新版本，计划与正式规范化后的 readback 一致，旧版本、历史激活与 Selection lease 不改写。数据 parity 或独立 W8 不满足时保持 BLOCKED，不自动激活。",
   "fix_verification": {
+    "scope_expansion_20261002": "用户已授权下一步：核清真实 frozen PIT 身份并修复运行角色/验证登记。新增精确 catalog 文件仅登记四个 CLI-only operator 模块；不改其他 backend 角色，不引入生产 API 或重启。",
     "root_cause": "既有 W6 producer 仅支持 fixture；DEV owning API 对旧配置补入有效默认字段，旧纯函数计划未绑定规范化后的目标 hash，真实演练正确回滚。",
     "dev_validation": "95 个 READY portfolio 的计划均验证：先规范化再迁移与先迁移再规范化结果相同；非 PIT 有效业务语义零漂移。95 个新版本回滚演练通过。",
     "dev_apply": "已授权的既存 aistock_dev:5433 中创建 95 个版本，配置版本总数 96 -> 191；只更新对应当前版本指针及 owner 审计，不改历史配置。",
     "dev_readback": "独立 fresh process 确认 95 个当前版本 NO_OP_ALREADY_CANONICAL；原版本、94 条历史 activation 与 Selection native configs 指纹不变；PIT singleton 仍 legacy/generation=0。",
     "production_authorization": "none",
     "production_apply": "noop",
-    "activation": "BLOCKED：v15 冻结 5449 spans 与 DEV canonical 同截止 5658 spans 不同，97 frozen-only / 306 rolling-only。未签发独立 W8 PASS 或 READY_TO_ACTIVATE。",
+    "activation": "BLOCKED：v15 manifest 仅绑定三字段执行股票池，未绑定正式五字段 FrozenPitSnapshot；投影为 5449 spans，与 DEV canonical 同截止 5658 spans 不同，97 frozen-only / 306 rolling-only。投影差异不冒充完整 PIT authority 差异；未签发独立 W8 PASS 或 READY_TO_ACTIVATE。",
     "parity_detail": "冻结选股 sidecar 为 5144 symbols。306 rolling-only 中 209 spans 对应冻结侧没有的 197 symbols，另 97 为已有股票区间差异；3 字段 eligibility projection 不冒充完整 5 字段 PIT 摘要，未擅自裁剪或补造。",
-    "source_delivery_status": "未创建 PR 或合入：正式 finish gate 要求为该新路径登记 target-owned 业务语义 probe，目前 /api/v1/paper-v2/canonical-pit/inventory 尚无登记。未跨越 allowed_write_scope 修改运行角色/探针 catalog，不用无关 HTTP 200 替代。",
+    "source_delivery_status": "已按实际 import 图在正式 runtime catalog 精确登记四个 CLI-only 模块；完整变更集 runtime_impact=none。混入 canonical_equity_pit 保持 backend、candidate_validator 保持 worker_scheduler。源码 PR 待最终 gate；数据业务激活仍 BLOCKED。",
+    "formal_encoder_readback": "复用 pit.py 正式 FrozenPitSnapshot parser、canonicalize_pit_spans 与 pit_spans_sha256，支持 nullable reason 的 <NULL> 编码；不将逻辑摘要与文件字节 SHA 混用。",
+    "review_rounds": [
+      "第一轮身份审核：修复原始数组/文件 SHA 与正式逻辑 spans digest 混用；nullable reasons RED→GREEN，正式快照 count/cutoff/reason/authority 篡改 fail closed。",
+      "第二轮归属与边界审核：四个精确离线路径不要求后端探针，混合业务源仍按 backend/worker 处理；三字段投影即使一致也不能宣称 full PIT parity。",
+      "最终定向验收：W6 43 passed、CI classifier 定向4 passed、catalog16 passed；10文件 guardrail/ownership 检查 blocking=0、unmapped=0；Ruff和diff-check通过。未把数据业务BLOCKED标为完成。"
+    ],
+    "latest_readonly_receipt": "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/dev-formal-pit-audit.json",
+    "latest_readonly_receipt_canonical_sha256": "81951ba07ba391fbed98ed15519f55a1867fd97bcbffb3eb2abc4ae331924641",
+    "actual_frozen_projection_analysis": "197 个缺少策略股票池身份的 symbol 中，131 个已经具备 day features 且已在 provider catalog；66 个无 day feature 目录。物理目录存在不是全历史数据完整的证明，不能把 197 个全部称为行情缺失。97 个区间差异仍需正式资格与行情边界来源核验，不裁剪或倒填。",
     "global_profile_sha256": "56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f",
     "outcomes_read": false,
     "candidate_write": false,
@@ -248,23 +259,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/paper-v2/canonical-pit/inventory",
+    "backend_restart_required": false,
     "fresh_process_evidence": [
       "独立 Python -B CLI 从 BUG-1685 worktree 导入：DEV rollback/apply/readback 95 个 owning API 新版本，95 NO_OP；历史 hash 相同，singleton generation=0。未启动或重启服务。"
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files_and_exact_catalog_roles",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ]
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
