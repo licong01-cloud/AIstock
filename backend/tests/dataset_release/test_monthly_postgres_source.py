@@ -164,8 +164,14 @@ def test_blocked_actual_audit_prevents_materialization_and_seal(tmp_path, monkey
     from backend.services.dataset_release.monthly_unified import SOURCE_GATES
 
     frozen = SimpleNamespace(source_reuse_manifest_ref="ref", source_content_root="a" * 64)
+    source_policies = []
+
+    def authority_factory(*_args, **kwargs):
+        source_policies.append(kwargs.get("sector_source_policy"))
+        return SimpleNamespace(freeze=lambda **_kwargs: frozen)
+
     monkeypatch.setattr(
-        source, "MonthlySourceAuthority", lambda *_args, **_kwargs: SimpleNamespace(freeze=lambda **_kwargs: frozen)
+        source, "MonthlySourceAuthority", authority_factory
     )
     seen = []
     monkeypatch.setattr(source, "ArtifactReadySourceBuilder", lambda *_args: seen.append("build"))
@@ -203,6 +209,35 @@ def test_blocked_actual_audit_prevents_materialization_and_seal(tmp_path, monkey
     with pytest.raises(MonthlySourceAuditError, match="blocking counts"):
         adapter.read(None, identity, context)
     assert seen == []
+    assert source_policies == ["classification_published_snapshot_v1"]
+
+
+def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_path):
+    from backend.services.dataset_release import monthly_postgres_source as source
+    from backend.services.dataset_release.canonical import digest_named_fields
+    from backend.services.dataset_release.monthly_unified import SOURCE_GATES
+
+    profile = SimpleNamespace(profile="qe_hmm_full_v2", semantic_profile_digest="a" * 64)
+    adapter = PostgresMonthlySourceAdapter(
+        profile=profile, cas=SimpleNamespace(root=tmp_path), artifact_root=tmp_path,
+        source_catalog=SimpleNamespace(root=tmp_path),
+    )
+    old_fields = {
+        "profile": profile.profile, "semantic_profile_digest": profile.semantic_profile_digest,
+        "source_authority_policy": "dataset_release_source_authority_v1",
+        "artifact_ready_contract": "dataset_release_artifact_ready_contract_v1",
+        "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
+        "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
+        "mvcc_partition_reuse": False, "gates": list(SOURCE_GATES),
+        "source_audit_contract": source.AUDIT_SCHEMA,
+    }
+    old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
+    assert adapter.adapter_version == "4"
+    assert adapter.contract_sha256 != old_identity
+    assert adapter.contract_sha256 == digest_named_fields(
+        "aistock_monthly_postgres_source_adapter_v1",
+        {**old_fields, "sector_source_policy": "classification_published_snapshot_v1"},
+    )
 
 
 DAY = date(2026, 9, 30)
