@@ -24,7 +24,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-import psutil
+try:
+    import psutil
+except ModuleNotFoundError as exc:
+    if exc.name != "psutil":
+        raise
+    psutil = None  # Metadata-only CI intake must not require process inspection.
 import yaml
 
 try:
@@ -3162,6 +3167,8 @@ def _resolved_process_argument(argument: str, *, cwd: Path) -> Path | None:
 
 
 def _monthly_release_worker_process_snapshot(target: dict[str, Any]) -> dict[str, Any]:
+    if psutil is None:
+        raise WorkflowError("monthly Worker process enumeration requires the prebuilt psutil dependency")
     local_probe = target.get("local_probe") if isinstance(target.get("local_probe"), dict) else {}
     worker_script = (REPO_ROOT / str(local_probe.get("worker_script") or "")).resolve()
     worker_mode = str(local_probe.get("worker_mode") or "")

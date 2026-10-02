@@ -70,6 +70,11 @@ jobs:
     steps:
       - name: Prepare exact main workspace
         timeout-minutes: 3
+        # LF only in this isolated checkout; preserve global Git and HTTP policy.
+        env:
+          GIT_CONFIG_COUNT: '2'
+          GIT_CONFIG_KEY_1: core.autocrlf
+          GIT_CONFIG_VALUE_1: 'false'
         run: |
           python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
             --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
@@ -168,6 +173,18 @@ jobs:
             $gate = [string]$payload.workflow_gate
             if ($gate -notin @("ready", "passed")) {
               Write-Host "::warning title=Code intelligence refresh::$($item.Provider) workflow_gate=$gate"
+              if ($item.Provider -eq "codegraph") {
+                $diagnostic = [ordered]@{
+                  action = $payload.action
+                  freshness = $payload.freshness.freshness
+                  missing_files = $payload.freshness.index_file_coverage.missing_files
+                  coverage_errors = $payload.freshness.index_file_coverage.errors
+                  oversized_critical_files = $payload.oversized_critical_files
+                  command_error = $payload.command_result.stderr
+                } | ConvertTo-Json -Depth 5 -Compress
+                Write-Host "codegraph_failure_diagnostic=$diagnostic"
+                $rows += "| codegraph diagnostic | warning | $diagnostic |"
+              }
             }
             $rows += "| $($item.Provider) | $gate | required when refresh executes |"
           }
@@ -177,4 +194,3 @@ jobs:
             "| Provider | Status | Policy |",
             "| --- | --- | --- |"
           ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
-

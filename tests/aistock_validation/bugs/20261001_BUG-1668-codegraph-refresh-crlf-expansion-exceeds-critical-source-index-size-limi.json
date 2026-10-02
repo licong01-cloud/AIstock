@@ -1,49 +1,53 @@
 {
-  "actual": "Nightly run 36788300918 used C drive pytest temp and failed four Historical Range capacity checks. BUG-1648/1649 fixed PR CI only. Enable identical fail-closed run/job isolated X temp before Nightly tests, with no installs, capacity relaxation or business changes.",
+  "actual": "Run 36785381281 failed incomplete_index after sync_then_reindex and retained no diagnostics. Its workflow source Git blob is 1028210 bytes but CRLF checkout expands to 1051381, exceeding installed CodeGraph 0.9.4 MAX_FILE_SIZE=1048576. Use deterministic LF only in isolated code-intelligence job, preflight genuine oversized critical sources before rebuild, retain failure artifacts. Do not change global Git settings, relax publish-ready coverage or modify business sources.",
   "allowed_write_scope": [
-    ".github/workflows/nightly.yml",
-    "backend/tests/scripts/test_ci_environment_verify.py",
-    "tests/aistock_validation/bugs/20261001_BUG-1665-nightly-test-jobs-omit-x-only-temporary-storage-configuration.json"
+    ".github/workflows/code-intelligence-refresh.yml",
+    "scripts/code_intelligence_adapter.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "tests/aistock_validation/bugs/20261001_BUG-1668-codegraph-refresh-crlf-expansion-exceeds-critical-source-index-size-limi.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1665",
-  "closed_at": "2026-10-01T20:30:47Z",
+  "bug_id": "BUG-1668",
+  "closed_at": "2026-10-01T20:51:36Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-10-01T20:21:35.304761Z",
-  "description": "Nightly run 36788300918 used C drive pytest temp and failed four Historical Range capacity checks. BUG-1648/1649 fixed PR CI only. Enable identical fail-closed run/job isolated X temp before Nightly tests, with no installs, capacity relaxation or business changes.",
+  "created_at": "2026-10-01T20:33:09.955694Z",
+  "description": "Run 36785381281 failed incomplete_index after sync_then_reindex and retained no diagnostics. Its workflow source Git blob is 1028210 bytes but CRLF checkout expands to 1051381, exceeding installed CodeGraph 0.9.4 MAX_FILE_SIZE=1048576. Use deterministic LF only in isolated code-intelligence job, preflight genuine oversized critical sources before rebuild, retain failure artifacts. Do not change global Git settings, relax publish-ready coverage or modify business sources.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20261001-a93dcca70a86",
-      "timestamp": "2026-10-01T20:21:35.304743Z"
+      "note": "Promoted from IC-20261001-e2b78685ea55",
+      "timestamp": "2026-10-01T20:33:09.955674Z"
     }
   ],
   "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/actions/runs/36788300918"
+    "https://github.com/licong01-cloud/AIstock/actions/runs/36785381281"
   ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_environment_verify.py",
-      "tests/aistock_validation/bugs/20261001_BUG-1665-nightly-test-jobs-omit-x-only-temporary-storage-configuration.json"
+      ".github/workflows/code-intelligence-refresh.yml",
+      "backend/tests/scripts/test_code_intelligence_adapter.py",
+      "scripts/code_intelligence_adapter.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1668-codegraph-refresh-crlf-expansion-exceeds-critical-source-index-size-limi.json"
     ],
     "added_files": [],
     "changed_files": [
-      ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_environment_verify.py",
-      "tests/aistock_validation/bugs/20261001_BUG-1665-nightly-test-jobs-omit-x-only-temporary-storage-configuration.json"
+      ".github/workflows/code-intelligence-refresh.yml",
+      "backend/tests/scripts/test_code_intelligence_adapter.py",
+      "scripts/code_intelligence_adapter.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1668-codegraph-refresh-crlf-expansion-exceeds-critical-source-index-size-limi.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        ".github/workflows/nightly.yml",
-        "backend/tests/scripts/test_ci_environment_verify.py"
+        ".github/workflows/code-intelligence-refresh.yml",
+        "scripts/code_intelligence_adapter.py",
+        "backend/tests/scripts/test_code_intelligence_adapter.py"
       ],
       "impacted_modules": [
         "validation.workflow_automation",
@@ -52,7 +56,7 @@
       ],
       "matched_rules": [
         {
-          "file": ".github/workflows/nightly.yml",
+          "file": ".github/workflows/code-intelligence-refresh.yml",
           "impact_modules": [
             "validation.runner",
             "validation.guardrails"
@@ -62,7 +66,17 @@
           "rule_id": "validation_workflow_automation_github_workflows"
         },
         {
-          "file": "backend/tests/scripts/test_ci_environment_verify.py",
+          "file": "scripts/code_intelligence_adapter.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_code_intelligence_adapter.py",
           "impact_modules": [
             "validation.runner",
             "validation.guardrails"
@@ -76,33 +90,36 @@
         "high"
       ],
       "suggested_scope": [
-        ".github/workflows/nightly.yml",
-        "backend/tests/scripts/test_ci_environment_verify.py"
+        ".github/workflows/code-intelligence-refresh.yml",
+        "scripts/code_intelligence_adapter.py",
+        "backend/tests/scripts/test_code_intelligence_adapter.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_environment_verify.py"
+      ".github/workflows/code-intelligence-refresh.yml",
+      "scripts/code_intelligence_adapter.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_environment_verify.py"
+      ".github/workflows/code-intelligence-refresh.yml",
+      "scripts/code_intelligence_adapter.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py"
     ]
   },
-  "first_seen_at": "2026-10-01T20:21:35.304761Z",
+  "first_seen_at": "2026-10-01T20:33:09.955694Z",
   "fix_branch": null,
-  "fix_commit": "6f1e99ec18f8fe96d450d91cb936757c318ffe89",
-  "fixed_at": "2026-10-01T20:30:47Z",
-  "github_issue_number": 5226,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5226",
-  "last_seen_at": "2026-10-01T20:21:35.304761Z",
+  "fix_commit": "b7867ca64c48e9fe172dbb0d1563c227074e4491",
+  "fixed_at": "2026-10-01T20:51:36Z",
+  "github_issue_number": 5229,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5229",
+  "last_seen_at": "2026-10-01T20:33:09.955694Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5228",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5235",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,37 +148,39 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1665",
+    "bug_id": "BUG-1668",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "80f0f7ea8ac623fa",
-    "recorded_at": "2026-10-01T20:34:49.049413Z",
+    "receipt_id": "9f7238922559d0e0",
+    "recorded_at": "2026-10-01T20:52:35.937271Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "a17d3eb1da209e3237f5a6c3481736cb173c82ac",
-    "source_merge_commit": "6f1e99ec18f8fe96d450d91cb936757c318ffe89",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5228",
+    "source_head_oid": "017eff99c612ecf977ba9a35223b1204676174ec",
+    "source_merge_commit": "b7867ca64c48e9fe172dbb0d1563c227074e4491",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5235",
     "validation_evidence": [
-      "rtk pytest -q backend/tests/scripts/test_ci_environment_verify.py -> 23 passed; CI verdict run 36921841486 -> SUCCESS"
+      "validation-receipt: id=4ab4e2549a9f4a58 commit=017eff99c612ecf977ba9a35223b1204676174ec kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/scripts/test_code_intelligence_adapter.py` result=`83 passed`",
+      "validation-receipt: id=64919124a1b40081 commit=017eff99c612ecf977ba9a35223b1204676174ec kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- .github/workflows/code-intelligence-refresh.yml scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py` result=`PASS blocking=0`"
     ],
-    "validation_evidence_digest": "7f9e82989c05fc3c7032f0ac963b4beb4036f5aaea90a956ffaa1ea1ce4ca3bf"
+    "validation_evidence_digest": "06ee975e03620e1281e655e1d3160a333563fb620de88eb3f232f5bbae42d6c9"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Nightly test jobs omit X-only temporary storage configuration",
+  "title": "CodeGraph refresh CRLF expansion exceeds critical source index size limit",
   "trigger_condition": {
-    "fingerprint": "a93dcca70a867028419e0018",
-    "source_event_id": "FE-20261001-a93dcca70a86"
+    "fingerprint": "e2b78685ea55e08d22a27bad",
+    "source_event_id": "FE-20261001-e2b78685ea55"
   },
   "validation_evidence": [
-    "rtk pytest -q backend/tests/scripts/test_ci_environment_verify.py -> 23 passed; CI verdict run 36921841486 -> SUCCESS"
+    "validation-receipt: id=4ab4e2549a9f4a58 commit=017eff99c612ecf977ba9a35223b1204676174ec kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/scripts/test_code_intelligence_adapter.py` result=`83 passed`",
+    "validation-receipt: id=64919124a1b40081 commit=017eff99c612ecf977ba9a35223b1204676174ec kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- .github/workflows/code-intelligence-refresh.yml scripts/code_intelligence_adapter.py backend/tests/scripts/test_code_intelligence_adapter.py` result=`PASS blocking=0`"
   ],
   "verification_budget": {
     "budget": "standard",

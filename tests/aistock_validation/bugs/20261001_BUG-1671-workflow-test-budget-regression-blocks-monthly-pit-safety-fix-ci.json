@@ -1,49 +1,46 @@
 {
-  "actual": "Nightly run 36788300918 used C drive pytest temp and failed four Historical Range capacity checks. BUG-1648/1649 fixed PR CI only. Enable identical fail-closed run/job isolated X temp before Nightly tests, with no installs, capacity relaxation or business changes.",
+  "actual": "Current main ratio 0.3012334604171339; test_workflow_automation_has_an_honest_production_denominator fails.",
   "allowed_write_scope": [
-    ".github/workflows/nightly.yml",
-    "backend/tests/scripts/test_ci_environment_verify.py",
-    "tests/aistock_validation/bugs/20261001_BUG-1665-nightly-test-jobs-omit-x-only-temporary-storage-configuration.json"
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20261001_BUG-1671-workflow-test-budget-regression-blocks-monthly-pit-safety-fix-ci.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1665",
-  "closed_at": "2026-10-01T20:30:47Z",
+  "bug_id": "BUG-1671",
+  "closed_at": "2026-10-01T21:15:24Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-10-01T20:21:35.304761Z",
-  "description": "Nightly run 36788300918 used C drive pytest temp and failed four Historical Range capacity checks. BUG-1648/1649 fixed PR CI only. Enable identical fail-closed run/job isolated X temp before Nightly tests, with no installs, capacity relaxation or business changes.",
+  "created_at": "2026-10-01T21:05:41.352509Z",
+  "description": "Current main ratio 0.3012334604171339; test_workflow_automation_has_an_honest_production_denominator fails.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20261001-a93dcca70a86",
-      "timestamp": "2026-10-01T20:21:35.304743Z"
+      "note": "Promoted from IC-20261001-a841b39aebc8",
+      "timestamp": "2026-10-01T21:05:41.352491Z"
     }
   ],
   "evidence_uris": [
-    "https://github.com/licong01-cloud/AIstock/actions/runs/36788300918"
+    "同一 main 基线 RED：workflow ratio=0.3012334604171339；参数化重复 close-sync 身份、dirty guard、client publish setup 和共享无效 catalog fixture 后，production SLOC=44590 不变，test SLOC=13365，ratio=0.29973088136353443。目标测试文件有效 SLOC=1333→1266，实质减少67行，ownership/阈值/production 均未修改。",
+    "三轮本地审核：逐案例保持 PR/commit 身份与 dirty path 正反断言；保持两个 client publish 场景及 runtime catalog 两层 fail-closed 断言；最终176项相关测试、Ruff、L0、workflow-smoke通过。无数据、DB、profile或运行态动作。"
   ],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Same semantic cases with deduplicated fixtures, workflow test ratio below 0.30 and catalog integrity PASS.",
   "file_scope_contract": {
     "actual_changed_files": [
-      ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_environment_verify.py",
-      "tests/aistock_validation/bugs/20261001_BUG-1665-nightly-test-jobs-omit-x-only-temporary-storage-configuration.json"
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1671-workflow-test-budget-regression-blocks-monthly-pit-safety-fix-ci.json"
     ],
     "added_files": [],
     "changed_files": [
-      ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_environment_verify.py",
-      "tests/aistock_validation/bugs/20261001_BUG-1665-nightly-test-jobs-omit-x-only-temporary-storage-configuration.json"
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1671-workflow-test-budget-regression-blocks-monthly-pit-safety-fix-ci.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        ".github/workflows/nightly.yml",
-        "backend/tests/scripts/test_ci_environment_verify.py"
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
       ],
       "impacted_modules": [
         "validation.workflow_automation",
@@ -52,17 +49,7 @@
       ],
       "matched_rules": [
         {
-          "file": ".github/workflows/nightly.yml",
-          "impact_modules": [
-            "validation.runner",
-            "validation.guardrails"
-          ],
-          "primary_module": "validation.workflow_automation",
-          "risk_level": "high",
-          "rule_id": "validation_workflow_automation_github_workflows"
-        },
-        {
-          "file": "backend/tests/scripts/test_ci_environment_verify.py",
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
           "impact_modules": [
             "validation.runner",
             "validation.guardrails"
@@ -76,33 +63,30 @@
         "high"
       ],
       "suggested_scope": [
-        ".github/workflows/nightly.yml",
-        "backend/tests/scripts/test_ci_environment_verify.py"
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_environment_verify.py"
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_environment_verify.py"
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ]
   },
-  "first_seen_at": "2026-10-01T20:21:35.304761Z",
+  "first_seen_at": "2026-10-01T21:05:41.352509Z",
   "fix_branch": null,
-  "fix_commit": "6f1e99ec18f8fe96d450d91cb936757c318ffe89",
-  "fixed_at": "2026-10-01T20:30:47Z",
-  "github_issue_number": 5226,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5226",
-  "last_seen_at": "2026-10-01T20:21:35.304761Z",
+  "fix_commit": "a640bb1a15a8ee591a4399f66201f1e50e426b59",
+  "fixed_at": "2026-10-01T21:15:24Z",
+  "github_issue_number": 5243,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5243",
+  "last_seen_at": "2026-10-01T21:05:41.352509Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5228",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5244",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,37 +115,39 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1665",
+    "bug_id": "BUG-1671",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "80f0f7ea8ac623fa",
-    "recorded_at": "2026-10-01T20:34:49.049413Z",
+    "receipt_id": "c4bb3337e74b5032",
+    "recorded_at": "2026-10-01T21:17:58.901836Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "a17d3eb1da209e3237f5a6c3481736cb173c82ac",
-    "source_merge_commit": "6f1e99ec18f8fe96d450d91cb936757c318ffe89",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5228",
+    "source_head_oid": "4ecf2c17644a5f4114ffd7dfa3e07cfeb57b3342",
+    "source_merge_commit": "a640bb1a15a8ee591a4399f66201f1e50e426b59",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5244",
     "validation_evidence": [
-      "rtk pytest -q backend/tests/scripts/test_ci_environment_verify.py -> 23 passed; CI verdict run 36921841486 -> SUCCESS"
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py backend/tests/scripts/test_aistock_validation_budget.py backend/tests/test_validation_catalog_integrity.py -q -> passed (176 tests)",
+      "rtk nox -s l0 -> passed"
     ],
-    "validation_evidence_digest": "7f9e82989c05fc3c7032f0ac963b4beb4036f5aaea90a956ffaa1ea1ce4ca3bf"
+    "validation_evidence_digest": "bf63129c4bb8d016dc9cb7aac294bd7e46a5a95ec340938061f3b476fae12774"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "Nightly test jobs omit X-only temporary storage configuration",
+  "title": "Workflow test budget regression blocks monthly PIT safety fix CI",
   "trigger_condition": {
-    "fingerprint": "a93dcca70a867028419e0018",
-    "source_event_id": "FE-20261001-a93dcca70a86"
+    "fingerprint": "a841b39aebc88fcfbb879b86",
+    "source_event_id": "FE-20261001-a841b39aebc8"
   },
   "validation_evidence": [
-    "rtk pytest -q backend/tests/scripts/test_ci_environment_verify.py -> 23 passed; CI verdict run 36921841486 -> SUCCESS"
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py backend/tests/scripts/test_aistock_validation_budget.py backend/tests/test_validation_catalog_integrity.py -q -> passed (176 tests)",
+    "rtk nox -s l0 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
