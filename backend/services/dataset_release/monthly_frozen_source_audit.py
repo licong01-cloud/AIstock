@@ -46,6 +46,7 @@ from .source_authority import (
     SOURCE_REFRESH_AUDIT_RECEIPT_SCHEMA,
 )
 from .sw_l2_quote_policy import build_quote_availability_payload
+from .shared_consumer_coverage import audit_causal_source_history
 
 
 AUDIT_SCHEMA = "aistock_monthly_frozen_source_audit_v1"
@@ -276,6 +277,8 @@ def audit_month_rows(
             facts("daily_basic", key),
             valid=lambda row: all(
                 _finite(row.get(name)) for name in ("turnover_rate", "turnover_rate_f", "volume_ratio")
+            ) and all(
+                _finite(row.get(name)) and float(row[name]) > 0 for name in ("total_mv", "circ_mv")
             ),
             exception=exception("daily_basic"),
         )
@@ -385,7 +388,10 @@ def audit_frozen_source(
     from .monthly_shared_components import _index_pool_intervals, _pit_intervals
     from backend.services.tushare_dataset_specs import MARGIN_DETAIL
 
-    descriptors = [item.as_build_input() for item in frozen.partitions]
+    descriptors = sorted(
+        (item.as_build_input() for item in frozen.partitions),
+        key=lambda item: (item["dataset"], str(item["partition_key"])),
+    )
     reader = CASSealedPartitionReader(cas, descriptors, max_partition_rows=1_000_000)
 
     def stream(dataset: str, left: date | None = None, right: date | None = None):
@@ -459,6 +465,34 @@ def audit_frozen_source(
 
         for counter in counters.values():
             counter.emit = emit
+        # Check causal weights for this operation's affected sessions. Source
+        # facts remain outside executable spans and are streamed once; no
+        # database fallback, historical DataFrame or synthesized fact is used.
+        if sessions:
+            full_day_suspensions = frozenset(
+                (str(row["ts_code"]), _day(row["trade_date"]))
+                for row in stream("suspend_d")
+                if row.get("suspend_type") == "S"
+                and str(row.get("suspend_timing") or "").strip() in {"", "09:30-09:30"}
+            )
+            def causal_key(symbol: str, day: date, prior: Any) -> None:
+                counters["daily_basic_required_fields"].check(
+                    (symbol, day), [] if prior is None else [{"circ_mv": prior[1]}],
+                    valid=lambda row: _finite(row.get("circ_mv")) and float(row["circ_mv"]) > 0,
+                    dataset="daily_basic_strict_prior_circ_mv",
+                )
+
+            causal = audit_causal_source_history(
+                stream("daily_basic"), calendar=calendar, spans=pit,
+                history_start=profile.start_date,
+                not_applicable_keys=full_day_suspensions, source_identity=aliases,
+                required_dates=frozenset(sessions),
+                on_required_key=causal_key,
+                emit=lambda issue: emit({"gate": "daily_basic_required_fields",
+                    "dataset": "daily_basic", "field": "strict_prior_circ_mv", **issue}),
+            )
+            causal_path = input_root / "causal-daily-basic-readback.json"
+            _write(causal_path, causal)
         months = sorted({day.strftime("%Y-%m") for day in sessions})
         for month in months:
             dates = tuple(day for day in sessions if day.strftime("%Y-%m") == month)
@@ -592,6 +626,8 @@ def audit_frozen_source(
         SourceArtifact(path.relative_to(artifact_root).as_posix(), path)
         for path in (alias_path, quote_path, issues_path)
     ]
+    if sessions:
+        artifacts.append(SourceArtifact(causal_path.relative_to(artifact_root).as_posix(), causal_path))
     for name, counter in counters.items():
         expectation = input_root / "gates" / f"{name}-expectation.json"
         readback = input_root / "gates" / f"{name}-readback.json"
