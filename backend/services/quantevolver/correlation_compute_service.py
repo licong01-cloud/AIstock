@@ -27,10 +27,12 @@ from psycopg2.extras import execute_values
 
 from ...db.pg_pool import get_conn
 from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
-from ..canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
+from ..canonical_equity_pit import CANONICAL_PIT_RULE_VERSION, CANONICAL_PIT_UNIVERSE_KEY
 from .correlation_engine import CorrelationEngine, CorrelationResult
 from .factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
+    OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+    OFFICIAL_FACTOR_INDEX_POLICY,
     FactorUniverseMaskService,
 )
 from .factor_eligibility_service import FactorEligibilityService
@@ -563,15 +565,28 @@ def run_target_correlation_refresh_local(
             cache_universe_key = target_meta.get("universe_key")
             if cache_universe_key not in {CANONICAL_PIT_UNIVERSE_KEY, OFFICIAL_FACTOR_UNIVERSE_KEY}:
                 raise ValueError("target factor cache universe authority is unavailable")
-            universe_metadata = FactorUniverseMaskService().metadata(
-                start_date="2018-08-01",
-                end_date=resolved_as_of,
-                universe_key=cache_universe_key,
-            )
+            # Official cached values already record their PIT denominator.
+            # Comparing them must not replace that historical identity with
+            # today's rolling state (or bootstrap/rebuild a live universe).
+            universe_metadata = {
+                field: target_meta.get(field)
+                for field in (
+                    "universe_key", "universe_rule_version", "universe_scope",
+                    "universe_fingerprint_sha256", "stock_universe_mode",
+                    "snapshot_universe_mode", "index_policy", "coverage_semantics",
+                    "universe_start_date", "universe_end_date", "universe_generated_at",
+                )
+            }
             binding = {
                 **universe_metadata, "status": "ok", "as_of_date": resolved_as_of,
                 "factor_data_dir": expected_factor_dir or target_meta.get("factor_data_dir"),
                 "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
+                "universe_rule_version": (
+                    CANONICAL_PIT_RULE_VERSION
+                    if cache_universe_key == CANONICAL_PIT_UNIVERSE_KEY
+                    else OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION
+                ),
+                "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
             }
             code_hashes = {row["factor_name"]: row.get("code_text_hash") for row in eligible_rows}
             target_error = _target_cache_mismatch(target_meta, binding, code_hashes.get(target))
