@@ -114,13 +114,13 @@ M1开发导航门沿R2事前合同：减baseline及matched日均net均≥5bps；
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-697 | economic_sector_price_value_v1.py；§1/8 | test_economic_sector_price_value_v1.py；artifact: 独立plan | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 只交付离线研究消费者，正式fit待QE空闲，不代表经济完成 |
-| F-698 | economic_sector_price_source_v1.py | test_economic_sector_price_source_v1.py；artifact: 原prepare源摘要 | VERIFIED | approved_by_user: 非历史捕获receipt，native UNPROVEN不变 |
-| F-699 | economic_sector_price_source_v1.py | test_economic_sector_price_source_v1.py；artifact: 7720完整prepare | VERIFIED | none |
-| F-700 | economic_sector_price_value_v1.py | test_economic_sector_price_value_v1.py | VERIFIED | none |
-| F-701 | economic_sector_price_value_v1.py | test_economic_sector_price_value_v1.py（实际sklearn/JSON、13/16维、4次单测fit） | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 单测fit不计正式研究trial，M1正式fit0 |
-| F-702 | economic_price_campaign_evaluation_v2.py；§7 | test_economic_price_campaign_evaluation_v2.py（真实shadow完整四臂/持仓不证明阻断） | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 81D正式研究未运行，不宣称收益/激活 |
-| F-703 | economic_sector_price_pipeline_v1.py | test_economic_sector_price_pipeline_v1.py；artifact: 登记/prepare | VERIFIED | none |
+| F-697 | backend/services/advisory_model_first/economic_sector_price_value_v1.py；§1/8 | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；artifact: 独立plan | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 只交付离线研究消费者，正式fit待QE空闲，不代表经济完成 |
+| F-698 | backend/services/advisory_model_first/economic_sector_price_source_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_source_v1.py；artifact: 原prepare源摘要 | VERIFIED | approved_by_user: 非历史捕获receipt，native UNPROVEN不变 |
+| F-699 | backend/services/advisory_model_first/economic_sector_price_source_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_source_v1.py；artifact: 7720完整prepare | VERIFIED | none |
+| F-700 | backend/services/advisory_model_first/economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py | VERIFIED | none |
+| F-701 | backend/services/advisory_model_first/economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py（实际sklearn/JSON、13/16维、4次单测fit） | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 单测fit不计正式研究trial，M1正式fit0 |
+| F-702 | backend/services/advisory_model_first/economic_price_campaign_evaluation_v2.py；§7 | backend/tests/advisory_model_first/test_economic_price_campaign_evaluation_v2.py（真实shadow完整四臂/持仓不证明阻断） | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 81D正式研究未运行，不宣称收益/激活 |
+| F-703 | backend/services/advisory_model_first/economic_sector_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: 登记/prepare | VERIFIED | none |
 | F-704 | §2/3/8/9/13 | artifact: 精确范围/三轮自审及无runtime/DB操作 | VERIFIED | none |
 
 ## 12. Risks / 结论边界
