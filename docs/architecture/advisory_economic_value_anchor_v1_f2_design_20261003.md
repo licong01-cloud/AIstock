@@ -1,6 +1,6 @@
 # Advisory D日价值锚与买入价格集合 H-VALUE-ANCHOR-1（F2）
 
-> 日期：2026-10-03；版本：v0.1；交付状态：DESIGN_REVIEWED_NO_EXPERIMENT。本文验收的是独立研究设计，不是模型效果、每日API接入或生产启用。
+> 日期：2026-10-03；版本：v0.2；当前接续状态：NAVIGATION_COMPLETED_CANDIDATE_STOPPED。原设计经#5344合入，内核#5346已合入，研究源码#5347与一次真实研究接续见§13。本文设计矩阵仍只验收设计，不是模型收益确认、每日API接入或生产启用。
 > 父级：[蓝图§16](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)。唯一目标是收益与风险驱动的日频买入价格建议；不预测开盘落点或最佳分钟，不重复QE选股研究。
 
 ## 1. Background / 当前事实与新问题
@@ -170,3 +170,11 @@ UNKNOWN控制的唯一事前规则：若市场准入可证明而模型特征/支
 仅离线独立family，旧生产API/UI/scheduler/policy默认行为全部不变。无需后端重启来运行纯离线代码，不声称运行时已加载。若未来值得继续，再单独设计同scope每日接入和正式资格；没有值得继续的模型则停止。本轮无binding/profile/数据激活、DDL/DML、依赖或进程操作，production_ddl_gate=noop，runtime_activation=noop。
 
 DESIGN-COMPLIANCE-001逐项：设计不冒充已实现；UNKNOWN/无支持不伪成功；新场景显式命名且不偷偷改原政策；不增加未来日期/治理平台门禁。重复审核必须记录真实发现和修订，不以validator通过代替业务审查。
+
+## 13. 真实接续结果 / 不改变事前合同
+
+已按固定方案完成run `advvalue_a4bc66a30cfa7d9d5078850c`，源HEAD1c8545ab870f5e12b9e128e09b1b13a4bdf0ae2f。386D/7720候选保留，新场景标签7699可用/21 UNKNOWN，12D未知10；共同train4250/validation1622，purge296。一配置两头一次fit，81D/1620实际评价候选与100共同估值日，三臂端点/held mark审计问题0；prepare15.163秒、fit0.880秒（含源核验）、fit＋评价12.169秒；前后QE7项状态均0，无DB/sealed/服务操作。
+
+新场景baseline/constant/model名义净收益21.3220%/25.4597%/17.4642%，MDD -10.3314%/-10.7283%/-8.0746%。model减constant日增量-6.9022bps，95%[-24.5301,9.9157]；减baseline-3.4196bps，95%[-18.9390,12.2020]。模型81真实TAKE＋3 UNKNOWN控制episode，相对常数实际进入不同58日。虽然模型胜率61.90%及MDD改善，两个收益条件仍未满足，`STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION/NAVIGATION_ONLY`。不事后把常数控制升级为选中的candidate，不改阈值/seed/期限/信息集补救本run；经济确认、binding和正式启用0。源码与内核能力保留，但不为该模型接daily family或收集更多证据。
+
+本段仅更新真实进度，原§2～7事前假设、目标、支持及终止条件不因结果调整。完整结果路径与主线优先级见蓝图§1.3/§16，旧19.17%不参与此场景判胜。
