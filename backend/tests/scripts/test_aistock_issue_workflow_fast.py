@@ -24,30 +24,37 @@ def cli_task_worktree(tmp_path, monkeypatch):
         return subprocess.check_output(["git", "-C", str(root), *args], text=True, stderr=subprocess.STDOUT, timeout=15).strip()
 
     git(base, "init", "-q")
-    git(base, "config", "user.email", "workflow-test@example.invalid")
-    git(base, "config", "user.name", "workflow-test")
-    (base / "baseline.txt").write_text("baseline", encoding="utf-8")
-    git(base, "add", ".")
-    git(base, "commit", "-qm", "baseline")
+    # Git identity is supplied per command; the shared baseline can be empty.
+    git(base, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "--allow-empty", "-qm", "baseline")
     git(base, "update-ref", "refs/remotes/origin/main", "HEAD")
     git(base, "worktree", "add", "-qb", "bug/task-context", str(task))
     (task / "task.txt").write_text("task", encoding="utf-8")
     git(task, "add", ".")
-    git(task, "commit", "-qm", "task change")
+    git(task, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "-qm", "task change")
+    monkeypatch.setattr(workflow, "REPO_ROOT", base)
+    monkeypatch.setattr(workflow, "BUGS_ROOT", base / "tests/aistock_validation/bugs")
     monkeypatch.setattr(workflow, "SCRIPT_ROOT", base, raising=False)
     monkeypatch.chdir(task)
     return base, task, git
 
 
-def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktree, monkeypatch):
+@pytest.mark.parametrize("create", [False, True])
+def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktree, monkeypatch, create):
     base, task, git = cli_task_worktree
     original_root = workflow.REPO_ROOT
+    original_flow_root = workflow.flow.REPO_ROOT
     original_exists = Path.exists
     monkeypatch.setattr(Path, "exists", lambda path: False if path == Path("F:/Dev/AIstock") else original_exists(path))
     monkeypatch.delenv("AISTOCK_CANONICAL_ROOT", raising=False)
     monkeypatch.delenv("AISTOCK_ROOT", raising=False)
     (task / "nested").mkdir()
     monkeypatch.chdir(task / "nested")
+    state = task / "tmp/issue_workflow/BUG-999/state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text('{"worktree":"real-task"}', encoding="utf-8")
+    bug = task / "tests/aistock_validation/bugs/20261003_BUG-999.json"
+    bug.parent.mkdir(parents=True)
+    bug.write_text('{"bug_id":"BUG-999","status":"open"}', encoding="utf-8")
     calls = []
 
     def handler(_args):
@@ -55,7 +62,11 @@ def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktre
         assert workflow._canonical_root() == base
         assert workflow.flow.BUGS_ROOT == task / "tests/aistock_validation/bugs"
         assert workflow.flow.TEST_PLANS == task / "tests/aistock_validation/catalog/test_plans.yaml"
-        assert workflow._finish_changed_files("origin/main", "HEAD") == ["task.txt"]
+        assert workflow.BUGS_ROOT == workflow.flow.BUGS_ROOT
+        assert workflow.flow.FILE_OWNERSHIP == task / "tests/aistock_validation/catalog/file_ownership.yaml"
+        assert workflow._load_state("BUG-999")["worktree"] == "real-task"
+        assert workflow.find_bug_record("BUG-999")[1] == bug
+        assert workflow._finish_changed_files("origin/main", "HEAD") == ["task.txt", "tests/", "tmp/"]
         receipts, errors = workflow._build_validation_receipts(["python -m nox -s l0 -> passed"], root=workflow.REPO_ROOT)
         assert not errors and receipts[0]["commit"] == git(task, "rev-parse", "HEAD")
         assert receipts[0]["commit"] != git(base, "rev-parse", "HEAD")
@@ -68,23 +79,44 @@ def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktre
         workflow._maybe_create_pr(bug_id="BUG-999", finish=finish, push=False, create_pr=True, watch_ci=False, pr_title=None)
         assert calls[0]["root"] == task and calls[0]["branch"] == "bug/task-context"
         assert calls[0]["expected_head"] == receipts[0]["commit"]
+        state.write_text(json.dumps({"planned_worktree": str(task), "planned_branch": "bug/task-context"}), encoding="utf-8")
+        plan = workflow._maybe_create_worktree(
+            record={"bug_id": "BUG-999", "title": "task"}, bug_id="BUG-999",
+            source_bug_json=bug, create=create, dry_run=False, task_slug=None,
+        )
+        assert plan["reused"] is True and not plan.get("created")
+        assert plan["branch"] == "bug/task-context"
+        assert workflow._actual_and_planned_worktree(plan) == (str(task), None)
         return 0
 
     args = SimpleNamespace(command="run", mode="pr", func=handler)
     monkeypatch.setattr(workflow, "build_parser", lambda: SimpleNamespace(parse_args=lambda _: args))
     assert workflow.main([]) == 0
     assert workflow.REPO_ROOT == original_root
+    assert workflow.flow.REPO_ROOT == original_flow_root
 
 
-@pytest.mark.parametrize("failure", ["unknown", "foreign", "git_override", "head_drift", "branch_drift", "receipt_mismatch", "digest_mismatch", "head_argument"])
+@pytest.mark.parametrize("failure", ["unknown", "foreign", "git_override", "head_drift", "branch_drift", "receipt_mismatch", "digest_mismatch", "head_argument", "registered_branch_drift", "workflow_error"])
 def test_canonical_cli_task_context_fails_closed(cli_task_worktree, monkeypatch, capsys, failure):
     base, task, git = cli_task_worktree
+    original_root = workflow.REPO_ROOT
     invoked = []
 
     def handler(_args):
         invoked.append(True)
+        if failure == "workflow_error":
+            raise workflow.WorkflowError("target validation failed")
+        if failure == "registered_branch_drift":
+            state = task / "tmp/issue_workflow/BUG-999/state.json"
+            state.parent.mkdir(parents=True)
+            state.write_text(json.dumps({"worktree": str(task), "branch": "wrong/branch"}), encoding="utf-8")
+            workflow._maybe_create_worktree(
+                record={"bug_id": "BUG-999"}, bug_id="BUG-999", source_bug_json=task / "BUG-999.json",
+                create=False, dry_run=False, task_slug=None,
+            )
+            pytest.fail("registered branch drift must fail closed")
         if failure == "head_drift":
-            git(task, "commit", "--allow-empty", "-qm", "concurrent head change")
+            git(task, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "--allow-empty", "-qm", "concurrent head change")
         if failure == "branch_drift":
             git(task, "branch", "-m", "renamed-task")
         root = workflow.REPO_ROOT
@@ -112,8 +144,9 @@ def test_canonical_cli_task_context_fails_closed(cli_task_worktree, monkeypatch,
     args = SimpleNamespace(command="finish", func=handler)
     monkeypatch.setattr(workflow, "build_parser", lambda: SimpleNamespace(parse_args=lambda _: args))
     assert workflow.main([]) == 2
+    assert workflow.REPO_ROOT == original_root
     assert capsys.readouterr().err
-    assert bool(invoked) == (failure in {"head_drift", "branch_drift", "receipt_mismatch", "digest_mismatch", "head_argument"})
+    assert bool(invoked) == (failure not in {"unknown", "foreign", "git_override"})
 
 
 @pytest.mark.parametrize("executable", ["gh", "C:/tools/gh.exe"])
@@ -601,67 +634,31 @@ def test_rotation_l2_overview_semantic_contract_binds_complete_run() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {**_rotation_l2_overview_payload(), "status": "failed"},
-        {**_rotation_l2_overview_payload(), "ok": False},
-        {**_rotation_l2_overview_payload(), "errors": ["readback failed"]},
-    ],
-)
-def test_rotation_l2_overview_semantic_contract_rejects_conflicting_envelope(payload: dict[str, Any]) -> None:
-    semantic = _rotation_l2_semantic(payload)
-
-    assert semantic["verdict"] == "failed"
-    assert "status=ok" in semantic["reason"]
+_ROTATION_RUN_QUERY = "run_id=" + "a" * 64
 
 
-@pytest.mark.parametrize(
-    ("query", "payload", "reason"),
-    [
-        ("", _rotation_l2_overview_payload(), "exactly one non-empty run_id"),
-        (
-            "run_id=" + "a" * 64 + "&run_id=" + "a" * 64,
-            _rotation_l2_overview_payload(),
-            "exactly one non-empty run_id",
-        ),
-        ("run_id=" + "A" * 64, _rotation_l2_overview_payload("A" * 64), "lowercase SHA-256"),
-        ("run_id=" + "a" * 64, _rotation_l2_overview_payload("e" * 64), "does not match"),
-    ],
-)
-def test_rotation_l2_overview_semantic_contract_rejects_unbound_run(
-    query: str,
-    payload: dict[str, Any],
-    reason: str,
-) -> None:
-    semantic = _rotation_l2_semantic(payload, query=query)
-
-    assert semantic["verdict"] == "failed"
-    assert reason in semantic["reason"]
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "reason"),
-    [
-        ("sector_count", 130, "complete 131-sector catalog"),
-        ("sector_count", True, "complete 131-sector catalog"),
-        ("available_count", 132, "outside the sector catalog"),
-        ("canonical_row_sha256", None, "lowercase SHA-256"),
-        ("trade_date", "2026-09-31", "ISO date"),
-        ("trade_date", "2026-9-26", "ISO date"),
-        ("as_of_date", "2026-09-26", "must precede"),
-    ],
-)
-def test_rotation_l2_overview_semantic_contract_rejects_invalid_business_data(
-    field: str,
-    value: Any,
-    reason: str,
-) -> None:
+@pytest.mark.parametrize("query,envelope,fields,reason", [
+    (_ROTATION_RUN_QUERY, {"status": "failed"}, {}, "status=ok"),
+    (_ROTATION_RUN_QUERY, {"ok": False}, {}, "status=ok"),
+    (_ROTATION_RUN_QUERY, {"errors": ["readback failed"]}, {}, "status=ok"),
+    ("", {}, {}, "exactly one non-empty run_id"),
+    (_ROTATION_RUN_QUERY + "&" + _ROTATION_RUN_QUERY, {}, {}, "exactly one non-empty run_id"),
+    ("run_id=" + "A" * 64, {}, {"run_id": "A" * 64}, "lowercase SHA-256"),
+    (_ROTATION_RUN_QUERY, {}, {"run_id": "e" * 64}, "does not match"),
+    (_ROTATION_RUN_QUERY, {}, {"sector_count": 130}, "complete 131-sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"sector_count": True}, "complete 131-sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"available_count": 132}, "outside the sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"canonical_row_sha256": None}, "lowercase SHA-256"),
+    (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-09-31"}, "ISO date"),
+    (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-9-26"}, "ISO date"),
+    (_ROTATION_RUN_QUERY, {}, {"as_of_date": "2026-09-26"}, "must precede"),
+])
+def test_rotation_l2_overview_semantic_contract_rejects_invalid_readback(query, envelope, fields, reason):
+    """One negative oracle, preserving every envelope/query/row case."""
     payload = _rotation_l2_overview_payload()
-    payload["data"][field] = value
-
-    semantic = _rotation_l2_semantic(payload)
-
+    payload.update(envelope)
+    payload["data"].update(fields)
+    semantic = _rotation_l2_semantic(payload, query=query)
     assert semantic["verdict"] == "failed"
     assert reason in semantic["reason"]
 
