@@ -1,6 +1,6 @@
 # Advisory D可见选股状态持续性条件价格价值 F2详细设计 v1
 
-2026-10-04；48h任务接续M5，研究类型EXPLORATORY_SCREEN、RISK_MANAGED_ADVISORY、NAVIGATION_ONLY。仅新信息假设，不重训QE包，不把排名状态的机械持有期可预测性当盈利证明。设计先合入；M1正式研究终态之后才修改其共用实现/启动本M5，避免使M1预登记源码身份失效。
+2026-10-04；48h任务接续M5，研究类型EXPLORATORY_SCREEN、RISK_MANAGED_ADVISORY、NAVIGATION_ONLY。仅新信息假设，不重训QE包，不把排名状态的机械持有期可预测性当盈利证明。设计先合入；允许在独立M5工作树提前实现和测试，但不修改M1冻结工作树。M5源码合入、正式登记/拟合仍等待M1终态及其源码交付，不改变实验顺序。
 
 ## 1. Background / 当前事实与研究问题
 
@@ -12,9 +12,9 @@ H-SELECTION-STATE-VALUE-1：某股票连续进入当前包前5/前20及D前排�
 
 ## 2. Scope / 精确文件及依赖
 
-设计树`F:/Dev/AIstock_worktrees/advisory-selection-state-price-design-20261004` / `feat/advisory-selection-state-price-design-20261004`本次只写本设计。最新主线现有蓝图§16.6/P2已允许核定D历史状态信息；源码合入前同步蓝图当前队列，不能把未实现设计列为已完成模型。
+初版设计#5415已合入并完成自身清理；本次仅在`F:/Dev/AIstock_worktrees/advisory-m5-isolated-preparation-20261004` / `docs/advisory-m5-isolated-preparation-20261004`修订本设计与蓝图§16.6/P2。源码合入前同步蓝图当前队列，不能把未实现设计列为已完成模型。
 
-本设计合入后，从最新origin/main另建自己的源码树，可在M1等候时先实现新叶的纯D状态计算及其直接测试，不触碰M1源码/实现hash、不fit、不读取收益。共用模型/阶段提取和M5正式研究仍等待M1正式终态及源码#5414交付。允许源码范围仅：
+本设计合入后，仅在自己的M5源码树提前实现纯D状态、固定模型/薄编排及必要共核提取；可接收自己的M1源码分支作为开发依赖，但不得改M1工作树、重写其分支或把M5变更合并回M1。M1仍按原已登记implementation hash执行。M5准备阶段只运行合成直接测试及无收益来源检查，不登记研究、不读取真实收益、不fit真实研究模型。M5源码PR保持draft，源码合入、正式登记/拟合等待M1正式终态及#5414交付；若M1为正导航，先确认设计，不默认启动M5搜索。允许源码范围仅：
 
 - backend/services/advisory_model_first/economic_selection_state_price_v1.py（纯D历史信息、plan与固定模型适配）
 - backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py（来源、登记、prepare/fit/evaluate的薄适配）
@@ -32,7 +32,7 @@ H-SELECTION-STATE-VALUE-1：某股票连续进入当前包前5/前20及D前排�
 
 不改QE/Selection/HMM/StrategyPackage/公共数据/Execution/Paper/CI源码；不提交QE、不写数据库/DDL/DML、不重建池/候选/激活profile、不安装依赖、不控制backend/worker/其它进程。无需后端重启，若未来需要由用户执行。临时X任务目录，正式F独立hash目录，不覆盖旧plan/输入/结果。
 
-不读sealed或新holdout，不复跑旧负候选，不通过换窗口/seed/风险/门槛救活M1。源码重构只在M1完整研究结束后；旧M1精确code receipt仍保留历史有效，不能声称用新共核重新验证旧研究。
+不读sealed或新holdout，不复跑旧负候选，不通过换窗口/seed/风险/门槛救活M1。M5独立树可预备重构，但M1冻结树保持原始实现及hash不变；合入重构必须在M1终态及源码交付后，旧M1精确code receipt仍保留历史有效，不能声称用新共核重新验证旧研究。
 
 ## 4. Architecture / 目标与时钟
 
@@ -74,6 +74,8 @@ H-SELECTION-STATE-VALUE-1：某股票连续进入当前包前5/前20及D前排�
 
 M5为新的显式lineage/campaign`advisory_price_selection_state_v1_20261004`，在源码和本合同冻结后先预登记四fit/一candidate/全部窗/implementation和source hash，再看结果。依旧同经济研究族、同已消费开发窗，绝不宣称R3是新的独立OOS。持久产物沿同48h输出根`F:/Dev/AIstock_model_artifacts/advisory_price_research_campaign_r2_20261004`的新experiment_id目录，trial registry及campaign_fit_journal.jsonl沿原位置只追加，不换根/删除/清空来重置累计预算。
 
+plan携带`budget_anchor_ref`（role=`price_campaign_budget_anchor`），指向原R2已登记研究的`<campaign_root>/<experiment_id>/preregistered/manifest.json`。纯plan校验绝对非C盘路径/manifest层级，根只能从锚点推导；登记/拟合编排再只读验证锚点hash、原manifest/plan、同父数据/政策、registry及累计journal。只有目录结构不够；清空journal、外来锚点、源hash或输出根不符均fail closed，不借新lineage建立空预算账本。
+
 M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit。因此48h本批累计上限19物理fit+1索引，不将旧11fit清零，也不把单测fit计成研究trial。独立M5预算不得挪给M1或旧模型，M5partial fit不得隐式retry；单候选generated/selected及物理fit分账登记。M5 fit只有M1负向或真实阻断终态、M1源码交付后及公开QE三running路径空闲才放行；任一路running/unknown只暂停fit，不停其它允许研发。若M1出现正开发导航，先制定其独立确认设计，不默认继续搜索更好开发收益的M5，也不读取holdout。
 
 ## 9. Evaluation / 同冻结四臂与分流
@@ -86,7 +88,7 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 
 ## 10. Implementation Plan / 执行顺序与终止
 
-本设计三轮审核修订/校验/合入→最新main自身源码树、仅新叶D历史三字段纯计算/直接测试（可在M1等候时准备）→M1正式研究终态及#5414交付→M1同核纯数学/原子编排的最小提取及M1回归、最薄来源/模型适配→多轮源码审核和最小测试→clean source→一candidate四fit预登记/完整prepare→QE空闲时单次fit/完整四臂→真实蓝图结果/PR/CI/合入/自身清理。
+本设计三轮审核修订/校验/合入→独立M5树预备三字段/固定模型/薄编排、最小共核及合成M1精确回归，多轮源码审核和最小测试（不改变M1树，不读取真实收益/登记/fit）→M1正式研究终态及#5414交付→同步最新main及依赖差异，重新核定clean source/hash→一candidate四fit预登记/完整prepare→QE空闲时单次fit/完整四臂→真实蓝图结果/ready PR/CI/合入/自身清理。M1正导航时此研究入口不放行，转独立确认设计。
 
 工程≤4h、四fit≤30min、2线程/RSS≤2GiB/新增工件≤2GiB、≤7720候选/500000价行，不另建大数据或UI平台；长实验30min检查，短实验立即接续。截止沿48h总任务，不重计48h；源不成立或负向只结束本候选，用户停止或总预算到期才结束本轮。
 
@@ -108,12 +110,12 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 | F-708 | 同13/16 GBDT四fit、同maturity/global支持及JSON纯价集 |
 | F-709 | 完整四臂/干预与真TAKE/两个净增量/风险/三级证据隔离 |
 | F-710 | 注册/partial/本lineage4及整批19fit、QE互斥/资源 |
-| F-711 | M1终态后才抽取共核、精确回归、不复跑旧候选或复制平台 |
+| F-711 | 独立树可预备共核，M1冻结hash不变；合入/登记/fit后置，精确回归且不复跑旧候选或复制平台 |
 | F-712 | 明确Advisory范围/多轮自审/合入清理与用户重启分开 |
 
 ## 13. Design Acceptance Matrix
 
-当前design-only，不含新源码、fit、研究收益或激活。只读排名可识别性检查不是研究通过。
+设计已交付；独立源码候选`2c5510e6e`已实现纯D状态及冻结plan、7个直接测试/Ruff/F2/差异检查PASS；完整模型/编排及实际研究fit尚未完成。下面是设计验收，不是F2完整实现或经济通过。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -123,7 +125,7 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 | F-708 | §7 | artifact: 本设计同核四fit及支持 | DESIGN_VERIFIED | none |
 | F-709 | §9 | artifact: 本设计固定四臂与收益/风险门 | DESIGN_VERIFIED | none |
 | F-710 | §8/10 | artifact: 本设计新预算19而非旧fit清零 | DESIGN_VERIFIED | none |
-| F-711 | §2/10/11 | artifact: M1终态后才抽共核的执行依赖 | DESIGN_VERIFIED | none |
+| F-711 | §2/3/10/11 | artifact: 独立树预备、M1冻结hash不变及正式交付/fit后置合同 | DESIGN_VERIFIED | none |
 | F-712 | §2/3/10/11/15 | artifact: 本设计精确写域及无生产变化 | DESIGN_VERIFIED | none |
 
 ## 14. Risks / 不可误读
@@ -138,4 +140,4 @@ DESIGN-COMPLIANCE-001逐项：实现和研究/经济/激活分报；未知/矛�
 
 ## 16. 三轮设计自审
 
-方法轮：只比较同共同监督13/16信息增量，不将持有期机械可预测性当收益；固定三字段而非未来搜索目录。时钟/来源轮：20个完整calendarD不是20个稀疏名单，Top40外右删失41不冒称全市场rank，缺名单不能记0，保留所有原键。工程/预算轮：M1正式研究终态后才修改共核，旧11fit及拟合待执行4不清零，新lineage加4令整批cap19；不复制模拟器、不读旧失败评价、不改公共模块，设计通过不代表fit或盈利。本窗口三视角自审非独立外审。
+方法轮：只比较同共同监督13/16信息增量，不将持有期机械可预测性当收益；固定三字段而非未来搜索目录。时钟/来源轮：20个完整calendarD不是20个稀疏名单，Top40外右删失41不冒称全市场rank，缺名单不能记0，保留所有原键。工程/预算轮：独立树开发不会修改M1冻结树，正式合入/登记/fit仍后置；旧11fit及拟合待执行4不清零，新lineage加4令整批cap19；不复制模拟器、不读旧失败评价、不改公共模块，设计通过不代表fit或盈利。本窗口三视角自审非独立外审。

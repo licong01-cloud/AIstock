@@ -2015,7 +2015,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 |---|---|---|
 | 已完成 / R2三路线源码交付 | 设计#5395及源码#5404均合入/自身清理；15测试、三次真实四臂及11fit+1索引已完成 | 三candidate均负向停止，不回选matched或补证；经济确认/启用0，QE/DB/runtime不动 |
 | P1 / M1动态板块子设计与源码 | [动态板块M1 F2设计](advisory_sector_dynamic_price_value_v1_f2_design_20261004.md)固定sector_ret5/vol20/relative三个字段（两个独立信息），13/16同GBDT matched及4fit；先设计审核合入再实现 | 结构map与严格D成员知晓分开，原3977 UNKNOWN不解锁；尚须全窗prepare验证，不将两D读法或当前SW2021表当历史native COMPLETE |
-| P2 / 下一新信息可识别性设计 | M1真实阻断或负向后，在既存冻结排名/日行情上核定新的D历史动态信息（如选股状态持续性），先独立设计、预算、matched及监督再运行 | 不再同13D轮换算法、不盲加模型或默认开新上游alpha线；真正新路线计入累计trial，不把导航当确认 |
+| P2 / 下一新信息可识别性设计 | [M5选股状态持续性设计](advisory_selection_state_price_value_v1_f2_design_20261004.md)#5415已合入；3个D历史字段/13vs16同核/4fit及累计19上限。独立树可在M1等待时预备实现和合成测试，不改M1冻结树；M1真实阻断或负向及源码交付后才登记/运行 | 当前纯D状态及plan候选已实现，完整模型/编排/研究未完成；不读取真实收益作准备、不重复旧研究。M1正导航先确认设计，不默认继续搜索；不盲加模型或开启QE上游线，trial计数不清零 |
 | P3 / 有条件确认与交付 | 仅幸存新候选另立一次未消费历史确认设计；来源/确认达标后接入真实recipe的每日消费者/API/UI，生产启用独立处理 | 本轮不读sealed/新holdout、不按开发最大净值宣布赢家；旧失败不进入此项，既有#5324工程不重复验收 |
 | P4 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
 
