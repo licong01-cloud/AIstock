@@ -85,8 +85,8 @@
   },
   "first_seen_at": "2026-10-03T14:54:08.216972Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a0d7085b0d03667bb19ab8db2c1574f33ed189fc",
+  "fixed_at": "2026-10-03T15:31:09Z",
   "github_issue_number": 5366,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5366",
   "last_seen_at": "2026-10-03T14:54:08.216972Z",
@@ -94,6 +94,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5367",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -117,6 +118,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -128,7 +130,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1704",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ba94c0924f1e97a9",
+    "recorded_at": "2026-10-03T15:31:54.450950Z",
+    "runtime_contract_digest": "a58f2386cbc41e16fdd645269cd5e80f64f4543c61df4d94612ca20006e53607",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "acd9012c681af484529772f2fdbdad26c2892400",
+    "source_merge_commit": "a0d7085b0d03667bb19ab8db2c1574f33ed189fc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5367",
+    "validation_evidence": [
+      "validation-receipt: id=7b82001e7fc3237b commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=4b3e304b1eaef0f3 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+      "validation-receipt: id=15facff0d7207b73 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_formal_state_input.py` result=`15 passed`",
+      "validation-receipt: id=058b2939204a5c89 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/formal_state_input.py backend/tests/hmm_risk/test_formal_state_input.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "b1e2f4fdd5d1d3c08c1413d50fe6fe3a992bfab51ce23266277f1dd21c18507e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -137,6 +163,12 @@
     "fingerprint": "ecfbc17c8652bb2fa46242f2",
     "source_event_id": "FE-20261003-ecfbc17c8652"
   },
+  "validation_evidence": [
+    "validation-receipt: id=7b82001e7fc3237b commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=4b3e304b1eaef0f3 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
+    "validation-receipt: id=15facff0d7207b73 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_formal_state_input.py` result=`15 passed`",
+    "validation-receipt: id=058b2939204a5c89 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/formal_state_input.py backend/tests/hmm_risk/test_formal_state_input.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
