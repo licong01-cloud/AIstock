@@ -4,6 +4,7 @@
 - 主线：优先找到收益、风险、近期稳定性与可成交性足够好的单腿模型/因子组合，再验证多 Alpha 增量；荐股与模拟盘由各自窗口接入，不由 QE 扩张实现。
 - 初版日期：2026-07-10
 - 当前版本：v6.19（2026-10-03；MA-E35R/36R/37B/38累计57个Loop完成且有效入仓，MA-E37/39历史失败与后续修复分开）。文档交付经PR #5332；源码、实验、入仓和发布分别报告，最新研究事实以2.5.7、活动顺序以9.10为准，不把文档审核或发布作为实验前置。
+- 最新状态核对：2026-10-04；BUG-1697/PR #5351源已合入，后端运行态待用户重启；BUG-1702运行态verified，新MA-E39未启动。
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 - 多 Alpha 基础研发详细设计：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
@@ -1443,7 +1444,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 |---|---|---|
 | 已完成 | MA-E37B CSI1000三seed训练域对照 | 3/3有效入仓；同池交易的平均CAGR下降3.9290pp，保持全市场训练，不按最优seed晋级 |
 | 已完成 | MA-E38三完整季度陈旧化诊断 | 18/18有效入仓；refit仅部分季度改善，不全面滚动重训，不拼接季度净值 |
-| P0-1 | MA-E39执行消费阻断 | BUG-1697/PR #5351修复正式release根消费，完成源码合入和用户重启后的只读验证；BUG-1702部署lock/commit已经record-only，不要求人工补齐，不冻结依赖 |
+| P0-1 | BUG-1697用户重启后验证 | BUG-1697/PR #5351已合入，merge=42f0e7b3，下一步是用户重启backend-main及只读验证；BUG-1702部署lock/commit已经record-only，不要求人工补齐，不冻结依赖 |
 | P0-2 | 四组固定有限组合增量及分段分析 | 复用原GRU+LSTM、GRU+XGB各seed42/2026预测，全市场Top50、固定Borda50/50、连续账户分钟TWAP/TAIL_BOOST及同成本；WSL/node1各两组、每节点纯回测最多4、kernels≤4。同seed比较full/H1/7月/8月截至28日绝对/主动收益、Sharpe/MDD/IR与成熟IC，不平均NAV、不搜索权重或重训来源 |
 | P0-3 | 资产加载与业务交付分离 | MA-E38旧权重臂成功是研究推理路径证据；正式策略包/荐股/模拟盘接入尚未交付，完整发布资产校验保留 |
 | 独立问题 | MA-E37 STAR100 / MA-E39历史失败 | STAR100原训练年代无成员；MA-E39历史失败不改写，消费修复与新实验结果分列。不能缩窗、回填、伪造记录或平均腿NAV；部署pin缺失不再是阻断 |
@@ -1916,7 +1917,7 @@ DESIGN-COMPLIANCE-001：①没有把近端抽查冒充全历史盘点或把计�
 |---|---|---|
 | 既有基础架构 | active profile=`20260928-v15-unified-moneyflow1`；本轮双节点release根identity通过；BUG-1702 verified/Issue #5357 closed | profile/identity不代表所有模块验收；BUG-1697消费修复的源码与运行态分开，旧run不迁移；环境锁SHA/执行器commit缺失不阻断 |
 | 本次docs | v6.19与研究卡经PR #5332交付，当前交付状态以GitHub回读为准 | 多轮结果/口径/进度审核不构成实验前置，也不把文档提交冒充合入 |
-| 新增代码 | BUG-1697/PR #5351：最终50项身份/控制/恢复测试、真实双节点smoke通过；代码HEAD ec4deeef的QE回归681 passed/1 skipped；BUG-1702/#5362/#5365已合入和verified | 最终任务HEAD重新生成收据，旧错绑问题已修复；BUG-1697必要backend-main重启由用户执行，旧污染模型不洗净 |
+| 新增代码 | BUG-1697/PR #5351已全绿合入，merge=`42f0e7b36afc6d7ea56ca717db0fa4d1cded1065`；源HEAD 751a74cc最终50项身份/控制/恢复及双节点smoke通过；ec4deeef的QE回归681 passed/1 skipped；BUG-1702已verified | BUG-1697 runtime_identity_match=pending，Issue #5329保持OPEN；用户重启backend-main后验证与close-sync，旧污染模型不洗净 |
 | 实验 | MA-E35R/36R/37B/38共57个完成且有效入仓；MA-E37/39失败 | 失败/运行/计划/完成分开；不平均NAV或拼接季度；不声明全部目标完成 |
 | Archive / cleanup | 本次手工0写仓、0删除；AUTO新增21个结果逐Loop质量回读通过 | 准确非重复正负结果按既有授权入仓，X不入仓；不推导删除、历史物化或数据准备权限 |
 | dataset / DDL / dependency | 无变更 | 不接管数据准备、因子库、HMM训练、荐股或模拟盘 |
