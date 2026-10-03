@@ -5250,9 +5250,23 @@ def _run_read_command_with_retry(
 
 def _subprocess_env(args: list[str]) -> dict[str, str] | None:
     """Return a safe environment for workflow child processes."""
-    if not args or Path(str(args[0])).name.lower() != "git":
+    executable = Path(str(args[0])).name.lower() if args else ""
+    if executable not in {"git", "git.exe", "gh", "gh.exe"}:
         return None
     env = os.environ.copy()
+    if executable in {"gh", "gh.exe"}:
+        # GitHub API must not inherit the AI residential proxy. Keep all other
+        # destinations and proxy credentials unchanged, including model APIs.
+        bypass = list(dict.fromkeys(
+            item.strip()
+            for key in ("NO_PROXY", "no_proxy")
+            for item in env.get(key, "").split(",")
+            if item.strip()
+        ))
+        if "api.github.com" not in {item.lower() for item in bypass}:
+            bypass.append("api.github.com")
+        env["NO_PROXY"] = env["no_proxy"] = ",".join(bypass)
+        return env
     shell = env.get("SHELL", "")
     if os.name == "nt" and shell:
         shell_name = Path(shell).name.lower()
