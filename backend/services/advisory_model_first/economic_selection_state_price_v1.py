@@ -110,3 +110,25 @@ def selection_state_rows_v1(*, candidates, rankings, calendar):
         output.append({**{key: item[key] for key in KEY}, **dict(zip(STATE_FEATURES, block, strict=True)),
             'state_feature_status': status, 'state_feature_visible_through': day})
     return pd.DataFrame(output)
+
+
+def selection_state_fit_identity_v1(recipe, models, support):
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import information_fit_identity_v1
+    return information_fit_identity_v1(recipe, models, support, model_id='M5')
+
+
+def train_selection_state_price_v1(*, rows, configuration, before_fit):
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import train_information_price_v1
+    return train_information_price_v1(rows=rows, configuration=configuration, before_fit=before_fit,
+        model_id='M5', information_features=STATE_FEATURES, status_column='state_feature_status')
+
+
+def selection_state_nodes_v1(*, fitted, rows, arm):
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import information_nodes_v1
+    return information_nodes_v1(fitted=fitted, rows=rows, arm=arm, model_id='M5', information_features=STATE_FEATURES)
+
+
+def selection_state_price_set_v1(*, fitted, d_features, arm, reference_cny, legal_low_cny, legal_high_cny, tick_cny=.01):
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import information_price_set_v1
+    return information_price_set_v1(fitted=fitted, d_features=d_features, arm=arm, reference_cny=reference_cny,
+        legal_low_cny=legal_low_cny, legal_high_cny=legal_high_cny, tick_cny=tick_cny, model_id='M5', information_features=STATE_FEATURES)

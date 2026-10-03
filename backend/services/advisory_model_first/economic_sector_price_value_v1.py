@@ -54,14 +54,26 @@ class SectorPriceFitV1:
     model_sha256: str
 
 
-def sector_fit_identity_v1(recipe, models, support):
-    return sha(dict(model_id='M1', recipe=recipe, models=models, support=list(support.intervals_bps)))
+def _information_key(model_id, information_features):
+    if model_id == 'M1' and tuple(information_features) == SECTOR_FEATURES:
+        return 'sector_features'
+    if model_id == 'M5':
+        from backend.services.advisory_model_first.economic_selection_state_price_v1 import STATE_FEATURES
+        if tuple(information_features) == STATE_FEATURES:
+            return 'selection_features'
+    raise ValueError('fixed information block/model differs')
 
 
-def sector_matrix_v1(rows, *, arm):
+def information_fit_identity_v1(recipe, models, support, *, model_id):
+    if model_id not in ('M1', 'M5'):
+        raise ValueError('fixed information model differs')
+    return sha(dict(model_id=model_id, recipe=recipe, models=models, support=list(support.intervals_bps)))
+
+
+def information_matrix_v1(rows, *, arm, information_features):
     if arm not in ARMS:
         raise ValueError('sector model arm differs')
-    fields = [*D_FEATURES, *(SECTOR_FEATURES if arm == 'candidate' else ()), 'actual_gap_bps']
+    fields = [*D_FEATURES, *(information_features if arm == 'candidate' else ()), 'actual_gap_bps']
     raw = rows.loc[:, fields]
     if raw.map(lambda value: isinstance(value, (bool, np.bool_))).any().any():
         raise ValueError('sector boolean is not numeric')
@@ -72,21 +84,23 @@ def sector_matrix_v1(rows, *, arm):
     return values
 
 
-def predict_sector_price_v1(*, fitted, rows, arm):
-    if (sector_fit_identity_v1(fitted.recipe, fitted.models, fitted.support) != fitted.model_sha256
-            or fitted.recipe['d_features'] != list(D_FEATURES) or fitted.recipe['sector_features'] != list(SECTOR_FEATURES)):
+def predict_information_price_v1(*, fitted, rows, arm, model_id, information_features):
+    information_key = _information_key(model_id, information_features)
+    if (information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model_id) != fitted.model_sha256
+            or fitted.recipe['d_features'] != list(D_FEATURES) or fitted.recipe[information_key] != list(information_features)):
         raise ValueError('sector fitted identity/order differs')
-    matrix = sector_matrix_v1(rows, arm=arm)
+    matrix = information_matrix_v1(rows, arm=arm, information_features=information_features)
     mean, lower = (predict_json_v2(fitted.models[arm+'_'+head], matrix) for head in ('mean', 'path'))
     return [ValueAnchorEstimateV1(float(a), float(b)) for a, b in zip(mean, lower, strict=True)]
 
 
-def sector_nodes_v1(*, fitted, rows, arm):
+def information_nodes_v1(*, fitted, rows, arm, model_id, information_features):
+    _information_key(model_id, information_features)
     if arm not in ARMS or not rows.index.is_unique or len(rows) > 500000:
         raise ValueError('sector query arm/index/budget differs')
-    if sector_fit_identity_v1(fitted.recipe, fitted.models, fitted.support) != fitted.model_sha256:
+    if information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model_id) != fitted.model_sha256:
         raise ValueError('sector fitted identity changed')
-    fields = [*D_FEATURES, *SECTOR_FEATURES, 'actual_gap_bps']
+    fields = [*D_FEATURES, *information_features, 'actual_gap_bps']
     raw = rows.loc[:, fields]
     if raw.map(lambda value: isinstance(value, (bool, np.bool_))).any().any():
         raise ValueError('sector boolean is not numeric')
@@ -96,16 +110,18 @@ def sector_nodes_v1(*, fitted, rows, arm):
         downside_q90_bps=[None]*len(rows)), index=rows.index)
     if available.any():
         selected = rows.loc[available]
-        for index, estimate in zip(selected.index, predict_sector_price_v1(fitted=fitted, rows=selected, arm=arm), strict=True):
+        for index, estimate in zip(selected.index, predict_information_price_v1(fitted=fitted, rows=selected, arm=arm,
+                model_id=model_id, information_features=information_features), strict=True):
             point = evaluate_value_anchor_price_v1(estimate=estimate, reference_cny=1.,
                 price_cny=1+float(rows.loc[index, 'actual_gap_bps'])/10000, support=fitted.support)
             result.loc[index] = [point.status, point.expected_net_bps, point.downside_q90_bps]
     return result
 
 
-def sector_price_set_v1(*, fitted, d_features, arm, reference_cny, legal_low_cny, legal_high_cny, tick_cny=.01):
+def information_price_set_v1(*, fitted, d_features, arm, reference_cny, legal_low_cny, legal_high_cny,
+        model_id, information_features, tick_cny=.01):
     reference, low, high, tick = (finite_number(value, positive=True) for value in (reference_cny, legal_low_cny, legal_high_cny, tick_cny))
-    if low > high or set(d_features) != set(D_FEATURES)|set(SECTOR_FEATURES):
+    if low > high or set(d_features) != set(D_FEATURES)|set(information_features):
         raise ValueError('sector legal bounds/D schema differs')
     step = Decimal(str(tick))
     first, last = (int((Decimal(str(value))/step).to_integral_value(rounding=mode))
@@ -114,7 +130,7 @@ def sector_price_set_v1(*, fitted, d_features, arm, reference_cny, legal_low_cny
         raise ValueError('sector legal price tick budget differs')
     prices = [float(step*index) for index in range(first, last+1)]
     rows = pd.DataFrame([{**d_features, 'actual_gap_bps': float((step*index/Decimal(str(reference))-1)*10000)} for index in range(first, last+1)])
-    nodes = sector_nodes_v1(fitted=fitted, rows=rows, arm=arm)
+    nodes = information_nodes_v1(fitted=fitted, rows=rows, arm=arm, model_id=model_id, information_features=information_features)
     intervals, start, end = [], None, None
     for price, status in zip(prices, nodes.status, strict=True):
         if status == 'ACCEPTABLE':
@@ -130,18 +146,21 @@ def sector_price_set_v1(*, fitted, d_features, arm, reference_cny, legal_low_cny
     return ValueAnchorPriceSetV1(status, tuple(intervals), valuation_semantics='OBSERVED_PRICE_CONDITIONAL_NOT_CAUSAL_LIMIT_FILL')
 
 
-def train_sector_price_v1(*, rows, configuration, before_fit):
+def train_information_price_v1(*, rows, configuration, before_fit, model_id, information_features, status_column):
     import scipy
     import sklearn
     from sklearn.ensemble import GradientBoostingRegressor
     from threadpoolctl import threadpool_limits
     if (sklearn.__version__, scipy.__version__) != ('1.8.0', '1.16.3'):
         raise ValueError('sector exact fit runtime differs')
+    information_key = _information_key(model_id, information_features)
+    if status_column != {'M1': 'sector_feature_status', 'M5': 'state_feature_status'}[model_id]:
+        raise ValueError('fixed information availability contract differs')
     domain = rows.loc[rows.split.eq('train') & rows.values_available].copy()
     domain.loc[domain[KEY[1]].gt(pd.Timestamp(configuration.train_end)), 'actual_gap_bps'] = np.nan
     support = build_value_anchor_gap_support_v1(domain)
-    finite_sector = np.isfinite(rows.loc[:, SECTOR_FEATURES].to_numpy(dtype=float)).all(axis=1)
-    common = rows.training_eligible & rows.values_available & finite_sector & rows.sector_feature_status.eq('AVAILABLE') & rows.actual_gap_bps.map(
+    finite_information = np.isfinite(rows.loc[:, information_features].to_numpy(dtype=float)).all(axis=1)
+    common = rows.training_eligible & rows.values_available & finite_information & rows[status_column].eq('AVAILABLE') & rows.actual_gap_bps.map(
         lambda gap: bool(pd.notna(gap) and support.contains(float(gap))))
     train = rows.loc[rows.split.eq('train') & common].sort_values(KEY)
     ends = pd.to_datetime(train.label_information_end)
@@ -149,11 +168,11 @@ def train_sector_price_v1(*, rows, configuration, before_fit):
             or ends.isna().any() or ends.gt(pd.Timestamp(configuration.train_end)).any()
             or train[KEY[1]].gt(pd.Timestamp(configuration.train_end)).any()):
         raise ValueError('sector lacks mature common training/support')
-    recipe = dict(d_features=list(D_FEATURES), sector_features=list(SECTOR_FEATURES),
+    recipe = dict(d_features=list(D_FEATURES), **{information_key: list(information_features)},
         common_supervision_sha256=sha([[str(value) for value in key] for key in train[[*KEY, 'label_information_end']].itertuples(index=False, name=None)]))
     models, count = {}, 0
     for arm in ARMS:
-        matrix = sector_matrix_v1(train, arm=arm)
+        matrix = information_matrix_v1(train, arm=arm, information_features=information_features)
         for head, target in (('mean', train.gross_value_ratio), ('path', train.path_min_value_ratio)):
             estimator = GradientBoostingRegressor(**GBDT, loss='quantile' if head == 'path' else 'squared_error', alpha=.1)
             before_fit(arm+'_'+head)
@@ -167,12 +186,13 @@ def train_sector_price_v1(*, rows, configuration, before_fit):
     diagnostics = dict(train_rows=len(train), train_days=train[KEY[0]].nunique(), candidate_rows=len(rows),
         fitted_head_count=count, index_build_count=0, candidate_count=1, test_used_for_training_or_calibration=False,
         decision_use='NAVIGATION_ONLY', deployable=False)
-    fitted = SectorPriceFitV1(recipe, models, support, diagnostics, sector_fit_identity_v1(recipe, models, support))
+    fitted = SectorPriceFitV1(recipe, models, support, diagnostics, information_fit_identity_v1(recipe, models, support, model_id=model_id))
     validation = rows.loc[rows.split.eq('validation') & common]
     diagnostics['validation_diagnostics_only'] = {}
     if not validation.empty:
         for arm in ARMS:
-            estimates = predict_sector_price_v1(fitted=fitted, rows=validation, arm=arm)
+            estimates = predict_information_price_v1(fitted=fitted, rows=validation, arm=arm,
+                model_id=model_id, information_features=information_features)
             means = np.array([value.mean_gross_value_ratio for value in estimates])
             lower = np.array([value.path_min_ratio_q10 for value in estimates])
             error = validation.path_min_value_ratio.to_numpy()-lower
@@ -181,3 +201,30 @@ def train_sector_price_v1(*, rows, configuration, before_fit):
                 path_pinball_loss=float(np.mean(np.maximum(.1*error, -.9*error))),
                 path_lower_coverage=float(np.mean(validation.path_min_value_ratio.to_numpy() < lower)))
     return fitted
+
+
+# Existing M1 signatures, recipe fields and identity formula stay exact.
+def sector_fit_identity_v1(recipe, models, support):
+    return information_fit_identity_v1(recipe, models, support, model_id='M1')
+
+
+def sector_matrix_v1(rows, *, arm):
+    return information_matrix_v1(rows, arm=arm, information_features=SECTOR_FEATURES)
+
+
+def predict_sector_price_v1(*, fitted, rows, arm):
+    return predict_information_price_v1(fitted=fitted, rows=rows, arm=arm, model_id='M1', information_features=SECTOR_FEATURES)
+
+
+def sector_nodes_v1(*, fitted, rows, arm):
+    return information_nodes_v1(fitted=fitted, rows=rows, arm=arm, model_id='M1', information_features=SECTOR_FEATURES)
+
+
+def sector_price_set_v1(*, fitted, d_features, arm, reference_cny, legal_low_cny, legal_high_cny, tick_cny=.01):
+    return information_price_set_v1(fitted=fitted, d_features=d_features, arm=arm, reference_cny=reference_cny,
+        legal_low_cny=legal_low_cny, legal_high_cny=legal_high_cny, tick_cny=tick_cny, model_id='M1', information_features=SECTOR_FEATURES)
+
+
+def train_sector_price_v1(*, rows, configuration, before_fit):
+    return train_information_price_v1(rows=rows, configuration=configuration, before_fit=before_fit,
+        model_id='M1', information_features=SECTOR_FEATURES, status_column='sector_feature_status')

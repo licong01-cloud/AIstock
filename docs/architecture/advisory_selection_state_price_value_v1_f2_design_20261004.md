@@ -80,6 +80,8 @@ plan携带`budget_anchor_ref`（role=`price_campaign_budget_anchor`），指向�
 
 M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit。因此48h本批累计上限19物理fit+1索引，不将旧11fit清零，也不把单测fit计成研究trial。独立M5预算不得挪给M1或旧模型，M5partial fit不得隐式retry；单候选generated/selected及物理fit分账登记。M5 fit只有M1负向或真实阻断终态、M1源码交付后及公开QE三running路径空闲才放行；任一路running/unknown只暂停fit，不停其它允许研发。若M1出现正开发导航，先制定其独立确认设计，不默认继续搜索更好开发收益的M5，也不读取holdout。
 
+当前薄编排的可验证前序合同是原M1完整stage链及registry引用的`evaluated/manifest.json`：仅负导航或执行/估值BLOCKED可放行，正导航/缺链/来源不同/累计四fit不符均拒绝。若M1在更早的源码或输入阶段失败而未产生该终态工件，M5正式入口仍BLOCKED，必须另行制定真实终态证据合同；不能用失败消息、目录存在或手工状态替代receipt。
+
 ## 9. Evaluation / 同冻结四臂与分流
 
 完整原81D/1620候选、共同100估值日的Top5 baseline/±300bps规则/matched/candidate；Top40复评、VALUE_REVIEW_5_V1、五槽、现金0、无Top6补位。UNKNOWN但市场证明可执行仅为原动作研究控制，分列贡献、不计模型TAKE；市场不证明四臂均不进入。任一endpoint/held-mark/unsettled不证则经济BLOCKED、不输出netmetrics。
@@ -117,9 +119,9 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 
 ## 13. Design Acceptance Matrix
 
-设计已交付；独立源码候选`2c5510e6e`已实现纯D状态及冻结plan、7个直接测试/Ruff/F2/差异检查PASS；完整模型/编排及实际研究fit尚未完成。下面是设计验收，不是F2完整实现或经济通过。
+设计已交付；独立源码候选已实现纯D状态、冻结plan、固定四头GBDT与薄编排，以及M1同核/原子阶段的最小提取；18个直接测试/Ruff/差异检查PASS。M1冻结树未修改；M5真实登记/fit/完整四臂仍0。下面保持设计验收状态，源码单测不等于全链研究或经济通过。
 
-实现准备检查点：本设计#5415已合入/自身清理；新源码树已实现pure `selection_state_rows_v1`及`SelectionStatePricePlanV1`，7个直接测试PASS，Ruff/差异检查/F2通过。方法轮固定D包含在5/20D内及右删失41意义；来源/时钟轮拒绝重复rank、外来候选及非next-session T，缺日/不完整名单保留UNKNOWN；工程轮加候选/排名读取上界、未来排名/收益毒化与单行/批量一致，冻结plan拒绝激活、外来role及非法锚点路径。M1共用源码未改，锚点真实身份校验仍待薄编排实现，M5完整模型/编排/正式fit尚0，不能报F2整体功能完成。
+实现准备检查点：设计#5415及隔离准备修订#5416均合入/自身清理。方法轮核定13/16同核、共同mature监督与无标签global支持，合成同值信息的M1/M5 JSON树和支持精确一致、身份不同；时钟轮拒绝重复rank、外来候选及非next-session T，缺日/不完整名单保留UNKNOWN，T实际查询只读open、未来close不参与；工程轮修复测试fixture缺label_cutoff与PREPARED登记，追加原三研究manifest/registry及journal计数绑定，拒绝清空/换根与正M1前序。18个直接测试通过，均为合成单测；真实M5收益、activation及runtime完成均未宣称。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|

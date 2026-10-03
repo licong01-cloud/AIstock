@@ -1,8 +1,9 @@
+import numpy as np
 import pandas as pd
 import pytest
 
 from backend.services.advisory_model_first.economic_entry_labels import KEY
-from backend.services.advisory_model_first.economic_selection_state_price_v1 import STATE_FEATURES, SelectionStatePricePlanV1, selection_state_rows_v1
+from backend.services.advisory_model_first.economic_selection_state_price_v1 import STATE_FEATURES, SelectionStatePricePlanV1, selection_state_fit_identity_v1, selection_state_nodes_v1, selection_state_price_set_v1, selection_state_rows_v1, train_selection_state_price_v1
 from backend.tests.advisory_model_first.test_economic_price_campaign_contracts_v2 import plan_fixture
 
 
@@ -70,3 +71,45 @@ def test_contradictory_rank_clock_or_candidate_fails_closed(defect):
         args['candidates'].loc[args['candidates'].index[0], KEY[2]] = '999999.SZ'
     with pytest.raises(ValueError):
         selection_state_rows_v1(**args)
+
+
+def test_fixed_M5_four_fit_common_supervision_and_test_poison():
+    from backend.tests.advisory_model_first.test_economic_price_campaign_models_v2 import rows_fixture
+    from backend.services.advisory_model_first.economic_daily_feature_core_v1 import D_FEATURES
+    rows, configuration = rows_fixture()
+    rows[list(STATE_FEATURES)] = [.4, .6, 1.]
+    rows['state_feature_status'] = 'AVAILABLE'
+    rows.loc[0, list(STATE_FEATURES)] = np.nan
+    rows.loc[0, 'state_feature_status'] = 'UNKNOWN_HISTORICAL_LIST'
+    events = []
+    fitted = train_selection_state_price_v1(rows=rows, configuration=configuration, before_fit=events.append)
+    assert len(events) == 4 and fitted.models['matched_mean']['features'] == 13 and fitted.models['candidate_mean']['features'] == 16
+    assert fitted.recipe['selection_features'] == list(STATE_FEATURES) and 'sector_features' not in fitted.recipe
+    assert fitted.diagnostics['train_rows'] == int((rows.split.eq('train') & rows.training_eligible).sum())-1
+    assert fitted.support.contains(20.) and not fitted.diagnostics['deployable']
+    rows.loc[rows.split.eq('test'), [*D_FEATURES, *STATE_FEATURES, 'gross_value_ratio', 'path_min_value_ratio', 'actual_gap_bps']] = 99999.
+    replay = train_selection_state_price_v1(rows=rows, configuration=configuration, before_fit=lambda _: None)
+    assert fitted.model_sha256 == replay.model_sha256
+    rows.loc[rows.split.eq('train'), 'label_information_end'] = configuration.test_end
+    with pytest.raises(ValueError, match='mature common'):
+        train_selection_state_price_v1(rows=rows, configuration=configuration, before_fit=lambda _: pytest.fail('must not fit'))
+
+
+def test_M5_price_sets_preserve_holes_common_unknown_and_model_identity():
+    from backend.services.advisory_model_first.economic_daily_feature_core_v1 import D_FEATURES
+    from backend.tests.advisory_model_first.test_economic_sector_price_value_v1 import sector_fit_fixture
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import SectorPriceFitV1
+    original = sector_fit_fixture()
+    recipe = dict(d_features=list(D_FEATURES), selection_features=list(STATE_FEATURES))
+    fitted = SectorPriceFitV1(recipe, original.models, original.support, original.diagnostics,
+        selection_state_fit_identity_v1(recipe, original.models, original.support))
+    features = {**dict.fromkeys(D_FEATURES, .02), **dict(zip(STATE_FEATURES, (.4, .6, 1.), strict=True))}
+    grid = selection_state_price_set_v1(fitted=fitted, d_features=features, arm='candidate', reference_cny=10., legal_low_cny=9.7, legal_high_cny=10.3)
+    assert grid.intervals_cny == ((9.7, 9.9), (10.1, 10.3))
+    query = pd.DataFrame([{**features, 'actual_gap_bps': gap} for gap in (-100., 0., 100.)])
+    assert selection_state_nodes_v1(fitted=fitted, rows=query, arm='candidate').status.tolist() == ['ACCEPTABLE', 'UNKNOWN_INPUT_OR_SUPPORT', 'ACCEPTABLE']
+    query[STATE_FEATURES[0]] = np.nan
+    for arm in ('matched', 'candidate'):
+        assert selection_state_nodes_v1(fitted=fitted, rows=query, arm=arm).status.eq('UNKNOWN_INPUT_OR_SUPPORT').all()
+    with pytest.raises(ValueError, match='identity'):
+        selection_state_nodes_v1(fitted=original, rows=query, arm='candidate')
