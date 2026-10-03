@@ -15,7 +15,9 @@ Safety defaults:
 * production ``apply`` additionally requires a matching successful DEV DML
   validation receipt (legacy full DEV apply receipts remain readable);
 * the complete requested range is planned before the first production write;
-  sparse legal empties and registered candidate-local repairs do not become
+* ``--start-date`` bounds an incremental repair; omitted means profile history;
+* existing policy-valid audit authority rows are not reseeded;
+* sparse legal empties and registered candidate-local repairs do not become
   false hard blockers;
 * writes use the one registered ``physical_audit_seed`` authority and are
   followed by exact readback in the same transaction.
@@ -63,9 +65,7 @@ _TARGETS = {"dev", "production"}
 _MODES = {"plan", "apply", "verify", "validate-dml"}
 _SPARSE_DATASETS = frozenset({"bak_basic", "suspend_d"})
 _CANDIDATE_REPAIRABLE_DATASETS = frozenset({"index_daily", "stk_limit"})
-DEV_DML_CONTRACT_DIGEST = hashlib.sha256(
-    b"dataset_refresh_audit_dev_transactional_readback_v1"
-).hexdigest()
+DEV_DML_CONTRACT_DIGEST = hashlib.sha256(b"dataset_refresh_audit_dev_transactional_readback_v1").hexdigest()
 
 
 class AuditSeedError(RuntimeError):
@@ -262,11 +262,7 @@ def _connect(config: DatabaseConfig) -> Any:
         password=config.password,
         dbname=config.dbname,
         application_name="AIstock-dataset-release-audit-seed",
-        options=(
-            "-c client_encoding=utf8 "
-            "-c statement_timeout=300000 "
-            "-c max_parallel_workers_per_gather=0"
-        ),
+        options=("-c client_encoding=utf8 -c statement_timeout=300000 -c max_parallel_workers_per_gather=0"),
     )
 
 
@@ -378,9 +374,7 @@ def _physical_counts(
                 raise AuditSeedError(f"{spec.dataset}: chunked physical counts overlap")
             missing_required_codes: tuple[str, ...] = ()
             if spec.code_policy == "profile_index_codes":
-                required = {
-                    value.daily_code for value in profile.indices if value.required_from <= trade_date
-                }
+                required = {value.daily_code for value in profile.indices if value.required_from <= trade_date}
                 missing_required_codes = tuple(sorted(required.difference(set(observed_codes or ()))))
             result[trade_date] = PhysicalDayObservation(
                 row_count=int(row_count),
@@ -418,12 +412,13 @@ def _existing_ready_dates(
               AND data_source = ANY(%s)
               AND status = 'success'
               AND quality_status = ANY(%s)
+              AND COALESCE(error_message, '') = ''
             """,
             (
                 spec.dataset,
                 start,
                 end,
-                [value for value in spec.eligible_sources if value != AUTHORITY],
+                list(spec.eligible_sources),
                 list(spec.eligible_quality_statuses),
             ),
         )
@@ -461,9 +456,7 @@ def _build_dataset_plan(
                     table_identity=spec.table_identity,
                 )
             )
-        elif spec.candidate_repairable and (
-            spec.dataset == "stk_limit" or observation.invalid_rows == 0
-        ):
+        elif spec.candidate_repairable and (spec.dataset == "stk_limit" or observation.invalid_rows == 0):
             planned.append(
                 PlannedAuditRow(
                     dataset=spec.dataset,
@@ -506,12 +499,19 @@ def build_plan(
     profile: Any,
     end_date: dt.date,
     datasets: Sequence[str],
+    start_date: dt.date | None = None,
 ) -> tuple[DatasetPlan, ...]:
+    if start_date is not None and (
+        start_date > end_date or start_date < min(profile.start_date, profile.minute_start_date)
+    ):
+        raise AuditSeedError("requested start date is outside the profile/end-date range")
     plans: list[DatasetPlan] = []
     expected_cache: dict[dt.date, tuple[dt.date, ...]] = {}
     for dataset in datasets:
         spec = SPECS[dataset]
         start = _profile_start(profile, spec)
+        if start_date is not None:
+            start = max(start, start_date)
         if start > end_date:
             raise AuditSeedError(f"{dataset}: profile start is after requested end date")
         expected = expected_cache.get(start)
@@ -564,6 +564,7 @@ def _require_apply_authorization(
     profile: Any,
     end_date: dt.date,
     datasets: Sequence[str],
+    start_date: dt.date | None = None,
 ) -> None:
     if not authorization_ref or not _AUTHORIZATION_REF.fullmatch(authorization_ref):
         raise AuditSeedError("apply requires a bounded non-secret --authorization-ref")
@@ -585,6 +586,7 @@ def _require_apply_authorization(
         value.get("mode") == "apply"
         and value.get("end_date") == end_date.isoformat()
         and value.get("dataset_names") == list(datasets)
+        and value.get("requested_start_date") == (start_date.isoformat() if start_date is not None else None)
     )
     transactional_validation = (
         value.get("mode") == "validate-dml"
@@ -686,9 +688,7 @@ def _verify_rows(conn: Any, rows: Sequence[PlannedAuditRow]) -> int:
                 (datasets, dates),
             )
             observed = {
-                (row[0], row[1]): (row[2], int(row[3]), row[4])
-                for row in cursor.fetchall()
-                if row[0] is not None
+                (row[0], row[1]): (row[2], int(row[3]), row[4]) for row in cursor.fetchall() if row[0] is not None
             }
         for key, planned in expected.items():
             if observed.get(key) != ("success", planned.row_count, planned.quality_status):
@@ -707,6 +707,7 @@ def _receipt(
     authorization_ref: str | None,
     rows_changed: int,
     required_failures: int,
+    start_date: dt.date | None = None,
 ) -> Mapping[str, Any]:
     blocked = sum(len(plan.blocked_dates) for plan in plans)
     planned = sum(len(plan.planned_rows) for plan in plans)
@@ -723,6 +724,7 @@ def _receipt(
         "profile_config_digest": profile.config_digest,
         "semantic_profile_digest": profile.semantic_profile_digest,
         "end_date": end_date.isoformat(),
+        "requested_start_date": start_date.isoformat() if start_date is not None else None,
         "authority": AUTHORITY,
         "plan_digest": plan_digest,
         "authorization_ref": authorization_ref,
@@ -777,6 +779,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--database", choices=sorted(_TARGETS), required=True)
     parser.add_argument("--mode", choices=sorted(_MODES), default="plan")
     parser.add_argument("--end-date", required=True)
+    parser.add_argument("--start-date", help="Inclusive repair start; defaults to each dataset's profile start")
     parser.add_argument("--dataset", action="append", choices=sorted(SPECS), default=[])
     parser.add_argument("--env-file", default=str(REPO_ROOT / ".env"))
     parser.add_argument("--authorization-ref")
@@ -793,6 +796,11 @@ def main(
     args = _parser().parse_args(argv)
     profile = load_dataset_profile(args.profile)
     end_date = dt.date.fromisoformat(args.end_date)
+    start_date = dt.date.fromisoformat(args.start_date) if args.start_date else None
+    if start_date is not None and (
+        start_date > end_date or start_date < min(profile.start_date, profile.minute_start_date)
+    ):
+        raise AuditSeedError("requested start date is outside the profile/end-date range")
     datasets = tuple(args.dataset or sorted(SPECS))
     target = _load_database_config(args.database, Path(args.env_file))
     if args.mode in {"apply", "validate-dml"}:
@@ -805,6 +813,7 @@ def main(
             profile=profile,
             end_date=end_date,
             datasets=datasets,
+            start_date=start_date,
         )
 
     conn = connection_factory(target)
@@ -827,7 +836,7 @@ def main(
                 ),
             )
         else:
-            plans = build_plan(conn, profile=profile, end_date=end_date, datasets=datasets)
+            plans = build_plan(conn, profile=profile, end_date=end_date, datasets=datasets, start_date=start_date)
         digest = _plan_digest(profile, end_date, plans)
         blocked = sum(len(plan.blocked_dates) for plan in plans)
         rows = _all_planned_rows(plans)
@@ -897,6 +906,7 @@ def main(
         authorization_ref=args.authorization_ref,
         rows_changed=rows_changed,
         required_failures=required_failures,
+        start_date=start_date,
     )
     if args.receipt_path:
         _write_receipt(
