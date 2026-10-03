@@ -175,7 +175,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
     "fresh_process_evidence": [
-      "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1717_smoke.py F:/Dev/AIstock_worktrees/BUG-1717-hmm-l2-frozen-inference-incorrectly-rejects-fini-20261003 -> PASS; task PYTHONPATH; HMM/health router imports; actual frozen prediction28951 rows;18 finite nonzero diagnostic; original182-day prefix bitwise; DB/fit/selection/outcome poison; fits=0, targets/tail not accessed"
+      "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1717_smoke.py F:/Dev/AIstock_worktrees/BUG-1717-hmm-l2-frozen-inference-incorrectly-rejects-fini-20261003 -> PASS; task PYTHONPATH; HMM/health router imports; actual frozen prediction28951 rows;18 finite nonzero diagnostic; original182-day prefix bitwise; DB/fit/selection/outcome poison; fits=0, targets/tail not accessed",
+      "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1717_smoke.py F:/Dev/AIstock_worktrees/BUG-1717-hmm-l2-frozen-inference-incorrectly-rejects-fini-20261003 -> PASS; explicit PYTHONPATH; backend.routers.hmm_risk and backend.routers.health imports; real request 28951 rows,221 diagnostics,18 finite nonzero; prefix bitwise and model/input hashes unchanged; zero fit, no DB/target/tail"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
