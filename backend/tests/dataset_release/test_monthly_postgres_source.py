@@ -170,9 +170,8 @@ def test_blocked_actual_audit_prevents_materialization_and_seal(tmp_path, monkey
         source_policies.append(kwargs.get("sector_source_policy"))
         return SimpleNamespace(freeze=lambda **_kwargs: frozen)
 
-    monkeypatch.setattr(
-        source, "MonthlySourceAuthority", authority_factory
-    )
+    monkeypatch.setattr(source, "MonthlySourceAuthority", authority_factory)
+    monkeypatch.setattr(source, "_preflight_refresh_readiness", lambda *_args, **_kwargs: None)
     seen = []
     monkeypatch.setattr(source, "ArtifactReadySourceBuilder", lambda *_args: seen.append("build"))
     monkeypatch.setattr(source, "seal_source_stage_receipt", lambda *_args, **_kwargs: seen.append("seal"))
@@ -219,24 +218,32 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
 
     profile = SimpleNamespace(profile="qe_hmm_full_v2", semantic_profile_digest="a" * 64)
     adapter = PostgresMonthlySourceAdapter(
-        profile=profile, cas=SimpleNamespace(root=tmp_path), artifact_root=tmp_path,
+        profile=profile,
+        cas=SimpleNamespace(root=tmp_path),
+        artifact_root=tmp_path,
         source_catalog=SimpleNamespace(root=tmp_path),
     )
     old_fields = {
-        "profile": profile.profile, "semantic_profile_digest": profile.semantic_profile_digest,
+        "profile": profile.profile,
+        "semantic_profile_digest": profile.semantic_profile_digest,
         "source_authority_policy": "dataset_release_source_authority_v1",
         "artifact_ready_contract": "dataset_release_artifact_ready_contract_v1",
         "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
         "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
-        "mvcc_partition_reuse": False, "gates": list(SOURCE_GATES),
+        "mvcc_partition_reuse": False,
+        "gates": list(SOURCE_GATES),
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "4"
+    assert adapter.adapter_version == "5"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
-        {**old_fields, "sector_source_policy": "classification_published_snapshot_v1"},
+        {
+            **old_fields,
+            "sector_source_policy": "classification_published_snapshot_v1",
+            "refresh_audit_readiness_policy": source.REFRESH_READINESS_POLICY,
+        },
     )
 
 
@@ -244,15 +251,18 @@ DAY = date(2026, 9, 30)
 SYMBOL = "000001.SZ"
 
 
-@pytest.mark.parametrize('state', [
-    None,
-    (date(2018, 8, 1), date(2026, 8, 31), 'ready', False),
-    (date(2020, 1, 1), DAY, 'ready', False),
-    (date(2018, 8, 1), DAY, 'building', False),
-    (date(2018, 8, 1), DAY, 'ready', True),
-    (date(2018, 8, 1), '2026-09-30', 'ready', False),
-    (date(2018, 8, 1), DAY, 'ready', None),
-])
+@pytest.mark.parametrize(
+    "state",
+    [
+        None,
+        (date(2018, 8, 1), date(2026, 8, 31), "ready", False),
+        (date(2020, 1, 1), DAY, "ready", False),
+        (date(2018, 8, 1), DAY, "building", False),
+        (date(2018, 8, 1), DAY, "ready", True),
+        (date(2018, 8, 1), "2026-09-30", "ready", False),
+        (date(2018, 8, 1), DAY, "ready", None),
+    ],
+)
 def test_canonical_pit_readiness_blocks_before_freeze(tmp_path, monkeypatch, state):
     from backend.services.dataset_release import monthly_postgres_source as source
     from backend.services.dataset_release.monthly_unified import MonthlyReleaseSourceBlocked
@@ -275,22 +285,26 @@ def test_canonical_pit_readiness_blocks_before_freeze(tmp_path, monkeypatch, sta
         def fetchone(self):
             return state
 
-    monkeypatch.setattr(source, 'MonthlySourceAuthority', lambda *_args, **_kwargs: pytest.fail('must not freeze'))
+    monkeypatch.setattr(source, "MonthlySourceAuthority", lambda *_args, **_kwargs: pytest.fail("must not freeze"))
     adapter = PostgresMonthlySourceAdapter(
-        profile=SimpleNamespace(profile='qe_hmm_full_v2', universe_key='aistock_equity_pit_canonical_v2',
-                                start_date=date(2018, 8, 1)),
-        cas=SimpleNamespace(root=tmp_path), artifact_root=tmp_path,
-        source_catalog=SimpleNamespace(root=tmp_path, latest_source_snapshot=lambda **_kwargs: pytest.fail('no baseline read')),
+        profile=SimpleNamespace(
+            profile="qe_hmm_full_v2", universe_key="aistock_equity_pit_canonical_v2", start_date=date(2018, 8, 1)
+        ),
+        cas=SimpleNamespace(root=tmp_path),
+        artifact_root=tmp_path,
+        source_catalog=SimpleNamespace(
+            root=tmp_path, latest_source_snapshot=lambda **_kwargs: pytest.fail("no baseline read")
+        ),
     )
-    context = SimpleNamespace(plan={'predecessor': {'cutoff': '2026-08-31'}, 'target_cutoff': DAY.isoformat()})
+    context = SimpleNamespace(plan={"predecessor": {"cutoff": "2026-08-31"}, "target_cutoff": DAY.isoformat()})
     connection = Connection()
     with pytest.raises(MonthlyReleaseSourceBlocked) as caught:
-        adapter.read(connection, MonthlySnapshotIdentity('1-AA-1', '2026-10-02T00:00:00+00:00', 'watermark'), context)
-    assert caught.value.context['reason_code'] == 'BLOCKED_PIT_STATE_NOT_READY'
-    assert caught.value.context['requested_cutoff'] == DAY.isoformat()
-    assert caught.value.context['operator_script'] == 'scripts/prepare_canonical_pit_monthly.py'
+        adapter.read(connection, MonthlySnapshotIdentity("1-AA-1", "2026-10-02T00:00:00+00:00", "watermark"), context)
+    assert caught.value.context["reason_code"] == "BLOCKED_PIT_STATE_NOT_READY"
+    assert caught.value.context["requested_cutoff"] == DAY.isoformat()
+    assert caught.value.context["operator_script"] == "scripts/prepare_canonical_pit_monthly.py"
     assert len(connection.statements) == 1
-    assert connection.statements[0][0].lstrip().startswith('SELECT')
+    assert connection.statements[0][0].lstrip().startswith("SELECT")
     assert list(tmp_path.iterdir()) == []
 
 
@@ -303,16 +317,148 @@ def test_canonical_pit_precheck_accepts_exact_ready_scope():
             pass
 
         def execute(self, sql, params):
-            assert sql.lstrip().startswith('SELECT')
-            assert params == ('aistock_equity_pit_canonical_v2',)
+            assert sql.lstrip().startswith("SELECT")
+            assert params == ("aistock_equity_pit_canonical_v2",)
 
         def fetchone(self):
-            return date(2018, 8, 1), DAY, 'ready', False
+            return date(2018, 8, 1), DAY, "ready", False
 
-    adapter = SimpleNamespace(profile=SimpleNamespace(
-        universe_key='aistock_equity_pit_canonical_v2', start_date=date(2018, 8, 1),
-    ))
+    adapter = SimpleNamespace(
+        profile=SimpleNamespace(
+            universe_key="aistock_equity_pit_canonical_v2",
+            start_date=date(2018, 8, 1),
+        )
+    )
     PostgresMonthlySourceAdapter._require_pit_coverage(adapter, SimpleNamespace(cursor=Cursor), DAY)
+
+
+def test_refresh_readiness_aggregates_missing_and_ineligible_dates_without_payload_reads():
+    from backend.services.dataset_release import monthly_postgres_source as source
+    from backend.services.dataset_release.source_authority import SourceRefreshAuditLedger
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseSourceBlocked
+
+    days = (date(2026, 9, 29), DAY)
+    ledger = SourceRefreshAuditLedger(
+        rows={
+            ("margin_detail", days[0]): (
+                {
+                    "data_source": "tushare",
+                    "status": "success",
+                    "quality_status": "valid",
+                    "error_present": False,
+                    "audit_payload_sha256": "a" * 64,
+                },
+            ),
+            ("margin_detail", DAY): (
+                {
+                    "data_source": "tushare",
+                    "status": "success",
+                    "quality_status": "low_coverage",
+                    "error_present": False,
+                    "audit_payload_sha256": "b" * 64,
+                },
+            ),
+        },
+        trading_dates=days,
+        eligible_sources={name: ("tushare",) for name in ("daily_basic", "margin_detail")},
+        eligible_quality_statuses={name: ("valid",) for name in ("daily_basic", "margin_detail")},
+    )
+    calls = []
+
+    @contextmanager
+    def factory(policy):
+        calls.append(("session", policy))
+        yield "imported-readonly-snapshot"
+
+    def read_audit(session, **kwargs):
+        assert session == "imported-readonly-snapshot"
+        assert kwargs["cutoff"] == DAY
+        calls.append("audit")
+        return ledger
+
+    authority = SimpleNamespace(
+        _freeze_refresh_audit=read_audit,
+        _database_query_specs=lambda: [
+            SimpleNamespace(date_expression="date", start_policy="daily", audit_dataset=name)
+            for name in ("daily_basic", "margin_detail", "margin_detail")
+        ],
+    )
+    profile = SimpleNamespace(start_date=days[0], minute_start_date=DAY, resource_policy="policy")
+    with pytest.raises(MonthlyReleaseSourceBlocked) as caught:
+        source._preflight_refresh_readiness(authority, factory, profile=profile, cutoff=DAY)
+    context = caught.value.context
+    assert context["reason_code"] == "BLOCKED_SOURCE_REFRESH_AUDIT_INCOMPLETE"
+    assert context["blocker_count"] == 2
+    assert context["blockers"][0]["dataset"] == "daily_basic"
+    assert context["blockers"][0]["missing_count"] == 2
+    assert context["blockers"][1]["unusable_sample"] == [DAY.isoformat()]
+    assert context["database_write_performed"] is False
+    assert calls == [("session", "policy"), "audit"]
+
+
+def test_refresh_readiness_pass_preserves_per_partition_fact_validation():
+    from backend.services.dataset_release import monthly_postgres_source as source
+
+    checked = []
+    ledger = SimpleNamespace(partition_digest=lambda *args: checked.append(args) or "a" * 64)
+
+    @contextmanager
+    def factory(_policy):
+        yield None
+
+    authority = SimpleNamespace(
+        _freeze_refresh_audit=lambda *_args, **_kwargs: ledger,
+        _database_query_specs=lambda: [
+            SimpleNamespace(date_expression=None, start_policy="timeless", audit_dataset=None),
+            SimpleNamespace(date_expression="date", start_policy="minute", audit_dataset="kline_minute_raw"),
+        ],
+    )
+    source._preflight_refresh_readiness(
+        authority,
+        factory,
+        profile=SimpleNamespace(start_date=date(2018, 8, 1), minute_start_date=date(2020, 1, 1), resource_policy=None),
+        cutoff=DAY,
+    )
+    assert checked == [("kline_minute_raw", date(2020, 1, 1), DAY)]
+
+
+def test_adapter_readiness_failure_precedes_freeze_and_input_directory(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_postgres_source as source
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseSourceBlocked
+
+    def fail_readiness(*_args, **_kwargs):
+        raise MonthlyReleaseSourceBlocked(
+            "readiness incomplete",
+            context={
+                "reason_code": "BLOCKED_SOURCE_REFRESH_AUDIT_INCOMPLETE",
+                "blockers": [{"dataset": "margin_detail", "unusable_sample": [DAY.isoformat()]}],
+            },
+        )
+
+    monkeypatch.setattr(source, "_preflight_refresh_readiness", fail_readiness)
+    monkeypatch.setattr(
+        source,
+        "MonthlySourceAuthority",
+        lambda *_args, **_kwargs: SimpleNamespace(freeze=lambda **_kw: pytest.fail("payload freeze must not start")),
+    )
+    adapter = PostgresMonthlySourceAdapter(
+        profile=SimpleNamespace(profile="fixture"),
+        cas=SimpleNamespace(root=tmp_path),
+        artifact_root=tmp_path,
+        source_catalog=SimpleNamespace(root=tmp_path, latest_source_snapshot=lambda **_kwargs: None),
+    )
+    context = SimpleNamespace(
+        operation_id="dmr_test",
+        attempt=1,
+        plan={
+            "predecessor": {"cutoff": "2026-08-31"},
+            "target_cutoff": DAY.isoformat(),
+        },
+    )
+    with pytest.raises(MonthlyReleaseSourceBlocked) as caught:
+        adapter.read(None, MonthlySnapshotIdentity("1-AA-1", "2026-10-03T00:00:00+00:00", "repair"), context)
+    assert caught.value.context["blockers"][0]["dataset"] == "margin_detail"
+    assert list(tmp_path.iterdir()) == []
 
 
 def daily():
@@ -341,8 +487,15 @@ def rows():
         "kline_minute_raw": minutes(),
         "adj_factor": [{"ts_code": SYMBOL, "trade_date": DAY, "adj_factor": 1.0}],
         "daily_basic": [
-            {"ts_code": SYMBOL, "trade_date": DAY, "turnover_rate": 1.0, "turnover_rate_f": 1.0,
-             "volume_ratio": 1.0, "total_mv": 100.0, "circ_mv": 80.0}
+            {
+                "ts_code": SYMBOL,
+                "trade_date": DAY,
+                "turnover_rate": 1.0,
+                "turnover_rate_f": 1.0,
+                "volume_ratio": 1.0,
+                "total_mv": 100.0,
+                "circ_mv": 80.0,
+            }
         ],
         "suspend_d": [],
         "stk_limit": [{"ts_code": SYMBOL, "trade_date": DAY, "pre_close": 10, "up_limit": 11, "down_limit": 9}],
