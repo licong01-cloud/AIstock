@@ -138,7 +138,8 @@
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "Windows task-worktree fresh process: python -m pytest backend/tests/dataset_release/test_build_stage.py -q --basetemp=X:/AIstock_temp/BUG-1693/pytest-isolated-worker-1 -> 4 passed; actual private 12-index H5 and legacy no-helper compatibility, fixture source rows explicitly bounded; no operation claimed",
-      "SOURCE5 actual fresh-process production constructor and worker --preflight PASS; SOURCE6 precise typed wiring unit tests PASS; no operation or database opened"
+      "SOURCE5 actual fresh-process production constructor and worker --preflight PASS; SOURCE6 precise typed wiring unit tests PASS; no operation or database opened",
+      "python X:/AIstock_temp/BUG-1696/check_source6_production_wiring.py -> passed; SOURCE6 shared scope, database_opened=false, operation_claimed=false"
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
