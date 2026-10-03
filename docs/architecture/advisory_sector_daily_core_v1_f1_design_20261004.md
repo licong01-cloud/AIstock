@@ -56,13 +56,15 @@ sector quotes仅datetime/l2_code_id/sw2_close、最多420行，日期只21D内�
 | F-735 | 同叶_crosswalk/分类键与clock验证 | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`：id0/原KEY/未来分类/重复与pin拒绝 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
 | F-736 | 同叶quote边界及原sector计算复用 | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`：未来/外部/矛盾/超预算拒绝、缺日及正常raw未知保留 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
 | F-737 | 同叶RECIPE/组合receipt及source限制 | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`：重复输入同值hash、已计算core内容/时钟/语义校验及COMPUTATION_ONLY/native UNPROVEN/0query | IMPLEMENTED_PURE_CORE_VERIFIED | none |
-| F-738 | Scope/Verification/Production及同叶入口 | artifact: 三文件/21直接测试/Ruff/diff与零I/O；非业务或收益验收 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
+| F-738 | Scope/Verification/Production及同叶入口 | artifact: 三文件/21直接测试/Ruff/diff、已消费2024-08-01原20候选parity；kernel零I/O，非经济/资格验收 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
 
 ## 多轮实际审核及直接验证
 
 方法轮核对原core12/sector3公式逐字段parity、原price query不入D值、21close/20return ddof=1；来源时钟轮核对未来quote先拒绝、原候选KEY/分类clock/crosswalk pin、id0与正常未知，原语义未改变；工程轮核对纯scope、零I/O/正式资格、bounded frames及fixture复用。均为本窗口不同视角自审，不冒称独立外审。
 
 初轮15直接测试中14通过，duplicate分类本已正确拒绝，但复用的AdvisoryModelFirstError不是ValueError，修复测试接受这两种明确合同异常；只复验失败node通过，不改原错误处理或降低拒绝条件。初版稳定矩阵15 PASS（2.24秒），随后接入轮发现公共source不返回raw frames，直接raw入口会迫使重复SQL：只在本叶增加经receipt核对的公共组合入口及snapshot copy，不改原source/SQL。原15及新增6个直接用例最终21 PASS（3.15秒）、Ruff通过，无再次广回归；临时全X。F1标题/矩阵短证据路径曾不解析，已修为标准标题及精确测试路径；当前再验五项/diff。测试只证明纯计算，没有加载真实新source/model/行情/收益，不称原生或每日业务通过。
+
+随后单次已消费原D兼容验证：2024-08-01完整原20候选，核定原core receipt/12D值及M1冻结来源hash，仅读取原D前21session的H5两列（59,922原始行归一到168个所需date/id报价），复用原严格classification和结构crosswalk，输出15D与原M1准备输入rtol=0/atol=1e-12/equal_nan一致；9个完整可计算候选，其余UNKNOWN不删除，约0.984秒。无DB、收益标签解析、新窗口/收益、fit/登记；source仍RECOVERED_LIMITED/native UNPROVEN/deployable=false，不以本次兼容读取称真实native源或独立确认。X临时helper初始误把plan语义hash作文件字节pin而fail closed、随后改为正式reader验证的原manifest字节pin；HDF查询调用栈缺函数frame已在helper纠正，不修改pandas/依赖/原业务源码。源码未变，新增事实仅修Card/PR状态，不重复跑已通过叶矩阵。
 
 ## Rollout / Production Gates
 
