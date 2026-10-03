@@ -1,6 +1,7 @@
 {
   "actual": "P0 throughput remediation: mirror manifest remains 2026-09-15/9b7abbd3 while CI repeatedly deepens remote history for 4-19 minutes. Wire bounded best-effort offline mirror refresh after verified canonical main fast-forward, preserve live CI read-only objects and no new gate, dependency or process operations.",
   "allowed_write_scope": [
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "scripts/aistock_issue_workflow.py",
     "scripts/maintain_aistock_git_mirror.ps1",
