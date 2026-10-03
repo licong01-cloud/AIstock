@@ -127,6 +127,7 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
     "inference_basis": "planned_scope",
