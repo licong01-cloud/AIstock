@@ -824,7 +824,11 @@ def prepare_effect_baseline(frozen: Mapping[str, Any], source: Mapping[str, Any]
         )
     }
     code_map = baseline_reader.load_release_sw_l2_code_map(context["code_map"])
-    quote = baseline_reader.load_sector_quote_availability(context["quote"], code_map=code_map, required_end=END)
+    # The authority covers the frozen release, not just this evaluation window.
+    # Actual market-data reads below keep their existing decision/as-of bounds.
+    quote = baseline_reader.load_sector_quote_availability(
+        context["quote"], code_map=code_map, required_end=assets["release_cutoff"]
+    )
     if list(code_map.member_backed_codes) != frozen["catalog"]:
         raise fail("baseline release catalog differs from the HMM catalog")
     membership = pd.read_parquet(context["membership"])
