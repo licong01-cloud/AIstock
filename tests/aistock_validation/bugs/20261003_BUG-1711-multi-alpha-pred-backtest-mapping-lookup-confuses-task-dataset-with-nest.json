@@ -34,13 +34,20 @@
   ],
   "expected": "Resolve only the requested mapping depth; preserve record dataset and reject genuine duplicate siblings",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/multi_alpha/combine_backtest.py",
+      "backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1711-multi-alpha-pred-backtest-mapping-lookup-confuses-task-dataset-with-nest.json"
+    ],
     "added_files": [
       "backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py"
     ],
     "changed_files": [
-      "backend/services/multi_alpha/combine_backtest.py"
+      "backend/services/multi_alpha/combine_backtest.py",
+      "backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1711-multi-alpha-pred-backtest-mapping-lookup-confuses-task-dataset-with-nest.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/multi_alpha/combine_backtest.py",
@@ -123,14 +130,19 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
     "fresh_process_evidence": [
-      "PYTHONPATH=<task worktree> python tmp/issue_workflow/BUG-1711/fresh_process_smoke.py -> PASS real WSL/node1 generated templates consumed in isolated process; all business parameters unchanged except declared test segment; source/candidate writes=0, experiment submissions=0, process_control=false"
+      "PYTHONPATH=<task worktree> python tmp/issue_workflow/BUG-1711/fresh_process_smoke.py -> PASS real WSL/node1 generated templates consumed in isolated process; all business parameters unchanged except declared test segment; source/candidate writes=0, experiment submissions=0, process_control=false",
+      "PYTHONPATH=task worktree python tmp/issue_workflow/BUG-1711/fresh_process_smoke.py -> PASS two real generated templates; exact HEAD b68aaf0e7df7135ebbd11136231faad237bc1eb9 and source SHA saved in tmp/issue_workflow/BUG-1711/fresh_process_receipt.json; no experiments, candidate writes or process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
