@@ -23,6 +23,8 @@ H-SECTOR-DYNAMIC-2：在同12D+价格条件、同标签及共同监督上，加�
 - docs/architecture/advisory_sector_dynamic_price_value_v1_f2_design_20261004.md
 - docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
+源码树登记：`F:/Dev/AIstock_worktrees/advisory-sector-price-value-v1-20261004` / `feat/advisory-sector-price-value-v1-20261004`，基于已合入#5411的最新origin/main，仅上列精确文件可写。
+
 仅Advisory消费者/纯模型。临时runner/log/cache在X任务目录；新源输入和研究在`F:/Dev/AIstock_model_artifacts/advisory_price_research_campaign_r2_20261004`独立hash目录。不覆盖任何旧plan/输入/模型/结果，不改公共QE/Selection/数据生产者。
 
 ## 3. Non-goals / 安全边界
@@ -106,7 +108,7 @@ M1开发导航门沿R2事前合同：减baseline及matched日均net均≥5bps；
 
 ## 11. Design Acceptance Matrix
 
-当前design-only：结构映射/两D行情读法可行，完整时钟/源身份放行尚待prepare，代码和M1fit均0。
+设计#5411已合入。源码首版仅上列Advisory文件；三个定向新测试叶及公共四臂精确测试共11项PASS，Ruff/差异检查/F2校验PASS；完整窗口来源放行尚待prepare，M1正式fit仍0，尚无经济结果或启用。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -132,3 +134,5 @@ DESIGN-COMPLIANCE-001逐项：①设计/源码/输入/开发导航/确认/启用
 ## 14. 三轮设计自审
 
 方法轮核对新块只有两个独立信息量、派生relative不能冒称第三alpha，同模型matched隔离新增信息且不比较不同旧人口。时钟/源轮将结构码映射与成员可知分开、当前读取时间不倒填，补完整交易日重索引/21原报价不可稀疏跳日，保留原严格分类UNKNOWN。工程/边界轮修订声明的未知sentinel与unexpected id冲突区别、提取旧四臂helper而非复制平台、累计15fit不重置，明确SOURCE预检不等于全窗/经济/生产完成。本窗口自审不是独立外审；尚无M1收益或拟合结果用于修订。
+
+源码三轮自审：第一轮核对真实合同类型与价格集合、多段/支持洞，修复profile数字id=0须保留为合法id而非缺失；第二轮检查21完整日与实际maturity、可选缺失和共同mask，NaT成熟时钟硬拒绝；第三轮核对仅提取旧四臂公共计算、真实shadow定向回归及held-mark阻断，累计预算固定15且不可由调用参数放宽。单测初次两处预期/空值类型错误已针对性修订；最终11项PASS。源码提交后才预登记并运行，结果不用于调参。

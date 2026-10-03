@@ -99,12 +99,20 @@ def evaluate_campaign_v2(*, plan_path, output_root):
     inputs = pd.read_parquet(root/'prepared/rows.parquet')
     actions = {arm: campaign_actual_decisions_v2(fitted=fitted, candidates=candidates, inputs=inputs,
         prices=prices, references=refs, identity=identity, arm=arm) for arm in ARMS}
+    artifacts = evaluate_price_actions_v2(plan=plan, fitted=fitted, rankings=rankings, candidates=candidates,
+        prices=prices, identity=identity, calendar=json.loads((frozen/'calendar.json').read_text(encoding='utf-8')), actions=actions)
+    path = _publish(study_root=root, stage='evaluated', plan_sha256=plan.plan_sha256, parent_sha256=trained['stage_sha256'], artifacts=artifacts)
+    _record(plan, root, parent, 'EVALUATED', path/'manifest.json', generated=1, evaluated=1)
+    return path
+
+
+def evaluate_price_actions_v2(*, plan, fitted, rankings, candidates, prices, identity, calendar, actions):
+    """Common full four-arm policy/audits; no file reads, fits or publication."""
     baseline, rule = actions['matched'].copy(), actions['matched'].copy()
     baseline['model_action'] = 'TAKE'
     rule['model_action'] = np.where(rule.actual_gap_bps.between(-300, 300), 'TAKE', 'SKIP')
     actions = {'baseline': baseline, 'rule': rule, **actions}
-    market, cash, suspend, calendar = value_anchor_shadow_inputs_v1(prices=prices,
-        calendar=json.loads((frozen/'calendar.json').read_text(encoding='utf-8')))
+    market, cash, suspend, calendar = value_anchor_shadow_inputs_v1(prices=prices, calendar=calendar)
     targets = pd.DatetimeIndex(rankings[KEY[1]].unique()).sort_values()
     dates = sorted(candidates[KEY[0]].unique())
     portfolios, audits, artifacts = {}, {}, {}
@@ -149,6 +157,4 @@ def evaluate_campaign_v2(*, plan_path, output_root):
                 take_episodes=attribution['candidate']['actual_model_take_episodes'], decision_days=len(dates)))
         artifacts['paired_daily.parquet'] = _parquet_bytes(paired.reset_index())
     artifacts['evaluation.json'] = _json_bytes(report)
-    path = _publish(study_root=root, stage='evaluated', plan_sha256=plan.plan_sha256, parent_sha256=trained['stage_sha256'], artifacts=artifacts)
-    _record(plan, root, parent, 'EVALUATED', path/'manifest.json', generated=1, evaluated=1)
-    return path
+    return artifacts
