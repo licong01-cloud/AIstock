@@ -346,6 +346,10 @@ Nightly 研发验证不消费 DR 备份产物时，nightly-l3 只依赖 runner/r
 
 同模块、相同风险、相容 scope 和相同验证链的 issue 在安全时可优先使用一个 source batch worktree；不批处理时记录简短 split reason。Batch Context Pack 记录 issue 列表、共享文件、逐 issue 验收、提交映射、共享测试和拆分条件。
 
+多个窗口交接同一流水线根因时，沿用已有 owner、BUG/Issue、PR、source HEAD 和最小复现，不因窗口不同重复登记。登记遭遇传输失败时，恢复调用保留原始 intake 参数与指纹，先复验既有 reservation/Issue 状态；不得改写描述后把同一次登记当成新问题。不同根因、运行角色或不相容验收仍分开处理。此约定是交接与恢复规则，不新增全量 worktree/BUG JSON 扫描、全局等待队列或审批门禁。
+
+已有 source merge 与精确 cleanup 授权时，可从 canonical root 的安全工作目录执行 `run --mode merge --merge --merge-close-sync-pr --cleanup --sync-root`，同时传入准确的 `--pr-url`、`--branch`、`--worktree` 和真实验证证据，复用既有 finalizer 完成源码合入、close-sync 合入与自身工作树/分支清理，不必重新进入完整开发验证。未显式传入 cleanup 时默认不删除；源 PR 与 close-sync PR 仍各自满足当前 HEAD 的必需 CI，metadata-only 善后不重跑无关业务测试。尚未通过检查、产物未知、进程引用或调用方仍占用 source 工作目录时，保留既有阻断/延后与精确下一步，不为省一次调用绕过保护。runtime-pending BUG 不重启后端、不关闭 Issue，源工作树只按既有独立清理条件处理；删除完成后的状态记录写入 canonical root，不重新创建已清理的 source 目录。后续 resume 只补未完成阶段，不重复已证明完成的 source CI 或要求第二次相同授权。
+
 source batch 与 close-sync batch 是同一批次的两个阶段：source batch 允许多个 BUG 共用一个源 PR，但必须保持同模块、同风险、同验证链和共享 scope；`close-sync-batch` 只能把这些兼容 BUG 的独立记录同步到同一个已合入 PR/merge identity，并固化每个 BUG 的逐项证据与 compatibility key。不同模块、不同风险、不同 required verification、不同 runtime impact/activation policy、不同 production/dependency gate 或已有不同源 PR 的 BUG 不得通过 `close-sync-batch` 共享一个源身份。`backend_restart_required=true` 或需要 post-restart identity/business-smoke receipt 的 BUG 始终单独走 `finish`/`close-sync`；`none`/`client` 等无后端重启的 BUG 只有在 compatibility signature 完全一致时才可批处理。该规则是效率优化，不减少逐 BUG 的 Issue、状态、证据和门禁。
 
 <a id="rule-issue-close-sync-aggregate-001"></a>

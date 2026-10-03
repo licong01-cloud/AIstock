@@ -20146,8 +20146,16 @@ def build_merge_finalizer_plan(
     )
     if close_sync_root_sync_deferred:
         root_sync_deferrals.append(close_sync_root_sync_deferred)
+    state_root = (
+        _canonical_root()
+        if (cleanup_plan or {}).get("workflow_gate") == "cleanup_done" and not REPO_ROOT.exists()
+        else REPO_ROOT
+    )
     try:
-        postmortem = build_postmortem_plan(bug_id=canonical_bug_id)
+        postmortem = (
+            build_postmortem_plan(bug_id=canonical_bug_id, worktree=str(state_root))
+            if state_root != REPO_ROOT else build_postmortem_plan(bug_id=canonical_bug_id)
+        )
     except WorkflowError as exc:
         postmortem = {
             "schema_version": "aistock_issue_workflow_postmortem_v1",
@@ -20247,6 +20255,7 @@ def build_merge_finalizer_plan(
         _write_state(
             state_bug_id,
             state=durable_state,
+            root=state_root,
             pr_url=source_pr_url,
             commit=merge_commit,
             close_sync=close_sync,
@@ -20283,11 +20292,15 @@ def build_run_plan(
     pr_url: str | None = None,
     merge: bool = False,
     sync_root: bool = False,
+    merge_close_sync_pr: bool = False,
+    cleanup: bool = False,
     branch: str | None = None,
     worktree: str | None = None,
     production_gates: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
+    if (cleanup or merge_close_sync_pr) and mode != "merge":
+        raise WorkflowError("aftercare apply flags require run --mode merge")
     if mode in {"plan", "fix"}:
         if not issue_json:
             active_registry_record = _find_bug_record_from_active_registry(canonical_bug_id)
@@ -20423,8 +20436,8 @@ def build_run_plan(
             allow_missing_linkage=allow_missing_linkage,
             production_gates=production_gates or _production_gates_payload(),
             sync_root=sync_root,
-            merge_close_sync_pr=False,
-            cleanup=False,
+            merge_close_sync_pr=merge_close_sync_pr,
+            cleanup=cleanup,
             apply=True,
             source_pr_check=merge_result.get("verified") if isinstance(merge_result, dict) else None,
         )
@@ -20450,6 +20463,11 @@ def build_run_plan(
         _write_state(
             canonical_bug_id,
             state=wrapper_state,
+            root=(
+                _canonical_root()
+                if (finalizer.get("cleanup") or {}).get("workflow_gate") == "cleanup_done" and not REPO_ROOT.exists()
+                else REPO_ROOT
+            ),
             pr_url=pr_url,
             commit=finalizer.get("source_merge_commit"),
             merge=merge_result,
@@ -22688,12 +22706,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         pr_url=args.pr_url,
         merge=args.merge,
         sync_root=args.sync_root,
+        merge_close_sync_pr=getattr(args, "merge_close_sync_pr", False),
+        cleanup=getattr(args, "cleanup", False),
         branch=args.branch,
         worktree=args.worktree,
         production_gates=_production_gates_payload(args),
     )
     _emit_args(payload, args)
-    return 0 if payload.get("workflow_gate") not in {"validation_evidence_missing", "blocked"} else 2
+    return 0 if payload.get("workflow_gate") not in {"validation_evidence_missing", "blocked", "merged_aftercare_blocked"} else 2
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -23118,6 +23138,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--branch", help="Task branch for post-merge cleanup planning.")
     run.add_argument("--worktree", help="Task worktree for post-merge cleanup planning.")
     run.add_argument("--sync-root", action="store_true", help="Plan canonical root fast-forward after merge.")
+    run.add_argument("--merge-close-sync-pr", action="store_true", help="Complete the existing green-check close-sync merge in the same authorized invocation.")
+    run.add_argument("--cleanup", action="store_true", help="Explicitly authorize the existing exact task cleanup; default source merge does not delete.")
     run.add_argument("--production-ddl-gate", default="noop")
     run.add_argument("--production-frontend-dependency-gate", default="noop")
     run.add_argument("--production-backend-dependency-gate", default="noop")
