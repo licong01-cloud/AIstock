@@ -717,9 +717,170 @@ def validate_selected_model_set(
         raise FormalStateError("hmm_risk_model_receipt_invalid", "selected artifact source/readback differs")
 
 
-def run_two_processes(request_path: Path, output: Path, child_script: Path) -> Path:
-    request = load_request(request_path)
-    output = validate_output_location(output, dataset_root=Path(request["source_identity"]["dataset_root"]))
+def prepare_effect_request(
+    *,
+    original_request: Path,
+    original_acceptance: Path,
+    research: Path,
+    original_child: Path,
+    source: Mapping[str, str],
+) -> dict[str, Any]:
+    from backend.services.hmm_risk.formal_state_effect import VERSION as EFFECT_VERSION, extract_frozen_models
+    from backend.services.hmm_risk.formal_state_input import prepare_effect_baseline, prepare_effect_observations
+
+    # Force the same native pools into view before recording the fixed environment.
+    import hmmlearn.hmm  # noqa: F401
+    import sklearn.cluster  # noqa: F401
+
+    numeric_environment()
+    frozen = extract_frozen_models(
+        read_json(original_request), read_json(original_acceptance), read_json(research), read_json(original_child)
+    )
+    observations = prepare_effect_observations(frozen, source)
+    baseline = prepare_effect_baseline(frozen, source)
+    return receipt(
+        {
+            "schema_version": EFFECT_VERSION + "_request",
+            "frozen": frozen,
+            "observations": observations,
+            "baseline": baseline,
+            "source": dict(source),
+            "fits": 0,
+            "selection_performed": False,
+            "tail_accessed": False,
+        }
+    )
+
+
+def load_effect_request(path: Path, *, expected_sha256: str | None = None) -> dict[str, Any]:
+    from backend.services.hmm_risk.formal_state_effect import (
+        VERSION as EFFECT_VERSION,
+        fail,
+        validate_models,
+        verify_receipt,
+    )
+
+    request = read_json(path)
+    verify_receipt(request, expected_sha256)
+    if (
+        set(request)
+        != {
+            "schema_version",
+            "frozen",
+            "observations",
+            "baseline",
+            "source",
+            "fits",
+            "selection_performed",
+            "tail_accessed",
+            "receipt_sha256",
+        }
+        or request["schema_version"] != EFFECT_VERSION + "_request"
+        or type(request["fits"]) is not int
+        or request["fits"] != 0
+        or request["selection_performed"] is not False
+        or request["tail_accessed"] is not False
+    ):
+        raise fail("effect request contract differs")
+    validate_models(request["frozen"])
+    for key in ("observations", "baseline"):
+        verify_receipt(request[key])
+        if request[key].get("tail_accessed") is not False:
+            raise fail("effect source tail boundary differs")
+    source = request["source"]
+    required = {
+        "candidate_root",
+        "security_identity_manifest",
+        "provider_absence_manifest",
+        "work_parent",
+        "producer_commit",
+    }
+    if (
+        set(source) != required
+        or len(source["producer_commit"]) != 40
+        or any(c not in "0123456789abcdef" for c in source["producer_commit"])
+        or any(not Path(source[key]).is_absolute() for key in required - {"producer_commit"})
+    ):
+        raise fail("effect source locations/producer identity differ")
+    return request
+
+
+def effect_repeat(request: Mapping[str, Any]) -> dict[str, Any]:
+    from backend.services.hmm_risk.formal_state_effect import (
+        VERSION as EFFECT_VERSION,
+        evaluate,
+        predict,
+        verify_receipt,
+    )
+    from backend.services.hmm_risk.formal_state_input import prepare_effect_outcomes
+
+    import hmmlearn.hmm  # noqa: F401
+    import sklearn.cluster  # noqa: F401
+
+    environment = numeric_environment()
+    # Paths, host and process identity are not part of the numeric payload.
+    environment = {
+        "versions": environment["versions"],
+        "thread_variables": environment["thread_variables"],
+        "thread_pools": [{k: v for k, v in pool.items() if k != "filepath"} for pool in environment["thread_pools"]],
+    }
+    frozen, observations = request["frozen"], request["observations"]
+    sealed = predict(frozen, observations)
+    prediction_sha256 = sealed["receipt_sha256"]
+    # This is the first label access. The sealed predictor cannot receive it.
+    labels = prepare_effect_outcomes(frozen, request["source"])
+    result = evaluate(sealed, labels, request["baseline"]["predictions"])
+    verify_receipt(sealed, prediction_sha256)
+    identity = {
+        "contract_version": EFFECT_VERSION,
+        "original_request_sha256": frozen["original_request_sha256"],
+        "original_acceptance_sha256": frozen["original_acceptance_sha256"],
+        "research_sha256": frozen["research_sha256"],
+        "frozen_model_set_sha256": frozen["receipt_sha256"],
+        "model_parameter_set_sha256": canonical_sha256({c: m["model_sha256"] for c, m in frozen["models"].items()}),
+        "model_parameter_sha256_by_sector": {c: m["model_sha256"] for c, m in frozen["models"].items()},
+        "preprocess_sha256": canonical_sha256(frozen["preprocess"]),
+        "projection_set_sha256": canonical_sha256(
+            {c: m["projection"]["receipt_sha256"] for c, m in frozen["models"].items()}
+        ),
+        "semantic_mapping_sha256": canonical_sha256(
+            {c: [m["mapping"], m["utility_means"]] for c, m in frozen["models"].items()}
+        ),
+        "semantic_mapping_and_utility_by_sector": {
+            c: [m["mapping"], m["utility_means"]] for c, m in frozen["models"].items()
+        },
+        "train_eligibility_sha256": frozen["eligibility_receipt_sha256"],
+        "feature_definition_sha256": observations["feature_definition_sha256"],
+        "source_calendar": observations["source_calendar"],
+        "observation_sha256": observations["receipt_sha256"],
+        "prediction_sha256": prediction_sha256,
+        "outcome_sha256": labels["receipt_sha256"],
+        "observation_source": observations["source_identity"],
+        "outcome_source": labels["source_identity"],
+        "baseline_sha256": request["baseline"]["receipt_sha256"],
+        "mapping_sha256": request["baseline"]["mapping_sha256"],
+        "quote_authority_sha256": request["baseline"]["quote_authority_sha256"],
+        "source_commit": request["source"]["producer_commit"],
+    }
+    return receipt(
+        {
+            "schema_version": EFFECT_VERSION + "_repeat",
+            "contract": frozen["contract"],
+            "request_sha256": request["receipt_sha256"],
+            "numeric_environment": environment,
+            "evaluation_input_identity": identity,
+            "result": result,
+            "fits": 0,
+            "selection_performed": False,
+            "tail_accessed": False,
+        }
+    )
+
+
+def run_two_processes(request_path: Path, output: Path, child_script: Path, *, effect: bool = False) -> Path:
+    request = load_effect_request(request_path) if effect else load_request(request_path)
+    dataset_root = request["source"]["candidate_root"] if effect else request["source_identity"]["dataset_root"]
+    output = validate_output_location(output, dataset_root=Path(dataset_root))
     if output.exists():
         raise FormalStateError("hmm_risk_formal_output_collision", "output must be a new directory")
     output.mkdir(parents=True)
@@ -733,11 +894,12 @@ def run_two_processes(request_path: Path, output: Path, child_script: Path) -> P
                     [
                         sys.executable,
                         str(child_script),
-                        "child",
+                        "effect-child" if effect else "child",
                         "--request",
                         str(request_path),
                         "--output",
                         str(result_path),
+                        *(["--request-sha256", request["receipt_sha256"]] if effect else []),
                     ],
                     env=env,
                     stdout=log,
@@ -747,7 +909,18 @@ def run_two_processes(request_path: Path, output: Path, child_script: Path) -> P
             if result.returncode:
                 raise FormalStateError("hmm_risk_formal_child_failed", f"process {number} exited {result.returncode}")
             repeat_paths.append(result_path)
-        final = finalize(request, *(read_json(path) for path in repeat_paths))
+        repeats = [read_json(path) for path in repeat_paths]
+        if effect:
+            from backend.services.hmm_risk.formal_state_effect import close_effect_processes
+
+            if any(repeat.get("request_sha256") != request["receipt_sha256"] for repeat in repeats):
+                raise FormalStateError("hmm_risk_l2_effect_identity_mismatch", "child request differs")
+            final = close_effect_processes(*repeats)
+            write_once(output / "acceptance.json", final)
+            if canonical_json_bytes(read_json(output / "acceptance.json")) != canonical_json_bytes(final):
+                raise FormalStateError("hmm_risk_formal_output_readback_failed", "effect readback differs")
+            return output / "acceptance.json"
+        final = finalize(request, *repeats)
         write_once(output / "acceptance.json", final)
         groups = read_json(repeat_paths[0])["groups"]
         validate_semantic_readback(read_json(output / "acceptance.json"), request, groups)

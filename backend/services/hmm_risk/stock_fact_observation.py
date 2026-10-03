@@ -909,16 +909,24 @@ def build_l1_feature_panel(
     direct_sector_level: str = "L1",
     cross_section_min_coverage: float | None = None,
     use_moneyflow_amount_denominator: bool = False,
+    canonical_sector_codes: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Recompute the approved 7/20 features from L1 raw aggregates."""
 
-    if not aggregates:
+    if not aggregates and canonical_sector_codes is None:
         raise StateModelSetError("cannot build features without L1 aggregates")
     rows = [item.__dict__ for item in aggregates]
-    panel = pd.DataFrame(rows)
+    panel = pd.DataFrame(rows) if rows else pd.DataFrame(columns=list(FeatureDomainDailyAggregate.__dataclass_fields__))
     panel["trade_date"] = pd.to_datetime(panel["trade_date"])
     panel = panel.set_index(["trade_date", "l1_code"]).sort_index()
     codes = tuple(sorted(panel.index.get_level_values("l1_code").unique()))
+    if canonical_sector_codes is not None:
+        declared = tuple(canonical_sector_codes)
+        if declared != tuple(sorted(set(declared))) or not set(codes) <= set(declared):
+            raise StateModelSetError(
+                "explicit frozen feature catalog is duplicated/unordered or excludes source sectors"
+            )
+        codes = declared
     if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
         raise StateModelSetError("direct sector feature panel requires L1/31 or L2/131")
     if len(codes) != expected_sector_count:
@@ -2396,6 +2404,7 @@ def build_c010_feature_domain_panel(
     expected_sector_count: int = 31,
     direct_sector_level: str = "L1",
     diagnostic_only: bool = False,
+    canonical_sector_codes: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
     """Build the approved C-010 formula-v2 panel and immutable per-feature receipts."""
 
@@ -2405,6 +2414,7 @@ def build_c010_feature_domain_panel(
         csi300_returns=csi300_returns,
         expected_sector_count=expected_sector_count,
         direct_sector_level=direct_sector_level,
+        canonical_sector_codes=canonical_sector_codes,
     )
     required_domain_columns = {
         "moneyflow_amount",
