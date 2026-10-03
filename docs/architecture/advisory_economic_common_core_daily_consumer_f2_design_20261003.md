@@ -1,12 +1,14 @@
 # Advisory 日频经济价格建议：共享D内核接入 F2 详细设计
 
-> 2026-10-03；DESIGN_REVIEWED_IMPLEMENTATION_NOT_STARTED。本文交付接入设计，不宣称每日消费者或新收益模型已交付。遵循蓝图§16的业务优先顺序；复用[原每日消费者设计](advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md)，不建立第二套确认、模型平台或执行系统。
+> 2026-10-03；DESIGN_REVIEWED_SOURCE_ADAPTER_MERGED_MODEL_UI_PENDING。本文交付完整接入设计及独立输入切片的进度，不宣称完整每日消费者或新收益模型已交付。遵循蓝图§16的业务优先顺序；复用[原每日消费者设计](advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md)，不建立第二套确认、模型平台或执行系统。
 
 ## 1. Background / Problem
 
 现有v1/v3/v4经济研究均未确认；v4相对Selection日增量-0.1545bps，描述性区间跨零，不能默认进入独立确认。旧九字段每日消费者在独立树已有实现和81日功能验证，但尚未合入，六个浏览器场景仍缺精确安全runner。离线v4及只读bundle已由#5304/#5305交付，不是待办。
 
-新计算切片#5313已本地实现12个D值（原8+新4），统一20个候选/指数交易日、两个市场宽度交易日、实际两腿权重、原名单、复权和缺失语义。它不包含query_gap_bps；该字段只在价格条件查询时加入。27项计算测试、F1五项验收通过；截至本文审核，其修复后HEAD343718cc7的新CI尚在运行，不能称已合入。
+新计算切片#5313已合入a473e3b502d6cb98f363d6cf73a7953eb931cce0（修复后HEAD343718cc7，CI37099710628通过），实现12个D值（原8+新4），统一20个候选/指数交易日、两个市场宽度交易日、实际两腿权重、原名单、复权和缺失语义；27项计算测试、F1五项验收通过。它不包含query_gap_bps；该字段只在价格条件查询时加入。
+
+独立只读输入适配#5319已合入7edd740a82ff91f61ed842a88c615a516a7eff13（HEADab3262320，CI37101259296通过）；14项定向测试、F1四项通过。单D/至多20D块同核、精确键集、有界5SELECT、只读快照和rollback已交付。真实SQL smoke使用已消费2024-07-04与两个合成候选投影：5次source读取、两行12D计算成功；它不是原Selection名单、经济研究、原生身份或全批性能验收。完整模型/网格/API/UI接入仍未完成。
 
 本设计解决下一合格模型的日频接入，不为未达标旧模型新增回放、资格恢复或经济确认。新公式正确不意味着旧模型训练过这些输入，也不意味着盈利。
 
@@ -32,7 +34,7 @@
 
 调用方提供已验证原名单、D/T、包/政策/成本/股票池定义及原run/list或明确受限历史身份。计算hash只绑定规范输入，不证明native/PIT来源。正式和自然路径沿用严格原生合同；EXPLORATORY历史只消费原冻结候选，不改日期、补第6名或重新选股。未发布原名单是DEFERRED，不是合法NO_CANDIDATES。
 
-输入适配复用Advisory已有只读连接/预算约定，单快照REPEATABLE READ、readonly、autocommit=false，finally rollback；查询参数全部显式D边界，日历中的下一T只是时钟，不能查询T行情。原始源映射：`market.kline_daily_raw`的OHLC_li/volume_hand/amount_li、`market.adj_factor`的日因子、`market.stk_limit`报价；沪深300来自`market.index_daily`；S/R/timing来自`market.suspend_d`；权威日历来自`market.trading_calendar`。市场宽度使用已有PIT合格SH/SZ人群定义，绑定其规则与两日实际源值，不能随意换成当天候选或当前指数成员。
+输入适配复用Advisory已有只读连接/预算约定，单快照REPEATABLE READ、readonly、autocommit=false，finally rollback；查询参数全部显式D边界，日历中的下一T只是时钟，不能查询T行情。原始源映射：`market.kline_daily_raw`的OHLC_li/volume_hand/amount_li、`market.adj_factor`的日因子；沪深300来自`market.index_daily`；S/R/timing来自`market.suspend_d`；权威日历来自`market.trading_calendar`。`market.stk_limit`等法规报价属于后续价格网格适配，已交付D-feature source不为无用报价增加第六次查询。市场宽度使用已有PIT合格SH/SZ人群定义，绑定其规则与两日实际源值，不能随意换成当天候选或当前指数成员。
 
 单D原名单≤20，候选raw≤400、指数≤20、市场两日≤20,000、停复牌事件≤800；LIMIT使用预算+1，超限报错不截断成成功。每张数据表按日期和原symbols联合读取，禁止逐股查询。单D适配不读取财报、分钟、labels、收益或退出状态。候选与指数价格统一D可见adj_factor(day)/最后D可见anchor，不能用今天因子回填；新增量比只使用raw volume。原生来源资格另外核对，不由当前数据库历史值证明。
 
@@ -50,8 +52,8 @@
 
 ## 6. Implementation Plan / 优先顺序与放行
 
-1. #5313修复后CI通过再合入；旧UI只等待明确安全计划（六场景、runner-owned frontend/browser、无backend/DB/安装、全部临时X），不改公共runner。
-2. 独立只读输入适配F1：先设计/范围与正负合同，再实现单D和有界块，定向合成连接测试；业务数据读回仅最小已消费D，无收益访问。它是未来模型/日常消费者共同输入能力，不自动重训旧v4。
+1. #5313纯计算、#5319独立输入已分别通过多轮审核、定向测试和必需CI并合入；旧UI等待明确安全计划（六场景、runner-owned frontend/browser、无backend/DB/安装、全部临时X），不改公共runner。
+2. 输入F1已交付单D/有界块、定向连接测试和最小已消费D的只读SQL smoke；后续业务消费仍须核对真实原名单及来源身份，不能把合成请求当业务验收。它是未来模型/日常消费者共同输入能力，不自动重训旧v4。
 3. 新实质模型假设立项时复用同核输入；实际fit需完整新研究身份、可用数据和QE训练资源隔离，不由本设计自动启动。无合格模型只保留基线和明确不可用，不填占位BUY。
 4. 旧消费者六UI工程验收后再接显式模型路由/网格/API/UI；失败旧模型不作额外81日新回放。需要真实权重的工程验收使用已获授权且语义相符的候选，禁止mock冒充收益或native通过。
 5. 每切片至少两轮独立视角自审及修复，最终逐项设计验收、小矩阵一次、CI/PR；完成源合入后仅清理本任务树，用户重启及运行时读回另报。缺外部入口仅暂停对应动作，不以10小时预算填空等待。
@@ -88,7 +90,7 @@
 
 审核1：新内核不是旧模型训练语义证明；新增字段一致不抵消原八字段错接，故模型必须绑定新recipe，不为旧模型补侧车。审核2：旧消费者未合入、专用UI缺口不能用单独family大PR偷渡；单D输入切片独立，但不宣称完整API/UI。审核3：20D/2D、批块日期、S/R timing、真实快照与缺失边界明确；又修正批量来源的精确键集和日历连续性验证，避免外部股票日期组合读或漏掉真实交易日；不默认重跑81D失败模型，不扩公共验证或数据窗口职责。
 
-DESIGN-COMPLIANCE-001：设计逐项F-604..610已完整覆盖；其代码未实现事实明确，不以受限研究/结构检查冒充业务通过。新信息仍可能无经济增量；新recipe只有正确性价值，不保证alpha。没有实质研究假设时停止训练准备，不派生同族模型填时间。
+DESIGN-COMPLIANCE-001：设计逐项F-604..610已完整覆盖；计算与输入切片分别已有F1源码验收，完整模型/API/UI仍未交付，不以受限研究/结构检查冒充业务通过。新信息仍可能无经济增量；新recipe只有正确性价值，不保证alpha。没有实质研究假设时停止训练准备，不派生同族模型填时间。
 
 ## 10. Production Gates / Rollout / Rollback
 
