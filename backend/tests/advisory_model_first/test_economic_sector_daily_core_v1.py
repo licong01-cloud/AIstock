@@ -7,7 +7,9 @@ import pytest
 
 from backend.services.advisory_model_first.economic_daily_feature_core_v1 import D_FEATURES, build_economic_daily_feature_core_v1
 from backend.services.advisory_model_first.economic_entry_labels import KEY
-from backend.services.advisory_model_first.economic_sector_daily_core_v1 import FEATURES, build_sector_daily_features_v1
+from backend.services.advisory_model_first.economic_sector_daily_core_v1 import (
+    FEATURES, build_sector_daily_features_v1, compose_sector_daily_features_v1,
+)
 from backend.services.advisory_model_first.economic_sector_price_source_v1 import SECTOR_FEATURES, sector_dynamic_rows_v1
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
@@ -119,3 +121,36 @@ def test_no_candidates_remains_empty_computation_not_native_success(sector_packe
     frame, receipt = build_sector_daily_features_v1(**sector_packet)
     assert frame.empty and list(frame.columns) == [*KEY, *FEATURES]
     assert receipt['status'] == 'NO_CANDIDATES' and receipt['native_identity'] == 'UNPROVEN'
+
+
+def test_precomputed_source_entry_reuses_same_core_without_a_second_calculation(sector_packet, monkeypatch):
+    import backend.services.advisory_model_first.economic_sector_daily_core_v1 as module
+    expected, expected_receipt = build_sector_daily_features_v1(**sector_packet)
+    core, receipt = build_economic_daily_feature_core_v1(**sector_packet['core_inputs'], calendar=sector_packet['calendar'][1:])
+    def forbidden(*args, **kwargs):
+        raise AssertionError('source results must not trigger another core calculation/read')
+    monkeypatch.setattr(module, 'build_economic_daily_feature_core_v1', forbidden)
+    result, composed = compose_sector_daily_features_v1(core_frame=core, core_receipt=receipt,
+        **{key: value for key, value in sector_packet.items() if key != 'core_inputs'})
+    pd.testing.assert_frame_equal(result, expected)
+    assert composed == expected_receipt
+    receipt['deployable'] = True
+    assert composed['core_receipt']['deployable'] is False
+
+
+@pytest.mark.parametrize('poison', ['feature', 'clock', 'semantics', 'native', 'source_write'])
+def test_precomputed_core_cannot_bypass_content_clock_or_qualification(sector_packet, poison):
+    core, receipt = build_economic_daily_feature_core_v1(**sector_packet['core_inputs'], calendar=sector_packet['calendar'][1:])
+    if poison == 'feature':
+        core.loc[0, 'ret_5'] += .01
+    elif poison == 'clock':
+        core.loc[0, KEY[0]] = pd.Timestamp(sector_packet['calendar'][-1])
+    elif poison == 'semantics':
+        receipt['semantics_sha256'] = '0'*64
+    elif poison == 'native':
+        receipt['source_evidence'] = 'NATIVE_COMPLETE'
+    else:
+        receipt['db_source'] = {'readonly': True, 'database_written': True, 'native_capture': False}
+    with pytest.raises((ValueError, AdvisoryModelFirstError)):
+        compose_sector_daily_features_v1(core_frame=core, core_receipt=receipt,
+            **{key: value for key, value in sector_packet.items() if key != 'core_inputs'})

@@ -1,6 +1,6 @@
 # Advisory M1日频15D纯组合 F1 Feature Card
 
-2026-10-04；完整范围仅单D纯计算及调用方逐D复用，不是数据源/每日API或qualified模型。上层详细设计PR #5422先完成合入，本源码PR不越过它独立宣称daily完成。
+2026-10-04；完整范围仅单D纯计算及调用方逐D复用，不是数据源/每日API或qualified模型。上层详细设计#5422已经合入631b4b272a1f77654f99d163b6a7200e7d57b611并自身清理，本源码PR仍不宣称完整daily完成。
 
 ## Background
 
@@ -13,6 +13,8 @@ M1首次正NAV，core12D与sector3D分别已实现，但每日旧入口9D且fitt
 ## Contracts / 单一入口
 
 `build_sector_daily_features_v1(core_inputs, calendar, classification_rows, sector_quotes, crosswalk, expected_crosswalk_values_sha256)`。
+
+公共只读source已返回core12D/receipt但不返回raw frames，补同核`compose_sector_daily_features_v1(core_frame, core_receipt, ...)`入口让真实source不重复SQL或重算core。先核定确切KEY/12字段有序schema、D/T/有限数值或正常未知、feature内容hash/语义hash、输入hash/数量/正常COMPUTATION_ONLY限制；带db_source时readonly=true/database_written=false/native_capture=false。拒绝自报native/部署资格、clock或内容漂移，防止调用后共享receipt被修改。raw入口只调用既有core一次后进入此公共组合；两个入口同输入须同值/receipt，仍不证明原生来源。
 
 core_inputs仅7个既有核心参数，不含calendar；22个唯一递增date节点明确为21D+T，核心取最后20D+T，sector取21D。日历连续/紧邻T真实性调用方权威来源验证；计算器只核定显式序列，不以排序或hash证明交易日历已原生验证。query/labels/returns/outcomes不进入接口。
 
@@ -28,7 +30,7 @@ sector quotes仅datetime/l2_code_id/sw2_close、最多420行，日期只21D内�
 
 ## Verification Plan
 
-直接测试组合与原两函数逐字段parity、id0/缺分类、缺sector日不压缩、core正常缺失、22/21错位/未来/外部/重复拒绝及crosswalk pin。固定同包同输入重复调用同值/hash，证明逐D复用数学而非完整批量读取。
+直接测试组合与原两函数逐字段parity、id0/缺分类、缺sector日不压缩、core正常缺失、22/21错位/未来/外部/重复拒绝及crosswalk pin。补预计算入口不重复算core、漂移/时钟/语义/伪native/source写声明拒绝。固定完全相同输入重复调用同值/hash，证明逐D复用数学而非完整批量读取；不同source read_at/快照元数据的receipt identity可以不同，不把特征同值称为同一原生capture。
 
 最终直接矩阵一次、Ruff/F1/diff通过后提交PR；#5422先合入、本源码必需CI绿后合入及官方自身清理。此纯scope没有训练或真实新市场输入，不能以合成fixture称业务/PIT/经济验收。真实原D输入/model查询由其它切片另验，不为旧负实验补证。
 
@@ -50,17 +52,17 @@ sector quotes仅datetime/l2_code_id/sw2_close、最多420行，日期只21D内�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-734 | `backend/services/advisory_model_first/economic_sector_daily_core_v1.py` | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`的原两函数逐字段parity/22节点/原序列 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
+| F-734 | `backend/services/advisory_model_first/economic_sector_daily_core_v1.py` | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`的原两函数逐字段parity/22节点/原序列及预计算组合不重算 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
 | F-735 | 同叶_crosswalk/分类键与clock验证 | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`：id0/原KEY/未来分类/重复与pin拒绝 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
 | F-736 | 同叶quote边界及原sector计算复用 | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`：未来/外部/矛盾/超预算拒绝、缺日及正常raw未知保留 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
-| F-737 | 同叶RECIPE/组合receipt及source限制 | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`：重复输入同值hash/COMPUTATION_ONLY/native UNPROVEN/0query | IMPLEMENTED_PURE_CORE_VERIFIED | none |
-| F-738 | Scope/Verification/Production及同叶入口 | artifact: 三文件/15直接测试/Ruff/diff与零I/O；非业务或收益验收 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
+| F-737 | 同叶RECIPE/组合receipt及source限制 | `backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py`：重复输入同值hash、已计算core内容/时钟/语义校验及COMPUTATION_ONLY/native UNPROVEN/0query | IMPLEMENTED_PURE_CORE_VERIFIED | none |
+| F-738 | Scope/Verification/Production及同叶入口 | artifact: 三文件/21直接测试/Ruff/diff与零I/O；非业务或收益验收 | IMPLEMENTED_PURE_CORE_VERIFIED | none |
 
 ## 多轮实际审核及直接验证
 
 方法轮核对原core12/sector3公式逐字段parity、原price query不入D值、21close/20return ddof=1；来源时钟轮核对未来quote先拒绝、原候选KEY/分类clock/crosswalk pin、id0与正常未知，原语义未改变；工程轮核对纯scope、零I/O/正式资格、bounded frames及fixture复用。均为本窗口不同视角自审，不冒称独立外审。
 
-初轮15直接测试中14通过，duplicate分类本已正确拒绝，但复用的AdvisoryModelFirstError不是ValueError，修复测试接受这两种明确合同异常；只复验失败node通过，不改原错误处理或降低拒绝条件。稳定后最终15直接测试一次PASS（2.24秒）、Ruff/diff通过，临时全X。F1初次Implementation标题未被识别，改为明确Implementation Plan后五项PASS；实现矩阵修订后再次校验。测试只证明纯计算，没有加载真实新source/model/行情/收益，不称原生或每日业务通过。
+初轮15直接测试中14通过，duplicate分类本已正确拒绝，但复用的AdvisoryModelFirstError不是ValueError，修复测试接受这两种明确合同异常；只复验失败node通过，不改原错误处理或降低拒绝条件。初版稳定矩阵15 PASS（2.24秒），随后接入轮发现公共source不返回raw frames，直接raw入口会迫使重复SQL：只在本叶增加经receipt核对的公共组合入口及snapshot copy，不改原source/SQL。原15及新增6个直接用例最终21 PASS（3.15秒）、Ruff通过，无再次广回归；临时全X。F1标题/矩阵短证据路径曾不解析，已修为标准标题及精确测试路径；当前再验五项/diff。测试只证明纯计算，没有加载真实新source/model/行情/收益，不称原生或每日业务通过。
 
 ## Rollout / Production Gates
 

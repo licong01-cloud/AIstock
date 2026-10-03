@@ -1,6 +1,9 @@
 """Compose existing D-only formulas; no data I/O or model qualification."""
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import date
+from decimal import Decimal
+from numbers import Real
 import re
 
 import numpy as np
@@ -43,21 +46,65 @@ def _crosswalk(values, expected):
     return result
 
 
-def build_sector_daily_features_v1(*, core_inputs, calendar, classification_rows,
-                                   sector_quotes, crosswalk, expected_crosswalk_values_sha256):
-    """All original candidates, 15 D values, and a computation-only receipt.
-
-    The caller owns source/PIT qualification and authoritative session
-    continuity. T is a clock only, and no observed query price enters here.
-    """
-    if (not isinstance(core_inputs, dict) or set(core_inputs) != CORE_INPUTS
-            or not isinstance(calendar, (tuple, list)) or len(calendar) != 22
+def _calendar(calendar):
+    if (not isinstance(calendar, (tuple, list)) or len(calendar) != 22
             or any(type(day) is not date for day in calendar)
             or list(calendar) != sorted(set(calendar))):
-        raise ValueError('sector daily needs exact core inputs and twenty-one D sessions plus T')
+        raise ValueError('sector daily needs twenty-one D sessions plus T')
+
+
+def build_sector_daily_features_v1(*, core_inputs, calendar, classification_rows,
+                                   sector_quotes, crosswalk, expected_crosswalk_values_sha256):
+    """Compute the same core once, then use the common composition entry."""
+    _calendar(calendar)
+    if not isinstance(core_inputs, dict) or set(core_inputs) != CORE_INPUTS:
+        raise ValueError('sector daily needs exact original core inputs')
+    core, receipt = build_economic_daily_feature_core_v1(**core_inputs, calendar=tuple(calendar[1:]))
+    return compose_sector_daily_features_v1(core_frame=core, core_receipt=receipt, calendar=calendar,
+        classification_rows=classification_rows, sector_quotes=sector_quotes, crosswalk=crosswalk,
+        expected_crosswalk_values_sha256=expected_crosswalk_values_sha256)
+
+
+def compose_sector_daily_features_v1(*, core_frame, core_receipt, calendar, classification_rows,
+                                     sector_quotes, crosswalk, expected_crosswalk_values_sha256):
+    """Consume existing verified core results without repeating source reads.
+
+    Receipt checking proves content compatibility, never native provenance.
+    The caller owns source/PIT qualification and authoritative calendar.
+    """
+    _calendar(calendar)
+    if (not isinstance(core_frame, pd.DataFrame) or len(core_frame) > 20
+            or list(core_frame.columns) != [*KEY, *D_FEATURES] or not isinstance(core_receipt, dict)):
+        raise ValueError('sector daily computed core schema/budget differs')
+    core, core_receipt = core_frame.copy(), deepcopy(core_receipt)
+    checked = _frame(core, KEY, set(KEY) | set(D_FEATURES))
+    if (not checked[KEY[0]].eq(pd.Timestamp(calendar[-2])).all()
+            or not checked[KEY[1]].eq(pd.Timestamp(calendar[-1])).all()
+            or core.instrument.duplicated().any()
+            or not core.instrument.map(lambda value: isinstance(value, str) and bool(re.fullmatch(r'\d{6}\.(SH|SZ|BJ)', value))).all()
+            or len(core) and not core[KEY].equals(checked[KEY])
+            or core.loc[:, D_FEATURES].map(lambda value: value is not None and value is not pd.NA
+                and (isinstance(value, (bool, np.bool_)) or not isinstance(value, (Real, Decimal)))).any().any()
+            or np.isinf(core.loc[:, D_FEATURES].to_numpy(dtype=float)).any()):
+        raise ValueError('sector daily computed core keys, clocks or numeric values differ')
+    if (core_receipt.get('schema_version') != SEMANTICS['schema_version']
+            or core_receipt.get('semantics_sha256') != sha(SEMANTICS)
+            or core_receipt.get('feature_sha256') != sha(_records(core))
+            or not isinstance(core_receipt.get('input_sha256'), str)
+            or re.fullmatch(r'[0-9a-f]{64}', core_receipt['input_sha256']) is None
+            or type(core_receipt.get('candidate_count')) is not int or core_receipt['candidate_count'] != len(core)
+            or core_receipt.get('decision_date') != calendar[-2].isoformat()
+            or core_receipt.get('target_date') != calendar[-1].isoformat()
+            or core_receipt.get('status') != ('NO_CANDIDATES' if core.empty else 'COMPUTED')
+            or core_receipt.get('source_evidence') != 'COMPUTATION_ONLY'
+            or core_receipt.get('old_training_parity') != 'UNPROVEN'
+            or any(core_receipt.get(key) is not False for key in ('deployable', 'outcomes_read', 'new_native_receipt'))):
+        raise ValueError('sector daily computed core receipt or qualification differs')
+    db_source = core_receipt.get('db_source')
+    if db_source is not None and (not isinstance(db_source, dict) or db_source.get('readonly') is not True
+            or db_source.get('database_written') is not False or db_source.get('native_capture') is not False):
+        raise ValueError('sector daily computed core cannot hide a source write or native upgrade')
     mapping = _crosswalk(crosswalk, expected_crosswalk_values_sha256)
-    core, core_receipt = build_economic_daily_feature_core_v1(
-        **core_inputs, calendar=tuple(calendar[1:]))
     if (not isinstance(classification_rows, pd.DataFrame) or not classification_rows.columns.is_unique
             or set(classification_rows.columns) != set(CLASS_FIELDS) or len(classification_rows) > 20):
         raise ValueError('sector daily classification schema/budget differs')
