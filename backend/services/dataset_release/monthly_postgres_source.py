@@ -38,6 +38,7 @@ from .profile import CANONICAL_PROFILE_ID, DatasetProfile
 from .source_authority import (
     FrozenSourceAuthoritySnapshot,
     MonthlySourceAuthority,
+    SourceAuditIncomplete,
     SOURCE_REUSE_MANIFEST_SCHEMA,
     MONTHLY_SECTOR_SOURCE_POLICY,
     imported_source_session_factory,
@@ -47,7 +48,8 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "4"
+POSTGRES_SOURCE_ADAPTER_VERSION = "5"
+REFRESH_READINESS_POLICY = "same_snapshot_all_dated_ranges_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
 _CHANGE_DATASET_ALIASES = {
@@ -60,6 +62,70 @@ _CHANGE_DATASET_ALIASES = {
 
 class MonthlyPostgresSourceError(RuntimeError):
     """The frozen PostgreSQL source handoff is incomplete or ambiguous."""
+
+
+def _preflight_refresh_readiness(
+    authority: MonthlySourceAuthority,
+    session_factory: Any,
+    *,
+    profile: DatasetProfile,
+    cutoff: date,
+) -> None:
+    """Check the existing audit policy before streaming any source payload.
+
+    Both this small control read and the subsequent freeze import the same
+    coordinator snapshot. This is an ordering optimization, not proof of fact
+    completeness: partition checks and the nine frozen-source gates still run.
+    """
+    with session_factory(profile.resource_policy) as session:
+        ledger = authority._freeze_refresh_audit(session, cutoff=cutoff, checkpoint=lambda: None)
+    ranges = sorted(
+        {
+            (
+                str(query.audit_dataset),
+                profile.minute_start_date if query.start_policy == "minute" else profile.start_date,
+            )
+            for query in authority._database_query_specs()
+            if query.date_expression is not None
+        }
+    )
+    blockers = []
+    for dataset, start in ranges:
+        try:
+            ledger.partition_digest(dataset, start, cutoff)
+        except SourceAuditIncomplete as exc:
+            # Only emit the registered ledger's non-secret typed diagnostics.
+            blockers.append(
+                {
+                    key: value
+                    for key, value in exc.context.items()
+                    if key
+                    in {
+                        "dataset",
+                        "start",
+                        "end",
+                        "missing_count",
+                        "missing_sample",
+                        "unusable_count",
+                        "unusable_sample",
+                        "eligible_sources",
+                        "eligible_quality_statuses",
+                    }
+                }
+            )
+    if blockers:
+        raise MonthlyReleaseSourceBlocked(
+            "monthly source refresh-audit readiness is incomplete",
+            context={
+                "reason_code": "BLOCKED_SOURCE_REFRESH_AUDIT_INCOMPLETE",
+                "requested_cutoff": cutoff.isoformat(),
+                "readiness_policy": REFRESH_READINESS_POLICY,
+                "blocker_count": len(blockers),
+                "blockers": blockers,
+                "database_write_performed": False,
+                "source_payload_materialized": False,
+            },
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +299,7 @@ class PostgresMonthlySourceAdapter:
                 "artifact_ready_contract": "dataset_release_artifact_ready_contract_v1",
                 "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
                 "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
+                "refresh_audit_readiness_policy": REFRESH_READINESS_POLICY,
                 "mvcc_partition_reuse": self.mvcc_partition_reuse,
                 "gates": list(SOURCE_GATES),
                 "source_audit_contract": AUDIT_SCHEMA,
@@ -276,16 +343,18 @@ class PostgresMonthlySourceAdapter:
         else:
             baseline_row = None
 
+        session_factory = imported_source_session_factory(
+            identity.snapshot_id,
+            connection_factory=independent_postgres_connection_factory,
+        )
         authority = MonthlySourceAuthority(
             self.profile,
             self.cas,
-            session_factory=imported_source_session_factory(
-                identity.snapshot_id,
-                connection_factory=independent_postgres_connection_factory,
-            ),
+            session_factory=session_factory,
             mvcc_reuse_capability=self.mvcc_partition_reuse,
             sector_source_policy=MONTHLY_SECTOR_SOURCE_POLICY,
         )
+        _preflight_refresh_readiness(authority, session_factory, profile=self.profile, cutoff=target_cutoff)
         frozen = authority.freeze(
             cutoff=target_cutoff,
             baseline_partitions=baseline_partitions,
@@ -406,17 +475,19 @@ class PostgresMonthlySourceAdapter:
         # This does not extend spans or replace the later exact PIT validation.
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT start_date,end_date,status,dirty "
-                "FROM market.stock_universe_pit_state WHERE universe_key=%s",
+                "SELECT start_date,end_date,status,dirty FROM market.stock_universe_pit_state WHERE universe_key=%s",
                 (self.profile.universe_key,),
             )
             row = cursor.fetchone()
         if row is not None and len(row) == 4:
             start, end, status, dirty = row
             if (
-                type(start) is date and type(end) is date
-                and start <= self.profile.start_date and end >= cutoff
-                and status == 'ready' and dirty is False
+                type(start) is date
+                and type(end) is date
+                and start <= self.profile.start_date
+                and end >= cutoff
+                and status == "ready"
+                and dirty is False
             ):
                 return
         else:

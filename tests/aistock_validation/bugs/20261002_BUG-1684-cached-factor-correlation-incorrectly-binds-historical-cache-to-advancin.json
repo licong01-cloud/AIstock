@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1684",
-  "closed_at": null,
+  "closed_at": "2026-10-03T04:45:38.960712Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-02T11:34:32.143836Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d584377e933ef855e7960b4e381df2e658aee798",
+  "fixed_at": "2026-10-02T11:52:35Z",
   "github_issue_number": 5280,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5280",
   "last_seen_at": "2026-10-02T11:34:32.143836Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5284",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,9 +131,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_factor_research/id1545-reference-values-20261003/aftercare/BUG-1684-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1684",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b99dd9080153762523fe5e2c761c4d7badd6c89331b062f5807c96b665623e48",
+      "contract_digest": "8145d6a462e643bf02cc66742f3857dc8fbe70be082c2ae0a9a38e7e11212126",
+      "expected_identity": "d584377e933ef855e7960b4e381df2e658aee798",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-03T04:43:03.563648Z",
+      "mode": "read_only",
+      "observed_identity": "668a5c75aa90effdc125d183a97e222bde8ac9ad",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f1166af6a3524d99695002a7768821fd5b87fc631a555dea72822d0167bf1c87",
+      "receipt_sha256": "22fb47d3d38fd628eebab7eafb0883e3f7bfa6314768667b1c9ed66c926f3064",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "da3fdc42f4fd252e963c0b0606d738fec5b5d68044305586f9a31195ffbc6074",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -142,7 +166,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -151,6 +175,9 @@
     "fingerprint": "e7848dee13e295f1834f1943",
     "source_event_id": "FE-20261002-e7848dee13e2"
   },
+  "validation_evidence": [
+    "ID1545 business-readback passed: historical target PIT fingerprint a8015d9119b5; 594 available+1 unavailable=595; no live PIT lookup or rewrite; existing engine and target writer; unrelated correlations unchanged; isolated reference values not formal cache migration; X:/AIstock_factor_research/id1545-reference-values-20261003/aftercare/business-readback.json"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

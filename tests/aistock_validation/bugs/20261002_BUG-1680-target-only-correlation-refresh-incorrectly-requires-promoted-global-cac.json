@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1680",
-  "closed_at": null,
+  "closed_at": "2026-10-03T04:45:04.237178Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -110,8 +110,8 @@
   },
   "first_seen_at": "2026-10-02T05:50:13.022076Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8673d433c65886bea021021d2b27687e43e7cd12",
+  "fixed_at": "2026-10-02T06:40:29Z",
   "github_issue_number": 5265,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5265",
   "last_seen_at": "2026-10-02T05:50:13.022076Z",
@@ -119,6 +119,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5270",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -149,9 +150,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_factor_research/id1545-reference-values-20261003/aftercare/BUG-1680-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1680",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b99dd9080153762523fe5e2c761c4d7badd6c89331b062f5807c96b665623e48",
+      "contract_digest": "8145d6a462e643bf02cc66742f3857dc8fbe70be082c2ae0a9a38e7e11212126",
+      "expected_identity": "8673d433c65886bea021021d2b27687e43e7cd12",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-03T04:43:02.200078Z",
+      "mode": "read_only",
+      "observed_identity": "668a5c75aa90effdc125d183a97e222bde8ac9ad",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f1166af6a3524d99695002a7768821fd5b87fc631a555dea72822d0167bf1c87",
+      "receipt_sha256": "63141034f859f365f08216d350c675655452142945b42170c16d0d953f7f7061",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "eb5ff669bc863942d94044aa31131b3d8172bd709cdb3af2541a3ca75a6983e4",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -161,7 +185,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -170,6 +194,9 @@
     "fingerprint": "815d081831e3eaab91fd2b0e",
     "source_event_id": "FE-20261002-815d081831e3"
   },
+  "validation_evidence": [
+    "ID1545 business-readback passed: 594 available+1 unavailable=595; official target writer; classification MF money_flow; original source and unrelated correlations preserved; isolated reference values, not formal cache migration; X:/AIstock_factor_research/id1545-reference-values-20261003/aftercare/business-readback.json"
+  ],
   "validation_limitations": [
     "未改动的 test_factor_metrics_authority_static.py 存在两项主线静态失败，canonical main 只读复现相同结果：全仓路径检查命中其他模块、前端 MultiAlphaGroupEditor.tsx 已迁移。未删除、弱化或标绿这些测试。新增两融回归归入已有官方运行时合同测试，CI 分类 passed，无未映射文件。",
     "WSL rdagent-gpu 未安装 pytest；未安装依赖，使用标准库 unittest.mock 与真实相关性引擎在隔离合成数据上执行 fresh-process smoke，Windows/WSL 均 PASS。"
