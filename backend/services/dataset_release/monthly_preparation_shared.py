@@ -413,7 +413,7 @@ def summarize_sector_context(
     states: dict[str, tuple[date, date, int]] = {}
     spans = []
     markets = []
-    frozen_days = fallback_days = required_quotes = 0
+    frozen_days = authority_resolved_days = required_quotes = 0
     used_ids = set()
 
     def close(symbol):
@@ -482,7 +482,7 @@ def summarize_sector_context(
                     frozen_days += 1
                 else:
                     sector_id = int(enricher.enrich({"ts_code": symbol, "trade_date": day})["l2_code_id"])
-                    fallback_days += 1
+                    authority_resolved_days += 1
                 if sector_id not in code_map.id_to_code:
                     raise ComponentPreparationError(f"private PIT membership is unresolved: {symbol}/{day}")
                 if symbol in states and states[symbol][2] != sector_id:
@@ -523,7 +523,7 @@ def summarize_sector_context(
         "membership_symbol_count": int(membership["instrument"].nunique()),
         "membership_span_count": len(spans),
         "frozen_stock_trading_day_count": frozen_days,
-        "member_gap_fill_stock_trading_day_count": fallback_days,
+        "member_gap_fill_stock_trading_day_count": authority_resolved_days,
         "quote_required_sector_date_count": required_quotes,
         "quote_gap_count": 0,
         "membership_gap_count": 0,
