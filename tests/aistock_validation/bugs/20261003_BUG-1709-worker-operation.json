@@ -109,7 +109,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh process: check_monthly_busy_worker.py probes actual attempt239 writer lock with tracked MonthlyReleaseWorker; busy_polls=2, no exception, no request consumption, lock metadata unchanged; source SHA ab1c35344cf82b65165d5e7d34efbcfeb97138cd54ecfabe3f8a15f15769d6b7; operation_claimed=false/database_write=false/candidate_write=false/process_control=false. Unit related matrix57 passed/1 skipped; typed busy provider dependency BUG-1708. This is source-level evidence, not deployed runtime or full SOURCE acceptance."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
