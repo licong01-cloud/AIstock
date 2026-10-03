@@ -136,7 +136,8 @@
     "fresh_process_evidence": [
       "python tmp/issue_workflow/BUG-1697/fresh_process_smoke.py -> WSL/node1 dataset consumer passed; exact frozen manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc; no experiment submissions, dataset writes or process control",
       "python tmp/issue_workflow/BUG-1697/fresh_process_smoke.py -> real WSL and node1 dataset consumer PASS; no submission/write/restart",
-      "python tmp/issue_workflow/BUG-1697/fresh_process_smoke.py -> persistent consumer fix loaded in a fresh process; exact tested task HEAD and source SHA saved in fresh_process_smoke_receipt.json; WSL and node1 exact release-root and frozen manifest PASS; runtime conda lock and executor commit still missing; no experiment submission, dataset writes or service control"
+      "python tmp/issue_workflow/BUG-1697/fresh_process_smoke.py -> persistent consumer fix loaded in a fresh process; exact tested task HEAD and source SHA saved in fresh_process_smoke_receipt.json; WSL and node1 exact release-root and frozen manifest PASS; runtime conda lock and executor commit still missing; no experiment submission, dataset writes or service control",
+      "python tmp/issue_workflow/BUG-1697/fresh_process_smoke.py -> passed on real WSL and node1; exact release root and manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc; source HEAD and SHA recorded; optional lock and commit missing are record-only under BUG-1702; experiment submissions=0 dataset writes=0 process control=false"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
