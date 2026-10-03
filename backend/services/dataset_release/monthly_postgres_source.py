@@ -17,7 +17,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .artifact_ready_source import ArtifactReadySourceBuilder, load_artifact_ready_contract
 from .canonical import canonical_json_bytes, digest_named_fields
@@ -26,10 +26,13 @@ from .contracts import Scope
 from .control_store import ControlStore, SourceSnapshotCatalogSpec
 from .index_sources import independent_postgres_connection_factory
 from .monthly_snapshot import MonthlySnapshotIdentity, SnapshotConnection
+from .monthly_component_preparation import component_dependencies, preparation_plan
+from .monthly_preparation_source import PreparationSourceSnapshot, freeze_preparation_source
 from .monthly_source_audit import close_source_audit
 from .monthly_frozen_source_audit import AUDIT_SCHEMA, audit_frozen_source
 from .monthly_source_producer import (
     MonthlySourceReadSet,
+    MonthlySourcePreparationReadSet,
     SourceArtifact,
 )
 from .monthly_unified import SOURCE_GATES, MonthlyReleaseSourceBlocked, SourceChange
@@ -48,7 +51,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "5"
+POSTGRES_SOURCE_ADAPTER_VERSION = "6"
 REFRESH_READINESS_POLICY = "same_snapshot_all_dated_ranges_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -70,6 +73,7 @@ def _preflight_refresh_readiness(
     *,
     profile: DatasetProfile,
     cutoff: date,
+    operation_id: str | None = None,
 ) -> None:
     """Check the existing audit policy before streaming any source payload.
 
@@ -114,6 +118,15 @@ def _preflight_refresh_readiness(
                 }
             )
     if blockers:
+        preparation = (
+            preparation_plan(
+                operation_id=operation_id,
+                cutoff=cutoff,
+                blocking_datasets=tuple(str(item.get("dataset") or "unknown_source") for item in blockers),
+            )
+            if operation_id is not None
+            else None
+        )
         raise MonthlyReleaseSourceBlocked(
             "monthly source refresh-audit readiness is incomplete",
             context={
@@ -124,6 +137,8 @@ def _preflight_refresh_readiness(
                 "blockers": blockers,
                 "database_write_performed": False,
                 "source_payload_materialized": False,
+                "component_preparation_plan": preparation,
+                "component_preparation_execution": "NOT_STARTED",
             },
         )
 
@@ -276,6 +291,12 @@ class PostgresMonthlySourceAdapter:
     artifact_root: Path
     source_catalog: ControlStore
     mvcc_partition_reuse: bool = False
+    preparation_executor: (
+        Callable[
+            [ProducerContext, PreparationSourceSnapshot, Mapping[str, Any], MonthlySnapshotIdentity], Mapping[str, Any]
+        ]
+        | None
+    ) = None
 
     adapter_id: str = "aistock.monthly.postgres_source"
     adapter_version: str = POSTGRES_SOURCE_ADAPTER_VERSION
@@ -300,6 +321,10 @@ class PostgresMonthlySourceAdapter:
                 "snapshot_policy": "postgres_exported_repeatable_read_read_only_v1",
                 "pit_readiness_policy": "same_snapshot_pre_materialization_v1",
                 "refresh_audit_readiness_policy": REFRESH_READINESS_POLICY,
+                "component_preparation_dependency_digest": digest_named_fields(
+                    "aistock_monthly_component_dependency_v1",
+                    component_dependencies(),
+                ),
                 "mvcc_partition_reuse": self.mvcc_partition_reuse,
                 "gates": list(SOURCE_GATES),
                 "source_audit_contract": AUDIT_SCHEMA,
@@ -311,7 +336,7 @@ class PostgresMonthlySourceAdapter:
         connection: SnapshotConnection,
         identity: MonthlySnapshotIdentity,
         context: ProducerContext,
-    ) -> MonthlySourceReadSet:
+    ) -> MonthlySourceReadSet | MonthlySourcePreparationReadSet:
         predecessor_cutoff = date.fromisoformat(str(context.plan["predecessor"]["cutoff"]))
         target_cutoff = date.fromisoformat(str(context.plan["target_cutoff"]))
         if target_cutoff <= predecessor_cutoff:
@@ -354,7 +379,97 @@ class PostgresMonthlySourceAdapter:
             mvcc_reuse_capability=self.mvcc_partition_reuse,
             sector_source_policy=MONTHLY_SECTOR_SOURCE_POLICY,
         )
-        _preflight_refresh_readiness(authority, session_factory, profile=self.profile, cutoff=target_cutoff)
+        try:
+            _preflight_refresh_readiness(
+                authority,
+                session_factory,
+                profile=self.profile,
+                cutoff=target_cutoff,
+                operation_id=context.operation_id,
+            )
+        except MonthlyReleaseSourceBlocked as blocked:
+            # No optional caller PASS flags: only the code-owned registry may
+            # install the preparation executor. Catch within snapshot.read so
+            # the coordinator can still perform its repair-watermark seal.
+            if self.preparation_executor is None:
+                raise
+            plan = blocked.context.get("component_preparation_plan")
+            if not isinstance(plan, Mapping) or not plan.get("eligible_component_count"):
+                raise
+            frozen_private = freeze_preparation_source(
+                authority,
+                operation_id=context.operation_id,
+                cutoff=target_cutoff,
+                blocking_datasets=tuple(plan["blocking_datasets"]),
+                # The same-snapshot preflight owns the exact unusable count.
+                # A truncated sample or a historical hole cannot authorize
+                # omitting only the tail. Keep those whole domains deferred.
+                deferred_cutoff_datasets=tuple(
+                    sorted(
+                        {
+                            str(item["dataset"])
+                            for item in blocked.context.get("blockers", ())
+                            if isinstance(item, Mapping)
+                            and type(item.get("unusable_count")) is int
+                            and item["unusable_count"] == 1
+                            and item.get("unusable_sample") == [target_cutoff.isoformat()]
+                            and item.get("dataset") in plan["blocking_datasets"]
+                        }
+                    )
+                ),
+            )
+            private_root = (
+                self.artifact_root
+                / "monthly"
+                / context.operation_id
+                / "preparation-inputs"
+                / f"attempt-{context.attempt}"
+            )
+            private_root.mkdir(parents=True, exist_ok=False)
+            # These are ordinary SOURCE domain checks over frozen facts, not
+            # an artificial all-gate PASS. The omitted financing gate stays
+            # failed and cannot seal a full SOURCE or enter its reuse catalog.
+            gates, audits = audit_frozen_source(
+                cas=self.cas,
+                frozen=frozen_private,
+                profile=self.profile,
+                input_root=private_root,
+                artifact_root=self.artifact_root,
+                snapshot_group_id=f"postgres:{identity.snapshot_id}",
+                changes=(),
+                predecessor_cutoff=self.profile.start_date - date.resolution,
+            )
+            audit_path = private_root / "private-source-audit.json"
+            audit_body = {
+                "schema_version": "aistock_monthly_preparation_source_audit_v1",
+                "operation_id": context.operation_id,
+                "cutoff": target_cutoff.isoformat(),
+                "audit_start": self.profile.start_date.isoformat(),
+                "source_manifest_ref": frozen_private.source_manifest_ref.as_dict(),
+                "plan": dict(plan),
+                "gates": [gate.payload() for gate in gates],
+                "consistent_input_set_complete": False,
+                "publication_allowed": False,
+                "database_write_performed": False,
+            }
+            _write_canonical_exclusive(audit_path, audit_body)
+            return MonthlySourcePreparationReadSet(
+                snapshot_group_id=f"postgres:{identity.snapshot_id}",
+                input_artifacts=(
+                    *tuple(
+                        _cas_artifact(self.cas, ref)
+                        for ref in (
+                            frozen_private.source_manifest_ref,
+                            frozen_private.source_audit_ref,
+                            frozen_private.pit_snapshot_ref,
+                        )
+                    ),
+                    *audits,
+                    SourceArtifact(audit_path.relative_to(self.artifact_root).as_posix(), audit_path),
+                ),
+                blocking_context=dict(blocked.context),
+                preparation_token=(frozen_private, audit_body),
+            )
         frozen = authority.freeze(
             cutoff=target_cutoff,
             baseline_partitions=baseline_partitions,
@@ -624,6 +739,35 @@ class PostgresMonthlySourceAdapter:
         if not isinstance(token, SourceSnapshotCatalogSpec):
             raise MonthlyPostgresSourceError("sealed monthly source lacks catalog evidence")
         self.source_catalog.register_source_snapshot(token)
+
+    def preparation_snapshot_sealed(
+        self,
+        context: ProducerContext,
+        token: object,
+        identity: MonthlySnapshotIdentity,
+    ) -> Mapping[str, Any]:
+        """Execute only from the outer coordinator's post-overlap handoff."""
+        if (
+            self.preparation_executor is None
+            or not isinstance(token, tuple)
+            or len(token) != 2
+            or not isinstance(token[0], PreparationSourceSnapshot)
+            or not isinstance(token[1], Mapping)
+            or token[0].operation_id != context.operation_id
+            or token[0].official_cutoff.isoformat() != context.plan.get("target_cutoff")
+            or token[1].get("schema_version") != "aistock_monthly_preparation_source_audit_v1"
+            or token[1].get("operation_id") != context.operation_id
+            or token[1].get("source_manifest_ref") != token[0].source_manifest_ref.as_dict()
+            or not isinstance(token[1].get("gates"), list)
+            or len(token[1]["gates"]) != len(SOURCE_GATES)
+            or {gate.get("gate_id") for gate in token[1]["gates"]} != set(SOURCE_GATES)
+            or any(
+                gate.get("snapshot_group_id") != f"postgres:{identity.snapshot_id}"
+                for gate in token[1].get("gates", ())
+            )
+        ):
+            raise MonthlyPostgresSourceError("private source executor handoff identity differs")
+        return self.preparation_executor(context, token[0], token[1], identity)
 
 
 __all__: Sequence[str] = (
