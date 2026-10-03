@@ -51,6 +51,19 @@ TRAIN_START = date(2022, 1, 1)
 TRAIN_END = date(2024, 6, 30)
 
 
+def _fact_identity(value: Any) -> Any:
+    """Hash invalid source facts honestly without making them numeric inputs."""
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        return {k: _fact_identity(v) for k, v in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_fact_identity(v) for v in value]
+    if isinstance(value, (float, np.floating)) and not math.isfinite(float(value)):
+        return {"non_finite_source_fact": repr(float(value))}
+    return value
+
+
 def _source_a5(
     *,
     month_paths: Sequence[Path],
@@ -170,8 +183,12 @@ def _collect_domains(
     eligibility: Mapping[str, bool],
     aggregates: Mapping[str, list[Any]],
     evidence: Mapping[str, list[dict[str, Any]]],
+    levels: Sequence[str] = ("L1", "L2"),
 ) -> None:
-    for level, prefix in (("L1", "l1"), ("L2", "l2")):
+    if not levels or any(level not in ("L1", "L2") for level in levels) or len(set(levels)) != len(levels):
+        raise FormalStateError("hmm_risk_formal_input_invalid", "invalid direct observation levels")
+    for level in levels:
+        prefix = level.lower()
         projected = project_stock_fact_rows_for_direct_level(rows, sector_level=level)
         for code, group in itertools.groupby(projected, key=lambda row: row["l1_code"]):
             values = list(group)
@@ -532,6 +549,341 @@ def prepare_file_request(
         source_identity=source_identity,
         industry_authority=industry_authority,
         policy=policy,
+    )
+
+
+def _effect_stock_facts(
+    frozen: Mapping[str, Any],
+    source: Mapping[str, Any],
+    *,
+    start: date,
+    end: date,
+) -> tuple[dict[str, Any], tuple[date, ...], list[Any], dict[str, Any]]:
+    """Bounded L2 stock-fact construction; original training entry is untouched.
+
+    Only daily-basic is read before the lookback window to recover real strict
+    predecessors. No forward-fill, same-day substitution or A5 refit occurs.
+    """
+    from backend.services.hmm_risk import rotation_l1_input_bundle as reader
+    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, END, fail, validate_models
+    from backend.services.hmm_risk.formal_state_executor import validate_output_location
+
+    validate_models(frozen)
+    if not SOURCE_START <= start <= end <= END:
+        raise fail("effect source window exceeds its approved boundary")
+    assets = reader.load_rotation_l1_direct_v2_source_assets(
+        Path(source["candidate_root"]),
+        security_identity_manifest=Path(source["security_identity_manifest"]),
+        provider_absence_manifest=Path(source["provider_absence_manifest"]),
+        data_window_end=end,
+        frozen_release_binding=frozen_release_binding(),
+    )
+    if assets["inventory"]["qlib"]["calendar_sha256"] != CALENDAR_SHA:
+        raise fail("effect calendar file changed", reason="identity_mismatch")
+    calendar_all = tuple(reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt"))
+    calendar = tuple(day for day in calendar_all if SOURCE_START <= day <= end)
+    if not calendar or start not in calendar or calendar[-1] != end:
+        raise fail("effect source boundary is not an open session")
+    adapter = reader._industry_adapter(
+        frozen["industry_authority"], forbidden_roots=(Path(__file__).resolve().parents[3],)
+    )
+    _, l2 = reader._canonical_sector_codes(adapter)
+    if list(l2) != frozen["catalog"]:
+        raise fail("effect official text-code projection changed", reason="identity_mismatch")
+    security = reader._SecurityResolutionIndex(
+        load_security_source_identity_manifest(
+            assets["files"]["security_identity"],
+            expected_sha256=canonical_sha256(reader._read_json_object(assets["files"]["security_identity"])),
+        )
+    )
+    provider = load_provider_absence_manifest(
+        assets["files"]["provider_absence"],
+        expected_sha256=canonical_sha256(reader._read_json_object(assets["files"]["provider_absence"])),
+    )
+    if (
+        security.evidence()["manifest_sha256"] != frozen["security_identity_sha256"]
+        or provider.evidence()["manifest_sha256"] != frozen["provider_absence_sha256"]
+    ):
+        raise fail("effect source authorities differ from the original request", reason="identity_mismatch")
+    spans = reader._parse_instrument_spans(assets["instrument_universe_path"])
+    projection = reader._IndustryProjectionIndex(adapter, calendar=calendar)
+    suspension = reader._load_suspend_keys(
+        assets["files"]["suspend_data"],
+        assets["files"]["suspend_manifest"],
+        calendar=calendar,
+        expected_release_cutoff=assets["release_cutoff"],
+        expected_universe_key=assets["universe_key"],
+        bounded=True,
+    )
+    initial = {}
+    earlier = [day for day in calendar if day < start]
+    if earlier:
+        # Reading only real historical circ-mv facts is necessary context, not
+        # re-spooling the old training prices or rebuilding its request.
+        boundaries = [
+            (key, list(values)) for key, values in itertools.groupby(earlier, key=lambda d: (d.year, d.month))
+        ]
+        for _, month in boundaries:
+            frame = reader._load_fixed_h5_window(
+                assets["files"]["daily_basic"],
+                expected_columns=reader._DAILY_BASIC_COLUMNS,
+                expected_dtype="<f4",
+                start=month[0],
+                end=month[-1],
+                labels_prevalidated=True,
+            )
+            _, updates = reader._daily_basic_lookup(frame)
+            for day, facts in updates.items():
+                for symbol, value, status, reason in facts:
+                    initial[symbol] = (day, value, status, reason)
+    aggregates = {"L2": []}
+    entries = {"l2_domain_receipts": [], "l2_invalid_price_domain": []}
+    structural = {}
+    row_hashes = []
+
+    def collect(day: date, rows: Sequence[Mapping[str, Any]]) -> None:
+        present = {str(row["l2_code"]) for row in rows}
+        structural[day.isoformat()] = {code: code in present for code in frozen["catalog"]}
+        _collect_domains(
+            day, rows, eligibility=frozen["eligibility"], aggregates=aggregates, evidence=entries, levels=("L2",)
+        )
+        row_hashes.append([day.isoformat(), canonical_sha256(_fact_identity(rows))])
+
+    work_parent = validate_output_location(Path(source["work_parent"]), dataset_root=assets["release_root"])
+    work_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="hmm-l2-effect-", dir=work_parent) as temp:
+        month_paths = reader._spool_qlib_months(
+            assets["qlib_root"],
+            calendar=calendar_all,
+            spans=spans,
+            spool_root=Path(temp) / "months",
+            window_start=start,
+            window_end=end,
+        )
+        reader._build_stock_fact_aggregates(
+            month_paths=month_paths,
+            assets=assets,
+            calendar=calendar,
+            spans=spans,
+            adapter=projection,
+            security=security,
+            provider_absence=provider,
+            suspension_keys=suspension,
+            contributor_eligibility=frozen["eligibility"],
+            window_start=start,
+            window_end=end,
+            build_feature_domain_aggregates=False,
+            day_rows_callback=collect,
+            initial_circ_state=initial,
+        )
+    window = tuple(day for day in calendar if start <= day <= end)
+    if set(structural) != {day.isoformat() for day in window}:
+        raise fail("stock-fact callback calendar has an internal gap")
+    domain_reasons = {
+        (entry["trade_date"], entry["sector_code"]): entry["price_domain_reason_code"]
+        for entry in entries["l2_invalid_price_domain"]
+    }
+    identity = {
+        "release_identity": assets["release_identity"],
+        "source_inventory_sha256": assets["inventory"]["inventory_sha256"],
+        "source_dates": [d.isoformat() for d in window],
+        "source_facts_sha256": canonical_sha256(row_hashes),
+        "strict_prior_circ_context_sha256": canonical_sha256(
+            {code: [d.isoformat(), v, status, reason] for code, (d, v, status, reason) in sorted(initial.items())}
+        ),
+        "domain_lineage_sha256": canonical_sha256(entries),
+        "structural_membership": structural,
+        "domain_reasons": domain_reasons,
+    }
+    # Tuple keys are internal only and never passed to canonical JSON.
+    return assets, window, aggregates["L2"], identity
+
+
+def prepare_effect_observations(frozen: Mapping[str, Any], source: Mapping[str, Any]) -> dict[str, Any]:
+    from backend.services.hmm_risk import rotation_l1_input_bundle as reader
+    from backend.services.hmm_risk.formal_state_effect import (
+        CALENDAR_SHA,
+        CONTINUATION_START,
+        END,
+        OBSERVATION_SCHEMA,
+        calendar_contract,
+        fail,
+    )
+
+    calendar_path = Path(source["candidate_root"]) / "components/daily_bin_candidate/calendars/day.txt"
+    if reader._sha256_file(calendar_path) != CALENDAR_SHA:
+        raise fail("effect calendar changed", reason="identity_mismatch")
+    full = [d for d in reader._load_qlib_calendar(calendar_path) if SOURCE_START <= d <= END]
+    schedule = calendar_contract([d.isoformat() for d in full])
+    last_as_of = date.fromisoformat(schedule["as_of"][END.isoformat()])
+    index = full.index(CONTINUATION_START)
+    if index < 260:
+        raise fail("250-day C010 plus stock-return warmup unavailable")
+    assets, window, aggregates, identity = _effect_stock_facts(frozen, source, start=full[index - 260], end=last_as_of)
+    panel, definition, cross = build_c010_feature_domain_panel(
+        aggregates,
+        trading_dates=window,
+        csi300_returns={d: assets["benchmark"][d] for d in window},
+        expected_sector_count=131,
+        direct_sector_level="L2",
+        canonical_sector_codes=frozen["catalog"],
+    )
+    if definition != frozen["feature_definition"]:
+        raise fail("original C010 feature definition changed", reason="identity_mismatch")
+    continuation = [d.isoformat() for d in full if CONTINUATION_START <= d <= last_as_of]
+    filter_calendar = frozen["prefix_calendar"] + continuation
+    sector_rows = {}
+    for code in frozen["catalog"]:
+        matrix = (
+            panel.xs(code, level="l1_code")
+            .reindex(pd.to_datetime(continuation))[list(ALL_CORE_FEATURES)]
+            .to_numpy(dtype=np.float64)
+        )
+        finite = np.isfinite(matrix).all(axis=1)
+        sector_rows[code] = {
+            "positions": [len(frozen["prefix_calendar"]) + i for i in np.flatnonzero(finite).tolist()],
+            "values": matrix[finite].tolist(),
+            "na_reasons": {
+                day: identity["domain_reasons"].get((day, code), "hmm_risk_c010_observation_unavailable")
+                for i, day in enumerate(continuation)
+                if not finite[i]
+            },
+        }
+    source_identity = {k: v for k, v in identity.items() if k not in {"structural_membership", "domain_reasons"}}
+    return receipt(
+        {
+            "schema_version": OBSERVATION_SCHEMA,
+            "model_set_sha256": frozen["receipt_sha256"],
+            "feature_names": list(ALL_CORE_FEATURES),
+            "calendar": filter_calendar,
+            "source_calendar": [d.isoformat() for d in full],
+            "sectors": sector_rows,
+            "structural_membership": {d: identity["structural_membership"][d] for d in continuation},
+            "eligibility_receipt_sha256": frozen["eligibility_receipt_sha256"],
+            "source_identity": source_identity,
+            "feature_definition_sha256": canonical_sha256(definition),
+            "cross_section_lineage_sha256": canonical_sha256(cross),
+            "tail_accessed": False,
+        }
+    )
+
+
+def prepare_effect_outcomes(frozen: Mapping[str, Any], source: Mapping[str, Any]) -> dict[str, Any]:
+    """Separate label source access, invoked only after the prediction is sealed."""
+    from backend.services.hmm_risk import rotation_l1_input_bundle as reader
+    from backend.services.hmm_risk.formal_state_effect import END, START, composite_outcomes
+
+    calendar_path = Path(source["candidate_root"]) / "components/daily_bin_candidate/calendars/day.txt"
+    full = [d for d in reader._load_qlib_calendar(calendar_path) if SOURCE_START <= d <= END]
+    # 10 previous stock prices suffice for the unchanged daily aggregate. No
+    # C010 rolling features or contributor requalification are needed for y.
+    start = full[full.index(START) - 10]
+    assets, window, aggregates, identity = _effect_stock_facts(frozen, source, start=start, end=END)
+    returns = {d.isoformat(): {code: None for code in frozen["catalog"]} for d in window}
+    for aggregate in aggregates:
+        returns[aggregate.trade_date.isoformat()][aggregate.l1_code] = float(aggregate.l1_return)
+    body = composite_outcomes(
+        [d.isoformat() for d in full],
+        returns,
+        {d.isoformat(): assets["benchmark"][d] for d in window},
+        frozen["catalog"],
+    )
+    return receipt(
+        {
+            **{k: v for k, v in body.items() if k != "receipt_sha256"},
+            "source_identity": {
+                k: v for k, v in identity.items() if k not in {"structural_membership", "domain_reasons"}
+            },
+        }
+    )
+
+
+def prepare_effect_baseline(frozen: Mapping[str, Any], source: Mapping[str, Any]) -> dict[str, Any]:
+    """Reuse the original moneyflow delta input/formula without its old label."""
+    from backend.services.hmm_risk import rotation_l1_input_bundle as reader
+    from backend.services.hmm_risk import rotation_l2_input as baseline_reader
+    from backend.services.hmm_risk.formal_state_effect import END, START, calendar_contract, fail
+    from backend.services.hmm_risk.rotation_l2 import predictions_for_calendar
+
+    assets = reader.load_rotation_l1_direct_v2_source_assets(
+        Path(source["candidate_root"]),
+        security_identity_manifest=Path(source["security_identity_manifest"]),
+        provider_absence_manifest=Path(source["provider_absence_manifest"]),
+        data_window_end=date(2026, 3, 30),
+        frozen_release_binding=frozen_release_binding(),
+    )
+    root = assets["release_root"]
+    manifest = reader._read_json_object(root / "qe_dataset_manifest.json")
+    components = manifest["components"]
+    context = {
+        name: baseline_reader._require_file(root, str(components[key]["path"]), str(components[key]["sha256"]))
+        for name, key in (
+            ("code_map", "sector_code_map"),
+            ("quote", "sector_quote_availability"),
+            ("membership", "sector_membership_spans"),
+        )
+    }
+    code_map = baseline_reader.load_release_sw_l2_code_map(context["code_map"])
+    quote = baseline_reader.load_sector_quote_availability(context["quote"], code_map=code_map, required_end=END)
+    if list(code_map.member_backed_codes) != frozen["catalog"]:
+        raise fail("baseline release catalog differs from the HMM catalog")
+    membership = pd.read_parquet(context["membership"])
+    baseline_reader.validate_membership_frame(
+        membership, id_to_code=code_map.id_to_code, required_start=START, required_end=END
+    )
+    membership["instrument"] = membership["instrument"].astype(str).str.strip().str.upper()
+    membership["start_date"] = pd.to_datetime(membership["start_date"]).dt.date
+    membership["end_date"] = pd.to_datetime(membership["end_date"]).dt.date
+    full = [
+        d for d in reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt") if SOURCE_START <= d <= END
+    ]
+    schedule = calendar_contract([d.isoformat() for d in full])
+    source_days = full[full.index(START) - 25 : full.index(END)]
+    security = load_security_source_identity_manifest(
+        assets["files"]["security_identity"], expected_sha256=frozen["security_identity_sha256"]
+    )
+    provider = load_provider_absence_manifest(
+        assets["files"]["provider_absence"], expected_sha256=frozen["provider_absence_sha256"]
+    )
+    daily, amount_sha = baseline_reader._daily_aggregates(
+        root=root,
+        manifest=manifest,
+        membership=membership,
+        id_to_code=code_map.id_to_code,
+        quote_entries=quote.entries,
+        catalog=frozen["catalog"],
+        source_days=source_days,
+        provider_path=assets["instrument_universe_path"],
+        suspend_path=assets["files"]["suspend_data"],
+        moneyflow_path=assets["files"]["moneyflow"],
+        qlib_root=assets["qlib_root"],
+        calendar=full,
+        security_identity=security,
+        provider_absence=provider,
+        bounded_suspend=True,
+    )
+    rows = predictions_for_calendar(
+        calendar=full,
+        catalog=frozen["catalog"],
+        names=frozen["names"],
+        daily_rows=daily,
+        decision_days=[date.fromisoformat(d) for d in schedule["decisions"]],
+    )
+    return receipt(
+        {
+            "schema_version": "hmm_risk_l2_postcalibration_baseline_v1",
+            "predictions": rows,
+            "source_dates": [d.isoformat() for d in source_days],
+            "daily_aggregate_sha256": canonical_sha256(daily),
+            "mapping_sha256": code_map.member_backed_digest,
+            "quote_authority_sha256": quote.quote_availability_digest,
+            "component_pins": {
+                k: components[k] for k in ("sector_code_map", "sector_quote_availability", "sector_membership_spans")
+            },
+            "amount_window_sha256": amount_sha,
+            "target_accessed": False,
+            "tail_accessed": False,
+        }
     )
 
 

@@ -263,13 +263,38 @@ def _daily_index(rows: Sequence[Mapping[str, Any]]) -> dict[tuple[date, str], di
 
 def build_predictions(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
     validated = validate_input_bundle(bundle)
-    calendar = validated["calendar"]
-    catalog = validated["catalog_codes"]
-    names = validated["sector_names"]
-    daily = _daily_index(bundle["daily_aggregates"])
-    development_days = [value for value in calendar if DEVELOPMENT_START <= value <= DEVELOPMENT_END]
+    return predictions_for_calendar(
+        calendar=validated["calendar"],
+        catalog=validated["catalog_codes"],
+        names=validated["sector_names"],
+        daily_rows=bundle["daily_aggregates"],
+        decision_days=[value for value in validated["calendar"] if DEVELOPMENT_START <= value <= DEVELOPMENT_END],
+    )
+
+
+def predictions_for_calendar(
+    *,
+    calendar: Sequence[date],
+    catalog: Sequence[str],
+    names: Mapping[str, str],
+    daily_rows: Sequence[Mapping[str, Any]],
+    decision_days: Sequence[date],
+) -> list[dict[str, Any]]:
+    """The unchanged 25/20/5 baseline formula, for an explicitly authenticated calendar.
+
+    New callers authenticate their own source contract; this does not weaken
+    the original input-bundle validator or change its development window.
+    """
+    calendar = list(calendar)
+    if calendar != sorted(set(calendar)) or list(catalog) != sorted(set(catalog)):
+        raise _fail("source_invalid", "baseline calendar/catalog are not canonical")
+    if set(names) != set(catalog) or list(decision_days) != sorted(set(decision_days)):
+        raise _fail("source_invalid", "baseline names/decisions differ")
+    if any(day not in calendar or calendar.index(day) < FEATURE_DAYS for day in decision_days):
+        raise _fail("history_unavailable", "baseline decisions lack 25 prior sessions")
+    daily = _daily_index(daily_rows)
     rows: list[dict[str, Any]] = []
-    for trade_date in development_days:
+    for trade_date in decision_days:
         offset = calendar.index(trade_date)
         as_of_date = calendar[offset - 1]
         source_days = calendar[offset - FEATURE_DAYS : offset]
@@ -348,15 +373,18 @@ def _rank_ic(scores: Mapping[str, float], outcomes: Mapping[str, float]) -> floa
     codes = sorted(set(scores) & set(outcomes))
     if len(codes) < 2:
         return None
-    left = np.asarray([_average_ranks(scores)[code] for code in codes], dtype=np.float64)
-    right = np.asarray([_average_ranks(outcomes)[code] for code in codes], dtype=np.float64)
+    score_ranks, outcome_ranks = _average_ranks(scores), _average_ranks(outcomes)
+    left = np.asarray([score_ranks[code] for code in codes], dtype=np.float64)
+    right = np.asarray([outcome_ranks[code] for code in codes], dtype=np.float64)
     if float(np.std(left)) == 0.0 or float(np.std(right)) == 0.0:
         return None
     value = float(np.corrcoef(left, right)[0, 1])
     return value if math.isfinite(value) else None
 
 
-def _newey_west(calendar: Sequence[date], values: Mapping[date, float]) -> dict[str, Any]:
+def _newey_west(calendar: Sequence[date], values: Mapping[date, float], *, lag: int = HAC_LAG) -> dict[str, Any]:
+    if type(lag) is not int or lag < 0:
+        raise _fail("source_invalid", "HAC lag must be a nonnegative integer")
     ordered = [day for day in calendar if day in values]
     if len(ordered) < 2:
         return {"status": "HAC_UNAVAILABLE", "mean": None, "lower": None, "upper": None, "n": len(ordered)}
@@ -364,14 +392,13 @@ def _newey_west(calendar: Sequence[date], values: Mapping[date, float]) -> dict[
     centered = {day: values[day] - mean for day in ordered}
     positions = {day: index for index, day in enumerate(calendar)}
     variance_numerator = math.fsum(value * value for value in centered.values())
-    for lag in range(1, HAC_LAG + 1):
+    for distance in range(1, lag + 1):
         covariance = math.fsum(
-            centered[left] * centered[right]
+            centered[left] * centered[calendar[positions[left] - distance]]
             for left in ordered
-            for right in ordered
-            if positions[left] - positions[right] == lag
+            if positions[left] >= distance and calendar[positions[left] - distance] in centered
         )
-        variance_numerator += 2.0 * (1.0 - lag / (HAC_LAG + 1.0)) * covariance
+        variance_numerator += 2.0 * (1.0 - distance / (lag + 1.0)) * covariance
     variance = variance_numerator / (len(ordered) ** 2)
     if not math.isfinite(variance) or variance < 0:
         return {"status": "HAC_UNAVAILABLE", "mean": mean, "lower": None, "upper": None, "n": len(ordered)}
