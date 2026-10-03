@@ -14,7 +14,7 @@ H-SELECTION-STATE-VALUE-1：某股票连续进入当前包前5/前20及D前排�
 
 设计树`F:/Dev/AIstock_worktrees/advisory-selection-state-price-design-20261004` / `feat/advisory-selection-state-price-design-20261004`本次只写本设计。最新主线现有蓝图§16.6/P2已允许核定D历史状态信息；源码合入前同步蓝图当前队列，不能把未实现设计列为已完成模型。
 
-源码树在本设计合入、M1正式研究终态且源码#5414完成之后，从最新origin/main另建。允许源码范围仅：
+本设计合入后，从最新origin/main另建自己的源码树，可在M1等候时先实现新叶的纯D状态计算及其直接测试，不触碰M1源码/实现hash、不fit、不读取收益。共用模型/阶段提取和M5正式研究仍等待M1正式终态及源码#5414交付。允许源码范围仅：
 
 - backend/services/advisory_model_first/economic_selection_state_price_v1.py（纯D历史信息、plan与固定模型适配）
 - backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py（来源、登记、prepare/fit/evaluate的薄适配）
@@ -86,7 +86,7 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 
 ## 10. Implementation Plan / 执行顺序与终止
 
-本设计三轮审核修订/校验/合入→M1正式研究终态及#5414交付→最新main自身源码树、M1同核纯数学/原子编排的最小提取及M1回归→D历史三字段纯计算、最薄来源/模型适配→多轮源码审核和最小测试→clean source→一candidate四fit预登记/完整prepare→QE空闲时单次fit/完整四臂→真实蓝图结果/PR/CI/合入/自身清理。
+本设计三轮审核修订/校验/合入→最新main自身源码树、仅新叶D历史三字段纯计算/直接测试（可在M1等候时准备）→M1正式研究终态及#5414交付→M1同核纯数学/原子编排的最小提取及M1回归、最薄来源/模型适配→多轮源码审核和最小测试→clean source→一candidate四fit预登记/完整prepare→QE空闲时单次fit/完整四臂→真实蓝图结果/PR/CI/合入/自身清理。
 
 工程≤4h、四fit≤30min、2线程/RSS≤2GiB/新增工件≤2GiB、≤7720候选/500000价行，不另建大数据或UI平台；长实验30min检查，短实验立即接续。截止沿48h总任务，不重计48h；源不成立或负向只结束本候选，用户停止或总预算到期才结束本轮。
 
