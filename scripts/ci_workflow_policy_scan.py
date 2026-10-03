@@ -581,7 +581,8 @@ def build_contract_evidence(
             has_event_bound_base_preparation(workflow_text.get(name, ""), manual=name != "test.yml")
             for name in BASE_FETCH_RETRY_WORKFLOWS
         )
-        and "for index in range(max(1, int(attempts)))" in changed_files_text
+        and "for index in range(min(3, max(1, int(attempts))))" in changed_files_text
+        and "timeout=min(fetch_timeout, remaining)" in changed_files_text
         and '"--no-write-fetch-head"' in changed_files_text
         and 'f"--deepen={max(1, int(deepen_by))}"' in changed_files_text
         and '"merge-base"' in changed_files_text
