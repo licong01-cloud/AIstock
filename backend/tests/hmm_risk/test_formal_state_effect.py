@@ -597,6 +597,18 @@ def test_model_extraction_authenticates_original_parameters_without_fitting(inpu
         subject.extract_frozen_models(request, original, research, reseal(bad))
 
 
+def test_cli_rejects_effect_prepare_without_original_acceptance(tmp_path, monkeypatch, capsys):
+    from scripts.hmm_risk import run_formal_state_model_set as cli
+
+    output = tmp_path / "effect.json"
+    monkeypatch.setattr("sys.argv", ["executor", "effect-prepare", "--output", str(output)])
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    assert "effect-prepare requires --original-acceptance" in capsys.readouterr().err
+    assert not output.exists() and not output.with_name(output.name + ".failure.json").exists()
+
+
 def test_cli_rejects_effect_child_without_parent_pin(tmp_path, monkeypatch, capsys):
     from scripts.hmm_risk import run_formal_state_model_set as cli
 

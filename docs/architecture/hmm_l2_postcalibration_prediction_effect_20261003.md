@@ -200,6 +200,8 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 第三轮审核修订：把验收矩阵从过时的“设计审核/未实施”更新为源码直接测试状态；末尾批准后复核明确标为历史记录，不能覆盖当前状态。复核新观察/标签分离、冻结模型与人口分母、原delta/API版本隔离及迁移旧约束保持；没有新增阈值、资源门或自动重训。数据库迁移未验证、正式效果与真实UI未执行仍明确保留，不以源码/单元测试通过冒充这些完成状态。
 
+PR #5345首次CI扩展矩阵为229 passed/2 failed：新增effect-prepare合并CLI报错文案导致两个旧l2-readback/preflight提示合同断言失败，非模型或流水线故障。已在同一PR恢复旧模式原提示，并为effect-prepare保留独立校验；两个原失败节点及两个新模式校验共4 passed。未删除、放宽旧测试，未改变参数接受规则、模型合同或CI配置；最终CI结果以修复后的PR HEAD为准，首次CI失败不能记为全绿。
+
 完整HMM矩阵与mock UI交现有CI计划hmm_risk_pr_slice/hmm_risk_ui；本任务未启动用户或runner服务，未执行真实浏览器验收。SQL未执行、正式effect-prepare/effect-run未运行；没有任何真实新预测/IC、DB写入、runtime activation或QE收益结论。达到代码PR交付边界后等待独立合入授权，不绕过已合入源码要求读取正式新窗口。
 
 ## 正式审核记录（v0.1起草时的设计审核历史，不代替实现/模型验收）

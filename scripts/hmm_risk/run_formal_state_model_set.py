@@ -56,8 +56,11 @@ def main() -> int:
     parser.add_argument("--original-child", type=Path)
     parser.add_argument("--request-sha256")
     args = parser.parse_args()
-    if (args.mode in ("l2-readback", "effect-prepare")) != (args.original_acceptance is not None):
-        parser.error("l2-readback/effect-prepare require --original-acceptance")
+    if args.mode == "effect-prepare":
+        if args.original_acceptance is None:
+            parser.error("effect-prepare requires --original-acceptance")
+    elif (args.mode == "l2-readback") != (args.original_acceptance is not None):
+        parser.error("only l2-readback requires --original-acceptance")
     if (args.mode == "effect-prepare") != (args.research_readback is not None and args.original_child is not None):
         parser.error("effect-prepare requires --research-readback and --original-child")
     if args.mode != "effect-prepare" and (args.research_readback is not None or args.original_child is not None):
