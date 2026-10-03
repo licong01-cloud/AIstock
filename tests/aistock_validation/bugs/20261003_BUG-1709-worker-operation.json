@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "typed busy不会退出worker；空/全忙queue返回None，可运行任务仍处理一次；其他异常传播；auto activation逻辑保持原样",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_worker.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1709-worker-operation.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_worker.py",
-      "backend/tests/dataset_release/test_monthly_worker.py"
+      "backend/tests/dataset_release/test_monthly_worker.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1709-worker-operation.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_worker.py",
@@ -109,18 +115,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Windows fresh process: check_monthly_busy_worker.py probes actual attempt239 writer lock with tracked MonthlyReleaseWorker; busy_polls=2, no exception, no request consumption, lock metadata unchanged; source SHA ab1c35344cf82b65165d5e7d34efbcfeb97138cd54ecfabe3f8a15f15769d6b7; operation_claimed=false/database_write=false/candidate_write=false/process_control=false. Unit related matrix57 passed/1 skipped; typed busy provider dependency BUG-1708. This is source-level evidence, not deployed runtime or full SOURCE acceptance."
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
