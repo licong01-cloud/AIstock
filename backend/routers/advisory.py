@@ -37,6 +37,9 @@ from backend.services.advisory_program import (
 from backend.services.advisory_delivery_preflight import AdvisoryDeliveryPreflightService
 from backend.services.advisory_model_first.model_inference import AdvisoryModelShadowService
 from backend.services.advisory_model_first.entry_price_daily_service import AdvisoryEntryPriceDailyService
+from backend.services.advisory_model_first.economic_entry_daily_service import (
+    AdvisoryEconomicEntryDailyServiceV1, build_environment_economic_entry_daily_service_v1,
+)
 from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
 from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
@@ -248,6 +251,10 @@ def get_advisory_model_shadow_service() -> AdvisoryModelShadowService:
 
 def get_advisory_entry_price_service() -> AdvisoryEntryPriceDailyService:
     return AdvisoryEntryPriceDailyService()
+
+
+def get_advisory_economic_entry_service() -> AdvisoryEconomicEntryDailyServiceV1:
+    return build_environment_economic_entry_daily_service_v1()
 
 
 def get_advisory_forward_service() -> AdvisoryForwardService:
@@ -1004,6 +1011,7 @@ def model_shadow(
     price_contract: Literal["legacy-v1", "entry-v2"] = Query("legacy-v1"),
     entry_list_version_id: str | None = Query(None, min_length=1, max_length=160),
     entry_service: AdvisoryEntryPriceDailyService = Depends(get_advisory_entry_price_service),
+    economic_entry_service: AdvisoryEconomicEntryDailyServiceV1 = Depends(get_advisory_economic_entry_service),
 ) -> dict[str, Any]:
     result = {"ok": True, **service.model_shadow(program_id=program_id, target_trade_date=target_trade_date)}
     if price_contract == "entry-v2":
@@ -1018,7 +1026,37 @@ def model_shadow(
             result["entry_price"] = _empty_envelope(program_id, target_trade_date,
                 getattr(exc, "reason_code", "ADVISORY_ENTRY_PRICE_INPUT_UNAVAILABLE"))
         result["entry_price_collection"] = _entry_collection_status(program_id)
+    try:
+        result["entry_value"] = economic_entry_service.status(program_id=program_id, target_date=target_trade_date)
+    except Exception as exc:
+        result["entry_value"] = {"status": "INPUT_UNAVAILABLE", "program_id": program_id, "deployable": False,
+            "reason_code": getattr(exc, "reason_code", "ADVISORY_ENTRY_VALUE_INPUT_UNAVAILABLE")}
     return result
+
+
+def _raise_economic_entry_http(exc):
+    raise HTTPException(status_code=409, detail={"status": "INPUT_UNAVAILABLE", "deployable": False,
+        "reason_code": getattr(exc, "reason_code", "ADVISORY_ENTRY_VALUE_INPUT_UNAVAILABLE"),
+        "error_type": type(exc).__name__}) from exc
+
+
+@router.get("/programs/{program_id}/entry-value/status")
+def economic_entry_status(program_id: str, target_trade_date: date | None = Query(None),
+    service: AdvisoryEconomicEntryDailyServiceV1 = Depends(get_advisory_economic_entry_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.status(program_id=program_id, target_date=target_trade_date)}
+    except Exception as exc:
+        _raise_economic_entry_http(exc)
+
+
+@router.get("/programs/{program_id}/entry-value/research")
+def economic_entry_research(program_id: str, bundle_id: str = Query(..., pattern=r"^adveserve_[0-9a-f]{24}$"),
+    target_trade_date: date = Query(...),
+    service: AdvisoryEconomicEntryDailyServiceV1 = Depends(get_advisory_economic_entry_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.read_research(program_id=program_id, bundle_id=bundle_id, target_date=target_trade_date)}
+    except Exception as exc:
+        _raise_economic_entry_http(exc)
 
 
 @router.get("/programs/{program_id}/entry-price/status")
