@@ -1530,18 +1530,20 @@ def test_existing_source_pr_receipts_are_published_before_push_and_reused(monkey
 
 
 @pytest.mark.skipif(workflow.os.name != "nt", reason="Windows offline mirror helper")
-@pytest.mark.parametrize("outcome", ["ready", "timeout", "mismatch", "dirty"])
+@pytest.mark.parametrize("outcome", ["ready", "timeout", "mismatch", "dirty", "prefix_collision"])
 def test_post_sync_mirror_is_bounded_and_never_blocks_aftercare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
     helper = tmp_path / "scripts" / "maintain_aistock_git_mirror.ps1"
     helper.parent.mkdir()
     helper.write_text("# fixture", encoding="utf-8")
     monkeypatch.setenv("AISTOCK_GITHUB_RUNNER_PREBUILT_ROOT", str(tmp_path))
-    sha = "a" * 40
+    sha = "a" * 9 + "b" * 31
     monkeypatch.setattr(workflow, "_git_snapshot", lambda root: {
-        "branch": "main", "head": sha, "origin_main": sha, "dirty": outcome == "dirty"})
+        "branch": "main", "head": sha[:9], "origin_main": sha[:9], "dirty": outcome == "dirty"})
     calls: list[Any] = []
     def run(args: list[str], **kwargs: Any) -> dict[str, Any]:
         calls.append((args, kwargs))
+        if args[:2] == ["git", "rev-parse"]:
+            return {"ok": True, "stdout": sha + "\n" + ("a" * 9 + "c" * 31 if outcome == "prefix_collision" else sha)}
         return {"ok": outcome != "timeout", "stdout": workflow.json.dumps({
             "status": "ready", "main_sha": sha if outcome == "ready" else "b" * 40,
             "network_accessed": False, "process_control_performed": False})}
@@ -1549,9 +1551,10 @@ def test_post_sync_mirror_is_bounded_and_never_blocks_aftercare(tmp_path: Path, 
     receipt = workflow._refresh_ci_git_mirror_after_root_sync(tmp_path)
     assert receipt["status"] == ("ready" if outcome == "ready" else "warning")
     assert "blocking" not in receipt
-    assert bool(calls) == (outcome != "dirty")
-    if calls:
-        assert calls[0][1]["timeout"] == 60 and "-Apply" in calls[0][0]
+    helper_calls = [call for call in calls if call[0][0] == "powershell.exe"]
+    assert bool(helper_calls) == (outcome not in {"dirty", "prefix_collision"})
+    if helper_calls:
+        assert helper_calls[0][1]["timeout"] == 60 and "-Apply" in helper_calls[0][0]
 
 
 def test_merge_finalizer_stops_before_close_sync_when_client_publish_blocks(

@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1713",
-  "closed_at": null,
+  "closed_at": "2026-10-03T19:07:01Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -33,14 +33,20 @@
     "actual_changed_files": [
       ".github/workflows/test.yml",
       "backend/tests/scripts/test_ci_changed_files.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "scripts/ci_changed_files.py",
+      "scripts/ci_workflow_policy_scan.py",
       "tests/aistock_validation/bugs/20261003_BUG-1713-ci-source-ancestry-preparation-repeatedly-deepens-remote-main-without-a.json"
     ],
     "added_files": [],
     "changed_files": [
       ".github/workflows/test.yml",
       "backend/tests/scripts/test_ci_changed_files.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "scripts/ci_changed_files.py",
+      "scripts/ci_workflow_policy_scan.py",
       "tests/aistock_validation/bugs/20261003_BUG-1713-ci-source-ancestry-preparation-repeatedly-deepens-remote-main-without-a.json"
     ],
     "changed_files_source": "git_finish",
@@ -115,8 +121,8 @@
   },
   "first_seen_at": "2026-10-03T18:47:30.744509Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c0a00886ba0a01131f2116bb11da67a4bee6c34a",
+  "fixed_at": "2026-10-03T19:07:01Z",
   "github_issue_number": 5393,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5393",
   "last_seen_at": "2026-10-03T18:47:30.744509Z",
@@ -124,6 +130,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5396",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -142,6 +149,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -151,7 +159,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1713",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7329339fba96719d",
+    "recorded_at": "2026-10-03T19:07:38.869345Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c881e9678b33a97dd99553d1355a4a1e6a97e3be",
+    "source_merge_commit": "c0a00886ba0a01131f2116bb11da67a4bee6c34a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5396",
+    "validation_evidence": [
+      "validation-receipt: id=d002d21f98a39beb commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_changed_files.py -q -p no:cacheprovider` result=`18 passed; implementation unchanged`",
+      "validation-receipt: id=b5d43eb72460304f commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_changed_files.py -k failed_history_fetch -q -p no:cacheprovider` result=`2 passed`",
+      "validation-receipt: id=0f1e8136edc4c799 commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider` result=`39 passed`",
+      "validation-receipt: id=59734a6bfb4d6f7b commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_repository_contract_evidence_matches_machine_standard -q -p no:cacheprovider` result=`1 passed`",
+      "validation-receipt: id=00ffba0014749dfd commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`"
+    ],
+    "validation_evidence_digest": "b02f9b0b385b8ab17a9ecc333f22f8f3f9d1da7a87c1490247451db726992334"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.workflow_automation"
   ],
@@ -160,6 +193,13 @@
     "fingerprint": "7c0abd19dec76da1459bef57",
     "source_event_id": "FE-20261003-7c0abd19dec7"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d002d21f98a39beb commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_changed_files.py -q -p no:cacheprovider` result=`18 passed; implementation unchanged`",
+    "validation-receipt: id=b5d43eb72460304f commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_changed_files.py -k failed_history_fetch -q -p no:cacheprovider` result=`2 passed`",
+    "validation-receipt: id=0f1e8136edc4c799 commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider` result=`39 passed`",
+    "validation-receipt: id=59734a6bfb4d6f7b commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_repository_contract_evidence_matches_machine_standard -q -p no:cacheprovider` result=`1 passed`",
+    "validation-receipt: id=00ffba0014749dfd commit=c881e9678b33a97dd99553d1355a4a1e6a97e3be kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
