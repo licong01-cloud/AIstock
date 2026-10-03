@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1700",
-  "closed_at": null,
+  "closed_at": "2026-10-03T09:31:26Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -74,8 +74,8 @@
   },
   "first_seen_at": "2026-10-03T09:20:17.306363Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "15a170188820472b9dab6d0c7a7dfd3f0f86c00f",
+  "fixed_at": "2026-10-03T09:31:26Z",
   "github_issue_number": 5338,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5338",
   "last_seen_at": "2026-10-03T09:20:17.306363Z",
@@ -83,6 +83,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5339",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -100,6 +101,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -109,7 +111,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1700",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "95f189e7c89ca7bf",
+    "recorded_at": "2026-10-03T09:32:05.126885Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5957fcd292bcea8b9a0debd01a2e4b15876492a0",
+    "source_merge_commit": "15a170188820472b9dab6d0c7a7dfd3f0f86c00f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5339",
+    "validation_evidence": [
+      "validation-receipt: id=d3136c2312c407f3 commit=5957fcd292bcea8b9a0debd01a2e4b15876492a0 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/scripts/test_issue_flow.py::test_dependency_update_validation_is_folded_into_unified_ci --basetemp X:/AIstock_temp/workflow-task-context-20261003/pytest-dispatch-contract` result=`passed (1 passed)`",
+      "validation-receipt: id=ca808cb3176e6735 commit=5957fcd292bcea8b9a0debd01a2e4b15876492a0 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/tests/scripts/test_issue_flow.py` result=`passed`",
+      "validation-receipt: id=69c9074b21029071 commit=5957fcd292bcea8b9a0debd01a2e4b15876492a0 kind=ruff plan=direct status=passed command=`rtk ruff check backend/tests/scripts/test_issue_flow.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "2f0600a0392ec9416c2b7700a18c29a2cd72de82a27ab53af8eb351fe3d5a0e0"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.workflow_automation"
   ],
@@ -118,6 +143,11 @@
     "fingerprint": "4aa14c3bbac5275ab206eebb",
     "source_event_id": "FE-20261003-4aa14c3bbac5"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d3136c2312c407f3 commit=5957fcd292bcea8b9a0debd01a2e4b15876492a0 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/scripts/test_issue_flow.py::test_dependency_update_validation_is_folded_into_unified_ci --basetemp X:/AIstock_temp/workflow-task-context-20261003/pytest-dispatch-contract` result=`passed (1 passed)`",
+    "validation-receipt: id=ca808cb3176e6735 commit=5957fcd292bcea8b9a0debd01a2e4b15876492a0 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/tests/scripts/test_issue_flow.py` result=`passed`",
+    "validation-receipt: id=69c9074b21029071 commit=5957fcd292bcea8b9a0debd01a2e4b15876492a0 kind=ruff plan=direct status=passed command=`rtk ruff check backend/tests/scripts/test_issue_flow.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
