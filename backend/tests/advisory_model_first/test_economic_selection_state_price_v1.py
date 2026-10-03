@@ -2,7 +2,25 @@ import pandas as pd
 import pytest
 
 from backend.services.advisory_model_first.economic_entry_labels import KEY
-from backend.services.advisory_model_first.economic_selection_state_price_v1 import STATE_FEATURES, selection_state_rows_v1
+from backend.services.advisory_model_first.economic_selection_state_price_v1 import STATE_FEATURES, SelectionStatePricePlanV1, selection_state_rows_v1
+from backend.tests.advisory_model_first.test_economic_price_campaign_contracts_v2 import plan_fixture
+
+
+def test_single_fixed_plan_preserves_family_budget_roles_and_no_activation():
+    values = plan_fixture().model_dump(exclude={'schema_version', 'campaign_id', 'model_id'})
+    values['budget_anchor_ref'] = dict(artifact_uri='F:/unit/campaign/advprice2_fixture/preregistered/manifest.json',
+        sha256='d'*64, size_bytes=1, role='price_campaign_budget_anchor')
+    plan = SelectionStatePricePlanV1(**values)
+    assert str(plan.campaign_root).replace('\\', '/') == 'F:/unit/campaign'
+    assert plan.parameters['campaign_fit_budget'] == 19 and plan.parameters['physical_fit_budget'] == 4
+    assert plan.parameters['information_features'] == list(STATE_FEATURES) and not plan.deployable
+    for update in ({'deployable': True}, {'decision_use': 'ACTIVATION_EVIDENCE'}, {'train_start': '2020-01-01'},
+                   {'budget_anchor_ref': {**values['budget_anchor_ref'], 'role': 'foreign_role'}},
+                   {'budget_anchor_ref': {**values['budget_anchor_ref'], 'artifact_uri': 'C:/unit/preregistered/manifest.json'}},
+                   {'budget_anchor_ref': {**values['budget_anchor_ref'], 'artifact_uri': 'relative/preregistered/manifest.json'}},
+                   {'budget_anchor_ref': {**values['budget_anchor_ref'], 'artifact_uri': 'F:/unit/prepared/manifest.json'}}):
+        with pytest.raises(ValueError):
+            SelectionStatePricePlanV1.model_validate({**values, **update})
 
 
 def state_fixture():

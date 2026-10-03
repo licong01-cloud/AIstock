@@ -76,6 +76,8 @@ H-SELECTION-STATE-VALUE-1：某股票连续进入当前包前5/前20及D前排�
 
 M5为新的显式lineage/campaign`advisory_price_selection_state_v1_20261004`，在源码和本合同冻结后先预登记四fit/一candidate/全部窗/implementation和source hash，再看结果。依旧同经济研究族、同已消费开发窗，绝不宣称R3是新的独立OOS。持久产物沿同48h输出根`F:/Dev/AIstock_model_artifacts/advisory_price_research_campaign_r2_20261004`的新experiment_id目录，trial registry及campaign_fit_journal.jsonl沿原位置只追加，不换根/删除/清空来重置累计预算。
 
+plan显式携带`budget_anchor_ref`（role=`price_campaign_budget_anchor`），指向原R2已登记研究的`<campaign_root>/<experiment_id>/preregistered/manifest.json`。纯plan校验绝对非C盘路径/manifest层级，且根只能从该锚点推导；它本身不证明锚点真实。登记/拟合前编排器必须只读验证锚点hash、原R2 manifest及plan身份、同父数据/政策身份、原registry登记和原累计journal，再在同一根下追加M5；不接受只有目录结构而无原研究身份的锚点。清空journal、外来锚点、源hash不符、与运行输出根不同均fail closed；不能借新lineage建立空预算账本。
+
 M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit。因此48h本批累计上限19物理fit+1索引，不将旧11fit清零，也不把单测fit计成研究trial。独立M5预算不得挪给M1或旧模型，M5partial fit不得隐式retry；单候选generated/selected及物理fit分账登记。M5 fit只有M1负向或真实阻断终态、M1源码交付后及公开QE三running路径空闲才放行；任一路running/unknown只暂停fit，不停其它允许研发。若M1出现正开发导航，先制定其独立确认设计，不默认继续搜索更好开发收益的M5，也不读取holdout。
 
 ## 9. Evaluation / 同冻结四臂与分流
@@ -115,9 +117,9 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 
 ## 13. Design Acceptance Matrix
 
-当前design-only，不含新源码、fit、研究收益或激活。只读排名可识别性检查不是研究通过。
+设计已交付，当前仅独立D状态计算和冻结plan合同已实现；完整模型/编排、正式fit、研究收益和激活仍未完成。只读排名可识别性检查不是研究通过。
 
-实现准备检查点：本设计#5415已合入/自身清理；新源码树仅pure `selection_state_rows_v1`已实现，6个直接测试PASS，Ruff/差异检查/F2通过。方法轮固定D包含在5/20D内及右删失41意义；来源/时钟轮拒绝重复rank、外来候选及非next-session T，缺日/不完整名单保留UNKNOWN；工程轮加候选/排名读取上界、未来排名/收益毒化与单行/批量一致。M1共用源码未改，M5模型/编排/正式fit尚0，不能报F2整体功能完成。
+实现准备检查点：本设计#5415已合入/自身清理；新源码树已实现pure `selection_state_rows_v1`及`SelectionStatePricePlanV1`，7个直接测试PASS，Ruff/差异检查/F2通过。方法轮固定D包含在5/20D内及右删失41意义；来源/时钟轮拒绝重复rank、外来候选及非next-session T，缺日/不完整名单保留UNKNOWN；工程轮加候选/排名读取上界、未来排名/收益毒化与单行/批量一致，冻结plan拒绝激活、外来role及非法锚点路径。M1共用源码未改，锚点真实身份校验仍待薄编排实现，M5完整模型/编排/正式fit尚0，不能报F2整体功能完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
