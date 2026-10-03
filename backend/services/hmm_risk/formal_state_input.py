@@ -857,6 +857,7 @@ def prepare_effect_baseline(frozen: Mapping[str, Any], source: Mapping[str, Any]
         catalog=frozen["catalog"],
         source_days=source_days,
         provider_path=assets["instrument_universe_path"],
+        provider_catalog_path=assets["qlib_root"] / "instruments/all.txt",
         suspend_path=assets["files"]["suspend_data"],
         moneyflow_path=assets["files"]["moneyflow"],
         qlib_root=assets["qlib_root"],
