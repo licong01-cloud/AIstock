@@ -63,7 +63,7 @@ def test_private_source_is_sealed_only_after_repair_overlap_check(tmp_path, over
         tmp_path,
         Connection,
         PreparationAdapter(),
-        snapshot_factory=lambda factory: MonthlySnapshotCoordinator(
+        snapshot_factory=lambda factory, *, cutoff: MonthlySnapshotCoordinator(
             factory,
             repair_watermark_reader=lambda _: "repair-1",
             overlapping_repair_reader=lambda *_: ("repair-2",) if overlap else (),
@@ -173,7 +173,8 @@ def test_audited_source_producer_emits_strong_gate_artifacts(tmp_path: Path) -> 
     source.parent.mkdir()
     source.write_text("{}\n", encoding="utf-8")
 
-    def snapshot_factory(factory):  # type: ignore[no-untyped-def]
+    def snapshot_factory(factory, *, cutoff):  # type: ignore[no-untyped-def]
+        assert cutoff == date(2026, 9, 30)
         return MonthlySnapshotCoordinator(
             factory,
             repair_watermark_reader=lambda _connection: "repair-1",
@@ -256,7 +257,7 @@ def test_audited_source_producer_rejects_unpinned_change_receipt(tmp_path: Path)
         artifact_root=tmp_path,
         connection_factory=Connection,
         adapter=DriftAdapter(source, tmp_path),
-        snapshot_factory=lambda factory: MonthlySnapshotCoordinator(
+        snapshot_factory=lambda factory, *, cutoff: MonthlySnapshotCoordinator(
             factory,
             repair_watermark_reader=lambda _connection: "repair-1",
             overlapping_repair_reader=lambda _connection, _watermark: (),
@@ -310,7 +311,7 @@ def test_audited_source_producer_commits_adapter_only_after_overlap_seal(tmp_pat
         artifact_root=tmp_path,
         connection_factory=Connection,
         adapter=adapter,
-        snapshot_factory=lambda factory: MonthlySnapshotCoordinator(
+        snapshot_factory=lambda factory, *, cutoff: MonthlySnapshotCoordinator(
             factory,
             repair_watermark_reader=lambda _connection: "repair-1",
             overlapping_repair_reader=lambda _connection, _watermark: ("repair-2",),
