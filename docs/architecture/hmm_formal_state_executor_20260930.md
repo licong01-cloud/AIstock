@@ -1,10 +1,10 @@
 # 正式 executor：已完成L1/L2合同与后续L2-only修订
 
-版本：v0.7 l2-contract-approved（冻结输入最终 v17）。Feature tier：F2。
+版本：v0.8 l2-research-readback（冻结输入最终 v17）。Feature tier：F2。
 
 当前状态：原批准L1/L2双fresh-process **5184/5184 fits已完成，原完整合同未接受**；ready=false。未来新增研究仅围绕L2。2026-10-03用户明确“批准合同，并开始后续的任务”，批准本包A/B精确合同与实施、测试和全131行业zero-refit研究读回；不重跑训练。
 
-本轮增量：C-008-L2-D6-PERSISTENT-RC-A及C-008-L2-INDEPENDENT-A均为APPROVED_BY_USER。原模型、窗口、seed和acceptance保持不变；新源码/研究结果待实际验证，PR合入与cleanup仍需明确动作授权。
+本轮增量：C-008-L2-D6-PERSISTENT-RC-A及C-008-L2-INDEPENDENT-A均为APPROVED_BY_USER；新源码、直接测试和全131研究读回已完成，详见F-006。原模型/窗口/seed/acceptance保持不变，PR合入和cleanup仍需明确动作授权。
 
 ## Background
 
@@ -77,7 +77,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 
 一个实现任务包完成 F-001～F-004、聚焦测试和多轮修复；不是为每个小功能另建阶段。
 输入正式preflight、源码交付及5184-fit实验均已完成，F-005记录真实终态而不是通过声明。下一动作是复用结果闭合后续L2自然事件/语义/完整性合同，再按批准范围实现和最小验证，不复原退役链，不另建每个小规则的独立阶段。
-本轮精确合同已批准，下一动作是同一任务包的源码/测试/zero-refit读回，不再次执行F-001～F-005。
+本轮精确合同及源码/测试/zero-refit研究读回已完成，停在PR/CI及用户合入授权；后续L2历史预测/消费者效果须明确评价人口与available-at精确合同，不再次执行F-001～F-005。
 源码合入、模型结构/语义验收、样本外效果和产品交付是不同结果，不以任一项替代其他项。当前不再次创建旧源码PR，也不启动重训。
 
 ## Verification Plan
@@ -102,7 +102,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 | F-003 | backend/services/hmm_risk/formal_state_executor.py; scripts/hmm_risk/run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py; backend/tests/hmm_risk/test_formal_state_model_set.py；完整 mocked grid、signed-zero mismatch、parent 环境/flags 回读、child/finalization durable failure、CLI fresh-process 拒绝和 mixed-shape serialization | PASS | 无 |
 | F-004 | backend/services/hmm_risk/formal_state_calendar.py; backend/services/hmm_risk/formal_state_input.py; backend/services/hmm_risk/formal_state_model.py; backend/services/hmm_risk/formal_state_executor.py | backend/tests/hmm_risk/test_formal_state_calendar.py；最终v17全324组182日carrier/ledger/hash预检PASS，E最少143；正式selected-only D6保留完整calendar和typed evidence结果；语义证据未全过见F-005，carrier/readback通过不等于semantic acceptance | PASS_IMPLEMENTATION_AND_READBACK | 无 |
 | F-005 | scripts/hmm_risk/run_formal_state_model_set.py；merge dc3511458a71fff811fbcf654628992657bae929 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-v17-formal-5184/run/acceptance.json；正式5184 fits，fresh_process_bitwise_equal=true；receipt SHA=fa42b6982f2ff5d8b5e7c257ad727ba66eb0ee9ac9a18e045847e573704a01ac；legacy两个层级无完整D5候选；autocycle均选seed47，L1/L2 D6分别29/31、121/131；d3_d6_accepted/ready/phase2_ready/product_capability_promoted均false，无发布产物 | COMPLETE_RESULT_REPORT_MODEL_NOT_ACCEPTED | 无 |
-| F-006 | 本文件L2精确合同；实施限formal model/calendar/readback、CLI与直接HMM测试 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-v17-formal-5184/run/acceptance.json；只用于原冻结身份；新测试/读回未执行 | APPROVED_BY_USER_CONTRACT_IMPLEMENTATION_PENDING | 用户明确批准A/B合同及后续实施；批准当前实现待验证状态，不推导READY |
+| F-006 | backend/services/hmm_risk/formal_state_model.py; backend/services/hmm_risk/formal_state_calendar.py; backend/services/hmm_risk/formal_state_executor.py; scripts/hmm_risk/run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_calendar.py; test_formal_state_executor.py; test_formal_state_model_set.py；artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-l2-persistent-readback/research-final.json；131行业zero-refit研究读回完成，127项语义证据通过，4项不足、mapping=null；119项PR slice通过 | PASS_IMPLEMENTATION_AND_RESEARCH_READBACK | 无 |
 
 以下2026-09-30～2026-10-02源码/输入记录保留其当时状态，不能当作当前待办；最新输入与正式模型结果见Rollout / Rollback的当前终态。
 
@@ -345,7 +345,27 @@ A/B均APPROVED_BY_USER。本次终点是源码/测试多轮审核通过及全131
 
 ## Risks
 
-最终v17完整C-010/A5构造、source/request身份及全324组D6 carrier预检已闭合；正式5184 fits已完成，原合同未接受。当前autocycle L2的10项D6未通过不涉及输入日期缺数；persistent/边界规则和稀有语义证据是下一合同问题，不交回数据窗口当作补数任务。真实MAP/covariance收敛问题保留，不因自然行情豁免。不能从输入PASS或121/131结构比例推导预测有效。
+### 2026-10-03 已批准L2合同实现及zero-refit研究终态
+
+用户批准C-008-L2-D6-PERSISTENT-RC-A和C-008-L2-INDEPENDENT-A后，新增显式`l2-readback --request <原冻结请求> --original-acceptance <原acceptance> --output <新研究文件>`。固定认证原request canonical receipt `94b35f9c8b5767b1a5cb3ade009fcada1fe5811c2486404a9c0e1796b03084f7`及acceptance `fa42b6982f2ff5d8b5e7c257ad727ba66eb0ee9ac9a18e045847e573704a01ac`，不能通过自行重哈希替换输入或模型。
+
+原acceptance已在5184实验parent中对selected参数执行过semantic readback。本次复用该受钉住结果的posterior、carrier和selected model hash，只重算新结构/语义证据；不再载入两份约1GB的child网格，不重新filter、fit或运行D5。先用原合同共享证据计算回读原结果，再执行新版本；不复制数值实现，不改原合同默认入口。CLI复用write_once，输出后再次canonical比较同一计算结果；合法NA仍不生成假转换/边界信用。
+
+源码验证执行HEAD=`680fc756c8e7066dfaa71191c985b0cf59d943ab`：最终PR slice 119 passed、module registry 8 passed/14映射、L0 blocking=0；7个Python文件Ruff/check/format、py_compile、diff check通过；8个任务文件ownership完整无歧义。独立fresh-process验证router/health/model/calendar/executor 5模块均从本任务worktree加载，数据库连接及网络设poison，无服务操作。本段之后仅文档结果提交，不把文档-only HEAD冒充上述代码测试执行HEAD。
+
+真实只读研究命令在现存Conda base固定单线程环境运行；数据库connect/get_conn、网络、HMM.fit、train_repeat、fit_entry和select_restart均设poison。全部131行业、原D5 seed47、原模型hash及source identity闭合；新增fits=0、selection_performed=false。结果为127/131 evidence valid，原121通过项没有退化；新增6项：801032.SI、801084.SI、801141.SI、801223.SI、801733.SI、801783.SI。
+
+剩余801033.SI、801045.SI、801204.SI、801743.SI仍因1～3日状态的count/occupancy（月覆盖/variance在singleton时亦不足）保持明确失败，mapping=null；共同证据不足时structural_path=null，不用persistent补证据。不属于数据漏采，不交数据窗口补数，不更改seed/阈值，不默认填neutral或1.0。
+
+研究输出：`F:/Dev/AIstock_runtime/hmm_formal_state/20261003-l2-persistent-readback/research-final.json`；666263 bytes；canonical receipt SHA=`7f0d2376dd955069444077a3c7821e2aac761b3a4f139577a69d1ec8450a8f2d`；file SHA=`0f720781343090ef3e975eedc4f2bb24c21b9919d9b673aedfec5475d64fdb8a`。ready/phase2_ready/product_capability_promoted/database_write/runtime_action全部false。原acceptance和训练结果未修改。
+
+两轮源码自审及修复：第一轮闭合冻结来源、完整131目录、source ledger、typed失败与禁止fit/D5；第二轮修复共同证据不足时路径仍标persistent、恢复旧日历拒绝优先顺序、明确零count不计算run share，补固定数值环境与canonical读回。直接测试覆盖share=.9/>.9、单一长期run、内部NA不桥接/不取首尾信用、singleton/rare仍拒绝、posterior tie、未知版本、重哈希drift及CLI参数互斥。未发现当前任务scope内阻断finding；CI仍以正式PR实际结果为准。
+
+这只是已消费validation的开发期结构/语义校准结果，不是独立预测确认。mapping的outcome watermark 2025-04-30及non-as-known-taxonomy局限保持；禁止在同一校准窗口给QE伪造当时已知系数，禁止将127项子集冒充全截面预测效果。下一步为明确L2历史样本外预测/消费者效果的评价人口与available-at合同，不先展开新训练或历史归档工作。
+
+本次源码实际runtime分类=backend，target_ids=[backend-main]，catalog_error=null；fresh-process import不是生产运行态验证，未合入/激活或重启后端。未来源码合入后按backend-main流程由用户重启，再执行相应验证；此次合同批准不产生合入、cleanup或进程控制授权。
+
+最终v17完整C-010/A5构造、source/request及D6 carrier已闭合，原5184-fit合同未接受。原10项L2证据不足经已批准A/B研究读回解决6项，剩余4项稀有状态不足；不涉及输入日期缺数，不交数据窗口补数。真实MAP/covariance问题及旧结果保持，不能从127/131结构比例推导预测有效。
 真实 v15 moneyflow H5 物理行乱序被旧 HMM reader 误判为无效，已登记独立 BUG-1641 / Issue #5147；
 仅对 table H5 在内存中排序，保留重复键、日期、schema 的 fail-closed，不重写数据文件。
 原始 full-v3 as-published classification 的 resolved identity 只观察到 126 个 L2，
@@ -362,7 +382,7 @@ forward 仍遵循 as-published PIT；历史 non-as-known-taxonomy 身份不能�
 
 production_ddl_gate=noop；production_dml_gate=noop；dependency_install=noop。
 Conda AIstock mutation=false；dataset/profile mutation=false；runtime/process control=false。
-本轮仅修改本详细设计，父蓝图v2.62已由PR #5321合入：runtime_impact=none，无新增fit、数据库/数据集/profile写入或runtime activation，无后端重启需求。
+v0.6文档-only增量runtime_impact=none为历史状态；本次v0.8源码实际分类为backend/target_ids=[backend-main]、catalog_error=null，未执行runtime activation或服务重启，不降级实际分类。database/dataset/profile/production/dependency/process均未修改；用户仍拥有全部后端进程控制权。
 原源码4个changed files的runtime分类为backend/target_ids=[backend-main]，该历史分类不因文档-only任务降级；源码合入、用户重启与正式训练各自按对应授权和证据记录，不由本次文档重新控制或代报运行态。后端进程控制仍归用户。
 
 ## DESIGN-COMPLIANCE-001 当前复审
