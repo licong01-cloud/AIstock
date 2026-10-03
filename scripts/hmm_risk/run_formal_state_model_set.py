@@ -21,17 +21,21 @@ sys.path.insert(0, str(ROOT))
 
 from backend.services.hmm_risk.formal_state_executor import (  # noqa: E402
     load_request,
+    l2_research_readback,
+    read_json,
     receipt,
     run_two_processes,
     train_repeat,
     validate_output_location,
     write_once,
 )
+from backend.services.hmm_risk.contracts import canonical_json_bytes  # noqa: E402
+from backend.services.hmm_risk.formal_state_model import FormalStateError  # noqa: E402
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("prepare", "preflight", "run", "child"))
+    parser.add_argument("mode", choices=("prepare", "preflight", "run", "child", "l2-readback"))
     parser.add_argument("--request", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--candidate-root", type=Path)
@@ -40,7 +44,10 @@ def main() -> int:
     parser.add_argument("--industry-authority", type=Path)
     parser.add_argument("--work-parent", type=Path)
     parser.add_argument("--producer-commit")
+    parser.add_argument("--original-acceptance", type=Path)
     args = parser.parse_args()
+    if (args.mode == "l2-readback") != (args.original_acceptance is not None):
+        parser.error("only l2-readback requires --original-acceptance")
     source_args = (
         args.candidate_root,
         args.security_identity_manifest,
@@ -65,7 +72,6 @@ def main() -> int:
         return 1
     try:
         if args.mode == "prepare":
-            from backend.services.hmm_risk.formal_state_executor import read_json
             from backend.services.hmm_risk.formal_state_input import prepare_file_request
 
             result = prepare_file_request(
@@ -81,6 +87,16 @@ def main() -> int:
             print(f"request prepared and read back: {args.output}; fits=0")
         elif args.mode == "run":
             print(run_two_processes(args.request, args.output, Path(__file__)))
+        elif args.mode == "l2-readback":
+            request = load_request(args.request)
+            original = read_json(args.original_acceptance)
+            result = l2_research_readback(request, original)
+            write_once(args.output, result)
+            if canonical_json_bytes(read_json(args.output)) != canonical_json_bytes(
+                l2_research_readback(request, original)
+            ):
+                raise FormalStateError("hmm_risk_formal_output_readback_failed", "L2 research durable readback differs")
+            print(f"L2 research readback: {result['semantic_evidence_valid_count']}/131; fits=0; ready=false")
         else:
             request = load_request(args.request)
             result = (
