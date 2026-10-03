@@ -173,7 +173,7 @@ class AuditedMonthlySourceProducer:
     artifact_root: Path
     connection_factory: Callable[[], SnapshotConnection]
     adapter: MonthlySourceAdapter
-    snapshot_factory: Callable[[Callable[[], SnapshotConnection]], MonthlySnapshotCoordinator] = (
+    snapshot_factory: Callable[..., MonthlySnapshotCoordinator] = (
         managed_monthly_snapshot
     )
 
@@ -202,7 +202,7 @@ class AuditedMonthlySourceProducer:
         predecessor_cutoff = date.fromisoformat(str(context.plan["predecessor"]["cutoff"]))
         target_cutoff = date.fromisoformat(str(context.plan["target_cutoff"]))
 
-        coordinator = self.snapshot_factory(self.connection_factory)
+        coordinator = self.snapshot_factory(self.connection_factory, cutoff=target_cutoff)
         with coordinator as snapshot:
             if snapshot.identity is None:  # pragma: no cover - guarded by coordinator
                 raise MonthlySourceProducerError("monthly snapshot identity is unavailable")

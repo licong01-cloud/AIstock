@@ -32,18 +32,26 @@
   "evidence_uris": [],
   "expected": "Only evidenced writer scopes intersecting frozen input invalidate materialization; post-cutoff bounded normal suspend updates do not.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261003_BUG-1721-monthly-source-seal-treats-post-cutoff-suspend-jobs-as-overlapping-histo.json",
       "backend/services/dataset_release/monthly_repair_journal.py",
       "backend/services/dataset_release/monthly_snapshot.py",
       "backend/services/dataset_release/monthly_source_producer.py",
-      "scripts/dataset_release_source_stage.py",
       "backend/tests/dataset_release/test_monthly_repair_journal.py",
       "backend/tests/dataset_release/test_monthly_snapshot.py",
-      "backend/tests/dataset_release/test_monthly_source_producer.py",
-      "backend/tests/scripts/test_dataset_release_source_stage.py"
+      "backend/tests/dataset_release/test_monthly_source_producer.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261003_BUG-1721-monthly-source-seal-treats-post-cutoff-suspend-jobs-as-overlapping-histo.json",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/services/dataset_release/monthly_snapshot.py",
+      "backend/services/dataset_release/monthly_source_producer.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_snapshot.py",
+      "backend/tests/dataset_release/test_monthly_source_producer.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_repair_journal.py",
@@ -211,17 +219,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh python loaded tracked journal/snapshot/source producer. Production READ ONLY transaction: global overlap10, bounded overlap0 for cutoff2026-09-30; exact same-job empty_valid suspend completion and one future date verified. Existing DEV production SQL CTE matrix10 passed without writes. Source-level evidence only; deployed monthly worker and real SOURCE seal remain pending.",
+      "Windows fresh process loaded tracked journal/snapshot/producer. Production READ ONLY journal global10/bounded0 at cutoff2026-09-30; same-job empty_valid future suspend scopes verified. DEV10 actual SQL passed. No DB/candidate/profile/process writes; source validation only, runtime and SOURCE seal pending."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
