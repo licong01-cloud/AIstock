@@ -16235,6 +16235,50 @@ def build_watch_ci_plan(
     }
 
 
+def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_head: str, before_push: bool) -> dict[str, Any]:
+    """Publish validated receipts before synchronize; never overwrite a foreign PR."""
+    number = _github_pr_number_from_url(pr_url)
+    if number is None or pr_url != f"https://github.com/{GITHUB_REPO}/pull/{number}":
+        raise WorkflowError("existing PR URL is outside this repository")
+    current = _github_pull_rest_readback(pr_url)
+    if (current.get("state") != "OPEN" or current.get("head_ref") != branch
+            or current.get("base_ref") != "main" or current.get("url") != pr_url
+            or current.get("head_repo") != GITHUB_REPO):
+        raise WorkflowError("existing PR is not the open, repository-owned source branch; use its correct aftercare lane")
+    old_head = str(current.get("head_sha") or "")
+    if not _FULL_GIT_COMMIT_RE.fullmatch(old_head):
+        raise WorkflowError("existing PR has no exact head identity")
+    if old_head != expected_head:
+        if not before_push:
+            raise WorkflowError("existing PR head differs from validated task HEAD; push is required")
+        ancestor = _run_command(["git", "merge-base", "--is-ancestor", old_head, expected_head], cwd=REPO_ROOT, timeout=10)
+        if not ancestor.get("ok"):
+            raise WorkflowError("existing PR head is not an ancestor of validated task HEAD; refuse receipt overwrite")
+    body = body_path.read_text(encoding="utf-8")
+    updated = current.get("body") != body
+    if updated:
+        result = _run_command(["gh", "api", "--method", "PATCH", f"repos/{GITHUB_REPO}/pulls/{current['pr_number']}",
+                               "-F", f"body=@{body_path}"], cwd=REPO_ROOT, timeout=30)
+        if result.get("ok"):
+            response = _parse_rest_object(result, context="owned PR receipt update")
+            head = response.get("head") or {}
+            if (response.get("body") != body or response.get("state") != "open"
+                    or response.get("number") != current["pr_number"] or response.get("html_url") != pr_url
+                    or head.get("sha") != old_head or head.get("ref") != branch
+                    or (head.get("repo") or {}).get("full_name") != GITHUB_REPO
+                    or (response.get("base") or {}).get("ref") != "main"):
+                raise WorkflowError("PR changed during receipt update; refuse push")
+        elif _looks_like_github_transport_failure(f"{result.get('stderr')}\n{result.get('stdout')}"):
+            recovered = _github_pull_rest_readback(pr_url)
+            if (recovered.get("head_sha") != old_head or recovered.get("body") != body or recovered.get("state") != "OPEN"
+                    or recovered.get("head_ref") != branch or recovered.get("base_ref") != "main"
+                    or recovered.get("head_repo") != GITHUB_REPO or recovered.get("url") != pr_url):
+                raise WorkflowError("PR receipt update outcome unavailable; do not push or repeat mutation")
+        else:
+            raise WorkflowError(result.get("stderr") or "PR receipt update failed")
+    return {"url": pr_url, "head_sha": old_head, "body_updated": updated}
+
+
 def _maybe_create_pr(
     *,
     bug_id: str,
@@ -16273,12 +16317,21 @@ def _maybe_create_pr(
         raise WorkflowError("validation evidence is required before push/create-pr automation")
     if pre_pr_gate["workflow_gate"] != "passed":
         raise WorkflowError("; ".join(pre_pr_gate["blocking"]))
+    existing_pr: dict[str, Any] | None = None
+    known_pr_url = str(_load_state(bug_id).get("pr_url") or "")
+    if known_pr_url and (push or create_pr):
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
+        expected_head = _git(["rev-parse", "HEAD"], cwd=REPO_ROOT).strip()
+        existing_pr = _sync_owned_pr_body(pr_url=known_pr_url, branch=branch,
+            body_path=REPO_ROOT / str(finish.get("pr_body_path")), expected_head=expected_head, before_push=push)
+        actions.append({"command": "sync owned PR receipts before push", "result": {"ok": True, **existing_pr}})
     if push:
         _check_pr_receipt_identity(finish, root=REPO_ROOT)
+        already_remote = bool(existing_pr and existing_pr.get("head_sha") == expected_head)
         actions.append(
             {
-                "command": f"git push -u origin {branch}",
-                "result": _execute_workflow_command(
+                "command": "reuse exact remote task HEAD; skip redundant git push" if already_remote else f"git push -u origin {branch}",
+                "result": {"ok": True, "already_pushed": True, "head_sha": expected_head} if already_remote else _execute_workflow_command(
                     bug_id,
                     ["git", "push", "-u", "origin", branch],
                     state="pushed",
@@ -16297,21 +16350,26 @@ def _maybe_create_pr(
         expected_head = str(head_result.get("stdout") or "").strip()
         if not head_result.get("ok") or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head):
             raise WorkflowError(head_result.get("stderr") or "cannot resolve source PR head SHA")
-        result = _create_pr_with_transport_fallback(
-            branch=branch,
-            base="main",
-            title=title,
-            body_path=body_path,
-            expected_head=expected_head,
-            root=REPO_ROOT,
-        )
+        if existing_pr:
+            _sync_owned_pr_body(pr_url=known_pr_url, branch=branch, body_path=body_path,
+                                expected_head=expected_head, before_push=False)
+            result = {"ok": True, "stdout": known_pr_url, "source": "github_rest_existing_owned_pr"}
+        else:
+            result = _create_pr_with_transport_fallback(
+                branch=branch,
+                base="main",
+                title=title,
+                body_path=body_path,
+                expected_head=expected_head,
+                root=REPO_ROOT,
+            )
         if not result.get("ok"):
             raise WorkflowError(result.get("stderr") or result.get("stdout") or "PR create failed")
         _append_event(
             bug_id,
-            event="command:gh_pr_create",
+            event="command:gh_pr_reuse" if existing_pr else "command:gh_pr_create",
             state="pr_opened",
-            command="gh pr create",
+            command="gh api owned PR readback" if existing_pr else "gh pr create",
             cwd=REPO_ROOT,
             result="ok",
             evidence={
@@ -16321,7 +16379,7 @@ def _maybe_create_pr(
             },
         )
         pr_url = str(result.get("stdout") or "").splitlines()[-1].strip()
-        actions.append({"command": "gh pr create", "result": result})
+        actions.append({"command": "reuse owned source PR" if existing_pr else "gh pr create", "result": result})
         _write_state(bug_id, state="pr_opened", branch=branch, pr_url=pr_url, next_actions=["watch_ci_before_merge"])
     ci_watch: dict[str, Any] | None = None
     if watch_ci:
@@ -17678,6 +17736,7 @@ def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
         "merge_commit": str(payload.get("merge_commit_sha") or "").strip() or None,
         "head_sha": str(head.get("sha") or "").strip(),
         "head_ref": str(head.get("ref") or "").strip(),
+        "head_repo": str((head.get("repo") or {}).get("full_name") or ""),
         "base_ref": str(base.get("ref") or "").strip(),
         "url": str(payload.get("html_url") or pr_url),
         "body": str(payload.get("body") or ""),
@@ -20152,8 +20211,16 @@ def build_merge_finalizer_plan(
     )
     if close_sync_root_sync_deferred:
         root_sync_deferrals.append(close_sync_root_sync_deferred)
+    state_root = (
+        _canonical_root()
+        if (cleanup_plan or {}).get("workflow_gate") == "cleanup_done" and not REPO_ROOT.exists()
+        else REPO_ROOT
+    )
     try:
-        postmortem = build_postmortem_plan(bug_id=canonical_bug_id)
+        postmortem = (
+            build_postmortem_plan(bug_id=canonical_bug_id, worktree=str(state_root))
+            if state_root != REPO_ROOT else build_postmortem_plan(bug_id=canonical_bug_id)
+        )
     except WorkflowError as exc:
         postmortem = {
             "schema_version": "aistock_issue_workflow_postmortem_v1",
@@ -20253,6 +20320,7 @@ def build_merge_finalizer_plan(
         _write_state(
             state_bug_id,
             state=durable_state,
+            root=state_root,
             pr_url=source_pr_url,
             commit=merge_commit,
             close_sync=close_sync,
@@ -20289,11 +20357,15 @@ def build_run_plan(
     pr_url: str | None = None,
     merge: bool = False,
     sync_root: bool = False,
+    merge_close_sync_pr: bool = False,
+    cleanup: bool = False,
     branch: str | None = None,
     worktree: str | None = None,
     production_gates: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
+    if (cleanup or merge_close_sync_pr) and mode != "merge":
+        raise WorkflowError("aftercare apply flags require run --mode merge")
     if mode in {"plan", "fix"}:
         if not issue_json:
             active_registry_record = _find_bug_record_from_active_registry(canonical_bug_id)
@@ -20429,8 +20501,8 @@ def build_run_plan(
             allow_missing_linkage=allow_missing_linkage,
             production_gates=production_gates or _production_gates_payload(),
             sync_root=sync_root,
-            merge_close_sync_pr=False,
-            cleanup=False,
+            merge_close_sync_pr=merge_close_sync_pr,
+            cleanup=cleanup,
             apply=True,
             source_pr_check=merge_result.get("verified") if isinstance(merge_result, dict) else None,
         )
@@ -20456,6 +20528,11 @@ def build_run_plan(
         _write_state(
             canonical_bug_id,
             state=wrapper_state,
+            root=(
+                _canonical_root()
+                if (finalizer.get("cleanup") or {}).get("workflow_gate") == "cleanup_done" and not REPO_ROOT.exists()
+                else REPO_ROOT
+            ),
             pr_url=pr_url,
             commit=finalizer.get("source_merge_commit"),
             merge=merge_result,
@@ -22694,12 +22771,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         pr_url=args.pr_url,
         merge=args.merge,
         sync_root=args.sync_root,
+        merge_close_sync_pr=getattr(args, "merge_close_sync_pr", False),
+        cleanup=getattr(args, "cleanup", False),
         branch=args.branch,
         worktree=args.worktree,
         production_gates=_production_gates_payload(args),
     )
     _emit_args(payload, args)
-    return 0 if payload.get("workflow_gate") not in {"validation_evidence_missing", "blocked"} else 2
+    return 0 if payload.get("workflow_gate") not in {"validation_evidence_missing", "blocked", "merged_aftercare_blocked"} else 2
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -23124,6 +23203,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--branch", help="Task branch for post-merge cleanup planning.")
     run.add_argument("--worktree", help="Task worktree for post-merge cleanup planning.")
     run.add_argument("--sync-root", action="store_true", help="Plan canonical root fast-forward after merge.")
+    run.add_argument("--merge-close-sync-pr", action="store_true", help="Complete the existing green-check close-sync merge in the same authorized invocation.")
+    run.add_argument("--cleanup", action="store_true", help="Explicitly authorize the existing exact task cleanup; default source merge does not delete.")
     run.add_argument("--production-ddl-gate", default="noop")
     run.add_argument("--production-frontend-dependency-gate", default="noop")
     run.add_argument("--production-backend-dependency-gate", default="noop")
