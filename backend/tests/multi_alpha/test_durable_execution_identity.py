@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from backend.services.multi_alpha.combine_backtest import CombineBacktestRequest
 from backend.services.multi_alpha.durable_identity import (
     DurableExecutionIdentityResolver,
@@ -234,3 +236,115 @@ def test_missing_dataset_manifest_is_visible_evidence_not_a_research_rejection(t
     assert resolution.evidence["reason_code"] == "multi_alpha_execution_identity_incomplete"
     assert "dataset.qe_dataset_manifest.json" in resolution.evidence["missing"]
     assert resolution.evidence["acquisition_suggestions"]
+
+
+@pytest.mark.parametrize(
+    "config,expected_root",
+    [
+        ({"remote_qlib_data_path": "/frozen/r8/components/daily_bin_candidate"}, "/frozen/r8"),
+        ({"remote_qlib_data_path": "/mnt/wsl/releases/r8/components/daily_bin_candidate/"}, "/mnt/wsl/releases/r8"),
+        ({"data_root_uri": "/frozen/r8/", "remote_qlib_data_path": "/frozen/r8/components/daily_bin_candidate"}, "/frozen/r8"),
+        ({"data_root_uri": "/frozen/r8"}, "/frozen/r8"),
+        ({"remote_qlib_data_path": "/legacy/factor_data"}, "/legacy/factor_data"),
+        ({}, "/legacy/factor_data"),
+    ],
+)
+def test_dataset_identity_reads_release_root_not_daily_component(tmp_path, config, expected_root):
+    for run_id in ("qe_a_L1", "qe_b_L1"):
+        (tmp_path / f"{run_id}.pkl").write_bytes(b"prediction")
+    request = _request(tmp_path)
+    request.backtest_config.update(config)
+    before = dict(request.backtest_config)
+    calls = []
+    node_reads = []
+
+    def dataset_loader(node_id, root):
+        calls.append((node_id, root))
+        report = _dataset(complete=True)
+        report.dataset["resolved_data_root_uri"] = expected_root
+        return report
+
+    def node_loader(node_id):
+        node_reads.append(node_id)
+        return SimpleNamespace(qlib_data_path="/legacy/factor_data")
+
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),
+        environment_loader=lambda _: _environment(),
+        dataset_loader=dataset_loader,
+        node_info_resolver=node_loader,
+        source_root=REPO_ROOT,
+    )
+    resolution = resolver.resolve(request=request, node_id="wsl2-5080")
+    assert resolution.complete
+    assert calls == [("wsl2-5080", expected_root)]
+    assert request.backtest_config == before
+    assert node_reads == ([] if config else ["wsl2-5080"])
+
+
+@pytest.mark.parametrize("failure", ["configured_root_conflict", "resolved_root_drift", "manifest_drift", "node_drift", "missing_manifest", "missing_runtime"])
+def test_release_identity_drift_and_missing_runtime_remain_fail_closed(tmp_path, failure):
+    for run_id in ("qe_a_L1", "qe_b_L1"):
+        (tmp_path / f"{run_id}.pkl").write_bytes(b"prediction")
+    request = _request(tmp_path)
+    request.backtest_config.update(
+        remote_qlib_data_path="/frozen/r8/components/daily_bin_candidate",
+        dataset_manifest_sha256="f" * 64,
+    )
+    if failure == "configured_root_conflict":
+        request.backtest_config["data_root_uri"] = "/frozen/r9"
+    if failure == "missing_runtime":
+        request.backtest_config.pop("conda_environment_lock_sha256")
+        request.backtest_config.pop("executor_code_commit")
+    calls = []
+
+    def dataset_loader(node_id, root):
+        calls.append((node_id, root))
+        if failure == "missing_manifest":
+            return _dataset(complete=False)
+        report = _dataset(complete=True)
+        report.dataset["resolved_data_root_uri"] = "/frozen/r9" if failure == "resolved_root_drift" else "/frozen/r8"
+        if failure == "manifest_drift":
+            report.dataset["dataset_manifest_sha256"] = "0" * 64
+        if failure == "node_drift":
+            report.dataset["resolved_node_id"] = "other-node"
+        return report
+
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),
+        environment_loader=lambda _: _environment(),
+        dataset_loader=dataset_loader,
+        node_info_resolver=lambda _: SimpleNamespace(qlib_data_path="/old/default"),
+        source_root=REPO_ROOT,
+    )
+    resolution = resolver.resolve(request=request, node_id="wsl2-5080")
+    assert not resolution.complete
+    assert resolution.identity is None
+    assert resolution.evidence["reason_code"] == "multi_alpha_execution_identity_incomplete"
+    if failure == "configured_root_conflict":
+        assert calls == []
+        assert "dataset.resolved_data_root_uri" in resolution.evidence["missing"]
+    else:
+        assert calls == [("wsl2-5080", "/frozen/r8")]
+    if failure == "missing_runtime":
+        assert set(resolution.evidence["missing"]) == {"runtime.conda_environment_lock_sha256", "runtime.executor_code_commit"}
+    elif failure == "manifest_drift":
+        assert "dataset.dataset_manifest_sha256" in resolution.evidence["missing"]
+    elif failure == "node_drift":
+        assert "dataset.resolved_node_id" in resolution.evidence["missing"]
+
+
+@pytest.mark.parametrize("path", ["relative/components/daily_bin_candidate", "/frozen/../r8/components/daily_bin_candidate"])
+def test_invalid_component_root_is_not_probed_or_rebound(tmp_path, path):
+    request = _request(tmp_path)
+    request.backtest_config["remote_qlib_data_path"] = path
+    calls = []
+    resolver = DurableExecutionIdentityResolver(
+        model_store=_ModelStore(tmp_path),
+        dataset_loader=lambda *args: calls.append(args),
+    )
+    missing, suggestions, observations = [], [], {}
+    result = resolver._resolve_dataset(request=request, node_id="wsl2-5080", missing=missing,
+                                       suggestions=suggestions, observations=observations)
+    assert result is None and calls == []
+    assert missing == ["dataset.resolved_data_root_uri"]

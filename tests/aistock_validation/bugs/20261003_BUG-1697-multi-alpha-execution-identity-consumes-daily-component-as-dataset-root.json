@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-03T07:34:57.919796Z",
-  "description": "dataset.qe_dataset_manifest.json missing; remote day component 被当成根目录",
+  "description": "MA-E39四个固定组合在计算前失败：durable身份消费者将日线组件目录误当release根，无法读取同一冻结release已存在的manifest。修复只规范run-scoped lookup root并核对node/root/manifest；不改变计算路径、模型、因子、seed、窗口、费用或身份必需字段。两节点正式环境声明缺lock/commit是独立部署阻断，本修复不伪造或绕过。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -24,6 +24,25 @@
     }
   ],
   "evidence_uris": [],
+  "validation_evidence": [
+    "pytest backend/tests/multi_alpha/test_durable_execution_identity.py backend/tests/multi_alpha/test_durable_control.py -q -> 28 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed, 8 tests, 14 files mapped",
+    "python -m nox -s guardrail_changed_files -> passed, staged 3 files mapped, blocking=0",
+    "python -m nox -s qe_read_backend -> 681 passed, 1 skipped, 2 pre-existing numerical warnings",
+    "ruff check backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py -> passed",
+    "git diff --check -> passed"
+  ],
+  "design_compliance_review": {
+    "no_simplification": "完整修复release根消费、请求/回读root和manifest一致性；部署身份缺失明确保留，未宣称所有MA-E39阻断已解除。",
+    "no_silent_error": "根/节点/manifest漂移、缺manifest、缺runtime、相对或上跳路径均保持typed incomplete；真实双节点smoke通过。",
+    "business_semantics_unchanged": "不改变请求配置、provider计算路径、预测来源、模型/特征/seed/窗口/策略/费用；legacy非组件根语义保持。",
+    "no_new_gate": "沿用现有身份完整性与hash pin合同，未增加审批或放宽必需字段。",
+    "review_rounds": [
+      "RED→GREEN：8个原实现业务断言失败，legacy两项通过；首轮10项GREEN。",
+      "第二轮：补充显式根、node漂移、非法组件路径及避免重复node数据库查询；最终身份/恢复28项通过。",
+      "第三轮：两节点真实只读fresh-process根/manifest通过；独立环境声明缺失不被抹去；ownership、guardrail及QE计划通过。"
+    ]
+  },
   "expected": "使用正式绑定的 release root 查询且校验 manifest/node/root，组件数据路径仍保持原值；缺身份仍 fail closed",
   "file_scope_contract": {
     "added_files": [],
@@ -96,7 +115,7 @@
   "github_issue_number": 5329,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5329",
   "last_seen_at": "2026-10-03T07:34:57.919796Z",
-  "module": "qe.multi_alpha",
+  "module": "qe.auto_evolution",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -112,7 +131,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
+    "fresh_process_evidence": [
+      "python tmp/issue_workflow/BUG-1697/fresh_process_smoke.py -> WSL/node1 dataset consumer passed; exact frozen manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc; no experiment submissions, dataset writes or process control"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -128,7 +152,7 @@
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "qe.multi_alpha"
+    "qe.auto_evolution"
   ],
   "title": "Multi-alpha execution identity consumes daily component as dataset root",
   "trigger_condition": {
@@ -140,7 +164,7 @@
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
       "modules": [
-        "qe.multi_alpha",
+        "qe.auto_evolution",
         "qe_read"
       ],
       "plans": [
@@ -200,7 +224,7 @@
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
         "modules": [
-          "qe.multi_alpha",
+          "qe.auto_evolution",
           "qe_read"
         ],
         "plans": [

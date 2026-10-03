@@ -12,7 +12,7 @@ import asyncio
 import hashlib
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
 from backend.services.multi_alpha.durable_models import (
@@ -474,16 +474,46 @@ class DurableExecutionIdentityResolver:
         suggestions: list[str],
         observations: dict[str, Any],
     ) -> dict[str, str] | None:
+        config = request.backtest_config
         data_root_uri: str | None = None
+        explicit_root = str(config.get("data_root_uri") or "").strip()
+        provider_path = str(config.get("remote_qlib_data_path") or "").strip()
+        component_root: str | None = None
+        # This is the exact direct-v2 component layout, not a filesystem probe
+        # or a search through parent directories/current active releases.
+        if provider_path:
+            provider = PurePosixPath(provider_path)
+            if provider.parts[-2:] == ("components", "daily_bin_candidate"):
+                component_root = str(provider.parent.parent)
+                if not provider.is_absolute() or ".." in provider.parts:
+                    missing.append("dataset.resolved_data_root_uri")
+                    observations["dataset_root_error"] = "invalid direct-v2 provider path"
+                    suggestions.append("bind the exact node-local absolute release root and daily component")
+                    return None
+        if explicit_root:
+            data_root_uri = str(PurePosixPath(explicit_root))
+            if not PurePosixPath(explicit_root).is_absolute() or ".." in PurePosixPath(explicit_root).parts:
+                missing.append("dataset.resolved_data_root_uri")
+                observations["dataset_root_error"] = "invalid explicit release root"
+                suggestions.append("bind an absolute node-local data_root_uri")
+                return None
+            if component_root is not None and data_root_uri != component_root:
+                missing.append("dataset.resolved_data_root_uri")
+                observations["dataset_root_mismatch"] = {
+                    "declared": data_root_uri, "provider_release_root": component_root,
+                }
+                suggestions.append("bind data_root_uri and provider_uri_day to the same frozen release")
+                return None
+        else:
+            data_root_uri = component_root or provider_path or None
+        scoped_root = bool(explicit_root or component_root)
         try:
-            node = self._node_info_resolver(node_id)
-            data_root_uri = str(
-                request.backtest_config.get("remote_qlib_data_path")
-                or getattr(node, "qlib_data_path", None)
-                or ""
-            ).strip() or None
+            if data_root_uri is None:
+                node = self._node_info_resolver(node_id)
+                data_root_uri = str(getattr(node, "qlib_data_path", None) or "").strip() or None
         except Exception as exc:
             observations["node_resolution_error"] = _exception_observation(exc)
+        observations["dataset_lookup_root"] = data_root_uri
         try:
             report = self._dataset_loader(node_id, data_root_uri)
         except Exception as exc:
@@ -510,6 +540,21 @@ class DurableExecutionIdentityResolver:
                 "expected": str(node_id),
                 "actual": dataset.get("resolved_node_id"),
             }
+            return None
+        if scoped_root and str(PurePosixPath(str(dataset.get("resolved_data_root_uri") or ""))) != data_root_uri:
+            missing.append("dataset.resolved_data_root_uri")
+            observations["dataset_root_mismatch"] = {
+                "expected": data_root_uri, "actual": dataset.get("resolved_data_root_uri"),
+            }
+            suggestions.append("retrieve the immutable manifest from the exact run-scoped release root")
+            return None
+        expected_manifest = str(config.get("dataset_manifest_sha256") or "").strip()
+        if expected_manifest and dataset.get("dataset_manifest_sha256") != expected_manifest:
+            missing.append("dataset.dataset_manifest_sha256")
+            observations["dataset_manifest_mismatch"] = {
+                "expected": expected_manifest, "actual": dataset.get("dataset_manifest_sha256"),
+            }
+            suggestions.append("restore the exact frozen dataset manifest; do not rebind this run to a newer release")
             return None
         observations["dataset_manifest_sha256"] = dataset.get("dataset_manifest_sha256")
         return dataset
