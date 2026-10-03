@@ -37,8 +37,8 @@ from backend.services.hmm_risk.formal_state_model import (
 )
 from backend.services.hmm_risk.stock_fact_observation import validate_c010_policy_manifest
 
-FROZEN_GENERATION = "20261001-v16-unified-moneyflow2"
-FROZEN_MANIFEST = "fcc90ff0df761511c7e4d431da8a9bddf04e1c66c70c8780c6359e876f247098"
+FROZEN_GENERATION = "20261002-v17-unified-basic-history1"
+FROZEN_MANIFEST = "97df6acdbe43dc20f577e85f8cceb2814d73fca13b0f12cda7aefd90cfb62f2c"
 PIT_BUNDLE = "051e2af357703734080ff3ea5b4311926905aa7cbd1f31d926ef5b8575261313"
 TRAIN_CALENDAR_HASH = "b48fb5e911295d1c16920178b6ea48285c5890455aeaa31ad03ef7e11841f715"
 THREAD_VARIABLES = (
@@ -62,10 +62,10 @@ def frozen_release_binding() -> dict[str, str]:
     return {
         "generation": FROZEN_GENERATION,
         "release_id": "qe_hmm_full_v2_20260831",
-        "revision": "20261001-r8-unified-moneyflow2",
+        "revision": "20261002-r8-unified-basic-history1",
         "cutoff": "2026-08-31",
         "manifest_sha256": FROZEN_MANIFEST,
-        "manifest_file_sha256": "7f242fcf3100969ad5e4057fac457c09ec195972d3e8befb1e192cb7725f88a0",
+        "manifest_file_sha256": "eb193a03fedeb0aa4c825daed492f50331d4f1581b59b750203501b95694ad76",
     }
 
 
@@ -165,7 +165,7 @@ def load_request(path: Path) -> dict[str, Any]:
         or source["manifest_sha256"] != FROZEN_MANIFEST
         or source["cutoff"] != "2026-08-31"
     ):
-        raise FormalStateError("hmm_risk_formal_identity_mismatch", "request is not approved frozen v16")
+        raise FormalStateError("hmm_risk_formal_identity_mismatch", "request is not approved frozen v17")
     from backend.services.hmm_risk.rotation_l1_input_bundle import (
         _is_indirect_path,
         _require_frozen_direct_v2_profile,
