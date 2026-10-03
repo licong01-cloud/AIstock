@@ -102,7 +102,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 | F-003 | backend/services/hmm_risk/formal_state_executor.py; scripts/hmm_risk/run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py; backend/tests/hmm_risk/test_formal_state_model_set.py；完整 mocked grid、signed-zero mismatch、parent 环境/flags 回读、child/finalization durable failure、CLI fresh-process 拒绝和 mixed-shape serialization | PASS | 无 |
 | F-004 | backend/services/hmm_risk/formal_state_calendar.py; backend/services/hmm_risk/formal_state_input.py; backend/services/hmm_risk/formal_state_model.py; backend/services/hmm_risk/formal_state_executor.py | backend/tests/hmm_risk/test_formal_state_calendar.py；最终v17全324组182日carrier/ledger/hash预检PASS，E最少143；正式selected-only D6保留完整calendar和typed evidence结果；语义证据未全过见F-005，carrier/readback通过不等于semantic acceptance | PASS_IMPLEMENTATION_AND_READBACK | 无 |
 | F-005 | scripts/hmm_risk/run_formal_state_model_set.py；merge dc3511458a71fff811fbcf654628992657bae929 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-v17-formal-5184/run/acceptance.json；正式5184 fits，fresh_process_bitwise_equal=true；receipt SHA=fa42b6982f2ff5d8b5e7c257ad727ba66eb0ee9ac9a18e045847e573704a01ac；legacy两个层级无完整D5候选；autocycle均选seed47，L1/L2 D6分别29/31、121/131；d3_d6_accepted/ready/phase2_ready/product_capability_promoted均false，无发布产物 | COMPLETE_RESULT_REPORT_MODEL_NOT_ACCEPTED | 无 |
-| F-006 | 本文件L2精确合同；实施限formal model/calendar/readback、CLI与直接HMM测试 | 原acceptance冻结输入/模型身份；新验证待执行 | APPROVED_CONTRACT_IMPLEMENTATION_PENDING | 用户2026-10-03批准A/B及实施，不推导READY |
+| F-006 | 本文件L2精确合同；实施限formal model/calendar/readback、CLI与直接HMM测试 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-v17-formal-5184/run/acceptance.json；只用于原冻结身份；新测试/读回未执行 | APPROVED_BY_USER_CONTRACT_IMPLEMENTATION_PENDING | 用户明确批准A/B合同及后续实施；批准当前实现待验证状态，不推导READY |
 
 以下2026-09-30～2026-10-02源码/输入记录保留其当时状态，不能当作当前待办；最新输入与正式模型结果见Rollout / Rollback的当前终态。
 
@@ -199,7 +199,7 @@ legacy L1的`801130.SI`达到300 E-step仍未同时满足MAP/covariance自洽停
 5. **独立L2完整性**：131目录逐项状态、预注册资格、合格输出及coverage分开；不把L1或另family的失败自动合取为L2产品失败。数据资格在访问validation结果前冻结，模型结果如实报告；不能只评价121个D6通过行业并声称全截面有效。正式指数输入与C-010股票事实聚合版各遵其合同，无指数不造指数、不默认回落其他层级。
 6. **下一执行边界**：先给出本节精确合同及必要直接测试范围，审核通过并获模型合同批准后才修改代码/执行最小L2验证；保持尚未批准修改的features/window/seed/数值合同不变。不得直接把未来L2-only范围改写进历史5184请求。当前不启动新训练、实验、tail或服务。
 
-这里批准的是处理原则，不是所有模型必须通过。语义证据不足不等于数值/数据故障，也不能冒充已经有可用预测；新的运行schema和失败reason不由文档自行新增。
+处理原则及下面A/B精确合同已批准，不是所有模型必须通过。语义证据不足不等于数值/数据故障，也不能冒充已有可用预测；新的运行schema和失败reason仅按批准合同实施。
 
 ### L2精确修订决策包（一次闭合；2026-10-03精确合同已批准）
 
