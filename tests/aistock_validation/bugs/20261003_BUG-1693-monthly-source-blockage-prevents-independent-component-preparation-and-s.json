@@ -329,15 +329,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "python X:/AIstock_temp/BUG-1693/check_production_preparation.py -> passed; real production registry SOURCE6, shared formal BUILD scope; database_opened=false, operation_claimed=false, runtime_effectiveness_verified=false",
-      "python -m pytest backend/tests/dataset_release/test_monthly_preparation_executor.py::test_real_wsl_private_daily_minute_dump_finalize_and_recovery -q with AISTOCK_MONTHLY_REAL_QLIB_TEST=1 -> passed; actual existing WSL Qlib dump/finalize/recovery, explicitly bounded test source rows; no official monthly operation"
-    ],
-    "inference_basis": "actual_changed_files_after_worker_source_merge_77674039d96a95c113a259e552b074f758a70467",
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/BUG-1693/check_production_preparation.py -> passed; real production registry SOURCE6, shared formal BUILD scope; database_opened=false, operation_claimed=false, runtime_effectiveness_verified=false",
+      "python -m pytest backend/tests/dataset_release/test_monthly_preparation_executor.py::test_real_wsl_private_daily_minute_dump_finalize_and_recovery -q with AISTOCK_MONTHLY_REAL_QLIB_TEST=1 -> passed; actual existing WSL Qlib dump/finalize/recovery, explicitly bounded test source rows; no official monthly operation",
+      "python X:/AIstock_temp/BUG-1693/check_production_preparation.py -> passed; actual SOURCE6 production registry and shared formal BUILD scope; database_opened=false, operation_claimed=false, runtime_effectiveness_verified=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files_after_worker_source_merge_77674039d96a95c113a259e552b074f758a70467",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
