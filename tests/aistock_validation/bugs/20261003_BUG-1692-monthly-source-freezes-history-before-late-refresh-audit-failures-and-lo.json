@@ -30,14 +30,18 @@
   ],
   "expected": "All refresh audit blockers returned before source data sealing; existing nine fact gates remain mandatory.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1692-monthly-source-freezes-history-before-late-refresh-audit-failures-and-lo.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/source_authority.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_source_authority.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1692-monthly-source-freezes-history-before-late-refresh-audit-failures-and-lo.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -151,6 +155,22 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5310",
+  "post_restart_readback": {
+    "candidate_write": false,
+    "database_write": false,
+    "durable_operation_attempt": 238,
+    "durable_operation_id": "dmr_63a313d97fd046a38d5a876265565014",
+    "durable_operation_status": "SOURCE_BLOCKED",
+    "early_readiness_receipt": "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/monthly-early-readiness-20261003T051009662368Z.json",
+    "observed_runtime_commit": "98f38d30ee76ab212a08cfb12cc9a4e949ce8a28",
+    "profile_write": false,
+    "release_business_smoke": "blocked_by_source_incomplete_not_restart",
+    "restart_identity_receipt": "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/BUG1692-post-restart-actual-scope-20261003.json",
+    "runtime_identity_match": true,
+    "service_process_control": false,
+    "source_payload_materialized": false,
+    "typed_blocker": "margin_detail/2026-09-30"
+  },
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
