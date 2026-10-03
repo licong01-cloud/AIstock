@@ -25,7 +25,8 @@ function rotationRows(availableCount = 131) {
   }));
 }
 
-async function mockRotationApi(page: import("@playwright/test").Page, availableCount = 131) {
+async function mockRotationApi(page: import("@playwright/test").Page, availableCount = 131, hmm = false, mixed = false) {
+  const version = "hmm_risk_l2_postcalibration_effect_v1";
   await page.route("**/api/v1/hmm-risk/rotation-l2/overview?*", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -41,11 +42,12 @@ async function mockRotationApi(page: import("@playwright/test").Page, availableC
           binding_mbe_rank_ic: 0.02,
           research_surface_status: "AVAILABLE_EXPERIMENTAL",
           rotation_l2_capability_status: "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED",
-          effect_status: "DEVELOPMENT_EFFECT_QUALIFIED",
+          ...(hmm ? { model_version: version } : {}),
+          effect_status: hmm ? "DEVELOPMENT_EFFECT_REACHED_FORWARD_UNCONFIRMED" : "DEVELOPMENT_EFFECT_QUALIFIED",
           forward_power_status: "UNAVAILABLE",
           forward_confirmation: "NOT_STARTED",
           advisory_status: "NOT_AVAILABLE",
-          validation_basis: "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT",
+          validation_basis: hmm ? "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT" : "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT",
           input_hash: INPUT_HASH,
           mapping_hash: MAPPING_HASH,
           quote_authority_hash: "1".repeat(64),
@@ -63,7 +65,12 @@ async function mockRotationApi(page: import("@playwright/test").Page, availableC
       contentType: "application/json",
       body: JSON.stringify({
         status: "ok",
-        data: { run_id: RUN_ID, trade_date: "2026-03-31", rows: rotationRows(availableCount) },
+        data: { run_id: RUN_ID, trade_date: "2026-03-31", rows: rotationRows(availableCount).map((row, index) => hmm ? {
+          ...row, model_version: mixed && index === 0 ? undefined : version,
+          semantic_state: row.availability === "available" ? "neutral" : null,
+          forecast_state: row.availability === "available" ? "neutral" : null,
+          daily_rank_group: row.forecast_state,
+        } : row) },
       }),
     });
   });
@@ -102,6 +109,23 @@ test("never duplicates sectors when fewer rows are available than requested", as
   await expect(page.getByText("实际展示 15 项且不重复", { exact: false })).toBeVisible();
   const labels = await ranking.locator("article strong").allTextContents();
   expect(new Set(labels).size).toBe(labels.length);
+});
+
+test("distinguishes frozen industry semantics from daily relative ranks", async ({ page }) => {
+  await mockRotationApi(page, 127, true);
+  await assertRotationSurface(page);
+  const first = page.getByRole("region", { name: "申万二级行业轮动排名" }).locator("article").first();
+  await expect(first).toContainText("行业内状态");
+  await expect(first).toContainText("当日相对排名");
+  await expect(first).toContainText("中性");
+  await expect(first).toContainText("前列");
+});
+
+test("rejects mixed HMM and delta product rows", async ({ page }) => {
+  await mockRotationApi(page, 127, true, true);
+  await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
+  await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
+  await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
 });
 
 test("does not guess a latest run when product configuration is absent", async ({ page }) => {

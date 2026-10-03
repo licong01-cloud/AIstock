@@ -24,7 +24,7 @@ from .monthly_snapshot import (
     managed_monthly_snapshot,
 )
 from .monthly_source_audit import SourceGateEvidence, close_source_audit
-from .monthly_unified import SOURCE_GATES, SourceChange, classify_component_actions
+from .monthly_unified import SOURCE_GATES, MonthlyReleaseSourceBlocked, SourceChange, classify_component_actions
 from .monthly_worker import PRODUCER_EVIDENCE_SCHEMA, ProducerContext
 
 
@@ -39,12 +39,7 @@ class SourceArtifact:
 
     def __post_init__(self) -> None:
         relative = Path(self.artifact_id)
-        if (
-            not self.artifact_id
-            or relative.is_absolute()
-            or ".." in relative.parts
-            or "\\" in self.artifact_id
-        ):
+        if not self.artifact_id or relative.is_absolute() or ".." in relative.parts or "\\" in self.artifact_id:
             raise ValueError("source input artifact id is not portable")
         if not self.path.is_absolute():
             raise ValueError("source input artifact path must be absolute")
@@ -59,10 +54,24 @@ class MonthlySourceReadSet:
     seal_token: object | None = None
 
     def __post_init__(self) -> None:
-        if {item.gate for item in self.gates} != set(SOURCE_GATES) or len(self.gates) != len(
-            SOURCE_GATES
-        ):
+        if {item.gate for item in self.gates} != set(SOURCE_GATES) or len(self.gates) != len(SOURCE_GATES):
             raise ValueError("monthly source read set must cover each gate exactly once")
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlySourcePreparationReadSet:
+    """Incomplete private source view; cannot satisfy any SOURCE checkpoint."""
+
+    snapshot_group_id: str
+    input_artifacts: tuple[SourceArtifact, ...]
+    blocking_context: Mapping[str, Any]
+    preparation_token: object
+
+    def __post_init__(self) -> None:
+        if not self.input_artifacts or not self.snapshot_group_id.startswith("postgres:"):
+            raise ValueError("private source snapshot or input evidence is missing")
+        if self.preparation_token is None or not self.blocking_context.get("reason_code"):
+            raise ValueError("private source preparation handoff is incomplete")
 
 
 class MonthlySourceAdapter(Protocol):
@@ -75,7 +84,7 @@ class MonthlySourceAdapter(Protocol):
         connection: SnapshotConnection,
         identity: MonthlySnapshotIdentity,
         context: ProducerContext,
-    ) -> MonthlySourceReadSet: ...
+    ) -> MonthlySourceReadSet | MonthlySourcePreparationReadSet: ...
 
 
 def _sha256(path: Path) -> str:
@@ -125,19 +134,13 @@ def _require_source_provenance(
     for gate in read_set.gates:
         for reference in (gate.expectation_contract_ref, gate.readback_ref):
             if reference not in artifact_hashes:
-                raise MonthlySourceProducerError(
-                    f"source gate provenance is not pinned: {gate.gate}"
-                )
+                raise MonthlySourceProducerError(f"source gate provenance is not pinned: {gate.gate}")
         for exception in gate.exception_refs:
             if exception.authority_sha256 not in content_hashes:
-                raise MonthlySourceProducerError(
-                    f"source exception authority is not pinned: {gate.gate}"
-                )
+                raise MonthlySourceProducerError(f"source exception authority is not pinned: {gate.gate}")
     for change in read_set.changes:
         if change.source_receipt_sha256 not in content_hashes:
-            raise MonthlySourceProducerError(
-                f"source change receipt is not pinned: {change.dataset}"
-            )
+            raise MonthlySourceProducerError(f"source change receipt is not pinned: {change.dataset}")
     for repair in read_set.repair_receipts:
         if not isinstance(repair, Mapping):
             raise MonthlySourceProducerError("source repair receipt is invalid")
@@ -145,9 +148,7 @@ def _require_source_provenance(
             digest = str(repair.get(field) or "")
             ensure_sha256(digest, field=f"repair_receipt.{field}")
             if digest not in content_hashes:
-                raise MonthlySourceProducerError(
-                    f"source repair evidence is not pinned: {field}"
-                )
+                raise MonthlySourceProducerError(f"source repair evidence is not pinned: {field}")
 
 
 def _write_exclusive(path: Path, value: Mapping[str, Any]) -> dict[str, Any]:
@@ -172,9 +173,9 @@ class AuditedMonthlySourceProducer:
     artifact_root: Path
     connection_factory: Callable[[], SnapshotConnection]
     adapter: MonthlySourceAdapter
-    snapshot_factory: Callable[
-        [Callable[[], SnapshotConnection]], MonthlySnapshotCoordinator
-    ] = managed_monthly_snapshot
+    snapshot_factory: Callable[[Callable[[], SnapshotConnection]], MonthlySnapshotCoordinator] = (
+        managed_monthly_snapshot
+    )
 
     def __post_init__(self) -> None:
         if not self.producer_id.strip() or not self.producer_version.strip():
@@ -196,13 +197,7 @@ class AuditedMonthlySourceProducer:
         if context.stage != "SOURCE":
             raise MonthlySourceProducerError("audited source producer received a non-SOURCE stage")
         started = time.monotonic()
-        operation_root = (
-            self.artifact_root
-            / "monthly"
-            / context.operation_id
-            / "source"
-            / f"attempt-{context.attempt}"
-        )
+        operation_root = self.artifact_root / "monthly" / context.operation_id / "source" / f"attempt-{context.attempt}"
         operation_root.mkdir(parents=True, exist_ok=False)
         predecessor_cutoff = date.fromisoformat(str(context.plan["predecessor"]["cutoff"]))
         target_cutoff = date.fromisoformat(str(context.plan["target_cutoff"]))
@@ -211,24 +206,67 @@ class AuditedMonthlySourceProducer:
         with coordinator as snapshot:
             if snapshot.identity is None:  # pragma: no cover - guarded by coordinator
                 raise MonthlySourceProducerError("monthly snapshot identity is unavailable")
-            read_set = snapshot.read(
-                lambda connection, identity: self.adapter.read(connection, identity, context)
-            )
+            read_set = snapshot.read(lambda connection, identity: self.adapter.read(connection, identity, context))
             snapshot_group_id = f"postgres:{snapshot.identity.snapshot_id}"
-            if any(item.snapshot_group_id != snapshot_group_id for item in read_set.gates):
-                raise MonthlySourceProducerError("source gate snapshot identity differs")
-            audit = close_source_audit(
-                cutoff=target_cutoff,
-                predecessor_cutoff=predecessor_cutoff,
-                gates=read_set.gates,
-                changes=read_set.changes,
-            )
+            if isinstance(read_set, MonthlySourcePreparationReadSet):
+                if read_set.snapshot_group_id != snapshot_group_id:
+                    raise MonthlySourceProducerError("private source snapshot identity differs")
+            else:
+                if any(item.snapshot_group_id != snapshot_group_id for item in read_set.gates):
+                    raise MonthlySourceProducerError("source gate snapshot identity differs")
+                audit = close_source_audit(
+                    cutoff=target_cutoff,
+                    predecessor_cutoff=predecessor_cutoff,
+                    gates=read_set.gates,
+                    changes=read_set.changes,
+                )
             snapshot.assert_no_overlapping_repairs()
             identity = snapshot.identity
 
-        input_artifacts, artifact_hashes = _validated_source_artifacts(
-            read_set.input_artifacts
-        )
+        if isinstance(read_set, MonthlySourcePreparationReadSet):
+            input_artifacts, _ = _validated_source_artifacts(read_set.input_artifacts)
+            seal = _write_exclusive(
+                operation_root / "private-source-snapshot.json",
+                {
+                    "schema_version": "aistock_monthly_preparation_snapshot_seal_v1",
+                    "operation_id": context.operation_id,
+                    "attempt": context.attempt,
+                    "cutoff": target_cutoff.isoformat(),
+                    "predecessor_cutoff": predecessor_cutoff.isoformat(),
+                    "snapshot_group_id": snapshot_group_id,
+                    "source_as_of": identity.source_as_of,
+                    "initial_repair_watermark": identity.initial_repair_watermark,
+                    "overlapping_repair_ids": [],
+                    "inputs": input_artifacts,
+                    "consistent_input_set_complete": False,
+                    "publication_allowed": False,
+                    "database_write_performed": False,
+                },
+            )
+            hook = getattr(self.adapter, "preparation_snapshot_sealed", None)
+            if not callable(hook):
+                raise MonthlySourceProducerError("private source lacks a code-owned preparation executor")
+            result = hook(context, read_set.preparation_token, identity)
+            if not isinstance(result, Mapping) or result.get("status") not in {
+                "SOURCE_PREPARED_UNPUBLISHED",
+                "COMPONENTS_PREPARED_UNPUBLISHED",
+            }:
+                raise MonthlySourceProducerError("private preparation executor returned invalid status")
+            raise MonthlyReleaseSourceBlocked(
+                "monthly source remains incomplete after private preparation",
+                context={
+                    **dict(read_set.blocking_context),
+                    "component_preparation": dict(result),
+                    "component_preparation_execution": result["status"],
+                    "preparation_snapshot_seal": seal,
+                    "source_payload_materialized": True,
+                    "consistent_input_set_complete": False,
+                    "publication_allowed": False,
+                    "database_write_performed": False,
+                },
+            )
+
+        input_artifacts, artifact_hashes = _validated_source_artifacts(read_set.input_artifacts)
         _require_source_provenance(read_set, artifact_hashes=artifact_hashes)
         actions = classify_component_actions(read_set.changes)
         outputs: list[dict[str, str]] = []

@@ -23,6 +23,7 @@ from backend.data_service.security_source_identity import (
 )
 
 from .canonical import canonical_json_bytes
+from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME
 from .monthly_source_audit import (
     MonthlySourceAuditError,
     SourceGateEvidence,
@@ -157,13 +158,28 @@ class MinuteSummary:
     close: float = math.nan
     vol: float = 0
     amount: float = 0
+    auction: dict[str, float] | None = None
 
     def add(self, row: Mapping[str, Any]) -> None:
-        self.count += 1
         stamp = row["trade_time"]
         stamp = stamp if isinstance(stamp, datetime) else datetime.fromisoformat(str(stamp))
         if stamp.tzinfo is not None:
             stamp = stamp.astimezone(_SHANGHAI).replace(tzinfo=None)
+        # The producer excludes one exact auction from its 240 core bars.
+        # Raw daily economics still include that real opening trade.
+        if stamp.time() == MINUTE_OPENING_AUCTION_TIME:
+            if stamp.date() != self.trade_date:
+                self.invalid = True
+            elif self.auction is not None:
+                self.duplicate_count += 1
+                self.invalid = True
+            else:
+                try:
+                    self.auction = _ohlcv(row)
+                except MonthlySourceAuditError:
+                    self.invalid = True
+            return
+        self.count += 1
         minute = stamp.hour * 60 + stamp.minute
         index = minute - 571 if 571 <= minute <= 690 else minute - 781 + 120 if 781 <= minute <= 900 else -1
         if stamp.date() != self.trade_date or stamp.second or stamp.microsecond or index < 0:
@@ -188,7 +204,16 @@ class MinuteSummary:
         self.amount += value["amount"]
 
     def aggregates(self) -> dict[str, float]:
-        return {key: getattr(self, key) for key in ("open", "high", "low", "close", "vol", "amount")}
+        values = {key: getattr(self, key) for key in ("open", "high", "low", "close", "vol", "amount")}
+        if self.auction is not None:
+            values.update(
+                open=self.auction["open"],
+                high=max(self.high, self.auction["high"]),
+                low=min(self.low, self.auction["low"]),
+                vol=self.vol + self.auction["vol"],
+                amount=self.amount + self.auction["amount"],
+            )
+        return values
 
 
 def _index(rows: Iterable[Mapping[str, Any]], sessions: set[date]) -> dict[tuple[str, date], list[Mapping[str, Any]]]:
@@ -294,7 +319,7 @@ def audit_month_rows(
         )
         if key in suspended and (
             any(_finite(row.get("volume_hand")) and float(row["volume_hand"]) > 0 for row in daily)
-            or (key in summaries and summaries[key].vol > 0)
+            or (key in summaries and summaries[key].aggregates()["vol"] > 0)
         ):
             gates["suspend_limit"].invalid_count += 1
             gates["suspend_limit"].issue(key, "suspend_conflicts_with_trade")

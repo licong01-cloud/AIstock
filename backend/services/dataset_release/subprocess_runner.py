@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
-try:
+if __package__:
     from .log_store import (
         LogCapacityExceeded,
         LogSegmentBudget,
@@ -20,13 +20,8 @@ try:
         RotatingLogWriter,
         manifest_segments,
     )
-except ImportError:  # direct WSL script entrypoint
-    import sys
-
-    repository_root = Path(__file__).resolve().parents[3]
-    if str(repository_root) not in sys.path:
-        sys.path.insert(0, str(repository_root))
-    from backend.services.dataset_release.log_store import (  # noqa: E402
+else:  # Direct script: do not initialize the backend/DB package.
+    from log_store import (
         LogCapacityExceeded,
         LogSegmentBudget,
         MAX_LOG_SEGMENTS,

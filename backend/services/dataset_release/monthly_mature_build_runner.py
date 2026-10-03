@@ -66,9 +66,7 @@ class MonthlyBuildExecutionTools:
 
 
 class MonthlyBuildExecutionScopeFactory(Protocol):
-    def __call__(
-        self, context: ProducerContext
-    ) -> AbstractContextManager[MonthlyBuildExecutionTools]: ...
+    def __call__(self, context: ProducerContext) -> AbstractContextManager[MonthlyBuildExecutionTools]: ...
 
 
 class MonthlyCandidateFinalizer(Protocol):
@@ -106,9 +104,7 @@ class MatureMonthlyPhysicalBuildRunner:
         if (self.qlib_writer is None) != (self.consumer_smoke is None):
             raise MonthlyMatureBuildError("monthly build tools must be supplied as one pair")
         if (self.execution_scope_factory is None) != has_legacy_tools:
-            raise MonthlyMatureBuildError(
-                "monthly build requires exactly one attempt-scoped or legacy tool source"
-            )
+            raise MonthlyMatureBuildError("monthly build requires exactly one attempt-scoped or legacy tool source")
 
     def execute(
         self,
@@ -121,10 +117,7 @@ class MatureMonthlyPhysicalBuildRunner:
         if not release_id:
             raise MonthlyMatureBuildError("monthly release id is missing")
         candidate_root = Path(self.profile.candidate_root).resolve(strict=True)
-        if (
-            staging_root.parent.name != ".staging"
-            or staging_root.parent.parent.resolve(strict=True) != candidate_root
-        ):
+        if staging_root.parent.name != ".staging" or staging_root.parent.parent.resolve(strict=True) != candidate_root:
             raise MonthlyMatureBuildError("monthly staging root differs from profile")
         staging_relative_path = staging_root.relative_to(candidate_root).as_posix()
         release_digest = str(compiled.physical_plan.get("release_digest") or "")
@@ -139,6 +132,12 @@ class MatureMonthlyPhysicalBuildRunner:
         )
         if release_digest != expected_release_digest:
             raise MonthlyMatureBuildError("monthly physical release digest differs")
+        physical_plan = dict(compiled.physical_plan)
+        predecessor = context.plan.get("predecessor")
+        if isinstance(predecessor, Mapping):
+            # Only the durable controller plan supplies this lineage, never a
+            # path from an API caller or a partial preparation SOURCE receipt.
+            physical_plan["preparation_predecessor_profile_sha256"] = predecessor.get("profile_sha256")
         common = {
             "run_id": context.operation_id,
             "attempt_id": f"{context.operation_id}-attempt-{context.attempt}",
@@ -153,7 +152,7 @@ class MatureMonthlyPhysicalBuildRunner:
             "staging_root": staging_root,
             "profile": self.profile,
             "cas": self.cas,
-            "plan": compiled.physical_plan,
+            "plan": physical_plan,
         }
 
         if self.execution_scope_factory is not None:
@@ -168,38 +167,27 @@ class MatureMonthlyPhysicalBuildRunner:
                 )
             )
         with scope as tools:
-            prepare = run_build_stage(
-                BuildStageInvocation(stage="prepare", prerequisites={}, **common)
-            )
+            prepare = run_build_stage(BuildStageInvocation(stage="prepare", prerequisites={}, **common))
             prepare_ref = self._seal_stage(prepare, expected="prepare")
             operations = prepare.get("qlib_dump_operations")
-            if not isinstance(operations, list) or any(
-                not isinstance(item, Mapping) for item in operations
-            ):
+            if not isinstance(operations, list) or any(not isinstance(item, Mapping) for item in operations):
                 raise MonthlyMatureBuildError("prepare Qlib operation set is invalid")
             dump_refs: dict[str, CASRef] = {}
             for raw in operations:
                 operation = dict(raw)
                 operation_id = str(operation.get("operation_id") or "")
                 if not operation_id or operation_id in dump_refs:
-                    raise MonthlyMatureBuildError(
-                        "Qlib operation identity is empty or duplicated"
-                    )
+                    raise MonthlyMatureBuildError("Qlib operation identity is empty or duplicated")
                 receipt = tools.qlib_writer.execute(
                     context=context,
                     staging_root=staging_root,
                     operation=operation,
                 )
-                dump_refs[operation_id] = self.cas.verify(
-                    self.cas.put_json(dict(receipt))
-                )
+                dump_refs[operation_id] = self.cas.verify(self.cas.put_json(dict(receipt)))
 
             finalize_prerequisites = {
                 "prepare": prepare_ref.sha256,
-                **{
-                    f"qlib_dump_{name}": reference.sha256
-                    for name, reference in sorted(dump_refs.items())
-                },
+                **{f"qlib_dump_{name}": reference.sha256 for name, reference in sorted(dump_refs.items())},
             }
             finalized = run_build_stage(
                 BuildStageInvocation(
@@ -216,9 +204,7 @@ class MatureMonthlyPhysicalBuildRunner:
                 release_digest=release_digest,
             )
         smoke_ref = self.cas.verify(self.cas.put_json(dict(smoke.semantic_receipt)))
-        smoke_resource_ref = self.cas.verify(
-            self.cas.put_json(dict(smoke.resource_receipt))
-        )
+        smoke_resource_ref = self.cas.verify(self.cas.put_json(dict(smoke.resource_receipt)))
         validation_prerequisites = {
             **finalize_prerequisites,
             "finalize_bins": finalized_ref.sha256,
@@ -239,10 +225,7 @@ class MatureMonthlyPhysicalBuildRunner:
             validation_result=validated,
             stage_refs={
                 "prepare": prepare_ref,
-                **{
-                    f"qlib_dump_{name}": reference
-                    for name, reference in sorted(dump_refs.items())
-                },
+                **{f"qlib_dump_{name}": reference for name, reference in sorted(dump_refs.items())},
                 "finalize_bins": finalized_ref,
                 "consumer_smoke": smoke_ref,
                 "consumer_smoke_resource": smoke_resource_ref,
