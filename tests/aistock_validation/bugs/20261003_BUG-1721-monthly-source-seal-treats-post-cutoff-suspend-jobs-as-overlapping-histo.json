@@ -33,23 +33,23 @@
   "expected": "Only evidenced writer scopes intersecting frozen input invalidate materialization; post-cutoff bounded normal suspend updates do not.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261003_BUG-1721-monthly-source-seal-treats-post-cutoff-suspend-jobs-as-overlapping-histo.json",
       "backend/services/dataset_release/monthly_repair_journal.py",
       "backend/services/dataset_release/monthly_snapshot.py",
       "backend/services/dataset_release/monthly_source_producer.py",
       "backend/tests/dataset_release/test_monthly_repair_journal.py",
       "backend/tests/dataset_release/test_monthly_snapshot.py",
-      "backend/tests/dataset_release/test_monthly_source_producer.py"
+      "backend/tests/dataset_release/test_monthly_source_producer.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1721-monthly-source-seal-treats-post-cutoff-suspend-jobs-as-overlapping-histo.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261003_BUG-1721-monthly-source-seal-treats-post-cutoff-suspend-jobs-as-overlapping-histo.json",
       "backend/services/dataset_release/monthly_repair_journal.py",
       "backend/services/dataset_release/monthly_snapshot.py",
       "backend/services/dataset_release/monthly_source_producer.py",
       "backend/tests/dataset_release/test_monthly_repair_journal.py",
       "backend/tests/dataset_release/test_monthly_snapshot.py",
-      "backend/tests/dataset_release/test_monthly_source_producer.py"
+      "backend/tests/dataset_release/test_monthly_source_producer.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1721-monthly-source-seal-treats-post-cutoff-suspend-jobs-as-overlapping-histo.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -198,8 +198,8 @@
   },
   "first_seen_at": "2026-10-03T20:55:25.853160Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5ce9e1576ddc319c200646991e7f11e2a590914d",
+  "fixed_at": "2026-10-03T21:04:16Z",
   "github_issue_number": 5417,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5417",
   "last_seen_at": "2026-10-03T20:55:25.853160Z",
@@ -207,6 +207,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5418",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -231,6 +232,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -242,7 +244,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1721",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1f712b5a26d53c47",
+    "recorded_at": "2026-10-03T21:04:50.146271Z",
+    "runtime_contract_digest": "986ad9dcb33f12aeefd7f3e233f59566a2e2c57a201478777cc60b89f7413e5f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "bfb9616f518b7399c6bf7cb33c7c5f60b06cf935",
+    "source_merge_commit": "5ce9e1576ddc319c200646991e7f11e2a590914d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5418",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed;116 direct tests+10 existing DEV readonly SQL cases passed;CI37153688053 exact HEAD bfb9616f518b7399c6bf7cb33c7c5f60b06cf935 success; two review rounds passed; production DB dependency gates noop"
+    ],
+    "validation_evidence_digest": "523180bfefdd772ecdc00bccabc76052b97b10199aacfb8e9cbb13ee7c01412b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -251,6 +274,9 @@
     "fingerprint": "3ec935f33c027c3133680978",
     "source_event_id": "FE-20261003-3ec935f33c02"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed;116 direct tests+10 existing DEV readonly SQL cases passed;CI37153688053 exact HEAD bfb9616f518b7399c6bf7cb33c7c5f60b06cf935 success; two review rounds passed; production DB dependency gates noop"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
