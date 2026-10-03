@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-03T14:54:08.216972Z",
-  "description": "ValueError: sector quote availability exceeds release cutoff；输入准备失败，效果进程0/2。",
+  "description": "HMM effect基线消费者将2026-03-31评价末日传给共享quote-availability的release cutoff校验，误拒绝覆盖至真实2026-08-31截止日的合法authority。修复使用已验证assets.release_cutoff，原2026-03-30 feature/as-of读取和评价窗口保持不变。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -103,11 +103,13 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Conda base python X:/AIstock_temp/hmm_l2_effect_20261003/bug1704_smoke.py -> PASS; PYTHONPATH=current BUG-1704 worktree; backend.routers.hmm_risk/health and formal input/effect/executor imports; v17 actual 131-code quote authority readback and hash pins passed; database get_conn poisoned; fits=0/tail_accessed=false"
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
