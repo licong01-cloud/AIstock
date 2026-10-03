@@ -1,8 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.85
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.87
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-03
-> 当前最新事实：H-TIMING-1计算/来源PR #5331已合入`592fd305f9147ddfc3eaf87b8bed52d905352bed`；一次配对研究已完成，run=`advtiming_cd2ddd9832129255c14f9a80`。新15字段/同核13字段/原基线在100共同估值日的成本后名义收益分别`3.0673%/1.6174%/19.1729%`；新增两量相对控制日增量`+1.0789bps`，但相对基线`-15.0261bps`，未满足预注册的两个正增量条件，停止当前candidate、不进入消费者接入或确认。研究源码PR #5336已通过CI并合入`5ec8c8e2d1deee16a5587afd604d61481162669e`；工程交付、研究结果、经济确认和生产启用分报。下列2026-10-02及较早2026-10-03接续段是历史实施检查点，其待办只以§16的最新队列为准。
+> 本轮最新事实：[H-VALUE-ANCHOR-1](advisory_economic_value_anchor_v1_f2_design_20261003.md)已完成设计、内核及一次同场景三臂研究，run=`advvalue_a4bc66a30cfa7d9d5078850c`。基线/常数锚/D模型在100共同估值日名义净收益`21.3220%/25.4597%/17.4642%`；D模型减常数/减基线日增量`-6.9022/-3.4196bps`，两个描述性区间均跨零。虽模型MDD/胜率改善且有58个实际进入差异日，仍未满足预注册收益条件，停止当前candidate，不回选常数控制、调整阈值/期限/seed或扩窗补证。独立VALUE_REVIEW_5_V1未改变生产退出，不能与旧19.17%跨场景判胜；经济确认/ENTRY_VALUE启用仍0。设计#5344及内核#5346已合入；研究源码#5347的合入状态见§16。
+> 上一轮H-TIMING-1事实：计算/来源PR #5331已合入`592fd305f9147ddfc3eaf87b8bed52d905352bed`；一次配对研究已完成，run=`advtiming_cd2ddd9832129255c14f9a80`。新15字段/同核13字段/原基线在100共同估值日的成本后名义收益分别`3.0673%/1.6174%/19.1729%`；新增两量相对控制日增量`+1.0789bps`，但相对基线`-15.0261bps`，未满足预注册的两个正增量条件，停止当前candidate、不进入消费者接入或确认。研究源码PR #5336已通过CI并合入`5ec8c8e2d1deee16a5587afd604d61481162669e`；工程交付、研究结果、经济确认和生产启用分报。下列2026-10-02及较早2026-10-03接续段是历史实施检查点，其待办只以§16的最新队列为准。
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
 > 当前状态：`ECONOMIC_ENTRY_NOT_CONFIRMED_DAILY_SOURCE_MERGED_RUNTIME_READONLY_VERIFIED`（2026-10-03）。独立entry、历史四阶段及每日接入经PR #5099合入，merge=`ad6d73e591a1666490cffae84f6518d8c2694efd`；用户重启及BUG-1623、BUG-1632/1636语义验证已完成。BUG-1640 / PR #5150已合入，重启验收及close-sync PR #5190完成；原29日/580样本四阶段探索回放NOT_CONFIRMED，仅NAVIGATION_ONLY。原分布v3/v4和P0/N3研究结论不改判，零新binding/数据库写入。新的主动目标是收益与风险驱动的条件式买入价格建议，开盘分布仅为辅助能力；收益型v1/v3/v4均已有真实研究但尚无经济确认模型，不能继续调coverage或风险阈值。每日消费者#5324已合入68ff7aaaa，必需CI通过，用户重启后health/identity及三个实际Program的只读状态验证通过；当前无合格ENTRY_VALUE角色，NOT_CONFIGURED且不自动捕获；十三字段新模型日常路由尚未实现，独立12D计算/只读输入已交付。设计、源码、业务交付、模型效果和正式启用分别报告；本页下方有明确日期的旧检查点是历史事实，不是自动待办。
 > 当前价格/执行边界：Advisory只研发日频PIT价格分布、条件式买入价值和日频退出价值建议，不研发分钟线择时、最佳分钟买卖点、拆单或成交执行策略。收益型建议与开盘分布采用独立目标和证据，不以coverage证明盈利。未来QE、Paper或Execution可通过版本化只读合同独立消费建议，但执行研发和激活仍不属于本蓝图。
@@ -205,7 +206,7 @@ H0 的权威详细设计为
 | 模型质量升级 | `0 ACTIVATED SELECTOR CHALLENGERS` | M5A/M5B/M5C及P0-D至P0-L均未证明可以替换Selection；P0-D只作为experimental shadow，M4继续提供价格范围而非选股alpha |
 | 长期趋势模型 | `NOT_STARTED` | 长期趋势原生多 Alpha 父包尚未形成可训练输入 |
 | 旧研究族状态 | `P0-D..P0-L FROZEN` | 研究事实完整但无可激活winner；不以同族新变体继续消耗相同开发证据 |
-| 新路线实现状态 | `ECONOMIC_ENTRY_TIMING_CANDIDATE_STOPPED_NO_QUALIFIED_ROLE` | BUG-1640/PR #5150及close-sync #5190已合入并经用户重启验证；29日探索完成、仍非原生。收益型v1/v3/v4及H-TIMING-1均无经济确认；H-TIMING-1新三臂研究已完成且当前candidate停止。每日消费者#5324已合入并通过重启后的默认未配置验证；无合格ENTRY_VALUE角色、无新binding，不等待或补旧身份来挽救模型。 |
+| 新路线实现状态 | `VALUE_ANCHOR_CANDIDATE_STOPPED_NO_QUALIFIED_ROLE` | BUG-1640/PR #5150及close-sync #5190已合入并经用户重启验证；29日探索完成、仍非原生。收益型v1/v3/v4、H-TIMING-1及H-VALUE-ANCHOR-1均无经济确认；两个新假设各已完成一次研究并停止其精确candidate。每日消费者#5324已合入并通过重启后的默认未配置验证；无合格ENTRY_VALUE角色、无新binding，不等待或补旧身份来挽救模型。 |
 | Admission v2上游依赖 | `BASELINE_STAGE_DECOUPLED / OPTIONAL_SECTOR_SOURCE_NOT_READY` | G2-A v1.2 17/39结构停止，没有完整accepted OOF；仅R2 sector阶段受阻，R0/R1使用真实基础source不需等待 |
 | 系统级上游Alpha | `QE_ROLLING_LSTM_CANDIDATE_ONLY` | rolling LSTM seed123完成四vintage并显示相对rolling LGBM改善，但仍待两seed、LOO和2026H1 Top50负收益解释；尚无新StrategyPackage或Advisory binding |
 | QE因子分析运行态 | `DIRECT_V2_SOURCE_MERGED_BACKEND_RESTART_PENDING` | PR #4352源码和DEV/WSL验证已完成；生产API/后台任务是否加载新源须用户重启后另行readback。该状态不计为模型效果，也不阻断离线主线 |
@@ -221,6 +222,7 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 
 | 阶段 | 冻结输入与产物 | 样本/模型 | 资源 | 冻结 test 或真实运行结果 | 当前结论 |
 |---|---|---|---|---|---|
+| H-VALUE-ANCHOR-1 D-only价值锚 | plan `advvalue_a4bc66a30cfa7d9d5078850c`；源码HEAD `1c8545ab870f5e12b9e128e09b1b13a4bdf0ae2f`、研究PR #5347；结果 `F:/Dev/AIstock_model_artifacts/advisory_value_anchor_v1_20261003/advvalue_a4bc66a30cfa7d9d5078850c/evaluated/evaluation.json` | 386D/7720原候选，7699新场景标签可用/21 UNKNOWN；12D未知10保留；新共同train4250/validation1622，label-end purge296；1配置2头、1candidate；81D/1620 test候选、100共同估值日 | 既存输入预登记/新标签准备15.163秒，零DB重查；两头fit及源核验0.880秒，fit＋评价12.169秒；拟合前后7项QE状态均0；无DB写/sealed/服务控制 | baseline/constant/model名义收益`21.3220%/25.4597%/17.4642%`，MDD`-10.3314%/-10.7283%/-8.0746%`；model减constant日增量`-6.9022bps`、95%`[-24.5301,9.9157]`；减baseline`-3.4196bps`、95%`[-18.9390,12.2020]`；模型81真实TAKE＋3 UNKNOWN控制episode，常数89＋3；相对常数实际进入不同58日；三臂端点/持有mark问题0 | `STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION / EXPLORATORY_SCREEN / NAVIGATION_ONLY`；同独立VALUE_REVIEW_5_V1复评场景，非生产政策改变/沪深300超额/独立OOS/实盘成交。停止精确candidate，不事后转选常数控制，零confirmation/binding/启用 |
 | H-TIMING-1 同核买入价值探索 | plan `advtiming_cd2ddd9832129255c14f9a80`；recipe input `advtiminginput_9a929b2d2dafd1c4cf18f42f`；源码HEAD `001910b7ef7a64afb1deacc12233389b97abe4f5`、PR #5336已合入`5ec8c8e2d1deee16a5587afd604d61481162669e`；结果 `F:/Dev/AIstock_model_artifacts/advisory_entry_timing_v1_20261003/advtiming_cd2ddd9832129255c14f9a80/evaluated/evaluation.json` | 386D/7720原候选；7710个14D完整值、10 UNKNOWN保留；新共同train4153/validation1556；2配置4头、1candidate；81D/1620 test候选、100共同估值日 | 只读输入607.703秒/486 SELECT；一次4头fit6.719秒；预登记/fit/评价28.781秒；拟合前后QE活动状态均0；无DB写/sealed/服务操作 | baseline/core13/timing15名义收益`19.1729%/1.6174%/3.0673%`；MDD`-10.2278%/-9.5256%/-7.3655%`；15减13日增量`+1.0789bps`、描述性95%`[-10.5944,13.2180]`；15减baseline`-15.0261bps`、95%`[-32.6430,-0.3110]`；candidate19真实TAKE＋7 UNKNOWN控制episode，控制37＋3，相对控制进入不同30日 | `STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION / EXPLORATORY_SCREEN / NAVIGATION_ONLY`；当前来源NON_VINTAGE、原生成员限制不变；不是沪深300超额、独立OOS或真实成交。停止该candidate，零confirmation/binding/启用，不关闭价格方向 |
 | M0 可训练矩阵 | request `advmreq_ac5959aa8dc14a25e3b8c139` | 406 decision dates；8120 个 Top20 候选；6960 行冻结 features | 文件只读构建 | 训练/验证/test 的父输入身份已冻结，基础行情截止 `2026-06-30`，候选共同范围 `2024-07-04..2026-03-10` | 可训练输入已完成，不再扩建历史数据平台 |
 | M1 首个 reranker | bundle `9cf14e80cf13fad5473684d825935978aa40f3ff2f429fd98cbac0c7b7f87629` | train 3818 行/191 日；validation 1139 行/57 日；test 1599 行/80 日；Top5 400 行 | 128.921 秒；RSS 2,262,388,736 bytes | model Top5 5日平均超额 `-0.0002833`、命中率 `0.5025`、NDCG@5 `0.26570`；selection rank 为 `0.0085591`，HMM 为 `0.0040167`，随机为 `0.0055652` | 真实模型已接入 shadow，但原始质量明显低于基线 |
@@ -1956,16 +1958,16 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 2026-09-30历史8日探索结果保留：请求 `advepc_fda8f36ceae1ffe0e77db23c`，T=`2026-09-15..2026-09-24`共160候选，模型/市场可用、未知/停牌/crossing均0，预测167.98秒。连续coverage=0.6125、tick=0.64375、宽度/control=2.104502；IS差=-0.020045，CI95=[-0.021884,-0.013075]，结论INCONCLUSIVE/NAVIGATION_ONLY。该旧回放不再是主动待办，也不触发旧校准frontier回选；新的当前结果为上方29日完整探索。
 
-新模型推理仍需exact包候选及实际103特征。遇上游缺失只报告最小依赖给所属窗口；不修改QE/Selection公共代码。ENTRY_PRICE未确认为任何新包/新股票池可用前，其状态保持typed unavailable。
+旧排名模型推理仍需exact包候选及其实际103特征；各新价格模型只能按自己的显式recipe/order/scope消费，不能把103维要求套到D-only12维价值锚或其它9/13/15维family，也不能给旧权重补侧车。遇上游缺失只报告最小依赖给所属窗口；不修改QE/Selection公共代码。ENTRY_PRICE未确认为任何新包/新股票池可用前，其状态保持typed unavailable。
 
-2026-10-03当前唯一主动队列如下。最多一条价格模型主线和一条必要工程辅线；#5324已合入且用户重启后的默认未配置语义通过。H-TIMING-1已由设计→纯计算/来源→386D输入→一次配对研究完整执行，当前candidate停止，不再列为待训练，也不为其新建daily family。#5336源码已通过必需CI并合入，源树已官方安全清理；当前必要交付仅本蓝图进度同步和合入；随后只有具备实质新假设、与获利价格建议有直接联系的设计才可立项，不自动派生H-TIMING-2同源字段/loss/seed/阈值搜索。没有值得继续的新假设时结束本轮有效工作，不为烧满长任务时间增加工程或失败补证。
+2026-10-03当前唯一主动队列如下。最多一条价格模型主线和一条必要工程辅线；#5324默认未配置运行验证仍有效。H-TIMING-1及H-VALUE-ANCHOR-1各已按冻结方案完整执行一次并停止当前candidate，不再列为待训练/确认或为其新建daily family。#5344设计、#5346内核及#5347研究源码均已合入；本页事实同步及自身精确清理是本轮剩余善后，非新模型方向。约10小时计划依据预注册负结果条件提前结束，不自动派生H-TIMING-2/H-VALUE-ANCHOR-2同信息/loss/seed/期限/阈值搜索。下一研究须先明确实质新信息或新的可识别业务动作/价值，并说明为何区别于两次负结果；没有合格新假设就停止主动实验，不烧满工时。上游alpha与新策略包仍由QE负责。
 
 | 优先级 | 直接业务交付 | 禁止绕行及完成边界 |
 |---|---|---|
 | P1 / 正确性优先 | Advisory核对原Top20、训练/每日D特征语义、PIT时钟、法规价格坐标、正常缺失与单日/批量一致性；只修可复现Bug | 不恢复旧receipt、不补旧实验身份、不把特征一致性当收益确认；无错误则转P2，不追加全量测试工程 |
 | P2 / 每日建议交付 | 既有消费者工程/API投影/六UI及#5324 CI/合入、用户重启后默认未配置语义已验证；新recipe接入仅随值得继续的P3模型实施 | 当前无合格角色，NOT_CONFIGURED不自动捕获；现有负模型不启用或补证，UI/默认状态不证明收益或已配置正式路径；新recipe路由未交付，禁止给旧模型补侧车 |
-| P3 / 实质新业务假设设计 | H-TIMING-1完整探索已执行、当前candidate停止。下一项先明确“观测开盘条件下的收益相关”与“建议买价改变后的净价值”是否一致：新信息或新可识别业务标签的经济动机、D可产性、合法价格支持及成本后对照须在新设计中具体化，不能直接开训 | 不重复旧负结果取证；不把观察性query回归/日线触价当作因果买价优势或可成交证明；不换loss/阈值/seed/简单同源字段挽救旧family。设计必须有实质增量且可证伪，否则不立项；上游Alpha仍由QE研究 |
-| P4 / 有条件独立确认 | 仅对达到预先明确开发条件且值得确认的新候选，使用合法未消费窗口作收益/风险确认，再决定角色启用 | 当前v1/v3/v4/H-TIMING-1未达标结果不进入P4，不扩大验证窗口补证，不先看确认结果回选模型；生产启用及用户重启独立报告 |
+| P3 / 实质新信息或可识别业务假设 | H-VALUE-ANCHOR-1设计/内核/准备/两头fit/三臂导航已完成且模型两个增量均负，不再重复。下一设计先说明新增信息可见时钟、价格与市场状态的独立语义、原候选合法支持及同场景成本后对照；或只读消费QE新合格包的公开交付，不替QE重做alpha实验 | 不事后改选本次常数控制、不调loss/期限/seed/800风险/支持阈值或扩窗挽救当前family；不能以更高胜率/较小回撤替代失败收益条件。不读sealed、伪造触价成交或偷换生产退出；没有实质新假设不立项 |
+| P4 / 有条件独立确认 | 仅对达到预先明确开发条件且值得确认的新候选，使用合法未消费窗口作收益/风险确认，再决定角色启用 | 当前v1/v3/v4/H-TIMING-1/H-VALUE-ANCHOR-1未达标结果不进入P4，不扩大验证窗口补证，不先看确认结果回选模型；生产启用及用户重启独立报告 |
 | P5 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
 
 2026-10-03计算与输入切片进度：#5313已合入a473e3b502d6cb98f363d6cf73a7953eb931cce0（修复后HEAD343718cc7、CI37099710628通过），提供原8+新4共12个D字段的统一纯计算API，20D候选/指数与2D市场宽度，原名单/实际两腿、OHLC、指数中间缺日以及整日/盘中/复牌缺行情语义；27定向测试、Ruff及F1五项通过。#5319已合入7edd740a82ff91f61ed842a88c615a516a7eff13（HEADab3262320、CI37101259296通过），交付同核单D/至多20D批块只读输入：精确键集、有界5SELECT、单快照rollback；14定向测试和F1四项通过。最小真实SQL smoke只用已消费2024-07-04及两个合成候选投影，证明查询/12D计算兼容，不是原Selection名单、全批性能、native或经济验收。计算core不含query_gap、不读取收益、不拟合、不开DB连接；source显式只读数据库，两者COMPUTATION_ONLY/旧训练parity UNPROVEN，均不改变旧模型、产物或调度。后续[共享内核日频接入详细设计](advisory_economic_common_core_daily_consumer_f2_design_20261003.md)按真实模型recipe接入已有消费者；旧v3/v4缺新recipe身份时不补侧车、不默认重训或新增81D验证。十三字段新模型路由/API/UI仍未完成；旧九字段消费者#5324六UI及必需CI通过并合入68ff7aaaa，用户重启后只读默认未配置语义验证通过，不转交数据准备窗口做业务验证。
@@ -1975,6 +1977,12 @@ H-TIMING-1接续：#5327设计合入725cb1f84e0ad0211b4073a20efac72d2a4787e2；#
 进度只按工程交付、业务功能验收、经济有效性、正式启用四态记录；目前新收益型价格模型经济确认/正式启用数量均为0，不用PR数量、测试数量或训练完成冒充终极目标完成百分比。#5304/#5305已完成，不再列为下一步。过去有明确日期的回放、资源预检和输入缺口段落仅保存历史结果，不自动生成新任务。
 
 v3.85进度修订审核：本窗口事实轮逐项对照本run的plan、trained metadata和evaluation，区分81个候选决策日/100估值日、真实TAKE/UNKNOWN控制、15减13/15减baseline，不跨实验拼接收益；一致性轮同步页首、§1.2/1.3与§16，去掉H-TIMING-1“待训练”及旧BUG-1640“尚未合入”当前态，早期检查点保留为历史；投入/授权轮确认停止负candidate，不生成确认/激活/补证/UI待办，临时X、持久F、QE及数据库/服务均未改。三轮均为本窗口不同视角审核。DESIGN-COMPLIANCE-001四项分别为状态不冒充功能完成、未知不伪成功、固定合同不结果后放宽、无新治理/未来日期门禁；本次仅更新真实进度及下一设计边界，不扩大现有业务合同。
+
+v3.86设计时计划（历史检查点）：约10小时按设计、标签内核、双头/原子研究、一次导航和多轮审核交付顺序执行；当时仅DESIGN_REVIEWED_NO_EXPERIMENT。该计划的准备/训练/评价现已完成，结果见§1.3，不再作为未执行待办。ADJUSTED_SHADOW_VALUATION边界不变，不升级为实盘成交。
+
+v3.87本轮事实：#5344合入3ee16cac00c69038844de6cbef355981084e6d75，#5346合入776ccfc5a42f23f59d45c9d35dcc2b15b9c4559f，两树均官方cleanup_done。研究源码#5347 HEAD1c8545ab870f5e12b9e128e09b1b13a4bdf0ae2f、17直接测试/Ruff/F2五项通过，CI37115926268 SUCCESS后合入3e20e922d5922838cccc9de99cfa0f4e3df9318b。run完整保留7720候选，新场景21标签UNKNOWN/10 D输入未知及purge296各自报告，不能套旧监督mask；test1521是未跨test_end的监督可用数，实际评价仍保留81D/1620原候选，不删日期/股票。两头fit0.880秒（含源核验），prepare15.163秒、fit+评价12.169秒；前后7项QE状态均0。模型84实际episode中81为TAKE、3为未知控制，胜率61.90%高于基线58.24%，但收益低于基线与常数，两个MDE代理22.5775/24.6641bps都不是确认功效。按原条件停止当前candidate，不关闭全局价格方向，不启用或为其做每日新family。
+
+v3.87三视角审核：事实轮核对new plan/prepared/trained/evaluated，区分81D与100估值日、模型TAKE与未知控制以及新/旧退出场景；一致性轮同步页首、状态表、实验表和本队列，原计划降为历史检查点；投入/合同轮确认不因常数表现较好事后更换candidate，不为负模型补证/扩窗或接UI，不以胜率/MDD替代固定收益目标。DESIGN-COMPLIANCE-001四项分别为源码/研究/经济/启用分报、未知不伪成功、合同不结果后放宽、无新平台/日期/旧固化门禁。
 
 ### 16.2 被动观察（零研发排期）
 
@@ -1991,7 +1999,7 @@ v3.85进度修订审核：本窗口事实轮逐项对照本run的plan、trained 
 
 - P0-D至P0-L冻结、N1/N2 immutable结论，以及N3固定proposal/overlay/腿间/分钟/generator/margin/event/Score-HMM-v1/causal-Admission-v2.1-R1的selected=0与已消费窗口都只作为约束，不是任务；不得创建P0-M、放宽旧合同、回选旧arm或旧Entry/Exit候选，不能把旧窗口声称为新OOS。§6.3.2是2026-10-02用户批准的新价格条件化经济目标/标签，独立身份、导航证据，不是回选旧候选或抹去负结果。
 - 历史实验复盘、历史证据/数据固化、归档、Phase 1R、旧batch/root清理、通用缓存/调度/ModelOps、registry UI和额外治理均分配零主动工时。
-- 任何已经未达标的实验（含收益型v1/v3/v4/H-TIMING-1、旧分布/Admission）不再追加证据收集、扩窗口、补历史身份、自然积累验收或独立确认。最小必要代码正确性检查、通用消费者功能验收与有实质新假设的新实验是不同任务，不能借其名义挽救旧结果。
+- 任何已经未达标的实验（含收益型v1/v3/v4/H-TIMING-1/H-VALUE-ANCHOR-1、旧分布/Admission）不再追加证据收集、扩窗口、补历史身份、自然积累验收或独立确认。最小必要代码正确性检查、通用消费者功能验收与有实质新假设的新实验是不同任务，不能借其名义挽救旧结果。
 - 最小PIT、policy hash、成本、窗口、package/descriptor identity继续保留，因为它们防止未来泄漏、跨包误用和结果后改判；不得将这些最小正确性字段扩张为独立数据平台。
 
 固定分钟、QE Alpha generator、融资融券、财务事件、Score/HMM v1和因果Admission v2.1 R1均已完成且未形成资金权重、仓位或交易输入。R1正式结果selected=0并关闭当前辅助frontier，不写因子库或StrategyPackage，也不需要动态资金仓位授权。只有把空槽/现金扩展为动态资金权重、组合仓位或交易执行输入时，才需用户另行扩权。R-PUBLISH若涉及运行时源码生效，可能需要用户重启；离线研究默认不需要后端重启或DDL；如后续详细设计证明产生这些操作，仍须由用户执行或另行授权。
