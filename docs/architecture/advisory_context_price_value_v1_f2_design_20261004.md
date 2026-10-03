@@ -1,6 +1,6 @@
 # Advisory 行业条件价格价值 H-CONTEXT-VALUE-1 F2详细设计 v1
 
-日期：2026-10-04。归属：Advisory/model_first。用户批准48小时预算任务；依据主蓝图v3.90 §6.3.3、§16.1/16.5。本文件先交付设计，不声明实现、收益有效或正式启用。
+日期：2026-10-04。归属：Advisory/model_first。用户批准48小时预算任务；依据主蓝图v3.90 §6.3.3、§16.1/16.5。设计由PR #5383合入；源码接续见§15，收益有效及正式启用均未完成。
 
 ## 1. Background / 当前事实及新假设
 
@@ -163,4 +163,14 @@ DESIGN-COMPLIANCE-001：①完整设计不冒称已实现；②未知/非法/未
 2. 时钟/统计轮：明确两对照均须达到真实干预支持，计数映射原决策日，不扩大tail分母；事前基线噪声代理不是差分确认功效，不因欠功效追加搜索。
 3. 交付/范围轮：核对只有本文/蓝图设计PR，后续五源码及五测试精确登记；设计、源、实际fit、组合导航与确认/启用分别汇报。无行业行情源、未证明类别和旧native限制不得回填；现有ENV可用，不安装新平台。
 
-结构validator只核格式/设计条目，不证明模型/收益。当前DESIGN_REVIEWED_NO_IMPLEMENTATION，实际fit=0、收益读取=0、runtime/DB/QE修改=0。
+结构validator只核格式/设计条目，不证明模型/收益。G1交付时DESIGN_REVIEWED_NO_IMPLEMENTATION，实际fit=0、收益读取=0、runtime/DB/QE修改=0；这是设计交付检查点，当前接续见§15。
+
+## 15. G2源码接续 / 未启动真实研究
+
+已实现§2五源码叶和五定向测试，复用统一消费者、标签/政策、stage和registry，公开离线调用为`preregister_context_value_v1`→`prepare_context_value_v1`→`train_context_value_study_v1(qe_training_idle=True)`→`evaluate_context_value_v1`。调用仍须显式计划/evidence/profile/输出根；bool不是QE空闲证据，执行窗口须先核对公开运行状态，不提交QE实验。
+
+可直接复用`context_value_price_set_v1`作D信息+价格条件的纯查询；原生产family/API/UI尚未接入。模型系数/recipe/support以JSON保存，不依赖pickle或旧权重；matched/candidate使用同监督、同支持。
+
+源码自审及修复：①时钟/缺失轮修复未知known_from空值被旧非空日期函数误拒、缺行情left join保留全部键；②工程轮修复模块实际导入路径，训练/查询gap统一Decimal价格坐标，分位不收敛转硬失败、2线程/逐fit及工件预算约束；③身份/经济轮绑定登记时context projection、防止未提交依赖漂移、验证全人口四臂原子评价及UNKNOWN控制归因。按合同未读评价收益、未登记run、未真实fit、未写DB/改QE/控制服务。
+
+新增测试为合同验证，synthetic/mocked模型不冒充真实训练或收益验收。结构及源码验收后才登记并运行唯一研究，真实共同监督数量、训练噪声代理和导航结果届时单列。价格坐标Decimal修正是数值一致性，不改变100bps/30观察/5日/尾部支持或收益/风险门。
