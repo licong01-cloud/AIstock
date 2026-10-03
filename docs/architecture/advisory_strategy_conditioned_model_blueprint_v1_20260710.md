@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.99
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.00
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-04
@@ -2015,9 +2015,11 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 |---|---|---|
 | 已完成 / R2三路线源码交付 | 设计#5395及源码#5404均合入/自身清理；15测试、三次真实四臂及11fit+1索引已完成 | 三candidate均负向停止，不回选matched或补证；经济确认/启用0，QE/DB/runtime不动 |
 | 已完成 / R2-M1开发导航 | [动态板块M1 F2设计](advisory_sector_dynamic_price_value_v1_f2_design_20261004.md)#5411交付，源码#5414；原7720键prepare、1795train/765validation、4fit及81D四臂完成；五个冻结导航门通过 | 点估计过门不是收益确认：两个增量区间跨零，93episode中36真TAKE/57 UNKNOWN控制；native/ENTRY_VALUE启用仍0 |
-| P1 / M1一次独立确认设计及消费者准备 | #5414已交付/清理；#5420[确认F2框架](advisory_sector_price_value_confirmation_v1_f2_design_20261004.md)已合入；#5421冻结research reader必需CI全绿后合入9cd4e831e，16直接测试及真实权重合成parity通过。[M1日频详细设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)明确15D+价格query16、21D+T、三切片及原生训练资格边界。两腿权重存在，训练/processor/组合权重时钟仍UNPROVEN | 不读sealed/新holdout、不重训/调参/重新选点；正式日期/推断/功效未冻结。只做最小纯消费者准备，research reader不冒充daily；未来native输入或确认PASS不能倒补原RECOVERED_LIMITED训练。源/API/UI/qualified接入依实际资格放行，不为凑48h继续搜M5 |
+| P1 / M1一次独立确认设计及必要来源核定 | #5414/#5420/#5421/#5422均交付并自身清理；纯组合#5423已合入e968d2cb84d、21直接测试及原20候选15D兼容通过。[M1日频详细设计§8.1](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)记录原D全20价格坐标读回、9条研究价格集合/11 UNKNOWN（含多段），不需另写包装层。两腿权重存在但fit/processor/学习组合时钟仍UNPROVEN；明确原Loop9 conf GET为404 | 不读sealed/新holdout、不重训/调参/重新选点；正式日期/推断/功效未冻结。原D功能可用不是daily/收益确认：canonical历史价格组件可读但live指针legacy，不能回退或伪装已激活；未来native输入/确认PASS不能倒补原训练。只在公开源合同/真实资格成立后适配及API/UI，不重做已交付切片或为凑48h搜M5 |
 | P2 / M5准备保留、正式研究不放行 | [选股状态持续性设计](advisory_selection_state_price_value_v1_f2_design_20261004.md)#5415/#5416已交付，独立源码16e953938及18直接测试通过；新块/同核/薄编排准备保留 | M1已正导航，M5正式登记/fit/四臂为0，不为找更高开发收益启动它；不弃唯一源码、不清零旧trial、不改QE上游路线 |
 | P4 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
+
+v4.00当前功能进度：#5423以HEAD93ea35f4b/CI37160815000成功交付并自身cleanup_done。唯一已消费2024-08-01原20候选、原core receipt/15D与21D板块行情数值兼容通过；既有M1数学直接输出9条研究买入价格集合、11条UNKNOWN，法律完整tick最多1491，保留支持洞、多段及全部原名单。原D close/除权参考与既存冻结references逐条一致；无T实际行情、市场收益/label、新窗口、fit或角色激活。价格源确实只读DB，canonical历史组件ready不等于实时canonical切换：live仍shsz_st_pit_active_v1、component_is_live=false。首次legacy输入按合同拒绝；没有接受旧路径、改数据/公共模块或启用服务。原父模型时钟仍未知，明确原conf文件只读404不等于不存在模型或必需重训。本次事实/时钟/队列三轮自审只更新两文档及直接功能事实，不改变模型、scope、研究合同或两条跨零增量区间，不形成旧失败固化、新包装平台或人为等日期门禁；此前model-state GET元数据upsert披露保持，不能宣称整轮数据库NOOP。
 
 2026-10-03计算与输入切片进度：#5313已合入a473e3b502d6cb98f363d6cf73a7953eb931cce0（修复后HEAD343718cc7、CI37099710628通过），提供原8+新4共12个D字段的统一纯计算API，20D候选/指数与2D市场宽度，原名单/实际两腿、OHLC、指数中间缺日以及整日/盘中/复牌缺行情语义；27定向测试、Ruff及F1五项通过。#5319已合入7edd740a82ff91f61ed842a88c615a516a7eff13（HEADab3262320、CI37101259296通过），交付同核单D/至多20D批块只读输入：精确键集、有界5SELECT、单快照rollback；14定向测试和F1四项通过。最小真实SQL smoke只用已消费2024-07-04及两个合成候选投影，证明查询/12D计算兼容，不是原Selection名单、全批性能、native或经济验收。计算core不含query_gap、不读取收益、不拟合、不开DB连接；source显式只读数据库，两者COMPUTATION_ONLY/旧训练parity UNPROVEN，均不改变旧模型、产物或调度。后续[共享内核日频接入详细设计](advisory_economic_common_core_daily_consumer_f2_design_20261003.md)按真实模型recipe接入已有消费者；旧v3/v4缺新recipe身份时不补侧车、不默认重训或新增81D验证。十三字段新模型路由/API/UI仍未完成；旧九字段消费者#5324六UI及必需CI通过并合入68ff7aaaa，用户重启后只读默认未配置语义验证通过，不转交数据准备窗口做业务验证。
 

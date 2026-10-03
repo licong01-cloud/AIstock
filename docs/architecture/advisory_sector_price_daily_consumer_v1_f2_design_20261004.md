@@ -1,6 +1,6 @@
 # Advisory M1板块条件价格模型：日频消费者 F2 详细设计
 
-2026-10-04；DESIGN_ONLY_SOURCE_PREPARATION，非每日业务交付、独立确认或正式启用。依赖[确认框架](advisory_sector_price_value_confirmation_v1_f2_design_20261004.md)与[共享D消费者](advisory_economic_common_core_daily_consumer_f2_design_20261003.md)。不以新增接入工程代替收益确认。
+2026-10-04；SOURCE_PREPARATION_PARTIALLY_DELIVERED_FULL_DAILY_PENDING，非完整每日业务交付、独立确认或正式启用。依赖[确认框架](advisory_sector_price_value_confirmation_v1_f2_design_20261004.md)与[共享D消费者](advisory_economic_common_core_daily_consumer_f2_design_20261003.md)。不以新增接入工程代替收益确认。
 
 ## 1. Background / 当前事实与业务目的
 
@@ -10,15 +10,15 @@ R2-M1研究源码#5414已合入且自身清理；冻结开发导航通过，但�
 
 现有每日v3入口直接读取fitted.request.source_request并绑定EconomicModelScopeV2/九字段及旧qualified类型；M1的SectorPriceFitV1没有request，candidate输入16维，不能按“都是GBDT”强塞旧接口。目标是同一冻结价格条件数学消费严格D可见的新数据，给出支持内可能有净价值的多段/空/未知买入价格集合；不是预测开盘价、最佳分钟或保证成交。
 
-本次仅交付完整详细设计。正NAV允许最小消费者准备，不授权读取sealed/新holdout，不解除原训练身份限制；消费者源码可用不等于此M1可正式荐股。
+初始PR #5422仅交付完整详细设计；后续纯组合切片#5423已合入，当前实际准备状态见§8.1，不能再把该切片列为未实现。正NAV允许最小消费者准备，不授权读取sealed/新holdout，不解除原训练身份限制；消费者源码可用不等于此M1可正式荐股。
 
 ## 2. Scope / Non-goals / 显式范围及依赖
 
-本设计PR仅本文及蓝图当前路线链接。自己的独立worktree为advisory-sector-daily-consumer-20261004，分支docs/advisory-sector-daily-consumer-20261004，从最新origin/main创建。
+初始设计PR #5422仅本文及蓝图当前路线链接，原自身树已官方清理。本次进度更新使用独立worktree advisory-sector-consumer-progress-20261004 / docs/advisory-sector-consumer-progress-20261004，从最新origin/main创建，显式写范围仍只有本文及蓝图；没有新增业务源码、模型或公共模块修改。
 
-后续只实施有独立业务价值的三个小切片，逐切片事前登记而非一次大范围业务PR：
+已批准的范围限于以下三个有独立业务价值的小切片；第1已交付，其余按条件放行，逐切片事前登记而非一次大范围业务PR：
 
-1. 纯D组合与研究查询：新增`backend/services/advisory_model_first/economic_sector_daily_core_v1.py`、对应同叶测试及F1 Card；复用已有common D/sector/math/reader，不改原冻结数学或fit hash。
+1. 纯D组合与研究查询：#5423已新增`backend/services/advisory_model_first/economic_sector_daily_core_v1.py`、对应同叶测试及F1 Card，原价格函数直接消费兼容已通过；复用common D/sector/math/reader，不改原冻结数学或fit hash，不另排重复实现。
 2. 真实来源适配：必要时新增`economic_sector_daily_source_v1.py`、对应同叶测试及F1 Card；同叶下已有只读common source复用不改，不调用Selection或父包推理生产者。板块源公开合同未明确时只暂停该适配，不建新数据集。
 3. 资格成立后才登记现有Advisory服务/router/API类型/价格卡片的精确文件范围；复用既有展示，不先为未确认且原生训练身份未证明的模型开发自动角色或新UI。
 
@@ -68,10 +68,10 @@ M1 scope显式绑定family、15D字段有序名单、原recipe/数学逻辑hash�
 
 ## 7. Implementation Plan / 本轮48h内优先顺序
 
-1. #5421源码已合入，按已授权自身官方清理，不rerun旧run或改变CI。原父模型时钟只做已有metadata/公开只读配置核对，真实缺口单列，不控制QE。
-2. 本详细设计方法/时钟/工程三视角审核修订及F2校验。源码实现另立精确F1 Card，先交付纯21D+T组合/价格research消费；0fit/0新经济结论。资格链未成立不抢建API/UI或激活平台。
-3. 真实source仅在公开原始合同明晰后开发；可用的已消费原候选D用于最小consumer parity，不补市场数据/恢复receipt、不为已负实验复跑。此功能验证不成为新holdout证据。
-4. 父腿/组合训练时钟、未知来源资格、独立合法窗口/功效/推断仍按#5420确认框架处理；未完整冻结/授权不运行确认。若外部条件不足，保留源准备状态，不为凑48h搜同窗M5。
+1. 已交付：reader#5421、本文#5422及纯21D+T组合#5423均合入并完成自身官方清理；21直接测试及原20候选15D/价格集合功能兼容完成，见§8.1。不再重做这些切片，也不因功能读回另包一层新平台。
+2. 当前前置核定：只查已有父腿、processor及学习组合的原时钟声明、正式源身份和合法确认窗口/功效；不控制QE、不自动重训、不读取sealed。公开config仍缺原时钟，明确源URI的原Loop9 conf只读读取返回404，不猜其它路径、不恢复旧工作区或以当前默认split补齐。
+3. 真实source仅在公开原始合同明晰后开发。既有canonical历史价格组件已能支持已消费D的只读研究查询，但当前实时指针是legacy，不能回退legacy或把历史组件可读称为live身份就绪。板块公司分类与行情的来源仍分别核定，不能将结构crosswalk/index membership当作公司分类PIT。数据缺口只暂停相关资格/适配，不触发补库、激活或旧负模型复跑。
+4. 一次确认按#5420框架另行完成正式预登记，未完整冻结/授权不运行。资格未成立不抢建API/UI或角色；若外部条件不足，保留现有准备与明确缺口，不为凑48h搜同窗M5或重复工程验证。
 
 ## 8. Verification Plan / Design Acceptance Index
 
@@ -88,9 +88,21 @@ M1 scope显式绑定family、15D字段有序名单、原recipe/数学逻辑hash�
 
 后续最小直接矩阵为22与21calendar错位/未来毒化、原候选唯一性和15D原纯函数parity、index0/缺分类/正常停牌、缺报价不压缩/支持洞、多段/空/全未知、不同包池/recipe拒绝、实际冻结M1合成价集parity、overbudget及不调用fit/source写接口、research无法升级qualified。广回归交必需CI；真实source/业务验收必须用原名单而非只mock。
 
+### 8.1 已交付子切片与一次真实原D功能读回
+
+#5423以HEAD93ea35f4b0507fc972341028899586fcf2af0aa9、必需CI37160815000成功后合入e968d2cb84d4765b182e85b8e0ecb7bdae0edbc3，自身cleanup_done。仅新增纯组合叶、同叶测试及[F1 Card](advisory_sector_daily_core_v1_f1_design_20261004.md)三文件；21直接测试/Ruff/F1五项通过。预计算入口消费已有core12D及核定receipt，不迫使再次SQL或重算core；raw入口与预计算入口同核。
+
+最小真实功能读回只使用已消费2024-08-01原20候选、原core receipt、原15D准备值及D前21个交易日板块报价。原H5投影两列59,922行，归一化成168个本候选需要的(date,index)报价；15D数值按rtol=0/atol=1e-12/equal_nan与原M1准备一致，9条完整、11条未知保留。此读回没有打开label、收益、父prediction pickle或新窗口；纯kernel无I/O，但验证runner确实读取已冻结原文件/H5，不能报告整次验证无源访问。
+
+随后复用既有只读价格context源及原sector_price_set_v1：全20条D坐标与原references.parquet相符，完整法律格点最多1491、未超过5000。得到9条ACCEPTABLE研究价格集合、11条UNKNOWN_INPUT_OR_SUPPORT，全部原候选保留；多段集合未连桥。例如601700.SH的三个分离区间为[3.93,3.93]、[3.96,4.00]、[4.02,4.03] CNY。ACCEPTABLE是原冻结模型的价格条件判断，不是实盘荐股资格、盈利概率或成交/收益验证；UNKNOWN也不是模型SKIP。未读取T实际行情或市场outcome，fit/新研究登记/角色激活均0，无需新增包装层源码。
+
+价格源的当前DB历史读回采用READ ONLY/REPEATABLE READ、参数化SELECT与finally rollback，canonical历史组件aistock_equity_pit_canonical_v2已通过原有ready/覆盖/身份检查；实际live_universe_key仍为shsz_st_pit_active_v1、component_is_live=false。首次把live legacy key传给canonical源被拒绝，随后仅按该源公开的显式canonical历史组件合同核对，未接受legacy、绕过检查或更改激活。当前历史D值与原坐标一致不等于历史原生capture，保持CURRENT_DB_HISTORICAL_D_VALUES_NOT_ORIGINAL_CAPTURE/RECOVERED_LIMITED、native UNPROVEN。正式/自然采集路径仍需native与live身份，不依赖此验证放宽。
+
+原两腿weight的blob仍存在；已有manifest/config无完整fit/processor/学习组合时钟，唯一已明确指向的LSTM Loop9 conf只读文件GET返回404，未尝试其它路径、列举目录、下载params/数据归档或重训。这表示该证明目前不可取得，不证明全局不可学或必须新训练。M1开发结果、reader、计算兼容、原价格坐标消费与正式身份/独立确认分别报告。
+
 ## 9. Design Acceptance Matrix
 
-本表仅详细设计验收，源码/daily/确认未交付；不以设计合入报告功能完成。
+本表仅详细设计验收；reader及纯组合子切片已交付、真实原D价格消费兼容已验证，完整daily/APIUI/native/确认仍未交付。不以设计或子切片合入报告整项功能完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -109,8 +121,10 @@ M1 scope显式绑定family、15D字段有序名单、原recipe/数学逻辑hash�
 
 多轮审核记录：方法轮核对原candidate16/matched13、gap缩放、UNKNOWN控制及利润概率/成交/Exit边界；来源时钟轮修正为21D+T、明确id0有效和原native训练不可倒补，并补实际消费字节/receipt/hash不证明PIT；工程与交付轮核对三小切片、不改冻结数学或旧接口、只在资格成立后做API/UI，修复F2标题索引缺少Non-goals/Contracts。审核结果只针对详细设计，不把未实现部分或父时钟标为已完成；修订后再次校验八项及蓝图一致性。
 
+本次进度更新再次分三视角自审：事实轮按实际21项测试/原D15值/全20价格context与9/11状态核对，拒绝把9条研究集合当收益通过；时钟轮区分canonical历史组件与legacy实时指针、文件404与训练不存在，以及验证runner读源与kernel零I/O；队列轮移除已经交付的reader/纯组合/原价格兼容待办，保持旧scope、模型、fit与确认门不变，不新增低价值固化/包装任务。均为本窗口自审，不冒称独立外审。
+
 DESIGN-COMPLIANCE-001逐项：设计完整不冒充业务完整；正常UNKNOWN无假成功/默补/回退matched；原合同不结果后放宽/新增试验救活；所有未实现和来源缺口如实保留；价格集合不是资金/订单/分钟策略，严格守Advisory叶范围。
 
 ## 11. Rollout / Rollback / Production Gates
 
-本PR仅两文档，backend_restart_required=false，DB/DDL/DML/profile/依赖/activation/process/QE submission=NOOP；不掩盖此前已披露的model-state GET元数据upsert事件。本设计不调用任何API、原输入或模型数据。后续源码merge、原D功能读回、经济确认、用户重启、binding分别报告；原模型/输入/研究工件不覆盖，停止新消费者调用是默认回退，不删除唯一未合入M5准备。
+本PR仅两文档，backend_restart_required=false，DB写入/DDL/DML/profile/依赖/activation/process/QE submission=NOOP；不掩盖此前已披露的model-state GET元数据upsert事件。本次只记录已经发生的只读功能验证：runner读取原输入/模型/H5、历史DB价格元数据及一个明确原文件GET（404），本文没有调用API或运行研究。源码merge、原D功能读回、经济确认、用户重启、binding分别报告；原模型/输入/研究工件不覆盖，停止新消费者调用是默认回退，不删除唯一未合入M5准备。
