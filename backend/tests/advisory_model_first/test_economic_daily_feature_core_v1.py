@@ -155,6 +155,25 @@ def test_unknown_adjustment_and_conflicting_suspend_have_different_outcomes(pack
         build_economic_daily_feature_core_v1(**changed)
 
 
+@pytest.mark.parametrize("partial", ["same_day_resume", "intraday_timing", "resume_after_full_suspend"])
+def test_partial_suspension_keeps_observed_bars_but_never_invents_missing_bars(packet, partial):
+    changed = deepcopy(packet)
+    D = pd.Timestamp(packet["calendar"][-2])
+    types = ["S", "R"] if partial == "same_day_resume" else ["S"]
+    changed["suspend_rows"] = pd.DataFrame({"trade_date": [D] * len(types), "instrument": ["000001.SZ"] * len(types),
+        "suspend_type": types, "suspend_timing": ["09:30-10:00"] * len(types)})
+    if partial == "resume_after_full_suspend":
+        previous = pd.Timestamp(packet["calendar"][-3])
+        changed["suspend_rows"] = pd.DataFrame({"trade_date": [previous, D], "instrument": ["000001.SZ"] * 2,
+            "suspend_type": ["S", "R"], "suspend_timing": ["", ""]})
+        changed["raw_daily"] = changed["raw_daily"].loc[~(changed["raw_daily"].trade_date.eq(previous) & changed["raw_daily"].instrument.eq("000001.SZ"))]
+    observed, _ = build_economic_daily_feature_core_v1(**changed)
+    assert observed.ret_1.notna().all() and len(observed) == len(packet["candidates"])
+    changed["raw_daily"] = changed["raw_daily"].loc[~(changed["raw_daily"].trade_date.eq(D) & changed["raw_daily"].instrument.eq("000001.SZ"))]
+    missing, _ = build_economic_daily_feature_core_v1(**changed)
+    assert pd.isna(missing.ret_1.iloc[0]) and len(missing) == len(packet["candidates"])
+
+
 def test_split_adjusted_prices_do_not_adjust_raw_volume(packet):
     changed = deepcopy(packet)
     raw = changed["raw_daily"]

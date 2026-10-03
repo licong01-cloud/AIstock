@@ -14,7 +14,7 @@
 
 日历固定20个≤D交易日加合法下一T，D/T对应候选；交易日历权威性由上游来源身份另验证，纯计算不伪造原生receipt。候选原始OHLC/成交量/成交额/复权因子/涨跌幅报价≤400行；同一原始输入派生D复权视图和raw volume，前三收益/ATR复用既有shared builder和停牌归一化，新四字段复用已合入calculator，不能将复权volume当raw。指数固定20日沪深300，市场宽度只接受最后两个市场交易日、≤20,000行；缺行股票不跨更多历史carry来改变分母。未来训练必须用相同单日包逐D调用；批量只是多个单日包，不在一个长panel上预先算pct_change再切片。
 
-正常缺行情行、nullable字段值、停牌或未知分母保留候选和全部D字段，逐字段UNKNOWN，不补0或删股；必需列缺失属于schema错误，optional报价列缺失投影为未知。真实S/R来源冲突仍fail closed。OHLC有值时必须满足low≤open/close≤high；指数ret_5必须有最后六个连续交易日close，中间缺日也保持UNKNOWN。数据范围、类型、重复键、跨D/T、foreign symbol/benchmark、非法数值或父分数矛盾fail closed。空原名单合法返回NO_CANDIDATES。hash绑定规范化计算输入而非数据库原始字节；实际原生成/采集/数据库版本/PIT身份和收益资格均不由本函数证明；旧训练时序资格不升级。
+正常缺行情行、nullable字段值、停牌或未知分母保留候选和全部D字段，逐字段UNKNOWN，不补0或删股；必需列缺失属于schema错误，optional报价列缺失投影为未知。停牌事件≤800，键为date/symbol/type，同日S/R并非重复；保留optional suspend_timing及其实际列存在性，复用economic_entry_sources._suspension_states区分整日与盘中/同日复牌。只有已知整日S送入既有bar归一化；R或盘中事件有真实可执行bar时正常计算，缺bar时相关technical字段UNKNOWN，不能沿之前S继续合成复牌日bar。整日S与真实正成交矛盾才fail closed。OHLC有值时必须满足low≤open/close≤high；指数ret_5必须有最后六个连续交易日close，中间缺日也保持UNKNOWN。数据范围、类型、重复事件键、跨D/T、foreign symbol/benchmark、非法数值或父分数矛盾fail closed。空原名单合法返回NO_CANDIDATES。hash绑定规范化计算输入而非数据库原始字节；实际原生成/采集/数据库版本/PIT身份和收益资格均不由本函数证明；旧训练时序资格不升级。
 
 ## Implementation Plan
 
@@ -40,11 +40,13 @@
 | F-602 | economic_daily_feature_core_v1.py 有界schema/OHLC数值校验、逐字段UNKNOWN及规范输入hash | backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py 正常缺失、复权未知、S冲突、OHLC矛盾、重复/预算、Decimal/hash/输入不变性 | PASS | none |
 | F-603 | 三文件精确范围；economic_daily_feature_core_v1.py 纯计算无I/O/fit入口 | backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py 明确deployable/outcomes/native=false及old_training_parity=UNPROVEN；源码范围审核 | PASS | none |
 
-稳定矩阵：2026-10-03，`python -m pytest backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py -q -p no:cacheprovider --basetemp X:/AIstock_temp/advisory/daily-core-final-matrix`，24 passed，2.44s。Ruff通过；本矩阵仅证明计算API合同，不是经济有效性、实盘API/UI或旧模型训练身份的证明。
+最终稳定矩阵：2026-10-03，`python -m pytest backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py -q -p no:cacheprovider --basetemp X:/AIstock_temp/advisory/daily-core-final-suspension`，27 passed，2.66s。Ruff通过；本矩阵仅证明计算API合同，不是经济有效性、实盘API/UI或旧模型训练身份的证明。
 
 ## Risks / Review
 
 纯计算一致不代表旧训练身份完整或收益有效；当前模型仍未确认。两日breadth是未来统一输入合同，不是改变已消费研究。审核1：剥离未验收旧UI依赖、禁止修改原研究；审核2：统一raw→旧8/新4，避免两个独立source数值相同而身份不同；完整原rank和数值须先验证。源码审核2发现OHLC开盘矛盾未拒绝及指数中间缺日仍计算，先新增失败用例再修复，两项直接节点通过；审核3追加复权正常未知/S来源冲突区分通过。最终矩阵首次仅未来毒化测试追加第21条指数记录使预算门禁先触发，修正为替换原行隔离时间门禁，不放宽断言；四节点及24例稳定矩阵通过。真实源缺口仍由本窗口核验后向数据窗口提确切需求，不转移业务验证责任。
+
+合入前源码审核4又发现真实suspend_timing尚未投影、同日S/R误当重复及R缺bar可能沿S错误填平。复用既有事件分类，不修改公共bar policy；三类盘中/同日复牌/整日S后复牌用例先失败再修复，直接3例通过，最终27例通过。旧HEAD首轮CI通过不作为修复后HEAD收据，必须重新push创建新CI。
 
 ## Production Gates / Rollout / Rollback
 

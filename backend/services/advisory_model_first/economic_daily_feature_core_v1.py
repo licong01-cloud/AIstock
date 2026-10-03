@@ -14,6 +14,7 @@ import pandas as pd
 from backend.services.advisory_model_first.economic_daily_information_v1 import FEATURES, build_economic_daily_information_v1
 from backend.services.advisory_model_first.economic_entry_contracts import ECONOMIC_FEATURE_NAMES
 from backend.services.advisory_model_first.economic_entry_labels import KEY
+from backend.services.advisory_model_first.economic_entry_sources import _suspension_states
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.services.advisory_model_first.realtime_feature_source import _market_frame
 from backend.services.advisory_model_first.shared_feature_builder import _build_benchmark_features, _build_instrument_features, _build_market_features
@@ -26,6 +27,7 @@ QUOTE_FIELDS = ("pre_close", "up_limit", "down_limit")
 SEMANTICS = {"schema_version": "economic_daily_feature_core_v1", "feature_names": D_FEATURES,
     "candidate_sessions": 20, "benchmark_sessions": 20, "breadth_sessions": 2,
     "benchmark_return_5": "all_six_session_closes_required_no_fill",
+    "suspension_states": "economic_source_full_session_suspension_v1_resume_partial_no_synthetic_bar",
     "rank_denominator": "complete_original_candidate_count_minus_one_clipped_at_one",
     "candidate_price_basis": "RAW_LI_TO_CNY_ADJ_OVER_LAST_D_VISIBLE_ANCHOR",
     "information_volume_basis": "RAW_HAND_TO_SHARES_NOT_ADJUSTED",
@@ -49,7 +51,7 @@ def _number(value, *, positive=False, nonnegative=False, required=False):
     return number
 
 
-def _frame(frame, *, columns, optional=(), maximum, dates, symbols=None):
+def _frame(frame, *, columns, optional=(), maximum, dates, symbols=None, keys=("trade_date", "instrument")):
     allowed = (*columns, *optional)
     if (not isinstance(frame, pd.DataFrame) or len(frame) > maximum or not frame.columns.is_unique
             or not set(columns).issubset(frame.columns) or set(frame.columns) - set(allowed)):
@@ -66,9 +68,9 @@ def _frame(frame, *, columns, optional=(), maximum, dates, symbols=None):
     result["trade_date"] = days
     if (not result.instrument.map(lambda value: isinstance(value, str) and re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", value) is not None).all()
             or symbols is not None and set(result.instrument) - set(symbols)
-            or result.duplicated(["trade_date", "instrument"]).any()):
+            or result.duplicated(list(keys)).any()):
         _fail("daily core frame contains foreign or duplicate instruments")
-    return result.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
+    return result.sort_values(list(keys)).reset_index(drop=True)
 
 
 def _records(frame):
@@ -131,11 +133,17 @@ def build_economic_daily_feature_core_v1(*, candidates, raw_daily, market_daily,
     market["close"] = market.close.map(lambda value: _number(value, positive=True))
     benchmark = _frame(benchmark_daily, columns=("trade_date", "instrument", "close"), maximum=20, dates=sessions, symbols=("000300.SH",))
     benchmark["close"] = benchmark.close.map(lambda value: _number(value, positive=True))
-    suspends = _frame(suspend_rows, columns=("trade_date", "instrument", "suspend_type"), maximum=400, dates=sessions, symbols=symbols)
+    suspends = _frame(suspend_rows, columns=("trade_date", "instrument", "suspend_type"), optional=("suspend_timing",),
+        maximum=800, dates=sessions, symbols=symbols, keys=("trade_date", "instrument", "suspend_type"))
     if not suspends.suspend_type.isin(("S", "R")).all():
         _fail("daily core suspension state is invalid")
+    if not suspends.suspend_timing.map(lambda value: isinstance(value, str) or pd.isna(value)).all():
+        _fail("daily core suspension timing is invalid")
+    states = _suspension_states(suspends)
+    full_suspends = states.loc[states.suspended.eq(True), ["trade_date", "instrument"]].assign(suspend_type="S")
     input_hash = sha({"roster": _records(roster), "raw": _records(raw), "raw_present_fields": sorted(raw_daily.columns),
         "market": _records(market), "benchmark": _records(benchmark), "suspends": _records(suspends),
+        "suspend_present_fields": sorted(suspend_rows.columns),
         "calendar": [day.isoformat() for day in calendar], "roles": component_roles, "weights": weights})
     output = roster.loc[:, KEY].copy()
     for name in D_FEATURES:
@@ -158,9 +166,18 @@ def build_economic_daily_feature_core_v1(*, candidates, raw_daily, market_daily,
             if one.empty:
                 missing_bars[symbol] = "CANDIDATE_HISTORY_UNKNOWN"
                 continue
+            resume_days = suspends.loc[suspends.instrument.eq(symbol) & suspends.suspend_type.eq("R"), "trade_date"]
+            partial_days = states.loc[states.instrument.eq(symbol) & states.tradability_unknown.eq(True), "trade_date"]
+            barrier_days = pd.DatetimeIndex(pd.concat([resume_days, partial_days])).unique()
+            if len(barrier_days):
+                barriers = one.reindex(pd.MultiIndex.from_product([barrier_days, [symbol]], names=one.index.names))
+                visible = np.isfinite(barriers.loc[:, ["open", "high", "low", "close", "factor", "volume", "amount"]]).all(axis=1)
+                if not (visible & (barriers.volume.gt(0) | barriers.amount.gt(0))).all():
+                    missing_bars[symbol] = "RESUME_OR_PARTIAL_SESSION_BAR_UNKNOWN"
+                    continue
             try:
                 normalized = build_suspension_aware_bar_panel(daily=one,
-                    suspend_rows=suspends.loc[suspends.instrument.eq(symbol)], trading_calendar=pd.DatetimeIndex(sessions)).panel
+                    suspend_rows=full_suspends.loc[full_suspends.instrument.eq(symbol)], trading_calendar=pd.DatetimeIndex(sessions)).panel
             except AdvisoryModelFirstError as exc:
                 if exc.reason_code not in {"ADVISORY_SUSPENSION_UNEXPLAINED_MISSING", "ADVISORY_SUSPENSION_LAST_CLOSE_UNAVAILABLE"}:
                     raise
