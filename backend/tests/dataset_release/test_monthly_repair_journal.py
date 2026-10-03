@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 import json
 import os
 
@@ -48,6 +48,91 @@ class Connection:
 
     def cursor(self) -> Cursor:
         return Cursor(self)
+
+
+def _future_empty_suspend(connection: Connection, *, ledger: str = 'ingestion_jobs') -> tuple:
+    scope = {
+        'dataset': 'suspend_d', 'actual_dataset': 'suspend_d',
+        'schedule_dataset': 'suspend_d', 'mode': 'incremental',
+        'date_strategy': 'current_and_next_trading_day',
+        'start_date': '2026-10-08', 'end_date': '2026-10-08',
+        'refresh_start_date': '2026-10-08', 'refresh_end_date': '2026-10-08',
+        'inserted_rows': 0,
+        'stats': {'dataset': 'suspend_d', 'inserted_rows': 0, 'total_batches': 1,
+                  'success_batches': 1, 'failed_batches': 0},
+    }
+    return (ledger, 'future-empty', 'success' if ledger == 'ingestion_jobs' else 'reconciled',
+            'suspend_d', connection.now, None, connection.now, scope, True)
+
+
+def test_evidenced_empty_future_suspend_does_not_invalidate_september_source() -> None:
+    connection = Connection()
+    connection.overlaps = [_future_empty_suspend(connection),
+                           _future_empty_suspend(connection, ledger='data_sync_attempts')]
+    assert ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30)).overlapping_repairs(
+        connection, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00',
+    ) == ()
+
+
+@pytest.mark.parametrize('case', [
+    'no_cutoff', 'historical', 'on_cutoff', 'two_dates', 'unknown_date', 'compact_date',
+    'missing_scope', 'missing_callback', 'failed', 'unfinished', 'non_suspend',
+    'wrong_dataset', 'unknown_mode', 'unknown_strategy', 'positive_job_rows',
+    'positive_stats', 'failed_batch', 'extra_batch', 'missing_stats', 'null_proof',
+])
+def test_future_scope_exception_keeps_unproven_writes_fail_closed(case: str) -> None:
+    connection = Connection()
+    row = list(_future_empty_suspend(connection))
+    scope = row[7]
+    cutoff = None if case == 'no_cutoff' else date(2026, 9, 30)
+    if case in {'historical', 'on_cutoff', 'unknown_date', 'compact_date'}:
+        value = {'historical': '2026-09-29', 'on_cutoff': '2026-09-30',
+                 'unknown_date': '2026-02-30', 'compact_date': '20261008'}[case]
+        for key in ('start_date', 'end_date', 'refresh_start_date', 'refresh_end_date'):
+            scope[key] = value
+    elif case == 'two_dates':
+        scope['refresh_end_date'] = '2026-10-09'
+    elif case == 'missing_scope':
+        scope.pop('refresh_start_date')
+    elif case == 'missing_callback':
+        row[8] = False
+    elif case == 'null_proof':
+        row[8] = None
+    elif case == 'failed':
+        row[2] = 'failed'
+    elif case == 'unfinished':
+        row[6] = None
+    elif case == 'non_suspend':
+        row[3] = 'adj_factor'
+    elif case == 'wrong_dataset':
+        scope['actual_dataset'] = 'adj_factor'
+    elif case == 'unknown_mode':
+        scope['mode'] = 'full'
+    elif case == 'unknown_strategy':
+        scope['date_strategy'] = 'history'
+    elif case == 'positive_job_rows':
+        scope['inserted_rows'] = 1
+    elif case == 'positive_stats':
+        scope['stats']['inserted_rows'] = 1
+    elif case == 'failed_batch':
+        scope['stats']['failed_batches'] = 1
+    elif case == 'extra_batch':
+        scope['stats']['total_batches'] = 2
+    elif case == 'missing_stats':
+        scope.pop('stats')
+    connection.overlaps = [tuple(row)]
+    assert len(ManagedRepairImpactJournal(source_cutoff=cutoff).overlapping_repairs(
+        connection, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00',
+    )) == 1
+
+
+def test_overlap_query_bound_cannot_certify_a_truncated_empty_set() -> None:
+    connection = Connection()
+    connection.overlaps = [_future_empty_suspend(connection)] * 1000
+    with pytest.raises(MonthlyRepairJournalError, match='scope is incomplete'):
+        ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30)).overlapping_repairs(
+            connection, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00',
+        )
 
 
 def test_journal_watermark_rejects_nonterminal_managed_job() -> None:
@@ -169,6 +254,60 @@ def readonly_dev_connection():  # type: ignore[no-untyped-def]
     finally:
         connection.rollback()
         connection.close()
+
+
+@pytest.mark.parametrize('case,excluded', [
+    ('closed_empty', True), ('positive', False), ('unknown_quality', False),
+    ('wrong_job', False), ('wrong_date', False), ('wrong_scope', False),
+    ('owner_failed', False), ('callback_failed', False), ('unclosed', False),
+    ('historical', False),
+])
+def test_actual_overlap_sql_in_readonly_dev(readonly_dev_connection, case: str, excluded: bool) -> None:
+    """Run the production overlap SQL on typed CTE facts, without DEV writes."""
+    moment = '2026-10-02T00:00:00+00:00'
+    scope = _future_empty_suspend(Connection())[7]
+    if case == 'historical':
+        for key in ('start_date', 'end_date', 'refresh_start_date', 'refresh_end_date'):
+            scope[key] = '2026-09-30'
+    jobs = [dict(job_id='j', status='failed' if case == 'owner_failed' else 'success',
+                 summary=scope, created_at=moment, started_at=moment, finished_at=moment)]
+    attempts = [dict(attempt_id='a', target_id='t', job_id='other' if case == 'wrong_job' else 'j',
+                     status='failed' if case == 'callback_failed' else 'reconciled',
+                     rows_written=1 if case == 'positive' else 0, rows_observed=0,
+                     context_json={'quality_status': 'unknown' if case == 'unknown_quality' else 'empty_valid'},
+                     created_at=moment, started_at=moment,
+                     finished_at=None if case == 'unclosed' else moment)]
+    targets = [dict(target_id='t', dataset='suspend_d',
+                    target_date='2026-10-09' if case == 'wrong_date' else scope['start_date'],
+                    target_scope={'query_mode': 'by_code' if case == 'wrong_scope' else 'by_date'})]
+    fake = Connection()
+    journal = ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30))
+    journal.overlapping_repairs(fake, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00')
+    sql, params = fake.calls[0]
+    for table, cte in (('market.ingestion_jobs', 'fixture_jobs'),
+                       ('market.data_sync_attempts', 'fixture_attempts'),
+                       ('market.data_sync_targets', 'fixture_targets')):
+        sql = sql.replace(table, cte)
+    sql = '''WITH fixture_jobs AS (
+        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS j(
+            job_id text,status text,summary jsonb,created_at timestamptz,
+            started_at timestamptz,finished_at timestamptz)
+    ), fixture_attempts AS (
+        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS a(
+            attempt_id text,target_id text,job_id text,status text,
+            rows_written bigint,rows_observed bigint,context_json jsonb,
+            created_at timestamptz,started_at timestamptz,finished_at timestamptz)
+    ), fixture_targets AS (
+        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS t(
+            target_id text,dataset text,target_date date,target_scope jsonb)
+    ), ''' + sql.strip().removeprefix('WITH ')
+    with readonly_dev_connection.cursor() as cursor:
+        cursor.execute('SHOW transaction_read_only')
+        assert cursor.fetchone()[0] == 'on'
+        cursor.execute(sql, (json.dumps(jobs), json.dumps(attempts), json.dumps(targets), *params))
+        rows = cursor.fetchall()
+    assert len(rows) == 2
+    assert all(journal._empty_future_suspend(row) is excluded for row in rows)
 
 
 @pytest.mark.parametrize("case,blocked", [
