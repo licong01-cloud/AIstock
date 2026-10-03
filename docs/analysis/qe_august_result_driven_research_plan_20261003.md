@@ -1,6 +1,6 @@
 # QE 八月底结果驱动长任务：训练域、季度陈旧化与真实组合
 
-- 日期：2026-10-03；研究工作树草案，尚未提交或合入。
+- 日期：2026-10-03；研究分支待评审稿，PR #5332，尚未合入。
 - 代码基线：`668a5c75aa90effdc125d183a97e222bde8ac9ad`。
 - 目标：验证高价值单腿可部署性，再检验真实组合增量；不是平台研发、历史补账或数据发布。
 - 预估：12～18小时；任务终态、分析完成或明确输入阻断是退出依据，不为凑时长重跑。
@@ -96,7 +96,7 @@ LSTM Q2 RankIC从0.13237提高至0.16593/0.14834，收益仍负；GRU从0.03325�
 - 当前组合消费者将remote_qlib_data_path的daily目录传给dataset-identity，找不到根目录manifest；同时release根的正常dataset-identity已通过，不能据此判数据集缺失。
 - 这两个问题属于组合运行输入/消费契约，不能放宽现有身份合同、触碰数据生产或重启服务来绕过。
 
-2026-10-03核对两节点正式`/api/v1/qe_workspace/execution-environment`：上述两个声明均为空。release-root消费缺陷已登记BUG-1697 / Issue #5329，独立工作树修复；正式部署身份取得前仍NOT_READY，不能用installed_packages哈希或AIstock控制端HEAD替代执行节点身份。
+2026-10-03核对两节点正式`/api/v1/qe_workspace/execution-environment`：上述两个声明均为空。release-root消费缺陷已登记BUG-1697 / Issue #5329，独立工作树源码修复及两节点真实只读smoke通过，尚未合入生效。canonical工作流将收据绑定canonical main而非task HEAD，源码PR待流程owner处理；不沿用错误收据或修改流水线。正式部署身份取得前仍NOT_READY，不能用installed_packages哈希或AIstock控制端HEAD替代执行节点身份。
 
 失败run引用分别为`macb_idem_7324b4fff0521dde373713a3f0a599d72c1a18fa`、`macb_idem_0427010fd9178878bda640630e70b0a147742642`、`macb_idem_3f2c4b959029349903c45d7e76ee61fa323333ba`、`macb_idem_6a7874e0293a43c8adc390243aeae973658659f1`。没有自动重投，不入仓、不清理其状态记录；后续真实输入闭合后另立有明确lineage的新attempt。
 
