@@ -156,6 +156,7 @@ def _expand_expected(
     *,
     id_to_code: Mapping[int, str],
     provider_spans: Mapping[str, tuple[tuple[date, date], ...]],
+    provider_catalog: Mapping[str, tuple[tuple[date, date], ...]],
     source_days: Iterable[date],
     suspended: set[tuple[date, str]],
 ) -> tuple[pd.DataFrame, dict[tuple[date, str], int]]:
@@ -164,13 +165,15 @@ def _expand_expected(
     member_counts: dict[tuple[date, str], int] = defaultdict(int)
     for raw in membership.itertuples(index=False):
         code = id_to_code[int(raw.l2_code_id)]
-        provider = provider_spans.get(str(raw.instrument))
-        if provider is None:
+        if str(raw.instrument) not in provider_catalog:
             raise _fail(
                 "source_invalid",
                 "membership instrument is absent from PIT provider universe",
                 instrument=raw.instrument,
             )
+        provider = provider_spans.get(str(raw.instrument), ())
+        # Membership is a catalog of classification facts, not stock eligibility.
+        # Only the frozen PIT intervals define the source-day population.
         for day in source_days:
             if raw.start_date <= day <= raw.end_date and any(start <= day <= end for start, end in provider):
                 member_counts[(day, code)] += 1
@@ -260,6 +263,7 @@ def _daily_aggregates(
     catalog: list[str],
     source_days: list[date],
     provider_path: Path,
+    provider_catalog_path: Path,
     suspend_path: Path,
     moneyflow_path: Path,
     qlib_root: Path,
@@ -270,6 +274,9 @@ def _daily_aggregates(
 ) -> tuple[list[dict[str, Any]], str]:
     del root, manifest
     provider = _parse_provider_spans(provider_path)
+    provider_catalog = (
+        provider if provider_catalog_path == provider_path else _parse_provider_spans(provider_catalog_path)
+    )
     columns = ["trade_date", "ts_code", "suspend_type", "suspend_timing"]
     if bounded_suspend:
         from backend.services.hmm_risk.rotation_l1_input_bundle import _read_parquet_date_window
@@ -288,6 +295,7 @@ def _daily_aggregates(
         membership,
         id_to_code=id_to_code,
         provider_spans=provider,
+        provider_catalog=provider_catalog,
         source_days=source_days,
         suspended=full_suspend,
     )
@@ -608,6 +616,7 @@ def build_rotation_l2_input_bundle(
         catalog=catalog,
         source_days=source_days,
         provider_path=provider_path,
+        provider_catalog_path=provider_path,
         suspend_path=suspend_path,
         moneyflow_path=moneyflow_path,
         qlib_root=qlib_root,
