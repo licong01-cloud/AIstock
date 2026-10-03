@@ -118,7 +118,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:/AIstock_temp/hmm_l2_effect_20261003/BUG1704-post-restart.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -167,7 +167,8 @@
     "validation-receipt: id=7b82001e7fc3237b commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
     "validation-receipt: id=4b3e304b1eaef0f3 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed`",
     "validation-receipt: id=15facff0d7207b73 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_formal_state_input.py` result=`15 passed`",
-    "validation-receipt: id=058b2939204a5c89 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/formal_state_input.py backend/tests/hmm_risk/test_formal_state_input.py` result=`passed`"
+    "validation-receipt: id=058b2939204a5c89 commit=acd9012c681af484529772f2fdbdad26c2892400 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/formal_state_input.py backend/tests/hmm_risk/test_formal_state_input.py` result=`passed`",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1704 --target backend-main --expected-identity c90aa3f5dbc5a0ba47d437aed3144d553f55d5ed -> verified; identity and business smoke passed"
   ],
   "verification_budget": {
     "budget": "standard",
