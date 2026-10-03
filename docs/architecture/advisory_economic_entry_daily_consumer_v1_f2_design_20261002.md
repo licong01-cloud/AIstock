@@ -1,6 +1,6 @@
-# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.13
+# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.14
 
-> 日期2026-10-02；状态DESIGN_REVIEWED_IMPLEMENTATION_IN_PROGRESS。父设计：[经济进入价值](advisory_economic_entry_value_v1_f2_design_20261002.md)、[风险与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)、[一致双头v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)。本设计把离线数值内核接到完整日频条件网格、只读消费者/API与Advisory展示，不新增模型搜索，不研发分钟执行。
+> 日期2026-10-02；2026-10-03状态SOURCE_VERIFIED_CI_PENDING_RUNTIME_PENDING。父设计：[经济进入价值](advisory_economic_entry_value_v1_f2_design_20261002.md)、[风险与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)、[一致双头v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)。本设计把离线数值内核接到完整日频条件网格、只读消费者/API与Advisory展示，不新增模型搜索，不研发分钟执行。工程源码/API投影/UI展示验收完成，CI及用户重启后的运行加载仍待完成；当前没有经济确认模型或角色激活。
 
 ## 1. Background / 当前事实
 
@@ -145,6 +145,8 @@ LOCKED_HISTORICAL_OOT允许今天登记、对过去合格未消费窗口预测�
 
 仅定点修改：`backend/routers/advisory.py`的新依赖/GET/entry_value子对象；`backend/services/advisory_forward/service.py`辅助日常收集依赖/hook；对应现有`backend/tests/advisory_model_first/test_forward_date_clock.py`、`test_forward_api.py`中的最小隔离/响应合同；`frontend/src/lib/api/advisory.ts`新类型与只读调用；`frontend/src/app/paper-v2/advisory/page.tsx`新卡片；本设计、v3设计、主蓝图。AdvisoryForward hook已在设计阶段登记范围，不修改scheduler/startup或数据库基线操作。若实施发现需要其它文件，先记录实际范围和理由，不顺手改其它模块/ownership。
 
+2026-10-03验收进度同步额外登记唯一文件：`docs/architecture/advisory_economic_common_core_daily_consumer_f2_design_20261003.md`，只更新六UI已经通过和旧消费者可进入CI的依赖状态，不修改十三字段模型接入语义或扩大源码范围。
+
 顺序：设计两轮复核/合入→纯D网格/serving bundle及叶测试→只读source/service与不可变产物→API/UI与精确测试→已消费历史功能验证→源码多轮审核、必需CI/合入→用户重启后的只读语义验证。没有合格模型不激活，但完整消费者源码与功能路径继续实现；任何真实依赖只提出最小需求。
 
 ## 9. Verification Plan
@@ -172,22 +174,22 @@ LOCKED_HISTORICAL_OOT允许今天登记、对过去合格未消费窗口预测�
 
 ## 11. Design Acceptance Matrix
 
-两轮设计审核通过；完整成功路径仍待源码和真实功能验收。
+设计及源码多轮审核通过；本表仅验收消费者工程，不证明原生训练、模型利润、实际角色启用或用户运行时加载。实际业务功能采用§7既存81日只读网格/API证据及§13六场景UI收据，不重跑旧实验补证。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-570 | §3、§4.1 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-571 | §4.2 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-572 | §3、§4.3 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-573 | §4.3 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-574 | §4.3、§7 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-575 | §5 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-576 | §4.4 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-577 | §6 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-578 | §6 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-579 | §7 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-580 | §2、§8～§9、§13 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
-| F-581 | §5、§8 | artifact: docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | DESIGN_VERIFIED | none |
+| F-570 | backend/services/advisory_model_first/economic_entry_serving_bundle.py | backend/tests/advisory_model_first/test_economic_entry_daily_bundle.py | PASS | none |
+| F-571 | backend/services/advisory_model_first/economic_entry_daily_contracts.py; backend/services/advisory_model_first/economic_entry_daily_source.py | backend/tests/advisory_model_first/test_economic_entry_daily_source.py | PASS | none |
+| F-572 | backend/services/advisory_model_first/economic_entry_daily_inference.py; backend/services/advisory_model_first/economic_entry_daily_service.py | backend/tests/advisory_model_first/test_economic_entry_daily_inference.py | PASS | none |
+| F-573 | backend/services/advisory_model_first/economic_entry_daily_inference.py; frontend/src/components/advisory/EconomicEntryValueCard.tsx | backend/tests/advisory_model_first/test_economic_entry_daily_inference.py | PASS | none |
+| F-574 | backend/services/advisory_model_first/economic_entry_daily_inference.py | backend/tests/advisory_model_first/test_economic_entry_daily_inference.py | PASS | none |
+| F-575 | backend/services/advisory_model_first/economic_entry_daily_source.py | backend/tests/advisory_model_first/test_economic_entry_daily_source.py | PASS | none |
+| F-576 | backend/services/advisory_model_first/economic_entry_daily_service.py | backend/tests/advisory_model_first/test_economic_entry_daily_service.py | PASS | none |
+| F-577 | backend/routers/advisory.py | backend/tests/advisory_model_first/test_forward_api.py | PASS | none |
+| F-578 | frontend/src/components/advisory/EconomicEntryValueCard.tsx | frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts; artifact: X:/AIstock_temp/advisory-ui-7bbb741e-20261003/receipt.json | PASS | none |
+| F-579 | backend/services/advisory_model_first/economic_entry_daily_service.py | backend/tests/advisory_model_first/test_economic_entry_daily_service.py | PASS | none |
+| F-580 | backend/services/advisory_model_first/economic_entry_daily_service.py; docs/architecture/advisory_economic_entry_daily_consumer_v1_f2_design_20261002.md | backend/tests/advisory_model_first/test_economic_entry_daily_service.py | PASS | none |
+| F-581 | backend/services/advisory_forward/service.py | backend/tests/advisory_model_first/test_forward_date_clock.py | PASS | none |
 
 ## 12. Risks / 不能被工程交付掩盖的缺口
 
@@ -195,13 +197,13 @@ LOCKED_HISTORICAL_OOT允许今天登记、对过去合格未消费窗口预测�
 
 复用既有fixture新增artifact隔离分支，另用4项空名单身份/时钟与2项全局budget参数化覆盖直接安全合同，未扩大到其它业务模块或重复大场景。两次先复现再修复、第三次预算边界复核后，当前相关小矩阵62项实际通过（55既有+7新增）；Ruff和diff检查通过。这里的单元/注入工件不能算真实原生捕获、独立经济确认或浏览器证据。之前55项和81日功能记录仍为当时检查点，不作为当前HEAD的宽验收。
 
-当前仍无合格的Advisory专用UI执行计划：既有六场景必须由Validation Center/CI的安全runner执行，禁止为此启动后端或修改公共验证模块。完整F2未ready、未合入，角色未激活，经济负增量不改判。后续以提交后的真实HEAD绑定验证，不能把设计结构检查、工作树clean或源码checkpoint当成完整验收。
+2026-10-03流水线已交付专用六场景UI收据，6 PASS/0失败/0跳过/0重试；mock只证明展示合同，配合既有真实受限网格/API和叶测试闭合工程验收，不升级模型资格。消费者源码待必需CI/合入，运行加载等待用户重启；角色未激活，经济负增量不改判。完整用户功能及新模型效果不能由结构检查、工作树clean或UI单项通过替代。
 
 当前模型净增量负向，风险回撤改善可能部分来自少买留现金，不等于证明风险选择alpha；本任务不补跑现金对照或新模型来挑结果。历史股票池原生身份/特征vintage及D属性可产性仍需消费者核验，metadata/source hash PASS不等于业务正路径已证。日常source缺数据交所属窗口，不在Advisory补写。
 
 本轮不交付卖出价格模型；Exit的下一合法退出vs继续持有剩余价值仍按父设计§16及既有exit oracle/learnability合同后续演进，不把持有期可预测当Exit可学，不把入场价格集合外推出卖出点。
 
-当前源码实施检查点（本地验证中、未PR/合入）：研究serving view、完整D网格、原生候选/D source、不可变batch、独立角色/ACTIVATION登记消费、qualified view、日常capture/隔离、独立API/UI已有本地实现，空名单/停用/过期/身份矛盾分别处理。未来native D capsule核验内容/hash，不倒填旧输入。55定向测试通过（30.07秒），新增只读窗口授权/功效/真实模型可用时钟校验；81日真实受限网格、exact retry和三个实际batch API投影通过（§7/§13），不是原生训练、经济确认或生产激活。四根前端typecheck此前通过，六UI场景仅收集；浏览器和新增源码HEAD绑定仍pending。首次独立confirmation producer须真实提供既有窗口/MDE/frontier凭据，角色发布/回滚另行授权，不能由consumer单元链代办。当前模型负增量和native资格UNPROVEN仍禁止启用；活动PIT依赖见§7，不把QE离线profile差异作为已完成历史功能的阻断。工程、经济效果和正式启用分开，不宣布完整F2 ready。
+当前源码工程验收检查点：研究serving view、完整D网格、原生候选/D source、不可变batch、资格与ACTIVATION只读消费、日常capture/隔离、独立API/UI已实现，空名单/停用/过期/身份矛盾分别处理。相关稳定矩阵62项此前通过，最新main集成后直接11项通过；81日真实受限功能证据不重跑，四根TS检查保留，六UI已实际通过。工程可在必需CI绿灯后合入，源合入不等于用户运行时生效。首次确认producer、真实合格scope/PIT及角色发布仍独立后续，不由单元工件代办；当前负模型和native UNPROVEN禁止启用，不消费sealed、不增加确认/训练。十三字段新模型的每日路由/完整新recipe不是本九字段消费者的已交付项，按共享内核详细设计另行实现。
 
 以下是实现过程中各切片的历史检查点，不代替上述当前状态：
 
@@ -221,7 +223,11 @@ LOCKED_HISTORICAL_OOT允许今天登记、对过去合格未消费窗口预测�
 
 ## 13. Production Gates / Rollout / Rollback
 
-design_accepted=true_design_pr_5250_merged；source_implementation=in_progress_with_real_historical_readback；source_acceptance=pending；daily_api_ui_delivered=false；historical_daily_grid_verified=true_navigation_only；economic_model_confirmed=false；binding_active=false。设计合入commit `f0feb238121569fcfdfd07f6d3b24ad03369f0f5`，自身worktree已ff同步origin/main `6a63612aa485d9287691916741e05268f1c15ed3`，本地验证提交不等于完整F2 ready，尚无消费者PR/合入。数据库仅只读消费已消费历史D属性；DDL/DML/profile激活/依赖/用户进程操作noop；QE实验未提交；sealed未读；backend_restart_owner=user。
+design_accepted=true_design_pr_5250_merged；source_implementation=complete；source_acceptance=engineering_verified_ci_pending；api_ui_source_verified=true；runtime_activation=pending_user_restart；historical_daily_grid_verified=true_navigation_only；economic_model_confirmed=false；binding_active=false。设计合入commit `f0feb238121569fcfdfd07f6d3b24ad03369f0f5`；任务已普通同步最新核对main，尚待本消费者PR必需CI及源合入。后端加载目标`backend-main`，用户操作见`docs/operations/backend_main_runtime_restart_runbook.md`；重启后核对merge identity与独立entry-value GET语义，不调用有副作用model-state，不启用模型。DDL/DML/profile/依赖/用户进程操作noop，QE训练及sealed访问0。
+
+本次UI收据：run_id=`advisory-ui-7bbb741e-20261003`，HEAD=`7bbb741ebeb5c354cc9bd8e529475a3109a7dc49`，spec SHA=`bd4396aeafc843d5eda8a3c6badcf3b28927cf1dd15c3dbf057626aad25f2f68`；artifact=`X:/AIstock_temp/advisory-ui-7bbb741e-20261003/receipt.json`及`results.json`。原始结果expected6/unexpected0/skipped0/flaky0，最终28.753秒。完整标题前缀导致原`^economic entry`零收集，runner改等价`(?:^| )economic entry`并强制逐裸标题恰为指定6项，未改spec/跳过/扩套件。源码361个Git blob核验、依赖lock匹配、排除.env.local；runner-owned前端/浏览器已退出，全部临时X、默认拒绝未mock网络，无backend/DB/安装。后续合入main仅其他模块文档及本文/蓝图验收记录变更；已核对backend/frontend与该收据HEAD完全相同，原收据不改写、不声称在新文档HEAD重新执行过UI。PR最终源码等价检查另报告；若代码变化须重新验证。
+
+以下55项/六UI仅收集等段落为实施过程历史检查点；当前状态以上段及§11矩阵为准，不再形成旧实验补证任务。
 
 最新稳定门禁为55 passed、30.07秒（51消费者叶+4 API/hook；2项既有其它模块告警未越界修复）。两轮审核新增既有canonical窗口/access/一次性收据只读核验、同frontier不同experiment拒绝、开发block功效/MDE重算及真实TRAINED登记可用时钟；12项授权/功效/双时钟定向节点曾单独通过，全部使用X盘合成工件，不是独立经济确认。新代码重新加载实际旧v3研究bundle，TRAINED真实recorded_at=`2026-10-01T21:44:06.190923+00:00`；20条真实batch投影及旧manifest/batch hash不变、正式NOT_CONFIGURED，零新fit/新收益/sealed读取。§7的81日只读功能证据保持，浏览器/CI及正式启用仍未完成。Ruff/diff通过，四根TypeScript此前通过；最终设计结构须复核，并以实际新增源码HEAD绑定宽验证，不拿设计base冒充源码证据。
 
@@ -238,17 +244,17 @@ design_accepted=true_design_pr_5250_merged；source_implementation=in_progress_w
 | F-570 | serving_bundle | 旧真实权重/hash/可用时钟读回；研究消费者通过 | 原生训练资格未证明，禁止启用 |
 | F-571 | daily_contracts/source | 叶测试核验D/T/身份/缺失保留 | 正式活动PIT与原始lease由所属窗口闭合 |
 | F-572 | daily_inference/service | 81日413,698同核格点完成；零新fit | 不证明模型经济有效 |
-| F-573 | daily_inference、UI卡片 | 多段/未知/预算叶测试通过；展示矛盾已修复 | 浏览器展示待验收 |
+| F-573 | daily_inference、UI卡片 | 多段/未知/预算叶测试及六UI通过 | 用户运行时加载待重启 |
 | F-574 | daily_inference | 原D格点精确消费与T绑定测试通过 | 不做分钟择时、订单或成交证明 |
 | F-575 | daily_source | 实际只读canonical组件消费，非活动身份限制保留 | 仅提数据所属需求，不激活/补写 |
 | F-576 | daily_service | 81日exact retry零DB/推理、hash不变；原子和资格叶测试通过 | 首次独立确认producer未交付 |
 | F-577 | advisory router/API | 三个真实batch GET投影及定向API测试通过 | 未合入/重启，用户运行时未验收 |
-| F-578 | EconomicEntryValueCard | 四根TS检查/六场景收集通过 | 无浏览器收据，不能报告UI完整交付 |
+| F-578 | EconomicEntryValueCard | 四根TS检查及指定六UI实际PASS，收据见本节 | 仅展示合同，不代表收益确认 |
 | F-579 | daily_service/历史功能plan | 81日1,620原候选受限功能通过 | 仅NAVIGATION_ONLY，未读独立确认窗口 |
-| F-580 | 自有worktree/设计/精确diff | 边界、真实负结果和证据等级复核通过 | 不推送/合入完整F2的部分实现 |
+| F-580 | 自有worktree/设计/精确diff | 工程逐项通过，20文件Advisory精确scope | 必需CI/源合入及用户重启分别报告 |
 | F-581 | advisory_forward hook | 四个定向API/hook节点通过，默认未配置 | 新源码加载与用户重启后语义验证待交付 |
 
-DESIGN-COMPLIANCE-001复核结论：完整交付仍pending，未把局部实现/mock UI视为完成；矛盾响应明确拒绝、未知保留；原排名/模型/成本/风险/窗口不变；未新增审批或等待交易日门禁，现有窗口授权与验证执行安全边界按已批准设计执行。当前有局部源码修复进展，但没有满足完整F2合入条件。
+DESIGN-COMPLIANCE-001复核结论：①本设计消费者工程完整实现及源/API/UI证据齐备，模型利润和用户运行时不冒充完成；②矛盾响应拒绝、正常UNKNOWN保留、GET无隐式生成；③原排名/模型/成本/风险/窗口不变，新十三字段接入另项；④不新增审批或实盘等待门禁。已有授权允许必需CI通过后提交合入与自身善后，后端重启仍由用户执行。
 
 源码按用户既有授权、多轮审核及必需CI后可提交合入；新API加载等待用户重启，之后只读identity/business smoke。没有合格ENTRY_VALUE模型不生产绑定；未来正式角色须同时满足模型确认与scope/输入证据合同，不能用本工程PR绕过。
 
