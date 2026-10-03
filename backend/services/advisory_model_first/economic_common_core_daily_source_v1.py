@@ -10,7 +10,9 @@ import pandas as pd
 from backend.db.pg_pool import get_conn
 from backend.services.advisory_model_first.economic_daily_feature_core_v1 import RAW_FIELDS, build_economic_daily_feature_core_v1
 from backend.services.advisory_model_first.economic_entry_labels import KEY
+from backend.services.advisory_model_first.economic_entry_timing_features_v1 import ROSTER_FIELDS, TIMING_FEATURES, build_economic_entry_timing_features_v1
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
+from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
 
 
 def _invalid(message):
@@ -72,6 +74,15 @@ class EconomicCommonCoreReadonlyDailySourceV1:
         return self.load_batch(packets=[packet])[0]
 
     def load_batch(self, *, packets):
+        return self._load_batch(packets=packets, timing=False)
+
+    def load_timing_day(self, **packet):
+        return self.load_timing_batch(packets=[packet])[0]
+
+    def load_timing_batch(self, *, packets):
+        return self._load_batch(packets=packets, timing=True)
+
+    def _load_batch(self, *, packets, timing):
         packets = _packets(packets)
         deadline = self._clock() + self._budget
         pair_set = {(pd.Timestamp(day), symbol) for packet in packets for day in packet["calendar"][:-1]
@@ -174,6 +185,19 @@ class EconomicCommonCoreReadonlyDailySourceV1:
             receipt["db_source"] = {"read_at": read_at, "isolation": "REPEATABLE READ", "readonly": True,
                 "database_written": False, "native_capture": False, "evidence": "CURRENT_DB_READONLY_NOT_NATIVE_CAPTURE",
                 "select_count": len(queries), "queries": queries, "batch_packet_count": len(packets)}
+            if timing:
+                timing_frame, timing_receipt = build_economic_entry_timing_features_v1(
+                    candidates=packet["candidates"].loc[:, ROSTER_FIELDS], calendar=packet["calendar"],
+                    raw_daily=raw.loc[raw.trade_date.isin(sessions) & raw.instrument.isin(symbols)].copy(),
+                    suspend_rows=suspend.loc[suspend.trade_date.isin(sessions) & suspend.instrument.isin(symbols)].copy())
+                if not frame.loc[:, KEY].equals(timing_frame.loc[:, KEY]):
+                    _invalid("timing and daily core original roster differ")
+                for name in TIMING_FEATURES:
+                    frame[name] = timing_frame[name].to_numpy()
+                receipt = {"schema_version": "economic_common_core_timing_daily_source_v1", "core": receipt,
+                    "timing": timing_receipt, "feature_sha256": sha({"core": receipt["feature_sha256"], "timing": timing_receipt["feature_sha256"]}),
+                    "db_source": receipt["db_source"], "source_evidence": "COMPUTATION_ONLY", "deployable": False,
+                    "outcomes_read": False, "new_native_receipt": False, "status": receipt["status"], "candidate_count": len(frame)}
             results.append((frame,receipt))
         if self._clock() > deadline:
             _invalid("daily source total time budget exceeded")
