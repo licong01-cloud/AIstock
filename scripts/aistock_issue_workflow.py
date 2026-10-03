@@ -12229,6 +12229,32 @@ def _merge_commit_changed_files(merge_commit: str, *, root: Path) -> dict[str, A
     }
 
 
+def _refresh_ci_git_mirror_after_root_sync(root: Path) -> dict[str, Any]:
+    """Best-effort offline cache maintenance, never a source/cleanup gate."""
+    helper = root / "scripts" / "maintain_aistock_git_mirror.ps1"
+    allowed = Path(os.environ.get("AISTOCK_GITHUB_RUNNER_PREBUILT_ROOT") or "F:/Dev/github-actions-runner/prebuilt")
+    mirror = Path(os.environ.get("AISTOCK_GIT_OBJECT_MIRROR_ROOT") or str(allowed / "git" / "AIstock.git"))
+    if os.name != "nt" or not helper.is_file() or not allowed.is_dir():
+        return {"status": "not_required", "reason": "local_runner_cache_not_available"}
+    snapshot = _git_snapshot(root)
+    if snapshot.get("branch") != "main" or snapshot.get("dirty") or not snapshot.get("head") or snapshot.get("head") != snapshot.get("origin_main"):
+        return {"status": "warning", "warning": "mirror refresh deferred: canonical main is not clean and aligned"}
+    result = _run_command(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper),
+         "-SourceRoot", str(root), "-MirrorRoot", str(mirror), "-AllowedRoot", str(allowed), "-Apply", "-Json"],
+        cwd=root, timeout=60,
+    )
+    try:
+        receipt = json.loads(str(result.get("stdout") or "")) if result.get("ok") else {}
+        if (receipt.get("status") == "ready" and receipt.get("main_sha") == snapshot["head"]
+                and receipt.get("network_accessed") is False and receipt.get("process_control_performed") is False):
+            return {"status": "ready", "receipt": receipt}
+    except (ValueError, TypeError):
+        pass
+    return {"status": "warning", "warning": "offline mirror refresh failed; bounded remote checkout remains available",
+            "result": result}
+
+
 def _publish_changed_clients_after_merge(
     *,
     merge_commit: str,
@@ -12296,6 +12322,9 @@ def _publish_changed_clients_after_merge(
         payload["workflow_gate"] = "blocked"
         return payload
 
+    payload["git_object_mirror"] = _refresh_ci_git_mirror_after_root_sync(root)
+    if payload["git_object_mirror"].get("warning"):
+        payload.setdefault("warnings", []).append(payload["git_object_mirror"]["warning"])
     changed = _merge_commit_changed_files(merge_commit, root=root)
     payload["merge_diff"] = changed
     payload["changed_files"] = changed.get("files") or []
@@ -21930,6 +21959,9 @@ def build_cleanup_after_merge_plan(
                 )
             else:
                 applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
+            payload["git_object_mirror"] = _refresh_ci_git_mirror_after_root_sync(root)
+            if payload["git_object_mirror"].get("warning"):
+                payload.setdefault("warnings", []).append(payload["git_object_mirror"]["warning"])
         if supersession_verification:
             payload["superseded_cleanup_receipt"] = _persist_superseded_cleanup_receipt(
                 supersession_verification,
