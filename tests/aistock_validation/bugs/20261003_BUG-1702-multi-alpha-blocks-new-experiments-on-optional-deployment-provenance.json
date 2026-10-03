@@ -98,7 +98,9 @@
   "last_seen_at": "2026-10-03T14:00:01.975503Z",
   "module": "multi_alpha",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "任何新增门禁必须先向用户明确说明并获得单独直接授权；本任务不得增加实验准入、环境冻结或人工填写门禁。",
+    "不启动实验、不修改模型/因子/数据集、不执行 DDL/DML、依赖安装或客户端安装。"
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
@@ -112,7 +114,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock-CI/python.exe -m pytest backend/tests/multi_alpha/test_durable_execution_identity.py -q -> 18 passed in an isolated fresh process loading the persisted QE source; record-only absent/empty/invalid optional provenance, node update and legacy identity compatibility verified; no backend process control or experiment submission"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
