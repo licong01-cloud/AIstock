@@ -2084,7 +2084,7 @@ G1必须在拟合前给出明确数字：连续切分边界、实际fit总数、
 | 行业日期映射 | 原7720候选中7706唯一映射、14未覆盖；14条全部D早于当前canonical eligible_start，与profile股票池sidecar一致且原日线OHLC存在 | 14直接原因是旧冻结名单/当前252交易日准入边界不一致，不是已证明的停牌或日线缺失；保留原键，不重选/删股。原名单没有规则版本证明，不擅自断言当时使用365日规则 |
 | profile绑定的原生classification | bundle=`051e2af357703734080ff3ea5b4311926905aa7cbd1f31d926ef5b8575261313`、receipt=`910f6056c5be943116415411d77617154749f670df4efdda0f93e16f70385b13`；公共`IndustryPitResolver`以AS_PUBLISHED_PIT严格求解：3729 resolved、3977 knowledge_time_unverified、14 authority_unavailable；train/validation/已消费test resolved分别2181/835/713 | 部分分类有因果证明；完整dated spans不能将其余未证明行变成已知。不是因分类覆盖不足100%而否定方向 |
 | 原生指数成分身份 | 同一bundle只有4股的两段成分区间；原人口仅8/7720 resolved、7712 boundary_unavailable | 这是专门成分证据范围有限，不能解释为全市场行业数据缺口，消费者不以该源阻断普通分类 |
-| 生成合同 | `frozen_dated_sector_assignment_then_c013_gap_fill_v1`保留日期化观察；builder绑定可包含历史回投的HMM研究basis，该adapter的historical模式明确为`STABLE_TAXONOMY_BACKCAST/non_as_known_taxonomy=true`；本receipt未报告所用active_mode | 不断言本profile所有行均来自backcast；不等同于当前快照回填，但也不能单凭dated overlay或允许历史backcast的生成链路承诺逐D已知。未找到本拟议信息块额外知晓证据前，不直接训练 |
+| 生成合同 | `frozen_dated_sector_assignment_then_c013_gap_fill_v1`保留日期化观察；builder绑定可包含历史回投的HMM研究basis，该adapter的historical模式明确为`STABLE_TAXONOMY_BACKCAST/non_as_known_taxonomy=true`；本receipt未报告所用active_mode | 不断言所有行来自backcast，也不单凭日期化生成链路承诺逐D已知。未证明记录不进入因果拟合；3729严格解析类别可以进入有界G1，不因其余UNKNOWN阻断基础设计 |
 
 进一步归因：3977行各有唯一保留分类身份、known_from均为空，source_last_updated均存在；其中3367更新时间不晚于D、610晚于D，均不能据此伪造发布时间。公共builder只对2021-07-30分类切换识别特定知晓边界，其余一般历史记录按设计返回knowledge_time_unverified。这是知晓合同能力有限，不是50%以上行情缺失；共享builder不在Advisory修改范围。
 

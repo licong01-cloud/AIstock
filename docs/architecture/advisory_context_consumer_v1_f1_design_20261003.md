@@ -38,7 +38,7 @@
 ## Implementation Plan / 实施方案
 
 1. 设计自审：时钟/人口/范围三视角，冻结上述公开接口。
-2. 实现profile sidecar读取和pure分类消费；一个run只读取各文件一次，末尾验证profile/sidecar/实际读取源未漂移。不为每行重复IO。
+2. 实现profile sidecar读取和pure分类消费；文件按准备批次读取，校验绑定hash及末尾漂移；解析后的Source供单日/批量复用，不为每行重复IO。
 3. 最小prepare验证接入，保留旧输入，不在共享代码提供兜底；定向测试和真实键检查。
 4. 审核修复循环，F1验收、PR CI合入及官方自身清理；继续G1设计，不等待虚构窗口。
 
