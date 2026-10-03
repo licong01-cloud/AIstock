@@ -27,6 +27,7 @@ CONTRACTS = {
     "selection": "hmm_risk_c008_b3_d5_01_b_v1",
     "semantic": "hmm_risk_c008_b3_d6_01_b_na_a_v1",
 }
+L2_SEMANTIC_VERSION = "hmm_risk_l2_d6_persistent_rc_a_v1"
 
 
 class FormalStateError(ValueError):
@@ -822,6 +823,13 @@ def select_restart(candidates: Sequence[Mapping[str, Any]], expected_codes: Sequ
     )
 
 
+def _validate_semantic_dates(dates: Sequence[str]) -> None:
+    if len(dates) != 182 or sorted(set(dates)) != list(dates) or dates[0] != "2024-07-01" or dates[-1] != "2025-03-31":
+        raise FormalStateError("hmm_risk_semantic_calendar_invalid", "validation calendar differs")
+    for day in dates:
+        date.fromisoformat(day)
+
+
 def semantic_evidence(
     model: Any,
     *,
@@ -830,11 +838,26 @@ def semantic_evidence(
     values: np.ndarray,
     components: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    if len(dates) != 182 or sorted(set(dates)) != list(dates) or dates[0] != "2024-07-01" or dates[-1] != "2025-03-31":
-        raise FormalStateError("hmm_risk_semantic_calendar_invalid", "validation calendar differs")
-    for day in dates:
-        date.fromisoformat(day)
+    _validate_semantic_dates(dates)
     posterior = causal_filter(model, positions, values, len(dates))
+    return semantic_posterior_evidence(posterior, dates=dates, positions=positions, components=components)
+
+
+def semantic_posterior_evidence(
+    posterior: np.ndarray,
+    *,
+    dates: Sequence[str],
+    positions: Sequence[int],
+    components: Mapping[str, Mapping[str, Any]],
+    contract_version: str = CONTRACTS["semantic"],
+) -> dict[str, Any]:
+    """Shared evidence arithmetic; supplied posteriors require a pinned source receipt."""
+    if contract_version not in {CONTRACTS["semantic"], L2_SEMANTIC_VERSION}:
+        raise FormalStateError("hmm_risk_model_receipt_invalid", "unknown semantic contract")
+    _validate_semantic_dates(dates)
+    if list(positions) != sorted(set(positions)) or any(type(p) is not int or not 0 <= p < 182 for p in positions):
+        raise FormalStateError("hmm_risk_semantic_calendar_invalid", "observation positions invalid")
+    posterior = validate_posterior(posterior, len(dates), require_margin=False)
     if set(components) != {"excess_return_5d", "excess_return_10d", "excess_return_20d"}:
         raise FormalStateError("hmm_risk_semantic_utility_non_finite", "utility component set differs")
     utility_positions = set(range(len(dates)))
@@ -875,6 +898,9 @@ def semantic_evidence(
         failures.append("hmm_risk_semantic_validation_evidence_rows_insufficient")
     for state in states:
         selected = utility[[p for p in evidence_positions if hard[p] == state["state"]]]
+        mean = float(selected.mean()) if len(selected) else None
+        variance = float(selected.var(ddof=1)) if len(selected) >= 2 else None
+        se = math.sqrt(variance / len(selected)) if variance is not None else None
         comparisons = {
             "count": state["count"] >= max(5, math.ceil(0.02 * len(evidence_positions))),
             "occupancy": state["occupancy"] >= 0.02,
@@ -884,9 +910,38 @@ def semantic_evidence(
             "outgoing": state["outgoing"] >= 2,
             "share": state["max_run_share"] <= 0.9,
         }
-        mean = float(selected.mean()) if len(selected) else None
-        variance = float(selected.var(ddof=1)) if len(selected) >= 2 else None
-        se = math.sqrt(variance / len(selected)) if variance is not None else None
+        if contract_version == L2_SEMANTIC_VERSION:
+            state_id = state["state"]
+            observed = set(evidence_positions)
+            left = int(0 in observed and hard[0] == state_id)
+            right = int(len(dates) - 1 in observed and hard[-1] == state_id)
+            persistent = state["runs"] == 1 or state["max_run_share"] > 0.9
+            comparisons = {key: comparisons[key] for key in ("count", "occupancy", "months")}
+            common_valid = (
+                all(comparisons.values())
+                and mean is not None
+                and variance is not None
+                and se is not None
+                and np.isfinite([mean, variance, se]).all()
+            )
+            # NA gaps never create transitions or full-window censor credits.
+            if common_valid:
+                comparisons.update(
+                    runs=state["runs"] >= (1 if persistent else 2),
+                    incoming=True if persistent else state["incoming"] >= 2 - left,
+                    outgoing=True if persistent else state["outgoing"] >= 2 - right,
+                    share=True if persistent else state["max_run_share"] <= 0.9,
+                )
+            state.update(
+                structural_path=("persistent" if persistent else "recurrent") if common_valid else None,
+                left_censored=bool(left),
+                right_censored=bool(right),
+                incoming_required=None if persistent or not common_valid else 2 - left,
+                outgoing_required=None if persistent or not common_valid else 2 - right,
+                independent_regime_repetition_proven=False,
+            )
+            if state["count"] == 0:
+                state["max_run_share"] = None
         state.update(
             utility_mean=mean,
             utility_variance=variance,
@@ -909,7 +964,12 @@ def semantic_evidence(
                 )
         if state["count"] == 0:
             failures.append("hmm_risk_semantic_hard_state_missing")
-        if mean is None or variance is None or not np.isfinite([mean, variance]).all():
+        if (
+            mean is None
+            or variance is None
+            or not np.isfinite([mean, variance]).all()
+            or (contract_version == L2_SEMANTIC_VERSION and (se is None or not np.isfinite(se)))
+        ):
             failures.append("hmm_risk_semantic_validation_utility_variance_non_finite")
     ordered = (
         sorted(states, key=lambda s: s["utility_mean"]) if all(s["utility_mean"] is not None for s in states) else []
@@ -938,7 +998,7 @@ def semantic_evidence(
     reasons = sorted(set(failures), key=reason_priority.index)
     return receipt(
         {
-            "contract_version": CONTRACTS["semantic"],
+            "contract_version": contract_version,
             "base_contract_version": "hmm_risk_c008_b3_d6_01_b_v1",
             "availability_contract_version": "hmm_risk_c008_b3_d6_na_a_v1",
             "dates": list(dates),

@@ -544,6 +544,15 @@ def test_signed_zero_repeat_mismatch_is_not_object_equality(monkeypatch):
         executor.finalize(request, first, second)
 
 
+def test_l2_research_rejects_self_hashed_non_authoritative_source_without_fit_or_d5(monkeypatch):
+    for name in ("fit_entry", "train_repeat", "select_restart"):
+        monkeypatch.setattr(executor, name, lambda *_: pytest.fail("fit or D5 accessed"))
+    request = subject.receipt({"source_identity": {"generation": executor.FROZEN_GENERATION}})
+    original = subject.receipt({"request_sha256": request["receipt_sha256"]})
+    with pytest.raises(subject.FormalStateError, match="approved frozen source"):
+        executor.l2_research_readback(request, original)
+
+
 def test_output_location_rejects_source_release_relative_and_indirect_paths(tmp_path, monkeypatch):
     root = Path(__file__).resolve().parents[3]
     release = tmp_path / "release"

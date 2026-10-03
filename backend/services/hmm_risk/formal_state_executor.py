@@ -533,6 +533,93 @@ def validate_semantic_readback(
             )
 
 
+def l2_research_readback(request: Mapping[str, Any], original: Mapping[str, Any]) -> dict[str, Any]:
+    """Only the approved v17/seed47 run: authenticate, reinterpret, never refit.
+
+    The original acceptance was already read back against selected model
+    parameters. Its immutable canonical pin authenticates those posteriors and
+    model hashes without loading/replaying the historical 1GB child grids.
+    """
+    from backend.services.hmm_risk.formal_state_calendar import reinterpret_l2_evidence
+    from backend.services.hmm_risk.formal_state_model import L2_SEMANTIC_VERSION
+
+    environment = numeric_environment()
+    verify_hash(request)
+    verify_hash(original)
+    if (
+        request["receipt_sha256"] != "94b35f9c8b5767b1a5cb3ade009fcada1fe5811c2486404a9c0e1796b03084f7"
+        or original["receipt_sha256"] != "fa42b6982f2ff5d8b5e7c257ad727ba66eb0ee9ac9a18e045847e573704a01ac"
+        or original["request_sha256"] != request["receipt_sha256"]
+        or original["repeat_sha256"] != "e23d7c36fec13aa6a678b3780475e048ad217d764ccce31000bb21b6d2bd89c4"
+        or original["schema_version"] != VERSION
+        or type(original["fit_attempts"]) is not int
+        or original["fit_attempts"] != 5184
+        or original["fresh_process_bitwise_equal"] is not True
+        or any(
+            original[field] is not False
+            for field in (
+                "d3_d6_accepted",
+                "ready",
+                "phase2_ready",
+                "product_capability_promoted",
+                "database_write",
+                "runtime_action",
+            )
+        )
+    ):
+        raise FormalStateError("hmm_risk_formal_identity_mismatch", "not the approved frozen source run")
+    key = "autocycle_all_core:L2"
+    selection = original["selection"][key]
+    codes = request["sector_codes"]["L2"]
+    if (
+        selection["accepted"] is not True
+        or type(selection["selected_seed"]) is not int
+        or selection["selected_seed"] != 47
+        or len(codes) != 131
+        or sorted(original["semantic"][key]) != codes
+    ):
+        raise FormalStateError("hmm_risk_model_restart_family_incomplete", "frozen L2/seed47 closure differs")
+    results = {}
+    for code in codes:
+        results[code] = reinterpret_l2_evidence(
+            original["semantic"][key][code],
+            carrier=request["series"][key][code]["validation"],
+            dates=request["validation_calendar"],
+            feature_names=list(ALL_CORE_FEATURES),
+            source_identity_sha256=canonical_sha256(request["source_identity"]),
+            source_receipt_sha256=request["policy"]["receipt_sha256"],
+            selected_identity={"family": "autocycle_all_core", "level": "L2", "sector": code, "seed": 47},
+        )
+    return receipt(
+        {
+            "schema_version": "hmm_risk_l2_independent_research_readback_v1",
+            "contract_version": L2_SEMANTIC_VERSION,
+            "numeric_environment": environment,
+            "request_sha256": request["receipt_sha256"],
+            "original_acceptance_sha256": original["receipt_sha256"],
+            "source_identity": request["source_identity"],
+            "selected_seed": 47,
+            "sector_count": 131,
+            "semantic": results,
+            "semantic_evidence_valid_count": sum(r["semantic_evidence_valid"] for r in results.values()),
+            "fits": 0,
+            "selection_performed": False,
+            "ready": False,
+            "phase2_ready": False,
+            "product_capability_promoted": False,
+            "database_write": False,
+            "runtime_action": False,
+            "limitations": [
+                "development_calibration_not_independent_confirmation",
+                "persistent_not_independent_regime_repetition",
+                "semantic_outcome_watermark_2025-04-30_not_available_in_calibration_window",
+                "stable_taxonomy_backcast_not_as_published_forward",
+                "not_predictive_effect_or_qe_increment_acceptance",
+            ],
+        }
+    )
+
+
 def selected_model_set(
     final: Mapping[str, Any], request: Mapping[str, Any], groups: Mapping[str, Any]
 ) -> dict[str, Any]:
