@@ -1,6 +1,8 @@
 {
   "actual": "P0 throughput remediation: recent source CI spends 64 percent of execution in base-history preparation (4-19 minutes). Reuse verified local mirror ancestry before remote requests, fetch only needed pinned refs, enforce per-attempt and total budgets while preserving exact base/source HEAD proof and fail-closed coverage.",
   "allowed_write_scope": [
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "scripts/ci_changed_files.py",
     "backend/tests/scripts/test_ci_changed_files.py",
     ".github/workflows/test.yml",
@@ -27,13 +29,20 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_changed_files.py",
+      "scripts/ci_changed_files.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1713-ci-source-ancestry-preparation-repeatedly-deepens-remote-main-without-a.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/ci_changed_files.py",
+      ".github/workflows/test.yml",
       "backend/tests/scripts/test_ci_changed_files.py",
-      ".github/workflows/test.yml"
+      "scripts/ci_changed_files.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1713-ci-source-ancestry-preparation-repeatedly-deepens-remote-main-without-a.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/ci_changed_files.py",
@@ -128,10 +137,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,

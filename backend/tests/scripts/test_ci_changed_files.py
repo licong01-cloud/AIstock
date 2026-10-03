@@ -254,6 +254,29 @@ def test_git_timeout_and_fetch_budget_remain_fail_closed(tmp_path: Path, monkeyp
         changed_files_module._git(tmp_path, "rev-parse", timeout=0.01)
 
 
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_failed_history_fetch_is_capped_without_weakening_ancestry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exhausted: bool) -> None:
+    calls: list[object] = []
+    def commit(root: Path, revision: str, field: str) -> str:
+        if revision == "HEAD":
+            return "b" * 40
+        raise ChangedFilesError("missing base")
+    def git(root: Path, *args: str, **kwargs: object) -> str:
+        if args[0] == "fetch":
+            calls.append(kwargs["timeout"])
+            raise ChangedFilesError("fetch timed out")
+        return ""
+    monkeypatch.setattr(changed_files_module, "_commit", commit)
+    monkeypatch.setattr(changed_files_module, "_git", git)
+    monkeypatch.setattr(changed_files_module, "_restore_local_mirror_ancestry", lambda *args: {"status": "not_required"})
+    monkeypatch.setattr(changed_files_module.time, "sleep", lambda seconds: None)
+    with pytest.raises(ChangedFilesError, match="history preparation failed"):
+        prepare_pr_merge_base(repo_root=tmp_path, base_ref="main", base_sha="a" * 40,
+            checkout_ref="refs/heads/feature", attempts=99, total_budget=0 if exhausted else 150)
+    assert len(calls) == (0 if exhausted else 3)
+    assert all(0 < timeout <= 45 for timeout in calls)
+
+
 def test_pull_request_workflows_use_shared_current_base_resolver() -> None:
     workflow_paths = (
         Path(".github/workflows/test.yml"),
