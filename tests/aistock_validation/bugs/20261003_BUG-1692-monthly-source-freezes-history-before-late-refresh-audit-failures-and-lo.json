@@ -128,6 +128,23 @@
   "fixed_at": null,
   "github_issue_number": 5307,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5307",
+  "implementation_review": {
+    "candidate_write": false,
+    "database_write": false,
+    "design_compliance": {
+      "no_new_gate_or_authorization": true,
+      "no_partial_delivery_as_monthly_complete": true,
+      "no_silent_error_or_success": true,
+      "unchanged_business_semantics": true
+    },
+    "profile_write": false,
+    "rounds": [
+      "RED: 2 readiness tests failed with missing method; GREEN: 2 passed after implementation.",
+      "Second review: explicit adapter ordering regression added, 3 direct tests passed; real fresh-process production readonly preflight returned the exact single margin_detail date without source payload streaming."
+    ],
+    "runtime_action": false,
+    "scope_refinement": "Only monthly_postgres_source.py and its tests change; source_authority.py is untouched. Reuse existing imported read-only snapshot and audit methods, retaining both partition and nine fact checks."
+  },
   "last_seen_at": "2026-10-03T04:45:02.955141Z",
   "module": "local_data",
   "non_goals": [
@@ -145,17 +162,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/monthly-early-readiness-20261003T044803038631Z.json; readonly same-snapshot production preflight finds exactly margin_detail/2026-09-30 in 2.686s with no payload, CAS, candidate or database writes",
+      "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/monthly-early-readiness-20261003T044803038631Z.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
