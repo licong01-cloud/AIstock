@@ -22,6 +22,7 @@ from .monthly_unified import (
     SOURCE_GATES,
     STAGES,
     MonthlyPipeline,
+    MonthlyReleaseBusy,
     MonthlyReleaseError,
     MonthlyReleaseService,
     MonthlyReleaseSourceBlocked,
@@ -979,28 +980,32 @@ class MonthlyReleaseWorker:
 
     def run_once(self) -> dict[str, Any] | None:
         pending = self.service.store.pending_operation_ids()
-        if not pending:
-            return None
-        operation_id = pending[0]
-        state = self.service.run(operation_id)
-        request = self.service.store.read_request(operation_id)
-        if state.get("status") == "READY_TO_ACTIVATE" and request.get("activation_mode") == "activate_when_ready":
-            if self.authorization_store is None or self.activation_verifier is None:
-                return self.service.store.update_state(
+        for operation_id in pending:
+            try:
+                state = self.service.run(operation_id)
+            except MonthlyReleaseBusy:
+                # Another live attempt owns this operation.  Do not change its
+                # state, consume its request or turn contention into an exit.
+                continue
+            request = self.service.store.read_request(operation_id)
+            if state.get("status") == "READY_TO_ACTIVATE" and request.get("activation_mode") == "activate_when_ready":
+                if self.authorization_store is None or self.activation_verifier is None:
+                    return self.service.store.update_state(
+                        operation_id,
+                        last_error={
+                            "code": "MONTHLY_RELEASE_AUTO_ACTIVATION_UNAVAILABLE",
+                            "message": "worker lacks the activation authorization resolver/readback verifier",
+                        },
+                    )
+                return self.service.activate(
                     operation_id,
-                    last_error={
-                        "code": "MONTHLY_RELEASE_AUTO_ACTIVATION_UNAVAILABLE",
-                        "message": "worker lacks the activation authorization resolver/readback verifier",
-                    },
+                    authorization_store=self.authorization_store,
+                    authorization_ref=str(request.get("activation_authorization_ref") or ""),
+                    principal=str(request.get("requested_by") or ""),
+                    verify_after=self.activation_verifier,
                 )
-            return self.service.activate(
-                operation_id,
-                authorization_store=self.authorization_store,
-                authorization_ref=str(request.get("activation_authorization_ref") or ""),
-                principal=str(request.get("requested_by") or ""),
-                verify_after=self.activation_verifier,
-            )
-        return state
+            return state
+        return None
 
 
 __all__: Sequence[str] = (
