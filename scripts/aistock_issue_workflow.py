@@ -64,6 +64,7 @@ except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_wo
     )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_CODE_ROOT = REPO_ROOT
 BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 ALLOWED_FIX_STATUSES = {"open", "in_progress"}
@@ -7538,7 +7539,67 @@ def _canonical_root() -> Path:
     if override:
         return Path(override)
     default = Path("F:/Dev/AIstock")
-    return default if default.exists() else REPO_ROOT
+    return default if default.exists() else WORKFLOW_CODE_ROOT
+
+
+TASK_CONTEXT_COMMANDS = frozenset({
+    "run", "resume", "finish", "finish-batch", "workflow-smoke",
+    "restart-plan", "post-restart-verify", "close-sync", "close-sync-batch",
+})
+
+
+def _task_execution_root(command: str) -> Path:
+    """Use a linked task checkout for data, never as CLI/client code authority."""
+    if command not in TASK_CONTEXT_COMMANDS:
+        return REPO_ROOT
+    cwd = Path.cwd().resolve()
+    top = _run_command(["git", "rev-parse", "--show-toplevel"], cwd=cwd)
+    if not top.get("ok"):
+        if "not a git repository" in str(top.get("stderr", "")).lower():
+            return REPO_ROOT  # Support canonical CLI calls from a non-repo shell.
+        raise WorkflowError("Cannot verify the invoking task repository")
+    root = Path(str(top["stdout"])).resolve()
+    if root == REPO_ROOT.resolve():
+        return REPO_ROOT
+    common_dirs = []
+    for checkout in (REPO_ROOT, root):
+        result = _run_command(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=checkout,
+        )
+        if not result.get("ok") or not result.get("stdout"):
+            raise WorkflowError("Cannot verify linked task worktree identity")
+        common_dirs.append(Path(str(result["stdout"])).resolve())
+    if common_dirs[0] != common_dirs[1]:
+        raise WorkflowError("Invoking task worktree belongs to a different Git repository")
+    return root
+
+
+@contextlib.contextmanager
+def _task_execution_context(command: str):
+    global REPO_ROOT, BUGS_ROOT
+    root = _task_execution_root(command)
+    old_root, old_bugs = REPO_ROOT, BUGS_ROOT
+    catalog = root / "tests/aistock_validation/catalog"
+    bindings = {
+        "REPO_ROOT": root,
+        "CATALOG_ROOT": catalog,
+        "BUGS_ROOT": root / "tests/aistock_validation/bugs",
+        "CANDIDATES_ROOT": root / "tests/aistock_validation/runs/candidates",
+        "FAILURES_ROOT": root / "tests/aistock_validation/runs/failures",
+        "MODULE_REGISTRY": catalog / "module_registry.yaml",
+        "FILE_OWNERSHIP": catalog / "file_ownership.yaml",
+        "TEST_PLANS": catalog / "test_plans.yaml",
+    }
+    old_bindings = {name: getattr(flow, name) for name in bindings}
+    try:
+        REPO_ROOT, BUGS_ROOT = root, bindings["BUGS_ROOT"]
+        for name, value in bindings.items():
+            setattr(flow, name, value)
+        yield
+    finally:
+        REPO_ROOT, BUGS_ROOT = old_root, old_bugs
+        for name, value in old_bindings.items():
+            setattr(flow, name, value)
 
 
 def _git_snapshot(root: Path) -> dict[str, Any]:
@@ -9309,6 +9370,18 @@ def _maybe_create_worktree(
         "worktree": str(worktree),
         "base": "origin/main",
     }
+    if not dry_run and (REPO_ROOT / ".git").is_file():
+        state = _load_state(bug_id, REPO_ROOT) or {}
+        recorded_root = state.get("worktree") or state.get("planned_worktree")
+        recorded_branch = state.get("branch") or state.get("planned_branch")
+        if recorded_root and Path(str(recorded_root)).resolve() == REPO_ROOT.resolve():
+            if not source_bug_json.resolve().is_relative_to(BUGS_ROOT.resolve()):
+                raise WorkflowError("Existing task BUG record is outside its checkout")
+            actual_branch = _git(["branch", "--show-current"], cwd=REPO_ROOT)
+            if not recorded_branch or actual_branch != recorded_branch:
+                raise WorkflowError("Existing task branch differs from its recorded identity")
+            plan.update(branch=actual_branch, worktree=str(REPO_ROOT), reused=True)
+            return plan
     if not create or dry_run:
         return plan
     if worktree.exists():
@@ -9323,7 +9396,7 @@ def _maybe_create_worktree(
 
 def _actual_and_planned_worktree(worktree_plan: dict[str, Any]) -> tuple[str | None, str | None]:
     worktree = str(worktree_plan.get("worktree") or "").strip() or None
-    if worktree_plan.get("created"):
+    if worktree_plan.get("created") or worktree_plan.get("reused"):
         return worktree, None
     return None, worktree
 
@@ -23352,7 +23425,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return int(args.func(args))
+        with _task_execution_context(args.command):
+            return int(args.func(args))
     except WorkflowPayloadError as exc:
         _emit_args(exc.payload, args)
         return 2
