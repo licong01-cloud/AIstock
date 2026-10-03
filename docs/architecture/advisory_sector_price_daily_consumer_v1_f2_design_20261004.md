@@ -6,7 +6,7 @@
 
 R2-M1研究源码#5414已合入且自身清理；冻结开发导航通过，但两个配对增量区间跨零。candidate净收益29.7444%包含36个真TAKE及57个UNKNOWN基线研究控制，不能全部归因模型。原7720键、3505板块可用/3991分类或映射未知/224warmup及RECOVERED_LIMITED、native UNPROVEN保持不变。
 
-冻结模型reader PR #5421已提交，多轮自审、16直接测试及真实四头的合成parity通过，当前必需CI尚未完成；不是已合入、真实每日来源通过或经济资格。该reader不重新加载训练行情/profile或fit，scope中父模型information_end仍UNPROVEN。两腿权重确实存在，但现存manifest与两次公开loop config的data_split为空，不推导需要重训，也不以当前QE默认split补历史训练时钟。
+冻结模型reader PR #5421已在必需CI run37157479273全绿后合入9cd4e831e18909f62e5d23bd9576d8696b045988；多轮自审、16直接测试及真实四头合成parity通过。只证明冻结研究权重消费，不证明真实每日来源或经济资格。该reader不重新加载训练行情/profile或fit，scope中父模型information_end仍UNPROVEN。两腿权重确实存在，但现存manifest、公开loop config及既有editable config均没有原训练时钟（data_split为空/null），不推导需要重训，也不以当前QE默认split补历史训练时钟。
 
 现有每日v3入口直接读取fitted.request.source_request并绑定EconomicModelScopeV2/九字段及旧qualified类型；M1的SectorPriceFitV1没有request，candidate输入16维，不能按“都是GBDT”强塞旧接口。目标是同一冻结价格条件数学消费严格D可见的新数据，给出支持内可能有净价值的多段/空/未知买入价格集合；不是预测开盘价、最佳分钟或保证成交。
 
@@ -68,7 +68,7 @@ M1 scope显式绑定family、15D字段有序名单、原recipe/数学逻辑hash�
 
 ## 7. Implementation Plan / 本轮48h内优先顺序
 
-1. #5421必需CI通过后合入及自身官方清理；不rerun旧run或改变CI。原父模型时钟只做已有metadata/公开只读配置核对，真实缺口单列，不控制QE。
+1. #5421源码已合入，按已授权自身官方清理，不rerun旧run或改变CI。原父模型时钟只做已有metadata/公开只读配置核对，真实缺口单列，不控制QE。
 2. 本详细设计方法/时钟/工程三视角审核修订及F2校验。源码实现另立精确F1 Card，先交付纯21D+T组合/价格research消费；0fit/0新经济结论。资格链未成立不抢建API/UI或激活平台。
 3. 真实source仅在公开原始合同明晰后开发；可用的已消费原候选D用于最小consumer parity，不补市场数据/恢复receipt、不为已负实验复跑。此功能验证不成为新holdout证据。
 4. 父腿/组合训练时钟、未知来源资格、独立合法窗口/功效/推断仍按#5420确认框架处理；未完整冻结/授权不运行确认。若外部条件不足，保留源准备状态，不为凑48h搜同窗M5。
