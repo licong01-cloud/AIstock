@@ -165,16 +165,16 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 ## Design Acceptance Matrix
 
-下表只验收**本次设计文档的完整性与边界**，不是实施/效果矩阵。测试路径仅为实施后的计划矩阵，尚未运行；D1～D6已获用户明确批准；F2格式PASS不能替代用户批准或实施验证。实施后必须用真实代码/运行证据另更新对应状态，不能沿用design review作为功能完成。
+下表更新为**本次源码合同与直接测试矩阵**。D1～D6已获用户明确批准；110项聚焦测试实际通过，但不是正式效果、真实数据库或浏览器验收。F2格式PASS不能替代这些尚未执行的业务验证；本轮按批准计划先交付源码PR，正式零fit回放在源码合入后执行，真实持久化/激活仍按独立权限完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §D1；formal_state_executor/model | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-l2-persistent-readback/research-final.json；核对已有身份与新source身份边界，未实施恢复入口 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
-| F-002 | §D2；冻结day calendar | artifact: X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20261002-r8-unified-basic-history1-candidate/components/daily_bin_candidate/calendars/day.txt；实际日历算术，非预测回放 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
-| F-003 | §D3；formal_state_input/stock_fact_observation | backend/tests/hmm_risk/test_formal_state_input.py：计划验证后续L2构造、旧入口不变，本次仅对照源码职责 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
-| F-004 | §D4/D5；formal_state_model与现有L2基线 | backend/tests/hmm_risk/test_formal_state_model.py：计划hard utility与因果矩阵；本文明确score/效果/coverage已批准、实施及效果未运行 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
-| F-005 | §D6；现有Rotation L2 repository/API/UI | backend/tests/hmm_risk/test_rotation_l2_prediction.py：计划版本/语义隔离测试；本文未报告实施/运行通过 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
-| F-006 | §Non-goals/Production Gates/审核记录 | backend/tests/hmm_risk/test_formal_state_executor.py：计划fit/D5/DB poison；本次逐项核对未执行/未授权边界 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
+| F-001 | formal_state_effect.extract_frozen_models/validate_models | backend/tests/hmm_risk/test_formal_state_effect.py：原receipt认证、参数恢复、原前缀bitwise及fit/selection poison直接测试通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 用户批准先交付源码；正式大文件模型恢复尚未运行 |
+| F-002 | formal_state_effect.predict/composite_outcomes；formal_state_executor.effect_repeat | backend/tests/hmm_risk/test_formal_state_effect.py：t-1、连续前缀、t+1标签、221/201成熟日历及标签后置通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 用户批准先交付源码；正式新窗口回放尚未运行 |
+| F-003 | formal_state_input.prepare_effect_observations；stock_fact_observation显式目录 | backend/tests/hmm_risk/test_formal_state_input.py：20D定义、严格前置circ_mv、空停牌窗口metadata、全目录缺观察NaN测试通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 用户批准先交付源码；真实v17完整新窗口构造尚未运行 |
+| F-004 | formal_state_effect.evaluate/validate_acceptance；rotation_l2固定基线 | backend/tests/hmm_risk/test_formal_state_effect.py：硬utility、全人口mask、合法NA、spread预测分组、HAC19和效果状态闭合通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 用户批准先交付源码；真实Rank IC和覆盖结果尚未产生 |
+| F-005 | formal_state_executor.run_two_processes；rotation_l2_prediction；RotationL2Dashboard | backend/tests/hmm_risk/test_formal_state_effect.py；backend/tests/hmm_risk/test_rotation_l2_prediction.py：parent/request/version/writer/readback/API直接测试通过；frontend/tests/hmm-risk/hmm-risk.spec.ts：新增UI矩阵交CI | SOURCE_UNIT_VERIFIED_ONLY | 用户批准先交付源码；双真实process、SQL验证与真实API/UI尚未执行，不宣称产品完成 |
+| F-006 | effect CLI显式模式；Production Gates；实际文件runtime分类 | backend/tests/hmm_risk/test_formal_state_effect.py；backend/tests/hmm_risk/test_formal_state_executor.py：零fit、原入口默认、失败闭环与数据库poison导入通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 无 |
 
 ## Rollout / Rollback
 
@@ -196,7 +196,9 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 第一轮源码审核修复：有界停牌空窗口不能跳过metadata counts；独立观察receipt绑定原A5/feature定义；spread极端组在预测人口上冻结，不能因未来合法NA重新分组。第二轮修复：全目录无观察项保留NaN而非构造失败；产品检查逐行业参数/冻结utility、原semantic与每日rank投影，重新闭合人口/maturity/效果状态；显式未知或null版本拒绝，不退回旧delta语义。
 
-直接验证已实际运行：首批14 passed，扩展直接矩阵49 passed；原参数恢复、产品writer/readback、空目录及strict-prior circ_mv新增节点单独复验通过（期间fixture错误已修复，不记录为首轮全通过）。Ruff通过；使用现存canonical node_modules只读类型解析的TypeScript noEmit为0 diagnostics，未安装依赖、未生成frontend构建文件。最终HEAD对应门禁及CI以本源码PR真实结果为准，不复用这些中间HEAD作为最终receipt。
+直接验证已实际运行：首批14 passed，扩展直接矩阵49 passed；新增节点fixture错误已修复，不记录为首轮全通过。稳定源码在e4fa1563f上执行nox hmm_risk_pr_slice，110 passed、4条全空观察NA场景的pandas/NumPy warning；registry 8 passed、L0 blocking=0。其后同步主线仅涉及BUG-1699 metadata，未改变这110项所测HMM源码；文档修订后的最终HEAD另跑最小门禁，不把旧HEAD的测试伪称为新执行。两个L0 MEDIUM提示位于Playwright mock JSON，不是产品原始JSON展示。Ruff、py_compile和固定Conda base fresh-process导入通过；实际Conda AIstock的hmm_risk/health router导入由DB poison保护，数据库访问为0。TypeScript使用现存canonical node_modules只读解析，未安装依赖或生成构建文件。CI结果以本源码PR为准。
+
+第三轮审核修订：把验收矩阵从过时的“设计审核/未实施”更新为源码直接测试状态；末尾批准后复核明确标为历史记录，不能覆盖当前状态。复核新观察/标签分离、冻结模型与人口分母、原delta/API版本隔离及迁移旧约束保持；没有新增阈值、资源门或自动重训。数据库迁移未验证、正式效果与真实UI未执行仍明确保留，不以源码/单元测试通过冒充这些完成状态。
 
 完整HMM矩阵与mock UI交现有CI计划hmm_risk_pr_slice/hmm_risk_ui；本任务未启动用户或runner服务，未执行真实浏览器验收。SQL未执行、正式effect-prepare/effect-run未运行；没有任何真实新预测/IC、DB写入、runtime activation或QE收益结论。达到代码PR交付边界后等待独立合入授权，不绕过已合入源码要求读取正式新窗口。
 
@@ -221,4 +223,4 @@ DESIGN-COMPLIANCE-001：
 
 以上只说明设计审核，不宣称实现、经济效果、QE或产品已通过。F2 PASS仅是文档格式与验收索引一致性检查。
 
-2026-10-03批准后复核：D1～D6由用户明确批准；v0.1起草及三轮审核时的待批准/CI失败记录作为历史事实保留，不表示当前仍待批准。#5325根因已取得日志确认并完成测试隔离修复：CI同口径120 passed，生产环境校验和模型合同不变；同步主线后最终head 9fb0b47726aff9f82aa79d91e5cee9684081b442的CI SUCCESS，按用户授权已合入，merge=f49ebc600ac0cb4d52689443ed2bb304e29b01e4。本次只同步本文批准及依赖交付状态，新效果源码实施/两次零fit推断未启动，本文文档PR未获合入授权。canonical main已同步，但未激活、重启或验证用户后端运行态。
+2026-10-03批准后复核（#5326合入前的历史记录）：当时仅同步批准及依赖交付状态，效果源码实施/两次零fit推断未启动，文档PR尚未获合入授权。D1～D6由用户明确批准；v0.1待批准/CI失败记录不表示当前状态。#5325根因已确认并完成测试隔离修复：CI同口径120 passed，生产环境校验和模型合同不变；最终head 9fb0b47726aff9f82aa79d91e5cee9684081b442的CI SUCCESS，按用户授权合入f49ebc600ac0cb4d52689443ed2bb304e29b01e4。此后#5326已合入a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a，新效果源码状态以上方v0.3矩阵为准。没有激活、重启或验证用户后端运行态。
