@@ -15,6 +15,33 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("executable", ["gh", "C:/tools/gh.exe"])
+@pytest.mark.parametrize("existing", ["localhost", "api.github.com", "*"])
+def test_gh_environment_bypasses_only_api_and_preserves_parent(monkeypatch, executable, existing):
+    parent = {"NO_PROXY": existing, "no_proxy": "127.0.0.1", "HTTPS_PROXY": "http://127.0.0.1:7896"}
+    monkeypatch.setattr(workflow.os, "environ", parent)
+    monkeypatch.setattr(workflow.platform, "system", lambda: "Windows")
+    env = workflow._subprocess_env([executable, "api", "graphql"])
+    assert env is not None and env is not parent
+    assert env["NO_PROXY"] == env["no_proxy"]
+    assert set(env["NO_PROXY"].split(",")) == {existing, "127.0.0.1", "api.github.com"}
+    assert env["HTTPS_PROXY"] == parent["HTTPS_PROXY"]
+    assert parent == {"NO_PROXY": existing, "no_proxy": "127.0.0.1", "HTTPS_PROXY": "http://127.0.0.1:7896"}
+
+
+@pytest.mark.parametrize(("system", "override"), [("Linux", "1"), ("Darwin", "1"), ("Windows", "0")])
+def test_gh_route_keeps_non_windows_and_explicit_proxy_override(monkeypatch, system, override):
+    parent = {"NO_PROXY": "localhost", "HTTPS_PROXY": "http://127.0.0.1:7896", "AISTOCK_GITHUB_API_DIRECT": override}
+    monkeypatch.setattr(workflow.os, "environ", parent)
+    monkeypatch.setattr(workflow.platform, "system", lambda: system)
+    assert workflow._subprocess_env(["gh"]) == parent
+
+
+@pytest.mark.parametrize("args", [[], ["python"], ["curl.exe"], ["not-gh"]])
+def test_non_gh_commands_keep_inherited_network_environment(args):
+    assert workflow._subprocess_env(args) is None
+
+
 @pytest.mark.parametrize("command", ["promote-ci-issue", "ci-issue-janitor"])
 def test_metadata_cli_starts_without_process_dependency(command):
     import sys
