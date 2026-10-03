@@ -1477,6 +1477,58 @@ def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(
         assert result["merge_commit_containment"]["ok"] is True
 
 
+@pytest.mark.parametrize("case", ["update", "noop", "foreign", "nonancestor", "drift", "transport"])
+def test_owned_pr_receipt_sync_is_exact_and_recoverable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
+    url, branch, old, new = "https://github.com/licong01-cloud/AIstock/pull/1", "bug/task", "a" * 40, "b" * 40
+    body = tmp_path / "body.md"
+    body.write_text("validated receipts", encoding="utf-8")
+    row = {"pr_number": 1, "url": url, "state": "OPEN", "head_ref": branch, "base_ref": "main",
+           "head_repo": "foreign/repo" if case == "foreign" else workflow.GITHUB_REPO,
+           "head_sha": new if case == "noop" else old, "body": body.read_text() if case == "noop" else "stale"}
+    writes: list[str] = []
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", lambda url: dict(row))
+    def run(args: list[str], **kwargs: Any) -> dict[str, Any]:
+        if args[0] == "git":
+            return {"ok": case != "nonancestor"}
+        writes.append("PATCH")
+        row["body"] = body.read_text()
+        if case == "transport":
+            return {"ok": False, "stderr": "TLS handshake timeout"}
+        return {"ok": True, "stdout": json.dumps({"state": "open", "body": row["body"], "number": 1, "html_url": url,
+            "head": {"sha": new if case == "drift" else old, "ref": branch, "repo": {"full_name": workflow.GITHUB_REPO}},
+            "base": {"ref": "main"}})}
+    monkeypatch.setattr(workflow, "_run_command", run)
+    if case in {"foreign", "nonancestor", "drift"}:
+        with pytest.raises(workflow.WorkflowError):
+            workflow._sync_owned_pr_body(pr_url=url, branch=branch, body_path=body, expected_head=new, before_push=True)
+        assert len(writes) == (1 if case == "drift" else 0)
+    else:
+        result = workflow._sync_owned_pr_body(pr_url=url, branch=branch, body_path=body, expected_head=new, before_push=True)
+        assert result["body_updated"] == (case != "noop")
+
+
+@pytest.mark.parametrize("same_head", [False, True])
+def test_existing_source_pr_receipts_are_published_before_push_and_reused(monkeypatch: pytest.MonkeyPatch, same_head: bool) -> None:
+    events: list[str] = []
+    url = "https://github.com/licong01-cloud/AIstock/pull/1"
+    monkeypatch.setattr(workflow, "_load_state", lambda bug_id: {"pr_url": url})
+    monkeypatch.setattr(workflow, "_pr_worktree_guard", lambda: {"blocking": []})
+    monkeypatch.setattr(workflow, "_current_branch", lambda: "bug/task")
+    monkeypatch.setattr(workflow, "_check_pr_receipt_identity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(workflow, "_pre_pr_gate", lambda **kwargs: {"workflow_gate": "passed"})
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "b" * 40)
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: {"ok": True, "stdout": "b" * 40})
+    monkeypatch.setattr(workflow, "_sync_owned_pr_body", lambda **kwargs: events.append("receipt_before_push" if kwargs["before_push"] else "head_readback") or {"url": url, "head_sha": ("b" if same_head else "a") * 40})
+    monkeypatch.setattr(workflow, "_execute_workflow_command", lambda *args, **kwargs: events.append("push") or {"ok": True})
+    monkeypatch.setattr(workflow, "_create_pr_with_transport_fallback", lambda **kwargs: pytest.fail("existing PR recreated"))
+    monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(workflow, "_append_event", lambda *args, **kwargs: None)
+    result = workflow._maybe_create_pr(bug_id="BUG-999", finish={"validation_evidence": ["passed"], "pr_body_path": "body.md"},
+        push=True, create_pr=True, watch_ci=False, pr_title=None)
+    assert events == (["receipt_before_push", "head_readback"] if same_head else ["receipt_before_push", "push", "head_readback"])
+    assert result["pr_url"] == url
+
+
 @pytest.mark.skipif(workflow.os.name != "nt", reason="Windows offline mirror helper")
 @pytest.mark.parametrize("outcome", ["ready", "timeout", "mismatch", "dirty"])
 def test_post_sync_mirror_is_bounded_and_never_blocks_aftercare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:

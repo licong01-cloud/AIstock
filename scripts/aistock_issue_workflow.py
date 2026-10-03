@@ -16229,6 +16229,50 @@ def build_watch_ci_plan(
     }
 
 
+def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_head: str, before_push: bool) -> dict[str, Any]:
+    """Publish validated receipts before synchronize; never overwrite a foreign PR."""
+    number = _github_pr_number_from_url(pr_url)
+    if number is None or pr_url != f"https://github.com/{GITHUB_REPO}/pull/{number}":
+        raise WorkflowError("existing PR URL is outside this repository")
+    current = _github_pull_rest_readback(pr_url)
+    if (current.get("state") != "OPEN" or current.get("head_ref") != branch
+            or current.get("base_ref") != "main" or current.get("url") != pr_url
+            or current.get("head_repo") != GITHUB_REPO):
+        raise WorkflowError("existing PR is not the open, repository-owned source branch; use its correct aftercare lane")
+    old_head = str(current.get("head_sha") or "")
+    if not _FULL_GIT_COMMIT_RE.fullmatch(old_head):
+        raise WorkflowError("existing PR has no exact head identity")
+    if old_head != expected_head:
+        if not before_push:
+            raise WorkflowError("existing PR head differs from validated task HEAD; push is required")
+        ancestor = _run_command(["git", "merge-base", "--is-ancestor", old_head, expected_head], cwd=REPO_ROOT, timeout=10)
+        if not ancestor.get("ok"):
+            raise WorkflowError("existing PR head is not an ancestor of validated task HEAD; refuse receipt overwrite")
+    body = body_path.read_text(encoding="utf-8")
+    updated = current.get("body") != body
+    if updated:
+        result = _run_command(["gh", "api", "--method", "PATCH", f"repos/{GITHUB_REPO}/pulls/{current['pr_number']}",
+                               "-F", f"body=@{body_path}"], cwd=REPO_ROOT, timeout=30)
+        if result.get("ok"):
+            response = _parse_rest_object(result, context="owned PR receipt update")
+            head = response.get("head") or {}
+            if (response.get("body") != body or response.get("state") != "open"
+                    or response.get("number") != current["pr_number"] or response.get("html_url") != pr_url
+                    or head.get("sha") != old_head or head.get("ref") != branch
+                    or (head.get("repo") or {}).get("full_name") != GITHUB_REPO
+                    or (response.get("base") or {}).get("ref") != "main"):
+                raise WorkflowError("PR changed during receipt update; refuse push")
+        elif _looks_like_github_transport_failure(f"{result.get('stderr')}\n{result.get('stdout')}"):
+            recovered = _github_pull_rest_readback(pr_url)
+            if (recovered.get("head_sha") != old_head or recovered.get("body") != body or recovered.get("state") != "OPEN"
+                    or recovered.get("head_ref") != branch or recovered.get("base_ref") != "main"
+                    or recovered.get("head_repo") != GITHUB_REPO or recovered.get("url") != pr_url):
+                raise WorkflowError("PR receipt update outcome unavailable; do not push or repeat mutation")
+        else:
+            raise WorkflowError(result.get("stderr") or "PR receipt update failed")
+    return {"url": pr_url, "head_sha": old_head, "body_updated": updated}
+
+
 def _maybe_create_pr(
     *,
     bug_id: str,
@@ -16267,12 +16311,21 @@ def _maybe_create_pr(
         raise WorkflowError("validation evidence is required before push/create-pr automation")
     if pre_pr_gate["workflow_gate"] != "passed":
         raise WorkflowError("; ".join(pre_pr_gate["blocking"]))
+    existing_pr: dict[str, Any] | None = None
+    known_pr_url = str(_load_state(bug_id).get("pr_url") or "")
+    if known_pr_url and (push or create_pr):
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
+        expected_head = _git(["rev-parse", "HEAD"], cwd=REPO_ROOT).strip()
+        existing_pr = _sync_owned_pr_body(pr_url=known_pr_url, branch=branch,
+            body_path=REPO_ROOT / str(finish.get("pr_body_path")), expected_head=expected_head, before_push=push)
+        actions.append({"command": "sync owned PR receipts before push", "result": {"ok": True, **existing_pr}})
     if push:
         _check_pr_receipt_identity(finish, root=REPO_ROOT)
+        already_remote = bool(existing_pr and existing_pr.get("head_sha") == expected_head)
         actions.append(
             {
-                "command": f"git push -u origin {branch}",
-                "result": _execute_workflow_command(
+                "command": "reuse exact remote task HEAD; skip redundant git push" if already_remote else f"git push -u origin {branch}",
+                "result": {"ok": True, "already_pushed": True, "head_sha": expected_head} if already_remote else _execute_workflow_command(
                     bug_id,
                     ["git", "push", "-u", "origin", branch],
                     state="pushed",
@@ -16291,21 +16344,26 @@ def _maybe_create_pr(
         expected_head = str(head_result.get("stdout") or "").strip()
         if not head_result.get("ok") or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head):
             raise WorkflowError(head_result.get("stderr") or "cannot resolve source PR head SHA")
-        result = _create_pr_with_transport_fallback(
-            branch=branch,
-            base="main",
-            title=title,
-            body_path=body_path,
-            expected_head=expected_head,
-            root=REPO_ROOT,
-        )
+        if existing_pr:
+            _sync_owned_pr_body(pr_url=known_pr_url, branch=branch, body_path=body_path,
+                                expected_head=expected_head, before_push=False)
+            result = {"ok": True, "stdout": known_pr_url, "source": "github_rest_existing_owned_pr"}
+        else:
+            result = _create_pr_with_transport_fallback(
+                branch=branch,
+                base="main",
+                title=title,
+                body_path=body_path,
+                expected_head=expected_head,
+                root=REPO_ROOT,
+            )
         if not result.get("ok"):
             raise WorkflowError(result.get("stderr") or result.get("stdout") or "PR create failed")
         _append_event(
             bug_id,
-            event="command:gh_pr_create",
+            event="command:gh_pr_reuse" if existing_pr else "command:gh_pr_create",
             state="pr_opened",
-            command="gh pr create",
+            command="gh api owned PR readback" if existing_pr else "gh pr create",
             cwd=REPO_ROOT,
             result="ok",
             evidence={
@@ -16315,7 +16373,7 @@ def _maybe_create_pr(
             },
         )
         pr_url = str(result.get("stdout") or "").splitlines()[-1].strip()
-        actions.append({"command": "gh pr create", "result": result})
+        actions.append({"command": "reuse owned source PR" if existing_pr else "gh pr create", "result": result})
         _write_state(bug_id, state="pr_opened", branch=branch, pr_url=pr_url, next_actions=["watch_ci_before_merge"])
     ci_watch: dict[str, Any] | None = None
     if watch_ci:
@@ -17672,6 +17730,7 @@ def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
         "merge_commit": str(payload.get("merge_commit_sha") or "").strip() or None,
         "head_sha": str(head.get("sha") or "").strip(),
         "head_ref": str(head.get("ref") or "").strip(),
+        "head_repo": str((head.get("repo") or {}).get("full_name") or ""),
         "base_ref": str(base.get("ref") or "").strip(),
         "url": str(payload.get("html_url") or pr_url),
         "body": str(payload.get("body") or ""),
