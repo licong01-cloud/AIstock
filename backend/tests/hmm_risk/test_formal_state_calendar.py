@@ -15,6 +15,102 @@ from backend.services.hmm_risk import formal_state_calendar as subject
 from backend.services.hmm_risk import formal_state_model as numeric
 
 
+def _semantic_path(hard, *, positions=None, contract=numeric.L2_SEMANTIC_VERSION):
+    # Shape-only calendar fixture, never a production trading-calendar authority.
+    dates = [(date(2024, 7, 1) + timedelta(days=i)).isoformat() for i in range(181)] + ["2025-03-31"]
+    posterior = np.eye(3)[hard]
+    components = {
+        name: {"positions": list(range(182)), "values": (np.asarray(hard) * 0.01).tolist()}
+        for name in subject.COMPONENT_WEIGHTS
+    }
+    arguments = dict(dates=dates, positions=list(range(182)) if positions is None else positions, components=components)
+    return numeric.semantic_posterior_evidence(posterior, **arguments, contract_version=contract), posterior, arguments
+
+
+def test_l2_single_long_runs_keep_common_gates_actual_transitions_and_old_contract():
+    hard = [0] * 60 + [1] * 60 + [2] * 62
+    revised, _, _ = _semantic_path(hard)
+    old, _, _ = _semantic_path(hard, contract=numeric.CONTRACTS["semantic"])
+    assert revised["semantic_evidence_valid"] and not old["semantic_evidence_valid"]
+    assert revised["mapping"] == {"0": "fading", "1": "neutral", "2": "trending"}
+    assert [(s["incoming"], s["outgoing"]) for s in revised["states"]] == [(0, 1), (1, 1), (1, 0)]
+    assert all(s["structural_path"] == "persistent" for s in revised["states"])
+    assert revised["states"][0]["left_censored"] and revised["states"][2]["right_censored"]
+    assert all("structural_path" not in s for s in old["states"])
+    for key in ("count", "occupancy", "months", "incoming", "outgoing", "utility_mean", "utility_variance"):
+        assert [s[key] for s in old["states"]] == [s[key] for s in revised["states"]]
+
+
+def test_old_calendar_rejection_still_precedes_causal_filter(monkeypatch):
+    monkeypatch.setattr(numeric, "causal_filter", lambda *_: pytest.fail("invalid calendar reached filtering"))
+    with pytest.raises(numeric.FormalStateError, match="validation calendar"):
+        numeric.semantic_evidence(None, dates=[], positions=[], values=[], components={})
+
+
+@pytest.mark.parametrize("first,second,path", [(18, 2, "recurrent"), (19, 1, "persistent")])
+def test_l2_share_boundary_and_no_operator_path_choice(first, second, path):
+    hard = [1] * 30 + [0] * first + [2] * 40 + [0] * second
+    hard += [1] * (182 - len(hard))
+    result, _, _ = _semantic_path(hard)
+    assert result["states"][0]["structural_path"] == path
+    assert result["states"][0]["runs"] == 2
+
+
+def test_l2_internal_na_cannot_bridge_runs_or_claim_full_window_censor():
+    hard = [0] * 60 + [1] * 60 + [2] * 62
+    result, _, _ = _semantic_path(hard, positions=[p for p in range(182) if p not in {0, 30, 181}])
+    first, _, last = result["states"]
+    assert first["runs"] == 2 and first["max_run_share"] < 0.9
+    assert not first["left_censored"] and not last["right_censored"]
+    assert (first["incoming"], first["outgoing"]) == (0, 1)
+    assert first["incoming_required"] == 2
+    assert not result["semantic_evidence_valid"] and result["mapping"] is None
+
+
+@pytest.mark.parametrize("count", [1, 2, 3])
+def test_l2_persistent_never_repairs_singleton_or_rare_state(count):
+    result, _, _ = _semantic_path([0] * count + [1] * 90 + [2] * (92 - count))
+    assert result["states"][0]["structural_path"] is None
+    assert not result["semantic_evidence_valid"] and result["mapping"] is None
+    assert "hmm_risk_semantic_validation_state_count_insufficient" in result["reasons"]
+
+
+def test_l2_tie_unknown_contract_and_reinterpretation_identity_are_fail_closed(source, monkeypatch):
+    hard = [0] * 60 + [1] * 60 + [2] * 62
+    _, posterior, arguments = _semantic_path(hard)
+    posterior[60] = [0.5, 0.5, 0.0]
+    with pytest.raises(numeric.FormalStateError, match="tie"):
+        numeric.semantic_posterior_evidence(posterior, **arguments, contract_version=numeric.L2_SEMANTIC_VERSION)
+    with pytest.raises(numeric.FormalStateError, match="unknown semantic"):
+        numeric.semantic_posterior_evidence(posterior, **arguments, contract_version="unknown")
+    model, original_arguments = source
+    monkeypatch.setattr(model, "fit", lambda *_: pytest.fail("fit accessed"))
+    value = subject.evaluate_calendar_evidence(model, **original_arguments)
+    reinterpret_arguments = {k: v for k, v in original_arguments.items() if k != "processed_values"}
+    with pytest.raises(numeric.FormalStateError, match="identity"):
+        subject.reinterpret_l2_evidence(value, **reinterpret_arguments)
+
+
+def test_l2_pinned_evidence_reinterpretation_preserves_hashes_and_detects_rehashed_drift(source, monkeypatch):
+    model, arguments = source
+    hard = [0] * 60 + [1] * 60 + [2] * 62
+    posterior = np.eye(3)[hard]
+    arguments["selected_identity"] = {"family": "autocycle_all_core", "level": "L2", "sector": "801783.SI", "seed": 47}
+    monkeypatch.setattr(numeric, "causal_filter", lambda *_: posterior)
+    monkeypatch.setattr(model, "fit", lambda *_: pytest.fail("fit accessed"))
+    value = subject.evaluate_calendar_evidence(model, **arguments)
+    reinterpret_arguments = {k: v for k, v in arguments.items() if k != "processed_values"}
+    result = subject.reinterpret_l2_evidence(value, **reinterpret_arguments)
+    assert result["selected_model_parameter_sha256"] == value["selected_model_parameter_sha256"]
+    assert result["original_semantic_receipt_sha256"] == value["receipt_sha256"]
+    # Fixture utility is deliberately tied: structural repair must not fabricate mapping.
+    assert result["mapping"] is None
+    value["ledger"][10]["source_receipt_sha256"] = "c" * 64
+    value = numeric.receipt({k: v for k, v in value.items() if k != "receipt_sha256"})
+    with pytest.raises(numeric.FormalStateError, match="identity"):
+        subject.reinterpret_l2_evidence(value, **reinterpret_arguments)
+
+
 def test_fresh_process_uses_task_code_without_database_import():
     root = Path(__file__).resolve().parents[3]
     code = """
