@@ -150,13 +150,31 @@
     "hmm_risk_pr_slice"
   ],
   "risk_area": "bug",
+  "root_cause": "project_validation 将训练期 exact-zero 资格错误扩展为所有未来推断观测的门禁，违反已批准 D1-B §4：有限非零 inactive 观测只记诊断，固定19D mask永久不动态激活。真实801207.SI新观察中18日变为非零，原182日前缀仍为零。",
+  "formal_review": {
+    "round_1": "发现并修复训练/推断资格混淆，补充当前回放诊断的hash绑定和readback；2个直接测试RED后GREEN。",
+    "round_2": "复查训练exact-zero、完整20D有限值、mask/preprocess/model身份、未来因果边界、原posterior前缀和诊断漂移拒绝；没有剩余阻断finding。",
+    "design_compliance_001": {
+      "no_simplified_delivery": "PASS：保留131行业×221日，固定20D输入/19D模型，不缩窗、不剔除行业。",
+      "no_silent_errors": "PASS：非有限值、mask/hash漂移及诊断缺失/重复/错误均显式失败，不补零。",
+      "no_business_logic_drift": "PASS：仅恢复已批准D1-B推断规则；训练资格、特征、seed47、模型参数、预处理和projection不变。",
+      "no_unapproved_gates": "PASS：移除未经批准的未来非零阻断；持久化诊断不参与availability或效果promotion。"
+    },
+    "related_matrix": "rtk pytest backend/tests/hmm_risk/test_formal_state_model.py backend/tests/hmm_risk/test_formal_state_effect.py backend/tests/hmm_risk/test_formal_state_executor.py -q -p no:cacheprovider -> 103 passed",
+    "actual_request_prediction_smoke": "28951预测行、221个当前inactive诊断、18个真实非零；原182日posterior bitwise一致；模型/观测/request文件hash不变；fits=0、selection=false、target/tail未访问。"
+  },
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1717_smoke.py <task-worktree>; explicit task PYTHONPATH -> PASS; backend.routers.hmm_risk, backend.routers.health, formal_state_model/effect/executor imports; real prepared request prediction; 28951 rows, 221 inactive diagnostics, 18 finite nonzero; original prefix bitwise equal; model/input hashes unchanged; DB/fit/selection/outcome poison; zero fits, no target/tail/database/dataset/runtime action."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

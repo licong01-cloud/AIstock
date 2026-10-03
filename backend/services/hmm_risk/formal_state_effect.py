@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date
+import hashlib
 import math
 from typing import Any, Mapping, Sequence
 
@@ -17,6 +18,7 @@ from backend.services.hmm_risk.contracts import ALL_CORE_FEATURES, canonical_jso
 from backend.services.hmm_risk.formal_state_model import (
     FormalStateError,
     causal_filter,
+    preprocess_apply,
     project_validation,
     receipt,
     restore_model,
@@ -290,6 +292,7 @@ def predict(frozen: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[
     positions = {day: i for i, day in enumerate(dates)}
     scores_by_day = {day: {} for day in schedule["decisions"]}
     raw_rows = {}
+    inactive_receipts = []
     for code in frozen["catalog"]:
         item = frozen["models"][code]
         obs = observations["sectors"][code]
@@ -299,6 +302,10 @@ def predict(frozen: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[
         all_positions = item["prefix_positions"] + available_positions
         raw = np.asarray(item["prefix_values"] + obs["values"], dtype=np.float64)
         processed = project_validation(raw, frozen["preprocess"], item["projection"])
+        inactive = item["projection"]["inactive_feature_indices"]
+        full_processed = preprocess_apply(raw, frozen["preprocess"]) if inactive else None
+        observation_slots = {p: i for i, p in enumerate(all_positions)}
+        entry_hash = canonical_sha256(item) if inactive else None
         posterior = causal_filter(restore_model(item["model"]), all_positions, processed, len(dates))
         if not np.array_equal(posterior[: len(prefix)], np.asarray(item["prefix_posterior"])):
             raise fail(f"prefix changed after observation continuation: {code}", reason="prefix_mismatch")
@@ -306,6 +313,36 @@ def predict(frozen: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[
         for day in schedule["decisions"]:
             as_of = schedule["as_of"][day]
             p = positions[as_of]
+            if inactive and p in observation_slots:
+                slot = observation_slots[p]
+                for index in inactive:
+                    raw_value = float(raw[slot, index])
+                    transformed_value = float(full_processed[slot, index])
+                    inactive_receipts.append(
+                        receipt(
+                            {
+                                "schema_version": "hmm_risk_inactive_dimension_observation_receipt_v1",
+                                "model_set_id": frozen["receipt_sha256"],
+                                "model_entry_sha256": entry_hash,
+                                "projection_sha256": item["projection"]["receipt_sha256"],
+                                "family": "autocycle_all_core",
+                                "level": "L2",
+                                "sector_code": code,
+                                "trade_date": day,
+                                "as_of_date": as_of,
+                                "input_manifest_source_sha256": observations["receipt_sha256"],
+                                "feature_index": index,
+                                "feature_name": ALL_CORE_FEATURES[index],
+                                "raw_value_f64": raw_value,
+                                "preprocessed_value_f64": transformed_value,
+                                "raw_value_float64_sha256": _float64_sha256(raw_value),
+                                "preprocessed_value_float64_sha256": _float64_sha256(transformed_value),
+                                "raw_value_is_finite": True,
+                                "preprocessed_value_is_finite": True,
+                                "inactive_feature_observed_non_zero": raw_value != 0.0,
+                            }
+                        )
+                    )
             structural = observations["structural_membership"][as_of][code]
             if type(structural) is not bool:
                 raise fail("structural population is not boolean")
@@ -383,12 +420,17 @@ def predict(frozen: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[
             "model_set_sha256": frozen["receipt_sha256"],
             "observation_sha256": observations["receipt_sha256"],
             "predictions": predictions,
+            "inactive_dimension_observation_receipts": inactive_receipts,
             "fits": 0,
             "selection_performed": False,
             "target_accessed": False,
             "tail_accessed": False,
         }
     )
+
+
+def _float64_sha256(value: float) -> str:
+    return hashlib.sha256(np.asarray(value, dtype="<f8").tobytes()).hexdigest()
 
 
 def composite_outcomes(
@@ -772,6 +814,45 @@ def validate_acceptance(acceptance: Mapping[str, Any]) -> None:
         or {code for code, (mapping, _) in semantics.items() if mapping is None} != UNMAPPED
     ):
         raise fail("effect identity/model/mapping differs", reason="identity_mismatch")
+    diagnostics = identity["inactive_dimension_observation_receipts"]
+    keys = []
+    for item in diagnostics:
+        verify_receipt(item)
+        code, day = item["sector_code"], item["trade_date"]
+        raw, transformed = item["raw_value_f64"], item["preprocessed_value_f64"]
+        if (
+            item["schema_version"] != "hmm_risk_inactive_dimension_observation_receipt_v1"
+            or code != "801207.SI"
+            or day not in schedule["decisions"]
+            or item["as_of_date"] != schedule["as_of"][day]
+            or item["family"] != "autocycle_all_core"
+            or item["level"] != "L2"
+            or type(item["feature_index"]) is not int
+            or item["feature_index"] != 19
+            or item["feature_name"] != ALL_CORE_FEATURES[19]
+            or item["model_set_id"] != identity["frozen_model_set_sha256"]
+            or item["model_entry_sha256"] != identity["model_entry_sha256_by_sector"][code]
+            or item["projection_sha256"] != identity["projection_sha256_by_sector"][code]
+            or item["input_manifest_source_sha256"] != identity["observation_sha256"]
+            or any(
+                isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v)
+                for v in (raw, transformed)
+            )
+            or item["raw_value_is_finite"] is not True
+            or item["preprocessed_value_is_finite"] is not True
+            or item["raw_value_float64_sha256"] != _float64_sha256(raw)
+            or item["preprocessed_value_float64_sha256"] != _float64_sha256(transformed)
+            or item["inactive_feature_observed_non_zero"] is not (raw != 0.0)
+        ):
+            raise fail("inactive observation diagnostic identity/value differs", reason="identity_mismatch")
+        keys.append((code, day))
+    expected = sorted(
+        (row["sector_code"], row["trade_date"])
+        for row in acceptance["predictions"]
+        if row["sector_code"] == "801207.SI" and row["feature_eligible"]
+    )
+    if keys != expected:
+        raise fail("inactive observation diagnostic denominator/order differs", reason="identity_mismatch")
     daily = {}
     for row in acceptance["predictions"]:
         if row["trade_date"] not in schedule["decisions"] or row["as_of_date"] != schedule["as_of"].get(
