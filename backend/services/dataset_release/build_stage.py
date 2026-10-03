@@ -20,7 +20,7 @@ import psutil
 
 from backend.data_service.security_source_identity import MONEYFLOW_DATASET
 
-from .artifact_ready_build_source import ArtifactReadyBuildSource
+from .artifact_ready_build_source import ArtifactReadyBuildSource, ArtifactReadyPreparationBuildSource
 from .canonical import digest_named_fields, ensure_sha256, normalize_root_relative_path
 from .canonical_lineage import (
     CANONICAL_LINEAGE_CAPABILITY,
@@ -127,6 +127,9 @@ BUILD_STAGE_RESULT_SCHEMA = "dataset_release_build_stage_result_v1"
 BUILD_RESOURCE_RECEIPT_SCHEMA = "dataset_release_build_resource_receipt_v1"
 BUILD_PREPARE_RECEIPT_SCHEMA = "dataset_release_build_prepare_v1"
 BUILD_FINALIZE_RECEIPT_SCHEMA = "dataset_release_build_finalize_v1"
+PRIVATE_PREPARE_RECEIPT_SCHEMA = "aistock_monthly_private_build_prepare_v1"
+PRIVATE_FINALIZE_RECEIPT_SCHEMA = "aistock_monthly_private_build_finalize_v1"
+PRIVATE_STAGE_SCHEMA = "aistock_monthly_private_build_stage_v1"
 
 
 class CandidateBuildStageError(DatasetReleaseError):
@@ -392,13 +395,80 @@ def _validate_build_transition_preflight(invocation: BuildStageInvocation) -> No
         )
 
 
+def run_preparation_build_stage(
+    invocation: BuildStageInvocation,
+    *,
+    source: ArtifactReadyPreparationBuildSource,
+    checkpoint: Callable[[], None] = lambda: None,
+    component_completed: Callable[[Component, Mapping[str, Any]], None] | None = None,
+) -> Mapping[str, Any]:
+    """Private physical materialization; never a formal BUILD stage result."""
+    if (
+        not isinstance(source, ArtifactReadyPreparationBuildSource)
+        or invocation.stage not in {"prepare", "finalize-bins"}
+        or invocation.run_id != source.contract.get("operation_id")
+        or invocation.profile.profile != source.profile.profile
+        or invocation.plan.get("target_cutoff") != source.cutoff.isoformat()
+        or invocation.stage_timeout_seconds != invocation.profile.stage_timeouts_seconds["full_build"]
+        or invocation.staging_root.parent.name != ".staging"
+        or invocation.staging_root.parent.parent.resolve(strict=True) != invocation.candidate_root.resolve(strict=True)
+    ):
+        raise CandidateBuildStageError("private physical preparation binding differs")
+    _resolve_plain_directory(invocation.candidate_root, label="private preparation catalog")
+    _resolve_plain_directory(invocation.staging_root.parent, label="private preparation staging parent")
+    if invocation.staging_root.exists():
+        _assert_plain(invocation.staging_root)
+    selected = set(source.component_manifests)
+    if not selected or Component.FACTOR_H5_STATIC in selected:
+        raise CandidateBuildStageError("private physical component set is invalid")
+    _validate_build_transition_preflight(invocation)
+    actions = _actions(invocation.plan)
+    if any(actions[component] is not ComponentAction.FULL_REBUILD for component in selected):
+        raise CandidateBuildStageError("private preparation requires independent complete component output")
+    ledger = StageResourceReceipt(invocation)
+    evidence = (
+        _prepare(
+            invocation,
+            ledger=ledger,
+            checkpoint=checkpoint,
+            private_source=source,
+            component_completed=component_completed,
+        )
+        if invocation.stage == "prepare"
+        else _finalize(
+            invocation,
+            ledger=ledger,
+            checkpoint=checkpoint,
+            private_source=source,
+            component_completed=component_completed,
+        )
+    )
+    return {
+        "schema_version": PRIVATE_STAGE_SCHEMA,
+        "operation_id": invocation.run_id,
+        "attempt_id": invocation.attempt_id,
+        "attempt_fence": invocation.attempt_fence,
+        "stage": invocation.stage,
+        "status": "MATERIALIZED_UNPUBLISHED",
+        "components": sorted(component.value for component in selected),
+        "preparation_artifact_ref": source.contract_ref.as_dict(),
+        "publication_allowed": False,
+        "resource_receipt": ledger.finish(),
+        **evidence,
+        "safety": dict(_ZERO_SAFETY),
+    }
+
+
 def _prepare(
     invocation: BuildStageInvocation,
     *,
     ledger: StageResourceReceipt,
     checkpoint: Callable[[], None],
+    private_source: ArtifactReadyPreparationBuildSource | None = None,
+    component_completed: Callable[[Component, Mapping[str, Any]], None] | None = None,
 ) -> Mapping[str, Any]:
     actions = _actions(invocation.plan)
+    selected = set(Component) if private_source is None else set(private_source.component_manifests)
     unsupported = {
         component: action
         for component, action in actions.items()
@@ -411,16 +481,35 @@ def _prepare(
     if staging.exists():
         raise CandidateBuildStageError("new fenced prepare staging already exists")
     staging.mkdir(parents=True, exist_ok=False)
-    source, pit = _build_source(invocation)
+    source, pit = _build_source(invocation) if private_source is None else (private_source, private_source.pit_snapshot)
+    adopted = {}
+    preparation_identity = invocation.plan.get("preparation_predecessor_profile_sha256")
+    if preparation_identity is not None:
+        ensure_sha256(preparation_identity, field="preparation predecessor profile")
+    if private_source is None and preparation_identity is not None:
+        # Import locally: the private executor also composes these mature
+        # stages. Full _build_source has already validated the complete graph.
+        from .monthly_preparation_executor import adopt_prepared_physical_components
+
+        adopted = adopt_prepared_physical_components(invocation, source=source, checkpoint=checkpoint)
+    elif private_source is not None and preparation_identity is not None and Component.DOMESTIC_INDEX_CONTEXT in selected:
+        from .monthly_preparation_executor import reuse_private_index_dependency
+
+        dependency = reuse_private_index_dependency(invocation, source=private_source, checkpoint=checkpoint)
+        if dependency is not None:
+            adopted[Component.DOMESTIC_INDEX_CONTEXT] = dependency
     toolchain = invocation.profile.qlib_toolchain.build_verified(invocation.project_root)
     trading_days = source.trading_days()
-    index_source = _FrozenIndexSource(
-        trading_days=trading_days,
-        rows=tuple(source.index_rows()),
-    )
+    if Component.DAILY_BIN in selected and Component.DOMESTIC_INDEX_CONTEXT not in selected:
+        raise CandidateBuildStageError("private daily preparation requires its index CSV dependency")
     reuse_refs: dict[str, CASRef] = {}
     index_action = actions[Component.DOMESTIC_INDEX_CONTEXT]
-    if index_action is ComponentAction.FULL_REBUILD:
+    if Component.DOMESTIC_INDEX_CONTEXT not in selected:
+        index_payload = None
+    elif Component.DOMESTIC_INDEX_CONTEXT in adopted:
+        index_payload = _existing_index_receipt(staging)
+    elif index_action is ComponentAction.FULL_REBUILD:
+        index_source = _FrozenIndexSource(trading_days=trading_days, rows=tuple(source.index_rows()))
         index_receipt = IndexContextMaterializer(index_source, definitions=invocation.profile.indices).materialize(
             staging / "index_context",
             cutoff=pit.cutoff,
@@ -432,6 +521,7 @@ def _prepare(
         reuse_refs[Component.DOMESTIC_INDEX_CONTEXT.value] = invocation.cas.put_json(receipt)
         index_payload = _existing_index_receipt(staging)
     else:
+        index_source = _FrozenIndexSource(trading_days=trading_days, rows=tuple(source.index_rows()))
         index_receipt, receipt = _patch_index_component(
             invocation,
             source=index_source,
@@ -439,16 +529,40 @@ def _prepare(
         )
         reuse_refs[Component.DOMESTIC_INDEX_CONTEXT.value] = invocation.cas.put_json(receipt)
         index_payload = _index_receipt_payload(index_receipt, staging=staging)
-    ledger.chunk("index-context")
-    refs: dict[str, CASRef] = {
-        "index_receipt": invocation.cas.put_json(index_payload),
-        "index_materialization_receipt_file": invocation.cas.put_json(
-            _load_component_json(staging / "index_context" / "index_materialization_receipt.json")
-        ),
-        **{f"reuse_{key}": value for key, value in reuse_refs.items()},
-    }
+    refs: dict[str, CASRef] = {f"reuse_{key}": value for key, value in reuse_refs.items()}
+    refs.update(
+        {
+            f"prepared_adoption_{component.value}": invocation.cas.put_json(receipt)
+            for component, receipt in adopted.items()
+        }
+    )
+    if index_payload is not None:
+        ledger.chunk("index-context")
+        refs.update(
+            {
+                "index_receipt": invocation.cas.put_json(index_payload),
+                "index_materialization_receipt_file": invocation.cas.put_json(
+                    _load_component_json(staging / "index_context" / "index_materialization_receipt.json")
+                ),
+            }
+        )
+        if component_completed is not None:
+            component_completed(
+                Component.DOMESTIC_INDEX_CONTEXT,
+                {
+                    "domain_receipt_ref": refs["index_receipt"].as_dict(),
+                    "materialization_receipt_ref": refs["index_materialization_receipt_file"].as_dict(),
+                },
+            )
     dump_operations: list[dict[str, Any]] = []
-    if actions[Component.DAILY_BIN] is ComponentAction.REUSE:
+    if Component.DAILY_BIN not in selected:
+        pass
+    elif Component.DAILY_BIN in adopted:
+        refs["daily_reuse_receipt"] = invocation.cas.put_json(
+            _load_component_json(staging / "daily_bin" / "materialization_receipt.json")
+        )
+        ledger.chunk("daily-prepared-adoption")
+    elif actions[Component.DAILY_BIN] is ComponentAction.REUSE:
         receipt = _clone_reused_component(invocation, Component.DAILY_BIN)
         refs["daily_reuse_receipt"] = invocation.cas.put_json(
             _load_component_json(staging / "daily_bin" / "materialization_receipt.json")
@@ -546,7 +660,14 @@ def _prepare(
         refs["daily_transform_metrics"] = invocation.cas.put_json(daily_metrics.as_dict())
         dump_operations.append(daily_operation)
         ledger.chunk("daily-csv")
-    if actions[Component.MINUTE_BIN] is ComponentAction.REUSE:
+    if Component.MINUTE_BIN not in selected:
+        pass
+    elif Component.MINUTE_BIN in adopted:
+        refs["minute_reuse_receipt"] = invocation.cas.put_json(
+            _load_component_json(staging / "minute_bin" / "materialization_receipt.json")
+        )
+        ledger.chunk("minute-prepared-adoption")
+    elif actions[Component.MINUTE_BIN] is ComponentAction.REUSE:
         receipt = _clone_reused_component(invocation, Component.MINUTE_BIN)
         refs["minute_reuse_receipt"] = invocation.cas.put_json(
             _load_component_json(staging / "minute_bin" / "materialization_receipt.json")
@@ -649,7 +770,9 @@ def _prepare(
         refs["minute_transform_metrics"] = invocation.cas.put_json(minute_metrics.as_dict())
         dump_operations.append(minute_operation)
         ledger.chunk("minute-csv")
-    if actions[Component.FACTOR_H5_STATIC] is ComponentAction.REUSE:
+    if Component.FACTOR_H5_STATIC not in selected:
+        factor_receipt = None
+    elif actions[Component.FACTOR_H5_STATIC] is ComponentAction.REUSE:
         receipt = _clone_reused_component(invocation, Component.FACTOR_H5_STATIC)
         factor_receipt = _load_component_json(staging / "factor_bundle" / "factor_checkpoint.json")
         refs["reuse_factor_h5_static"] = invocation.cas.put_json(receipt)
@@ -701,16 +824,26 @@ def _prepare(
             checkpoint=checkpoint,
         )
         refs["reuse_factor_h5_static"] = invocation.cas.put_json(factor_adoption)
-    refs["factor_receipt"] = invocation.cas.put_json(factor_receipt)
-    ledger.chunk("factor-bundle")
+    if factor_receipt is not None:
+        refs["factor_receipt"] = invocation.cas.put_json(factor_receipt)
+        ledger.chunk("factor-bundle")
     prepare_receipt = invocation.cas.put_json(
         {
-            "schema_version": BUILD_PREPARE_RECEIPT_SCHEMA,
+            "schema_version": BUILD_PREPARE_RECEIPT_SCHEMA
+            if private_source is None
+            else PRIVATE_PREPARE_RECEIPT_SCHEMA,
             "profile": invocation.profile.profile,
             "cutoff": pit.cutoff.isoformat(),
             "pit_snapshot_digest": pit.spans_sha256,
-            "artifact_ready_content_root": source.artifact_ready_content_root,
-            "actions": {component.value: action.value for component, action in actions.items()},
+            "artifact_ready_content_root": source.artifact_ready_content_root if private_source is None else None,
+            **(
+                {"preparation_artifact_ref": private_source.contract_ref.as_dict(), "publication_allowed": False}
+                if private_source is not None
+                else {}
+            ),
+            "actions": {
+                component.value: action.value for component, action in actions.items() if component in selected
+            },
             "refs": {key: value.as_dict() for key, value in refs.items()},
             "safety": dict(_ZERO_SAFETY),
         }
@@ -730,11 +863,20 @@ def _finalize(
     *,
     ledger: StageResourceReceipt,
     checkpoint: Callable[[], None],
+    private_source: ArtifactReadyPreparationBuildSource | None = None,
+    component_completed: Callable[[Component, Mapping[str, Any]], None] | None = None,
 ) -> Mapping[str, Any]:
-    source, pit = _build_source(invocation)
+    source, pit = _build_source(invocation) if private_source is None else (private_source, private_source.pit_snapshot)
+    selected = set(Component) if private_source is None else set(private_source.component_manifests)
     del source
     prepare_stage = _prerequisite_json(invocation, "prepare")
     prepare = _cas_json(invocation.cas, prepare_stage.get("prepare_receipt_ref"))
+    if private_source is not None and (
+        prepare.get("schema_version") != PRIVATE_PREPARE_RECEIPT_SCHEMA
+        or prepare.get("preparation_artifact_ref") != private_source.contract_ref.as_dict()
+        or prepare.get("publication_allowed") is not False
+    ):
+        raise CandidateBuildStageError("private prepare receipt identity differs")
     refs = prepare.get("refs")
     if not isinstance(refs, Mapping):
         raise CandidateBuildStageError("prepare receipt refs are missing")
@@ -745,7 +887,9 @@ def _finalize(
         (Component.DAILY_BIN, "daily_bin", "daily"),
         (Component.MINUTE_BIN, "minute_bin", "minute"),
     ):
-        if actions[component] is ComponentAction.REUSE:
+        if component not in selected:
+            continue
+        if actions[component] is ComponentAction.REUSE or f"prepared_adoption_{component.value}" in refs:
             receipt = _cas_json(invocation.cas, refs[f"{operation_id}_reuse_receipt"])
             finalized[operation_id] = invocation.cas.put_json(receipt)
             ledger.chunk(f"finalize-{operation_id}-reuse")
@@ -831,12 +975,18 @@ def _finalize(
         _remove_owned_scratch(invocation.staging_root / dataset, ".writer-private")
         finalized[operation_id] = invocation.cas.put_json(receipt)
         ledger.chunk(f"finalize-{operation_id}")
+        if component_completed is not None:
+            component_completed(component, {"domain_receipt_ref": finalized[operation_id].as_dict()})
     preparation_receipts: dict[str, CASRef | None] = {}
     materialization_file_receipts: dict[str, CASRef] = {}
     for operation_id, dataset in (
         ("daily", "daily_bin"),
         ("minute", "minute_bin"),
     ):
+        if (Component.DAILY_BIN not in selected and operation_id == "daily") or (
+            Component.MINUTE_BIN not in selected and operation_id == "minute"
+        ):
+            continue
         path = invocation.staging_root / dataset / "csv_preparation_receipt.json"
         preparation_receipts[operation_id] = (
             invocation.cas.put_json(_load_component_json(path)) if path.is_file() else None
@@ -844,6 +994,19 @@ def _finalize(
         materialization_file_receipts[operation_id] = invocation.cas.put_json(
             _load_component_json(invocation.staging_root / dataset / "materialization_receipt.json")
         )
+    if private_source is not None:
+        final_ref = invocation.cas.put_json(
+            {
+                "schema_version": PRIVATE_FINALIZE_RECEIPT_SCHEMA,
+                "profile": invocation.profile.profile,
+                "cutoff": pit.cutoff.isoformat(),
+                "preparation_artifact_ref": private_source.contract_ref.as_dict(),
+                "component_receipts": {key: ref.as_dict() for key, ref in finalized.items()},
+                "publication_allowed": False,
+                "safety": dict(_ZERO_SAFETY),
+            }
+        )
+        return {"finalize_receipt_ref": final_ref.as_dict()}
     index_manifest = produce_index_context_candidate_manifest(
         candidate_root=invocation.staging_root,
         profile=invocation.profile,
