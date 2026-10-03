@@ -196,6 +196,7 @@ def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_pa
         "backend/tests/test_aistock_guardrail_scan.py",
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_issue_workflow_task_root.py",
     ]
 
 
@@ -954,6 +955,7 @@ def test_validation_mcp_issue_files_use_focused_workflow_lane(tmp_path: Path) ->
     assert payload["workflow_test_targets"] == [
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        "backend/tests/scripts/test_issue_workflow_task_root.py",
     ]
 
 
@@ -2036,6 +2038,7 @@ def test_workflow_sources_select_only_their_direct_test_targets(tmp_path: Path) 
 
     assert payload["workflow_test_targets"] == [
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_issue_workflow_task_root.py",
         "backend/tests/scripts/test_issue_flow.py",
         "backend/tests/scripts/test_issue_flow_pr_quality.py",
         "backend/tests/scripts/test_ci_change_classifier.py",

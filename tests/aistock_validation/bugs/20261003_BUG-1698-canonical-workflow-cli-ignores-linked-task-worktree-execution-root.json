@@ -3,6 +3,9 @@
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
     "backend/tests/scripts/test_issue_workflow_task_root.py",
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20261003_BUG-1698-canonical-workflow-cli-ignores-linked-task-worktree-execution-root.json"
   ],
   "assigned_agent": null,
