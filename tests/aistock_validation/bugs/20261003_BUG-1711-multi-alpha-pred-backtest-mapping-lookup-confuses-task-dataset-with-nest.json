@@ -107,8 +107,8 @@
   },
   "first_seen_at": "2026-10-03T17:55:12.911934Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a0062f929528f5b88f3a92027399a7c30c908bdb",
+  "fixed_at": "2026-10-03T18:40:27Z",
   "github_issue_number": 5386,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5386",
   "last_seen_at": "2026-10-03T17:55:12.911934Z",
@@ -116,6 +116,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5389",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -141,6 +142,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -152,7 +154,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1711",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "84bb8012895518b5",
+    "recorded_at": "2026-10-03T18:41:00.085670Z",
+    "runtime_contract_digest": "1db464dc1064ba85837d4ab3ccf2f37b7336c4f500fba4cef87631bcf92913a0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "13ceb54bd148f804e95abd5ee2b08dac0b403064",
+    "source_merge_commit": "a0062f929528f5b88f3a92027399a7c30c908bdb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5389",
+    "validation_evidence": [
+      "validation-receipt: id=bd437c67316ed798 commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=pytest plan=direct status=passed command=`pytest backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py -q --basetemp X:/AIstock_temp/qe/BUG-1711/sync-head` result=`7 passed via RTK`",
+      "validation-receipt: id=c4c0e5601cfa9ffa commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/multi_alpha/combine_backtest.py backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py tests/aistock_validation/bugs/20261003_BUG-1711-multi-alpha-pred-backtest-mapping-lookup-confuses-task-dataset-with-nest.json` result=`passed blocking=0`",
+      "validation-receipt: id=3a90b399f1d44cf1 commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=ruff plan=direct status=passed command=`ruff check backend/services/multi_alpha/combine_backtest.py backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py` result=`passed via RTK`",
+      "validation-receipt: id=33345e288c40e756 commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/multi_alpha/combine_backtest.py backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py` result=`passed`",
+      "validation-receipt: id=0fd150797fca4a2e commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed via RTK`"
+    ],
+    "validation_evidence_digest": "f2eb897515fa90899911c23680d958fa29c269991d3c1ddf42652aee5d9efa7b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -161,6 +188,13 @@
     "fingerprint": "3dadf9ae512bc3f475fc7e8c",
     "source_event_id": "FE-20261003-3dadf9ae512b"
   },
+  "validation_evidence": [
+    "validation-receipt: id=bd437c67316ed798 commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=pytest plan=direct status=passed command=`pytest backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py backend/tests/multi_alpha/test_sector_risk_overlay_pred_backtest.py -q --basetemp X:/AIstock_temp/qe/BUG-1711/sync-head` result=`7 passed via RTK`",
+    "validation-receipt: id=c4c0e5601cfa9ffa commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/multi_alpha/combine_backtest.py backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py tests/aistock_validation/bugs/20261003_BUG-1711-multi-alpha-pred-backtest-mapping-lookup-confuses-task-dataset-with-nest.json` result=`passed blocking=0`",
+    "validation-receipt: id=3a90b399f1d44cf1 commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=ruff plan=direct status=passed command=`ruff check backend/services/multi_alpha/combine_backtest.py backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py` result=`passed via RTK`",
+    "validation-receipt: id=33345e288c40e756 commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/multi_alpha/combine_backtest.py backend/tests/multi_alpha/test_pred_backtest_conf_mapping.py` result=`passed`",
+    "validation-receipt: id=0fd150797fca4a2e commit=13ceb54bd148f804e95abd5ee2b08dac0b403064 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed via RTK`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
