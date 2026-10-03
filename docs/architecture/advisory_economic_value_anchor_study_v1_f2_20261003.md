@@ -1,6 +1,7 @@
 # Advisory H-VALUE-ANCHOR-1 一次D-only价值研究切片（F2）
 
 > 日期2026-10-03；v0.1；源码交付范围为一次固定离线研究，非每日业务/正式模型启用。父[F2设计](advisory_economic_value_anchor_v1_f2_design_20261003.md)与[内核F1](advisory_economic_value_anchor_kernel_v1_f1_20261003.md)已分别经#5344/#5346合入。
+> 最新接续：源码PR #5347已通过CI37115926268并合入3e20e922d5922838cccc9de99cfa0f4e3df9318b；run `advvalue_a4bc66a30cfa7d9d5078850c`已完成两头及三臂，结果为STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION；经济确认/启用仍0，详见末节。原源码矩阵不代替经济证据。
 
 ## Background / 当前事实
 
@@ -73,3 +74,9 @@ train/validation按label_information_end purge，两头同一eligible交集；AV
 ## Rollout / Rollback / Production Gates
 
 纯离线显式入口，无router/scheduler默认路由变化，源码合入可离线执行但不证明后端已加载。旧生产功能不变，只有值得继续的模型才另设计consumer scope及confirmation。runtime/profile/binding/DDL/DML/依赖/进程全noop，后端重启用户负责。DESIGN-COMPLIANCE-001四项为范围内真实源码、未知不伪成功、固定合同不事后放宽、无新平台/日期/旧证据门禁。
+
+## 本次真实研究结果
+
+386D/7720原候选完整保留，7699新标签可用/21未知，4250/1622共同train/validation；test监督1521仅为purge后的计数，实际模型评价仍保留全部81D/1620候选。prepare15.163秒、fit0.880秒（含源核验）、fit＋评价12.169秒，一配置两头一次；前后QE7项活动状态0，端点和持有mark核验三臂均无问题。
+
+新场景同100日baseline/constant/model名义收益21.3220%/25.4597%/17.4642%；模型相对常数/基线日增量-6.9022/-3.4196bps，描述性区间均跨零。模型81 TAKE＋3 UNKNOWN控制episode、相对常数进入不同58日，非恒等输出，但增量未通过。固定停止当前candidate，不事后回选常数规则或追加模型/阈值/窗口，不建daily family，不激活。完整数值与原生身份限制见蓝图§1.3；此段不修改事前合同。
