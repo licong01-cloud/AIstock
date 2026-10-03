@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1710",
-  "closed_at": null,
+  "closed_at": "2026-10-03T18:55:18.953780Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -146,10 +146,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/hmm_l2_effect_20261003/BUG1710-post-restart.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1710",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_rotation_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b99dd9080153762523fe5e2c761c4d7badd6c89331b062f5807c96b665623e48",
+      "contract_digest": "a58f2386cbc41e16fdd645269cd5e80f64f4543c61df4d94612ca20006e53607",
+      "expected_identity": "c90aa3f5dbc5a0ba47d437aed3144d553f55d5ed",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-03T18:53:42.471403Z",
+      "mode": "read_only",
+      "observed_identity": "a0062f929528f5b88f3a92027399a7c30c908bdb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0ed4da8c90e4621862620b8e17739370c418fe4d248a3f823f17b78a37f4540e",
+      "receipt_sha256": "3a21dfc7e94fc50de8d14af96b993c745c0a4bf47761e2108b56eb0f178fc871",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c2175c72501b89b0775d320ad2909d2fe4a6b862642068067f434f46caa8da74",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -180,7 +202,7 @@
     ],
     "validation_evidence_digest": "a9dabd48acbfb521b051eaf92065c69c6c7f07467bc8a602e6d866aaa7384082"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -190,7 +212,8 @@
     "source_event_id": "FE-20261003-6acb23a0fce9"
   },
   "validation_evidence": [
-    "validation-receipt: id=aa9bb41635ee03ad commit=fe26496e528a22e33ff002dd787b0ae28a8fa32f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`"
+    "validation-receipt: id=aa9bb41635ee03ad commit=fe26496e528a22e33ff002dd787b0ae28a8fa32f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1710 --target backend-main --expected-identity c90aa3f5dbc5a0ba47d437aed3144d553f55d5ed -> verified; identity and business smoke passed"
   ],
   "verification_budget": {
     "budget": "standard",
