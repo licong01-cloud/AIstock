@@ -1,8 +1,8 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.95
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.96
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-04
-> 本版方向：业务目标、六层架构及Advisory/QE所有权不变。R1/#5388及R2设计#5395/三模型源码#5404均已合入并清理；R2三candidate/11fit+1索引完整运行，各停止精确候选，经济确认/启用仍0。当前继续[动态板块M1新信息设计](advisory_sector_dynamic_price_value_v1_f2_design_20261004.md)：已找到SW2021显式结构码对照及绑定H5报价，仍须严格D分类与完整日历/源身份放行，M1源码/fit尚0。单候选或一批负结果不结束48小时任务；源不成立只暂停该项，继续下一真正新增信息设计，不再同13D反复换算法。旧参数/结果不改判、不回选matched或补证救活。R2三路线实际结果见[多模型R2 F2](advisory_price_research_campaign_r2_f2_design_20261004.md)§17；当前队列§16.6，§16.5为已完成R1历史事实。
+> 本版方向：业务目标、六层架构及Advisory/QE所有权不变。R1/#5388及R2设计#5395/三模型源码#5404均已合入并清理；R2三candidate/11fit+1索引完整运行，各停止精确候选，经济确认/启用仍0。[动态板块M1设计](advisory_sector_dynamic_price_value_v1_f2_design_20261004.md)#5411已合入/清理，三叶源码及公共四臂helper已实现并多轮自审；7720原候选/50180板块日/id报价的完整prepare通过，新增块3505可用、3991分类或映射未知、224warmup。M1正式fit0，拟合前QE multi-alpha running2，按互斥合同等待空闲；同时继续下一真正新增信息设计，整轮不停。不将源码/来源通过当经济确认。旧参数/结果不改判、不回选matched或补证救活。R2三路线实际结果见[多模型R2 F2](advisory_price_research_campaign_r2_f2_design_20261004.md)§17；当前队列§16.6，§16.5为已完成R1历史事实。
 > 本轮最新事实：[H-VALUE-ANCHOR-1](advisory_economic_value_anchor_v1_f2_design_20261003.md)已完成设计、内核及一次同场景三臂研究，run=`advvalue_a4bc66a30cfa7d9d5078850c`。基线/常数锚/D模型在100共同估值日名义净收益`21.3220%/25.4597%/17.4642%`；D模型减常数/减基线日增量`-6.9022/-3.4196bps`，两个描述性区间均跨零。虽模型MDD/胜率改善且有58个实际进入差异日，仍未满足预注册收益条件，停止当前candidate，不回选常数控制、调整阈值/期限/seed或扩窗补证。独立VALUE_REVIEW_5_V1未改变生产退出，不能与旧19.17%跨场景判胜；经济确认/ENTRY_VALUE启用仍0。设计#5344及内核#5346已合入；研究源码#5347的合入状态见§16。
 > 上一轮H-TIMING-1事实：计算/来源PR #5331已合入`592fd305f9147ddfc3eaf87b8bed52d905352bed`；一次配对研究已完成，run=`advtiming_cd2ddd9832129255c14f9a80`。新15字段/同核13字段/原基线在100共同估值日的成本后名义收益分别`3.0673%/1.6174%/19.1729%`；新增两量相对控制日增量`+1.0789bps`，但相对基线`-15.0261bps`，未满足预注册的两个正增量条件，停止当前candidate、不进入消费者接入或确认。研究源码PR #5336已通过CI并合入`5ec8c8e2d1deee16a5587afd604d61481162669e`；工程交付、研究结果、经济确认和生产启用分报。下列2026-10-02及较早2026-10-03接续段是历史实施检查点，其待办只以§16的最新队列为准。
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
@@ -2014,7 +2014,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | 优先级 | 直接业务交付 | 禁止绕行及完成边界 |
 |---|---|---|
 | 已完成 / R2三路线源码交付 | 设计#5395及源码#5404均合入/自身清理；15测试、三次真实四臂及11fit+1索引已完成 | 三candidate均负向停止，不回选matched或补证；经济确认/启用0，QE/DB/runtime不动 |
-| P1 / M1动态板块子设计与源码 | [动态板块M1 F2设计](advisory_sector_dynamic_price_value_v1_f2_design_20261004.md)固定sector_ret5/vol20/relative三个字段（两个独立信息），13/16同GBDT matched及4fit；先设计审核合入再实现 | 结构map与严格D成员知晓分开，原3977 UNKNOWN不解锁；尚须全窗prepare验证，不将两D读法或当前SW2021表当历史native COMPLETE |
+| P1 / M1动态板块研究待闲时执行 | [动态板块M1 F2设计](advisory_sector_dynamic_price_value_v1_f2_design_20261004.md)#5411已合入/清理，三叶源码及公共四臂helper已实现；7720完整prepare通过，固定13/16同GBDT及4fit | 正式fit0，QE multi-alpha running2时不训练；原3977知晓UNKNOWN及池外14不解锁，当前3505可用/224warmup，不冒称原生或经济COMPLETE |
 | P2 / 下一新信息可识别性设计 | [M5选股状态持续性设计](advisory_selection_state_price_value_v1_f2_design_20261004.md)#5415已合入；3个D历史字段/13vs16同核/4fit及累计19上限。独立树可在M1等待时预备实现和合成测试，不改M1冻结树；M1真实阻断或负向及源码交付后才登记/运行 | 当前纯D状态及plan候选已实现，完整模型/编排/研究未完成；不读取真实收益作准备、不重复旧研究。M1正导航先确认设计，不默认继续搜索；不盲加模型或开启QE上游线，trial计数不清零 |
 | P3 / 有条件确认与交付 | 仅幸存新候选另立一次未消费历史确认设计；来源/确认达标后接入真实recipe的每日消费者/API/UI，生产启用独立处理 | 本轮不读sealed/新holdout、不按开发最大净值宣布赢家；旧失败不进入此项，既有#5324工程不重复验收 |
 | P4 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
@@ -2112,7 +2112,7 @@ G1必须在拟合前给出明确数字：连续切分边界、实际fit总数、
 
 ### 16.6 当前R2：连续不同条件价格模型（2026-10-04）
 
-用户新授权48小时预算`2026-10-04 02:36～2026-10-06 02:36 Asia/Shanghai`。这是同一价格业务主线内的串行多假设，不是六条并行项目或无限调参。详见[R2 F2详细设计](advisory_price_research_campaign_r2_f2_design_20261004.md)§17。设计#5395已合入/清理；M2/M3/M4均已完整运行，三candidate/11物理fit/一索引、0selected，源码PR #5404交付。三者真实TAKE81/89/78，净增量均不达标，停止各精确candidate；整轮继续M1来源及真正新增信息设计，不再同13D反复换算法。M1尚未取得完整来源放行，不能把来源可行性当模型通过。
+用户新授权48小时预算`2026-10-04 02:36～2026-10-06 02:36 Asia/Shanghai`。这是同一价格业务主线内的串行多假设，不是六条并行项目或无限调参。详见[R2 F2详细设计](advisory_price_research_campaign_r2_f2_design_20261004.md)§17。设计#5395已合入/清理；M2/M3/M4均已完整运行，三candidate/11物理fit/一索引、0selected，源码PR #5404交付。三者真实TAKE81/89/78，净增量均不达标，停止各精确candidate；整轮继续M1及真正新增信息设计，不再同13D反复换算法。M1完整prepare已通过，但正式fit待QE空闲，不能把来源或源码通过当模型通过。
 
 | 顺序 | 路线 | 唯一比较与阶段边界 |
 |---|---|---|
@@ -2120,7 +2120,7 @@ G1必须在拟合前给出明确数字：连续切分边界、实际fit总数、
 | 已完成1 | M2 H-NONLINEAR-PRICE-2 | 4fit/完整四臂；减baseline/matched日-5.0797/-14.9636bps、真实TAKE81，净增量/MDD门失败；已接续M3 |
 | 已完成2 | M3 H-HURDLE-PRICE-2 | 5fit/完整四臂；日-7.2904/-7.8016bps、真实TAKE89，净增量/尾损门失败；已接续M4 |
 | 已完成3 | M4 H-LOCAL-DISTRIBUTION-2 | 2fit+1索引/完整四臂；日-5.7956/-0.7159bps、真实TAKE78，净增量门失败；继续下一新信息设计 |
-| 当前接续 | M1 H-SECTOR-DYNAMIC-2 | 独立子设计规定SW2021显式结构map、严格D行业、profile绑定H5板块报价；新增3字段/2独立信息，13/16 GBDT四头，整个R2最多15fit+1索引；代码/M1fit尚0 |
+| 当前接续 | M1 H-SECTOR-DYNAMIC-2 | #5411设计已合入/清理；三叶源码及公共helper已实现，完整prepare7720键/50180报价/3505新增块AVAILABLE；13/16 GBDT四头、R2累计15fit+1索引不改，当前正式fit0，等待QE公开空闲 |
 | 后续 | 一次独立确认设计 | 开发候选须相对baseline/matched均过净增量、风险与真实干预/TAKE支持门；仍NAVIGATION_ONLY，不能自动绑定或消费sealed |
 
 每个run的baseline/±300bps规则/matched/candidate全人口同日历；UNKNOWN研究控制贡献独立，非模型TAKE。停止门及数值由详细设计§8先冻结，未过者仅结束自身lineage，不追加旧失败证据。所有实际fit、工程失败和已消费窗口进入最小现有registry及campaign总账；纯JSON模型parity、完整端点/持仓mark与真实maturity保持fail-closed。不为探索正点估计声称DSR/PBO确认。
@@ -2133,6 +2133,6 @@ G1必须在拟合前给出明确数字：连续切分边界、实际fit总数、
 
 #5404最终HEAD80e924298a351d9e16e73d2096ae4ff48a568af1，CI37148272127 SUCCESS后合入5f122f22a5a545f28d2ed80117d52be88e9fc0d2，官方cleanup_done/warnings0。真实fit源码仍1a66ca00067df22eb55a22ad6e8c5673eb61c9d0，后续仅文档更新，不冒称用新HEAD重训。三candidate/11fit+1索引/0selected，原386D/7720键完整，新共同监督4049train/1591val，已消费test完整81D/1620候选/100估值日，不与旧R1监督混用；详细三路线负结果见R2设计§17。源/研发交付不代表收益确认或ENTRY_VALUE启用。
 
-M1可行性来源新增事实：只读market.sw_index_classify有134个L2 SW2021唯一显式pair，官方标准表同样区分行业码/指数码；表无时态列，不作为历史成员知晓证据。profile原生sector pins绑定H5 sha575ad57d...；两训练D（2024-07-04/05）只读5706行/130 id，日/id重复报价一致。新设计要求严格原D分类、版本化结构关系验证、完整21交易日板块close，当前H5的instrument归属不被消费，未知/未发布/warmup仍保留。不需要外部“行业窗口”、新数据激活或修改公共模块；如果完整来源合同不成立只暂停M1，继续真正新信息设计。
+M1当前来源事实：只读market.sw_index_classify的134个L2 SW2021唯一显式pair与官方2021标准表精确一致；表无时态列，不作为历史成员知晓证据。profile绑定H5 sha575ad57d...，正式prepare（advsectorvalue_d22f697febf9d36f501e1216）保留7720键，验证50180日/id报价重复冲突0，3505 AVAILABLE/3991分类或映射UNKNOWN/224warmup；原严格可知3729=3505+224，原未知3977及池外14均不升级。完整21交易日板块close单位/样本std固定，H5的instrument历史归属不被消费。当前正式fit0，QE multi-alpha running2时不训练，也不把来源PASS当经济证据；继续源码交付与下一新信息设计。
 
-本轮48h active目标已登记，截止仍2026-10-06 02:36。此前旧目标的经济设计/标签/模型/开发导航及Exit design-only后续§16已按主线事实结清，不把旧目标blocked状态当新任务阻塞；经济成功不是旧源码目标的完成条件。当前M1设计尚未实现/拟合，三条负实验不终止全任务。
+本轮48h active目标已登记，截止仍2026-10-06 02:36。此前旧目标的经济设计/标签/模型/开发导航及Exit design-only后续§16已按主线事实结清，不把旧目标blocked状态当新任务阻塞；经济成功不是旧源码目标的完成条件。当前M1源码及完整prepare已实现，正式fit待QE空闲，三条负实验或此暂时互斥不终止全任务。
