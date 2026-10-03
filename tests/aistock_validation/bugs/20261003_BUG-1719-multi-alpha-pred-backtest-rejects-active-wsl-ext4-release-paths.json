@@ -105,8 +105,8 @@
   },
   "first_seen_at": "2026-10-03T19:24:58.216497Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3d4b3a9300fdb1a21d474d9f7c421f898db9d6d3",
+  "fixed_at": "2026-10-03T19:57:12Z",
   "github_issue_number": 5406,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5406",
   "last_seen_at": "2026-10-03T19:24:58.216497Z",
@@ -114,6 +114,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5412",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -138,6 +139,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -149,7 +151,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1719",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "32d838557a7183ff",
+    "recorded_at": "2026-10-03T19:57:48.914035Z",
+    "runtime_contract_digest": "1db464dc1064ba85837d4ab3ccf2f37b7336c4f500fba4cef87631bcf92913a0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "502f771831117f14f7d236d5bedc72d69e700719",
+    "source_merge_commit": "3d4b3a9300fdb1a21d474d9f7c421f898db9d6d3",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5412",
+    "validation_evidence": [
+      "validation-receipt: id=5d1268744dc79b5a commit=502f771831117f14f7d236d5bedc72d69e700719 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/multi_alpha/test_remote_native_wsl_paths.py -q` result=`12 passed`",
+      "validation-receipt: id=9a7d269cbac83ddc commit=502f771831117f14f7d236d5bedc72d69e700719 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_remote_native_wsl_paths.py tests/aistock_validation/bugs/20261003_BUG-1719-multi-alpha-pred-backtest-rejects-active-wsl-ext4-release-paths.json` result=`passed`",
+      "validation-receipt: id=e8d8b04a04797dc5 commit=502f771831117f14f7d236d5bedc72d69e700719 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_remote_native_wsl_paths.py` result=`passed`",
+      "validation-receipt: id=8581b81a81e69d8c commit=502f771831117f14f7d236d5bedc72d69e700719 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_remote_native_wsl_paths.py` result=`passed`",
+      "validation-receipt: id=937699c52ea759e4 commit=502f771831117f14f7d236d5bedc72d69e700719 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "c539aa0c35b9cb1fe57f187ae3daae550034ccc9fd5028f1c8d4d9e96b32487c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -158,6 +185,13 @@
     "fingerprint": "f120738a463a0b9a353b6483",
     "source_event_id": "FE-20261003-f120738a463a"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5d1268744dc79b5a commit=502f771831117f14f7d236d5bedc72d69e700719 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/multi_alpha/test_remote_native_wsl_paths.py -q` result=`12 passed`",
+    "validation-receipt: id=9a7d269cbac83ddc commit=502f771831117f14f7d236d5bedc72d69e700719 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_remote_native_wsl_paths.py tests/aistock_validation/bugs/20261003_BUG-1719-multi-alpha-pred-backtest-rejects-active-wsl-ext4-release-paths.json` result=`passed`",
+    "validation-receipt: id=e8d8b04a04797dc5 commit=502f771831117f14f7d236d5bedc72d69e700719 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_remote_native_wsl_paths.py` result=`passed`",
+    "validation-receipt: id=8581b81a81e69d8c commit=502f771831117f14f7d236d5bedc72d69e700719 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/multi_alpha/remote_dispatch.py backend/tests/multi_alpha/test_remote_native_wsl_paths.py` result=`passed`",
+    "validation-receipt: id=937699c52ea759e4 commit=502f771831117f14f7d236d5bedc72d69e700719 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
