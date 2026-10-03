@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-03T14:00:01.975503Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b69eaa3e9d503e4dfab00073c82b71f443f2607",
+  "fixed_at": "2026-10-03T14:49:40Z",
   "github_issue_number": 5357,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5357",
   "last_seen_at": "2026-10-03T14:00:01.975503Z",
@@ -108,6 +108,7 @@
     "任何新增门禁必须先向用户明确说明并获得单独直接授权；本任务不得增加实验准入、环境冻结或人工填写门禁。",
     "不启动实验、不修改模型/因子/数据集、不执行 DDL/DML、依赖安装或客户端安装。"
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5362",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -133,6 +134,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -144,7 +146,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1702",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ee53deba68295852",
+    "recorded_at": "2026-10-03T14:50:21.394293Z",
+    "runtime_contract_digest": "1db464dc1064ba85837d4ab3ccf2f37b7336c4f500fba4cef87631bcf92913a0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "71da839d8b4487d8cf65d1be4d29691c254d66ad",
+    "source_merge_commit": "1b69eaa3e9d503e4dfab00073c82b71f443f2607",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5362",
+    "validation_evidence": [
+      "validation-receipt: id=87d8edbe2a02da75 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/multi_alpha/test_durable_execution_identity.py backend/tests/multi_alpha/test_durable_control.py backend/tests/multi_alpha/test_durable_orchestrator_restart.py -q` result=`37 passed`",
+      "validation-receipt: id=bdcdd13c19aa05a8 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; files=3 blocking=0`",
+      "validation-receipt: id=d8631d45ff21f122 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; ownership files=3 mapped=3 blocking=0`",
+      "validation-receipt: id=5ec28ac079440425 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py` result=`passed`",
+      "validation-receipt: id=d65a8303f1000938 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=compile plan=direct status=passed command=`python -m py_compile backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py` result=`passed`",
+      "validation-receipt: id=2ca639305276da00 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "3afe6e5143723d62fb46f84cbf539b126effe11b6c23bbea04945182e906c1ca"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -153,6 +181,14 @@
     "fingerprint": "d6c4f0dc70ba63e33d4618f8",
     "source_event_id": "FE-20261003-d6c4f0dc70ba"
   },
+  "validation_evidence": [
+    "validation-receipt: id=87d8edbe2a02da75 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/multi_alpha/test_durable_execution_identity.py backend/tests/multi_alpha/test_durable_control.py backend/tests/multi_alpha/test_durable_orchestrator_restart.py -q` result=`37 passed`",
+    "validation-receipt: id=bdcdd13c19aa05a8 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; files=3 blocking=0`",
+    "validation-receipt: id=d8631d45ff21f122 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; ownership files=3 mapped=3 blocking=0`",
+    "validation-receipt: id=5ec28ac079440425 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py` result=`passed`",
+    "validation-receipt: id=d65a8303f1000938 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=compile plan=direct status=passed command=`python -m py_compile backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py` result=`passed`",
+    "validation-receipt: id=2ca639305276da00 commit=71da839d8b4487d8cf65d1be4d29691c254d66ad kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
