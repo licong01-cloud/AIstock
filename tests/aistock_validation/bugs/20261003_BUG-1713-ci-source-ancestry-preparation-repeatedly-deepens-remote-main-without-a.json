@@ -1,6 +1,7 @@
 {
   "actual": "P0 throughput remediation: recent source CI spends 64 percent of execution in base-history preparation (4-19 minutes). Reuse verified local mirror ancestry before remote requests, fetch only needed pinned refs, enforce per-attempt and total budgets while preserving exact base/source HEAD proof and fail-closed coverage.",
   "allowed_write_scope": [
+    "scripts/ci_workflow_policy_scan.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "scripts/ci_changed_files.py",
