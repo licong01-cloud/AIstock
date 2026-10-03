@@ -387,7 +387,7 @@ def prepare_file_request(
         identity["frozen_release_generation"] != FROZEN_GENERATION
         or identity["dataset_manifest_sha256"] != FROZEN_MANIFEST
     ):
-        raise FormalStateError("hmm_risk_formal_identity_mismatch", "only approved frozen v16 allowed")
+        raise FormalStateError("hmm_risk_formal_identity_mismatch", "only approved frozen v17 allowed")
     calendar_all = source_reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt")
     calendar = tuple(day for day in calendar_all if SOURCE_START <= day <= SOURCE_END)
     if not calendar or calendar[0] != SOURCE_START or calendar[-1] != SOURCE_END:
