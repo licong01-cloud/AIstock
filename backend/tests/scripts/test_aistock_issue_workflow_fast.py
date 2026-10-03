@@ -1557,6 +1557,74 @@ def test_post_sync_mirror_is_bounded_and_never_blocks_aftercare(tmp_path: Path, 
         assert helper_calls[0][1]["timeout"] == 60 and "-Apply" in helper_calls[0][0]
 
 
+@pytest.mark.parametrize("cleanup,gate", [(False, "close_sync_persisted"), (True, "complete"), (True, "fixed_source_pending_user_restart")])
+def test_merge_wrapper_forwards_only_explicit_aftercare_and_does_not_recreate_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup: bool, gate: str) -> None:
+    source, canonical = tmp_path / "source", tmp_path / "canonical"
+    source.mkdir()
+    canonical.mkdir()
+    monkeypatch.setattr(workflow, "REPO_ROOT", source)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: canonical)
+    monkeypatch.setattr(workflow, "_merge_pr_if_ready_for_bug", lambda *args: {"verified": {"checked": True}})
+    states: list[Any] = []
+    monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: states.append(kwargs))
+    def finalizer(**kwargs: Any) -> dict[str, Any]:
+        assert kwargs["cleanup"] == cleanup and kwargs["merge_close_sync_pr"] == cleanup
+        assert kwargs["source_pr_check"] == {"checked": True}
+        if cleanup:
+            source.rmdir()
+        return {"workflow_gate": gate, "cleanup": {"workflow_gate": "cleanup_done"} if cleanup else None,
+                "close_sync_pr_merge": {"workflow_gate": "merged"}, "source_merge_commit": "a" * 40}
+    monkeypatch.setattr(workflow, "build_merge_finalizer_plan", finalizer)
+    result = workflow.build_run_plan(bug_id="BUG-999", mode="merge", issue_json=None, changed_files=[], create_worktree=False,
+        dry_run=False, validation_evidence=["python -m nox -s l0 -> passed"], task_slug=None, allow_missing_linkage=False,
+        allow_closed=False, base="origin/main", head="HEAD", pr_url="https://github.com/licong01-cloud/AIstock/pull/1",
+        merge=True, cleanup=cleanup, merge_close_sync_pr=cleanup, branch="bug/task", worktree=str(source))
+    assert states[-1]["root"] == (canonical if cleanup else source)
+    assert source.exists() != cleanup
+    assert result["workflow_gate"] == ("merged_runtime_verification_pending" if "pending" in gate else "merged_close_synced")
+
+
+def test_merge_aftercare_apply_flags_and_blocked_exit_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow.sys, "argv", ["workflow.py", "run", "--bug-id", "BUG-999", "--mode", "merge", "--merge", "--cleanup", "--merge-close-sync-pr"])
+    args = workflow.build_parser().parse_args()
+    def plan(**kwargs: Any) -> dict[str, Any]:
+        assert kwargs["cleanup"] is True and kwargs["merge_close_sync_pr"] is True
+        return {"workflow_gate": "merged_aftercare_blocked"}
+    monkeypatch.setattr(workflow, "build_run_plan", plan)
+    monkeypatch.setattr(workflow, "_emit_args", lambda *args: None)
+    assert workflow.cmd_run(args) == 2
+
+
+def test_finalizer_records_state_and_postmortem_outside_deleted_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source, canonical = tmp_path / "source", tmp_path / "canonical"
+    source.mkdir()
+    canonical.mkdir()
+    monkeypatch.setattr(workflow, "REPO_ROOT", source)
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: canonical)
+    monkeypatch.setattr(workflow, "_cwd_is_inside", lambda _: False)
+    monkeypatch.setattr(workflow, "_relocate_cwd_before_cleanup", lambda _: None)
+    for name in ("_close_sync_is_complete", "_close_sync_pr_in_progress_marker", "_source_merge_receipt_from_close_sync"):
+        monkeypatch.setattr(workflow, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(workflow, "_publish_changed_clients_after_merge", lambda **kwargs: {"workflow_gate": "ready"})
+    monkeypatch.setattr(workflow, "build_close_sync_plan", lambda **kwargs: {"workflow_gate": "closed"})
+    monkeypatch.setattr(workflow, "_persist_source_merge_receipt_for_close_sync", lambda plan, **kwargs: plan)
+    monkeypatch.setattr(workflow, "_maybe_commit_and_pr_close_sync", lambda **kwargs: {"workflow_gate": "pr_opened"})
+    monkeypatch.setattr(workflow, "_merge_close_sync_pr_if_ready", lambda **kwargs: {"workflow_gate": "merged"})
+    def cleanup(**kwargs: Any) -> tuple[dict[str, Any], None]:
+        source.rmdir()
+        return {"workflow_gate": "cleanup_done", "sync_root": True}, None
+    monkeypatch.setattr(workflow, "_build_cleanup_after_merge_plan_with_root_sync_deferral", cleanup)
+    monkeypatch.setattr(workflow, "_build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral", lambda **kwargs: ({"workflow_gate": "cleanup_done"}, None))
+    states: list[Any] = []
+    monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: states.append(kwargs))
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"worktree": kwargs["worktree"]})
+    result = workflow.build_merge_finalizer_plan(bug_id="BUG-999", source_pr_url="https://github.com/licong01-cloud/AIstock/pull/1",
+        source_branch="bug/task", source_worktree=str(source), validation_evidence=["python -m nox -s l0 -> passed"],
+        cleanup=True, merge_close_sync_pr=True, apply=True, source_pr_check={"pr": {"mergeCommit": {"oid": "a" * 40}}})
+    assert result["workflow_gate"] == "complete" and not source.exists()
+    assert states[-1]["root"] == canonical and result["postmortem"]["worktree"] == str(canonical)
+
+
 def test_merge_finalizer_stops_before_close_sync_when_client_publish_blocks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
