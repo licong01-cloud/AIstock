@@ -1,12 +1,14 @@
 # L2冻结HMM：校准后历史轮动效果与产品消费详细设计
 
-版本：v0.1。Feature tier：F2。当前状态：PROPOSED_PENDING_USER_APPROVAL。
+版本：v0.2。Feature tier：F2。当前状态：APPROVED_BY_USER_NOT_IMPLEMENTED。
+
+2026-10-03用户明确批准PR #5326中的效果评估D1～D6精确合同。批准仅改变合同状态；本次不启动源码实施、零fit回放、tail、数据库写入、运行时激活或清理。文档PR合入与后续长任务启动仍需对应授权。
 
 本文件属于父蓝图P1的一个完整业务任务包，不另设预检、adapter、指标、CLI或页面小阶段。终极目标仍是**申万二级行业轮动预测与风险预警**；本包直接回答已训练HMM能否在校准完成之后提供有用的L2轮动排序，不以结构合格、文档完成或历史证据整理替代预测效果。
 
 ## Background（背景与真实进度）
 
-父权威为[HMM总体蓝图](hmm_evolution_and_risk_management_system_design_20260716.md)。[当前正式executor设计](hmm_formal_state_executor_20260930.md)中的C-008-L2-D6-PERSISTENT-RC-A及C-008-L2-INDEPENDENT-A已获批准；其文档PR #5323、源码PR #5325在本文件起草时尚未合入。本文不更改这两份合同，不把本文的新评价规则宣称已批准。
+父权威为[HMM总体蓝图](hmm_evolution_and_risk_management_system_design_20260716.md)。[当前正式executor设计](hmm_formal_state_executor_20260930.md)中的C-008-L2-D6-PERSISTENT-RC-A及C-008-L2-INDEPENDENT-A已获批准；其文档PR #5323、源码PR #5325在本文件起草时尚未合入。本文不更改这两份合同；本次批准的是下列独立评价D1～D6，不追认原全grid验收。
 
 - 最终v17原正式实验5184 fits已完成，原两family×两level合同未接受，原acceptance不变。
 - 已批准的全131行业zero-refit研究回读：autocycle_all_core:L2仍为D5 seed47，127个行业具有语义mapping，4个为证据不足；原121个通过行业无回退。模型参数hash未改变。
@@ -17,7 +19,7 @@
 
 ## Scope（范围）
 
-提出并一次闭合D1～D6：冻结模型恢复、L2文件输入延续、模拟available-at、硬状态到轮动分数、全目录覆盖与同日期基线比较、结果/产品消费边界。获精确合同批准后，才实施源码及两次fresh-process零fit历史推断。
+已批准并一次闭合D1～D6：冻结模型恢复、L2文件输入延续、模拟available-at、硬状态到轮动分数、全目录覆盖与同日期基线比较、结果/产品消费边界。后续任务获启动授权后，才实施源码及两次fresh-process零fit历史推断。
 
 现有代码复用位置：`formal_state_input.py`的C-010/A5构造、`stock_fact_observation.py`的L2 feature-domain panel、`formal_state_model.py`的preprocess/projection/restore/causal_filter、`formal_state_executor.py`的identity/readback；产品复用既有Rotation L2 repository/API/UI。不新建训练平台、feature store、通用registry或平行writer。
 
@@ -25,7 +27,7 @@
 
 不训练、不调用D5、不换seed、不改变20D特征、训练窗口、数值参数或已批准D6；不恢复退役B3/P6链，不生成原两family READY。不新增L1候选、per-sector stitching、soft semantic mapping、收益驱动缺失过滤或参数搜索。不重建/修改数据集、active profile或历史产物，不进行证据归档。正式QE实验交QE窗口；不改QE、荐股、Selection、Paper或Advisory。
 
-本文仅提出新的评价及score合同。设计审核/F2通过只代表可提交设计，不代表合同批准、源码实现、效果通过或生产权限。
+本文记录已获用户批准的评价及score合同。设计审核/F2通过本身不产生批准；当前批准依据为用户明确指令，不代表源码实现、效果通过或生产权限。
 
 ## Architecture（同一P1闭环）
 
@@ -33,7 +35,7 @@
 
 预测与标签是两个访问阶段；预测器禁止获取结果标签。先封闭预测，再计算指标；两进程复现相同预测/指标payload。工程完成、开发效果、forward确认、QE增量及生产采用分别报告，不互相推导。
 
-## Contracts（待批准精确合同D1～D6）
+## Contracts（已批准精确合同D1～D6）
 
 ### D1：原模型与冻结文件身份，不改训练
 
@@ -114,9 +116,9 @@ N<2时normalized rank_score为null并带`cross_section_rank_unavailable`，但�
 
 目录D=131。结构人口S(t)依模拟as_of的membership及本股票事实版批准结构资格冻结，不以20D特征是否有限缩小S，不能由D6通过或后来收益决定。原始分数集合R(t)为S(t)中有冻结mapping、完整20D有效观察及合法hard posterior者；N=|R(t)|>=2时可排名预测P(t)=R(t)，否则P(t)为空，有限raw_score仅为非排名诊断。4个mapping不足项属于模型不可预测，不从D/S分母删除。逐日所有131项都保留状态和reason；raw候选覆盖与可排名覆盖分别报告。
 
-metric集合M(t)为P(t)中有完整合法复合目标者。推荐沿用已有L2效果方案的**先验约定**：有效IC日要求`|M(t)|>=max(2,ceil(0.90*|P(t)|))`；201个计划成熟decision中有效IC日比例>=90%；总体预测覆盖`sum|P(t)|/sum|S(t)|>=90%`。上述为待批准的本包证据充分性规则，不是股票最少数量/资源门禁，不把自然NA诊断为业务数据错误；同时报告D、S、P、M、逐行业缺失率和全131目录覆盖，不能只报127行业为全人口。分母0则null/NOT_APPLICABLE；无可用预测或无可定义IC均EVIDENCE_INSUFFICIENT，不伪造0或成功。
+metric集合M(t)为P(t)中有完整合法复合目标者。推荐沿用已有L2效果方案的**先验约定**：有效IC日要求`|M(t)|>=max(2,ceil(0.90*|P(t)|))`；201个计划成熟decision中有效IC日比例>=90%；总体预测覆盖`sum|P(t)|/sum|S(t)|>=90%`。上述为已批准的本包证据充分性规则，不是股票最少数量/资源门禁，不把自然NA诊断为业务数据错误；同时报告D、S、P、M、逐行业缺失率和全131目录覆盖，不能只报127行业为全人口。分母0则null/NOT_APPLICABLE；无可用预测或无可定义IC均EVIDENCE_INSUFFICIENT，不伪造0或成功。
 
-每日Rank IC为M(t)内raw_score与y各自average-rank后的Pearson；有效日等权。唯一binding development效果推荐`mean_daily_RankIC>=0.02`，来源`CONVENTIONAL_PRIOR_MAGNITUDE_NOT_VALUE_DERIVED`，是本包新增推荐值，需批准，不能靠L1或旧L2授权自动继承。HAC只诊断区间，不附加t-stat/power/每行业每报告块AND门；正常行情变化不是失败reason，真实效果不足仍如实报告。
+每日Rank IC为M(t)内raw_score与y各自average-rank后的Pearson；有效日等权。唯一binding development效果推荐`mean_daily_RankIC>=0.02`，来源`CONVENTIONAL_PRIOR_MAGNITUDE_NOT_VALUE_DERIVED`，是本包已明确批准的先验值，不能靠L1或旧L2授权自动继承。HAC只诊断区间，不附加t-stat/power/每行业每报告块AND门；正常行情变化不是失败reason，真实效果不足仍如实报告。
 
 HAC推荐Bartlett Newey-West lag19，按完整201日成熟calendar的真实open-session距离计算，不压缩NA成邻日、不用0充当IC。n为有效IC日，e_t=IC_t-mean，`gamma_k=(1/n)*sum[calendar_distance(i,j)=k](e_i*e_j)`，`LRV=gamma_0+2*sum[k=1..19](1-k/20)*gamma_k`，`SE=sqrt(LRV/n)`，诊断区间mean±1.96SE。n<2、variance负/非有限则HAC_UNAVAILABLE，不clamp、不同意据此确认或额外阻断研究产品；保留观测mask和非随机缺失局限。
 
@@ -151,26 +153,26 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 ## Implementation Plan（同一任务包，不新增开发阶段）
 
-当前先审核本文及父蓝图增量，提交D1～D6推荐决策；未批准不实施。批准后以已合入的A/B源码为基线，在一个HMM feature任务中完成必要模型读取、观察延续、推断/指标、产品版本适配及直接测试；代码最多三轮审核修复，零阻断可提前结束，否则报告真实阻断。源码/CI与合入授权闭合后，在指定validation worktree运行双process零fit，报告效果及是否值得进入已有L2产品/消费者验证，不再重跑5184 fits。不把本次“开始下一步”解释为合入现有PR或批准本文新增score/日期/阈值。
+本文及父蓝图增量已完成设计审核，D1～D6于2026-10-03获用户明确批准；后续长任务尚未启动。获任务启动授权后以已合入的A/B源码为基线，在一个HMM feature任务中完成必要模型读取、观察延续、推断/指标、产品版本适配及直接测试；代码最多三轮审核修复，零阻断可提前结束，否则报告真实阻断。源码/CI与合入授权闭合后，在指定validation worktree运行双process零fit，报告效果及是否值得进入已有L2产品/消费者验证，不再重跑5184 fits。本次合同批准不自动授权合入本文文档PR、启动任务、生产写入、激活或清理。
 
 本次已完成日历算术和源码可复用性核对；源码缺少后续窗口构造/预测效果入口，仍待实施，不能把现有l2-readback当作本设计已实现。数据窗口仅负责真正共享源缺口，所有HMM特征/因果/效果验证由本窗口负责。
 
 ## Verification Plan
 
-设计：F2 validator、git diff --check、三轮以内针对性自审；校准前后角色、日期算术、预测封闭先于标签、原训练不变、人口分母、产品旧版本隔离逐条检查。设计中的新增90%、0.02、lag19、硬状态均值排序均标待批准，不暗中运行。
+设计：F2 validator、git diff --check、三轮以内针对性自审；校准前后角色、日期算术、预测封闭先于标签、原训练不变、人口分母、产品旧版本隔离逐条检查。设计中的90%、0.02、lag19、硬状态均值排序均已明确批准，未实际运行。
 
 实施直接矩阵限`backend/tests/hmm_risk`：冻结模型hash恢复、seed/D5/fit poison；预处理仅train/旧projection；未来source/target poison与prefix不变；calendar20D成熟末端及内部NA；131目录/4项mapping缺失；停牌/停发保留moneyflow/单成员；合法NA与未知漏采；同分/全同分/空分母/HAC缺口；基线同源同标签同日期及交集覆盖；旧product版本不变/新版本writer-readback/身份冲突。只增加实际缺失合同节点，不复制整套矩阵。changed-files→ownership→HMM slice、Ruff、py_compile、registry/L0、fresh-process import；完整矩阵优先CI，不重复跑历史训练测试。
 
 ## Design Acceptance Matrix
 
-下表只验收**本次设计文档的完整性与边界**，不是实施/效果矩阵。测试路径仅为实施后的计划矩阵，尚未运行；D1～D6仍为PROPOSED_PENDING_USER_APPROVAL，F2格式PASS不能改变该状态。实施后必须用真实代码/运行证据另更新对应状态，不能沿用design review作为功能完成。
+下表只验收**本次设计文档的完整性与边界**，不是实施/效果矩阵。测试路径仅为实施后的计划矩阵，尚未运行；D1～D6已获用户明确批准；F2格式PASS不能替代用户批准或实施验证。实施后必须用真实代码/运行证据另更新对应状态，不能沿用design review作为功能完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | §D1；formal_state_executor/model | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-l2-persistent-readback/research-final.json；核对已有身份与新source身份边界，未实施恢复入口 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
 | F-002 | §D2；冻结day calendar | artifact: X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20261002-r8-unified-basic-history1-candidate/components/daily_bin_candidate/calendars/day.txt；实际日历算术，非预测回放 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
 | F-003 | §D3；formal_state_input/stock_fact_observation | backend/tests/hmm_risk/test_formal_state_input.py：计划验证后续L2构造、旧入口不变，本次仅对照源码职责 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
-| F-004 | §D4/D5；formal_state_model与现有L2基线 | backend/tests/hmm_risk/test_formal_state_model.py：计划hard utility与因果矩阵；本文明确score/效果/coverage全部待批准 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
+| F-004 | §D4/D5；formal_state_model与现有L2基线 | backend/tests/hmm_risk/test_formal_state_model.py：计划hard utility与因果矩阵；本文明确score/效果/coverage已批准、实施及效果未运行 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
 | F-005 | §D6；现有Rotation L2 repository/API/UI | backend/tests/hmm_risk/test_rotation_l2_prediction.py：计划版本/语义隔离测试；本文未报告实施/运行通过 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
 | F-006 | §Non-goals/Production Gates/审核记录 | backend/tests/hmm_risk/test_formal_state_executor.py：计划fit/D5/DB poison；本次逐项核对未执行/未授权边界 | DESIGN_REVIEW_VERIFIED_ONLY | 无 |
 
@@ -186,7 +188,7 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 本次文档：production_ddl_gate=noop；production_dml_gate=noop；backend/frontend dependency gates=noop；runtime_activation=noop；backend_restart_authority=false；database_write=false；dataset_write=false；active_profile_write=false；fit/selection/tail_access=0/false/false；cleanup未执行。未来任何写库、激活或重启不由本文自动授权。
 
-## 正式审核记录（设计，不代替实现/模型验收）
+## 正式审核记录（v0.1起草时的设计审核历史，不代替实现/模型验收）
 
 第一轮自审修复：新增日期不能借原SOURCE_END=2025-04-30的request/source inventory作身份；明确独立evaluation_input_identity、原参数认证和旧请求不变。区分industry semantic_state与daily_rank_group，不能迁移现有delta版本语义。首次F2检查发现`proposed`矩阵状态不受支持，改为仅验收文档完整性的矩阵并明确所有实施/效果未执行，不把待批准合同伪装已批准。
 
@@ -194,7 +196,7 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 第三轮自审核对：父蓝图目标/P0完成/P1待批准与本文一致；核对原19条版本历史和11条verified矩阵行逐字保留。221个decision、201个复合成熟日、105/96报告块计数由冻结calendar实际核算；源/标签上界不跨tail，模型及4个不可用行业不被事后改变。两份文档F2 PASS、warnings=0，git diff --check通过。未发现设计范围内未描述的阻断；D1～D6仍待用户批准，实施及预测效果没有运行。
 
-另有真实交付依赖：本次实时查询PR #5323 CI verdict为SUCCESS；PR #5325的run `37105506032`为FAILURE，verdict明确`backend=failure`。可读取的GitHub jobs/log只返回verdict，尚未取得底层backend失败断言，因此不臆断根因、重跑训练、重试CI冒充修复或修改模型阈值。该源码PR在解除真实CI阻断及获合入授权前不可作为已交付基线；不把本文文档F2通过报告为源码CI通过。
+起草时真实交付依赖：当时查询PR #5323 CI verdict为SUCCESS；PR #5325的run `37105506032`为FAILURE，verdict明确`backend=failure`。当时只取得verdict，尚未取得底层backend失败断言，因此未臆断根因、重跑训练、重试CI冒充修复或修改模型阈值。此为v0.1历史观察，不是当前CI状态；后续定位、修复及批准状态见本次批准后复核，不把本文文档F2通过报告为源码CI通过。
 
 DESIGN-COMPLIANCE-001：
 
@@ -202,7 +204,9 @@ DESIGN-COMPLIANCE-001：
 |---|---|
 | 禁止简化交付 | §D1/D3/D6保持原20D模型及全131目录，产品/效果未执行如实标记；0 fits是冻结模型推断，不是替代训练的mock |
 | 禁止静默错误 | §D2～D5区分合法NA、未知缺失、未成熟、空分母、mapping缺失及真实效果不足；不默认neutral/1.0/0收益 |
-| 禁止改变业务逻辑 | 新score/utility评价/日期是明确待批准合同，旧D3～D6、seed/model hash、delta产品及QE资产保持原语义；仅L2研究 |
-| 禁止私增门禁审批 | §D5数值全部为提案；无新HAC/power、每行业、最少股票数、资源/审批AND门；授权按现有动作边界处理 |
+| 禁止改变业务逻辑 | 新score/utility评价/日期是本次明确批准合同，旧D3～D6、seed/model hash、delta产品及QE资产保持原语义；仅L2研究 |
+| 禁止私增门禁审批 | §D5数值全部来自本次明确批准合同；无新HAC/power、每行业、最少股票数、资源/审批AND门；授权按现有动作边界处理 |
 
 以上只说明设计审核，不宣称实现、经济效果、QE或产品已通过。F2 PASS仅是文档格式与验收索引一致性检查。
+
+2026-10-03批准后复核：D1～D6由用户明确批准；v0.1起草及三轮审核时的待批准/CI失败记录作为历史事实保留，不表示当前仍待批准。#5325根因已取得日志确认并完成测试隔离修复：CI同口径120 passed，生产环境校验和模型合同不变；修复head CI成功，同步主线后的最终head仍须通过CI。本次只同步文档批准状态，源码实施/两次零fit推断未启动，文档PR未获合入授权。
