@@ -13,6 +13,7 @@ import styles from "./rotation-l1.module.css";
 import RiskL1Panel from "./RiskL1Panel";
 
 const CONFIGURED_RUN_ID = process.env.NEXT_PUBLIC_HMM_ROTATION_L2_RUN_ID?.trim() || "";
+const FROZEN_HMM_VERSION = "hmm_risk_l2_postcalibration_effect_v1";
 
 function formatNumber(value: number | null, digits = 4): string {
   return value === null ? "—" : value.toFixed(digits);
@@ -56,6 +57,20 @@ export default function RotationL2Dashboard() {
             "hmm_risk_rotation_l2_ui_denominator_invalid",
             500,
           );
+        }
+        const hmm = nextOverview.model_version === FROZEN_HMM_VERSION;
+        const states = new Set(["trending", "neutral", "fading"]);
+        if ((nextOverview.model_version !== undefined && !hmm)
+          || (hmm && (nextOverview.validation_basis !== "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT"
+            || nextOverview.run_id !== runId || detail.run_id !== runId || detail.trade_date !== nextOverview.trade_date))
+          || detail.rows.some((row) => hmm
+            ? row.model_version !== FROZEN_HMM_VERSION || row.run_id !== runId
+              || row.trade_date !== nextOverview.trade_date || row.as_of_date !== nextOverview.as_of_date || (row.availability === "available"
+              && (row.semantic_state !== row.forecast_state || !states.has(row.semantic_state || "")
+                || !states.has(row.daily_rank_group || "") || row.rotation_score === null || !Number.isFinite(row.rotation_score)
+                || row.rotation_score < -0.5 || row.rotation_score > 0.5))
+            : row.model_version !== undefined || nextOverview.validation_basis !== "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT")) {
+          throw new HMMRiskApiError("L2 模型版本与状态/排名投影不一致，拒绝混用。", "hmm_risk_rotation_l2_ui_version_invalid", 500);
         }
         setOverview(nextOverview);
         setRows(detail.rows);
@@ -180,12 +195,18 @@ export default function RotationL2Dashboard() {
           </section>
           <section className={styles.heatmap} aria-label="申万二级行业轮动排名">
             {cards.map((row) => (
-              <article key={`${row.sector_code}-${row.forecast_state}`} className={`${styles.card} ${styles[row.forecast_state || "unavailable"]}`}>
+              <article key={`${row.sector_code}-${row.forecast_state}`} className={`${styles.card} ${styles[row.model_version === FROZEN_HMM_VERSION ? row.daily_rank_group || "unavailable" : row.forecast_state || "unavailable"]}`}>
                 <div>
                   <strong>{row.sector_name}</strong>
                   {row.sector_name !== row.sector_code && <code>{row.sector_code}</code>}
                 </div>
-                <span>{stateLabel(row)}</span><b>{formatNumber(row.rotation_score, 5)}</b>
+                {row.model_version === FROZEN_HMM_VERSION ? (
+                  <>
+                    <span>行业内状态：{row.semantic_state === "trending" ? "走强" : row.semantic_state === "fading" ? "走弱" : "中性"}</span>
+                    <span>当日相对排名：{row.daily_rank_group === "trending" ? "前列" : row.daily_rank_group === "fading" ? "后列" : "中段"}</span>
+                  </>
+                ) : <span>{stateLabel(row)}</span>}
+                <b>{formatNumber(row.rotation_score, 5)}</b>
               </article>
             ))}
           </section>

@@ -158,6 +158,14 @@ def test_writer_rejects_effect_and_capability_drift() -> None:
         _validate_row(row)
 
 
+@pytest.mark.parametrize("version", [None, "unknown", "hmm_risk_l2_postcalibration_effect_v1"])
+def test_delta_contract_cannot_be_relabelled_as_an_explicit_hmm_version(version):
+    row = rows_from_acceptance(_acceptance())[0]
+    row["run_summary"] = {**row["run_summary"], "contract_version": version}
+    with pytest.raises(RotationL2PredictionError):
+        _validate_row(row)
+
+
 def test_writer_serializes_uuid_parameters_for_plain_psycopg2_connections() -> None:
     cursor = _Cursor()
     repository = RotationL2PredictionRepository(conn_factory=lambda: _Connection(cursor))

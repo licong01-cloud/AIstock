@@ -1,8 +1,8 @@
 # L2冻结HMM：校准后历史轮动效果与产品消费详细设计
 
-版本：v0.2。Feature tier：F2。当前状态：APPROVED_BY_USER_NOT_IMPLEMENTED。
+版本：v0.3。Feature tier：F2。当前状态：APPROVED_SOURCE_IMPLEMENTED_EFFECT_NOT_RUN。
 
-2026-10-03用户明确批准PR #5326中的效果评估D1～D6精确合同。批准仅改变合同状态；本次不启动源码实施、零fit回放、tail、数据库写入、运行时激活或清理。文档PR合入与后续长任务启动仍需对应授权。
+2026-10-03用户明确批准PR #5326中的效果评估D1～D6精确合同，随后授权启动长任务。文档PR已合入a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a，当前正在交付源码及直接契约验证；正式效果回放未运行。源码PR合入仍需独立授权；数据库写入、运行时激活和清理不由长任务自动授权。
 
 本文件属于父蓝图P1的一个完整业务任务包，不另设预检、adapter、指标、CLI或页面小阶段。终极目标仍是**申万二级行业轮动预测与风险预警**；本包直接回答已训练HMM能否在校准完成之后提供有用的L2轮动排序，不以结构合格、文档完成或历史证据整理替代预测效果。
 
@@ -153,9 +153,9 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 ## Implementation Plan（同一任务包，不新增开发阶段）
 
-本文及父蓝图增量已完成设计审核，D1～D6于2026-10-03获用户明确批准；后续长任务尚未启动。获任务启动授权后以已合入的A/B源码为基线，在一个HMM feature任务中完成必要模型读取、观察延续、推断/指标、产品版本适配及直接测试；代码最多三轮审核修复，零阻断可提前结束，否则报告真实阻断。源码/CI与合入授权闭合后，在指定validation worktree运行双process零fit，报告效果及是否值得进入已有L2产品/消费者验证，不再重跑5184 fits。本次合同批准不自动授权合入本文文档PR、启动任务、生产写入、激活或清理。
+本文及父蓝图增量已完成设计审核，D1～D6于2026-10-03获用户明确批准，文档PR #5326已合入且长任务已启动。以已合入的A/B源码为基线，在一个HMM feature任务中完成必要模型读取、观察延续、推断/指标、产品版本适配及直接测试；代码最多三轮审核修复，零阻断可提前结束，否则报告真实阻断。源码/CI与独立合入授权闭合后，在指定validation worktree运行双process零fit，报告效果及是否值得进入已有L2产品/消费者验证，不再重跑5184 fits。任务启动不自动授权源码PR合入、生产写入、激活或清理。
 
-本次已完成日历算术和源码可复用性核对；源码缺少后续窗口构造/预测效果入口，仍待实施，不能把现有l2-readback当作本设计已实现。数据窗口仅负责真正共享源缺口，所有HMM特征/因果/效果验证由本窗口负责。
+起草时只完成日历算术和源码可复用性核对；本次源码增加了后续窗口构造及预测效果入口，但正式模型效果仍未执行，不能把原l2-readback或合成测试当作效果通过。数据窗口仅负责真正共享源缺口，所有HMM特征/因果/效果验证由本窗口负责。
 
 ## Verification Plan
 
@@ -186,7 +186,19 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 ## Production Gates
 
-本次文档：production_ddl_gate=noop；production_dml_gate=noop；backend/frontend dependency gates=noop；runtime_activation=noop；backend_restart_authority=false；database_write=false；dataset_write=false；active_profile_write=false；fit/selection/tail_access=0/false/false；cleanup未执行。未来任何写库、激活或重启不由本文自动授权。
+本次源码交付：production_ddl_gate=not_authorized_not_executed；production_dml_gate=noop；backend/frontend dependency gates=noop；runtime_activation=noop；backend_restart_authority=false；database_write=false；dataset_write=false；active_profile_write=false；fit/selection/tail_access=0/false/false；cleanup未执行。已有L2表只接受delta版本，因此新增HMM拥有的显式版本约束迁移源码scripts/hmm_risk/extend_rotation_l2_effect_schema.sql；未在DEV或生产执行，真实持久化仍为独立阻断，不声明数据库兼容已验证。未来必须先在现有DEV验证，再单独授权目标DDL/DML；不得通过删除旧约束或改写旧行绕过版本合同。
+
+## 源码交付与审核增量（不代替正式效果或运行态验收）
+
+实施引用：formal_state_effect.py恢复原参数/前缀、硬状态utility及全人口评价；formal_state_input.py构造有界L2观察、标签和原delta对照；formal_state_executor.py及run_formal_state_model_set.py提供effect-prepare/effect-run/effect-child。原训练模式默认不变。必要strict-prior circ_mv只读取真实历史上下文，不重造训练request或A5资格。stock_fact_observation.py只增加显式冻结目录reindex：整个窗口缺观察或全无机会时保留NaN，不能补造聚合值或缩小131分母。
+
+产品引用：rotation_l2_prediction.py显式区分HMM与旧delta合同，新版本贡献为hard_state/frozen_utility_mean/semantic_state/average_rank_score/daily_rank_group/model_parameter_sha256；旧delta contribution==score不变。现有API输出独立语义与排名字段，RotationL2Dashboard.tsx分开展示行业内状态和当日相对排名；两榜默认10+10、总数<=30不变。
+
+第一轮源码审核修复：有界停牌空窗口不能跳过metadata counts；独立观察receipt绑定原A5/feature定义；spread极端组在预测人口上冻结，不能因未来合法NA重新分组。第二轮修复：全目录无观察项保留NaN而非构造失败；产品检查逐行业参数/冻结utility、原semantic与每日rank投影，重新闭合人口/maturity/效果状态；显式未知或null版本拒绝，不退回旧delta语义。
+
+直接验证已实际运行：首批14 passed，扩展直接矩阵49 passed；原参数恢复、产品writer/readback、空目录及strict-prior circ_mv新增节点单独复验通过（期间fixture错误已修复，不记录为首轮全通过）。Ruff通过；使用现存canonical node_modules只读类型解析的TypeScript noEmit为0 diagnostics，未安装依赖、未生成frontend构建文件。最终HEAD对应门禁及CI以本源码PR真实结果为准，不复用这些中间HEAD作为最终receipt。
+
+完整HMM矩阵与mock UI交现有CI计划hmm_risk_pr_slice/hmm_risk_ui；本任务未启动用户或runner服务，未执行真实浏览器验收。SQL未执行、正式effect-prepare/effect-run未运行；没有任何真实新预测/IC、DB写入、runtime activation或QE收益结论。达到代码PR交付边界后等待独立合入授权，不绕过已合入源码要求读取正式新窗口。
 
 ## 正式审核记录（v0.1起草时的设计审核历史，不代替实现/模型验收）
 
