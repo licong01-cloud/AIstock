@@ -30,14 +30,18 @@
   ],
   "expected": "All refresh audit blockers returned before source data sealing; existing nine fact gates remain mandatory.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1692-monthly-source-freezes-history-before-late-refresh-audit-failures-and-lo.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/source_authority.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_source_authority.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1692-monthly-source-freezes-history-before-late-refresh-audit-failures-and-lo.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -124,8 +128,8 @@
   },
   "first_seen_at": "2026-10-03T04:45:02.955141Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "60e59cc3fdc6163f3d0f630ddf1c1a3fc983dfde",
+  "fixed_at": "2026-10-03T04:59:14Z",
   "github_issue_number": 5307,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5307",
   "implementation_review": {
@@ -150,6 +154,23 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5310",
+  "post_restart_readback": {
+    "candidate_write": false,
+    "database_write": false,
+    "durable_operation_attempt": 238,
+    "durable_operation_id": "dmr_63a313d97fd046a38d5a876265565014",
+    "durable_operation_status": "SOURCE_BLOCKED",
+    "early_readiness_receipt": "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/monthly-early-readiness-20261003T051009662368Z.json",
+    "observed_runtime_commit": "98f38d30ee76ab212a08cfb12cc9a4e949ce8a28",
+    "profile_write": false,
+    "release_business_smoke": "blocked_by_source_incomplete_not_restart",
+    "restart_identity_receipt": "X:/AIstock_temp/business-data-audit-20261002/BUG-1685-next/BUG1692-post-restart-actual-scope-20261003.json",
+    "runtime_identity_match": true,
+    "service_process_control": false,
+    "source_payload_materialized": false,
+    "typed_blocker": "margin_detail/2026-09-30"
+  },
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -172,6 +193,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -183,7 +205,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1692",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2d6e553941bbb1b6",
+    "recorded_at": "2026-10-03T05:05:42.696992Z",
+    "runtime_contract_digest": "45c7c6f3a06bdb4eed5a9b7b84c47eb9d5ae546939f1917e25bf971b11eadd61",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dad908a3b16f6b7261711a60044ccbf0e05ea9d1",
+    "source_merge_commit": "60e59cc3fdc6163f3d0f630ddf1c1a3fc983dfde",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5310",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_source_producer.py -q -> 60 passed"
+    ],
+    "validation_evidence_digest": "706359be2a2143a902b40603404ef03690a598303ad90eab48822f75a88700e2"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -192,6 +236,12 @@
     "fingerprint": "ee65ca798f6904bbc874609e",
     "source_event_id": "FE-20261003-ee65ca798f69"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d25025efae09c02e commit=dad908a3b16f6b7261711a60044ccbf0e05ea9d1 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_postgres_source.py backend/tests/dataset_release/test_monthly_postgres_source.py tests/aistock_validation/bugs/20261003_BUG-1692-monthly-source-freezes-history-before-late-refresh-audit-failures-and-lo.json` result=`passed`",
+    "validation-receipt: id=8775194bd1842926 commit=dad908a3b16f6b7261711a60044ccbf0e05ea9d1 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_source_producer.py -q --basetemp X:/AIstock_temp/BUG-1692-workflow-final` result=`60 passed`",
+    "python -m nox -s l0 -> passed",
+    "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_source_producer.py -q -> 60 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
