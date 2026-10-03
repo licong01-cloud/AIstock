@@ -1,56 +1,53 @@
 {
-  "actual": "Canonical absolute-path workflow invoked from task worktree incorrectly uses script-root main for changed files, HEAD-bound receipts and PR creation. Keep canonical executable authority; resolve and validate actual task Git worktree, fail closed for unknown context or identity drift; no QE business changes.",
+  "actual": "BUG-1693 finish sees changed_files empty and canonical state despite linked worktree changes; BUG-1696 has correct local state but canonical cannot read it.",
   "allowed_write_scope": [
     "scripts/aistock_issue_workflow.py",
-    "scripts/issue_flow.py",
-    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "backend/tests/scripts/test_issue_workflow_task_root.py",
     "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
-    "tests/aistock_validation/bugs/20261003_BUG-1699-canonical-workflow-binds-task-worktree-validation-and-pr-git-context-to.json"
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/bugs/20261003_BUG-1698-canonical-workflow-cli-ignores-linked-task-worktree-execution-root.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1699",
-  "closed_at": null,
+  "bug_id": "BUG-1698",
+  "closed_at": "2026-10-03T09:21:57Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-10-03T08:51:38.810710Z",
-  "description": "Canonical absolute-path workflow invoked from task worktree incorrectly uses script-root main for changed files, HEAD-bound receipts and PR creation. Keep canonical executable authority; resolve and validate actual task Git worktree, fail closed for unknown context or identity drift; no QE business changes.",
+  "created_at": "2026-10-03T07:40:10.544279Z",
+  "description": "BUG-1693 finish sees changed_files empty and canonical state despite linked worktree changes; BUG-1696 has correct local state but canonical cannot read it.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20261003-450f83dcb736",
-      "timestamp": "2026-10-03T08:51:38.810692Z"
+      "note": "Promoted from IC-20261003-d8d7204e42e2",
+      "timestamp": "2026-10-03T07:40:10.544262Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Canonical CLI discovers state, scope, HEAD and modifications in the invoking linked task worktree while retaining merged main client authority.",
   "file_scope_contract": {
-    "actual_changed_files": [
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-      "scripts/aistock_issue_workflow.py",
-      "scripts/issue_flow.py",
-      "tests/aistock_validation/bugs/20261003_BUG-1699-canonical-workflow-binds-task-worktree-validation-and-pr-git-context-to.json"
+    "added_files": [
+      "backend/tests/scripts/test_issue_workflow_task_root.py"
     ],
-    "added_files": [],
     "changed_files": [
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-      "scripts/aistock_issue_workflow.py",
-      "scripts/issue_flow.py",
-      "tests/aistock_validation/bugs/20261003_BUG-1699-canonical-workflow-binds-task-worktree-validation-and-pr-git-context-to.json"
+      "scripts/aistock_issue_workflow.py"
     ],
-    "changed_files_source": "git_finish",
+    "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+        "backend/tests/scripts/test_issue_workflow_task_root.py"
       ],
       "impacted_modules": [
         "validation.workflow_automation",
         "validation.runner",
-        "validation.guardrails"
+        "validation.guardrails",
+        "tests.backend"
       ],
       "matched_rules": [
         {
@@ -64,46 +61,45 @@
           "rule_id": "validation_workflow_automation_scripts"
         },
         {
-          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-          "impact_modules": [
-            "validation.runner",
-            "validation.guardrails"
-          ],
-          "primary_module": "validation.workflow_automation",
-          "risk_level": "high",
-          "rule_id": "validation_workflow_test_override"
+          "file": "backend/tests/scripts/test_issue_workflow_task_root.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
         }
       ],
       "risk_levels": [
-        "high"
+        "high",
+        "medium"
       ],
       "suggested_scope": [
         "scripts/aistock_issue_workflow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+        "backend/tests/scripts/test_issue_workflow_task_root.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "backend/tests/scripts/test_issue_workflow_task_root.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "backend/tests/scripts/test_issue_workflow_task_root.py"
     ]
   },
-  "first_seen_at": "2026-10-03T08:51:38.810710Z",
+  "first_seen_at": "2026-10-03T07:40:10.544279Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
-  "github_issue_number": 5334,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5334",
-  "last_seen_at": "2026-10-03T08:51:38.810710Z",
-  "module": "validation.workflow_automation",
+  "fix_commit": "b6c43cbcd0c78a24e0b34c26c56ce70c5d4bdb19",
+  "fixed_at": "2026-10-03T09:21:57Z",
+  "github_issue_number": 5330,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5330",
+  "last_seen_at": "2026-10-03T07:40:10.544279Z",
+  "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5333",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -117,11 +113,11 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "actual_changed_files",
+    "inference_basis": "planned_scope",
     "persistence_basis": "not_required",
-    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": false,
+    "post_restart_receipt_ref": null,
+    "provisional": true,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -130,21 +126,49 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
-  "suspected_modules": [
-    "validation.workflow_automation"
-  ],
-  "title": "Canonical workflow binds task worktree validation and PR Git context to script root",
-  "trigger_condition": {
-    "fingerprint": "450f83dcb7365590267cb3dd",
-    "source_event_id": "FE-20261003-450f83dcb736"
+  "source_merge_receipt": {
+    "bug_id": "BUG-1698",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ac78a7f2ad7d26e8",
+    "recorded_at": "2026-10-03T09:23:43.003544Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d305e50cc22467c86d72c0f42af9fca3206273e0",
+    "source_merge_commit": "b6c43cbcd0c78a24e0b34c26c56ce70c5d4bdb19",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5333",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_task_root.py backend/tests/scripts/test_aistock_issue_workflow_fast.py backend/tests/scripts/test_ci_change_classifier.py -q -> 285 passed",
+      "python -m nox -s validation_catalog_integrity -> passed",
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "c0f9e0ad94d03b8603e6715b55772ccd6d55f92a7b05a47ab3b022e98112e9e6"
   },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Canonical workflow CLI ignores linked task worktree execution root",
+  "trigger_condition": {
+    "fingerprint": "d8d7204e42e24637d0dad04e",
+    "source_event_id": "FE-20261003-d8d7204e42e2"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_task_root.py backend/tests/scripts/test_aistock_issue_workflow_fast.py backend/tests/scripts/test_ci_change_classifier.py -q -> 285 passed",
+    "python -m nox -s validation_catalog_integrity -> passed",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
       "modules": [
-        "validation.workflow_automation",
+        "validation",
         "validation_workflow_automation"
       ],
       "plans": [
@@ -188,7 +212,7 @@
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
-    "batch_candidate": false,
+    "batch_candidate": true,
     "cleanup_fast_candidate": false,
     "compact_success_output": true,
     "docs_only_merge_with_related_code": true,
@@ -196,6 +220,7 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
@@ -204,7 +229,7 @@
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
         "modules": [
-          "validation.workflow_automation",
+          "validation",
           "validation_workflow_automation"
         ],
         "plans": [

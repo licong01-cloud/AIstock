@@ -7544,6 +7544,38 @@ def _canonical_root() -> Path:
     return default if default.exists() else SCRIPT_ROOT
 
 
+TASK_CONTEXT_COMMANDS = frozenset({
+    "run", "resume", "finish", "finish-batch", "workflow-smoke",
+    "restart-plan", "post-restart-verify", "close-sync", "close-sync-batch",
+})
+
+
+def _task_execution_root(command: str) -> Path:
+    """Use a linked task checkout for data, never as CLI/client code authority."""
+    if command not in TASK_CONTEXT_COMMANDS:
+        return REPO_ROOT
+    if any(os.environ.get(key) for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")):
+        raise WorkflowError("ambiguous task Git context: inherited Git directory/index override")
+    cwd = Path.cwd().resolve()
+    top = _run_command(["git", "rev-parse", "--show-toplevel"], cwd=cwd)
+    if not top.get("ok"):
+        raise WorkflowError("Cannot verify the invoking task repository")
+    root = Path(str(top["stdout"])).resolve()
+    common_dirs = []
+    for checkout in (SCRIPT_ROOT, root):
+        result = _run_command(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=checkout,
+        )
+        if not result.get("ok") or not result.get("stdout"):
+            raise WorkflowError("Cannot verify linked task worktree identity")
+        common_dirs.append(Path(str(result["stdout"])).resolve())
+    if common_dirs[0] != common_dirs[1]:
+        raise WorkflowError("Invoking task worktree belongs to a different Git repository")
+    return root
+
+
+
+
 def _git_snapshot(root: Path) -> dict[str, Any]:
     if not (root / ".git").exists() and not (root / ".git").is_file():
         return {"ok": False, "error": f"not a git checkout: {root}"}
@@ -9312,6 +9344,18 @@ def _maybe_create_worktree(
         "worktree": str(worktree),
         "base": "origin/main",
     }
+    if not dry_run and (REPO_ROOT / ".git").is_file():
+        state = _load_state(bug_id, REPO_ROOT) or {}
+        recorded_root = state.get("worktree") or state.get("planned_worktree")
+        recorded_branch = state.get("branch") or state.get("planned_branch")
+        if recorded_root and Path(str(recorded_root)).resolve() == REPO_ROOT.resolve():
+            if not source_bug_json.resolve().is_relative_to(BUGS_ROOT.resolve()):
+                raise WorkflowError("Existing task BUG record is outside its checkout")
+            actual_branch = _git(["branch", "--show-current"], cwd=REPO_ROOT)
+            if not recorded_branch or actual_branch != recorded_branch:
+                raise WorkflowError("Existing task branch differs from its recorded identity")
+            plan.update(branch=actual_branch, worktree=str(REPO_ROOT), reused=True)
+            return plan
     if not create or dry_run:
         return plan
     if worktree.exists():
@@ -9326,7 +9370,7 @@ def _maybe_create_worktree(
 
 def _actual_and_planned_worktree(worktree_plan: dict[str, Any]) -> tuple[str | None, str | None]:
     worktree = str(worktree_plan.get("worktree") or "").strip() or None
-    if worktree_plan.get("created"):
+    if worktree_plan.get("created") or worktree_plan.get("reused"):
         return worktree, None
     return None, worktree
 
@@ -23388,12 +23432,7 @@ def _check_pr_receipt_identity(finish: dict[str, Any], *, root: Path) -> None:
 def _cli_task_context(args: argparse.Namespace):
     """Keep imports canonical while binding task data and Git to the caller checkout."""
     global REPO_ROOT, BUGS_ROOT, RUNTIME_TARGET_CATALOG, _TASK_GIT_IDENTITY
-    if any(os.environ.get(key) for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")):
-        raise WorkflowError("ambiguous task Git context: inherited Git directory/index override")
-    root = Path(_git(["rev-parse", "--show-toplevel"], cwd=Path.cwd())).resolve()
-    common_args = ["rev-parse", "--path-format=absolute", "--git-common-dir"]
-    if Path(_git(common_args, cwd=root)).resolve() != Path(_git(common_args, cwd=SCRIPT_ROOT)).resolve():
-        raise WorkflowError("task worktree does not share the canonical script repository")
+    root = _task_execution_root(args.command)
     previous = (REPO_ROOT, BUGS_ROOT, RUNTIME_TARGET_CATALOG, _TASK_GIT_IDENTITY)
     flow_paths = {
         "REPO_ROOT": root,
@@ -23408,7 +23447,7 @@ def _cli_task_context(args: argparse.Namespace):
     previous_flow = {key: getattr(flow, key) for key in flow_paths}
     REPO_ROOT, BUGS_ROOT = root, flow_paths["BUGS_ROOT"]
     RUNTIME_TARGET_CATALOG = root / "docs/standards/aistock_runtime_targets_v1.yaml"
-    strict = args.command in {"finish", "finish-batch"} or (args.command == "run" and args.mode == "pr")
+    strict = args.command in {"finish", "finish-batch"} or (args.command == "run" and getattr(args, "mode", None) == "pr")
     try:
         for key, value in flow_paths.items():
             setattr(flow, key, value)

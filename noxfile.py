@@ -3115,6 +3115,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
         session,
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
         "backend/tests/scripts/test_nightly_discovery_plans.py",
         "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
