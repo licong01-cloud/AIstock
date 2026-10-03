@@ -11,6 +11,10 @@
 - backend/tests/advisory_model_first/test_economic_common_core_daily_source_v1.py
 - 本文。
 
+## Non-goals
+
+不交付模型、收益确认、完整价格区间或角色激活，不修改其它模块，不读取收益或sealed，不操作服务或业务数据库写入。
+
 ## Approach / Contracts
 
 纯函数输入原候选、21日时钟（20D+下一T）、raw daily、S/R；复用现有core结构与数值校验。固定19配对，D adj anchor，contrast=mean(log(O*/prevC*)-log(C*/O*))，vol=std(log(O*/prevC*),ddof=1)。不压缩日历、不填缺失、不消费T行情。每个特征独立按所需原值传播UNKNOWN；缺D close不影响完整的vol，缺更早close影响两个量。原值非有限、非正价格、重复/外部/未来键及OHLC矛盾fail closed。
@@ -19,9 +23,13 @@
 
 source.load_timing_day委托load_timing_batch，内部共用原load_batch实现、同一快照/原值，旧load_day/load_batch原行为与返回维数不变。timing入口返回KEY+12D+2timing及合并receipt，不额外SQL、不公开裸packet、不使用摘要反推原值。仍1..20包、最多5SELECT、30s总预算、单SQL15s、finally rollback。
 
-## Implementation / Verification
+## Implementation Plan
 
 设计自审1：固定所需原值及独立UNKNOWN，缺D close只影响contrast。设计自审2：部分停牌端点证明与S/R歧义明确；只读共路不改原消费者。纯计算手算及公司行动、时钟/重复/synthetic、缺失/正常停牌测试；source复用同fixture测试单批同值hash、5查询及默认兼容，失败先定点、稳定最小矩阵一次。不同视角循环审核修复直至无已知问题。
+
+## Verification Plan
+
+按下表逐项检查源代码与定向测试；修改后先失败节点、最终相关小矩阵一次。Ruff、diff、范围及F1 validator通过后创建PR，required CI通过再合入。
 
 ## Design Acceptance Index
 
