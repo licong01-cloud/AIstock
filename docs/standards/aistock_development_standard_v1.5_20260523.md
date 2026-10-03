@@ -220,6 +220,8 @@ HTTP、subprocess、DB 长查询和批处理设置 timeout、取消、日志、�
 
 PR check watch、已完成 Actions run/job/log 诊断和 last-green 定位在 GraphQL/`gh run` 遇到 TLS、EOF、schannel、连接重置或超时时，先执行固定次数重试，再改用等价 GitHub REST endpoint；PR check 绑定 REST 回读的精确 HEAD SHA，Actions jobs 超过单页上限时 fail-closed。权限、策略、输入、404 或其他非传输错误不得改写成网络恢复。REST 与 GraphQL 都失败时返回结构化 unavailable/deferred 结果，不要求重新授权、不启动第二个 workflow、不循环重试。
 
+对同一任务已登记的 OPEN source PR，`run --mode pr` 先完成实际任务 HEAD 的 finish/收据校验，再通过 REST 核对本仓库、精确 branch/base 和旧 HEAD 为新 HEAD 的祖先；push 前同步生成的 PR body，避免 synchronize 事件固化旧收据。相同 HEAD/body 不重复写入；远端已是精确 task HEAD 时不重复 push，不重建已知 PR，也不因此重跑已完成的同 HEAD CI。更新传输结果不明时只作有限只读回查，不盲目重试 PATCH；身份漂移、外仓库或非祖先拒绝覆盖，保留已有状态。新 HEAD 始终需要自己的必需 CI，不得复用旧 HEAD 的绿灯。新任务没有已登记 PR 时仍走既有创建路径，不增加额外发现扫描、锁、安装或人工授权。
+
 <a id="rule-db-comment-001"></a>
 ### 6.11 [DB-COMMENT-001] 数据库语义
 
