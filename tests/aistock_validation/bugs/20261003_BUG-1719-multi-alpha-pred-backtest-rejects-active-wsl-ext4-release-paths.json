@@ -25,20 +25,27 @@
     {
       "action": "design_compliance_review",
       "actor": "codex-qe",
-      "timestamp": "2026-10-03T19:47:00Z",
-      "note": "两轮审核：RED三例复现合法EXT4挂载被拒，GREEN十二例覆盖IPv4/IPv6/localhost、既有Windows驱动挂载及远端拒绝边界。DESIGN-COMPLIANCE-001四项：完整修复路径识别；错误继续显式抛出；不改模型、数据、策略、容量或节点选择；不增加审批或研究门禁。生产源码仅六行增量，原非loopback、未知挂载、相对路径及Windows路径拒绝保持。数据库/候选数据写入和服务控制均为零；源码合入不等于backend-main运行态生效。"
+      "note": "两轮审核：RED三例复现合法EXT4挂载被拒，GREEN十二例覆盖IPv4/IPv6/localhost、既有Windows驱动挂载及远端拒绝边界。DESIGN-COMPLIANCE-001四项：完整修复路径识别；错误继续显式抛出；不改模型、数据、策略、容量或节点选择；不增加审批或研究门禁。生产源码仅六行增量，原非loopback、未知挂载、相对路径及Windows路径拒绝保持。数据库/候选数据写入和服务控制均为零；源码合入不等于backend-main运行态生效。",
+      "timestamp": "2026-10-03T19:47:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_remote_native_wsl_paths.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1719-multi-alpha-pred-backtest-rejects-active-wsl-ext4-release-paths.json"
+    ],
     "added_files": [
       "backend/tests/multi_alpha/test_remote_native_wsl_paths.py"
     ],
     "changed_files": [
-      "backend/services/multi_alpha/remote_dispatch.py"
+      "backend/services/multi_alpha/remote_dispatch.py",
+      "backend/tests/multi_alpha/test_remote_native_wsl_paths.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1719-multi-alpha-pred-backtest-rejects-active-wsl-ext4-release-paths.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/multi_alpha/remote_dispatch.py",
@@ -119,16 +126,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
     "fresh_process_evidence": [
       "python -m pytest backend/tests/multi_alpha/test_remote_native_wsl_paths.py -q -> passed; isolated fresh interpreter loads tracked remote_dispatch.py; 12 path contracts, no DB or service calls"
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
