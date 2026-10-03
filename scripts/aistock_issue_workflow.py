@@ -7541,7 +7541,7 @@ def _canonical_root() -> Path:
     if override:
         return Path(override)
     default = Path("F:/Dev/AIstock")
-    return default if default.exists() else REPO_ROOT
+    return default if default.exists() else SCRIPT_ROOT
 
 
 def _git_snapshot(root: Path) -> dict[str, Any]:

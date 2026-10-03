@@ -42,12 +42,17 @@ def cli_task_worktree(tmp_path, monkeypatch):
 def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktree, monkeypatch):
     base, task, git = cli_task_worktree
     original_root = workflow.REPO_ROOT
+    original_exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: False if path == Path("F:/Dev/AIstock") else original_exists(path))
+    monkeypatch.delenv("AISTOCK_CANONICAL_ROOT", raising=False)
+    monkeypatch.delenv("AISTOCK_ROOT", raising=False)
     (task / "nested").mkdir()
     monkeypatch.chdir(task / "nested")
     calls = []
 
     def handler(_args):
         assert workflow.REPO_ROOT == workflow.flow.REPO_ROOT == task
+        assert workflow._canonical_root() == base
         assert workflow.flow.BUGS_ROOT == task / "tests/aistock_validation/bugs"
         assert workflow.flow.TEST_PLANS == task / "tests/aistock_validation/catalog/test_plans.yaml"
         assert workflow._finish_changed_files("origin/main", "HEAD") == ["task.txt"]
