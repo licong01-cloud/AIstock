@@ -378,6 +378,14 @@ A/B均APPROVED_BY_USER。本次终点是源码/测试多轮审核通过及全131
 forward 仍遵循 as-published PIT；历史 non-as-known-taxonomy 身份不能冒充 forward 确认。
 正式全grid实际出现legacy无完整D5 candidate、autocycle选中后D6未全通过；均保留真实结果，不改阈值、换seed或发布预测能力。未来L2-only精确合同不得回写旧验收。
 
+### 2026-10-03 PR #5325 CI测试隔离修复
+
+CI run `37105506032`为118 passed/1 failed；唯一失败为身份拒绝测试未隔离numeric_environment，在CI解释器先被正式固定版本/线程校验拒绝，而非到达预期来源拒绝。测试路由及changed-test coverage通过，不属于流水线缺陷。
+
+仅修改该HMM测试，用两个确定分支分别验证环境拒绝与环境前置通过后的来源拒绝，均检查typed reason，并保持fit/train/D5 poison；独立实际环境拒绝测试保留。生产numeric_environment、正式版本/线程要求、模型/seed/阈值及所有原产物零修改。
+
+修复后在既有AIstock-CI解释器实际执行：聚焦3 passed；同CI七文件HMM slice 120 passed；Ruff check/format、UTF-8/compile、diff检查通过；module registry 8 passed/14映射；L0 findings=0/blocking=0。两轮自审分别核对测试隔离生命周期/typed拒绝及模块/模型边界，无阻断。结果为修复后代码内容的本地证据，最新PR CI须另看实时结果，不写成全绿；没有正式fit、重新研究读回、依赖安装或运行态动作。
+
 ## Production Gates
 
 production_ddl_gate=noop；production_dml_gate=noop；dependency_install=noop。

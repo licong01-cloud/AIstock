@@ -544,13 +544,27 @@ def test_signed_zero_repeat_mismatch_is_not_object_equality(monkeypatch):
         executor.finalize(request, first, second)
 
 
-def test_l2_research_rejects_self_hashed_non_authoritative_source_without_fit_or_d5(monkeypatch):
+@pytest.mark.parametrize("valid_environment", [False, True])
+def test_l2_research_rejects_self_hashed_non_authoritative_source_without_fit_or_d5(monkeypatch, valid_environment):
+    # Identity rejection must not depend on the host matching the formal-fit environment.
+    # Keep a separate case proving environment rejection occurs before source acceptance.
+    def environment():
+        if not valid_environment:
+            raise subject.FormalStateError(
+                "hmm_risk_numeric_environment_mismatch", "fixed version/thread contract differs"
+            )
+        return {"test_only": True}
+
+    monkeypatch.setattr(executor, "numeric_environment", environment)
     for name in ("fit_entry", "train_repeat", "select_restart"):
         monkeypatch.setattr(executor, name, lambda *_: pytest.fail("fit or D5 accessed"))
     request = subject.receipt({"source_identity": {"generation": executor.FROZEN_GENERATION}})
     original = subject.receipt({"request_sha256": request["receipt_sha256"]})
-    with pytest.raises(subject.FormalStateError, match="approved frozen source"):
+    message = "approved frozen source" if valid_environment else "fixed version/thread"
+    reason = "hmm_risk_formal_identity_mismatch" if valid_environment else "hmm_risk_numeric_environment_mismatch"
+    with pytest.raises(subject.FormalStateError, match=message) as error:
         executor.l2_research_readback(request, original)
+    assert error.value.reason_code == reason
 
 
 def test_output_location_rejects_source_release_relative_and_indirect_paths(tmp_path, monkeypatch):
