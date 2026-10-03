@@ -369,6 +369,9 @@ def test_dataset_identity_reads_release_root_not_daily_component(tmp_path, confi
         (tmp_path / f"{run_id}.pkl").write_bytes(b"prediction")
     request = _request(tmp_path)
     request.backtest_config.update(config)
+    # Combining BUG-1697 with BUG-1702 must not restore deployment-pin gates.
+    request.backtest_config.pop("conda_environment_lock_sha256")
+    request.backtest_config.pop("executor_code_commit")
     before = dict(request.backtest_config)
     calls = []
     node_reads = []
@@ -395,10 +398,11 @@ def test_dataset_identity_reads_release_root_not_daily_component(tmp_path, confi
     assert calls == [("wsl2-5080", expected_root)]
     assert request.backtest_config == before
     assert node_reads == ([] if config else ["wsl2-5080"])
+    assert resolution.evidence["observations"]["runtime_provenance"]["record_only"] is True
 
 
-@pytest.mark.parametrize("failure", ["configured_root_conflict", "resolved_root_drift", "manifest_drift", "node_drift", "missing_manifest", "missing_runtime"])
-def test_release_identity_drift_and_missing_runtime_remain_fail_closed(tmp_path, failure):
+@pytest.mark.parametrize("failure", ["configured_root_conflict", "resolved_root_drift", "manifest_drift", "node_drift", "missing_manifest"])
+def test_release_identity_drift_remains_fail_closed(tmp_path, failure):
     for run_id in ("qe_a_L1", "qe_b_L1"):
         (tmp_path / f"{run_id}.pkl").write_bytes(b"prediction")
     request = _request(tmp_path)
@@ -408,9 +412,6 @@ def test_release_identity_drift_and_missing_runtime_remain_fail_closed(tmp_path,
     )
     if failure == "configured_root_conflict":
         request.backtest_config["data_root_uri"] = "/frozen/r9"
-    if failure == "missing_runtime":
-        request.backtest_config.pop("conda_environment_lock_sha256")
-        request.backtest_config.pop("executor_code_commit")
     calls = []
 
     def dataset_loader(node_id, root):
@@ -441,9 +442,7 @@ def test_release_identity_drift_and_missing_runtime_remain_fail_closed(tmp_path,
         assert "dataset.resolved_data_root_uri" in resolution.evidence["missing"]
     else:
         assert calls == [("wsl2-5080", "/frozen/r8")]
-    if failure == "missing_runtime":
-        assert set(resolution.evidence["missing"]) == {"runtime.conda_environment_lock_sha256", "runtime.executor_code_commit"}
-    elif failure == "manifest_drift":
+    if failure == "manifest_drift":
         assert "dataset.dataset_manifest_sha256" in resolution.evidence["missing"]
     elif failure == "node_drift":
         assert "dataset.resolved_node_id" in resolution.evidence["missing"]

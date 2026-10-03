@@ -14,16 +14,18 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-03T07:34:57.919796Z",
-  "description": "MA-E39四个固定组合在计算前失败：durable身份消费者将日线组件目录误当release根，无法读取同一冻结release已存在的manifest。修复只规范run-scoped lookup root并核对node/root/manifest；不改变计算路径、模型、因子、seed、窗口、费用或身份必需字段。两节点正式环境声明缺lock/commit是独立部署阻断，本修复不伪造或绕过。",
+  "description": "MA-E39四个固定组合在计算前失败：durable身份消费者将日线组件目录误当release根，无法读取同一冻结release已存在的manifest。修复只规范run-scoped lookup root并核对node/root/manifest；不改变计算路径、模型、因子、seed、窗口、费用或身份必需字段。2026-10-03续审遵守已合入BUG-1702：环境锁SHA和执行器commit仅记录，不构成实验阻断，不要求人工填写。",
   "design_compliance_review": {
     "business_semantics_unchanged": "不改变请求配置、provider计算路径、预测来源、模型/特征/seed/窗口/策略/费用；legacy非组件根语义保持。",
     "no_new_gate": "沿用现有身份完整性与hash pin合同，未增加审批或放宽必需字段。",
-    "no_silent_error": "根/节点/manifest漂移、缺manifest、缺runtime、相对或上跳路径均保持typed incomplete；真实双节点smoke通过。",
-    "no_simplification": "完整修复release根消费、请求/回读root和manifest一致性；部署身份缺失明确保留，未宣称所有MA-E39阻断已解除。",
+    "no_silent_error": "根/节点/manifest漂移、缺manifest、相对或上跳路径均保持typed incomplete；环境锁SHA和执行器commit缺失仅留证，不拒绝实验。",
+    "no_simplification": "完整修复release根消费、请求/回读root和manifest一致性；与已合入BUG-1702兼容，不恢复部署冻结要求。",
     "review_rounds": [
       "RED→GREEN：8个原实现业务断言失败，legacy两项通过；首轮10项GREEN。",
       "第二轮：补充显式根、node漂移、非法组件路径及避免重复node数据库查询；最终身份/恢复28项通过。",
-      "第三轮：两节点真实只读fresh-process根/manifest通过；独立环境声明缺失不被抹去；ownership、guardrail及QE计划通过。"
+      "第三轮：两节点真实只读fresh-process根/manifest通过；独立环境声明缺失不被抹去；ownership、guardrail及QE计划通过。",
+      "2026-10-03续审第一轮：安全合并最新main后旧missing_runtime断言RED；删除与BUG-1702相冲突的旧断言，六种release根/legacy路径正例均在无人工部署pin时完整通过；31项GREEN。",
+      "2026-10-03续审第二轮：代码逐项核对run-scoped根、节点、manifest、路径边界及原请求不变；记录而非冻结部署信息，既有真实内容身份和历史hash兼容保持。后续最终HEAD收据独立生成，不复用旧HEAD测试结论。"
     ]
   },
   "events": [
@@ -115,7 +117,8 @@
   "last_seen_at": "2026-10-03T07:34:57.919796Z",
   "module": "qe.auto_evolution",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "任何新增门禁须先向用户说明并取得单独直接授权；环境锁SHA和执行器commit仅记录，不要求人工填写，不冻结节点依赖。"
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
