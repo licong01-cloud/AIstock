@@ -30,14 +30,22 @@
   ],
   "expected": "Use the explicit frozen provider catalog to reject truly unknown instruments; intersect known membership with frozen PIT spans. Preserve interval gaps, suspension semantics, source bounds and missing-value failures. Do not substitute all.txt for selection eligibility.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/rotation_l2_input.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
+      "backend/tests/hmm_risk/test_rotation_l2_input.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1710-hmm-l2-effect-baseline-confuses-membership-catalog-with-pit-eligibility.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/formal_state_input.py",
       "backend/services/hmm_risk/rotation_l2_input.py",
       "backend/tests/hmm_risk/test_formal_state_input.py",
-      "backend/tests/hmm_risk/test_rotation_l2_input.py"
+      "backend/tests/hmm_risk/test_rotation_l2_input.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1710-hmm-l2-effect-baseline-confuses-membership-catalog-with-pit-eligibility.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/formal_state_input.py",
@@ -131,13 +139,16 @@
       "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1710_smoke.py F:/Dev/AIstock_worktrees/BUG-1710-hmm-l2-effect-baseline-confuses-membership-catal-20261003; explicit task PYTHONPATH -> PASS; backend.routers.hmm_risk, backend.routers.health and changed HMM imports; DB poison; 5258 membership rows retained; 9 known non-PIT stocks excluded from eligibility; 1199622 pre-suspend stock-days; unknown stock rejected; all four input file hashes unchanged; fits=0"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
+    "provisional": false,
     "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
