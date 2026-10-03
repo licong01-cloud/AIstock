@@ -50,13 +50,14 @@ _DATASET_FIELDS = (
 )
 _RUNTIME_FIELDS = (
     "qlib_runtime_template_sha256",
-    "conda_environment_lock_sha256",
     "execution_environment_snapshot_id",
     "execution_environment_manifest_sha256",
-    "executor_code_commit",
     "executor_file_set_sha256",
     "backtest_config_sha256",
 )
+# Deployment declarations are provenance, not experiment admission criteria.
+# Actual environment and executor content remain bound by the node manifest.
+_RUNTIME_PROVENANCE_FIELDS = ("conda_environment_lock_sha256", "executor_code_commit")
 _MATERIALIZER_FIELDS = (
     "aistock_commit",
     "planner_version",
@@ -102,9 +103,9 @@ def build_execution_identity(
 ) -> ExecutionIdentity:
     """Build a canonical P0-2 execution identity from content manifests.
 
-    All required evidence is explicit. A missing field is reported through a
-    structured contract error rather than silently falling back to a current
-    path, runtime default, or guessed configuration.
+    Required content evidence is explicit; optional deployment declarations
+    remain record-only. A missing content field is reported rather than
+    replaced by a current path, runtime default, or guessed configuration.
     """
 
     _require_mapping_fields(dataset, _DATASET_FIELDS, section="dataset")
@@ -150,7 +151,13 @@ def build_execution_identity(
             normalized_sources,
             key=lambda item: (item["leg_id"], item["seed_run_id"], item["artifact_sha256"]),
         ),
-        "runtime": _normalize_mapping(runtime, _RUNTIME_FIELDS, section="runtime"),
+        "runtime": {
+            **_normalize_mapping(runtime, _RUNTIME_FIELDS, section="runtime"),
+            **{
+                field: runtime[field].strip() if isinstance(runtime[field], str) else runtime[field]
+                for field in _RUNTIME_PROVENANCE_FIELDS if field in runtime
+            },
+        },
         "materializer": _normalize_mapping(materializer, _MATERIALIZER_FIELDS, section="materializer"),
         "business_formula": _normalize_mapping(
             business_formula,
@@ -579,27 +586,34 @@ class DurableExecutionIdentityResolver:
             runtime_template_hash = _optional_sha256(
                 declared_runtime.get("qlib_runtime_template_sha256"),
             )
-        conda_lock_hash = _configured_or_file_hash(
-            config,
-            hash_key="conda_environment_lock_sha256",
-            path_key="conda_environment_lock_path",
-        )
-        if conda_lock_hash is None:
+        provenance_errors: list[dict[str, str]] = []
+        try:
+            # Prefer what the execution node actually reports over an old
+            # request declaration. Neither absence nor collection failure may
+            # reject a new experiment or invent a deployment identity.
             conda_lock_hash = _optional_sha256(
                 declared_runtime.get("conda_environment_lock_sha256"),
+            ) or _configured_or_file_hash(
+                config,
+                hash_key="conda_environment_lock_sha256",
+                path_key="conda_environment_lock_path",
             )
+        except (OSError, ValueError, RuntimeError) as exc:
+            conda_lock_hash = None
+            provenance_errors.append({
+                "field": "conda_environment_lock_sha256",
+                "error_type": type(exc).__name__,
+                "reason_code": str(getattr(exc, "reason_code", "runtime_provenance_unavailable")),
+            })
         executor_code_commit = str(
-            config.get("executor_code_commit")
-            or declared_runtime.get("executor_code_commit")
+            declared_runtime.get("executor_code_commit")
+            or config.get("executor_code_commit")
             or ""
         ).strip()
         executor_file_set_hash = str(environment_manifest.get("executor_file_set_sha256") or "").strip()
         if runtime_template_hash is None:
             missing.append("runtime.qlib_runtime_template_sha256")
             suggestions.append("configure a content hash for the QE qrun runtime template or a readable runtime_template_dir")
-        if conda_lock_hash is None:
-            missing.append("runtime.conda_environment_lock_sha256")
-            suggestions.append("configure the expected conda environment lock hash for the QE deployment")
         if environment is None:
             # The environment loader already records the detail; keep each
             # required runtime component visible in the same evidence object.
@@ -610,20 +624,37 @@ class DurableExecutionIdentityResolver:
                     "runtime.executor_file_set_sha256",
                 ]
             )
-        if not executor_code_commit:
-            missing.append("runtime.executor_code_commit")
-            suggestions.append("set the owning QE deployment executor_code_commit as an immutable deployment value")
         if not executor_file_set_hash:
             missing.append("runtime.executor_file_set_sha256")
             suggestions.append("repair the owning QE execution-environment manifest executor file set")
+        provenance_missing = [
+            field for field, value in (
+                ("conda_environment_lock_sha256", conda_lock_hash),
+                ("executor_code_commit", executor_code_commit),
+            ) if not value
+        ]
+        observations["runtime_provenance"] = {
+            "record_only": True,
+            "complete": not provenance_missing,
+            "missing": provenance_missing,
+            "collection_errors": provenance_errors,
+            "sources": {
+                field: (
+                    "node_manifest" if declared_runtime.get(field)
+                    else "request_declaration" if config.get(field)
+                    else "request_lock_file" if field == "conda_environment_lock_sha256" and config.get("conda_environment_lock_path")
+                    else "unavailable"
+                )
+                for field in _RUNTIME_PROVENANCE_FIELDS
+            },
+        }
         if len(missing) > runtime_missing_before:
             return None
         assert environment is not None
         assert runtime_template_hash is not None
-        assert conda_lock_hash is not None
         runtime = {
             "qlib_runtime_template_sha256": runtime_template_hash,
-            "conda_environment_lock_sha256": conda_lock_hash,
+            "conda_environment_lock_sha256": conda_lock_hash or "",
             "execution_environment_snapshot_id": environment.execution_environment_snapshot_id,
             "execution_environment_manifest_sha256": environment.execution_environment_manifest_sha256,
             "executor_code_commit": executor_code_commit,

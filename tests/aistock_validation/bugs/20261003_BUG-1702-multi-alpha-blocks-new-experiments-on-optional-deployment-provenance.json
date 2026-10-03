@@ -1,0 +1,264 @@
+{
+  "actual": "Both empty fields cause multi_alpha_execution_identity_incomplete before child planning.",
+  "allowed_write_scope": [
+    "backend/services/multi_alpha/durable_identity.py",
+    "backend/tests/multi_alpha/test_durable_execution_identity.py",
+    "tests/aistock_validation/bugs/20261003_BUG-1702-multi-alpha-blocks-new-experiments-on-optional-deployment-provenance.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1702",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-03T14:00:01.975503Z",
+  "description": "Both empty fields cause multi_alpha_execution_identity_incomplete before child planning.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261003-d6c4f0dc70ba",
+      "timestamp": "2026-10-03T14:00:01.975486Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "New experiments accept absent deployment lock SHA/executor commit; actual environment manifest/code fingerprints remain recorded; persisted legacy identities validate unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/multi_alpha/durable_identity.py",
+      "backend/tests/multi_alpha/test_durable_execution_identity.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1702-multi-alpha-blocks-new-experiments-on-optional-deployment-provenance.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_identity.py",
+      "backend/tests/multi_alpha/test_durable_execution_identity.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1702-multi-alpha-blocks-new-experiments-on-optional-deployment-provenance.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/multi_alpha/durable_identity.py",
+        "backend/tests/multi_alpha/test_durable_execution_identity.py"
+      ],
+      "impacted_modules": [
+        "qe.auto_evolution",
+        "qe.core",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/multi_alpha/durable_identity.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_durable_execution_identity.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/multi_alpha/durable_identity.py",
+        "backend/tests/multi_alpha/test_durable_execution_identity.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/multi_alpha/durable_identity.py",
+      "backend/tests/multi_alpha/test_durable_execution_identity.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/multi_alpha/durable_identity.py",
+      "backend/tests/multi_alpha/test_durable_execution_identity.py"
+    ]
+  },
+  "first_seen_at": "2026-10-03T14:00:01.975503Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5357,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5357",
+  "last_seen_at": "2026-10-03T14:00:01.975503Z",
+  "module": "multi_alpha",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "任何新增门禁必须先向用户明确说明并获得单独直接授权；本任务不得增加实验准入、环境冻结或人工填写门禁。",
+    "不启动实验、不修改模型/因子/数据集、不执行 DDL/DML、依赖安装或客户端安装。"
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock-CI/python.exe -m pytest backend/tests/multi_alpha/test_durable_execution_identity.py -q -> 18 passed in an isolated fresh process loading the persisted QE source; record-only absent/empty/invalid optional provenance, node update and legacy identity compatibility verified; no backend process control or experiment submission",
+      "Fresh AIstock-CI python process at final task HEAD loads tracked durable_identity.py: 37 identity/control/restart tests passed; optional provenance does not block planning; historical identity hashes preserved; no experiment, database write or backend control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "multi_alpha"
+  ],
+  "title": "Multi-alpha blocks new experiments on optional deployment provenance",
+  "trigger_condition": {
+    "fingerprint": "d6c4f0dc70ba63e33d4618f8",
+    "source_event_id": "FE-20261003-d6c4f0dc70ba"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "multi_alpha",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "multi_alpha",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
