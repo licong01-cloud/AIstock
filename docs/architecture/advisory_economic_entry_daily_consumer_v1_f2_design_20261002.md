@@ -1,6 +1,6 @@
-# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.14
+# Advisory 收益型价格条件每日消费与展示 F2 设计 v0.15
 
-> 日期2026-10-02；2026-10-03状态SOURCE_VERIFIED_CI_PENDING_RUNTIME_PENDING。父设计：[经济进入价值](advisory_economic_entry_value_v1_f2_design_20261002.md)、[风险与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)、[一致双头v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)。本设计把离线数值内核接到完整日频条件网格、只读消费者/API与Advisory展示，不新增模型搜索，不研发分钟执行。工程源码/API投影/UI展示验收完成，CI及用户重启后的运行加载仍待完成；当前没有经济确认模型或角色激活。
+> 日期2026-10-02；2026-10-03状态SOURCE_MERGED_RUNTIME_READONLY_VERIFIED_NO_QUALIFIED_MODEL。父设计：[经济进入价值](advisory_economic_entry_value_v1_f2_design_20261002.md)、[风险与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)、[一致双头v3](advisory_economic_entry_aligned_cohort_v3_f2_design_20261002.md)。本设计把离线数值内核接到完整日频条件网格、只读消费者/API与Advisory展示，不新增模型搜索，不研发分钟执行。工程源码/API投影/UI展示验收完成；#5324必需CI成功并合入68ff7aaaa，用户重启后health/identity及三个实际Program默认NOT_CONFIGURED读回通过；当前没有经济确认模型或角色激活。
 
 ## 1. Background / 当前事实
 
@@ -197,13 +197,13 @@ LOCKED_HISTORICAL_OOT允许今天登记、对过去合格未消费窗口预测�
 
 复用既有fixture新增artifact隔离分支，另用4项空名单身份/时钟与2项全局budget参数化覆盖直接安全合同，未扩大到其它业务模块或重复大场景。两次先复现再修复、第三次预算边界复核后，当前相关小矩阵62项实际通过（55既有+7新增）；Ruff和diff检查通过。这里的单元/注入工件不能算真实原生捕获、独立经济确认或浏览器证据。之前55项和81日功能记录仍为当时检查点，不作为当前HEAD的宽验收。
 
-2026-10-03流水线已交付专用六场景UI收据，6 PASS/0失败/0跳过/0重试；mock只证明展示合同，配合既有真实受限网格/API和叶测试闭合工程验收，不升级模型资格。消费者源码待必需CI/合入，运行加载等待用户重启；角色未激活，经济负增量不改判。完整用户功能及新模型效果不能由结构检查、工作树clean或UI单项通过替代。
+2026-10-03流水线已交付专用六场景UI收据，6 PASS/0失败/0跳过/0重试；mock只证明展示合同，配合既有真实受限网格/API和叶测试闭合工程验收，不升级模型资格。消费者#5324已完成必需CI/合入及用户重启后只读默认未配置验证；角色未激活，经济负增量不改判。完整用户功能及新模型效果不能由结构检查、工作树clean或UI单项通过替代。
 
 当前模型净增量负向，风险回撤改善可能部分来自少买留现金，不等于证明风险选择alpha；本任务不补跑现金对照或新模型来挑结果。历史股票池原生身份/特征vintage及D属性可产性仍需消费者核验，metadata/source hash PASS不等于业务正路径已证。日常source缺数据交所属窗口，不在Advisory补写。
 
 本轮不交付卖出价格模型；Exit的下一合法退出vs继续持有剩余价值仍按父设计§16及既有exit oracle/learnability合同后续演进，不把持有期可预测当Exit可学，不把入场价格集合外推出卖出点。
 
-当前源码工程验收检查点：研究serving view、完整D网格、原生候选/D source、不可变batch、资格与ACTIVATION只读消费、日常capture/隔离、独立API/UI已实现，空名单/停用/过期/身份矛盾分别处理。相关稳定矩阵62项此前通过，最新main集成后直接11项通过；81日真实受限功能证据不重跑，四根TS检查保留，六UI已实际通过。工程可在必需CI绿灯后合入，源合入不等于用户运行时生效。首次确认producer、真实合格scope/PIT及角色发布仍独立后续，不由单元工件代办；当前负模型和native UNPROVEN禁止启用，不消费sealed、不增加确认/训练。十三字段新模型的每日路由/完整新recipe不是本九字段消费者的已交付项，按共享内核详细设计另行实现。
+当前源码工程验收检查点：研究serving view、完整D网格、原生候选/D source、不可变batch、资格与ACTIVATION只读消费、日常capture/隔离、独立API/UI已实现，空名单/停用/过期/身份矛盾分别处理。相关稳定矩阵62项此前通过，最新main集成后直接11项通过；81日真实受限功能证据不重跑，四根TS检查保留，六UI已实际通过。工程已通过必需CI run37104100606并由#5324合入68ff7aaaa；用户重启后默认未配置运行验证已通过，正式已配置角色路径尚无真实合格模型可验。首次确认producer、真实合格scope/PIT及角色发布仍独立后续，不由单元工件代办；当前负模型和native UNPROVEN禁止启用，不消费sealed、不增加确认/训练。十三字段新模型的每日路由/完整新recipe不是本九字段消费者的已交付项，按共享内核详细设计另行实现。
 
 以下是实现过程中各切片的历史检查点，不代替上述当前状态：
 
@@ -223,7 +223,7 @@ LOCKED_HISTORICAL_OOT允许今天登记、对过去合格未消费窗口预测�
 
 ## 13. Production Gates / Rollout / Rollback
 
-design_accepted=true_design_pr_5250_merged；source_implementation=complete；source_acceptance=engineering_verified_ci_pending；api_ui_source_verified=true；runtime_activation=pending_user_restart；historical_daily_grid_verified=true_navigation_only；economic_model_confirmed=false；binding_active=false。设计合入commit `f0feb238121569fcfdfd07f6d3b24ad03369f0f5`；任务已普通同步最新核对main，尚待本消费者PR必需CI及源合入。后端加载目标`backend-main`，用户操作见`docs/operations/backend_main_runtime_restart_runbook.md`；重启后核对merge identity与独立entry-value GET语义，不调用有副作用model-state，不启用模型。DDL/DML/profile/依赖/用户进程操作noop，QE训练及sealed访问0。
+design_accepted=true_design_pr_5250_merged；source_implementation=complete；source_acceptance=engineering_verified_merged_PR5324；api_ui_source_verified=true；runtime_activation=readonly_default_unconfigured_verified_after_user_restart；historical_daily_grid_verified=true_navigation_only；economic_model_confirmed=false；binding_active=false。设计合入commit `f0feb238121569fcfdfd07f6d3b24ad03369f0f5`；消费者#5324已合入68ff7aaaa9358c160c75916231207d5f87f3c014；必需CI run37104100606成功，main已同步并完成本源树官方清理。后端加载目标`backend-main`，用户操作见`docs/operations/backend_main_runtime_restart_runbook.md`；用户重启后已核对merge identity与三个实际Program的独立entry-value GET默认NOT_CONFIGURED语义，不调用有副作用model-state，不启用模型。DDL/DML/profile/依赖/用户进程操作noop，QE训练及sealed访问0。
 
 本次UI收据：run_id=`advisory-ui-7bbb741e-20261003`，HEAD=`7bbb741ebeb5c354cc9bd8e529475a3109a7dc49`，spec SHA=`bd4396aeafc843d5eda8a3c6badcf3b28927cf1dd15c3dbf057626aad25f2f68`；artifact=`X:/AIstock_temp/advisory-ui-7bbb741e-20261003/receipt.json`及`results.json`。原始结果expected6/unexpected0/skipped0/flaky0，最终28.753秒。完整标题前缀导致原`^economic entry`零收集，runner改等价`(?:^| )economic entry`并强制逐裸标题恰为指定6项，未改spec/跳过/扩套件。源码361个Git blob核验、依赖lock匹配、排除.env.local；runner-owned前端/浏览器已退出，全部临时X、默认拒绝未mock网络，无backend/DB/安装。后续合入main仅其他模块文档及本文/蓝图验收记录变更；已核对backend/frontend与该收据HEAD完全相同，原收据不改写、不声称在新文档HEAD重新执行过UI。PR最终源码等价检查另报告；若代码变化须重新验证。
 
@@ -244,18 +244,18 @@ design_accepted=true_design_pr_5250_merged；source_implementation=complete；so
 | F-570 | serving_bundle | 旧真实权重/hash/可用时钟读回；研究消费者通过 | 原生训练资格未证明，禁止启用 |
 | F-571 | daily_contracts/source | 叶测试核验D/T/身份/缺失保留 | 正式活动PIT与原始lease由所属窗口闭合 |
 | F-572 | daily_inference/service | 81日413,698同核格点完成；零新fit | 不证明模型经济有效 |
-| F-573 | daily_inference、UI卡片 | 多段/未知/预算叶测试及六UI通过 | 用户运行时加载待重启 |
+| F-573 | daily_inference、UI卡片 | 多段/未知/预算叶测试及六UI通过 | 用户重启后默认未配置验证通过；无合格角色仍不可部署 |
 | F-574 | daily_inference | 原D格点精确消费与T绑定测试通过 | 不做分钟择时、订单或成交证明 |
 | F-575 | daily_source | 实际只读canonical组件消费，非活动身份限制保留 | 仅提数据所属需求，不激活/补写 |
 | F-576 | daily_service | 81日exact retry零DB/推理、hash不变；原子和资格叶测试通过 | 首次独立确认producer未交付 |
-| F-577 | advisory router/API | 三个真实batch GET投影及定向API测试通过 | 未合入/重启，用户运行时未验收 |
+| F-577 | advisory router/API | 三个真实batch GET投影及定向API测试通过 | 已合入并用户重启，三个实际Program默认状态读回通过；不冒充已配置正式路径 |
 | F-578 | EconomicEntryValueCard | 四根TS检查及指定六UI实际PASS，收据见本节 | 仅展示合同，不代表收益确认 |
 | F-579 | daily_service/历史功能plan | 81日1,620原候选受限功能通过 | 仅NAVIGATION_ONLY，未读独立确认窗口 |
-| F-580 | 自有worktree/设计/精确diff | 工程逐项通过，20文件Advisory精确scope | 必需CI/源合入及用户重启分别报告 |
-| F-581 | advisory_forward hook | 四个定向API/hook节点通过，默认未配置 | 新源码加载与用户重启后语义验证待交付 |
+| F-580 | 自有worktree/设计/精确diff | 工程逐项通过，20文件Advisory精确scope | 必需CI/源合入/源树清理及用户重启后默认状态均已核对；经济确认仍未通过 |
+| F-581 | advisory_forward hook | 四个定向API/hook节点通过，默认未配置 | 新源码已加载，三个实际Program不自动捕获；未执行有副作用hook |
 
 DESIGN-COMPLIANCE-001复核结论：①本设计消费者工程完整实现及源/API/UI证据齐备，模型利润和用户运行时不冒充完成；②矛盾响应拒绝、正常UNKNOWN保留、GET无隐式生成；③原排名/模型/成本/风险/窗口不变，新十三字段接入另项；④不新增审批或实盘等待门禁。已有授权允许必需CI通过后提交合入与自身善后，后端重启仍由用户执行。
 
-源码按用户既有授权、多轮审核及必需CI后可提交合入；新API加载等待用户重启，之后只读identity/business smoke。没有合格ENTRY_VALUE模型不生产绑定；未来正式角色须同时满足模型确认与scope/输入证据合同，不能用本工程PR绕过。
+源码按用户既有授权、多轮审核及必需CI由#5324合入，源树清理完成；用户重启后health=ok、merge identity精确匹配、三个实际Program的只读默认未配置状态通过，未触发研究或角色启用。没有合格ENTRY_VALUE模型不生产绑定；未来正式角色须同时满足模型确认与scope/输入证据合同，不能用本工程PR绕过。
 
 新角色失败仅新子对象unavailable，旧M4/ENTRY_PRICE与基线不改；版本回退只选择已批准的新角色artifact，不覆盖旧模型/名单/捕获时钟、不改数据库、不重启服务。未完成项保持明确状态，不用POC/placeholder或mock-only交付冒充完整日常价格建议。
