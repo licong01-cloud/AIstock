@@ -27,15 +27,15 @@
   "expected": "单根合法源竞价按既有合同分类；常规240根完整、原始量价日合计闭合；真实缺失重复和量价漂移保持fail-closed",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261003_BUG-1706-240.json",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1706-240.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261003_BUG-1706-240.json",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1706-240.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-03T15:06:24.080408Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2208861fde64cf9e47bb614316d6acbba5cb31df",
+  "fixed_at": "2026-10-03T15:28:37Z",
   "github_issue_number": 5368,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5368",
   "last_seen_at": "2026-10-03T15:06:24.080408Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5369",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,6 +129,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -139,7 +141,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1706",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "877ae1e8ad97b4ef",
+    "recorded_at": "2026-10-03T15:29:23.916212Z",
+    "runtime_contract_digest": "5ff16709ead9c71a68aa604864f21e41d6c6bace4798405bf3757e056624d7e0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9ba232e43242e55a9228c9eba236644aa0ce1733",
+    "source_merge_commit": "2208861fde64cf9e47bb614316d6acbba5cb31df",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5369",
+    "validation_evidence": [
+      "validation-receipt: id=137dd2e4a629e0c0 commit=9ba232e43242e55a9228c9eba236644aa0ce1733 kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed, 3 changed paths, 0 findings, 0 blocking`",
+      "validation-receipt: id=f3b84817ed8fe58b commit=9ba232e43242e55a9228c9eba236644aa0ce1733 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_source_audit.py backend/tests/dataset_release/test_canonical_stock_transformer.py -q --basetemp=X:/AIstock_temp/BUG-1693/pytest-auction-final` result=`70 passed`",
+      "validation-receipt: id=9bc4755acf8dbce0 commit=9ba232e43242e55a9228c9eba236644aa0ce1733 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/dataset_release/monthly_frozen_source_audit.py backend/tests/dataset_release/test_monthly_postgres_source.py` result=`passed`",
+      "validation-receipt: id=9f2a81909d8b056a commit=9ba232e43242e55a9228c9eba236644aa0ce1733 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "66b4b9c873455899d17e335584e731dcc70bcd9a230214a1882ab98a38bc683b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -148,6 +174,12 @@
     "fingerprint": "fa7bcb86f444c52d75cd6dbd",
     "source_event_id": "FE-20261003-fa7bcb86f444"
   },
+  "validation_evidence": [
+    "validation-receipt: id=137dd2e4a629e0c0 commit=9ba232e43242e55a9228c9eba236644aa0ce1733 kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed, 3 changed paths, 0 findings, 0 blocking`",
+    "validation-receipt: id=f3b84817ed8fe58b commit=9ba232e43242e55a9228c9eba236644aa0ce1733 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_source_audit.py backend/tests/dataset_release/test_canonical_stock_transformer.py -q --basetemp=X:/AIstock_temp/BUG-1693/pytest-auction-final` result=`70 passed`",
+    "validation-receipt: id=9bc4755acf8dbce0 commit=9ba232e43242e55a9228c9eba236644aa0ce1733 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/dataset_release/monthly_frozen_source_audit.py backend/tests/dataset_release/test_monthly_postgres_source.py` result=`passed`",
+    "validation-receipt: id=9f2a81909d8b056a commit=9ba232e43242e55a9228c9eba236644aa0ce1733 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
