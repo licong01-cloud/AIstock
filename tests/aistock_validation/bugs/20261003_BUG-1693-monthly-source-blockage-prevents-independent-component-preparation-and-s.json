@@ -1,6 +1,32 @@
 {
   "actual": "One margin_detail refresh audit stops all SOURCE and all eight component builds",
   "allowed_write_scope": [
+    "noxfile.py",
+    "backend/services/dataset_release/monthly_preparation_composition.py",
+    "backend/tests/dataset_release/test_monthly_preparation_composition.py",
+    "backend/tests/dataset_release/test_monthly_production.py",
+    "backend/services/dataset_release/monthly_supervised_build.py",
+    "backend/tests/dataset_release/test_monthly_supervised_build.py",
+    "backend/services/dataset_release/daily_minute_materializer.py",
+    "backend/tests/dataset_release/test_daily_minute_materializer.py",
+    "backend/services/dataset_release/subprocess_runner.py",
+    "backend/tests/dataset_release/test_subprocess_runner.py",
+    "backend/tests/dataset_release/test_monthly_shared_components.py",
+    "backend/services/dataset_release/monthly_preparation_shared.py",
+    "backend/tests/dataset_release/test_monthly_preparation_shared.py",
+    "backend/services/dataset_release/monthly_preparation_sector.py",
+    "backend/tests/dataset_release/test_monthly_preparation_sector.py",
+    "backend/services/dataset_release/monthly_preparation_executor.py",
+    "backend/tests/dataset_release/test_monthly_preparation_executor.py",
+    "backend/tests/dataset_release/test_build_stage.py",
+    "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+    "backend/services/dataset_release/monthly_preparation_artifacts.py",
+    "backend/tests/dataset_release/test_monthly_preparation_artifacts.py",
+    "backend/services/dataset_release/monthly_preparation_source.py",
+    "backend/tests/dataset_release/test_monthly_preparation_source.py",
+    "backend/tests/dataset_release/test_monthly_source_producer.py",
+    "backend/services/dataset_release/artifact_ready_build_source.py",
+    "backend/services/dataset_release/monthly_production.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
     "backend/services/dataset_release/monthly_source_producer.py",
     "backend/services/dataset_release/monthly_worker_composition.py",
@@ -13,6 +39,7 @@
     "backend/services/dataset_release/monthly_shared_components.py",
     "backend/services/dataset_release/monthly_component_preparation.py",
     "backend/tests/dataset_release/test_monthly_component_preparation.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "docs/architecture/monthly_component_preparation_f2_design_20261003.md",
     "tests/aistock_validation/bugs/20261003_BUG-1693-monthly-source-blockage-prevents-independent-component-preparation-and-s.json"
   ],
@@ -45,6 +72,7 @@
       "docs/architecture/monthly_component_preparation_f2_design_20261003.md"
     ],
     "changed_files": [
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_source_producer.py",
       "backend/services/dataset_release/monthly_worker_composition.py",
@@ -59,6 +87,7 @@
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
+        "backend/tests/dataset_release/test_monthly_postgres_source.py",
         "backend/services/dataset_release/monthly_postgres_source.py",
         "backend/services/dataset_release/monthly_source_producer.py",
         "backend/services/dataset_release/monthly_worker_composition.py",

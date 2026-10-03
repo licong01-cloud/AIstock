@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import hashlib
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -333,9 +334,14 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
     profile = SimpleNamespace(
         profile="fixture",
         start_date=date(2024, 7, 1),
+        resource_policy=SimpleNamespace(validation_read_chunk_rows=2),
         universe_key="aistock_equity_pit_canonical_v2",
     )
 
+    monkeypatch.setattr(
+        "backend.services.dataset_release.monthly_shared_components._read_sector_frame",
+        lambda *_args: pytest.fail("whole-history stock-sector DataFrame must not be used"),
+    )
     result = FrozenMonthlySharedComponentBuilder(
         profile=profile,  # type: ignore[arg-type]
         cas=cas,
@@ -366,3 +372,54 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         staging
         / "components/sector_context_candidate_v1/sector_membership_spans.parquet"
     ).is_file()
+
+    # Builder-integration boundary: use independently copied, actually hashed
+    # fixture outputs. Strict full-SOURCE lookup/receipt rejection/recovery is
+    # tested separately with the real typed reader, not faked by this lookup.
+    from backend.services.dataset_release.monthly_preparation_executor import VerifiedPreparationCheckpoint
+    from backend.services.dataset_release.monthly_component_preparation import _file_ref
+    from backend.services.dataset_release import monthly_preparation_shared as private
+
+    catalog = staging.parent.parent
+    profile.candidate_root = catalog
+    definitions = {
+        "stock_pools": {path.name: path for path in (staging / "stock_pools").glob("*.txt")
+                        if path.name != "benchmark.txt"},
+        "benchmark": {"benchmark.txt": staging / "stock_pools/benchmark.txt"},
+        "suspend": {f"components/suspend_d_daily_candidate_v2/{name}":
+                    staging / f"components/suspend_d_daily_candidate_v2/{name}"
+                    for name in ("suspend_d.parquet", "meta.json")},
+        "sector_context": {name: staging / f"components/sector_context_candidate_v1/{name}"
+                           for name in ("market_context.parquet", "sector_membership_spans.parquet")},
+    }
+    proofs = {}
+    for domain, files in definitions.items():
+        prior = catalog / ".staging" / "unit-prepared-fixture" / domain
+        for relative, original in files.items():
+            target = prior / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(original, target)
+        proofs[domain] = VerifiedPreparationCheckpoint(
+            {"component_root": prior.relative_to(catalog).as_posix()},
+            {"output_refs": [_file_ref(prior, relative) for relative in files]},
+        )
+    monkeypatch.setattr(private, "recover_prepared_shared_components", lambda **_kwargs: proofs)
+    successor = catalog / ".staging" / "adoption-fixture"
+    successor.mkdir()
+    for name in ("daily_bin", "minute_bin", "factor_bundle", "index_context"):
+        if (staging / name).is_dir():
+            shutil.copytree(staging / name, successor / name)
+    adopted = FrozenMonthlySharedComponentBuilder(profile, cas, date(2024, 7, 1)).execute(
+        context=context, staging_root=successor, compiled=compiled,
+        validation_result={"validation_ref": source_ref.as_dict(),
+                           "component_artifact_manifest_ref": source_ref.as_dict()},
+    )
+    assert all(path.is_file() for path in adopted.required_files)
+    for domain, files in definitions.items():
+        for relative, original in files.items():
+            target = (successor / "stock_pools" / relative if domain in {"stock_pools", "benchmark"}
+                      else successor / relative if domain == "suspend"
+                      else successor / "components/sector_context_candidate_v1" / relative)
+            assert target.read_bytes() == original.read_bytes()
+            assert target.stat().st_ino != (catalog / proofs[domain].record["component_root"] / relative).stat().st_ino
+    assert not list(successor.rglob("prepared-component.json"))

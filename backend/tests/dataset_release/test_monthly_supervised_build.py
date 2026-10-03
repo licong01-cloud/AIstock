@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import make_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,20 @@ from backend.services.dataset_release.monthly_supervised_build import (
     SupervisedMonthlyQlibWriter,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
+
+
+def test_portable_receipt_accepts_typed_tuple_logs_without_leaking_paths() -> None:
+    segment = {"stream": "stderr", "generation": 1, "size_bytes": 3,
+               "sha256": "a" * 64, "cas_ref": {"sha256": "a" * 64}, "path": "private/log"}
+    receipt_type = make_dataclass("TypedReceipt", ["log_segments", "result_path", "log_root"])
+    result = module._portable_receipt(receipt_type((segment,), "private/result", "private/logs"))
+    assert result == {"log_segments": [{key: value for key, value in segment.items() if key != "path"}]}
+
+
+@pytest.mark.parametrize("segments", [{}, "", None, 0, {"stdout"}])
+def test_portable_receipt_rejects_malformed_even_empty_log_collections(segments) -> None:
+    with pytest.raises(MonthlySupervisedBuildError, match="log receipt"):
+        module._portable_receipt({"log_segments": segments})
 
 
 def _sha(path: Path) -> str:
