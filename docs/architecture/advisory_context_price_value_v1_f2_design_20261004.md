@@ -1,6 +1,6 @@
-# Advisory 行业条件价格价值 H-CONTEXT-VALUE-1 F2详细设计 v1
+# Advisory 行业条件价格价值 H-CONTEXT-VALUE-1 F2详细设计 v1.1
 
-日期：2026-10-04。归属：Advisory/model_first。用户批准48小时预算任务；依据主蓝图v3.90 §6.3.3、§16.1/16.5。本文件先交付设计，不声明实现、收益有效或正式启用。
+日期：2026-10-04。归属：Advisory/model_first。用户批准48小时预算任务；立项依据主蓝图v3.90 §6.3.3、§16.1/16.5，当前进度对应v3.92。设计由PR #5383合入；五源码叶、14项定向合同测试及一次真实四头拟合/完整回放已完成，实际结果见§16。新增行业candidate未通过预登记净增量及模型TAKE支持条件，停止本候选；源码待本轮PR交付，经济确认及正式启用仍未完成。
 
 ## 1. Background / 当前事实及新假设
 
@@ -132,18 +132,18 @@ infer按完整估值日配对moving-block bootstrap：block5/reps2000/seed202610
 
 ## 11. Design Acceptance Matrix
 
-以下仅验收本文设计。源码/真实准备/拟合/经济/启用状态必须在实际实施后另报，不将DESIGN_VERIFIED升级成实现PASS。
+G1的设计验收与G2/G3的实际工程/研究验收分别记录；以下为当前源码合同及本次已消费开发窗口的证据。源码合同通过不是经济通过；原生资格、独立确认和生产接入均未完成，不把负向导航改判为模型可用。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-681 | 本文§1/5.3 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-682 | 本文§3/5.1 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-683 | 本文§5.2/7 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-684 | 本文§5.3/5.4/6 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-685 | 本文§5.4/10 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-686 | 本文§5.5/6/7 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-687 | 本文§4/6 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-688 | 本文§2/3/9/10/13 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md | DESIGN_VERIFIED | none |
+| F-681 | `economic_context_value_contracts_v1.py`/training；本文§1/5.3 | `backend/tests/advisory_model_first/test_economic_context_value_contracts_v1.py`；§16共同监督/四头拟合 | IMPLEMENTED_NAVIGATION_NEGATIVE | none |
+| F-682 | `economic_context_value_pipeline_v1.py`/training；§3/5.1 | `backend/tests/advisory_model_first/test_economic_context_value_training_v1.py`；§16原7720键/386D及RECOVERED_LIMITED | SOURCE_VERIFIED | none |
+| F-683 | pipeline/evaluation复用VALUE_REVIEW_5_V1；§5.2/7 | `backend/tests/advisory_model_first/test_economic_context_value_evaluation_v1.py`；§16四臂endpoint/holding审计 | SOURCE_VERIFIED_SHADOW_ONLY | none |
+| F-684 | `economic_context_value_training_v1.py`；§5.3/5.4/6 | `backend/tests/advisory_model_first/test_economic_context_value_training_v1.py`；§16四次真实fit、857/304共同监督 | SOURCE_VERIFIED | none |
+| F-685 | `economic_context_value_inference_v1.py`；§5.4/10 | `backend/tests/advisory_model_first/test_economic_context_value_inference_v1.py`；价格支持洞、tick/费用及模型漂移定向测试 | SOURCE_VERIFIED | none |
+| F-686 | `economic_context_value_evaluation_v1.py`；§5.5/6/7 | `backend/tests/advisory_model_first/test_economic_context_value_evaluation_v1.py`；§16完整四臂、控制贡献、两门失败 | IMPLEMENTED_NAVIGATION_NEGATIVE | none |
+| F-687 | `economic_context_value_pipeline_v1.py`；§4/6 | `backend/tests/advisory_model_first/test_economic_context_value_pipeline_v1.py`；§16五registry阶段/四fit journal及公开QE空闲读回 | SOURCE_VERIFIED | none |
+| F-688 | 本文§2/3/9/10/13/15/16 | artifact: docs/architecture/advisory_context_price_value_v1_f2_design_20261004.md；14定向测试、三轮自审、源码/生产分报 | SOURCE_VERIFIED_OFFLINE_SCOPE | none |
 
 ## 12. Risks / 统计与业务限制
 
@@ -163,4 +163,45 @@ DESIGN-COMPLIANCE-001：①完整设计不冒称已实现；②未知/非法/未
 2. 时钟/统计轮：明确两对照均须达到真实干预支持，计数映射原决策日，不扩大tail分母；事前基线噪声代理不是差分确认功效，不因欠功效追加搜索。
 3. 交付/范围轮：核对只有本文/蓝图设计PR，后续五源码及五测试精确登记；设计、源、实际fit、组合导航与确认/启用分别汇报。无行业行情源、未证明类别和旧native限制不得回填；现有ENV可用，不安装新平台。
 
-结构validator只核格式/设计条目，不证明模型/收益。当前DESIGN_REVIEWED_NO_IMPLEMENTATION，实际fit=0、收益读取=0、runtime/DB/QE修改=0。
+结构validator只核格式/设计条目，不证明模型/收益。G1交付时DESIGN_REVIEWED_NO_IMPLEMENTATION，实际fit=0、收益读取=0、runtime/DB/QE修改=0；这是设计交付检查点，当前接续见§15。
+
+## 15. G2源码接续 / 拟合前历史检查点
+
+以下是`f89600371567ac95d5053138702cde680241a104`提交时的拟合前检查点，实际登记/拟合/导航接续见§16；不能将本节的当时零fit当作当前状态。
+
+已实现§2五源码叶和五定向测试，复用统一消费者、标签/政策、stage和registry，公开离线调用为`preregister_context_value_v1`→`prepare_context_value_v1`→`train_context_value_study_v1(qe_training_idle=True)`→`evaluate_context_value_v1`。调用仍须显式计划/evidence/profile/输出根；bool不是QE空闲证据，执行窗口须先核对公开运行状态，不提交QE实验。
+
+可直接复用`context_value_price_set_v1`作D信息+价格条件的纯查询；原生产family/API/UI尚未接入。模型系数/recipe/support以JSON保存，不依赖pickle或旧权重；matched/candidate使用同监督、同支持。
+
+源码自审及修复：①时钟/缺失轮修复未知known_from空值被旧非空日期函数误拒、缺行情left join保留全部键；②工程轮修复模块实际导入路径，训练/查询gap统一Decimal价格坐标，分位不收敛转硬失败、2线程/逐fit及工件预算约束；③身份/经济轮绑定登记时context projection、防止未提交依赖漂移、验证全人口四臂原子评价及UNKNOWN控制归因。按合同未读评价收益、未登记run、未真实fit、未写DB/改QE/控制服务。
+
+新增测试为合同验证，synthetic/mocked模型不冒充真实训练或收益验收。结构及源码验收后才登记并运行唯一研究，真实共同监督数量、训练噪声代理和导航结果届时单列。价格坐标Decimal修正是数值一致性，不改变100bps/30观察/5日/尾部支持或收益/风险门。
+
+## 16. 一次真实研究及停止结论（2026-10-04）
+
+研究`advctxvalue_a551b5933b0dffc5b3877bd1`，plan SHA256=`a551b5933b0dffc5b3877bd1cfe9688e81f035b47a132bba7f112a946b40bd4c`；实际拟合源码HEAD=`f89600371567ac95d5053138702cde680241a104`。持久工件根`F:/Dev/AIstock_model_artifacts/advisory_context_price_value_v1_20261004/advctxvalue_a551b5933b0dffc5b3877bd1`，四stage hash链/文件hash和五registry阶段一致；新main同步仅带入已合入HMM源码，不修改该模块，当前研究implementation identity复核不变。不是重跑旧负实验。
+
+预登记在prepare/fit之前；两个配置共857训练行、304validation行，原386D/7720候选不变。实际matched/candidate各mean/path两头，一次共四物理fit，fit-stage调用约7.985秒；journal记录四次STARTED，完整trained stage及diagnostics证明拟合完成，不把单独journal视为完成收据。单一完整四臂评价约28.593秒。拟合前/后QE公开experiment/custom_evo/multi-backtest running均为0，无QE提交或控制。训练基线噪声代理53.7926bps来自218训练估值日，仅MDE_PROXY_NOT_CONFIRMATION_POWER。
+
+原81决策日/1620候选、100共同估值日完整四臂（均已退出，无残留持仓）；四臂endpoint限制0、held-mark问题0，仅日级shadow证明，不是真实成交：
+
+| 臂 | 100日成本后名义净收益 | MDD | 退出episode / 胜率 |
+|---|---:|---:|---:|
+| 原Top5 baseline | 21.3220% | -10.3314% | 91 / 58.2418% |
+| 固定±300bps rule | 20.5747% | -9.4780% | 91 / 58.2418% |
+| 无行业预测信息matched | 34.0460% | -8.0929% | 93 / 60.2151% |
+| 行业candidate | 33.0073% | -8.5670% | 93 / 60.2151% |
+
+candidate减baseline日净增量`+9.2802bps`、开发block95%区间`[-3.5941,25.1664]`；减matched`-0.8533bps`、区间`[-8.3361,5.9988]`。两个区间均跨0，非独立OOS或指数超额。candidate相对baseline/matched实际进入变化36/30目标日（映射原81决策日，非tail分母），干预条件通过；但净增量须同时≥5bps，matched项失败。
+
+Top5 candidate动作TAKE14/SKIP57/UNAVAILABLE334；实际模型TAKE仅4笔，UNKNOWN基线研究控制89笔，不能把93笔全当模型样本。matched实际模型TAKE3笔、研究控制90笔。candidate错过3笔原基线盈利、避免5笔原基线亏损仅作episode描述，不加总冒充组合收益。真实TAKE<30导致支持条件失败；MDD/最差5%日收益非劣条件通过也不能替代收益/支持。validation path lower违约率candidate5.5921%、matched3.6184%仅诊断，未校准为风险承诺。
+
+结论`STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION`；选中0，`EXPLORATORY_SCREEN/RISK_MANAGED_ADVISORY/NAVIGATION_ONLY`，deployable=false。不回选看上去更好的matched、不降低支持/风险/净增量门、不扩窗口/seed/loss或给本candidate增加confirmation/自然证据。它仅否定当前严格类别增量候选，不证明所有行业信息/价格价值或matched已获经济确认。可继续的新增信息必须另立事前因果假设/lineage，不能用更多历史结果挑赢家。
+
+源码交付复核：三轮本窗口方法/时钟/工程自审及fix-point修复，14项最小定向测试、Ruff、F2检查通过；另一次只读工件一致性审查验证四stage、原键、四fit、四臂共同净值/MDD、五registry阶段与停止条件，没有第二次拟合或经济回放。临时文件X、正式工件F；QE/Selection/HMM/Execution/Paper源码修改、DB写入、sealed读取、binding/运行启用、后端重启均0。源码PR/CI/合入及自身清理独立记录在蓝图§16；本设计不声称完成生产买入价格功能。
+
+## 17. 交付前审核修订与设计符合性
+
+方法/结果轮：核对完整原候选、共同监督、四臂共同日历、费用及配对收益；不把candidate名义33.0073%或UNKNOWN控制89笔当模型效果，不回选matched。时钟/身份轮：核对四stage/文件hash与五registry记录、原键/真实fit、公开QE前后空闲及同步main后implementation不变；不重复研究，不将历史零fit检查点当当前状态。文档/范围轮：统一页首、主线队列、§6.3.3、验收矩阵及G0～G4状态，保留原历史实验及限制造成的未完成项；使用支持的SOURCE_VERIFIED状态而非未定义状态。同步main后14项定向测试再次通过，Ruff及两文F2 8/8、142/142（warnings0）通过，不跑本窗口广回归。
+
+DESIGN-COMPLIANCE-001逐项结论：①本轮完整交付的是批准的离线研究合同，不将未完成经济确认/原生资格/每日接入简化成完成；②缺失/漂移/未证明成交或mark仍typed UNKNOWN/BLOCKED/硬失败，完整负结果不伪造成功；③模型/标签/支持/数值门在收益前冻结，结果后只更新事实，不改业务及其它模块；④未增加新审批、等待未来日或全量行业门，现有CI及用户后端重启边界保持。以上为本窗口多视角自审，不冒称独立外部审核。
