@@ -14,13 +14,19 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-03T17:55:12.911934Z",
-  "description": "Four children failed in materializing with ambiguous mapping task.dataset; no remote attempts",
+  "description": "MA-E39四组冻结预测组合在materializing失败，无节点attempt。文本mapping定位错误跨越层级，将task.dataset与SignalRecord kwargs.dataset混淆；同样会误匹配嵌套kwargs、segments和topk。修复限定到当前mapping直接子级，保留同级重复/缺失拒绝，不重新序列化Jinja模板、不改变模型、因子、PIT、成本、TWAP/TAIL_BOOST或数据发布。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261003-3dadf9ae512b",
       "timestamp": "2026-10-03T17:55:12.911914Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "codex-qe",
+      "note": "两轮审核：第一轮RED确认跨层同名字段冲突，修复lookup和replacement的直接子级定位；第二轮覆盖2/4空格与CRLF、嵌套字段原样保留、同级重复及缺失fail-closed，并对两个真实生成模板执行fresh-process内存消费。DESIGN-COMPLIANCE-001四项：完整根因修复；不吞错；仅声明override修改且业务参数不变；不新增审批/门禁。失败实验未入仓，未重投；运行态待用户重启。",
+      "timestamp": "2026-10-03T18:06:00Z"
     }
   ],
   "evidence_uris": [
@@ -115,9 +121,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
+    "fresh_process_evidence": [
+      "PYTHONPATH=<task worktree> python tmp/issue_workflow/BUG-1711/fresh_process_smoke.py -> PASS real WSL/node1 generated templates consumed in isolated process; all business parameters unchanged except declared test segment; source/candidate writes=0, experiment submissions=0, process_control=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "backend",
