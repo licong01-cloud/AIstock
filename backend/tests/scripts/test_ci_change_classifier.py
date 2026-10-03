@@ -196,7 +196,7 @@ def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_pa
         "backend/tests/test_aistock_guardrail_scan.py",
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_issue_flow.py",
-        "backend/tests/scripts/test_issue_workflow_task_root.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
     ]
 
 
@@ -231,191 +231,35 @@ def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) ->
     }
     assert advisory_payload["unmapped_code_files"] == []
 
-    p0k_payload = classifier.classify_changed_files(
-        [
-            "scripts/advisory_p0k_build_training_request.py",
-            "scripts/wsl/advisory_p0k_train.py",
-        ],
-        repo_root=tmp_path,
-    )
-    assert p0k_payload["classification"] == "targeted_ci_required"
-    assert p0k_payload["backend_required"] is True
-    assert p0k_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert p0k_payload["dev_db_required"] is False
-    assert p0k_payload["unmapped_code_files"] == []
-
-    p0l_payload = classifier.classify_changed_files(
-        [
-            "scripts/advisory_p0l_build_training_request.py",
-            "scripts/wsl/advisory_p0l_train.py",
-        ],
-        repo_root=tmp_path,
-    )
-    assert p0l_payload["classification"] == "targeted_ci_required"
-    assert p0l_payload["backend_required"] is True
-    assert p0l_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert p0l_payload["dev_db_required"] is False
-    assert p0l_payload["unmapped_code_files"] == []
-
-    n1_payload = classifier.classify_changed_files(
-        ["scripts/advisory_n1_tier1_oracle_learnability.py"],
-        repo_root=tmp_path,
-    )
-    assert n1_payload["classification"] == "targeted_ci_required"
-    assert n1_payload["backend_required"] is True
-    assert n1_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert n1_payload["dev_db_required"] is False
-    assert n1_payload["unmapped_code_files"] == []
-
-    alpha_audit_payload = classifier.classify_changed_files(
-        ["scripts/advisory_strategy_package_alpha_audit.py"],
-        repo_root=tmp_path,
-    )
-    assert alpha_audit_payload["classification"] == "targeted_ci_required"
-    assert alpha_audit_payload["backend_required"] is True
-    assert alpha_audit_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert alpha_audit_payload["dev_db_required"] is False
-    assert alpha_audit_payload["unmapped_code_files"] == []
-
-    independent_alpha_audit_payload = classifier.classify_changed_files(
-        ["scripts/advisory_independent_package_alpha_audit.py"],
-        repo_root=tmp_path,
-    )
-    assert independent_alpha_audit_payload["classification"] == "targeted_ci_required"
-    assert independent_alpha_audit_payload["backend_required"] is True
-    assert independent_alpha_audit_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert independent_alpha_audit_payload["dev_db_required"] is False
-    assert independent_alpha_audit_payload["unmapped_code_files"] == []
-
-    entry_exit_audit_payload = classifier.classify_changed_files(
-        ["scripts/advisory_entry_exit_formal_audit.py"],
-        repo_root=tmp_path,
-    )
-    assert entry_exit_audit_payload["classification"] == "targeted_ci_required"
-    assert entry_exit_audit_payload["backend_required"] is True
-    assert entry_exit_audit_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert entry_exit_audit_payload["dev_db_required"] is False
-    assert entry_exit_audit_payload["unmapped_code_files"] == []
-
-    exit_learnability_payload = classifier.classify_changed_files(
-        ["scripts/advisory_exit_learnability_audit.py"],
-        repo_root=tmp_path,
-    )
-    assert exit_learnability_payload["classification"] == "targeted_ci_required"
-    assert exit_learnability_payload["backend_required"] is True
-    assert exit_learnability_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert exit_learnability_payload["dev_db_required"] is False
-    assert exit_learnability_payload["unmapped_code_files"] == []
-
-    qe_alpha_preparation_payload = classifier.classify_changed_files(
-        ["scripts/advisory_qe_alpha_mve_prepare.py"],
-        repo_root=tmp_path,
-    )
-    assert qe_alpha_preparation_payload["classification"] == "targeted_ci_required"
-    assert qe_alpha_preparation_payload["backend_required"] is True
-    assert qe_alpha_preparation_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert qe_alpha_preparation_payload["dev_db_required"] is False
-    assert qe_alpha_preparation_payload["unmapped_code_files"] == []
-
-    qe_alpha_mve_payload = classifier.classify_changed_files(
-        ["scripts/advisory_qe_alpha_mve_run.py"],
-        repo_root=tmp_path,
-    )
-    assert qe_alpha_mve_payload["classification"] == "targeted_ci_required"
-    assert qe_alpha_mve_payload["backend_required"] is True
-    assert qe_alpha_mve_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert qe_alpha_mve_payload["dev_db_required"] is False
-    assert qe_alpha_mve_payload["unmapped_code_files"] == []
-
-    qe_alpha_generator_payload = classifier.classify_changed_files(
-        ["scripts/advisory_qe_alpha_generator_mve_run.py"],
-        repo_root=tmp_path,
-    )
-    assert qe_alpha_generator_payload["classification"] == "targeted_ci_required"
-    assert qe_alpha_generator_payload["backend_required"] is True
-    assert qe_alpha_generator_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert qe_alpha_generator_payload["dev_db_required"] is False
-    assert qe_alpha_generator_payload["unmapped_code_files"] == []
-
-    parent_overlay_payload = classifier.classify_changed_files(
-        ["scripts/advisory_parent_incremental_overlay_run.py"],
-        repo_root=tmp_path,
-    )
-    assert parent_overlay_payload["classification"] == "targeted_ci_required"
-    assert parent_overlay_payload["backend_required"] is True
-    assert parent_overlay_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert parent_overlay_payload["dev_db_required"] is False
-    assert parent_overlay_payload["unmapped_code_files"] == []
-
-    leg_disagreement_payload = classifier.classify_changed_files(
-        ["scripts/advisory_leg_disagreement_mve_run.py"],
-        repo_root=tmp_path,
-    )
-    assert leg_disagreement_payload["classification"] == "targeted_ci_required"
-    assert leg_disagreement_payload["backend_required"] is True
-    assert leg_disagreement_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert leg_disagreement_payload["dev_db_required"] is False
-    assert leg_disagreement_payload["unmapped_code_files"] == []
-
-    minute_information_payload = classifier.classify_changed_files(
-        ["scripts/advisory_minute_information_set_mve_run.py"],
-        repo_root=tmp_path,
-    )
-    assert minute_information_payload["classification"] == "targeted_ci_required"
-    assert minute_information_payload["backend_required"] is True
-    assert minute_information_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert minute_information_payload["dev_db_required"] is False
-    assert minute_information_payload["unmapped_code_files"] == []
-
-    margin_information_payload = classifier.classify_changed_files(
-        ["scripts/advisory_margin_information_set_mve_run.py"],
-        repo_root=tmp_path,
-    )
-    assert margin_information_payload["classification"] == "targeted_ci_required"
-    assert margin_information_payload["backend_required"] is True
-    assert margin_information_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert margin_information_payload["dev_db_required"] is False
-    assert margin_information_payload["unmapped_code_files"] == []
-
-    financial_event_source_payload = classifier.classify_changed_files(
-        ["scripts/advisory_financial_event_source_readiness.py"],
-        repo_root=tmp_path,
-    )
-    assert financial_event_source_payload["classification"] == "targeted_ci_required"
-    assert financial_event_source_payload["backend_required"] is True
-    assert financial_event_source_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert financial_event_source_payload["dev_db_required"] is False
-    assert financial_event_source_payload["unmapped_code_files"] == []
-
-    financial_event_mve_payload = classifier.classify_changed_files(
-        ["scripts/advisory_financial_event_information_set_mve.py"],
-        repo_root=tmp_path,
-    )
-    assert financial_event_mve_payload["classification"] == "targeted_ci_required"
-    assert financial_event_mve_payload["backend_required"] is True
-    assert financial_event_mve_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert financial_event_mve_payload["dev_db_required"] is False
-    assert financial_event_mve_payload["unmapped_code_files"] == []
-
-    score_hmm_payload = classifier.classify_changed_files(
-        ["scripts/advisory_score_hmm_admission_mve.py"],
-        repo_root=tmp_path,
-    )
-    assert score_hmm_payload["classification"] == "targeted_ci_required"
-    assert score_hmm_payload["backend_required"] is True
-    assert score_hmm_payload["backend_sessions"] == ["advisory_modeling_backend"]
-
-    causal_admission_payload = classifier.classify_changed_files(
-        ["scripts/advisory_causal_admission_v2_mve.py"],
-        repo_root=tmp_path,
-    )
-    assert causal_admission_payload["classification"] == "targeted_ci_required"
-    assert causal_admission_payload["backend_required"] is True
-    assert causal_admission_payload["backend_sessions"] == ["advisory_modeling_backend"]
-    assert causal_admission_payload["dev_db_required"] is False
-    assert causal_admission_payload["unmapped_code_files"] == []
-    assert score_hmm_payload["dev_db_required"] is False
-    assert score_hmm_payload["unmapped_code_files"] == []
+    advisory_cases = [
+        ["scripts/advisory_p0k_build_training_request.py", "scripts/wsl/advisory_p0k_train.py"],
+        ["scripts/advisory_p0l_build_training_request.py", "scripts/wsl/advisory_p0l_train.py"],
+        *([f"scripts/{name}.py"] for name in (
+            "advisory_n1_tier1_oracle_learnability",
+            "advisory_strategy_package_alpha_audit",
+            "advisory_independent_package_alpha_audit",
+            "advisory_entry_exit_formal_audit",
+            "advisory_exit_learnability_audit",
+            "advisory_qe_alpha_mve_prepare",
+            "advisory_qe_alpha_mve_run",
+            "advisory_qe_alpha_generator_mve_run",
+            "advisory_parent_incremental_overlay_run",
+            "advisory_leg_disagreement_mve_run",
+            "advisory_minute_information_set_mve_run",
+            "advisory_margin_information_set_mve_run",
+            "advisory_financial_event_source_readiness",
+            "advisory_financial_event_information_set_mve",
+            "advisory_score_hmm_admission_mve",
+            "advisory_causal_admission_v2_mve",
+        )),
+    ]
+    for paths in advisory_cases:
+        result = classifier.classify_changed_files(paths, repo_root=tmp_path)
+        assert result["classification"] == "targeted_ci_required", paths
+        assert result["backend_required"] is True, paths
+        assert result["backend_sessions"] == ["advisory_modeling_backend"], paths
+        assert result["dev_db_required"] is False, paths
+        assert result["unmapped_code_files"] == [], paths
 
     payload = classifier.classify_changed_files(
         ["backend/services/paper_trading_v2/runtime.py"],
@@ -955,7 +799,7 @@ def test_validation_mcp_issue_files_use_focused_workflow_lane(tmp_path: Path) ->
     assert payload["workflow_test_targets"] == [
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
-        "backend/tests/scripts/test_issue_workflow_task_root.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
     ]
 
 
@@ -2038,7 +1882,7 @@ def test_workflow_sources_select_only_their_direct_test_targets(tmp_path: Path) 
 
     assert payload["workflow_test_targets"] == [
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-        "backend/tests/scripts/test_issue_workflow_task_root.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
         "backend/tests/scripts/test_issue_flow.py",
         "backend/tests/scripts/test_issue_flow_pr_quality.py",
         "backend/tests/scripts/test_ci_change_classifier.py",

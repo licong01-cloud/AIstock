@@ -38,12 +38,16 @@ def invoke(monkeypatch, callback, command="finish"):
     return workflow.main([])
 
 
+def write_state(task, payload):
+    state = task / "tmp/issue_workflow/BUG-999/state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_canonical_cli_binds_task_state_and_helper_paths_then_restores(linked_roots, monkeypatch):
     canonical, task = linked_roots
     before = workflow.flow.REPO_ROOT
-    state = task / "tmp/issue_workflow/BUG-999/state.json"
-    state.parent.mkdir(parents=True)
-    state.write_text('{"worktree": "real-task"}', encoding="utf-8")
+    write_state(task, {"worktree": "real-task"})
 
     def check(args):
         assert workflow.REPO_ROOT == task
@@ -67,9 +71,7 @@ def test_canonical_cli_binds_task_state_and_helper_paths_then_restores(linked_ro
 @pytest.mark.parametrize("create", [False, True])
 def test_registered_existing_task_is_reused_without_recreation(linked_roots, monkeypatch, create):
     _, task = linked_roots
-    state = task / "tmp/issue_workflow/BUG-999/state.json"
-    state.parent.mkdir(parents=True)
-    state.write_text(json.dumps({"planned_worktree": str(task), "planned_branch": "test/task"}), encoding="utf-8")
+    write_state(task, {"planned_worktree": str(task), "planned_branch": "test/task"})
     bug = task / "tests/aistock_validation/bugs/20261003_BUG-999.json"
     bug.parent.mkdir(parents=True)
     bug.write_text('{"bug_id":"BUG-999"}', encoding="utf-8")
@@ -87,9 +89,7 @@ def test_registered_existing_task_is_reused_without_recreation(linked_roots, mon
 
 def test_reusing_existing_task_rejects_branch_identity_drift(linked_roots, monkeypatch):
     _, task = linked_roots
-    state = task / "tmp/issue_workflow/BUG-999/state.json"
-    state.parent.mkdir(parents=True)
-    state.write_text(json.dumps({"worktree": str(task), "branch": "wrong/branch"}), encoding="utf-8")
+    write_state(task, {"worktree": str(task), "branch": "wrong/branch"})
     def check(args):
         workflow._maybe_create_worktree(
             record={"bug_id": "BUG-999"}, bug_id="BUG-999",
@@ -109,13 +109,15 @@ def test_task_root_restored_after_workflow_error(linked_roots, monkeypatch):
     assert workflow.REPO_ROOT == canonical
 
 
-@pytest.mark.parametrize("command", ["doctor", "verify-clients", "install-client", "cleanup-after-merge"])
-def test_authority_and_cleanup_commands_keep_canonical_root(linked_roots, monkeypatch, command):
+@pytest.mark.parametrize("command", ["doctor", "verify-clients", "install-client", "cleanup-after-merge", None])
+def test_non_task_execution_keeps_canonical_root(linked_roots, monkeypatch, tmp_path, command):
     canonical, _ = linked_roots
+    if command is None:
+        monkeypatch.chdir(tmp_path)
     def check(args):
         assert workflow.REPO_ROOT == canonical
         return 0
-    assert invoke(monkeypatch, check, command) == 0
+    assert invoke(monkeypatch, check, command or "finish") == 0
 
 
 def test_foreign_repository_is_rejected_without_running_task(linked_roots, monkeypatch, tmp_path):
@@ -128,18 +130,9 @@ def test_foreign_repository_is_rejected_without_running_task(linked_roots, monke
     assert workflow.REPO_ROOT == canonical
 
 
-def test_non_repository_cwd_keeps_canonical_root(linked_roots, monkeypatch, tmp_path):
-    canonical, _ = linked_roots
-    monkeypatch.chdir(tmp_path)
-    def check(args):
-        assert workflow.REPO_ROOT == canonical
-        return 0
-    assert invoke(monkeypatch, check) == 0
-
-
 def test_task_root_regression_is_in_the_actual_workflow_ci_slice():
     from scripts.ci_change_classifier import classify_changed_files
-    path = "backend/tests/scripts/test_issue_workflow_task_root.py"
+    path = "backend/tests/scripts/test_aistock_issue_workflow_task_root.py"
     result = classify_changed_files(
         ["scripts/aistock_issue_workflow.py", path, "noxfile.py"], repo_root=workflow.REPO_ROOT,
     )
