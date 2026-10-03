@@ -1178,78 +1178,56 @@ def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch:
     assert emitted["close_sync_commit"]["workflow_gate"] == "deferred_runtime_verification"
 
 
-@pytest.mark.parametrize("pr_number,commit,accepted", [(199, "a", True), (200, "a", False), (199, "b", False)])
+@pytest.mark.parametrize("mode", ["merged", "planned", "invalid"])
+def test_post_restart_scope_comes_from_recorded_merge_not_planned_paths(cli_task_worktree, monkeypatch, mode):
+    base, task, git = cli_task_worktree
+    record = {"bug_id": "BUG-199", "file_scope_contract": {"changed_files": ["backend/services/dataset_release/build_stage.py"]}}
+    if mode != "planned":
+        record["fix_commit"] = git(task, "rev-parse", "HEAD") if mode == "merged" else "a" * 40
+    monkeypatch.setattr(workflow, "find_bug_record", lambda **kwargs: (record, base / "BUG-199.json"))
+    def capture(**kwargs):
+        expected = ["task.txt"] if mode == "merged" else record["file_scope_contract"]["changed_files"]
+        assert kwargs["changed_files"] == expected
+        raise RuntimeError("scope captured before probes")
+    monkeypatch.setattr(workflow, "build_runtime_contract", capture)
+    # An operator identity override is not authority to replace the source delta.
+    with pytest.raises(workflow.WorkflowError if mode == "invalid" else RuntimeError,
+                       match=None if mode == "invalid" else "scope captured"):
+        workflow.build_post_restart_verify(bug_id="BUG-199", issue_json=None,
+                                           target_id="backend-main", expected_identity="b" * 40)
+
+
+@pytest.mark.parametrize("pr_number,commit,accepted,recovery_number,guard_accepted", [
+    (199, "a", True, 199, True), (200, "a", False, 199, True),
+    (199, "b", False, 199, True), (199, "a", True, 200, False),
+])
 def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    pr_number: int,
-    commit: str,
-    accepted: bool,
-) -> None:
-    issue = tmp_path / "tests" / "aistock_validation" / "bugs" / "BUG-199.json"
-    issue.parent.mkdir(parents=True)
-    issue.write_text(
-        json.dumps(
-            {
-                "bug_id": "BUG-199",
-                "status": "fixed",
-                "fix_commit": "a" * 40,
-                "pr_url": "https://github.example/pull/199",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_dirty_files",
-        lambda _root: ["tests/aistock_validation/bugs/BUG-199.json"],
-    )
-
-    recovered = workflow._recoverable_close_sync_dirty_record(
-        tmp_path,
-        "BUG-199",
-        issue,
-        source_pr_url=f"https://github.example/pull/{pr_number}",
-        merge_commit=commit * 40,
-    )
-    if accepted:
-        assert recovered is not None
-        assert recovered["path"] == "tests/aistock_validation/bugs/BUG-199.json"
-    else:
-        assert recovered is None
-
-
-@pytest.mark.parametrize("recovery_number,accepted", [(199, True), (200, False)])
-def test_close_sync_apply_guard_allows_only_the_exact_recoverable_dirty_record(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    recovery_number: int,
-    accepted: bool,
+    tmp_path, monkeypatch, pr_number, commit, accepted, recovery_number, guard_accepted,
 ) -> None:
     dirty_path = "tests/aistock_validation/bugs/BUG-199.json"
+    issue = tmp_path / dirty_path
+    issue.parent.mkdir(parents=True)
+    record = {"bug_id": "BUG-199", "status": "fixed", "fix_commit": "a" * 40,
+              "pr_url": "https://github.example/pull/199"}
+    issue.write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
+    recovered = workflow._recoverable_close_sync_dirty_record(
+        tmp_path, "BUG-199", issue, source_pr_url=f"https://github.example/pull/{pr_number}", merge_commit=commit * 40,
+    )
+    if accepted:
+        assert recovered is not None and recovered["path"] == dirty_path
+    else:
+        assert recovered is None
     monkeypatch.setattr(
-        workflow,
-        "_validate_registry_apply_target",
-        lambda _root: {
+        workflow, "_validate_registry_apply_target", lambda _root: {
             "blocking": ["registry target is dirty (1 file(s)); start from a clean task worktree"],
             "warnings": [],
             "git": {"dirty": True, "dirty_count": 1},
         },
     )
-    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
-    recovery = {
-        "bug_id": "BUG-199",
-        "path": f"tests/aistock_validation/bugs/BUG-{recovery_number}.json",
-        "status": "fixed",
-        "fix_commit": "a" * 40,
-        "pr_url": "https://github.example/pull/199",
-    }
-
-    result = workflow._validate_close_sync_apply_target(
-        tmp_path,
-        recoverable_dirty_record=recovery,
-    )
-    if accepted:
+    recovery = {**record, "path": f"tests/aistock_validation/bugs/BUG-{recovery_number}.json"}
+    result = workflow._validate_close_sync_apply_target(tmp_path, recoverable_dirty_record=recovery)
+    if guard_accepted:
         assert result["blocking"] == []
         assert result["recoverable_dirty_record"] == recovery
     else:

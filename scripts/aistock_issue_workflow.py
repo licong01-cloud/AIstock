@@ -4900,9 +4900,13 @@ def build_post_restart_verify(
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
+    recorded_merge = str(record.get("fix_commit") or record.get("merge_commit") or "").strip()
     contract = build_runtime_contract(
         record=record,
-        changed_files=resolve_record_runtime_changed_files(record),
+        changed_files=(
+            _merged_commit_changed_files(recorded_merge)
+            if recorded_merge else resolve_record_runtime_changed_files(record)
+        ),
         fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
         if isinstance(record.get("runtime_contract"), dict)
         else [],
@@ -11002,7 +11006,7 @@ def build_finish_plan(
                 "runtime_identity_match": runtime_contract.get("runtime_identity_match"),
             }
         )
-        persisted_file_scope = record.get("file_scope_contract")
+        persisted_file_scope = _actual_file_scope_contract(record, changed)
         if reconciliation.get("applied"):
             persisted_runtime.update(
                 {
@@ -11011,14 +11015,11 @@ def build_finish_plan(
                     "planned_target_ids": reconciliation.get("planned_target_ids") or [],
                 }
             )
-            persisted_file_scope = _actual_file_scope_contract(record, changed)
         if (
             persisted_runtime != record.get("runtime_contract")
             or persisted_file_scope != record.get("file_scope_contract")
         ):
-            record = {**record, "runtime_contract": persisted_runtime}
-            if reconciliation.get("applied"):
-                record["file_scope_contract"] = persisted_file_scope
+            record = {**record, "runtime_contract": persisted_runtime, "file_scope_contract": persisted_file_scope}
             _write_json(source_path, record)
     closure_ready = bool(evidence) and not validation_evidence_errors
     draft_ready = (
@@ -20821,6 +20822,10 @@ def build_close_sync_plan(
                 runtime_receipt,
             )
         updated["runtime_contract"] = updated_runtime
+        if merge_commit:
+            updated["file_scope_contract"] = _actual_file_scope_contract(
+                record, _merged_commit_changed_files(merge_commit),
+            )
         _write_json(source_path, updated)
         evidence_payload = {
             **payload,
