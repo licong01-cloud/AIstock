@@ -12239,6 +12239,12 @@ def _refresh_ci_git_mirror_after_root_sync(root: Path) -> dict[str, Any]:
     snapshot = _git_snapshot(root)
     if snapshot.get("branch") != "main" or snapshot.get("dirty") or not snapshot.get("head") or snapshot.get("head") != snapshot.get("origin_main"):
         return {"status": "warning", "warning": "mirror refresh deferred: canonical main is not clean and aligned"}
+    identity = _run_command(["git", "rev-parse", "HEAD", "refs/remotes/origin/main"], cwd=root, timeout=10)
+    revisions = str(identity.get("stdout") or "").splitlines()
+    if (not identity.get("ok") or len(revisions) != 2
+            or not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in revisions)
+            or revisions[0] != revisions[1]):
+        return {"status": "warning", "warning": "mirror refresh deferred: exact main identities are unavailable or differ"}
     result = _run_command(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper),
          "-SourceRoot", str(root), "-MirrorRoot", str(mirror), "-AllowedRoot", str(allowed), "-Apply", "-Json"],
@@ -12246,7 +12252,7 @@ def _refresh_ci_git_mirror_after_root_sync(root: Path) -> dict[str, Any]:
     )
     try:
         receipt = json.loads(str(result.get("stdout") or "")) if result.get("ok") else {}
-        if (receipt.get("status") == "ready" and receipt.get("main_sha") == snapshot["head"]
+        if (receipt.get("status") == "ready" and receipt.get("main_sha") == revisions[0]
                 and receipt.get("network_accessed") is False and receipt.get("process_control_performed") is False):
             return {"status": "ready", "receipt": receipt}
     except (ValueError, TypeError):
