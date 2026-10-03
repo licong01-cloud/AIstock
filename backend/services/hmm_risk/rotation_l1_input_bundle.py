@@ -2007,6 +2007,31 @@ def _industry_adapter(authority: Mapping[str, Any], *, forbidden_roots: Sequence
     return adapter
 
 
+def _read_parquet_date_window(
+    path: Path,
+    *,
+    start: date,
+    end: date,
+    columns: Sequence[str],
+) -> pd.DataFrame:
+    """Predicate-pushdown read without loading later business rows."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    kind = pq.read_schema(path).field("trade_date").type
+    if pa.types.is_timestamp(kind):
+        lower, upper = pd.Timestamp(start), pd.Timestamp(end)
+    elif pa.types.is_date(kind):
+        lower, upper = start, end
+    elif pa.types.is_string(kind):
+        lower, upper = start.isoformat(), end.isoformat()
+    else:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Parquet trade_date type is unsupported")
+    return pd.read_parquet(
+        path, columns=list(columns), filters=[("trade_date", ">=", lower), ("trade_date", "<=", upper)]
+    )
+
+
 def _load_suspend_keys(
     data_path: Path,
     manifest_path: Path,
@@ -2014,6 +2039,7 @@ def _load_suspend_keys(
     calendar: Sequence[date],
     expected_release_cutoff: date | None = None,
     expected_universe_key: str | None = None,
+    bounded: bool = False,
 ) -> frozenset[tuple[date, str]]:
     manifest = _read_json_object(manifest_path, reason=REASON_SOURCE_SCHEMA_INVALID)
     schema = manifest.get("schema_version")
@@ -2040,12 +2066,17 @@ def _load_suspend_keys(
     ):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d authority differs from the approved contract")
     try:
-        frame = pd.read_parquet(data_path, columns=["ts_code", "trade_date", "suspend_type", "suspend_timing"])
+        columns = ["ts_code", "trade_date", "suspend_type", "suspend_timing"]
+        frame = (
+            _read_parquet_date_window(data_path, start=min(calendar), end=max(calendar), columns=columns)
+            if bounded
+            else pd.read_parquet(data_path, columns=columns)
+        )
     except Exception as exc:
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d parquet cannot be read") from exc
-    if frame.empty and direct:
+    if frame.empty and direct and not bounded:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 suspend_d is empty")
-    if frame.empty:
+    if frame.empty and not (direct and bounded):
         return frozenset()
     frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="raise").dt.date
     frame["ts_code"] = frame["ts_code"].astype(str).str.upper()
@@ -2053,7 +2084,16 @@ def _load_suspend_keys(
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d includes rows outside suspend_type S")
     if frame.duplicated(["trade_date", "ts_code"]).any():
         raise _fail(REASON_DUPLICATE_KEY, "suspend_d contains duplicate stock/date rows")
-    if direct:
+    if direct and bounded:
+        declared = manifest.get("daily_row_counts")
+        if not isinstance(declared, Mapping) or any(
+            not isinstance(day, str) or type(count) is not int or count < 0 for day, count in declared.items()
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend window lacks declared daily counts")
+        actual = frame.groupby("trade_date").size().to_dict()
+        if any(actual.get(day, 0) != declared.get(day.isoformat(), 0) for day in calendar):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend window readback differs from metadata")
+    elif direct:
         daily_counts = {day.isoformat(): int(count) for day, count in frame.groupby("trade_date").size().items()}
         declared_counts = manifest.get("daily_row_counts")
         declared_dates = (
@@ -2579,11 +2619,21 @@ def _build_stock_fact_aggregates(
     window_end: date = SOURCE_END,
     build_feature_domain_aggregates: bool = True,
     day_rows_callback: Callable[[date, Sequence[Mapping[str, Any]]], None] | None = None,
+    initial_circ_state: Mapping[str, tuple[date, float | None, str, str | None]] | None = None,
 ) -> tuple[list[Any], list[Any], dict[tuple[date, str, str], str], dict[str, list[dict[str, Any]]]]:
     history: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     g2a_history: dict[str, deque[tuple[date, float]]] = defaultdict(lambda: deque(maxlen=20))
     active_span_start: dict[str, date] = {}
-    circ_state: dict[str, tuple[date, float | None, str, str | None]] = {}
+    circ_state: dict[str, tuple[date, float | None, str, str | None]] = dict(initial_circ_state or {})
+    for source_code, (fact_day, value, status, _) in circ_state.items():
+        if (
+            not source_code
+            or not SOURCE_START <= fact_day < window_start
+            or status not in {"available", "latest_value_non_finite", "latest_value_non_positive"}
+            or (status == "available" and (value is None or not math.isfinite(value) or value <= 0))
+            or (status != "available" and value is not None)
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior circ_mv context")
     l1_aggregates: list[Any] = []
     l2_aggregates: list[Any] = []
     unavailable: dict[tuple[date, str, str], str] = {}
