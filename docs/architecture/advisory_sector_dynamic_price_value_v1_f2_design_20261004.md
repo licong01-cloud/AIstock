@@ -108,18 +108,20 @@ M1开发导航门沿R2事前合同：减baseline及matched日均net均≥5bps；
 
 ## 11. Design Acceptance Matrix
 
-设计#5411已合入。源码首版仅上列Advisory文件；三个定向新测试叶及公共四臂精确测试共11项PASS，Ruff/差异检查/F2校验PASS；完整窗口来源放行尚待prepare，M1正式fit仍0，尚无经济结果或启用。
+设计#5411已合入。源码仅上列Advisory文件，已执行三轮自审修复及定向测试。正式预登记`advsectorvalue_d22f697febf9d36f501e1216`，完整prepare已于2026-10-04 04:12通过：7720原候选全部保留，50180日/id报价重复冲突0，新增块AVAILABLE3505/UNKNOWN分类或映射3991/warmup224；原严格可知3729=3505+224，池外14仍UNKNOWN，原3977知晓未知不解锁。SW2021的134结构pair与官方表精确一致，profile行情131码命名空间包括合法id=0。源读取没有数据库写入、sealed消费或原生证据升级。
+
+2026-10-04 04:13拟合前公开QE检查：single running0、custom_evo running0、multi-alpha running2（macb_idem_d1b438d28cd03452c4ad60f2398abe210e809598 / macb_idem_7860ec944ad54176cbe1d102ccabdc89d078b50e）。遵守本轮互斥合同，M1正式fit保持0；工程可交付、研究待闲时继续，不操作其它任务或把研究待运行当经济通过。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-697 | §1/8 | artifact: 本设计 | DESIGN_VERIFIED | none |
-| F-698 | §5.1 | artifact: SW2021官方对照/只读表schema | DESIGN_VERIFIED | approved_by_user: 非历史捕获receipt，未放行M1fit |
-| F-699 | §5.2/5.3 | artifact: 两训练D只读源预检 | DESIGN_VERIFIED | approved_by_user: 全窗口源/日历尚未prepare |
-| F-700 | §5/6 | artifact: 本设计冻结同监督/支持合同 | DESIGN_VERIFIED | none |
-| F-701 | §6/9 | artifact: 本设计固定模型规格 | DESIGN_VERIFIED | none |
-| F-702 | §7 | artifact: R2开发合同及本设计 | DESIGN_VERIFIED | none |
-| F-703 | §6/8/9 | artifact: 本设计不可变阶段及预算 | DESIGN_VERIFIED | none |
-| F-704 | §2/3/8/9/13 | artifact: 本设计精确范围 | DESIGN_VERIFIED | none |
+| F-697 | economic_sector_price_value_v1.py；§1/8 | test_economic_sector_price_value_v1.py；artifact: 独立plan | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 只交付离线研究消费者，正式fit待QE空闲，不代表经济完成 |
+| F-698 | economic_sector_price_source_v1.py | test_economic_sector_price_source_v1.py；artifact: 原prepare源摘要 | VERIFIED | approved_by_user: 非历史捕获receipt，native UNPROVEN不变 |
+| F-699 | economic_sector_price_source_v1.py | test_economic_sector_price_source_v1.py；artifact: 7720完整prepare | VERIFIED | none |
+| F-700 | economic_sector_price_value_v1.py | test_economic_sector_price_value_v1.py | VERIFIED | none |
+| F-701 | economic_sector_price_value_v1.py | test_economic_sector_price_value_v1.py（实际sklearn/JSON、13/16维、4次单测fit） | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 单测fit不计正式研究trial，M1正式fit0 |
+| F-702 | economic_price_campaign_evaluation_v2.py；§7 | test_economic_price_campaign_evaluation_v2.py（真实shadow完整四臂/持仓不证明阻断） | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 81D正式研究未运行，不宣称收益/激活 |
+| F-703 | economic_sector_price_pipeline_v1.py | test_economic_sector_price_pipeline_v1.py；artifact: 登记/prepare | VERIFIED | none |
+| F-704 | §2/3/8/9/13 | artifact: 精确范围/三轮自审及无runtime/DB操作 | VERIFIED | none |
 
 ## 12. Risks / 结论边界
 

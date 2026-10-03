@@ -1,4 +1,5 @@
 import copy
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -6,6 +7,15 @@ import pytest
 
 from backend.services.advisory_model_first.economic_entry_labels import KEY
 from backend.services.advisory_model_first.economic_sector_price_source_v1 import sector_dynamic_rows_v1, sector_quotes_v1, structural_crosswalk_v1
+
+
+def test_profile_hash_conflict_fails_before_any_h5_or_business_read(tmp_path):
+    from backend.services.advisory_model_first.economic_sector_price_source_v1 import load_sector_dynamic_rows_v1
+    profile = tmp_path/'profile.json'
+    profile.write_bytes(b'{}')
+    with pytest.raises(ValueError, match='profile hash changed'):
+        load_sector_dynamic_rows_v1(plan=SimpleNamespace(profile_path=str(profile), profile_sha256='a'*64),
+            rows=None, calendar=None, authority_root=None)
 
 
 def test_versioned_explicit_crosswalk_zero_id_and_conflicts():
