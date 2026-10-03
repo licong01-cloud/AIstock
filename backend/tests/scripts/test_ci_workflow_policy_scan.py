@@ -367,8 +367,7 @@ def test_git_object_mirror_helper_builds_from_aligned_local_main_without_network
     main_sha = git("rev-parse", "HEAD")
     git("update-ref", "refs/remotes/origin/main", main_sha)
 
-    completed = subprocess.run(
-        [
+    command = [
             powershell,
             "-NoProfile",
             "-ExecutionPolicy",
@@ -383,11 +382,8 @@ def test_git_object_mirror_helper_builds_from_aligned_local_main_without_network
             str(allowed),
             "-Apply",
             "-Json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+        ]
+    completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
 
     payload = json.loads(completed.stdout)
     manifest = json.loads(Path(payload["manifest_path"]).read_text(encoding="utf-8-sig"))
@@ -397,6 +393,21 @@ def test_git_object_mirror_helper_builds_from_aligned_local_main_without_network
     assert payload["process_control_performed"] is False
     assert manifest["repository"] == "licong01-cloud/AIstock"
     assert git("-C", str(mirror), "rev-parse", "refs/heads/main") == main_sha
+    unchanged = Path(payload["manifest_path"]).read_bytes()
+    noop = json.loads(subprocess.run(command, check=True, capture_output=True, text=True, timeout=30).stdout)
+    assert noop["refreshed"] is False
+    assert Path(payload["manifest_path"]).read_bytes() == unchanged
+    git("commit", "--allow-empty", "-m", "advance")
+    new_sha = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", new_sha)
+    refreshed = json.loads(subprocess.run(command, check=True, capture_output=True, text=True, timeout=30).stdout)
+    assert refreshed["refreshed"] is True and refreshed["main_sha"] == new_sha
+    assert git("-C", str(mirror), "cat-file", "-t", main_sha) == "commit"
+    helper = Path("scripts/maintain_aistock_git_mirror.ps1").read_text(encoding="utf-8")
+    assert "'gc.auto=0'" in helper and "'maintenance.auto=false'" in helper
+    git("update-ref", "refs/remotes/origin/main", main_sha)
+    rejected = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert rejected.returncode != 0 and "not aligned" in rejected.stderr
 
 
 def test_heavy_lane_short_circuit_contract_rejects_direct_backend_execution(tmp_path: Path) -> None:
