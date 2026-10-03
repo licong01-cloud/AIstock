@@ -185,6 +185,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1692",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2d6e553941bbb1b6",
+    "recorded_at": "2026-10-03T05:05:42.696992Z",
+    "runtime_contract_digest": "45c7c6f3a06bdb4eed5a9b7b84c47eb9d5ae546939f1917e25bf971b11eadd61",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dad908a3b16f6b7261711a60044ccbf0e05ea9d1",
+    "source_merge_commit": "60e59cc3fdc6163f3d0f630ddf1c1a3fc983dfde",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5310",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_source_producer.py -q -> 60 passed"
+    ],
+    "validation_evidence_digest": "706359be2a2143a902b40603404ef03690a598303ad90eab48822f75a88700e2"
+  },
   "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
@@ -196,7 +218,9 @@
   },
   "validation_evidence": [
     "validation-receipt: id=d25025efae09c02e commit=dad908a3b16f6b7261711a60044ccbf0e05ea9d1 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_postgres_source.py backend/tests/dataset_release/test_monthly_postgres_source.py tests/aistock_validation/bugs/20261003_BUG-1692-monthly-source-freezes-history-before-late-refresh-audit-failures-and-lo.json` result=`passed`",
-    "validation-receipt: id=8775194bd1842926 commit=dad908a3b16f6b7261711a60044ccbf0e05ea9d1 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_source_producer.py -q --basetemp X:/AIstock_temp/BUG-1692-workflow-final` result=`60 passed`"
+    "validation-receipt: id=8775194bd1842926 commit=dad908a3b16f6b7261711a60044ccbf0e05ea9d1 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_source_producer.py -q --basetemp X:/AIstock_temp/BUG-1692-workflow-final` result=`60 passed`",
+    "python -m nox -s l0 -> passed",
+    "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_source_producer.py -q -> 60 passed"
   ],
   "verification_budget": {
     "budget": "standard",
