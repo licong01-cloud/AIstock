@@ -110,8 +110,8 @@
   },
   "first_seen_at": "2026-10-03T07:34:57.919796Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "42f0e7b36afc6d7ea56ca717db0fa4d1cded1065",
+  "fixed_at": "2026-10-03T16:28:36Z",
   "github_issue_number": 5329,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5329",
   "last_seen_at": "2026-10-03T07:34:57.919796Z",
@@ -120,6 +120,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval.",
     "任何新增门禁须先向用户说明并取得单独直接授权；环境锁SHA和执行器commit仅记录，不要求人工填写，不冻结节点依赖。"
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5351",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -147,6 +148,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -158,7 +160,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1697",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c295cce17fd5b7fe",
+    "recorded_at": "2026-10-03T16:29:06.531287Z",
+    "runtime_contract_digest": "1db464dc1064ba85837d4ab3ccf2f37b7336c4f500fba4cef87631bcf92913a0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "751a74cc0528331c09dfa6a6fe260afc66ac4e46",
+    "source_merge_commit": "42f0e7b36afc6d7ea56ca717db0fa4d1cded1065",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5351",
+    "validation_evidence": [
+      "validation-receipt: id=f952115a89fa4a72 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py tests/aistock_validation/bugs/20261003_BUG-1697-multi-alpha-execution-identity-consumes-daily-component-as-dataset-root.json` result=`passed, 3 files, blocking=0`",
+      "validation-receipt: id=7a827618d0439a62 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=pytest plan=direct status=passed command=`pytest backend/tests/multi_alpha/test_durable_execution_identity.py backend/tests/multi_alpha/test_durable_control.py backend/tests/multi_alpha/test_durable_orchestrator_restart.py -q --basetemp X:/AIstock_temp/qe/BUG-1697/main-sync-final-tests` result=`50 passed via RTK`",
+      "validation-receipt: id=4bd4fd196c75f284 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=ruff plan=direct status=passed command=`ruff check backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py` result=`passed via RTK`",
+      "validation-receipt: id=7b95f87668a29303 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py` result=`passed`",
+      "validation-receipt: id=9c28263ff6c388f6 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed via RTK`"
+    ],
+    "validation_evidence_digest": "a9ed11c3fbee29b30728c27563ebe80ac40e2e4f67945a8f6abed1fb5e49f50c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -173,7 +200,12 @@
     "python -m nox -s guardrail_changed_files -> passed, staged 3 files mapped, blocking=0",
     "python -m nox -s qe_read_backend -> 681 passed, 1 skipped, 2 pre-existing numerical warnings",
     "ruff check backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py -> passed",
-    "git diff --check -> passed"
+    "git diff --check -> passed",
+    "validation-receipt: id=f952115a89fa4a72 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py tests/aistock_validation/bugs/20261003_BUG-1697-multi-alpha-execution-identity-consumes-daily-component-as-dataset-root.json` result=`passed, 3 files, blocking=0`",
+    "validation-receipt: id=7a827618d0439a62 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=pytest plan=direct status=passed command=`pytest backend/tests/multi_alpha/test_durable_execution_identity.py backend/tests/multi_alpha/test_durable_control.py backend/tests/multi_alpha/test_durable_orchestrator_restart.py -q --basetemp X:/AIstock_temp/qe/BUG-1697/main-sync-final-tests` result=`50 passed via RTK`",
+    "validation-receipt: id=4bd4fd196c75f284 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=ruff plan=direct status=passed command=`ruff check backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py` result=`passed via RTK`",
+    "validation-receipt: id=7b95f87668a29303 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/multi_alpha/durable_identity.py backend/tests/multi_alpha/test_durable_execution_identity.py` result=`passed`",
+    "validation-receipt: id=9c28263ff6c388f6 commit=751a74cc0528331c09dfa6a6fe260afc66ac4e46 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed via RTK`"
   ],
   "verification_budget": {
     "budget": "standard",
