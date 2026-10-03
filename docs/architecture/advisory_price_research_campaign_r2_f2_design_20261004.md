@@ -10,7 +10,7 @@
 
 ## 2. Scope / 写入登记
 
-只在`F:/Dev/AIstock_worktrees/advisory-price-research-campaign-r2-20261004` / `feat/advisory-price-research-campaign-r2-20261004`操作以下精确文件：
+设计树`advisory-price-research-campaign-r2-20261004`经PR #5395合入并官方清理后，源码在最新main独立树`F:/Dev/AIstock_worktrees/advisory-price-models-r2-20261004` / `feat/advisory-price-models-r2-20261004`操作以下精确文件；只清理本任务自身树，不操作其它树：
 
 - docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md
 - docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
@@ -64,7 +64,7 @@ M2/M3/M4三种可独立路线在首个结果前一起冻结；最多三经济候
 
 M2～M4不依赖分类，其共同**全局价格支持**来自无标签train完整12D且T≤train_end的合法观察：100bps桶，每桶≥30观察/≥5个D，桶真实min/max交训练总体gap2.5%～97.5%，支持洞保留。这是新三模型在本次设计前冻结的共同合同，不是放宽前轮按行业支持继续跑；原H-CONTEXT-VALUE-1结果/参数不改，不跨人口宣称改进。各比较只在同一新run中做matched。
 
-模型监督为完整12D、合法价格及Y/L AVAILABLE且label-end未越split、共同全局支持。M3概率/幅度的子监督由预定标签定义在train内固定，两臂评价人口一致；M4只从该train存训练库，不能把validation/test结果加库。scaler均值/std只由共同train监督拟合，常数scale1明确；不是未知填充。共同keys/hash、支持/recipe/order/模型身份都登记。
+模型监督为完整12D、合法价格及Y/L AVAILABLE且label-end未越split、共同全局支持。共同train最低100行/20个D，不足仅暂停该模型，不改样本。M3概率/幅度的子监督由预定标签定义在train内固定，两臂评价人口一致；M4只从该train存训练库，不能把validation/test结果加库。scaler均值/std只由共同train监督拟合，常数scale1明确；不是未知填充。13原变量一起存scaler；M2加性basis标准化12D但保留原g/hinges，M3 GLM和M4局部使用标准化13D，GBDT用原13D。共同keys/hash、支持/recipe/order/模型身份都登记。
 
 ## 7. Fixed estimator specs / 不作网格搜索
 
@@ -123,18 +123,18 @@ test毒化不改变fit/basis/support，训练标签变化允许改变拟合但�
 
 ## 13. Design Acceptance Matrix
 
-当前仅设计，源码、拟合、完整经济评价未执行；以下DESIGN_VERIFIED不等于实现或业务完成，进度按真实阶段更新。
+源码/三轮本窗口自审及15项定向测试/Ruff通过；只读来源预检PASS，三研究均先登记并完成拟合/完整四臂评价，全部停止自身candidate。以下源码/开发导航态不等于收益确认/启用；整轮仍继续M1来源核定及真正新增信息设计，不因三条负结果直接结束。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-689 | §1/5/10 | artifact: docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-690 | §3/4/5/6 | artifact: docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-691 | §6/7 | artifact: docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-692 | §5/6/7/9 | artifact: docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-693 | §4/7/12 | artifact: docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-694 | §8/9 | artifact: docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-695 | §3/9/10 | artifact: docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md | DESIGN_VERIFIED | none |
-| F-696 | §2/3/10/12/14 | artifact: docs/architecture/advisory_price_research_campaign_r2_f2_design_20261004.md | DESIGN_VERIFIED | none |
+| F-689 | campaign evaluation/contracts | `backend/tests/advisory_model_first/test_economic_price_campaign_evaluation_v2.py` | SOURCE_VERIFIED | approved_by_user: 整轮研究未完成，单模型停止不结束整轮 |
+| F-690 | campaign pipeline/contracts | `backend/tests/advisory_model_first/test_economic_price_campaign_contracts_v2.py`；只读预检 | SOURCE_VERIFIED | approved_by_user: M1映射未证暂停，旧native限制保留 |
+| F-691 | campaign models/pipeline | `backend/tests/advisory_model_first/test_economic_price_campaign_models_v2.py` | SOURCE_VERIFIED | approved_by_user: 仅开发消费，未读sealed/确认 |
+| F-692 | campaign models/pipeline | `backend/tests/advisory_model_first/test_economic_price_campaign_models_v2.py`；§17真实11fit | SOURCE_VERIFIED_NAVIGATION_NEGATIVE | approved_by_user: 三candidate停止，11fit及1索引全部记账 |
+| F-693 | campaign models/inference | `backend/tests/advisory_model_first/test_economic_price_campaign_inference_v2.py`；JSON parity tests | SOURCE_VERIFIED | approved_by_user: 纯价格函数非任意限价成交/生产接口 |
+| F-694 | campaign evaluation | `backend/tests/advisory_model_first/test_economic_price_campaign_evaluation_v2.py`；§17三次完整四臂 | SOURCE_VERIFIED_NAVIGATION_NEGATIVE | approved_by_user: 均未过开发门，经济确认及启用0 |
+| F-695 | campaign pipeline | `backend/tests/advisory_model_first/test_economic_price_campaign_pipeline_v2.py` | SOURCE_VERIFIED | approved_by_user: 研究需公开QE空闲检查，DB/进程未操作 |
+| F-696 | §2/3/10/12/14 | artifact: 本设计范围与三轮自审 | SOURCE_VERIFIED | approved_by_user: 经济确认/启用0，服务重启user-owned |
 
 ## 14. Rollout / Rollback / Production Gates / 设计符合性
 
@@ -145,3 +145,23 @@ DESIGN-COMPLIANCE-001：①完整研究与未完成生产/经济分报，不把p
 ## 15. Risks / 限制
 
 同一开发窗口的多模型选择仍有研究者偏差；不能用三候选最大收益或开发区间作为独立确认。全局价格支持不保证12D任意状态可学；局部模型有稀疏支持，概率头未证明校准，退出标签仍是政策条件结果而非盘中最优价。新数据映射未证只暂停M1；源/求解/序列化不合格暂停对应run，不用默认值救结果。研究控制与真实TAKE分报，不能把未知基线持仓的收益归给模型。本轮仅开发导航，不承诺收益或生产激活。
+
+## 16. 源码审核接续（拟合前）
+
+方法轮：概率/零原子/幅度和gross-net代数、共监督及无标签支持；修正Gamma数值下溢须失败不填值。时钟/身份轮：test毒化、实际maturity、JSON浮点32边界、局部日期/距离支持、D输入与T开盘隔离；新标签仅复用原prepared数据，不读旧模型或评价。工程轮：核定部分fit禁止隐式重试、原子阶段hash、profile projection绑定、真实fit/索引分别记录、累计预算与X目录。一次测试失败来自错误预期异常类型，修正为已有typed Advisory错误后定向通过；随后15项完整最小矩阵通过（2.88秒），Ruff/F2通过。测试中的合成拟合不是商业研究trial，本轮真实研究fit仍0。
+
+设计PR #5395已合入`1b87c68fe9776b7ed7a0be2a43fca7b58e42cac2`，CI37146034669 SUCCESS，设计树官方cleanup_done。源码树从之后最新main新建，main同步带入其它窗口代码不是本窗口修改。只读来源预检profile `20260928-v15-unified-moneyflow1`、原父/12D/同政策标签均PASS；M1仍缺crosswalk。正式拟合须清洁提交源码、三plan在首结果前登记、公开QE状态确认，无新生产接入/重启需求。
+
+## 17. 三种不同路线真实结果（2026-10-04，开发导航）
+
+三份plan在首个结果前一次登记，实际拟合源码HEAD=`1a66ca00067df22eb55a22ad6e8c5673eb61c9d0`；新输出根`F:/Dev/AIstock_model_artifacts/advisory_price_research_campaign_r2_20261004`。原386D/7720候选完整，新共同train4049行/214D，validation监督1591；test只用于开发评价，81D/1620候选及100共同估值日不删减。所有四臂端点/held-mark/未结算限制0，不将旧R1监督857/304混用。
+
+| 路线/study | 物理fit/索引 | candidate/matched/baseline名义净收益 | candidate减baseline/matched日均增量 | 真实TAKE/未知控制 | 冻结门及下一步 |
+|---|---|---|---|---|---|
+| M2 `advprice2_a343e79d70522cdb09a3d056` | 4/0；fit4.640s，eval14.094s | 15.3803%/33.7078%/21.3220% | -5.0797/-14.9636bps；95%区间[-20.0033,8.8421]/[-34.2404,-0.1432] | 81/3 | 净增量及matched MDD非劣失败；STOP后实际继续M3 |
+| M3 `advprice2_a52b82ccc1210d6eed1e713a` | 5/0；fit4.281s，eval14.391s | 12.6965%/21.7681%/21.3220% | -7.2904/-7.8016bps；[-21.2930,6.6271]/[-20.3558,3.4910] | 89/4 | 净增量及matched尾损失败；STOP后实际继续M4 |
+| M4 `advprice2_c461468b0a21451f7d1d6a3c` | 2/1；fit4.860s，eval15.485s | 14.5707%/15.3803%/21.3220% | -5.7956/-0.7159bps；[-23.7893,10.7292]/[-18.1408,16.7011] | 78/11 | 净增量失败；继续M1来源及下一新增信息可识别性设计，不再同13D换算法 |
+
+三者均`STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION`/NAVIGATION_ONLY/deployable=false，干预和TAKE门通过；不是以前TAKE4的支持不足问题。胜率、风险改善或matched较高收益不能替代各candidate事前合同；不回选matched、缩窗或扩seed。11fit+1索引全部记入持久journal、3candidate/0selected，前/中/后公开QE三个running路径均0；未提交QE研究、未写数据库/服务/数据激活。模型概率尚非已校准收益概率，shadow收益不是指数超额或真实fill。
+
+源码PR #5404原HEAD1a66ca00067df22eb55a22ad6e8c5673eb61c9d0，CI37147606903 SUCCESS。本节后续文档更新需新HEAD的CI；不把旧run当新HEAD收据，不重复拟合或回放。单模型批次结束不等于48h整轮结束；M1/下一新信息须先设计核定，再进入独立身份/预算，旧三条不挽救。
