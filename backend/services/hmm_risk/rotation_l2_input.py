@@ -273,10 +273,17 @@ def _daily_aggregates(
     calendar: list[date],
     security_identity: SecuritySourceIdentityManifest,
     provider_absence: ProviderAbsenceManifest,
+    bounded_suspend: bool = False,
 ) -> tuple[list[dict[str, Any]], str]:
     del root, manifest
     provider = _parse_provider_spans(provider_path)
-    suspend = pd.read_parquet(suspend_path, columns=["trade_date", "ts_code", "suspend_type", "suspend_timing"])
+    columns = ["trade_date", "ts_code", "suspend_type", "suspend_timing"]
+    if bounded_suspend:
+        from backend.services.hmm_risk.rotation_l1_input_bundle import _read_parquet_date_window
+
+        suspend = _read_parquet_date_window(suspend_path, start=source_days[0], end=source_days[-1], columns=columns)
+    else:
+        suspend = pd.read_parquet(suspend_path, columns=columns)
     suspend["trade_date"] = pd.to_datetime(suspend["trade_date"], errors="coerce").dt.date
     suspend["ts_code"] = suspend["ts_code"].astype(str).str.strip().str.upper()
     full_suspend = {

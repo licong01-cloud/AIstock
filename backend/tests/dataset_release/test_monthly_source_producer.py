@@ -14,15 +14,81 @@ from backend.services.dataset_release.monthly_snapshot import (
 from backend.services.dataset_release.monthly_source_audit import SourceGateEvidence
 from backend.services.dataset_release.monthly_source_producer import (
     AuditedMonthlySourceProducer,
+    MonthlySourcePreparationReadSet,
     MonthlySourceProducerError,
     MonthlySourceReadSet,
     SourceArtifact,
 )
-from backend.services.dataset_release.monthly_unified import SOURCE_GATES, STAGES, SourceChange
+from backend.services.dataset_release.monthly_unified import (
+    SOURCE_GATES,
+    STAGES,
+    SourceChange,
+    MonthlyReleaseSourceBlocked,
+)
 from backend.services.dataset_release.monthly_worker import ProducerContext, RegisteredMonthlyPipeline
 
 
 SHA = "a" * 64
+
+
+@pytest.mark.parametrize("overlap", [False, True])
+def test_private_source_is_sealed_only_after_repair_overlap_check(tmp_path, overlap):
+    source = tmp_path / "partial-source.json"
+    source.write_text("{}\n", encoding="utf-8")
+    calls = []
+
+    class PreparationAdapter:
+        adapter_id = "aistock.monthly.source"
+        adapter_version = "6"
+        contract_sha256 = SHA
+
+        def read(self, _connection, identity, context):
+            return MonthlySourcePreparationReadSet(
+                snapshot_group_id=f"postgres:{identity.snapshot_id}",
+                input_artifacts=(SourceArtifact("partial-source.json", source),),
+                blocking_context={"reason_code": "BLOCKED_SOURCE_REFRESH_AUDIT_INCOMPLETE"},
+                preparation_token=object(),
+            )
+
+        def preparation_snapshot_sealed(self, context, token, identity):
+            calls.append((context.operation_id, token, identity.snapshot_id))
+            return {"status": "SOURCE_PREPARED_UNPUBLISHED", "prepared_component_count": 0}
+
+        def snapshot_sealed(self, *_args):
+            pytest.fail("partial SOURCE must never enter the full source reuse catalog")
+
+    producer = AuditedMonthlySourceProducer(
+        "aistock.monthly.source",
+        "2",
+        tmp_path,
+        Connection,
+        PreparationAdapter(),
+        snapshot_factory=lambda factory: MonthlySnapshotCoordinator(
+            factory,
+            repair_watermark_reader=lambda _: "repair-1",
+            overlapping_repair_reader=lambda *_: ("repair-2",) if overlap else (),
+        ),
+    )
+    context = ProducerContext(
+        stage="SOURCE",
+        operation_id=f"dmr_{'8' * 32}",
+        attempt=1,
+        request={},
+        plan={"target_cutoff": "2026-09-30", "predecessor": {"cutoff": "2026-08-31"}},
+        prior_receipts={},
+    )
+    if overlap:
+        with pytest.raises(MonthlySnapshotError, match="repairs overlapped"):
+            producer.produce(context)
+        assert calls == []
+    else:
+        with pytest.raises(MonthlyReleaseSourceBlocked) as error:
+            producer.produce(context)
+        assert len(calls) == 1
+        assert error.value.context["consistent_input_set_complete"] is False
+        assert error.value.context["publication_allowed"] is False
+        assert error.value.context["component_preparation_execution"] == "SOURCE_PREPARED_UNPUBLISHED"
+        assert not (tmp_path / "monthly" / context.operation_id / "source" / "attempt-1" / "source-audit.json").exists()
 
 
 class Cursor:

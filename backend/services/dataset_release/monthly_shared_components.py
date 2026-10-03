@@ -651,6 +651,28 @@ class FrozenMonthlySharedComponentBuilder:
         )
         if frozen.artifact_ready_contract_ref is None:
             raise MonthlySharedComponentsError("SOURCE lacks artifact-ready authority")
+        from .monthly_preparation_shared import recover_prepared_shared_components
+        from .monthly_preparation_executor import adopt_pinned_shared_file
+
+        prepared = recover_prepared_shared_components(
+            context=context, snapshot=frozen, profile=self.profile,
+            sector_membership_start=self.sector_membership_start, staging_root=root,
+        )
+
+        def adopt(domain: str, relative_path: str, target: Path) -> Path:
+            return adopt_pinned_shared_file(
+                root=Path(self.profile.candidate_root), verified=prepared[domain],
+                relative_path=relative_path, destination=target,
+            )
+
+        def sidecar(domain: str, target: Path, rows: Sequence[tuple[str, date, date]]) -> Path:
+            if domain not in prepared:
+                return _write_sidecar(target, rows)
+            expected = "".join(f"{symbol}\t{left.isoformat()}\t{right.isoformat()}\n" for symbol, left, right in rows).encode("utf-8")
+            path = adopt(domain, target.name, target)
+            if path.read_bytes() != expected:
+                raise MonthlySharedComponentsError("prepared sidecar differs from complete SOURCE")
+            return path
         calendar_path = _plain_existing_file(
             root, "daily_bin/qlib/calendars/day.txt", label="Qlib day calendar"
         )
@@ -674,24 +696,29 @@ class FrozenMonthlySharedComponentBuilder:
         )
         pool_root = root / "stock_pools"
         pool_paths = {
-            "stock_universe": _write_sidecar(
+            "stock_universe": sidecar("stock_pools",
                 pool_root / "stock_universe.txt", pit_rows
             )
         }
         for pool_id, rows in index_pools.items():
-            pool_paths[pool_id] = _write_sidecar(
+            pool_paths[pool_id] = sidecar("stock_pools",
                 pool_root / f"index_pool__{pool_id}.txt", rows
             )
         if set(pool_paths) != set(_POOL_IDS):
             raise MonthlySharedComponentsError("six-pool output set differs")
-        benchmark_path = _write_sidecar(
+        benchmark_path = sidecar("benchmark",
             pool_root / "benchmark.txt",
             (("000300.SH", calendar[0], cutoff),),
         )
 
         suspend_rows = _source_rows(self.cas, frozen, "suspend_d")
-        suspend_parquet, suspend_meta, _suspended_keys, suspend_source_rows = (
-            _build_suspend(
+        if "suspend" in prepared:
+            component = "components/suspend_d_daily_candidate_v2"
+            suspend_parquet = adopt("suspend", f"{component}/suspend_d.parquet", root / component / "suspend_d.parquet")
+            suspend_meta = adopt("suspend", f"{component}/meta.json", root / component / "meta.json")
+            suspend_source_rows = len(suspend_rows)
+        else:
+            suspend_parquet, suspend_meta, _suspended_keys, suspend_source_rows = _build_suspend(
                 root=root,
                 rows=suspend_rows,
                 pit_rows=pit_rows,
@@ -699,7 +726,6 @@ class FrozenMonthlySharedComponentBuilder:
                 profile=self.profile,
                 cutoff=cutoff,
             )
-        )
         pool_coverage = {
             pool_id: {
                 "symbol_count": len({row[0] for row in rows}),
@@ -756,28 +782,30 @@ class FrozenMonthlySharedComponentBuilder:
         quote = validate_sector_quote_availability(
             quote_payload, code_map=code_map, required_end=cutoff
         )
-        sector_frame = _read_sector_frame(sector_h5)
-        unknown_ids = sorted(
-            set(sector_frame.loc[sector_frame["l2_code_id"] >= 0, "l2_code_id"])
-            - set(code_map.id_to_code)
-        )
-        if unknown_ids:
-            raise MonthlySharedComponentsError(
-                f"sector_data contains unknown l2_code_id values: {unknown_ids[:10]}"
+        from .monthly_preparation_shared import summarize_sector_context
+        from .monthly_component_preparation import ComponentPreparationError
+        try:
+            sector_membership, market, counts = summarize_sector_context(
+                sector_h5=sector_h5, profile=self.profile, enricher=enricher,
+                code_map=code_map, quote=quote, calendar=calendar, pit_rows=pit_rows,
+                start=self.sector_membership_start, cutoff=cutoff,
+                bound=self.profile.resource_policy.validation_read_chunk_rows,
+                checkpoint=lambda: None,
             )
-        frozen_assignments = _frozen_sector_assignments(
-            sector_frame,
-            start=self.sector_membership_start,
-            end=cutoff,
-        )
-        sector_membership, resolved_days, frozen_days, gap_fill_days = _build_sector_membership(
-            enricher=enricher,
-            pit_rows=pit_rows,
-            calendar=calendar,
-            start=self.sector_membership_start,
-            end=cutoff,
-            frozen_assignments=frozen_assignments,
-        )
+        except ComponentPreparationError as exc:
+            raise MonthlySharedComponentsError(str(exc)) from exc
+        frozen_days = counts["frozen_stock_trading_day_count"]
+        gap_fill_days = counts["member_gap_fill_stock_trading_day_count"]
+        resolved_days = frozen_days + gap_fill_days
+        if "sector_context" in prepared:
+            import pandas as pd
+            proof = prepared["sector_context"]
+            prior_root = Path(self.profile.candidate_root) / proof.record["component_root"]
+            if (
+                not sector_membership.equals(pd.read_parquet(prior_root / "sector_membership_spans.parquet"))
+                or not market.equals(pd.read_parquet(prior_root / "market_context.parquet"))
+            ):
+                raise MonthlySharedComponentsError("prepared sector sidecars differ from complete frozen source")
         membership_start, membership_end, membership_count, symbol_count = (
             validate_membership_frame(
                 sector_membership,
@@ -786,21 +814,15 @@ class FrozenMonthlySharedComponentBuilder:
                 required_end=cutoff,
             )
         )
-        market = _build_market_context(sector_frame)
         market_start, market_end, market_count = validate_market_context_frame(
             market,
             required_start=self.sector_membership_start,
             required_end=cutoff,
         )
-        quote_coverage = _validate_sector_alignment(
-            frame=sector_frame,
-            membership=sector_membership,
-            calendar=calendar,
-            code_map=code_map,
-            quote_availability=quote,
-            start=self.sector_membership_start,
-            end=cutoff,
-        )
+        quote_coverage = {
+            "required_sector_date_count": counts["quote_required_sector_date_count"],
+            "missing_sector_date_count": counts["quote_gap_count"],
+        }
 
         base_manifest_path, base_manifest_sha = _base_manifest(
             root=root,
@@ -825,8 +847,12 @@ class FrozenMonthlySharedComponentBuilder:
         )
         market_path = sector_root / "market_context.parquet"
         membership_path = sector_root / "sector_membership_spans.parquet"
-        market.to_parquet(market_path, index=False)
-        sector_membership.to_parquet(membership_path, index=False)
+        if "sector_context" in prepared:
+            adopt("sector_context", market_path.name, market_path)
+            adopt("sector_context", membership_path.name, membership_path)
+        else:
+            market.to_parquet(market_path, index=False)
+            sector_membership.to_parquet(membership_path, index=False)
         receipt = {
             "schema_version": SECTOR_CONTEXT_RECEIPT_SCHEMA,
             "source_dataset_manifest_sha256": base_manifest_sha,
@@ -834,9 +860,7 @@ class FrozenMonthlySharedComponentBuilder:
                 "path": sector_h5.relative_to(root).as_posix(),
                 "sha256": _sha256(sector_h5),
                 "byte_size": sector_h5.stat().st_size,
-                "used_l2_code_id_count": len(
-                    set(sector_frame.loc[sector_frame["l2_code_id"] >= 0, "l2_code_id"])
-                ),
+                "used_l2_code_id_count": counts["used_l2_code_id_count"],
             },
             "sector_code_map": {
                 "schema_version": RELEASE_SW_L2_CODE_MAP_SCHEMA,

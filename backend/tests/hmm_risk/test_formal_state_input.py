@@ -14,6 +14,203 @@ from backend.services.hmm_risk.formal_state_executor import frozen_release_bindi
 from backend.services.hmm_risk.formal_state_model import FormalStateError
 
 
+@pytest.mark.parametrize("authority_end", ["2026-08-31", "2026-09-01"])
+def test_effect_baseline_checks_quote_authority_against_release_cutoff(tmp_path, monkeypatch, authority_end):
+    import json
+
+    from backend.tests.dataset_release.test_shared_sector_context import _code_map, _quote_availability
+
+    code_map = _code_map()
+    quote = _quote_availability(code_map, end=authority_end)
+    components = {}
+    for key, payload in (("sector_code_map", code_map), ("sector_quote_availability", quote)):
+        path = tmp_path / f"{key}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        components[key] = {"path": path.name, "sha256": reader._sha256_file(path)}
+    membership = tmp_path / "membership.parquet"
+    membership.write_bytes(b"membership-read-boundary")
+    components["sector_membership_spans"] = {
+        "path": membership.name,
+        "sha256": reader._sha256_file(membership),
+    }
+    (tmp_path / "qe_dataset_manifest.json").write_text(json.dumps({"components": components}), encoding="utf-8")
+
+    def assets(root, **kwargs):
+        assert root == tmp_path
+        assert kwargs["data_window_end"] == date(2026, 3, 30)
+        assert kwargs["frozen_release_binding"] == frozen_release_binding()
+        return {"release_root": root, "release_cutoff": date(2026, 8, 31)}
+
+    class MembershipBoundaryReached(Exception):
+        pass
+
+    def membership_read(path, *args, **kwargs):
+        assert path == membership
+        raise MembershipBoundaryReached
+
+    monkeypatch.setattr(reader, "load_rotation_l1_direct_v2_source_assets", assets)
+    monkeypatch.setattr(subject.pd, "read_parquet", membership_read)
+    source = {
+        "candidate_root": str(tmp_path),
+        "security_identity_manifest": str(tmp_path / "security.json"),
+        "provider_absence_manifest": str(tmp_path / "absence.json"),
+    }
+    frozen = {"catalog": code_map["member_backed_codes"]}
+    if authority_end == "2026-09-01":
+        with pytest.raises(ValueError, match="exceeds release cutoff"):
+            subject.prepare_effect_baseline(frozen, source)
+    else:
+        # Authority metadata can extend beyond the evaluation period. Actual
+        # feature data remains bounded by the original 2026-03-30 as-of above.
+        with pytest.raises(MembershipBoundaryReached):
+            subject.prepare_effect_baseline(frozen, source)
+
+
+def test_effect_source_and_parquet_reads_are_bounded_before_file_access(monkeypatch, tmp_path):
+    from backend.services.hmm_risk import formal_state_effect as effect
+
+    monkeypatch.setattr(effect, "validate_models", lambda _: None)
+    monkeypatch.setattr(
+        reader, "load_rotation_l1_direct_v2_source_assets", lambda *_a, **_kw: pytest.fail("source access")
+    )
+    with pytest.raises(FormalStateError, match="boundary"):
+        subject._effect_stock_facts({}, {}, start=date(2025, 4, 1), end=date(2026, 4, 1))
+    path = tmp_path / "facts.parquet"
+    pd.DataFrame({"trade_date": pd.to_datetime(["2026-03-30", "2026-04-01"]), "value": [1.0, float("nan")]}).to_parquet(
+        path
+    )
+    original = pd.read_parquet
+
+    def bounded(*args, **kwargs):
+        assert kwargs["filters"] == [
+            ("trade_date", ">=", pd.Timestamp("2026-03-30")),
+            ("trade_date", "<=", pd.Timestamp("2026-03-31")),
+        ]
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pd, "read_parquet", bounded)
+    frame = reader._read_parquet_date_window(
+        path, start=date(2026, 3, 30), end=date(2026, 3, 31), columns=["trade_date", "value"]
+    )
+    assert len(frame) == 1 and frame["value"].tolist() == [1.0]
+
+
+def test_effect_explicit_catalog_retains_structurally_absent_sector_as_na():
+    from dataclasses import replace
+    from backend.tests.hmm_risk.test_stock_fact_observation import _feature_domain_aggregate
+    from backend.services.hmm_risk.stock_fact_observation import build_c010_feature_domain_panel
+    from backend.services.hmm_risk.contracts import StateModelSetError
+
+    days = [date(2025, 4, 1), date(2025, 4, 2)]
+    codes = [f"801{i:03d}.SI" for i in range(131)]
+    aggregates = [
+        replace(_feature_domain_aggregate(day, i, j), l1_code=codes[i])
+        for j, day in enumerate(days)
+        for i in range(130)
+    ]
+    kwargs = {
+        "trading_dates": days,
+        "csi300_returns": {day: 0.01 for day in days},
+        "expected_sector_count": 131,
+        "direct_sector_level": "L2",
+    }
+    with pytest.raises(StateModelSetError, match="131"):
+        build_c010_feature_domain_panel(aggregates, **kwargs)
+    panel, _, _ = build_c010_feature_domain_panel(aggregates, **kwargs, canonical_sector_codes=codes)
+    assert len(panel) == 262
+    assert panel.xs(codes[-1], level="l1_code")[list(ALL_CORE_FEATURES)].isna().all().all()
+    empty_panel, _, _ = build_c010_feature_domain_panel([], **kwargs, canonical_sector_codes=codes)
+    assert len(empty_panel) == 262 and empty_panel[list(ALL_CORE_FEATURES)].isna().all().all()
+
+
+def test_effect_strictly_prior_circ_context_is_used_without_same_day_substitution(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    symbol = "000001.SZ"
+    prior, day = date(2025, 3, 31), date(2025, 4, 1)
+    rows = np.ones(1, dtype=reader._QLIB_SOURCE_DTYPE)
+    rows["symbol"] = symbol.encode("ascii")
+    rows["trade_date"] = 20250401
+    path = tmp_path / "202504.bin"
+    rows.tofile(path)
+    index = pd.MultiIndex.from_arrays([pd.to_datetime([day]), [symbol]], names=["datetime", "instrument"])
+    basic = pd.DataFrame(1.0, index=index, columns=reader._DAILY_BASIC_COLUMNS, dtype=np.float32)
+    flow = pd.DataFrame(1.0, index=index, columns=reader._MONEYFLOW_COLUMNS, dtype=np.float32)
+    monkeypatch.setattr(
+        reader,
+        "_load_fixed_h5_window",
+        lambda _p, **kw: basic if tuple(kw["expected_columns"]) == reader._DAILY_BASIC_COLUMNS else flow,
+    )
+    adapter = SimpleNamespace(
+        resolve=lambda *_: SimpleNamespace(
+            status="resolved", reason_code=None, l1_code="801010.SI", l1_name="L1", l2_code="801011.SI", l2_name="L2"
+        )
+    )
+    security = SimpleNamespace(
+        resolve=lambda *_: SimpleNamespace(source_ts_code=symbol, evidence=lambda: {"source_ts_code": symbol})
+    )
+    captured = []
+    context = {symbol: (prior, 500.0, "available", None)}
+    kwargs = {
+        "month_paths": [path],
+        "assets": {"files": {"daily_basic": tmp_path / "basic", "moneyflow": tmp_path / "flow"}},
+        "calendar": [prior, day],
+        "spans": {symbol: ((day, day),)},
+        "adapter": adapter,
+        "security": security,
+        "provider_absence": SimpleNamespace(rows=()),
+        "suspension_keys": frozenset(),
+        "contributor_eligibility": {symbol: True},
+        "window_start": day,
+        "window_end": day,
+        "build_feature_domain_aggregates": False,
+        "day_rows_callback": lambda _d, values: captured.extend(values),
+    }
+    reader._build_stock_fact_aggregates(**kwargs, initial_circ_state=context)
+    assert captured[0]["prev_circ_mv_cny"] == 500.0 and captured[0]["circ_mv_source_date"] == prior
+    assert context == {symbol: (prior, 500.0, "available", None)}
+    with pytest.raises(reader.RotationL1InputBundleError, match="strictly prior"):
+        reader._build_stock_fact_aggregates(**kwargs, initial_circ_state={symbol: (day, 500.0, "available", None)})
+
+
+def test_bounded_suspend_empty_window_still_validates_declared_counts(tmp_path):
+    import json
+
+    path = tmp_path / "suspend.parquet"
+    meta_path = tmp_path / "meta.json"
+    day = date(2026, 3, 31)
+    pd.DataFrame(
+        {
+            "ts_code": ["000001.SZ"],
+            "trade_date": pd.to_datetime(["2026-08-31"]),
+            "suspend_type": ["S"],
+            "suspend_timing": [""],
+        }
+    ).to_parquet(path)
+    meta = {
+        "schema_version": reader.DIRECT_V2_SUSPEND_SCHEMA_VERSION,
+        "component": "suspend_d",
+        "start": reader.DIRECT_V2_RELEASE_START.isoformat(),
+        "end": "2026-08-31",
+        "universe_key": "test",
+        "source_table": "market.suspend_d",
+        "suspend_type": "S",
+        "daily_row_counts": {day.isoformat(): 1},
+    }
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    kwargs = {
+        "calendar": [day],
+        "expected_release_cutoff": date(2026, 8, 31),
+        "expected_universe_key": "test",
+        "bounded": True,
+    }
+    with pytest.raises(reader.RotationL1InputBundleError, match="readback"):
+        reader._load_suspend_keys(path, meta_path, **kwargs)
+    meta["daily_row_counts"][day.isoformat()] = 0
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    assert reader._load_suspend_keys(path, meta_path, **kwargs) == frozenset()
+
+
 def test_frozen_binding_pins_final_v17_without_changing_model_contract():
     assert frozen_release_binding() == {
         "generation": "20261002-v17-unified-basic-history1",

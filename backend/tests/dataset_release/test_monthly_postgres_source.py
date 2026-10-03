@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta, timezone
 from contextlib import contextmanager
 import json
 from types import SimpleNamespace
@@ -235,7 +235,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "5"
+    assert adapter.adapter_version == "6"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -243,6 +243,10 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             **old_fields,
             "sector_source_policy": "classification_published_snapshot_v1",
             "refresh_audit_readiness_policy": source.REFRESH_READINESS_POLICY,
+            "component_preparation_dependency_digest": digest_named_fields(
+                "aistock_monthly_component_dependency_v1",
+                source.component_dependencies(),
+            ),
         },
     )
 
@@ -595,6 +599,68 @@ def test_minute_summary_does_not_store_240_rows():
     assert value.count == 240
     assert value.labels.bit_count() == 240
     assert not hasattr(value, "rows")
+
+
+def auction_data():
+    data = rows()
+    auction = {**data["kline_minute_raw"][0],
+               "trade_time": data["kline_minute_raw"][0]["trade_time"].replace(minute=30),
+               "open_li": 9900, "high_li": 9900, "low_li": 9900, "close_li": 9900,
+               "volume_hand": 2, "amount_li": 20000}
+    data["kline_minute_raw"].insert(0, auction)
+    data["kline_daily_raw"][0].update(open_li=9900, low_li=9900, volume_hand=242, amount_li=2420000)
+    return data
+
+
+@pytest.mark.parametrize("placement", ["first", "last", "utc"])
+def test_minute_source_auction_is_not_a_canonical_bar(placement):
+    data = auction_data()
+    if placement == "last":
+        data["kline_minute_raw"].append(data["kline_minute_raw"].pop(0))
+    elif placement == "utc":
+        auction = data["kline_minute_raw"][0]
+        auction["trade_time"] = auction["trade_time"].replace(tzinfo=timezone(timedelta(hours=8))).astimezone(timezone.utc)
+    summary = MinuteSummary(DAY)
+    for row in data["kline_minute_raw"]:
+        summary.add(row)
+    assert (summary.count, summary.labels.bit_count(), summary.invalid) == (240, 240, False)
+    assert summary.aggregates()["open"] == 9.9
+    assert summary.aggregates()["vol"] == 24200
+    assert all(gate.status == "PASS" for gate in run(data).values())
+
+
+@pytest.mark.parametrize("defect", ["duplicate", "second", "nonfinite", "missing", "only_auction",
+                                    "price_drift", "volume_drift", "cash_drift", "out_of_session", "auction_only_suspended"])
+def test_minute_auction_preserves_fail_closed(defect):
+    data = auction_data()
+    minute = data["kline_minute_raw"]
+    auction = minute[0]
+    if defect == "duplicate":
+        minute.append(dict(auction))
+    elif defect == "second":
+        auction["trade_time"] += timedelta(seconds=1)
+    elif defect == "nonfinite":
+        auction["amount_li"] = float("nan")
+    elif defect == "missing":
+        minute.pop()
+    elif defect == "only_auction":
+        data["kline_minute_raw"] = [auction]
+    elif defect == "price_drift":
+        auction.update(open_li=9800, high_li=9800, low_li=9800, close_li=9800)
+    elif defect == "volume_drift":
+        auction["volume_hand"] *= 2
+    elif defect == "cash_drift":
+        auction["amount_li"] *= 3
+    elif defect == "out_of_session":
+        auction["trade_time"] = auction["trade_time"].replace(minute=0)
+    else:
+        data["kline_minute_raw"] = [auction]
+        data["kline_daily_raw"] = []
+        data["suspend_d"] = [{"ts_code": SYMBOL, "trade_date": DAY, "suspend_type": "S", "suspend_timing": None}]
+    result = run(data)
+    assert result["suspend_limit" if defect == "auction_only_suspended" else "minute_price"].status == "BLOCKED"
+    if defect == "duplicate":
+        assert result["minute_price"].duplicate_count == 1
 
 
 def test_real_shared_source_resolutions_are_used_as_codes():

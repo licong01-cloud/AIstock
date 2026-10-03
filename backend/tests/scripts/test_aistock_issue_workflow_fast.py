@@ -15,6 +15,140 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.fixture
+def cli_task_worktree(tmp_path, monkeypatch):
+    base, task = tmp_path / "authority", tmp_path / "task"
+    base.mkdir()
+
+    def git(root, *args):
+        return subprocess.check_output(["git", "-C", str(root), *args], text=True, stderr=subprocess.STDOUT, timeout=15).strip()
+
+    git(base, "init", "-q")
+    # Git identity is supplied per command; the shared baseline can be empty.
+    git(base, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "--allow-empty", "-qm", "baseline")
+    git(base, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(base, "worktree", "add", "-qb", "bug/task-context", str(task))
+    (task / "task.txt").write_text("task", encoding="utf-8")
+    git(task, "add", ".")
+    git(task, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "-qm", "task change")
+    monkeypatch.setattr(workflow, "REPO_ROOT", base)
+    monkeypatch.setattr(workflow, "BUGS_ROOT", base / "tests/aistock_validation/bugs")
+    monkeypatch.setattr(workflow, "SCRIPT_ROOT", base, raising=False)
+    monkeypatch.chdir(task)
+    return base, task, git
+
+
+@pytest.mark.parametrize("create", [False, True])
+def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktree, monkeypatch, create):
+    base, task, git = cli_task_worktree
+    original_root = workflow.REPO_ROOT
+    original_flow_root = workflow.flow.REPO_ROOT
+    original_exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: False if path == Path("F:/Dev/AIstock") else original_exists(path))
+    monkeypatch.delenv("AISTOCK_CANONICAL_ROOT", raising=False)
+    monkeypatch.delenv("AISTOCK_ROOT", raising=False)
+    (task / "nested").mkdir()
+    monkeypatch.chdir(task / "nested")
+    state = task / "tmp/issue_workflow/BUG-999/state.json"
+    state.parent.mkdir(parents=True)
+    state.write_text('{"worktree":"real-task"}', encoding="utf-8")
+    bug = task / "tests/aistock_validation/bugs/20261003_BUG-999.json"
+    bug.parent.mkdir(parents=True)
+    bug.write_text('{"bug_id":"BUG-999","status":"open"}', encoding="utf-8")
+    calls = []
+
+    def handler(_args):
+        assert workflow.REPO_ROOT == workflow.flow.REPO_ROOT == task
+        assert workflow._canonical_root() == base
+        assert workflow.flow.BUGS_ROOT == task / "tests/aistock_validation/bugs"
+        assert workflow.flow.TEST_PLANS == task / "tests/aistock_validation/catalog/test_plans.yaml"
+        assert workflow.BUGS_ROOT == workflow.flow.BUGS_ROOT
+        assert workflow.flow.FILE_OWNERSHIP == task / "tests/aistock_validation/catalog/file_ownership.yaml"
+        assert workflow._load_state("BUG-999")["worktree"] == "real-task"
+        assert workflow.find_bug_record("BUG-999")[1] == bug
+        assert workflow._finish_changed_files("origin/main", "HEAD") == ["task.txt", "tests/", "tmp/"]
+        receipts, errors = workflow._build_validation_receipts(["python -m nox -s l0 -> passed"], root=workflow.REPO_ROOT)
+        assert not errors and receipts[0]["commit"] == git(task, "rev-parse", "HEAD")
+        assert receipts[0]["commit"] != git(base, "rev-parse", "HEAD")
+        finish = {"validation_evidence": ["passed"], "validation_receipts": receipts, "pr_body_path": "tmp/body.md"}
+        monkeypatch.setattr(workflow, "_pr_worktree_guard", lambda: {"blocking": []})
+        monkeypatch.setattr(workflow, "_pre_pr_gate", lambda **kwargs: {"workflow_gate": "passed", "blocking": []})
+        monkeypatch.setattr(workflow, "_create_pr_with_transport_fallback", lambda **kwargs: calls.append(kwargs) or {"ok": True, "stdout": "https://github.com/test/repo/pull/1"})
+        monkeypatch.setattr(workflow, "_append_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: None)
+        workflow._maybe_create_pr(bug_id="BUG-999", finish=finish, push=False, create_pr=True, watch_ci=False, pr_title=None)
+        assert calls[0]["root"] == task and calls[0]["branch"] == "bug/task-context"
+        assert calls[0]["expected_head"] == receipts[0]["commit"]
+        state.write_text(json.dumps({"planned_worktree": str(task), "planned_branch": "bug/task-context"}), encoding="utf-8")
+        plan = workflow._maybe_create_worktree(
+            record={"bug_id": "BUG-999", "title": "task"}, bug_id="BUG-999",
+            source_bug_json=bug, create=create, dry_run=False, task_slug=None,
+        )
+        assert plan["reused"] is True and not plan.get("created")
+        assert plan["branch"] == "bug/task-context"
+        assert workflow._actual_and_planned_worktree(plan) == (str(task), None)
+        return 0
+
+    args = SimpleNamespace(command="run", mode="pr", func=handler)
+    monkeypatch.setattr(workflow, "build_parser", lambda: SimpleNamespace(parse_args=lambda _: args))
+    assert workflow.main([]) == 0
+    assert workflow.REPO_ROOT == original_root
+    assert workflow.flow.REPO_ROOT == original_flow_root
+
+
+@pytest.mark.parametrize("failure", ["unknown", "foreign", "git_override", "head_drift", "branch_drift", "receipt_mismatch", "digest_mismatch", "head_argument", "registered_branch_drift", "workflow_error"])
+def test_canonical_cli_task_context_fails_closed(cli_task_worktree, monkeypatch, capsys, failure):
+    base, task, git = cli_task_worktree
+    original_root = workflow.REPO_ROOT
+    invoked = []
+
+    def handler(_args):
+        invoked.append(True)
+        if failure == "workflow_error":
+            raise workflow.WorkflowError("target validation failed")
+        if failure == "registered_branch_drift":
+            state = task / "tmp/issue_workflow/BUG-999/state.json"
+            state.parent.mkdir(parents=True)
+            state.write_text(json.dumps({"worktree": str(task), "branch": "wrong/branch"}), encoding="utf-8")
+            workflow._maybe_create_worktree(
+                record={"bug_id": "BUG-999"}, bug_id="BUG-999", source_bug_json=task / "BUG-999.json",
+                create=False, dry_run=False, task_slug=None,
+            )
+            pytest.fail("registered branch drift must fail closed")
+        if failure == "head_drift":
+            git(task, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "--allow-empty", "-qm", "concurrent head change")
+        if failure == "branch_drift":
+            git(task, "branch", "-m", "renamed-task")
+        root = workflow.REPO_ROOT
+        if failure == "head_argument":
+            workflow.build_finish_plan(bug_id="BUG-999", issue_json=None, changed_files=None,
+                                       base="origin/main", head=git(base, "rev-parse", "HEAD"),
+                                       validation_evidence=[], plan_only=True, allow_missing_evidence=False)
+        if failure in {"receipt_mismatch", "digest_mismatch"}:
+            finish = {"validation_evidence": ["passed"], "validation_receipts": [{"commit": git(base, "rev-parse", "HEAD")}]}
+            if failure == "digest_mismatch":
+                finish["validation_receipts"][0]["commit"] = git(task, "rev-parse", "HEAD")
+            workflow._check_pr_receipt_identity(finish, root=root)
+        else:
+            workflow._build_validation_receipts(["python -m nox -s l0 -> passed"], root=root)
+        return 0
+
+    if failure in {"unknown", "foreign"}:
+        other = task.parent / failure
+        other.mkdir()
+        if failure == "foreign":
+            git(other, "init", "-q")
+        monkeypatch.chdir(other)
+    if failure == "git_override":
+        monkeypatch.setenv("GIT_DIR", str(base / ".git"))
+    args = SimpleNamespace(command="finish", func=handler)
+    monkeypatch.setattr(workflow, "build_parser", lambda: SimpleNamespace(parse_args=lambda _: args))
+    assert workflow.main([]) == 2
+    assert workflow.REPO_ROOT == original_root
+    assert capsys.readouterr().err
+    assert bool(invoked) == (failure not in {"unknown", "foreign", "git_override"})
+
+
 @pytest.mark.parametrize("executable", ["gh", "C:/tools/gh.exe"])
 @pytest.mark.parametrize("existing", ["localhost", "api.github.com", "*"])
 def test_gh_environment_bypasses_only_api_and_preserves_parent(monkeypatch, executable, existing):
@@ -83,10 +217,10 @@ def _monthly_ready_payload() -> dict[str, Any]:
 
 
 def _monthly_verdict(payload):
-    return workflow._evaluate_business_smoke_semantics(
+    return _business_semantic(
         "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32,
-        json.dumps(payload), response_sha256="d" * 64,
-    )[1]
+        payload, "d" * 64,
+    )
 
 
 def test_monthly_ready_probe_requires_operation_bound_success() -> None:
@@ -394,52 +528,39 @@ def test_factor_metrics_semantics_reject_duplicate_persisted_rows() -> None:
     assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE.replace("limit=1", "limit=2"))[0] == "failed"
 
 
+def _business_semantic(url: str, payload: Any, response_hash: str) -> dict[str, Any]:
+    return workflow._evaluate_business_smoke_semantics(
+        url, json.dumps(payload), response_sha256=response_hash,
+    )[1]
+
+
 def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
-    _schema, semantic = workflow._evaluate_business_smoke_semantics(
-        f"http://127.0.0.1:8001/api/v1/advisory/programs/{program_id}/entry-price/status",
-        json.dumps(payload),
-        response_sha256="e" * 64,
-    )
-    return semantic
-
-
-def test_entry_price_status_semantic_contract_accepts_safe_unconfigured_readback() -> None:
-    semantic = _entry_price_status_semantic(
-        {
-            "ok": True,
-            "schema_version": "advisory_entry_price_status_v1",
-            "configured": False,
-            "program_id": "advp_test",
-            "status": "NOT_CONFIGURED",
-            "database_written": False,
-        }
+    return _business_semantic(
+        f"http://127.0.0.1:8001/api/v1/advisory/programs/{program_id}/entry-price/status", payload, "e" * 64,
     )
 
-    assert semantic["contract_id"] == "advisory_entry_price_status"
-    assert semantic["verdict"] == "passed"
-    assert semantic["facts"] == {
+
+def _entry_price_payload(configured=False):
+    return {
+        "ok": True,
+        "schema_version": "advisory_entry_price_status_v1",
+        "configured": configured,
         "program_id": "advp_test",
-        "configured": False,
-        "status": "NOT_CONFIGURED",
+        "status": "QUALITY_REVIEW_REQUIRED" if configured else "NOT_CONFIGURED",
         "database_written": False,
+        **({"binding_activated": False} if configured else {}),
     }
 
 
-def test_entry_price_status_semantic_contract_accepts_non_activating_configured_readback() -> None:
-    semantic = _entry_price_status_semantic(
-        {
-            "ok": True,
-            "schema_version": "advisory_entry_price_status_v1",
-            "configured": True,
-            "program_id": "advp_test",
-            "status": "QUALITY_REVIEW_REQUIRED",
-            "database_written": False,
-            "binding_activated": False,
-        }
-    )
-
+@pytest.mark.parametrize("configured", [False, True])
+def test_entry_price_status_semantic_contract_accepts_safe_readback(configured) -> None:
+    payload = _entry_price_payload(configured)
+    semantic = _entry_price_status_semantic(payload)
+    assert semantic["contract_id"] == "advisory_entry_price_status"
     assert semantic["verdict"] == "passed"
-    assert semantic["facts"]["status"] == "QUALITY_REVIEW_REQUIRED"
+    assert semantic["facts"] == {key: payload[key] for key in (
+        "program_id", "configured", "status", "database_written"
+    )}
 
 
 @pytest.mark.parametrize(
@@ -462,14 +583,7 @@ def test_entry_price_status_semantic_contract_rejects_invalid_or_unsafe_readback
     override: dict[str, Any],
     reason: str,
 ) -> None:
-    payload = {
-        "ok": True,
-        "schema_version": "advisory_entry_price_status_v1",
-        "configured": False,
-        "program_id": "advp_test",
-        "status": "NOT_CONFIGURED",
-        "database_written": False,
-    }
+    payload = _entry_price_payload()
     payload.update(override)
 
     semantic = _entry_price_status_semantic(payload)
@@ -498,12 +612,10 @@ def _rotation_l2_semantic(
     *,
     query: str = "run_id=" + "a" * 64,
 ) -> dict[str, Any]:
-    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+    return _business_semantic(
         f"http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?{query}",
-        json.dumps(payload),
-        response_sha256="d" * 64,
+        payload, "d" * 64,
     )
-    return semantic
 
 
 def test_rotation_l2_overview_semantic_contract_binds_complete_run() -> None:
@@ -522,76 +634,39 @@ def test_rotation_l2_overview_semantic_contract_binds_complete_run() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {**_rotation_l2_overview_payload(), "status": "failed"},
-        {**_rotation_l2_overview_payload(), "ok": False},
-        {**_rotation_l2_overview_payload(), "errors": ["readback failed"]},
-    ],
-)
-def test_rotation_l2_overview_semantic_contract_rejects_conflicting_envelope(payload: dict[str, Any]) -> None:
-    semantic = _rotation_l2_semantic(payload)
-
-    assert semantic["verdict"] == "failed"
-    assert "status=ok" in semantic["reason"]
+_ROTATION_RUN_QUERY = "run_id=" + "a" * 64
 
 
-@pytest.mark.parametrize(
-    ("query", "payload", "reason"),
-    [
-        ("", _rotation_l2_overview_payload(), "exactly one non-empty run_id"),
-        (
-            "run_id=" + "a" * 64 + "&run_id=" + "a" * 64,
-            _rotation_l2_overview_payload(),
-            "exactly one non-empty run_id",
-        ),
-        ("run_id=" + "A" * 64, _rotation_l2_overview_payload("A" * 64), "lowercase SHA-256"),
-        ("run_id=" + "a" * 64, _rotation_l2_overview_payload("e" * 64), "does not match"),
-    ],
-)
-def test_rotation_l2_overview_semantic_contract_rejects_unbound_run(
-    query: str,
-    payload: dict[str, Any],
-    reason: str,
-) -> None:
-    semantic = _rotation_l2_semantic(payload, query=query)
-
-    assert semantic["verdict"] == "failed"
-    assert reason in semantic["reason"]
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "reason"),
-    [
-        ("sector_count", 130, "complete 131-sector catalog"),
-        ("sector_count", True, "complete 131-sector catalog"),
-        ("available_count", 132, "outside the sector catalog"),
-        ("canonical_row_sha256", None, "lowercase SHA-256"),
-        ("trade_date", "2026-09-31", "ISO date"),
-        ("trade_date", "2026-9-26", "ISO date"),
-        ("as_of_date", "2026-09-26", "must precede"),
-    ],
-)
-def test_rotation_l2_overview_semantic_contract_rejects_invalid_business_data(
-    field: str,
-    value: Any,
-    reason: str,
-) -> None:
+@pytest.mark.parametrize("query,envelope,fields,reason", [
+    (_ROTATION_RUN_QUERY, {"status": "failed"}, {}, "status=ok"),
+    (_ROTATION_RUN_QUERY, {"ok": False}, {}, "status=ok"),
+    (_ROTATION_RUN_QUERY, {"errors": ["readback failed"]}, {}, "status=ok"),
+    ("", {}, {}, "exactly one non-empty run_id"),
+    (_ROTATION_RUN_QUERY + "&" + _ROTATION_RUN_QUERY, {}, {}, "exactly one non-empty run_id"),
+    ("run_id=" + "A" * 64, {}, {"run_id": "A" * 64}, "lowercase SHA-256"),
+    (_ROTATION_RUN_QUERY, {}, {"run_id": "e" * 64}, "does not match"),
+    (_ROTATION_RUN_QUERY, {}, {"sector_count": 130}, "complete 131-sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"sector_count": True}, "complete 131-sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"available_count": 132}, "outside the sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"canonical_row_sha256": None}, "lowercase SHA-256"),
+    (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-09-31"}, "ISO date"),
+    (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-9-26"}, "ISO date"),
+    (_ROTATION_RUN_QUERY, {}, {"as_of_date": "2026-09-26"}, "must precede"),
+])
+def test_rotation_l2_overview_semantic_contract_rejects_invalid_readback(query, envelope, fields, reason):
+    """One negative oracle, preserving every envelope/query/row case."""
     payload = _rotation_l2_overview_payload()
-    payload["data"][field] = value
-
-    semantic = _rotation_l2_semantic(payload)
-
+    payload.update(envelope)
+    payload["data"].update(fields)
+    semantic = _rotation_l2_semantic(payload, query=query)
     assert semantic["verdict"] == "failed"
     assert reason in semantic["reason"]
 
 
 def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
-    _schema, semantic = workflow._evaluate_business_smoke_semantics(
+    semantic = _business_semantic(
         "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/not-registered",
-        json.dumps({"status": "ok", "data": {}}),
-        response_sha256="f" * 64,
+        {"status": "ok", "data": {}}, "f" * 64,
     )
 
     assert semantic["contract_id"] is None
@@ -730,7 +805,8 @@ def test_repository_runtime_catalog_preserves_representative_roles(
     assert payload["target_ids"] == expected_targets
 
 
-def test_monthly_release_sources_select_supervised_process_probe() -> None:
+@pytest.mark.parametrize("monthly", [True, False])
+def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
     monthly_sources = [
@@ -744,32 +820,23 @@ def test_monthly_release_sources_select_supervised_process_probe() -> None:
         "backend/services/dataset_release/monthly_worker_runtime.py",
     ]
 
-    selected, error = workflow._select_runtime_probe_route(target, runtime_files=monthly_sources)
-
-    assert error is None
-    assert selected["probe_route_id"] == "monthly_release_worker_process"
-    assert selected["probe_mode"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_MODE
-    assert selected["probes"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS
-    assert selected["probe_origins"] == ["http://127.0.0.1:8001", "http://localhost:8001"]
-
-
-def test_shared_release_source_without_monthly_anchor_keeps_generic_heartbeat_probe() -> None:
-    catalog = workflow._load_runtime_target_catalog()
-    target = catalog["targets"]["worker-scheduler"]
-
     selected, error = workflow._select_runtime_probe_route(
-        target,
-        runtime_files=["backend/services/dataset_release/build_stage.py"],
+        target, runtime_files=monthly_sources if monthly else ["backend/services/dataset_release/build_stage.py"],
     )
 
     assert error is None
-    assert selected["probe_route_id"] == "dataset_release_worker_heartbeat"
-    assert selected["probe_mode"] == workflow._DATASET_RELEASE_WORKER_HEARTBEAT_MODE
+    if monthly:
+        assert selected["probe_route_id"] == "monthly_release_worker_process"
+        assert selected["probe_mode"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_MODE
+        assert selected["probes"] == workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS
+        assert selected["probe_origins"] == ["http://127.0.0.1:8001", "http://localhost:8001"]
+    else:
+        assert selected["probe_route_id"] == "dataset_release_worker_heartbeat"
+        assert selected["probe_mode"] == workflow._DATASET_RELEASE_WORKER_HEARTBEAT_MODE
 
 
-def test_monthly_release_process_probes_do_not_consult_worker_heartbeat(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.parametrize("worker_count", [1, 2])
+def test_monthly_release_process_probes_bind_exact_worker_count(monkeypatch, worker_count) -> None:
     target = {
         "probe_origins": ["http://127.0.0.1:8001"],
         "probes": workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS,
@@ -777,9 +844,9 @@ def test_monthly_release_process_probes_do_not_consult_worker_heartbeat(
     snapshot = {
         "schema_version": "aistock_monthly_release_worker_process_snapshot_v1",
         "backend_listener_count": 1,
-        "worker_count": 1,
-        "healthy": True,
-        "workers": [{"pid": 101, "ppid": 100}],
+        "worker_count": worker_count,
+        "healthy": worker_count == 1,
+        "workers": [{"pid": 101 + index, "ppid": 100} for index in range(worker_count)],
     }
     monkeypatch.setattr(workflow, "_monthly_release_worker_process_snapshot", lambda _target: snapshot)
     monkeypatch.setattr(
@@ -801,8 +868,14 @@ def test_monthly_release_process_probes_do_not_consult_worker_heartbeat(
     results = workflow._read_monthly_release_worker_process_probes(target, 3.0)
 
     assert [item["name"] for item in results] == ["health_ref", "identity_ref", "business_smoke_ref"]
-    assert all(item["status"] == "passed" for item in results)
     assert results[2]["semantic"]["contract_id"] == "monthly_release_worker_supervision"
+    if worker_count == 1:
+        assert all(item["status"] == "passed" for item in results)
+    else:
+        assert results[0]["status"] == "failed"
+        assert results[2]["status"] == "failed"
+        assert results[2]["semantic"]["verdict"] == "failed"
+        assert "worker_count=2" in results[2]["error"]
 
 
 def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
@@ -814,36 +887,17 @@ def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
     worker_path.parent.mkdir(parents=True)
     worker_path.write_text("# worker\n", encoding="utf-8")
 
-    class FakeChild:
-        pid = 102
-
-        @staticmethod
-        def ppid() -> int:
-            return 101
-
-        @staticmethod
-        def cmdline() -> list[str]:
-            return ["python", str(worker_path), "--serve", "--poll-seconds", "5.0"]
-
-        @staticmethod
-        def cwd() -> str:
-            return str(tmp_path)
-
-    class FakeParent:
-        pid = 101
-
-        @staticmethod
-        def cmdline() -> list[str]:
-            return ["python", "-m", "uvicorn", "backend.main:app", "--port", str(parent_port)]
-
-        @staticmethod
-        def cwd() -> str:
-            return str(tmp_path)
-
-        @staticmethod
-        def children(*, recursive: bool) -> list[FakeChild]:
-            assert recursive is False
-            return [FakeChild()]
+    child = SimpleNamespace(
+        pid=102, ppid=lambda: 101, cwd=lambda: str(tmp_path),
+        cmdline=lambda: ["python", str(worker_path), "--serve", "--poll-seconds", "5.0"],
+    )
+    def children(*, recursive):
+        assert recursive is False
+        return [child]
+    parent = SimpleNamespace(
+        pid=101, cwd=child.cwd, children=children,
+        cmdline=lambda: ["python", "-m", "uvicorn", "backend.main:app", "--port", str(parent_port)],
+    )
 
     monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
@@ -857,7 +911,7 @@ def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
             )
         ],
     )
-    monkeypatch.setattr(workflow.psutil, "Process", lambda pid: FakeParent() if pid == 101 else pytest.fail())
+    monkeypatch.setattr(workflow.psutil, "Process", lambda pid: parent if pid == 101 else pytest.fail())
 
     snapshot = workflow._monthly_release_worker_process_snapshot(
         {
@@ -873,35 +927,6 @@ def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
     assert snapshot["backend_listener_count"] == 1
     assert snapshot["worker_count"] == 1
     assert snapshot["healthy"] is True
-
-
-def test_monthly_release_process_probe_fails_closed_for_duplicate_workers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    target = {
-        "probe_origins": ["http://127.0.0.1:8001"],
-        "probes": workflow._MONTHLY_RELEASE_WORKER_PROCESS_REFS,
-    }
-    snapshot = {
-        "schema_version": "aistock_monthly_release_worker_process_snapshot_v1",
-        "backend_listener_count": 1,
-        "worker_count": 2,
-        "healthy": False,
-        "workers": [{"pid": 101, "ppid": 100}, {"pid": 102, "ppid": 100}],
-    }
-    monkeypatch.setattr(workflow, "_monthly_release_worker_process_snapshot", lambda _target: snapshot)
-    monkeypatch.setattr(
-        workflow,
-        "_read_only_http_probe",
-        lambda name, url, **_kwargs: {"name": name, "url": url, "status": "passed"},
-    )
-
-    results = workflow._read_monthly_release_worker_process_probes(target, 3.0)
-
-    assert results[0]["status"] == "failed"
-    assert results[2]["status"] == "failed"
-    assert results[2]["semantic"]["verdict"] == "failed"
-    assert "worker_count=2" in results[2]["error"]
 
 
 def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
@@ -1055,10 +1080,8 @@ def test_read_command_retry_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == 3
 
 
-def test_github_issue_create_retries_missing_nested_module_label_with_parent(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.parametrize("module", ["validation.workflow_automation", "unknown"])
+def test_github_issue_create_only_recovers_nested_module_labels(tmp_path, monkeypatch, module) -> None:
     commands: list[list[str]] = []
 
     def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
@@ -1066,7 +1089,7 @@ def test_github_issue_create_retries_missing_nested_module_label_with_parent(
         if len(commands) == 1:
             return _result(
                 ok=False,
-                stderr="could not add label: 'module:validation.workflow_automation' not found",
+                stderr=f"could not add label: 'module:{module}' not found",
                 returncode=1,
             )
         return _result(stdout="https://github.com/licong01-cloud/AIstock/issues/4601\n")
@@ -1075,13 +1098,17 @@ def test_github_issue_create_retries_missing_nested_module_label_with_parent(
     body = tmp_path / "body.md"
     body.write_text("issue", encoding="utf-8")
 
-    result = workflow._create_github_issue_with_recovery(
-        bug_id="BUG-1461",
-        title="BUG-1461 P2: example",
-        body_path=body,
-        labels=["aistock:bug", "module:validation.workflow_automation", "status:open"],
-        cwd=tmp_path,
-    )
+    def create():
+        return workflow._create_github_issue_with_recovery(
+            bug_id="BUG-1461", title="BUG-1461 P2: example", body_path=body,
+            labels=["aistock:bug", f"module:{module}", "status:open"], cwd=tmp_path,
+        )
+    if module == "unknown":
+        with pytest.raises(workflow.WorkflowError, match="module:unknown"):
+            create()
+        assert len(commands) == 1
+        return
+    result = create()
 
     assert result["number"] == 4601
     assert result["warnings"] == [
@@ -1091,33 +1118,6 @@ def test_github_issue_create_retries_missing_nested_module_label_with_parent(
     assert "module:validation.workflow_automation" in commands[0][-1]
     assert "module:validation" in commands[1][-1]
     assert "module:validation.workflow_automation" not in commands[1][-1]
-
-
-def test_github_issue_create_does_not_retry_unknown_top_level_module_label(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-
-    def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
-        nonlocal calls
-        calls += 1
-        return _result(ok=False, stderr="could not add label: 'module:unknown' not found", returncode=1)
-
-    monkeypatch.setattr(workflow, "_run_command", fake_run)
-    body = tmp_path / "body.md"
-    body.write_text("issue", encoding="utf-8")
-
-    with pytest.raises(workflow.WorkflowError, match="module:unknown"):
-        workflow._create_github_issue_with_recovery(
-            bug_id="BUG-199",
-            title="BUG-199 P2: example",
-            body_path=body,
-            labels=["aistock:bug", "module:unknown", "status:open"],
-            cwd=tmp_path,
-        )
-
-    assert calls == 1
 
 
 def test_workflow_smoke_does_not_call_full_doctor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1178,78 +1178,56 @@ def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch:
     assert emitted["close_sync_commit"]["workflow_gate"] == "deferred_runtime_verification"
 
 
-@pytest.mark.parametrize("pr_number,commit,accepted", [(199, "a", True), (200, "a", False), (199, "b", False)])
+@pytest.mark.parametrize("mode", ["merged", "planned", "invalid"])
+def test_post_restart_scope_comes_from_recorded_merge_not_planned_paths(cli_task_worktree, monkeypatch, mode):
+    base, task, git = cli_task_worktree
+    record = {"bug_id": "BUG-199", "file_scope_contract": {"changed_files": ["backend/services/dataset_release/build_stage.py"]}}
+    if mode != "planned":
+        record["fix_commit"] = git(task, "rev-parse", "HEAD") if mode == "merged" else "a" * 40
+    monkeypatch.setattr(workflow, "find_bug_record", lambda **kwargs: (record, base / "BUG-199.json"))
+    def capture(**kwargs):
+        expected = ["task.txt"] if mode == "merged" else record["file_scope_contract"]["changed_files"]
+        assert kwargs["changed_files"] == expected
+        raise RuntimeError("scope captured before probes")
+    monkeypatch.setattr(workflow, "build_runtime_contract", capture)
+    # An operator identity override is not authority to replace the source delta.
+    with pytest.raises(workflow.WorkflowError if mode == "invalid" else RuntimeError,
+                       match=None if mode == "invalid" else "scope captured"):
+        workflow.build_post_restart_verify(bug_id="BUG-199", issue_json=None,
+                                           target_id="backend-main", expected_identity="b" * 40)
+
+
+@pytest.mark.parametrize("pr_number,commit,accepted,recovery_number,guard_accepted", [
+    (199, "a", True, 199, True), (200, "a", False, 199, True),
+    (199, "b", False, 199, True), (199, "a", True, 200, False),
+])
 def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    pr_number: int,
-    commit: str,
-    accepted: bool,
-) -> None:
-    issue = tmp_path / "tests" / "aistock_validation" / "bugs" / "BUG-199.json"
-    issue.parent.mkdir(parents=True)
-    issue.write_text(
-        json.dumps(
-            {
-                "bug_id": "BUG-199",
-                "status": "fixed",
-                "fix_commit": "a" * 40,
-                "pr_url": "https://github.example/pull/199",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        workflow,
-        "_dirty_files",
-        lambda _root: ["tests/aistock_validation/bugs/BUG-199.json"],
-    )
-
-    recovered = workflow._recoverable_close_sync_dirty_record(
-        tmp_path,
-        "BUG-199",
-        issue,
-        source_pr_url=f"https://github.example/pull/{pr_number}",
-        merge_commit=commit * 40,
-    )
-    if accepted:
-        assert recovered is not None
-        assert recovered["path"] == "tests/aistock_validation/bugs/BUG-199.json"
-    else:
-        assert recovered is None
-
-
-@pytest.mark.parametrize("recovery_number,accepted", [(199, True), (200, False)])
-def test_close_sync_apply_guard_allows_only_the_exact_recoverable_dirty_record(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    recovery_number: int,
-    accepted: bool,
+    tmp_path, monkeypatch, pr_number, commit, accepted, recovery_number, guard_accepted,
 ) -> None:
     dirty_path = "tests/aistock_validation/bugs/BUG-199.json"
+    issue = tmp_path / dirty_path
+    issue.parent.mkdir(parents=True)
+    record = {"bug_id": "BUG-199", "status": "fixed", "fix_commit": "a" * 40,
+              "pr_url": "https://github.example/pull/199"}
+    issue.write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
+    recovered = workflow._recoverable_close_sync_dirty_record(
+        tmp_path, "BUG-199", issue, source_pr_url=f"https://github.example/pull/{pr_number}", merge_commit=commit * 40,
+    )
+    if accepted:
+        assert recovered is not None and recovered["path"] == dirty_path
+    else:
+        assert recovered is None
     monkeypatch.setattr(
-        workflow,
-        "_validate_registry_apply_target",
-        lambda _root: {
+        workflow, "_validate_registry_apply_target", lambda _root: {
             "blocking": ["registry target is dirty (1 file(s)); start from a clean task worktree"],
             "warnings": [],
             "git": {"dirty": True, "dirty_count": 1},
         },
     )
-    monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
-    recovery = {
-        "bug_id": "BUG-199",
-        "path": f"tests/aistock_validation/bugs/BUG-{recovery_number}.json",
-        "status": "fixed",
-        "fix_commit": "a" * 40,
-        "pr_url": "https://github.example/pull/199",
-    }
-
-    result = workflow._validate_close_sync_apply_target(
-        tmp_path,
-        recoverable_dirty_record=recovery,
-    )
-    if accepted:
+    recovery = {**record, "path": f"tests/aistock_validation/bugs/BUG-{recovery_number}.json"}
+    result = workflow._validate_close_sync_apply_target(tmp_path, recoverable_dirty_record=recovery)
+    if guard_accepted:
         assert result["blocking"] == []
         assert result["recoverable_dirty_record"] == recovery
     else:
@@ -1279,21 +1257,30 @@ def test_windows_process_scan_builds_full_caller_ancestor_exclusion(
     assert "AISTOCK_CLEANUP_EXCLUDE_PIDS" not in captured["env"]
 
 
-def test_backend_lifespan_logs_are_transient_only_for_exact_bounded_format(tmp_path: Path) -> None:
+@pytest.mark.parametrize("valid_format", [True, False])
+def test_backend_lifespan_logs_are_transient_only_for_exact_bounded_format(tmp_path, valid_format) -> None:
     log_root = tmp_path / "backend" / "logs"
     log_root.mkdir(parents=True)
     (log_root / "aistock.log").write_text(
-        "2026-08-13 03:10:31 INFO [backend.main] lifespan validation started\n",
+        "2026-08-13 03:10:31 INFO [backend.main] lifespan validation started\n"
+        if valid_format else "Traceback: retain this evidence\n",
         encoding="utf-8",
     )
-    (log_root / "errors.log").write_text("", encoding="utf-8")
+    paths = ["backend/logs/aistock.log"]
+    if valid_format:
+        (log_root / "errors.log").write_text("", encoding="utf-8")
+        paths.append("backend/logs/errors.log")
 
     accepted, reason = workflow._validated_backend_lifespan_log_transient_paths(
-        ["backend/logs/aistock.log", "backend/logs/errors.log"],
+        paths,
         worktree_path=tmp_path,
     )
 
-    assert accepted == {"backend/logs/aistock.log", "backend/logs/errors.log"}
+    if not valid_format:
+        assert accepted == set()
+        assert reason == "backend_lifespan_log_format_mismatch"
+        return
+    assert accepted == set(paths)
     assert reason == "bounded_test_created_backend_lifespan_log"
 
     (log_root / "aistock.log.1").write_text("rotated evidence", encoding="utf-8")
@@ -1304,20 +1291,6 @@ def test_backend_lifespan_logs_are_transient_only_for_exact_bounded_format(tmp_p
 
     assert rejected == set()
     assert reject_reason == "backend_lifespan_log_inventory_mismatch"
-
-
-def test_backend_lifespan_log_format_mismatch_stays_unknown(tmp_path: Path) -> None:
-    log_root = tmp_path / "backend" / "logs"
-    log_root.mkdir(parents=True)
-    (log_root / "aistock.log").write_text("Traceback: retain this evidence\n", encoding="utf-8")
-
-    accepted, reason = workflow._validated_backend_lifespan_log_transient_paths(
-        ["backend/logs/aistock.log"],
-        worktree_path=tmp_path,
-    )
-
-    assert accepted == set()
-    assert reason == "backend_lifespan_log_format_mismatch"
 
 
 def test_cleanup_discovers_registered_worktree_when_argument_is_omitted(
@@ -1367,23 +1340,29 @@ def test_cleanup_discovers_registered_worktree_when_argument_is_omitted(
     assert payload["worktree_registered"] is True
 
 
-def test_cleanup_retry_accepts_merged_pr_head_ancestry(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.parametrize("cache_matches", [True, False])
+def test_cleanup_merged_pr_cache_is_reused_only_for_exact_identity(tmp_path, monkeypatch, cache_matches) -> None:
+    branch = "bug/BUG-199-already-partially-cleaned"
+    pr_url = "https://github.example/pull/199"
     head = "a" * 40
     merge_commit = "b" * 40
-    verified_pr_check = {
+    verified = {
         "checked": True,
         "merged": True,
         "pr": {
-            "url": "https://github.example/pull/199",
-            "headRefName": "bug/BUG-199-already-partially-cleaned",
+            "url": pr_url,
+            "headRefName": branch,
             "headRefOid": head,
             "mergeCommit": {"oid": merge_commit},
         },
     }
-    monkeypatch.setattr(workflow, "_verify_pr_merged", lambda pr_url: pytest.fail("cached PR check was reread"))
+    readbacks = []
+    def readback(value):
+        assert cache_matches is False, "cached PR check was reread"
+        assert value == pr_url
+        readbacks.append(value)
+        return verified
+    monkeypatch.setattr(workflow, "_verify_pr_merged", readback)
     monkeypatch.setattr(
         workflow,
         "_git_commit_is_ancestor",
@@ -1391,16 +1370,23 @@ def test_cleanup_retry_accepts_merged_pr_head_ancestry(
     )
 
     result = workflow._cleanup_merge_verification(
-        "bug/BUG-199-already-partially-cleaned",
-        "https://github.example/pull/199",
+        branch,
+        pr_url,
         False,
         cwd=tmp_path,
-        verified_pr_check=verified_pr_check,
+        verified_pr_check=verified if cache_matches else {
+            "checked": True, "merged": True,
+            "pr": {
+                "url": "https://github.example/pull/200", "headRefName": "bug/BUG-200-other",
+                "headRefOid": "c" * 40, "mergeCommit": {"oid": "d" * 40},
+            },
+        },
     )
 
     assert result["verified"] is True
     assert result["method"] == "merged_pr_head_is_ancestor_of_merge_commit"
     assert result["tree_equivalence_ref"] == head
+    assert len(readbacks) == (0 if cache_matches else 1)
 
 
 def test_cleanup_preflight_reuses_successful_same_finalizer_fetch(
@@ -1418,55 +1404,6 @@ def test_cleanup_preflight_reuses_successful_same_finalizer_fetch(
 
     assert result["status"] == "fetched"
     assert result["reused"] is True
-
-
-def test_cleanup_pr_cache_mismatch_forces_exact_readback(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    branch = "bug/BUG-199-target"
-    pr_url = "https://github.example/pull/199"
-    head = "a" * 40
-    merge_commit = "b" * 40
-    readbacks = 0
-
-    def readback(value: str) -> dict[str, Any]:
-        nonlocal readbacks
-        readbacks += 1
-        assert value == pr_url
-        return {
-            "checked": True,
-            "merged": True,
-            "pr": {
-                "url": pr_url,
-                "headRefName": branch,
-                "headRefOid": head,
-                "mergeCommit": {"oid": merge_commit},
-            },
-        }
-
-    monkeypatch.setattr(workflow, "_verify_pr_merged", readback)
-    monkeypatch.setattr(workflow, "_git_commit_is_ancestor", lambda ancestor, descendant, root: True)
-
-    result = workflow._cleanup_merge_verification(
-        branch,
-        pr_url,
-        False,
-        cwd=tmp_path,
-        verified_pr_check={
-            "checked": True,
-            "merged": True,
-            "pr": {
-                "url": "https://github.example/pull/200",
-                "headRefName": "bug/BUG-200-other",
-                "headRefOid": "c" * 40,
-                "mergeCommit": {"oid": "d" * 40},
-            },
-        },
-    )
-
-    assert result["verified"] is True
-    assert readbacks == 1
 
 
 @pytest.mark.parametrize("stale", [False, True])

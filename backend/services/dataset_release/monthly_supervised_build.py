@@ -107,8 +107,8 @@ def _portable_receipt(value: object) -> dict[str, Any]:
         payload = dict(value.as_dict())
     else:
         raise MonthlySupervisedBuildError("supervised child receipt is not typed")
-    segments = payload.get("log_segments") or []
-    if not isinstance(segments, list) or any(not isinstance(item, Mapping) for item in segments):
+    segments = payload.get("log_segments", [])
+    if not isinstance(segments, (list, tuple)) or any(not isinstance(item, Mapping) for item in segments):
         raise MonthlySupervisedBuildError("supervised child log receipt is invalid")
     payload["log_segments"] = [
         {

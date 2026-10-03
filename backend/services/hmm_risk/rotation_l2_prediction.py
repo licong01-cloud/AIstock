@@ -14,6 +14,14 @@ import uuid
 from backend.db.pg_pool import get_conn
 from backend.services.hmm_risk.contracts import canonical_json_bytes, canonical_sha256
 from backend.services.hmm_risk.rotation_l2 import ACCEPTANCE_SCHEMA, BINDING_MBE_RANK_IC
+from backend.services.hmm_risk.formal_state_effect import (
+    ACCEPTANCE_SCHEMA as EFFECT_ACCEPTANCE_SCHEMA,
+    BASIS as EFFECT_BASIS,
+    CONTRACT as EFFECT_CONTRACT,
+    EFFECT_REACHED,
+    VERSION as EFFECT_VERSION,
+    validate_acceptance as validate_effect_acceptance,
+)
 
 
 REASON_NOT_FOUND = "hmm_risk_rotation_l2_not_found"
@@ -142,6 +150,18 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
     if row["availability"] not in {"available", "unavailable"}:
         raise RotationL2PredictionError(REASON_WRITER, "availability differs")
     available = row["availability"] == "available"
+    summary = row["run_summary"]
+    if not isinstance(summary, Mapping):
+        raise RotationL2PredictionError(REASON_WRITER, "run summary is absent")
+    version = summary.get("contract_version")
+    if "contract_version" in summary and version != EFFECT_VERSION:
+        raise RotationL2PredictionError(REASON_WRITER, "unknown explicit prediction contract version")
+    hmm_effect = version == EFFECT_VERSION
+    if hmm_effect and (
+        row["evaluation_contract_hash"] != canonical_sha256(EFFECT_CONTRACT)
+        or not _is_sha256(summary.get("semantic_mapping_sha256"))
+    ):
+        raise RotationL2PredictionError(REASON_WRITER, "HMM evaluation contract differs")
     score = row["rotation_score"]
     if available:
         if not isinstance(score, (float, int)) or not math.isfinite(float(score)) or not -0.5 <= float(score) <= 0.5:
@@ -149,7 +169,32 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
         if row["forecast_state"] not in {"trending", "neutral", "fading"} or row["reason_code"] is not None:
             raise RotationL2PredictionError(REASON_WRITER, "available state/reason coupling differs")
         contribution = row["feature_contributions"]
-        if (
+        if hmm_effect:
+            if (
+                not row["structural_eligible"]
+                or not row["feature_eligible"]
+                or not isinstance(contribution, Mapping)
+                or set(contribution)
+                != {
+                    "hard_state",
+                    "frozen_utility_mean",
+                    "semantic_state",
+                    "average_rank_score",
+                    "daily_rank_group",
+                    "model_parameter_sha256",
+                }
+                or type(contribution["hard_state"]) is not int
+                or contribution["hard_state"] not in (0, 1, 2)
+                or not isinstance(contribution["frozen_utility_mean"], (int, float))
+                or isinstance(contribution["frozen_utility_mean"], bool)
+                or not math.isfinite(contribution["frozen_utility_mean"])
+                or contribution["semantic_state"] != row["forecast_state"]
+                or contribution["average_rank_score"] != score
+                or contribution["daily_rank_group"] not in {"trending", "neutral", "fading"}
+                or not _is_sha256(contribution["model_parameter_sha256"])
+            ):
+                raise RotationL2PredictionError(REASON_WRITER, "HMM state/utility/rank explanation differs")
+        elif (
             not row["structural_eligible"]
             or not isinstance(contribution, Mapping)
             or set(contribution) != {"moneyflow_intensity_delta_5d_rank"}
@@ -168,32 +213,40 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise RotationL2PredictionError(REASON_WRITER, "database rows may not self-authorize a product surface")
     if row["execution_status"] != "COMPLETED":
         raise RotationL2PredictionError(REASON_WRITER, "execution status differs")
-    if row["effect_status"] not in {
+    effects = {
         "DEVELOPMENT_EFFECT_QUALIFIED",
         "BELOW_BINDING_MBE",
         "EVIDENCE_INSUFFICIENT",
         "NO_USABLE_PREDICTIONS",
-    }:
+    }
+    if hmm_effect:
+        effects = {EFFECT_REACHED, "BELOW_BINDING_MBE", "EVIDENCE_INSUFFICIENT"}
+    if row["effect_status"] not in effects:
         raise RotationL2PredictionError(REASON_WRITER, "effect status differs")
-    if row["outcome_status"] not in {
+    outcomes = {
         "available",
         "outcome_not_mature",
         "outcome_unavailable_quote_discontinued",
         "prediction_unavailable",
-    }:
+    }
+    if hmm_effect:
+        outcomes = {"available", "outcome_not_mature", "outcome_legal_na", "prediction_unavailable"}
+    if row["outcome_status"] not in outcomes:
         raise RotationL2PredictionError(REASON_WRITER, "outcome status differs")
     if row["rotation_l2_capability_status"] not in {
         "NOT_AVAILABLE",
         "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED",
     }:
         raise RotationL2PredictionError(REASON_WRITER, "L2 capability status differs")
-    qualified = row["effect_status"] == "DEVELOPMENT_EFFECT_QUALIFIED"
+    qualified = row["effect_status"] == (EFFECT_REACHED if hmm_effect else "DEVELOPMENT_EFFECT_QUALIFIED")
     research_available = row["rotation_l2_capability_status"] == "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED"
     if qualified != research_available:
         raise RotationL2PredictionError(REASON_WRITER, "effect and L2 capability states differ")
     if row["forward_power_status"] != "UNAVAILABLE" or row["forward_confirmation"] != "NOT_STARTED":
         raise RotationL2PredictionError(REASON_WRITER, "forward state differs")
-    if row["advisory_status"] != "NOT_AVAILABLE" or row["validation_basis"] != "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT":
+    if row["advisory_status"] != "NOT_AVAILABLE" or row["validation_basis"] != (
+        EFFECT_BASIS if hmm_effect else "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT"
+    ):
         raise RotationL2PredictionError(REASON_WRITER, "advisory/validation state differs")
     if type(row["revision"]) is not int or row["revision"] < 1:
         raise RotationL2PredictionError(REASON_WRITER, "revision is invalid")
@@ -221,10 +274,16 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def rows_from_acceptance(acceptance: Mapping[str, Any]) -> list[dict[str, Any]]:
+    hmm_effect = acceptance.get("schema_version") == EFFECT_ACCEPTANCE_SCHEMA
+    if hmm_effect:
+        try:
+            validate_effect_acceptance(acceptance)
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise RotationL2PredictionError(REASON_WRITER, "HMM effect acceptance is invalid") from exc
     body = {key: value for key, value in acceptance.items() if key != "acceptance_sha256"}
-    if acceptance.get("schema_version") != ACCEPTANCE_SCHEMA or acceptance.get("acceptance_sha256") != canonical_sha256(
-        body
-    ):
+    if acceptance.get("schema_version") != (
+        EFFECT_ACCEPTANCE_SCHEMA if hmm_effect else ACCEPTANCE_SCHEMA
+    ) or acceptance.get("acceptance_sha256") != canonical_sha256(body):
         raise RotationL2PredictionError(REASON_WRITER, "acceptance receipt is invalid")
     metrics = acceptance.get("metrics")
     if not isinstance(metrics, Mapping):
@@ -252,6 +311,9 @@ def rows_from_acceptance(acceptance: Mapping[str, Any]) -> list[dict[str, Any]]:
         "planned_fits": acceptance["planned_fits"],
         "completed_fits": acceptance["completed_fits"],
     }
+    if hmm_effect:
+        summary["contract_version"] = EFFECT_VERSION
+        summary["semantic_mapping_sha256"] = acceptance["evaluation_input_identity"]["semantic_mapping_sha256"]
     rows: list[dict[str, Any]] = []
     for prediction in acceptance["predictions"]:
         row = {
@@ -465,7 +527,27 @@ class RotationL2PredictionRepository:
         if not rows:
             raise RotationL2PredictionError(REASON_NOT_FOUND, "L2 prediction date is not found")
         _validate_batch(rows)
-        return {"run_id": run_id, "trade_date": trade_date.isoformat(), "rows": rows}
+        return {
+            "run_id": run_id,
+            "trade_date": trade_date.isoformat(),
+            "rows": [
+                {
+                    **row,
+                    **(
+                        {
+                            "model_version": EFFECT_VERSION,
+                            "semantic_state": row["forecast_state"],
+                            "daily_rank_group": row["feature_contributions"]["daily_rank_group"]
+                            if row["feature_contributions"]
+                            else None,
+                        }
+                        if row["run_summary"].get("contract_version") == EFFECT_VERSION
+                        else {}
+                    ),
+                }
+                for row in rows
+            ],
+        }
 
     def overview(self, *, run_id: str) -> dict[str, Any]:
         if not _is_sha256(run_id):
@@ -506,6 +588,11 @@ class RotationL2PredictionRepository:
             "tail_accessed": bool(head["run_summary"]["tail_accessed"]),
             "metrics": head["run_summary"]["metrics"],
             "canonical_row_sha256": row_hash,
+            **(
+                {"model_version": EFFECT_VERSION}
+                if head["run_summary"].get("contract_version") == EFFECT_VERSION
+                else {}
+            ),
         }
 
 

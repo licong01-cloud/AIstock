@@ -8,6 +8,7 @@ import pytest
 
 from backend.services.advisory_model_first.economic_common_core_daily_source_v1 import EconomicCommonCoreReadonlyDailySourceV1
 from backend.services.advisory_model_first.economic_daily_feature_core_v1 import RAW_FIELDS
+from backend.services.advisory_model_first.economic_entry_timing_features_v1 import TIMING_FEATURES
 from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
 from backend.tests.advisory_model_first.test_economic_daily_feature_core_v1 import packet as core_packet
 
@@ -161,3 +162,45 @@ def test_unsafe_requests_are_rejected_before_any_database_read(packet,invalid):
     with pytest.raises(AdvisoryModelFirstError):
         database.source().load_batch(packets=[day]*21 if invalid == "batch" else [day])
     assert database.calls == [] and database.rollbacks == 0
+
+
+def test_timing_entry_reuses_original_five_queries_and_preserves_default_core(packet):
+    default_db, single_db, batch_db = Database(packet), Database(packet), Database(packet)
+    day = day_packet(packet)
+    core, original = default_db.source().load_day(**day)
+    single, first = single_db.source().load_timing_day(**day)
+    (batch, second), _ = batch_db.source().load_timing_batch(packets=[day,deepcopy(day)])
+    pd.testing.assert_frame_equal(single, batch)
+    pd.testing.assert_frame_equal(single.drop(columns=list(TIMING_FEATURES)), core)
+    assert first["core"]["input_sha256"] == original["input_sha256"]
+    assert first["timing"] == second["timing"] and first["feature_sha256"] == second["feature_sha256"]
+    for database, receipt in ((single_db, first), (batch_db, second)):
+        assert database.rollbacks == 1 and receipt["db_source"]["select_count"] == 5
+        assert [sql for sql,_ in database.calls] == [sql for sql,_ in default_db.calls]
+        assert database.options == default_db.options
+        assert not receipt["deployable"] and not receipt["new_native_receipt"]
+
+
+def test_timing_missing_raw_and_zero_volume_do_not_remove_candidates(packet):
+    database = Database(packet)
+    bars = database.original["raw_daily"]
+    bars.loc[bars.instrument.eq("000001.SZ"), "volume_hand"] = 0.
+    value, receipt = database.source().load_timing_day(**day_packet(packet))
+    assert value.instrument.tolist() == ["000001.SZ", "000002.SZ"]
+    assert value.loc[0,list(TIMING_FEATURES)].isna().all()
+    assert value.loc[1,list(TIMING_FEATURES)].notna().all()
+    assert receipt["timing"]["unknown_fields"][0]["fields"] and database.rollbacks == 1
+    empty = day_packet(packet)
+    empty["candidates"] = empty["candidates"].iloc[:0]
+    value, receipt = Database(packet).source().load_timing_day(**empty)
+    assert value.empty and receipt["status"] == "NO_CANDIDATES" and receipt["db_source"]["select_count"] == 1
+
+
+def test_timing_source_d_close_unknown_keeps_independent_overnight_volatility(packet):
+    database = Database(packet)
+    bars = database.original["raw_daily"]
+    mask = bars.instrument.eq("000001.SZ") & bars.trade_date.eq(pd.Timestamp(packet["calendar"][-2]))
+    bars.loc[mask, "close_li"] = float("nan")
+    value, receipt = database.source().load_timing_day(**day_packet(packet))
+    assert pd.isna(value[TIMING_FEATURES[0]].iloc[0]) and pd.notna(value[TIMING_FEATURES[1]].iloc[0])
+    assert set(receipt["timing"]["unknown_fields"][0]["fields"]) == {TIMING_FEATURES[0]}

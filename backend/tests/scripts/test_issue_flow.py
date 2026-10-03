@@ -1399,7 +1399,11 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
 def test_dependency_update_validation_is_folded_into_unified_ci() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/dependency-update-validate.yml").read_text(encoding="utf-8"))
     triggers = workflow.get("on") or workflow.get(True)
-    assert triggers == {"workflow_dispatch": {}}
+    assert set(triggers) == {"workflow_dispatch"}
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"base_ref", "base_sha"}
+    assert inputs["base_ref"]["default"] == "main"
+    assert all(item["type"] == "string" and item["required"] is False for item in inputs.values())
 
     ci_workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
     ci_steps = ci_workflow["jobs"]["ci-verdict"]["steps"]

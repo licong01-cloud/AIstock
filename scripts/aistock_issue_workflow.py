@@ -63,7 +63,9 @@ except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_wo
         write_allocator_state,
     )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = SCRIPT_ROOT
+_TASK_GIT_IDENTITY: tuple[Path, str, str] | None = None
 BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 ALLOWED_FIX_STATUSES = {"open", "in_progress"}
@@ -757,6 +759,7 @@ def _build_validation_receipts(
     root: Path,
     changed_files: Iterable[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    _assert_task_git_identity(root)
     commit = _git(["rev-parse", "HEAD"], cwd=root, check=False).strip() or "unknown"
     environment_identity = {
         "os": os.name,
@@ -4897,9 +4900,13 @@ def build_post_restart_verify(
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
+    recorded_merge = str(record.get("fix_commit") or record.get("merge_commit") or "").strip()
     contract = build_runtime_contract(
         record=record,
-        changed_files=resolve_record_runtime_changed_files(record),
+        changed_files=(
+            _merged_commit_changed_files(recorded_merge)
+            if recorded_merge else resolve_record_runtime_changed_files(record)
+        ),
         fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
         if isinstance(record.get("runtime_contract"), dict)
         else [],
@@ -7538,7 +7545,39 @@ def _canonical_root() -> Path:
     if override:
         return Path(override)
     default = Path("F:/Dev/AIstock")
-    return default if default.exists() else REPO_ROOT
+    return default if default.exists() else SCRIPT_ROOT
+
+
+TASK_CONTEXT_COMMANDS = frozenset({
+    "run", "resume", "finish", "finish-batch", "workflow-smoke",
+    "restart-plan", "post-restart-verify", "close-sync", "close-sync-batch",
+})
+
+
+def _task_execution_root(command: str) -> Path:
+    """Use a linked task checkout for data, never as CLI/client code authority."""
+    if command not in TASK_CONTEXT_COMMANDS:
+        return REPO_ROOT
+    if any(os.environ.get(key) for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")):
+        raise WorkflowError("ambiguous task Git context: inherited Git directory/index override")
+    cwd = Path.cwd().resolve()
+    top = _run_command(["git", "rev-parse", "--show-toplevel"], cwd=cwd)
+    if not top.get("ok"):
+        raise WorkflowError("Cannot verify the invoking task repository")
+    root = Path(str(top["stdout"])).resolve()
+    common_dirs = []
+    for checkout in (SCRIPT_ROOT, root):
+        result = _run_command(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=checkout,
+        )
+        if not result.get("ok") or not result.get("stdout"):
+            raise WorkflowError("Cannot verify linked task worktree identity")
+        common_dirs.append(Path(str(result["stdout"])).resolve())
+    if common_dirs[0] != common_dirs[1]:
+        raise WorkflowError("Invoking task worktree belongs to a different Git repository")
+    return root
+
+
 
 
 def _git_snapshot(root: Path) -> dict[str, Any]:
@@ -9309,6 +9348,18 @@ def _maybe_create_worktree(
         "worktree": str(worktree),
         "base": "origin/main",
     }
+    if not dry_run and (REPO_ROOT / ".git").is_file():
+        state = _load_state(bug_id, REPO_ROOT) or {}
+        recorded_root = state.get("worktree") or state.get("planned_worktree")
+        recorded_branch = state.get("branch") or state.get("planned_branch")
+        if recorded_root and Path(str(recorded_root)).resolve() == REPO_ROOT.resolve():
+            if not source_bug_json.resolve().is_relative_to(BUGS_ROOT.resolve()):
+                raise WorkflowError("Existing task BUG record is outside its checkout")
+            actual_branch = _git(["branch", "--show-current"], cwd=REPO_ROOT)
+            if not recorded_branch or actual_branch != recorded_branch:
+                raise WorkflowError("Existing task branch differs from its recorded identity")
+            plan.update(branch=actual_branch, worktree=str(REPO_ROOT), reused=True)
+            return plan
     if not create or dry_run:
         return plan
     if worktree.exists():
@@ -9323,7 +9374,7 @@ def _maybe_create_worktree(
 
 def _actual_and_planned_worktree(worktree_plan: dict[str, Any]) -> tuple[str | None, str | None]:
     worktree = str(worktree_plan.get("worktree") or "").strip() or None
-    if worktree_plan.get("created"):
+    if worktree_plan.get("created") or worktree_plan.get("reused"):
         return worktree, None
     return None, worktree
 
@@ -10859,9 +10910,10 @@ def build_start_plan(
     }
 
 
-def _finish_changed_files(base: str, head: str, *, root: Path = REPO_ROOT) -> list[str]:
+def _finish_changed_files(base: str, head: str, *, root: Path | None = None) -> list[str]:
     """Combine committed branch changes with the current staged, dirty, and untracked task paths."""
 
+    root = root or REPO_ROOT
     return _normalize_changed_files(
         [
             *flow.changed_files_from_git(base, head),
@@ -10883,6 +10935,9 @@ def build_finish_plan(
     fresh_process_evidence: list[str] | None = None,
     code_intelligence_summary_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    _assert_task_git_identity(REPO_ROOT)
+    if _TASK_GIT_IDENTITY is not None and _git(["rev-parse", head], cwd=REPO_ROOT) != _TASK_GIT_IDENTITY[1]:
+        raise WorkflowError("finish --head does not match the actual task HEAD")
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
     current_state = _load_state(canonical_bug_id, REPO_ROOT) or {}
@@ -10951,7 +11006,7 @@ def build_finish_plan(
                 "runtime_identity_match": runtime_contract.get("runtime_identity_match"),
             }
         )
-        persisted_file_scope = record.get("file_scope_contract")
+        persisted_file_scope = _actual_file_scope_contract(record, changed)
         if reconciliation.get("applied"):
             persisted_runtime.update(
                 {
@@ -10960,14 +11015,11 @@ def build_finish_plan(
                     "planned_target_ids": reconciliation.get("planned_target_ids") or [],
                 }
             )
-            persisted_file_scope = _actual_file_scope_contract(record, changed)
         if (
             persisted_runtime != record.get("runtime_contract")
             or persisted_file_scope != record.get("file_scope_contract")
         ):
-            record = {**record, "runtime_contract": persisted_runtime}
-            if reconciliation.get("applied"):
-                record["file_scope_contract"] = persisted_file_scope
+            record = {**record, "runtime_contract": persisted_runtime, "file_scope_contract": persisted_file_scope}
             _write_json(source_path, record)
     closure_ready = bool(evidence) and not validation_evidence_errors
     draft_ready = (
@@ -16163,6 +16215,8 @@ def _maybe_create_pr(
     if guard["blocking"]:
         raise WorkflowError("; ".join(guard["blocking"]))
     branch = _current_branch()
+    if push or create_pr:
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
     pre_pr_gate = _pre_pr_gate(
         finish=finish,
         validation_evidence=finish.get("validation_evidence") or [],
@@ -16185,6 +16239,7 @@ def _maybe_create_pr(
     if pre_pr_gate["workflow_gate"] != "passed":
         raise WorkflowError("; ".join(pre_pr_gate["blocking"]))
     if push:
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
         actions.append(
             {
                 "command": f"git push -u origin {branch}",
@@ -16200,6 +16255,7 @@ def _maybe_create_pr(
         )
         _write_state(bug_id, state="pushed", branch=branch, next_actions=["create_pr_from_pr_body"])
     if create_pr:
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
         title = pr_title or f"{bug_id} issue workflow fix"
         body_path = REPO_ROOT / str(finish.get("pr_body_path"))
         head_result = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=30)
@@ -20766,6 +20822,10 @@ def build_close_sync_plan(
                 runtime_receipt,
             )
         updated["runtime_contract"] = updated_runtime
+        if merge_commit:
+            updated["file_scope_contract"] = _actual_file_scope_contract(
+                record, _merged_commit_changed_files(merge_commit),
+            )
         _write_json(source_path, updated)
         evidence_payload = {
             **payload,
@@ -23348,11 +23408,73 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _assert_task_git_identity(root: Path) -> None:
+    if _TASK_GIT_IDENTITY is None:
+        return
+    expected_root, expected_head, expected_branch = _TASK_GIT_IDENTITY
+    if root.resolve() != expected_root or (
+        _git(["rev-parse", "HEAD"], cwd=root) != expected_head
+        or _git(["symbolic-ref", "-q", "HEAD"], cwd=root, check=False) != expected_branch
+    ):
+        raise WorkflowError("task Git context/HEAD/branch drift; regenerate validation evidence in the task worktree")
+
+
+def _check_pr_receipt_identity(finish: dict[str, Any], *, root: Path) -> None:
+    _assert_task_git_identity(root)
+    head = _git(["rev-parse", "HEAD"], cwd=root)
+    receipts = finish.get("validation_receipts") or []
+    digest = hashlib.sha256(
+        "\n".join(sorted(str(item).replace("\\", "/") for item in finish.get("changed_files") or [])).encode("utf-8")
+    ).hexdigest()
+    if not receipts or any(
+        not isinstance(item, dict) or item.get("commit") != head or item.get("changed_files_digest") != digest
+        for item in receipts
+    ):
+        raise WorkflowError("validation receipt does not match task HEAD; regenerate finish evidence before push/PR")
+
+
+@contextlib.contextmanager
+def _cli_task_context(args: argparse.Namespace):
+    """Keep imports canonical while binding task data and Git to the caller checkout."""
+    global REPO_ROOT, BUGS_ROOT, RUNTIME_TARGET_CATALOG, _TASK_GIT_IDENTITY
+    root = _task_execution_root(args.command)
+    previous = (REPO_ROOT, BUGS_ROOT, RUNTIME_TARGET_CATALOG, _TASK_GIT_IDENTITY)
+    flow_paths = {
+        "REPO_ROOT": root,
+        "CATALOG_ROOT": root / "tests/aistock_validation/catalog",
+        "BUGS_ROOT": root / "tests/aistock_validation/bugs",
+        "CANDIDATES_ROOT": root / "tests/aistock_validation/runs/candidates",
+        "FAILURES_ROOT": root / "tests/aistock_validation/runs/failures",
+        "MODULE_REGISTRY": root / "tests/aistock_validation/catalog/module_registry.yaml",
+        "FILE_OWNERSHIP": root / "tests/aistock_validation/catalog/file_ownership.yaml",
+        "TEST_PLANS": root / "tests/aistock_validation/catalog/test_plans.yaml",
+    }
+    previous_flow = {key: getattr(flow, key) for key in flow_paths}
+    REPO_ROOT, BUGS_ROOT = root, flow_paths["BUGS_ROOT"]
+    RUNTIME_TARGET_CATALOG = root / "docs/standards/aistock_runtime_targets_v1.yaml"
+    strict = args.command in {"finish", "finish-batch"} or (args.command == "run" and getattr(args, "mode", None) == "pr")
+    try:
+        for key, value in flow_paths.items():
+            setattr(flow, key, value)
+        _TASK_GIT_IDENTITY = (
+            (root, _git(["rev-parse", "HEAD"], cwd=root), _git(["symbolic-ref", "-q", "HEAD"], cwd=root, check=False))
+            if strict else None
+        )
+        yield
+        if strict:
+            _assert_task_git_identity(root)
+    finally:
+        REPO_ROOT, BUGS_ROOT, RUNTIME_TARGET_CATALOG, _TASK_GIT_IDENTITY = previous
+        for key, value in previous_flow.items():
+            setattr(flow, key, value)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return int(args.func(args))
+        with _cli_task_context(args):
+            return int(args.func(args))
     except WorkflowPayloadError as exc:
         _emit_args(exc.payload, args)
         return 2
