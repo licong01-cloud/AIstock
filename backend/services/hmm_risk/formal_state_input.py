@@ -838,9 +838,8 @@ def prepare_effect_baseline(frozen: Mapping[str, Any], source: Mapping[str, Any]
     membership["instrument"] = membership["instrument"].astype(str).str.strip().str.upper()
     membership["start_date"] = pd.to_datetime(membership["start_date"]).dt.date
     membership["end_date"] = pd.to_datetime(membership["end_date"]).dt.date
-    full = [
-        d for d in reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt") if SOURCE_START <= d <= END
-    ]
+    release_calendar = reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt")
+    full = [d for d in release_calendar if SOURCE_START <= d <= END]
     schedule = calendar_contract([d.isoformat() for d in full])
     source_days = full[full.index(START) - 25 : full.index(END)]
     security = load_security_source_identity_manifest(
@@ -861,7 +860,9 @@ def prepare_effect_baseline(frozen: Mapping[str, Any], source: Mapping[str, Any]
         suspend_path=assets["files"]["suspend_data"],
         moneyflow_path=assets["files"]["moneyflow"],
         qlib_root=assets["qlib_root"],
-        calendar=full,
+        # Bin headers use absolute positions in the complete release calendar.
+        # Source days and expected PIT rows still stop at the unchanged as-of.
+        calendar=release_calendar,
         security_identity=security,
         provider_absence=provider,
         bounded_suspend=True,

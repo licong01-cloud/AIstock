@@ -126,12 +126,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1707_smoke.py F:/Dev/AIstock_worktrees/BUG-1707-hmm-l2-effect-baseline-rejects-multi-span-pit-un-20261003; explicit task PYTHONPATH -> PASS; backend.routers.hmm_risk, backend.routers.health and changed HMM imports loaded from task worktree; DB poison; 5144 instruments / 5449 PIT spans; fits=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "backend",
+    "runtime_identity_match": "pending",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
