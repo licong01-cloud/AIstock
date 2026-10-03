@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import Enum
+import errno
 import hashlib
 import json
 import os
@@ -101,6 +102,11 @@ class MonthlyReleaseError(RuntimeError):
 
 class MonthlyReleaseConflict(MonthlyReleaseError):
     code = "ACTIVE_PROFILE_CONFLICT"
+
+
+class MonthlyReleaseBusy(MonthlyReleaseConflict):
+    code = "MONTHLY_RELEASE_BUSY"
+    retryable = True
 
 
 class MonthlyReleaseNotReady(MonthlyReleaseError):
@@ -485,34 +491,41 @@ def _read_json(path: Path, *, label: str) -> dict[str, Any]:
 
 
 @contextmanager
-def _exclusive_lock(path: Path) -> Iterator[None]:
+def _exclusive_lock(path: Path, *, blocking: bool = True) -> Iterator[None]:
     """Cross-platform advisory lock over one product/operation lock file."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+b")
+    acquired = False
     try:
         handle.seek(0, os.SEEK_END)
         if handle.tell() == 0:
             handle.write(b"0")
             handle.flush()
-        if os.name == "nt":
-            import msvcrt
-
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        else:  # pragma: no cover - exercised by WSL/CI Linux
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        yield
-    finally:
         try:
             if os.name == "nt":
                 import msvcrt
 
                 handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
+            else:  # pragma: no cover - exercised by WSL/CI Linux
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except OSError as exc:
+            if not blocking and exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                raise MonthlyReleaseBusy("monthly operation writer is already owned") from exc
+            raise
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired and os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:  # pragma: no cover
+            elif acquired:  # pragma: no cover
                 import fcntl
 
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -1524,7 +1537,7 @@ class MonthlyReleaseService:
 
     def run(self, operation_id: str) -> dict[str, Any]:
         root = self.store.operation_root(operation_id)
-        with _exclusive_lock(root / ".writer.lock"):
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
             request = self.store.read_request(operation_id)
             plan = self.store.read_plan(operation_id)
             state = self.store.read_state(operation_id)
@@ -2235,6 +2248,7 @@ __all__: Sequence[str] = (
     "MonthlyOperationStore",
     "MonthlyPipeline",
     "MonthlyReleaseAuthorizationError",
+    "MonthlyReleaseBusy",
     "MonthlyReleaseCancelled",
     "MonthlyReleaseConflict",
     "MonthlyReleaseError",

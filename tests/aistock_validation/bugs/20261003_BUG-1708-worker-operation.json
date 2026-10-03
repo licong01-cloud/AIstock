@@ -129,6 +129,7 @@
   "last_seen_at": "2026-10-03T17:14:02.809543Z",
   "module": "local_data",
   "non_goals": [
+    "本BUG仅交付后端typed busy锁边界；worker轮询恢复由独立BUG-1709交付和验收，不以本BUG单独宣称完整月更恢复。",
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "production_backend_dependency_gate": "noop",
@@ -143,7 +144,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh process loads tracked monthly_unified.py and probes the existing attempt239 writer lock: MONTHLY_RELEASE_BUSY, retryable=true, body_entered=false, lock size/mtime unchanged; no source producer invoked, database_write=false, process_control=false. Raw locked byte SHA cannot be read on Windows and was not claimed. Related tests32 passed/1 skipped; worker recovery dependency is BUG-1709."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

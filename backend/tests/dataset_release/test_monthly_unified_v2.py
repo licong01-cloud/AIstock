@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
+import errno
 import hashlib
+import importlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -528,6 +530,62 @@ def test_cancel_is_observed_at_stage_boundary(tmp_path: Path) -> None:
     operation_id = service.submit(_request())["operation_id"]
     service.cancel(operation_id)
     assert service.run(operation_id)["status"] == "CANCELLED"
+
+
+def test_busy_writer_preserves_operation_and_releases_only_owned_lock(tmp_path: Path) -> None:
+    pipeline = Pipeline()
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+    before = service.status(operation_id)
+    lock = service.store.operation_root(operation_id) / ".writer.lock"
+    with monthly_subject._exclusive_lock(lock):
+        for _ in range(2):
+            with pytest.raises(MonthlyReleaseError) as raised:
+                service.run(operation_id)
+            assert raised.value.code == "MONTHLY_RELEASE_BUSY"
+            assert raised.value.retryable is True
+            assert service.status(operation_id) == before
+            assert pipeline.calls == []
+    assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+    assert pipeline.calls == list(STAGES)
+
+
+@pytest.mark.parametrize("error_number", [errno.EIO, errno.EBADF])
+def test_writer_io_failure_is_not_busy_and_never_unlocks_unowned_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_number: int
+) -> None:
+    module_name, method = ("msvcrt", "locking") if monthly_subject.os.name == "nt" else ("fcntl", "flock")
+    module = importlib.import_module(module_name)
+    attempts = []
+    failure = OSError(error_number, "real writer I/O failure")
+
+    def fail(*args: Any) -> None:
+        attempts.append(args)
+        raise failure
+
+    monkeypatch.setattr(module, method, fail)
+    with pytest.raises(OSError) as raised:
+        with monthly_subject._exclusive_lock(tmp_path / "writer.lock", blocking=False):
+            pytest.fail("unowned lock entered")
+    assert raised.value is failure
+    assert len(attempts) == 1
+
+
+def test_writer_open_permission_failure_is_not_busy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lock = tmp_path / "writer.lock"
+    original_open = Path.open
+    failure = PermissionError(errno.EACCES, "writer file access denied")
+
+    def open_path(path: Path, *args: Any, **kwargs: Any):
+        if path == lock:
+            raise failure
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", open_path)
+    with pytest.raises(PermissionError) as raised:
+        with monthly_subject._exclusive_lock(lock, blocking=False):
+            pytest.fail("inaccessible writer entered")
+    assert raised.value is failure
 
 
 def test_source_blocked_waits_for_explicit_resume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
