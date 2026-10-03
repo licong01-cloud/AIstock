@@ -1,8 +1,10 @@
 # 正式 executor：已完成L1/L2合同与后续L2-only修订
 
-版本：v0.5 result-and-l2-direction（冻结输入最终 v17）。Feature tier：F2。
+版本：v0.6 l2-contract-proposal（冻结输入最终 v17）。Feature tier：F2。
 
-当前状态：原批准L1/L2双fresh-process **5184/5184 fits已完成，原完整合同未接受**；ready=false。今后新增研究按父蓝图v2.62仅围绕L2。本次仅同步结果和已批准业务方向，新增D6 persistent/右截尾及独立L2完整性的精确合同仍待闭合，不实施源码、不重跑训练。
+当前状态：原批准L1/L2双fresh-process **5184/5184 fits已完成，原完整合同未接受**；ready=false。今后新增研究按父蓝图v2.62仅围绕L2。本轮新增D6 persistent/右截尾及独立L2完整性精确提案，仍待用户批准，不实施源码、不重跑训练。
+
+本轮增量：下面§“L2精确修订决策包”已给出推荐公式和边界，状态为`PROPOSED_PENDING_USER_APPROVAL`。用户已批准的是L2-only与自然事件处理方向，不包含本包新增精确公式。原D3～D6、模型、窗口、seed及既有acceptance保持不变。
 
 ## Background
 
@@ -69,11 +71,13 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 - F-003：两次 fresh-process 全 grid、零-refit readback 与 D5 train-only selection 的完整执行控制流和故障测试。
 - F-004：D6-NA 完整 carrier/source/masks/ledger 与 selected-only semantic acceptance 的源码及共享 readback 验证。
 - F-005：正式 5184 fits 和真实终态，禁止伪 READY。
+- F-006：后续L2 persistent/右截尾及独立完整性精确提案；处理方向获批，精确公式、源码与新验收尚未批准/执行，不与F-001～F-005历史源码/实验混同。
 
 ## Implementation Plan
 
 一个实现任务包完成 F-001～F-004、聚焦测试和多轮修复；不是为每个小功能另建阶段。
 输入正式preflight、源码交付及5184-fit实验均已完成，F-005记录真实终态而不是通过声明。下一动作是复用结果闭合后续L2自然事件/语义/完整性合同，再按批准范围实现和最小验证，不复原退役链，不另建每个小规则的独立阶段。
+本轮已形成该精确提案，停在用户裁决；不是再次实施F-001～F-005或新增独立研究阶段。
 源码合入、模型结构/语义验收、样本外效果和产品交付是不同结果，不以任一项替代其他项。当前不再次创建旧源码PR，也不启动重训。
 
 ## Verification Plan
@@ -98,6 +102,7 @@ parent 验证重复结果 canonical bytes 和 entry semantic readback → 每 fa
 | F-003 | backend/services/hmm_risk/formal_state_executor.py; scripts/hmm_risk/run_formal_state_model_set.py | backend/tests/hmm_risk/test_formal_state_executor.py; backend/tests/hmm_risk/test_formal_state_model_set.py；完整 mocked grid、signed-zero mismatch、parent 环境/flags 回读、child/finalization durable failure、CLI fresh-process 拒绝和 mixed-shape serialization | PASS | 无 |
 | F-004 | backend/services/hmm_risk/formal_state_calendar.py; backend/services/hmm_risk/formal_state_input.py; backend/services/hmm_risk/formal_state_model.py; backend/services/hmm_risk/formal_state_executor.py | backend/tests/hmm_risk/test_formal_state_calendar.py；最终v17全324组182日carrier/ledger/hash预检PASS，E最少143；正式selected-only D6保留完整calendar和typed evidence结果；语义证据未全过见F-005，carrier/readback通过不等于semantic acceptance | PASS_IMPLEMENTATION_AND_READBACK | 无 |
 | F-005 | scripts/hmm_risk/run_formal_state_model_set.py；merge dc3511458a71fff811fbcf654628992657bae929 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-v17-formal-5184/run/acceptance.json；正式5184 fits，fresh_process_bitwise_equal=true；receipt SHA=fa42b6982f2ff5d8b5e7c257ad727ba66eb0ee9ac9a18e045847e573704a01ac；legacy两个层级无完整D5候选；autocycle均选seed47，L1/L2 D6分别29/31、121/131；d3_d6_accepted/ready/phase2_ready/product_capability_promoted均false，无发布产物 | COMPLETE_RESULT_REPORT_MODEL_NOT_ACCEPTED | 无 |
+| F-006 | 本文件“L2精确修订决策包”；未来修改限formal model/calendar/readback与直接HMM测试，当前尚未实施 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261003-v17-formal-5184/run/acceptance.json；仅只读核对10项原失败及边界事实；新路径、阈值比较与新验收未运行，直接测试范围见决策包 | APPROVED_BY_USER_DIRECTION_ONLY_EXACT_CONTRACT_PROPOSED | 用户批准L2-only与自然事件处理原则；决策A/B精确公式仍PROPOSED_PENDING_USER_APPROVAL，文档F2 PASS不推导精确合同/源码implementation-ready |
 
 以下2026-09-30～2026-10-02源码/输入记录保留其当时状态，不能当作当前待办；最新输入与正式模型结果见Rollout / Rollback的当前终态。
 
@@ -195,6 +200,62 @@ legacy L1的`801130.SI`达到300 E-step仍未同时满足MAP/covariance自洽停
 6. **下一执行边界**：先给出本节精确合同及必要直接测试范围，审核通过并获模型合同批准后才修改代码/执行最小L2验证；保持尚未批准修改的features/window/seed/数值合同不变。不得直接把未来L2-only范围改写进历史5184请求。当前不启动新训练、实验、tail或服务。
 
 这里批准的是处理原则，不是所有模型必须通过。语义证据不足不等于数值/数据故障，也不能冒充已经有可用预测；新的运行schema和失败reason不由文档自行新增。
+
+### L2精确修订决策包（一次闭合；全部新增规则待用户批准）
+
+本包只调整L2的语义证据结构解释与版本完整性，不修改D3/D4数值、D4 train gate、D5分数/选seed、features、训练/validation窗口、utility、PIT或release。建议先批准后对已有autocycle L2 selected模型执行**zero-refit readback**，不搜索seed、不启动新grid，不修改原child、request、acceptance或模型hash。legacy和L1结果保持原终态；此次不解决所有旧模型数值/结构问题。
+
+#### 决策A：C-008-L2-D6-PERSISTENT-RC-A
+
+推荐合同版本：`hmm_risk_l2_d6_persistent_rc_a_v1`。仅适用于新增L2语义回读版本；原`hmm_risk_c008_b3_d6_01_b_na_a_v1`原位保持。
+
+**共同条件原数值全部保留**：T仍为182日完整calendar，E=O∩U且|E|≥30；每state hard count≥max(5,ceil(0.02×|E|))、occupancy≥0.02、calendar months≥2；posterior finite/nonnegative/row-sum与top1-top2 margin、hard argmax唯一authority、utility sample variance/SE finite、原numeric adjacent utility gap与.35/.35/.30权重保持。不新增95% separation；共同条件不通过时仍无正式semantic mapping，不用persistent补缺态、singleton或soft mass。
+
+定义与计算顺序：
+
+1. 只从冻结完整T与E上的hard assignments提取state连续run；两个E位置仅当完整calendar下标相邻才属于同一run。合法NA会切断可观测run，不跨NA桥接，不以transition-only posterior冒充O/utility evidence。
+   内部NA造成转换证据不可辨识时，只报告该行业该状态证据不足，不当作股票漏采或数值失败，也不自动否定其他行业；正常停牌不能成为绕过共同count/month/utility保护或伪造转换的理由。
+2. `n_s`是E上的state count；`R_s`是上述run数；`S_s=max(run length)/n_s`。若n_s=0，不计算比例且共同条件明确不足。`I_s`/`X_s`仍只数相邻且双方都在E上的真实异state进入/退出事件。
+3. `B_left(s)=1`仅当T的第0日属于E且hard state=s；否则0。`B_right(s)=1`仅当T的最后一日属于E且hard state=s；否则0。边界标志表示左/右截尾，**不是额外转换事件**；内部NA、首个/最后一个非边界E日不得取得此标志。
+4. 共同条件检查后，`R_s=1 OR S_s>0.9`进入persistent；其余进入recurrent。路径互斥，share=0.9且R_s≥2只能走recurrent；路径由冻结数据的确定公式决定，不由操作者或失败后的重试选择。
+
+| 路径 | 推荐精确结构条件 | 明确不证明的性质 |
+|---|---|---|
+| recurrent | R_s≥2；S_s≤0.9；I_s≥2−B_left(s)；X_s≥2−B_right(s)。保持实际I_s/X_s值，单独记录可观测边界与比较阈值，不伪造进入/退出 | 不据此证明状态收益显著、持续时间稳定或预测有效；右截尾只影响可观测边界，不免除count/month/utility |
+| persistent | 共同条件全部通过；R_s≥1；每个非截尾且两侧可观察的run边界必须与实际hard state切换一致；I_s/X_s全部如实记录，不要求重复进出或S_s≤0.9 | 单一长期run只提供该窗口的状态条件utility证据，不是独立重复regime或可靠duration/hazard估计；不扩大为未来有效性结论 |
+
+persistent不再额外复制D4的train六个月/30样本门到D6；本包保留原D6 common gate，不新增与自然持续现象对冲的更高阈值。相应代价是接受的语义统计可能依赖一段长期run，假接受风险必须在结果中明示；如果用户要求独立regime重复证据，该状态应报告不足，而不是事后提高阈值或再调模型。
+
+原10个L2未通过项中，4项涉及1～3日rare state，仍不能因本包直接通过；其余6项主要涉及持续/转换覆盖。本包不是针对这6个代码的allowlist，必须同一规则回读全131行业；这是预期作用范围，不是新验收结果，不承诺新增通过数量。所有已知sample/utility/identity故障保留；不能在看到新结果后改0.9、路径或共同条件。
+本包在已观察原validation结果之后制定；因此该窗口已经参与规则设计，未来zero-refit即使通过也只属开发期结构/语义校准结果，不是新的独立模型验证或untouched证明。新旧规则差异必须如实列出，不能追认原合同成功。
+
+**状态/失败语义**：原`semantic_assignment_valid`与`semantic_evidence_valid`分开回读；数值/identity失败仍typed fail closed，共同证据或对应路径不足不生成mapping。保留具体reason与自然事件解释，不能把“证据不足”描述成基础数据缺失，也不能将其改成accepted。新版本及路径/censor字段须在获批实现时纳入原receipt/hash/schema回读；不建立平行writer或兼容代理。
+
+#### 决策B：C-008-L2-INDEPENDENT-A
+
+建议将本轮诊断对象固定为已有`autocycle_all_core:L2`、D5所选seed47、冻结v17及原selected model hashes；**不进行新的D5选择**。L1/legacy不参与该L2研究版本的合取。本包不宣称原“两family×两level”模型集通过，不更名/覆盖旧产物，不将新研究版本自动替换QE现用版本。
+
+- 数据人口仍由冻结131目录、PIT与原预注册输入资格确定，不从新D6结果反推eligible；每个目录项都要回读并报告numerical/assignment/evidence状态及原因。未知源缺失、hash/schema漂移不因局部发布而容忍。
+- 对合法NA、无官方报价和semantic evidence不足逐行业诚实报告；缺少正式mapping时不输出trending/neutral/fading、不补1.0或把不可用当末位。当前正式指数版与C-010股票事实版不互相替代。
+- zero-refit成功只形成一个新的**结构/语义研究回读结果**，不直接写accepted_model_set/READY、不升级产品capability、不写数据库或runtime receipt。若需要将部分行业接入产品，coverage/评价人口及消费者状态必须在预测效果合同中明示，不把D6通过子集表现冒充全截面表现。
+- 同一行业某family的真实numerical/train不足仍保留，不豁免旧D4。将来其他已批准L2版本可独立评价，但本包不启动它们的训练或自动择优。
+
+#### 预测及QE消费的因果边界（不得由结构修订绕过）
+
+当前D6用2024-07-01..2025-03-31的future excess utility完成语义校准，outcome watermark为2025-04-30。其mapping是该校准完成后才可用的研究结果，不能给同一校准窗口的QE历史交易贴上“当时已知”的状态/系数。即使posterior递推本身因果，使用后来才确定的mapping仍可能泄漏。
+
+下一预测效果验证须明确选择：使用校准完成之后的合格历史评价区间，或另行批准严格walk-forward的train-only语义校准。评价区间起点不得早于所有模型/预处理/mapping实际available-at；末日必须满足完整outcome且不跨未授权tail边界；具体日期由冻结calendar算出后提交批准。不得把已消费development恢复成untouched，不因模型名称或hash相同而跳过available-at。
+历史回放的available-at按对应批准的as-of合同解释，工程重建时间与模拟信息水位分别报告，不把本日生成模型伪称为历史实际发布版本。原stable-taxonomy-backcast的non-as-known局限保持披露；其历史研究结果不能冒充as-published PIT下的forward确认。
+
+本包不替代现有QE正式历史系数资产；QE正式实验仍由QE窗口执行，HMM侧只交付通过其场景合同的冻结可选资产。新结构回读不能据此宣布QE增益、轮动Rank IC或风险precision通过。
+
+#### 一个任务包内的实现、直接测试与停止条件
+
+批准后一次完成D6新版本比较/回读及必要CLI路由，复用原formal model/calendar/receipt构造；不恢复退役链、复制数值实现或修改全局CI/nox/test plan。只改HMM-owned源码/CLI及`backend/tests/hmm_risk`，源码合入按当时授权执行；本次文档未预授权源码或训练。
+
+直接矩阵必须覆盖：共同gate失败的singleton、所有boundary/tie取值；完整calendar首尾与内部NA不混同；两个独立run/单一长期run/share=0.9与>0.9；真实enter/exit计数不增加；unknown missing不当停牌；persistent不补mapping、D5不重选、不refit；旧合同结果不变；全131目录/模型hash/source identity闭合；mapping available-at与旧系数版本隔离。至少两轮审核，发现问题在同scope修复，不因新reason增加矩阵膨胀。
+
+当前文档结束条件是两项精确推荐均完整、审核无阻断并提交用户裁决；两项状态仍`PROPOSED_PENDING_USER_APPROVAL`。未批准前停止在文档，不执行新gate、模型回读重验收、训练、tail、生产写入、依赖安装、profile切换或进程控制。批准后的第一执行终点是全131行业zero-refit研究结果与局限，不是强制全部通过或直接READY。
 
 ### 历史执行授权：v16 冻结输入更新与预检
 
@@ -301,7 +362,7 @@ forward 仍遵循 as-published PIT；历史 non-as-known-taxonomy 身份不能�
 
 production_ddl_gate=noop；production_dml_gate=noop；dependency_install=noop。
 Conda AIstock mutation=false；dataset/profile mutation=false；runtime/process control=false。
-本轮仅修改父蓝图和本详细设计：runtime_impact=none，无新增fit、数据库/数据集/profile写入或runtime activation，无后端重启需求。
+本轮仅修改本详细设计，父蓝图v2.62已由PR #5321合入：runtime_impact=none，无新增fit、数据库/数据集/profile写入或runtime activation，无后端重启需求。
 原源码4个changed files的runtime分类为backend/target_ids=[backend-main]，该历史分类不因文档-only任务降级；源码合入、用户重启与正式训练各自按对应授权和证据记录，不由本次文档重新控制或代报运行态。后端进程控制仍归用户。
 
 ## DESIGN-COMPLIANCE-001 当前复审
@@ -314,3 +375,5 @@ Conda AIstock mutation=false；dataset/profile mutation=false；runtime/process 
 本记录不是正式模型验收通过声明。F-005为执行完成而合同未接受；正式fits、D5/D6、预测效果、产品及运行态仍为独立状态。后续精确修订尚未批准，不能用文档validator通过代替implementation-ready。
 
 2026-10-03文档两轮自审：第一轮修复历史fits=0与当前执行完成的表述混同，补齐F-004/F-005直接结果引用，明确结果报告完成不等于模型接受；第二轮核对父蓝图L2-only、合法自然事件与证据不足、旧阈值/目录/窗口/seed保持、停止发布与真实moneyflow分离及发布授权边界。未遗留文档范围阻断；新增精确D6修订仍待批准，不以文档F2 PASS冒充模型或源码验收。
+
+以上为v0.5审核记录，PR #5321已合入。本轮v0.6第一轮修正current/proposal状态及单文档scope，补齐F-006待批准矩阵，明确内部NA不取得完整窗口截尾标志；第二轮复核共同数值原样、互斥路径、真实转换不增加、旧全grid不改判、已看validation不能冒充独立证明，以及语义mapping的future-utility/available-at与QE隔离。未发现文档范围阻断；不以两轮自审代替用户对新增精确合同的批准。
