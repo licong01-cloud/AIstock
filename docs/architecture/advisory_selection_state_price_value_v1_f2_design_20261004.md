@@ -16,6 +16,8 @@ H-SELECTION-STATE-VALUE-1：某股票连续进入当前包前5/前20及D前排�
 
 本设计合入后，从最新origin/main另建自己的源码树，可在M1等候时先实现新叶的纯D状态计算及其直接测试，不触碰M1源码/实现hash、不fit、不读取收益。共用模型/阶段提取和M5正式研究仍等待M1正式终态及源码#5414交付。允许源码范围仅：
 
+源码树登记：`F:/Dev/AIstock_worktrees/advisory-selection-state-price-v1-20261004` / `feat/advisory-selection-state-price-v1-20261004`。当前仅新增D状态计算及直接测试；共用模型/阶段、M5fit仍未开始，不报F2业务整体完成。
+
 - backend/services/advisory_model_first/economic_selection_state_price_v1.py（纯D历史信息、plan与固定模型适配）
 - backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py（来源、登记、prepare/fit/evaluate的薄适配）
 - backend/services/advisory_model_first/economic_sector_price_value_v1.py（抽取冻结任意信息块的同核纯GBDT/JSON数学；M1包装语义不变）
@@ -114,6 +116,8 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 ## 13. Design Acceptance Matrix
 
 当前design-only，不含新源码、fit、研究收益或激活。只读排名可识别性检查不是研究通过。
+
+实现准备检查点：本设计#5415已合入/自身清理；新源码树仅pure `selection_state_rows_v1`已实现，6个直接测试PASS，Ruff/差异检查/F2通过。方法轮固定D包含在5/20D内及右删失41意义；来源/时钟轮拒绝重复rank、外来候选及非next-session T，缺日/不完整名单保留UNKNOWN；工程轮加候选/排名读取上界、未来排名/收益毒化与单行/批量一致。M1共用源码未改，M5模型/编排/正式fit尚0，不能报F2整体功能完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
