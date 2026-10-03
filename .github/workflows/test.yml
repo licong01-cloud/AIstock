@@ -104,6 +104,7 @@ jobs:
           "interrupted_git_pack_cleanup count=$($fragments.Count) bytes=$([long]$removedBytes)"
 
       - name: Fetch current PR base ref only
+        timeout-minutes: 3
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}

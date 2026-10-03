@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import signal
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Sequence
@@ -18,18 +21,116 @@ class ChangedFilesError(RuntimeError):
 _FULL_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
-def _git(repo_root: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=repo_root,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+def _bounded_fetch(root: Path, args: tuple[str, ...], timeout: float) -> subprocess.CompletedProcess[str]:
+    """Timeout only this CI-owned Git/SSH tree, never a runner/service process."""
+    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen(["git", *args], cwd=root, text=True, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, **options)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+    except subprocess.TimeoutExpired:
+        if proc.poll() is None:
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                   capture_output=True, timeout=5, check=False)
+                else:
+                    os.killpg(proc.pid, signal.SIGKILL)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait(timeout=5)
+        raise
+    finally:
+        for stream in (proc.stdout, proc.stderr):
+            if stream:
+                stream.close()
+
+
+def _git(repo_root: Path, *args: str, timeout: float = 10) -> str:
+    try:
+        result = _bounded_fetch(repo_root, args, timeout) if args[0] == "fetch" else subprocess.run(
+            ["git", *args], cwd=repo_root, check=False, capture_output=True, text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ChangedFilesError(f"git {args[0]} timed out after {timeout:g} seconds") from exc
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
         raise ChangedFilesError(f"git {' '.join(args)}: {detail}")
     return result.stdout.rstrip("\r\n")
+
+
+def _restore_local_mirror_ancestry(root: Path, pinned_base: str) -> dict[str, str]:
+    """Remove shallow main boundaries by fetching only from a verified local mirror."""
+    objects = os.environ.get("GIT_ALTERNATE_OBJECT_DIRECTORIES", "")
+    if not objects or os.pathsep in objects or not pinned_base:
+        return {"status": "not_required"}
+    try:
+        object_path = Path(objects).resolve()
+        mirror = object_path.parent
+        manifest = json.loads(Path(str(mirror) + ".aistock-mirror.json").read_text(encoding="utf-8-sig"))
+        if not isinstance(manifest, dict):
+            raise ChangedFilesError("local mirror manifest is not an object")
+        if (object_path.name != "objects" or not object_path.is_dir()
+                or manifest.get("schema_version") != "aistock_git_object_mirror_v1"
+                or manifest.get("repository") != "licong01-cloud/AIstock"
+                or Path(manifest.get("object_directory", "")).resolve() != object_path
+                or Path(manifest.get("mirror_root", "")).resolve() != mirror
+                or _git(mirror, "rev-parse", "--is-bare-repository") != "true"
+                or _git(mirror, "config", "--get", "aistock.repository") != manifest["repository"]
+                or _commit(mirror, "refs/heads/main", "mirror_main") != manifest.get("main_sha")):
+            raise ChangedFilesError("local mirror identity/manifest mismatch")
+        _commit(mirror, pinned_base, "mirror_base")
+        if _git(root, "rev-parse", "--is-shallow-repository") != "true":
+            return {"status": "not_required"}
+        shallow = Path(_git(root, "rev-parse", "--git-path", "shallow"))
+        shallow = shallow if shallow.is_absolute() else root / shallow
+        if shallow.is_symlink() or root not in shallow.resolve().parents:
+            raise ChangedFilesError("shallow file is not owned by this checkout")
+        original = shallow.read_bytes()
+        boundaries = original.decode("ascii").splitlines()
+        retained: list[str] = []
+        # Ignore shallow markers only for proof, never for the final diff. A missing
+        # parent rejects reuse. This traverses commits, not worktrees/files/BUG JSON.
+        with tempfile.NamedTemporaryFile(delete=False) as empty:
+            proof_path = Path(empty.name)
+        try:
+            for boundary in boundaries:
+                if not _FULL_SHA_RE.fullmatch(boundary):
+                    raise ChangedFilesError("invalid shallow commit identity")
+                try:
+                    _git(root, "--shallow-file", str(proof_path), "rev-list", "--missing=error", boundary)
+                except ChangedFilesError:
+                    retained.append(boundary)
+        finally:
+            proof_path.unlink()
+        if retained == boundaries:
+            return {"status": "not_required"}
+        # Use Git's own exclusive shallow.lock convention and re-read before write.
+        lock_path = Path(str(shallow) + ".lock")
+        locked = lock_path.open("xb")
+        owns_lock = True
+        try:
+            with locked:
+                if shallow.read_bytes() != original:
+                    raise ChangedFilesError("shallow boundaries changed during local proof")
+                locked.write("".join(f"{sha}\n" for sha in retained).encode("ascii"))
+                locked.flush()
+                os.fsync(locked.fileno())
+            if retained:
+                os.replace(lock_path, shallow)
+            else:
+                shallow.unlink()
+                lock_path.unlink()
+            owns_lock = False
+        finally:
+            if owns_lock:
+                lock_path.unlink(missing_ok=True)
+        return {"status": "restored"}
+    except (ChangedFilesError, OSError, ValueError, TypeError) as exc:
+        return {"status": "warning", "reason": str(exc)}
 
 
 def _commit(repo_root: Path, revision: str, field: str) -> str:
@@ -49,7 +150,9 @@ def prepare_pr_merge_base(
     resolve_current_base: bool = False,
     attempts: int = 3,
     deepen_by: int = 64,
-) -> dict[str, str | int | bool]:
+    fetch_timeout: float = 45,
+    total_budget: float = 150,
+) -> dict[str, object]:
     """Prove pinned PR source ancestry without attributing integration-only files."""
 
     root = repo_root.resolve()
@@ -76,45 +179,58 @@ def prepare_pr_merge_base(
         try:
             _commit(root, pinned_base, "base_sha")
             source_commit = _commit(root, pinned_source or head_commit, "source_head_sha")
+            if pinned_source:
+                _git(root, "merge-base", "--is-ancestor", source_commit, head_commit)
             _git(root, "merge-base", pinned_base, source_commit)
             return True
-        except ChangedFilesError:
+        except ChangedFilesError as exc:
+            if (pinned_source and "--is-ancestor" in str(exc)
+                    and _git(root, "rev-parse", "--is-shallow-repository") == "false"):
+                raise
             return False
 
+    started = time.monotonic()
     used_attempts = 0
-    if not ready():
+    local_history: dict[str, str] = {"status": "not_required"}
+    history_ready = ready()
+    if not history_ready:
+        local_history = _restore_local_mirror_ancestry(root, pinned_base)
+        history_ready = ready()
+    if not history_ready:
         fetch_specs = [
-            f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+            f"+{pinned_base or 'refs/heads/' + branch}:refs/remotes/origin/{branch}",
             f"+{source_ref}:refs/remotes/origin/aistock-pr-checkout",
         ]
-        for index in range(max(1, int(attempts))):
+        detail = "merge base remains unavailable"
+        for index in range(min(3, max(1, int(attempts)))):
+            remaining = total_budget - (time.monotonic() - started)
+            if remaining <= 0:
+                raise ChangedFilesError("pinned PR base/head history preparation failed: total fetch budget exhausted")
             used_attempts = index + 1
-            result = subprocess.run(
-                [
-                    "git",
+            try:
+                _git(root,
                     "fetch",
                     "--no-tags",
                     "--no-write-fetch-head",
                     f"--deepen={max(1, int(deepen_by))}",
                     "origin",
                     *fetch_specs,
-                ],
-                cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0 and resolve_manual_base and not pinned_base:
-                pinned_base = _commit(root, f"refs/remotes/origin/{branch}", "base_ref")
-            if result.returncode == 0 and ready():
-                break
-            if index + 1 < max(1, int(attempts)):
+                    timeout=min(fetch_timeout, remaining),
+                )
+                if resolve_manual_base and not pinned_base:
+                    pinned_base = _commit(root, f"refs/remotes/origin/{branch}", "base_ref")
+                if ready():
+                    break
+            except ChangedFilesError as exc:
+                detail = str(exc)
+            if index + 1 < min(3, max(1, int(attempts))):
                 time.sleep(0.5 * (index + 1))
         else:
-            detail = result.stderr.strip() or result.stdout.strip() or "merge base remains unavailable"
             raise ChangedFilesError(f"pinned PR base/head history preparation failed: {detail}")
     _git(root, "update-ref", f"refs/remotes/origin/{branch}", pinned_base)
     source_commit = _commit(root, pinned_source or head_commit, "source_head_sha")
+    if _commit(root, "HEAD", "head_sha") != head_commit:
+        raise ChangedFilesError("checkout HEAD changed during source ancestry preparation")
     if pinned_source:
         _git(root, "merge-base", "--is-ancestor", source_commit, head_commit)
     merge_base = _git(root, "merge-base", pinned_base, source_commit).strip()
@@ -128,6 +244,8 @@ def prepare_pr_merge_base(
         "fetch_used": used_attempts > 0,
         "fetch_attempts": used_attempts,
         "deepen_by": max(1, int(deepen_by)),
+        "local_mirror_ancestry": local_history,
+        "elapsed_seconds": round(time.monotonic() - started, 3),
     }
 
 
