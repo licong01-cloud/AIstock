@@ -5255,6 +5255,8 @@ def _subprocess_env(args: list[str]) -> dict[str, str] | None:
         return None
     env = os.environ.copy()
     if executable in {"gh", "gh.exe"}:
+        if platform.system() != "Windows" or env.get("AISTOCK_GITHUB_API_DIRECT") == "0":
+            return env
         # GitHub API must not inherit the AI residential proxy. Keep all other
         # destinations and proxy credentials unchanged, including model APIs.
         bypass = list(dict.fromkeys(
