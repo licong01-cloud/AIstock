@@ -28,12 +28,18 @@
   ],
   "expected": "以assets.release_cutoff验证完整quote authority身份；原评价/feature读取边界保持，合法span超过评价末日可通过，真正超过release cutoff仍fail closed。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/formal_state_input.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1704-hmm-l2-effect-baseline-confuses-evaluation-end-with-release-cutoff.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/formal_state_input.py",
-      "backend/tests/hmm_risk/test_formal_state_input.py"
+      "backend/tests/hmm_risk/test_formal_state_input.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1704-hmm-l2-effect-baseline-confuses-evaluation-end-with-release-cutoff.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/formal_state_input.py",
@@ -100,16 +106,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
     "fresh_process_evidence": [
-      "Conda base python X:/AIstock_temp/hmm_l2_effect_20261003/bug1704_smoke.py -> PASS; PYTHONPATH=current BUG-1704 worktree; backend.routers.hmm_risk/health and formal input/effect/executor imports; v17 actual 131-code quote authority readback and hash pins passed; database get_conn poisoned; fits=0/tail_accessed=false"
+      "Conda base python X:/AIstock_temp/hmm_l2_effect_20261003/bug1704_smoke.py -> PASS; PYTHONPATH=current BUG-1704 worktree; backend.routers.hmm_risk/health and formal input/effect/executor imports; v17 actual 131-code quote authority readback and hash pins passed; database get_conn poisoned; fits=0/tail_accessed=false",
+      "python X:/AIstock_temp/hmm_l2_effect_20261003/bug1704_smoke.py -> PASS, current task worktree, v17 131-code real file readback, DB poison, no fits/tail"
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
