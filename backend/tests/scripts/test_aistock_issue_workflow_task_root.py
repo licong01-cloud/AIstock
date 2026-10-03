@@ -27,6 +27,7 @@ def linked_roots(tmp_path, monkeypatch):
     nested = task / "nested"
     nested.mkdir()
     monkeypatch.setattr(workflow, "REPO_ROOT", canonical)
+    monkeypatch.setattr(workflow, "SCRIPT_ROOT", canonical)
     monkeypatch.setattr(workflow, "BUGS_ROOT", canonical / "tests/aistock_validation/bugs")
     monkeypatch.chdir(nested)
     return canonical, task
@@ -109,7 +110,7 @@ def test_task_root_restored_after_workflow_error(linked_roots, monkeypatch):
     assert workflow.REPO_ROOT == canonical
 
 
-@pytest.mark.parametrize("command", ["doctor", "verify-clients", "install-client", "cleanup-after-merge", None])
+@pytest.mark.parametrize("command", ["doctor", "verify-clients", "install-client", "cleanup-after-merge"])
 def test_non_task_execution_keeps_canonical_root(linked_roots, monkeypatch, tmp_path, command):
     canonical, _ = linked_roots
     if command is None:

@@ -1108,7 +1108,8 @@ def build_batch_plan(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _git_output(args: list[str], cwd: Path = REPO_ROOT, check: bool = True) -> str:
+def _git_output(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
+    cwd = cwd or REPO_ROOT
     proc = subprocess.run(
         ["git", *args],
         cwd=str(cwd),

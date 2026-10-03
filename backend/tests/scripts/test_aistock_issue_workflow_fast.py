@@ -15,6 +15,107 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.fixture
+def cli_task_worktree(tmp_path, monkeypatch):
+    base, task = tmp_path / "authority", tmp_path / "task"
+    base.mkdir()
+
+    def git(root, *args):
+        return subprocess.check_output(["git", "-C", str(root), *args], text=True, stderr=subprocess.STDOUT, timeout=15).strip()
+
+    git(base, "init", "-q")
+    git(base, "config", "user.email", "workflow-test@example.invalid")
+    git(base, "config", "user.name", "workflow-test")
+    (base / "baseline.txt").write_text("baseline", encoding="utf-8")
+    git(base, "add", ".")
+    git(base, "commit", "-qm", "baseline")
+    git(base, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(base, "worktree", "add", "-qb", "bug/task-context", str(task))
+    (task / "task.txt").write_text("task", encoding="utf-8")
+    git(task, "add", ".")
+    git(task, "commit", "-qm", "task change")
+    monkeypatch.setattr(workflow, "SCRIPT_ROOT", base, raising=False)
+    monkeypatch.chdir(task)
+    return base, task, git
+
+
+def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktree, monkeypatch):
+    base, task, git = cli_task_worktree
+    original_root = workflow.REPO_ROOT
+    original_exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda path: False if path == Path("F:/Dev/AIstock") else original_exists(path))
+    monkeypatch.delenv("AISTOCK_CANONICAL_ROOT", raising=False)
+    monkeypatch.delenv("AISTOCK_ROOT", raising=False)
+    (task / "nested").mkdir()
+    monkeypatch.chdir(task / "nested")
+    calls = []
+
+    def handler(_args):
+        assert workflow.REPO_ROOT == workflow.flow.REPO_ROOT == task
+        assert workflow._canonical_root() == base
+        assert workflow.flow.BUGS_ROOT == task / "tests/aistock_validation/bugs"
+        assert workflow.flow.TEST_PLANS == task / "tests/aistock_validation/catalog/test_plans.yaml"
+        assert workflow._finish_changed_files("origin/main", "HEAD") == ["task.txt"]
+        receipts, errors = workflow._build_validation_receipts(["python -m nox -s l0 -> passed"], root=workflow.REPO_ROOT)
+        assert not errors and receipts[0]["commit"] == git(task, "rev-parse", "HEAD")
+        assert receipts[0]["commit"] != git(base, "rev-parse", "HEAD")
+        finish = {"validation_evidence": ["passed"], "validation_receipts": receipts, "pr_body_path": "tmp/body.md"}
+        monkeypatch.setattr(workflow, "_pr_worktree_guard", lambda: {"blocking": []})
+        monkeypatch.setattr(workflow, "_pre_pr_gate", lambda **kwargs: {"workflow_gate": "passed", "blocking": []})
+        monkeypatch.setattr(workflow, "_create_pr_with_transport_fallback", lambda **kwargs: calls.append(kwargs) or {"ok": True, "stdout": "https://github.com/test/repo/pull/1"})
+        monkeypatch.setattr(workflow, "_append_event", lambda *args, **kwargs: None)
+        monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: None)
+        workflow._maybe_create_pr(bug_id="BUG-999", finish=finish, push=False, create_pr=True, watch_ci=False, pr_title=None)
+        assert calls[0]["root"] == task and calls[0]["branch"] == "bug/task-context"
+        assert calls[0]["expected_head"] == receipts[0]["commit"]
+        return 0
+
+    args = SimpleNamespace(command="run", mode="pr", func=handler)
+    monkeypatch.setattr(workflow, "build_parser", lambda: SimpleNamespace(parse_args=lambda _: args))
+    assert workflow.main([]) == 0
+    assert workflow.REPO_ROOT == original_root
+
+
+@pytest.mark.parametrize("failure", ["unknown", "foreign", "git_override", "head_drift", "branch_drift", "receipt_mismatch", "digest_mismatch", "head_argument"])
+def test_canonical_cli_task_context_fails_closed(cli_task_worktree, monkeypatch, capsys, failure):
+    base, task, git = cli_task_worktree
+    invoked = []
+
+    def handler(_args):
+        invoked.append(True)
+        if failure == "head_drift":
+            git(task, "commit", "--allow-empty", "-qm", "concurrent head change")
+        if failure == "branch_drift":
+            git(task, "branch", "-m", "renamed-task")
+        root = workflow.REPO_ROOT
+        if failure == "head_argument":
+            workflow.build_finish_plan(bug_id="BUG-999", issue_json=None, changed_files=None,
+                                       base="origin/main", head=git(base, "rev-parse", "HEAD"),
+                                       validation_evidence=[], plan_only=True, allow_missing_evidence=False)
+        if failure in {"receipt_mismatch", "digest_mismatch"}:
+            finish = {"validation_evidence": ["passed"], "validation_receipts": [{"commit": git(base, "rev-parse", "HEAD")}]}
+            if failure == "digest_mismatch":
+                finish["validation_receipts"][0]["commit"] = git(task, "rev-parse", "HEAD")
+            workflow._check_pr_receipt_identity(finish, root=root)
+        else:
+            workflow._build_validation_receipts(["python -m nox -s l0 -> passed"], root=root)
+        return 0
+
+    if failure in {"unknown", "foreign"}:
+        other = task.parent / failure
+        other.mkdir()
+        if failure == "foreign":
+            git(other, "init", "-q")
+        monkeypatch.chdir(other)
+    if failure == "git_override":
+        monkeypatch.setenv("GIT_DIR", str(base / ".git"))
+    args = SimpleNamespace(command="finish", func=handler)
+    monkeypatch.setattr(workflow, "build_parser", lambda: SimpleNamespace(parse_args=lambda _: args))
+    assert workflow.main([]) == 2
+    assert capsys.readouterr().err
+    assert bool(invoked) == (failure in {"head_drift", "branch_drift", "receipt_mismatch", "digest_mismatch", "head_argument"})
+
+
 @pytest.mark.parametrize("executable", ["gh", "C:/tools/gh.exe"])
 @pytest.mark.parametrize("existing", ["localhost", "api.github.com", "*"])
 def test_gh_environment_bypasses_only_api_and_preserves_parent(monkeypatch, executable, existing):
