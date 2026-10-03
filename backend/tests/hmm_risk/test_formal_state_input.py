@@ -14,8 +14,7 @@ from backend.services.hmm_risk.formal_state_executor import frozen_release_bindi
 from backend.services.hmm_risk.formal_state_model import FormalStateError
 
 
-@pytest.mark.parametrize("authority_end", ["2026-08-31", "2026-09-01"])
-def test_effect_baseline_checks_quote_authority_against_release_cutoff(tmp_path, monkeypatch, authority_end):
+def _effect_baseline_assets(tmp_path, monkeypatch, authority_end="2026-08-31"):
     import json
 
     from backend.tests.dataset_release.test_shared_sector_context import _code_map, _quote_availability
@@ -35,11 +34,21 @@ def test_effect_baseline_checks_quote_authority_against_release_cutoff(tmp_path,
     }
     (tmp_path / "qe_dataset_manifest.json").write_text(json.dumps({"components": components}), encoding="utf-8")
 
+    result = {"release_root": tmp_path, "release_cutoff": date(2026, 8, 31)}
+
     def assets(root, **kwargs):
         assert root == tmp_path
         assert kwargs["data_window_end"] == date(2026, 3, 30)
         assert kwargs["frozen_release_binding"] == frozen_release_binding()
-        return {"release_root": root, "release_cutoff": date(2026, 8, 31)}
+        return result
+
+    monkeypatch.setattr(reader, "load_rotation_l1_direct_v2_source_assets", assets)
+    return code_map, membership, result
+
+
+@pytest.mark.parametrize("authority_end", ["2026-08-31", "2026-09-01"])
+def test_effect_baseline_checks_quote_authority_against_release_cutoff(tmp_path, monkeypatch, authority_end):
+    code_map, membership, _ = _effect_baseline_assets(tmp_path, monkeypatch, authority_end)
 
     class MembershipBoundaryReached(Exception):
         pass
@@ -48,7 +57,6 @@ def test_effect_baseline_checks_quote_authority_against_release_cutoff(tmp_path,
         assert path == membership
         raise MembershipBoundaryReached
 
-    monkeypatch.setattr(reader, "load_rotation_l1_direct_v2_source_assets", assets)
     monkeypatch.setattr(subject.pd, "read_parquet", membership_read)
     source = {
         "candidate_root": str(tmp_path),
@@ -64,6 +72,70 @@ def test_effect_baseline_checks_quote_authority_against_release_cutoff(tmp_path,
         # feature data remains bounded by the original 2026-03-30 as-of above.
         with pytest.raises(MembershipBoundaryReached):
             subject.prepare_effect_baseline(frozen, source)
+
+
+def test_effect_baseline_uses_release_bin_indices_with_bounded_source_dates(tmp_path, monkeypatch):
+    from backend.services.hmm_risk import formal_state_effect as effect
+    from backend.services.hmm_risk import rotation_l2_input as baseline
+
+    code_map, membership_path, assets = _effect_baseline_assets(tmp_path, monkeypatch)
+    release_calendar = list(pd.bdate_range("2018-08-01", "2026-08-31").date)
+    assets.update(
+        {
+            "qlib_root": tmp_path,
+            "instrument_universe_path": tmp_path / "stock_universe.txt",
+            "files": {
+                name: tmp_path / name for name in ("security_identity", "provider_absence", "suspend_data", "moneyflow")
+            },
+        }
+    )
+    membership = pd.DataFrame(
+        [{"instrument": "000001.SZ", "start_date": effect.START, "end_date": effect.END, "l2_code_id": 1}]
+    )
+    monkeypatch.setattr(subject.pd, "read_parquet", lambda path: membership.copy())
+    monkeypatch.setattr(baseline, "validate_membership_frame", lambda *_a, **_kw: None)
+    monkeypatch.setattr(reader, "_load_qlib_calendar", lambda *_: tuple(release_calendar))
+    monkeypatch.setattr(
+        effect, "calendar_contract", lambda *_: {"decisions": [effect.START.isoformat(), effect.END.isoformat()]}
+    )
+    monkeypatch.setattr(subject, "load_security_source_identity_manifest", lambda *_a, **_kw: object())
+    monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_a, **_kw: object())
+    feature_path = tmp_path / "features/000001.sz/amount.day.bin"
+    feature_path.parent.mkdir(parents=True)
+    values = np.arange(len(release_calendar), dtype=np.float32) + 100
+    values[release_calendar.index(effect.END) + 1 :] = np.nan  # Tail numeric poison must remain unread.
+    np.concatenate((np.array([0], dtype=np.float32), values)).astype("<f4").tofile(feature_path)
+
+    class SourceBoundaryReached(Exception):
+        pass
+
+    def aggregate_read(**kwargs):
+        source_days = kwargs["source_days"]
+        assert len(source_days) == release_calendar.index(effect.END) - release_calendar.index(effect.START) + 25
+        assert source_days[-1] == date(2026, 3, 30)
+        assert kwargs["provider_path"] == assets["instrument_universe_path"]
+        expected = pd.DataFrame({"trade_date": [effect.START, source_days[-1]], "instrument": ["000001.SZ"] * 2})
+        result, _ = baseline._qlib_amount_frame(tmp_path, calendar=kwargs["calendar"], expected=expected)
+        assert result["amount_cny"].tolist() == [
+            float(values[release_calendar.index(day)]) for day in expected["trade_date"]
+        ]
+        assert list(kwargs["calendar"]) == release_calendar
+        raise SourceBoundaryReached
+
+    monkeypatch.setattr(baseline, "_daily_aggregates", aggregate_read)
+    frozen = {
+        "catalog": code_map["member_backed_codes"],
+        "security_identity_sha256": "a" * 64,
+        "provider_absence_sha256": "b" * 64,
+    }
+    source = {
+        "candidate_root": str(tmp_path),
+        "security_identity_manifest": str(tmp_path / "security.json"),
+        "provider_absence_manifest": str(tmp_path / "absence.json"),
+    }
+    assert membership_path.is_file()
+    with pytest.raises(SourceBoundaryReached):
+        subject.prepare_effect_baseline(frozen, source)
 
 
 def test_effect_source_and_parquet_reads_are_bounded_before_file_access(monkeypatch, tmp_path):

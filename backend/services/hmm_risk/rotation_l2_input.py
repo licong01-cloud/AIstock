@@ -107,21 +107,16 @@ def _parse_calendar(path: Path) -> list[date]:
     return values
 
 
-def _parse_provider_spans(path: Path) -> dict[str, tuple[date, date]]:
-    spans: dict[str, tuple[date, date]] = {}
+def _parse_provider_spans(path: Path) -> dict[str, tuple[tuple[date, date], ...]]:
+    from backend.services.hmm_risk.rotation_l1_input_bundle import (
+        RotationL1InputBundleError,
+        _parse_instrument_spans,
+    )
+
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for line in lines:
-            if not line.strip():
-                continue
-            symbol, start_raw, end_raw = line.split("\t")
-            symbol = symbol.strip().upper()
-            if symbol in spans:
-                raise ValueError(f"duplicate instrument {symbol}")
-            spans[symbol] = (date.fromisoformat(start_raw), date.fromisoformat(end_raw))
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return _parse_instrument_spans(path)
+    except RotationL1InputBundleError as exc:
         raise _fail("source_invalid", "provider instrument spans are invalid", path=str(path)) from exc
-    return spans
 
 
 def _hdf_slice(path: Path, *, start: date, end: date, columns: list[str]) -> pd.DataFrame:
@@ -160,7 +155,7 @@ def _expand_expected(
     membership: pd.DataFrame,
     *,
     id_to_code: Mapping[int, str],
-    provider_spans: Mapping[str, tuple[date, date]],
+    provider_spans: Mapping[str, tuple[tuple[date, date], ...]],
     source_days: Iterable[date],
     suspended: set[tuple[date, str]],
 ) -> tuple[pd.DataFrame, dict[tuple[date, str], int]]:
@@ -176,10 +171,8 @@ def _expand_expected(
                 "membership instrument is absent from PIT provider universe",
                 instrument=raw.instrument,
             )
-        lower = max(raw.start_date, provider[0])
-        upper = min(raw.end_date, provider[1])
         for day in source_days:
-            if lower <= day <= upper:
+            if raw.start_date <= day <= raw.end_date and any(start <= day <= end for start, end in provider):
                 member_counts[(day, code)] += 1
                 if (day, str(raw.instrument)) not in suspended:
                     rows.append((day, str(raw.instrument), code))

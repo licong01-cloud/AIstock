@@ -18,6 +18,48 @@ def test_quote_availability_uses_only_frozen_spans() -> None:
     assert _availability(entries, "801011.SI", date(2026, 4, 29)) is False
 
 
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_provider_parser_retains_disjoint_pit_intervals(tmp_path, reverse_order):
+    rows = ["000004.SZ\t2024-07-01\t2024-07-02", "000004.SZ\t2024-07-04\t2024-07-05"]
+    path = tmp_path / "stock_universe.txt"
+    path.write_text("\n".join(rows[::-1] if reverse_order else rows) + "\n", encoding="utf-8")
+    assert subject._parse_provider_spans(path) == {
+        "000004.SZ": ((date(2024, 7, 1), date(2024, 7, 2)), (date(2024, 7, 4), date(2024, 7, 5)))
+    }
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        "000004.SZ\t2024-07-01\t2024-07-03\n000004.SZ\t2024-07-03\t2024-07-05\n",
+        "000004.SZ\t2024-07-02\t2024-07-01\n",
+        "000004.SZ\tinvalid-date\t2024-07-01\n",
+    ],
+)
+def test_provider_parser_rejects_ambiguous_or_invalid_intervals(tmp_path, rows):
+    path = tmp_path / "stock_universe.txt"
+    path.write_text(rows, encoding="utf-8")
+    with pytest.raises(RotationL2Error) as error:
+        subject._parse_provider_spans(path)
+    assert error.value.reason_code == "hmm_risk_rotation_l2_source_invalid"
+
+
+def test_expected_population_does_not_fill_pit_interval_gaps():
+    days = tuple(date(2024, 7, day) for day in range(1, 6))
+    membership = pd.DataFrame(
+        [{"instrument": "000004.SZ", "start_date": days[0], "end_date": days[-1], "l2_code_id": 133}]
+    )
+    expected, counts = _expand_expected(
+        membership,
+        id_to_code={133: "801783.SI"},
+        provider_spans={"000004.SZ": ((days[0], days[1]), (days[3], days[4]))},
+        source_days=days,
+        suspended={(days[4], "000004.SZ")},
+    )
+    assert expected["trade_date"].tolist() == [days[0], days[1], days[3]]
+    assert counts == {(day, "801783.SI"): 1 for day in (days[0], days[1], days[3], days[4])}
+
+
 def test_expected_population_is_pit_and_excludes_only_full_day_suspend() -> None:
     membership = pd.DataFrame(
         [
@@ -39,8 +81,8 @@ def test_expected_population_is_pit_and_excludes_only_full_day_suspend() -> None
         membership,
         id_to_code={133: "801783.SI"},
         provider_spans={
-            "000001.SZ": (date(2024, 7, 1), date(2024, 7, 3)),
-            "000002.SZ": (date(2024, 7, 1), date(2024, 7, 3)),
+            "000001.SZ": ((date(2024, 7, 1), date(2024, 7, 3)),),
+            "000002.SZ": ((date(2024, 7, 1), date(2024, 7, 3)),),
         },
         source_days=(date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3)),
         suspended={(date(2024, 7, 2), "000001.SZ")},
