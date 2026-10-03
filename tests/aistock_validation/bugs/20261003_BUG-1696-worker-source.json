@@ -4,6 +4,9 @@
     "backend/services/dataset_release/artifact_ready_build_source.py",
     "backend/services/dataset_release/build_stage.py",
     "backend/tests/dataset_release/test_build_stage.py",
+    "backend/services/dataset_release/monthly_worker_runtime.py",
+    "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20261003_BUG-1696-worker-source.json"
   ],
   "assigned_agent": null,
@@ -29,13 +32,18 @@
   ],
   "expected": "worker 严格区分 private schema 与完整 SOURCE，按有效身份安全采用且完整终验保持",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/artifact_ready_build_source.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/tests/dataset_release/test_build_stage.py"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/artifact_ready_build_source.py",
       "backend/services/dataset_release/build_stage.py",
       "backend/tests/dataset_release/test_build_stage.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/artifact_ready_build_source.py",
@@ -127,13 +135,20 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Windows task-worktree fresh process: python -m pytest backend/tests/dataset_release/test_build_stage.py -q --basetemp=X:/AIstock_temp/BUG-1693/pytest-isolated-worker-1 -> 4 passed; actual private 12-index H5 and legacy no-helper compatibility, fixture source rows explicitly bounded; no operation claimed",
+      "SOURCE5 actual fresh-process production constructor and worker --preflight PASS; SOURCE6 precise typed wiring unit tests PASS; no operation or database opened"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

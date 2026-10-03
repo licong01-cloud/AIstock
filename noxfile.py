@@ -725,6 +725,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
         "backend/tests/dataset_release/test_monthly_worker_supervisor.py",
         "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+        "backend/tests/dataset_release/test_monthly_worker_runtime.py",
         "backend/tests/dataset_release/test_active_task_binding.py",
         "backend/tests/dataset_release/test_managed_consumer_task.py",
         "backend/tests/dataset_release/test_monthly_hmm_consumer_probe.py",
