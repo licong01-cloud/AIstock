@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.98
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v3.99
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-04
@@ -2015,7 +2015,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 |---|---|---|
 | 已完成 / R2三路线源码交付 | 设计#5395及源码#5404均合入/自身清理；15测试、三次真实四臂及11fit+1索引已完成 | 三candidate均负向停止，不回选matched或补证；经济确认/启用0，QE/DB/runtime不动 |
 | 已完成 / R2-M1开发导航 | [动态板块M1 F2设计](advisory_sector_dynamic_price_value_v1_f2_design_20261004.md)#5411交付，源码#5414；原7720键prepare、1795train/765validation、4fit及81D四臂完成；五个冻结导航门通过 | 点估计过门不是收益确认：两个增量区间跨零，93episode中36真TAKE/57 UNKNOWN控制；native/ENTRY_VALUE启用仍0 |
-| P1 / M1一次独立确认设计及消费者准备 | #5414已交付/清理；[确认F2设计](advisory_sector_price_value_confirmation_v1_f2_design_20261004.md)固定M1/同13D matched/原基线，双增量及绝对收益主门、来源/时钟/功效和唯一读取规则。只读资产声明已核定两腿权重存在；训练时钟/processor及新候选完整性尚未证明 | 不读取sealed/新holdout，不重训/调参/重新选点；确认正式日期、推断/功效及regime数值未冻结，不称可启动。可先做冻结模型消费者的最小设计与合成直接测试准备，不代表正式daily/经济激活 |
+| P1 / M1一次独立确认设计及消费者准备 | #5414已交付/清理；#5420[确认F2框架](advisory_sector_price_value_confirmation_v1_f2_design_20261004.md)已合入；#5421冻结research reader已提交、16直接测试及真实权重合成parity通过，必需CI尚未完成。[M1日频详细设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)明确15D+价格query16、21D+T、三切片及原生训练资格边界。两腿权重存在，训练/processor/组合权重时钟仍UNPROVEN | 不读sealed/新holdout、不重训/调参/重新选点；正式日期/推断/功效未冻结。只做最小纯消费者准备，research reader不冒充daily；未来native输入或确认PASS不能倒补原RECOVERED_LIMITED训练。源/API/UI/qualified接入依实际资格放行，不为凑48h继续搜M5 |
 | P2 / M5准备保留、正式研究不放行 | [选股状态持续性设计](advisory_selection_state_price_value_v1_f2_design_20261004.md)#5415/#5416已交付，独立源码16e953938及18直接测试通过；新块/同核/薄编排准备保留 | M1已正导航，M5正式登记/fit/四臂为0，不为找更高开发收益启动它；不弃唯一源码、不清零旧trial、不改QE上游路线 |
 | P4 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
 
