@@ -54,7 +54,7 @@ NULL/缺报价/缺量/正常停牌缺行/不足20session整块UNKNOWN，保留�
 | signed_adjusted_volume_balance19 | sum(Q_i×sign(r_i))/sum(Q_i)，i=1..19，[-1,1] | 涨跌日量分布，不是主动买卖额或因果净流入 |
 | adjusted_volume_concentration20 | sum((Q_i/sum(Q))²)，i=0..19，[1/20,1] | 量在原20日集中度，不是流动性/成交概率保证 |
 
-三个字段同时有效才AVAILABLE，candidate/matched共享同一mask。纯共同价格/量尺度变化不改值；股票数量与因子拆股坐标手算直接验。signed sign(0)=0，无经济epsilon；全部加权用归一化Q权重，避免直接Q×C或Q²的中间溢出，不winsorize、不以结果择特征。仅固定浮点≤1e-12端点容差。原12D/g的无标签global支持独立，不因为新块人口或未来Y/L改变。
+三个字段同时有效才AVAILABLE，candidate/matched共享同一mask。纯共同价格/量尺度变化不改值；股票数量与因子拆股坐标手算直接验。signed sign(0)=0，无经济epsilon；全部加权用各自窗口归一化Q权重，19日分布须独立归一化，不能让首日极大量权把后19日真实交易数值下溢为零；避免直接Q×C或Q²的中间溢出，不winsorize、不以结果择特征。仅固定浮点≤1e-12端点容差。原12D/g的无标签global支持独立，不因为新块人口或未来Y/L改变。
 
 ## 6. Model / 同监督及价格集合
 
