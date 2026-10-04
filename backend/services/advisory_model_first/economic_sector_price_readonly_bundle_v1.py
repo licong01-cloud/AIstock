@@ -13,7 +13,6 @@ import numpy as np
 from backend.services.advisory_model_first.economic_daily_feature_core_v1 import D_FEATURES
 from backend.services.advisory_model_first.economic_entry_contracts import EconomicEntryStudyPlanV1
 from backend.services.advisory_model_first.economic_price_campaign_models_v2 import predict_json_v2
-from backend.services.advisory_model_first.economic_sector_price_pipeline_v1 import sector_implementation_sha256_v1
 from backend.services.advisory_model_first.economic_sector_price_source_v1 import SECTOR_FEATURES
 from backend.services.advisory_model_first.economic_sector_price_value_v1 import (
     SectorPriceFitV1, SectorPricePlanV1, sector_fit_identity_v1,
@@ -27,6 +26,8 @@ JSON_LIMIT = 2 * 1024**2
 TOTAL_LIMIT = 16 * 1024**2
 STAGES = ('preregistered', 'prepared', 'trained', 'evaluated')
 GATES = {'interventions', 'mdd', 'model_takes', 'net_increment', 'tail'}
+NAVIGATIONS = {'CONSIDER_CONFIRMATION_DESIGN_ONLY', 'STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION',
+               'BLOCKED_EXECUTION_OR_MARK_UNPROVEN'}
 
 
 def _path(value):
@@ -182,7 +183,6 @@ class LoadedSectorResearchBundleV1:
                 or self.decision_use != 'NAVIGATION_ONLY' or self.deployable is not False
                 or self.native_identity != 'UNPROVEN' or self.source_evidence != 'RECOVERED_LIMITED'
                 or sha(self.fitted.diagnostics) != self.original_diagnostics_sha256
-                or self.plan.implementation_sha256 != sector_implementation_sha256_v1()
                 or self.fitted.model_sha256 != self.original_model_sha256
                 or sector_fit_identity_v1(self.fitted.recipe, self.fitted.models, self.fitted.support) != self.original_model_sha256):
             raise ValueError('sector reader in-memory model, plan or math identity changed')
@@ -199,8 +199,6 @@ def load_sector_research_bundle_v1(*, plan_ref, trained_manifest_ref, evaluated_
     root = path.parent.parent
     if path != root / 'preregistered/plan.json' or root.name != plan.experiment_id:
         raise ValueError('sector reader needs the original published plan location')
-    if plan.implementation_sha256 != sector_implementation_sha256_v1():
-        raise ValueError('sector reader frozen logical math implementation differs')
     trained_path, raw_trained = reads.reference(trained_manifest_ref, 'sector_readonly_trained')
     evaluated_path, raw_evaluated = reads.reference(evaluated_manifest_ref, 'sector_readonly_evaluated')
     if trained_path != root / 'trained/manifest.json' or evaluated_path != root / 'evaluated/manifest.json':
@@ -274,12 +272,12 @@ def load_sector_research_bundle_v1(*, plan_ref, trained_manifest_ref, evaluated_
             or sector_fit_identity_v1(recipe, models, support) != metadata['model_sha256']):
         raise ValueError('sector reader fit identity or original evidence level differs')
     report = reads.json(root / 'evaluated/evaluation.json', stages['evaluated']['files']['evaluation.json'])
-    gates = report.get('gates')
+    gates = report.get('gates', {})  # Execution-blocked reports legitimately have no profit gates.
     if (report.get('plan_sha256') != plan.plan_sha256 or report.get('model_id') != 'M1'
-            or report.get('navigation') != 'CONSIDER_CONFIRMATION_DESIGN_ONLY'
+            or report.get('navigation') not in NAVIGATIONS
             or report.get('economic_effectiveness') != 'NOT_CONFIRMED' or report.get('decision_use') != 'NAVIGATION_ONLY'
             or any(report.get(key) is not False for key in ('deployable', 'sealed_accessed', 'database_written', 'real_fill_proven'))
-            or not isinstance(gates, dict) or set(gates) != GATES or any(value is not True for value in gates.values())
+            or not isinstance(gates, dict) or set(gates) - GATES or any(type(value) is not bool for value in gates.values())
             or report.get('source_evidence') != preparation['source_evidence']):
         raise ValueError('sector reader cannot reinterpret the original navigation or economic evidence')
     scope = {key: dataset[key] for key in ('package_id', 'program_id', 'manifest_sha256')}

@@ -23,11 +23,14 @@ class _Record:
 
 
 class _PackageService:
-    def __init__(self, record: _Record, *, eligible: bool = True, blockers: tuple[str, ...] = ()) -> None:
+    def __init__(self, record: _Record) -> None:
         self.record = record
         self.get_calls: list[str] = []
-        eligibility = SimpleNamespace(eligible=eligible, blockers=blockers, warnings=())
-        self.asset_eligibility = SimpleNamespace(summarize=lambda _record: eligibility)
+        # Any repeat qualification, even reading this property, must fail this test.
+
+    @property
+    def asset_eligibility(self) -> Any:
+        pytest.fail("Advisory must not requalify an existing QE StrategyPackage")
 
     def get_package(self, package_id: str) -> _Record:
         self.get_calls.append(package_id)
@@ -76,16 +79,12 @@ def _service(
     manifest: Any,
     *,
     package_status: PackageStatus = PackageStatus.SELECTION_ENABLED,
-    eligible: bool = True,
-    asset_blockers: tuple[str, ...] = (),
     binding: dict[str, Any] | None = None,
     model_configured: bool = False,
     model_root: str = "",
 ) -> tuple[AdvisoryDeliveryPreflightService, _PackageService, _ProgramService, _ModelResolver]:
     package_service = _PackageService(
         _Record(manifest=manifest, package_status=package_status),
-        eligible=eligible,
-        blockers=asset_blockers,
     )
     program_service = _ProgramService(
         binding
@@ -199,7 +198,7 @@ def test_conflicting_frozen_universe_evidence_blocks_delivery() -> None:
     assert result["blockers"] == ["DELIVERY_UNIVERSE_EVIDENCE_CONFLICT"]
 
 
-def test_audit_only_source_evidence_cannot_replace_primary_frozen_universe_identity() -> None:
+def test_consistent_source_universe_is_usable_without_a_primary_publication_path() -> None:
     service, *_ = _service(
         _manifest(source_universe={"mode": "single_index", "pool_ids": ["csi300"]})
     )
@@ -210,9 +209,9 @@ def test_audit_only_source_evidence_cannot_replace_primary_frozen_universe_ident
         target_count=20,
     )
 
-    assert result["overall_status"] == "BLOCKED"
-    assert result["universe_compatibility"]["status"] == "DELIVERY_CONTRACT_INCOMPLETE"
-    assert result["blockers"] == ["DELIVERY_UNIVERSE_PRIMARY_EVIDENCE_MISSING"]
+    assert result["overall_status"] == "READY_BASELINE_ONLY"
+    assert result["universe_compatibility"]["status"] == "EXACT_UNIVERSE_MATCHED"
+    assert result["blockers"] == []
 
 
 def test_same_restricted_pool_with_different_mode_shape_is_compatible_but_not_exact() -> None:
@@ -245,23 +244,14 @@ def test_invalid_frozen_universe_shape_blocks_delivery_without_fallback() -> Non
 
 
 @pytest.mark.parametrize(
-    ("package_status", "eligible", "asset_blockers", "expected_blocker"),
-    [
-        (PackageStatus.RETIRED, True, (), "PACKAGE_RETIRED"),
-        (PackageStatus.SELECTION_ENABLED, False, ("asset_hash_invalid",), "PACKAGE_ASSET_INELIGIBLE:asset_hash_invalid"),
-    ],
+    "package_status", [PackageStatus.RETIRED, PackageStatus.SELECTION_ENABLED],
 )
-def test_retired_or_asset_ineligible_package_is_blocked(
+def test_existing_package_qualification_is_delegated_to_qe(
     package_status: PackageStatus,
-    eligible: bool,
-    asset_blockers: tuple[str, ...],
-    expected_blocker: str,
 ) -> None:
     service, *_ = _service(
         _manifest(),
         package_status=package_status,
-        eligible=eligible,
-        asset_blockers=asset_blockers,
     )
 
     result = service.preflight(
@@ -270,8 +260,13 @@ def test_retired_or_asset_ineligible_package_is_blocked(
         target_count=20,
     )
 
-    assert result["overall_status"] == "BLOCKED"
-    assert expected_blocker in result["blockers"]
+    assert result["overall_status"] == "READY_BASELINE_ONLY"
+    assert result["blockers"] == []
+    assert result["package"]["package_status"] == package_status.value
+    assert result["package"]["asset_eligible"] is True
+    assert result["package"]["asset_blockers"] == []
+    assert result["package"]["qualification_authority"] == "QE_STRATEGY_PACKAGE"
+    assert result["package"]["qualification_rechecked"] is False
 
 
 @pytest.mark.parametrize(
