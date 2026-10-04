@@ -144,3 +144,32 @@ def test_explicit_M7_extension27_keeps_M6_default23_and_requires_terminal_identi
     (tmp_path/prior.experiment_id/'evaluated/unit.json').write_bytes(b'{"tampered":true}')
     with pytest.raises(Exception, match='hash|size|artifact'):
         pipeline.verify_moneyflow_budget_v1(prior, price_path_extension=extension)
+
+
+def test_explicit_M8_extension31_keeps_old_defaults_and_original27_terminal(tmp_path):
+    from backend.services.advisory_model_first.economic_market_risk_price_pipeline_v1 import _market_risk_fit_event
+    from backend.tests.advisory_model_first.test_economic_market_risk_price_pipeline_v1 import market_risk_plan_fixture
+    newest, previous, original, _, events = market_risk_plan_fixture(tmp_path)
+    assert pipeline.verify_moneyflow_budget_v1(original, price_path_extension=previous) == tmp_path
+    with pytest.raises(ValueError, match='requires original explicit'):
+        pipeline.verify_moneyflow_budget_v1(original, market_risk_extension=newest)
+    (tmp_path/newest.experiment_id).mkdir()
+    for arm in ('matched', 'candidate'):
+        for head in ('mean', 'path'):
+            _market_risk_fit_event(newest, tmp_path/newest.experiment_id, arm+'_'+head)
+    assert pipeline.verify_moneyflow_budget_v1(original, price_path_extension=previous, market_risk_extension=newest) == tmp_path
+    with pytest.raises(ValueError, match='foreign'):
+        pipeline.verify_moneyflow_budget_v1(original, price_path_extension=previous)
+    with pytest.raises(ValueError, match='cumulative'):
+        _market_risk_fit_event(newest, tmp_path/newest.experiment_id, 'extra')
+    journal = tmp_path/'campaign_fit_journal.jsonl'
+    journal.write_text(''.join(json.dumps(event)+'\n' for event in events[:-1]), encoding='utf-8')
+    with pytest.raises(ValueError, match='four completed M7'):
+        pipeline.verify_moneyflow_budget_v1(original, price_path_extension=previous, market_risk_extension=newest)
+    journal.write_text(''.join(json.dumps(event)+'\n' for event in events), encoding='utf-8')
+    foreign = newest.model_copy(update={'profile_sha256': 'f'*64})
+    with pytest.raises(ValueError, match='root/source'):
+        pipeline.verify_moneyflow_budget_v1(original, price_path_extension=previous, market_risk_extension=foreign)
+    (tmp_path/previous.experiment_id/'evaluated/unit.json').write_bytes(b'{"tampered":true}')
+    with pytest.raises(Exception, match='hash|size|artifact'):
+        pipeline.verify_moneyflow_budget_v1(original, price_path_extension=previous, market_risk_extension=newest)

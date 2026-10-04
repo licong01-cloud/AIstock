@@ -46,7 +46,7 @@ prepare冻结index_close.parquet及query_at/hash/日期范围/SELECT数的source
 
 ## 5. Frozen information block / 只三字段
 
-同20个原正式交易日，19个股票/指数log-return分别r_s[j]、r_m[j]，j=1..19；均完整有限。原KEY加以下三个值、market_risk_feature_status、market_risk_feature_visible_through=D。状态固定AVAILABLE / UNKNOWN_20D_WARMUP / UNKNOWN_MARKET_RISK_SOURCE / UNKNOWN_FLAT_BENCHMARK。
+同20个原正式交易日，19个股票/指数log-return分别r_s[j]、r_m[j]，j=1..19；实现采用log(C[j]/C[j-1])、要求结果完整有限，避免相邻绝对log相减使完全相同return产生伪方差；19个指数return完全相等时确认为零方差，不设经验epsilon、clip或最小波动阈值。原KEY加以下三个值、market_risk_feature_status、market_risk_feature_visible_through=D。状态固定AVAILABLE / UNKNOWN_20D_WARMUP / UNKNOWN_MARKET_RISK_SOURCE / UNKNOWN_FLAT_BENCHMARK。
 
 | 字段 | 精确定义/单位 | 缺失及数值 |
 |---|---|---|
@@ -100,17 +100,17 @@ baseline Top5、±300bps rule、matched、candidate；完整81决策日/1620原�
 
 ## 12. Design Acceptance Matrix
 
-仅详细设计验收；M8源码/prepare/fit/研究结果全部PENDING，没有新model/run或收益宣称。
+详细设计#5454已合入并自身清理；以下为源码及一次完整研究的逐项验收，不将工程或探索完成等同经济确认/启用。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-895 | §1/5/6 | artifact: 原12D/旧横截面vol与本次字段对照 | DESIGN_VERIFIED | none |
-| F-896 | §4/5/10 | artifact: 386日指数日期键及numeric schema的事前spike，来源测试规格 | DESIGN_VERIFIED | none |
-| F-897 | §5/6/10 | artifact: 固定公式/公平监督/同核真实接口与价格支持规格 | DESIGN_VERIFIED | none |
-| F-898 | §8 | artifact: 预注册完整四臂及原数值边界 | DESIGN_VERIFIED | none |
-| F-899 | §7/10 | artifact: 实际原27计数、M7终态和明确小extension测试规格 | DESIGN_VERIFIED | none |
-| F-900 | §3/7 | artifact: QE只读running/X-F/零DB写入/服务控制预算 | DESIGN_VERIFIED | none |
-| F-901 | §2/9/13/14 | artifact: 注册精确叶范围与三轮设计自审及交付分层 | DESIGN_VERIFIED | none |
+| F-895 | backend/services/advisory_model_first/economic_market_risk_price_v1.py；§1/5/6/15 | test: backend/tests/advisory_model_first/test_economic_market_risk_price_v1.py；原12D/旧Admission与本块对照 | SOURCE_VERIFIED | none |
+| F-896 | backend/services/advisory_model_first/economic_market_risk_price_pipeline_v1.py；§4/15 | test: backend/tests/advisory_model_first/test_economic_market_risk_price_pipeline_v1.py；artifact: 实际单SELECT/386指数键/7720原候选 | SOURCE_VERIFIED | none |
+| F-897 | backend/services/advisory_model_first/economic_market_risk_price_v1.py；backend/services/advisory_model_first/economic_sector_price_value_v1.py；§5/6/15 | test: backend/tests/advisory_model_first/test_economic_market_risk_price_v1.py；artifact: 三字段手算、平盘/NULL/未来毒化及旧数学身份、3693共同train/195D | SOURCE_VERIFIED | none |
+| F-898 | §8/15；economic_market_risk_price_pipeline_v1.py | artifact: 完整四臂/两个配对增量及五NAV条件，net_increment=false | VERIFIED_RESEARCH_COMPLETED_NEGATIVE | none |
+| F-899 | backend/services/advisory_model_first/economic_moneyflow_price_pipeline_v1.py；backend/services/advisory_model_first/economic_sector_price_pipeline_v1.py；§7/15 | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 默认23/M7-only27/M8显式31及foreign/partial、31实际fit+1index | SOURCE_VERIFIED | none |
+| F-900 | §3/7/15 | artifact: fit前后QE三running均0、线程2/X-F/0DB写入及激活 | SOURCE_VERIFIED | none |
+| F-901 | §2/13/15；精确注册12文件 | test: 39直接项/Ruff/F2/L0；artifact: 三轮本窗口自审、源码与经济分报 | SOURCE_VERIFIED | none |
 
 ## 13. Risks / 审核与设计符合性
 
@@ -123,3 +123,25 @@ DESIGN-COMPLIANCE四项：没有mock-only/子集完成宣称；未知/矛盾分�
 ## 14. Rollout / Rollback / Production Gates
 
 纯离线研究，API/UI/消费者绑定/角色/模型/数据/数据库/依赖/服务操作noop，backend_restart_required=false。源或语义变化新lineage、原工件/计数不覆盖；负候选停止自身，下一路线只允许真正新信息/可识别动作设计，不借旧结果救活。正式收益确认或生产启用另按实证与授权，不能由本设计宣称。
+
+## 15. 实际源码及一次研究（2026-10-05）
+
+设计PR #5454已合入553830c0f且自身官方清理。源码在独立advisory-market-risk-price-value-m8-20261005树，真实研究producer HEAD=6a4589e58e92c0038e847fe432673342aec0d069；implementation SHA=f442320c384ed674597aaf667d13d443bd7d02fa6077e7c7c8346cb521829ffa。随后事实文档提交不代表重新训练。
+
+源码来源/监督/预算三视角反复自审：先复现指数完全相同return因浮点抵消产生伪方差，改用log相邻价格比和精确constant-return判定，不加经验epsilon、clip或最小波动门。Decimal NaN作为坏数拒绝，普通源NULL保留UNKNOWN；真实BoundedEntryReadSession经测试connector验证只读/repeatable-read/rollback/close，旧默认cap与旧模型身份不变。修复失败节点后稳定39项直接测试、Ruff、F2七项和两个正式L0入口通过（feature 0finding；guardrail 3finding/0blocking）。均为本窗口不同视角自审，不冒称独立外审或完整UI验证。
+
+新run=advmarketriskvalue_2bb98affaa5abf78ce659c30，plan SHA=2bb98affaa5abf78ce659c309a3cb3914bdc16cd53073d47a05f05206f26d147；工件在F:/Dev/AIstock_model_artifacts/advisory_price_research_campaign_r2_20261004同名独立目录。先预登记，一次prepare 9.297秒、一次4fit并完整四臂21.079秒（fit阶段7.344秒）。原7720候选全保留，7330 AVAILABLE/380预热UNKNOWN/10源UNKNOWN，原股票快照380240行；新指数386行，一个只读SELECT，query_at=2026-10-04T21:24:32.937286+00:00，CURRENT_DB_HISTORICAL_NON_VINTAGE/native UNPROVEN，不倒填捕获时间。共同train3693行/195D，validation1591仅诊断；fit前21:28:12UTC、后21:29:19UTC QE三个running均0。累计31 physical-fit+1历史index；无DB写入、分钟、sealed、QE提交、服务控制或模型启用。
+
+| 冻结读回 | 实际结果 |
+|---|---|
+| 全人口/政策 | 原81决策日/1620候选/100共同估值日，VALUE_REVIEW_5_V1及原成本不变 |
+| candidate / baseline / matched / rule净收益 | 12.5727% / 21.3220% / 4.5719% / 20.5747%；零回报现金基准，不是指数超额或真实fill |
+| 配对candidate减baseline | 日-7.7890bps；描述性95% block区间[-30.3771,11.5360] |
+| 配对candidate减matched | 日+7.0702bps；描述性95% block区间[-15.1580,27.7327] |
+| 真实干预及贡献分账 | baseline/matched差异57/61日；candidate 48真TAKE+8 UNKNOWN控制，matched 79+4；不把控制收益归给模型 |
+| MDD candidate / baseline / matched | -9.5376% / -10.3314% / -11.8944% |
+| candidate / baseline尾部均值 | -243.9603 / -254.3254bps；风险改善不能替代收益条件 |
+| 条件及端点审计 | net_increment=false，其余四NAV条件true；四臂端点受限、held-mark及未结算阻断均0，仍非真实成交证明 |
+| 结论 | STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION / NAVIGATION_ONLY / NOT_CONFIRMED / deployable=false |
+
+仅停止本次固定市场风险candidate，不反选matched、调阈值/seed、扩大旧样本或追加历史补证，不推出新的日频family/角色绑定。下一真正不同信息/可识别动作仍须先详细设计；新工件读取与经济确认、源码合入及运行态分报。源码PR当前交付中；其合入和清理以GitHub/官方工作流实时状态为准，不用本研究完成冒称已合入。

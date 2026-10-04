@@ -65,7 +65,7 @@ def test_actual_query_T_open_only_unknown_preserves_candidate_and_clock():
         pipeline.sector_actual_decisions_v1(**args)
 
 
-@pytest.mark.parametrize(('model', 'cap'), [('M1', 15), ('M5', 19), ('M6', 23), ('M7', 27)])
+@pytest.mark.parametrize(('model', 'cap'), [('M1', 15), ('M5', 19), ('M6', 23), ('M7', 27), ('M8', 31)])
 def test_fixed_budget_routes_keep_existing_caps(tmp_path, model, cap):
     plan = sector_plan_fixture(tmp_path)
     root = tmp_path/plan.experiment_id
