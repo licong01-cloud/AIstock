@@ -40,6 +40,7 @@ from backend.services.advisory_model_first.entry_price_daily_service import Advi
 from backend.services.advisory_model_first.economic_entry_daily_service import (
     AdvisoryEconomicEntryDailyServiceV1, build_environment_economic_entry_daily_service_v1,
 )
+from backend.services.advisory_model_first.economic_sector_daily_service_v1 import AdvisorySectorDailyServiceV1
 from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
 from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
@@ -1038,6 +1039,26 @@ def _raise_economic_entry_http(exc):
     raise HTTPException(status_code=409, detail={"status": "INPUT_UNAVAILABLE", "deployable": False,
         "reason_code": getattr(exc, "reason_code", "ADVISORY_ENTRY_VALUE_INPUT_UNAVAILABLE"),
         "error_type": type(exc).__name__}) from exc
+
+
+def get_advisory_sector_daily_service() -> AdvisorySectorDailyServiceV1:
+    return AdvisorySectorDailyServiceV1()
+
+
+@router.get("/programs/{program_id}/sector-entry-price")
+def sector_entry_price(program_id: str, target_trade_date: date | None = Query(None),
+    list_version_id: str | None = Query(None, max_length=128),
+    service: AdvisorySectorDailyServiceV1 = Depends(get_advisory_sector_daily_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.read_day(program_id=program_id, target_date=target_trade_date, list_version_id=list_version_id)}
+    except Exception as exc:
+        reason = getattr(exc, "reason_code", "ADVISORY_SECTOR_DAILY_INPUT_UNAVAILABLE")
+        state = {"ADVISORY_SECTOR_FROZEN_LIST_NOT_READY": "FROZEN_LIST_NOT_READY",
+                 "ADVISORY_SECTOR_MODEL_INPUT_INCOMPATIBLE": "MODEL_INPUT_INCOMPATIBLE"}.get(reason, "INPUT_UNAVAILABLE")
+        import psycopg2
+        unavailable = isinstance(exc, psycopg2.OperationalError) or reason.endswith("QUERY_FAILED")
+        raise HTTPException(status_code=503 if unavailable else 409, detail={"status": state,
+            "reason_code": reason, "error_type": type(exc).__name__, "deployable": False}) from exc
 
 
 @router.get("/programs/{program_id}/entry-value/status")

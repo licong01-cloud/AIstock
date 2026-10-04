@@ -1,10 +1,10 @@
 # Advisory M1日频名单、价格API与价格卡片 F2详细设计
 
-2026-10-05；DESIGN_VERIFIED_IMPLEMENTATION_PENDING。承接[上位M1日频设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)第三业务切片。本轮18小时计划优先完成真实日频消费，不重做QE研究或为旧失败结果补证据。进入QE策略包的组合直接使用；本文只处理真实输入、数学和展示，不增加资格、native、父训练时钟或收益确认门。
+2026-10-05；SOURCE_IMPLEMENTED_UI_CI_VALIDATION_PENDING。承接[上位M1日频设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)第三业务切片；设计已由PR #5443合入876316279cfb3118664192ea0abc9333b4980c68，实施状态见§8.1。本轮18小时计划优先完成真实日频消费，不重做QE研究或为旧失败结果补证据。进入QE策略包的组合直接使用；本文只处理真实输入、数学和展示，不增加资格、native、父训练时钟或收益确认门。
 
 ## 1. Background / 事实与目标
 
-冻结M1 reader、15D纯组合及真实只读source已合入；分类及family在PR #5442，最新HEAD b916e38240f1c2e5661b96ad9fa3557863d63865的27项测试/Ruff/F1通过，新CI run37215823160正在运行，尚未合入。原2024-08-01的20候选价格功能读回约7.4秒，9条价格集合、11条UNKNOWN；这不是每日名单/API/UI已完成。旧M1增量区间跨零、93episode含57个UNKNOWN baseline控制，不把29.7444%全归因模型，也不作为使用门槛。
+冻结M1 reader、15D纯组合及真实只读source已合入；分类及family PR #5442在HEAD b916e38240f1c2e5661b96ad9fa3557863d63865的27项测试/Ruff/F1及新CI run37215823160通过后合入d04ba01f3f2c2c786d6c99529c06813fc35a11ff，自身官方清理完成。原2024-08-01的20候选价格功能读回约8.516秒，9条价格集合、11条UNKNOWN；这不是每日名单/API/UI已完成。旧M1增量区间跨零、93episode含57个UNKNOWN baseline控制，不把29.7444%全归因模型，也不作为使用门槛。
 
 目标：原published list及其review/Selection候选→D日数据库输入和冻结模型→每只原股票的多段/空/UNKNOWN条件买入价格→只读API与价格卡片。每日可运行，同一入口批量历史验证；不预测开盘价，不研发分钟执行、订单、资金仓位、卖出价格或Exit策略。
 
@@ -25,7 +25,7 @@
 ## 3. Architecture / 实际复用接口
 
 1. `AdvisoryProgramPGRepository.list_version_for_date(program_id, target, status='PUBLISHED')`或`latest_list_version`，显式list id使用`get_list_version`，随后`list_version_items`。原list的binding不可用当前active binding替换；精确参数化SELECT原binding id所需字段，避免枚举全部历史binding。
-2. 既存review身份与`SelectionCenterRepository.get_run`只读消费，不调用Selection生成或preflight资产审批。`list_version_to_dict`提供原D/T；`_resolve_decision_date`仅核对真实原D一致性。review需要同快照runtime policy字段时直接参数化SELECT该原review，而不在进行中的事务里调用会重新set_session/rollback的公共reader。
+2. 既存review身份与`SelectionCenterRepository.get_run`只读消费，不调用Selection生成或preflight资产审批。`list_version_to_dict`及原runtime context声明原D/T；本叶`_decision_date`核对真实原D声明一致性，正常停牌留下的更早报价不是第二个D。review需要同快照runtime policy字段时直接参数化SELECT该原review，而不在进行中的事务里调用会重新set_session/rollback的公共reader。
 3. M1已冻结Top20维度：原非EXIT且rank 1–20的已发布名单确定该模型候选集合；先严格验证重复/缺失/外部项，再复用`_candidate_rows_for_recommendation_list`投影run。真实名单可能还含Top20外WATCH和历史持仓/EXIT，不能因原list共47项拒绝整日。API分别报告原list项数、该模型候选数、未覆盖原项及原因，旧完整业务名单不变；Top20外不冒称已被此模型估值。不得把缺失list或坏rank伪装原空名单，不以原run全Top50或当前池重新选Top20。`project_economic_frozen_candidate_roster_v1`复用真实normalized scores和weights，保持原rank/顺序。
 4. 读取21个截至D交易日与紧邻T，共22节点；调用既存`EconomicSectorPriceDailyFamilyV1.predict_day/predict_batch`和`EconomicSectorReadonlyDailySourceV1.load_batch`，数学不重写。
 5. 分类复用已发布中立行业bundle和公共resolver，只取D可见CLASSIFICATION；结构crosswalk/code map和公司分类分开。配置声明实际已发布数据来源，不强绑训练期profile，也不回退旧profile或以全池复现为条件。
@@ -45,7 +45,7 @@
 
 ## 5. API/UI / 明确角色与状态
 
-新GET `/api/v1/advisory/programs/{program_id}/sector-entry-price?target_trade_date=YYYY-MM-DD&list_version_id=...`，target可省略取真实最新published list，显式list必须与program/target一致。GET只读计算，无capture/登记/训练/落库副作用。没有该原名单是FROZEN_LIST_NOT_READY，不返回成功空结果。合理原空名单为NO_CANDIDATES。
+新GET `/api/v1/advisory/programs/{program_id}/sector-entry-price?target_trade_date=YYYY-MM-DD&list_version_id=...`，target可省略取真实最新published list，显式list必须与program/target一致。GET只读计算，无capture/登记/训练/落库副作用。没有该原名单是FROZEN_LIST_NOT_READY，不返回成功空结果。合理原空名单为NO_CANDIDATES，包括原Selection确为空，以及原指数准入明确output_candidate_count=0但raw Selection非空的情况；无原零准入声明不能用缺失名单假装空荐股。
 
 返回schema `economic_sector_daily_service_v1`、model_family、program/requested/resolved D/T、list/review/run/binding、真实source policy/pool、冻结model/bundle/policy、source evidence限制、原candidate数组、content hash。状态NOT_CONFIGURED / FROZEN_LIST_NOT_READY / MODEL_INPUT_INCOMPATIBLE / COMPUTED / NO_CANDIDATES；运行异常HTTP409/503按原因分开，不吞掉异常声称成功。每股保留family的ACCEPTABLE_PRICE_SET / NO_ACCEPTABLE_PRICE / UNKNOWN_INPUT_OR_SUPPORT / QUERY_DOMAIN_UNAVAILABLE / QUERY_DOMAIN_OVER_BUDGET及多段interval/node数。
 
@@ -89,6 +89,24 @@ M1卡片与旧v3类型隔离。自动按当前program和visible list target/list
 | F-797 | §6/7 | artifact: 真实业务与效果分层验证计划 | DESIGN_VERIFIED | none |
 | F-798 | §6/9/10 | artifact: 多轮自审及CI/生产分层 | DESIGN_VERIFIED | none |
 
+### 8.1 实施验收与剩余边界（2026-10-05）
+
+原published list/service/GET/新family卡片源码已实现；原v3接口和完整名单不变。名单21项、组合服务14项及隔离ASGI 6项定向测试共41项通过，覆盖配置坏JSON/未知字段/错误family和原指数零准入。前端实际原生TypeScript编译通过；RTK包装的第一次npx调用没有运行正确TypeScript，未当作通过收据。
+
+真实业务只读验证使用已消费的2026-08-24、08-25、08-28。08-28原47项中20个原Top20候选进入M1、27项保留未估值；完整调用约14.969秒，8条价格集合、12条UNKNOWN。三日同核批量共60候选，17.813秒/平均5.938秒每天，合批特征查询7次；逐股条件价格及15D内容SHA与单日一致，peak working set约419MiB，推理线程上限2。三日依次8/9/8条价格集合，中间日另有1 NO_ACCEPTABLE_PRICE、9 UNKNOWN、1 QUERY_DOMAIN_OVER_BUDGET；超预算保留原股且明确未估值，不裁剪价格域。不同实时读取时间导致receipt整体hash不同，不把数值内容一致冒称整个receipt hash一致。
+
+上述验证fit=0、无收益/label/T行情/新sealed、无数据库写入/数据激活/候选重建/QE提交或进程控制。测试配置仅X盘只读测试输入，不是运行配置或模型启用。8.1的证据不得用于经济确认。
+
+| 实施项 | 实际状态 | 尚缺验收 |
+|---|---|---|
+| F-791～794 | 源码/真实原名单与同核批量读回已通过 | 当前HEAD CI及最终设计符合性 |
+| F-795 | 6项隔离ASGI HTTP测试通过，无用户后端启动 | 合入后用户重启的真实HTTP语义验证 |
+| F-796 | 5状态及晚返回竞态共6个精准UI场景已编写，实际类型编译通过 | 六场景浏览器收据尚未生成，不借用旧6场景收据 |
+| F-797 | 单日/三日真实业务、同值、查询及资源读回通过 | UI展示验证；不等于收益/成交证明 |
+| F-798 | 本窗口分视角自审与修复进行中 | 最新HEAD必需CI、UI验收、合入与官方清理尚未完成 |
+
+当前Validation Center未找到可执行的Advisory UI专用计划；广UI由流水线/CI执行精确范围，只用runner-owned隔离端口/进程，临时产物全X，不启动用户后端或安装依赖，不修改公共计划或CI。未有收据不宣称UI通过或本切片已满足合入条件。更晚的T实价读回/自然捕获不属于此只读GET，不把历史重算伪装D原生发布。
+
 ## 9. Risks / 审核与设计符合性
 
 最大风险：用旧native-only九字段来源阻断M1、把当前pool重新筛股票、把原review hash错当模型shadow hash、把UNKNOWN当SKIP、把单D7秒误设整批CPU30秒预算，以及API/UI已实现误报已证收益。每轮本窗口不同视角自审，不冒称独立外审；问题修复后仅重跑相关节点，稳定后一次最小矩阵。
@@ -98,6 +116,8 @@ DESIGN-COMPLIANCE-001：四项逐条检查完整业务/无mock-only，真实矛�
 设计自审修订记录（本窗口）：第一轮接口/时钟审计确认`_candidate_rows_for_recommendation_list`只投影原名单，先验证以避免其跳过坏rank；明确review与shadow hash不同。第二轮事务/边界审计把历史binding枚举改为精确SELECT，避免公共review reader的事务内set_session，并保留source独立快照披露。第三轮模型配置/UI审计冻结具体字段，从原小identity recipe取真实权重，不允许任意路径HTTP输入；修正部分UNKNOWN下NO_ACCEPTABLE_PRICE的展示边界和list切换竞态。校验器第一次使用不支持的DESIGN_DRAFT状态而失败，现仅将已审过的详细设计标DESIGN_VERIFIED，实施仍明确PENDING，未伪造源码完成。
 
 第四轮真实输入设计复核：只读发现原program已发布名单从2026-08-14起，训练截止内没有DB业务名单，不能用训练parquet冒充真实published list；2026-08-28列表47项含Top20外WATCH/旧持仓，修正为原published Top20投影并显式保留未估值项，而非用20项上限拒绝正常业务名单。样本原review hash与model parent/value hash确实不同。未读取该日收益、T行情、sealed模型诊断或赢家。
+
+实施多轮自审：接口/数据轮以真实47项修复WATCH正常动作与无rank旧持仓；时钟/事务轮区分旧停牌报价与声明D、原review/shadow/value政策，并在批量CPU前结束读阶段预算；边界/UI轮修复原指数合法零准入、增强实际状态/节点字段一致性和晚返回取消，未增加利润/原生/QE资格门。异常只重跑对应修复节点，稳定后一次同叶矩阵；不称独立外审。
 
 ## 10. Rollout / Rollback / Production Gates
 

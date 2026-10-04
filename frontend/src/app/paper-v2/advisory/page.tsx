@@ -32,6 +32,7 @@ import type { SelectablePackage } from "@/lib/paper-v2/types";
 import type { JsonObject } from "@/lib/api/selectionCenter";
 import { HistoricalRangeResearchView } from "./historical-range";
 import { EconomicEntryValueCard } from "@/components/advisory/EconomicEntryValueCard";
+import { SectorEntryPriceCard } from "@/components/advisory/SectorEntryPriceCard";
 
 type SortDirection = "asc" | "desc";
 type ActivePoolSortKey =
@@ -2257,6 +2258,7 @@ function AdvisoryPageContent() {
             <span className="pv2-muted"> 点击“预览初始列表”可先检查候选，点击“生成初始列表”会发布第一版推荐列表；全程自动生成候选，无需填写内部编号。</span>
           </div>
         )}
+        <SectorEntryPriceCard programId={selectedProgram?.program_id} targetTradeDate={visibleListVersion?.target_trade_date || visibleListVersion?.trade_date} listVersionId={visibleListVersion?.list_version_id} />
         <EconomicEntryValueCard programId={selectedProgram?.program_id} targetTradeDate={visibleListVersion?.target_trade_date || visibleListVersion?.trade_date} />
         <section className="mt-3 rounded-lg border bg-card p-4 text-card-foreground" data-testid="advisory-entry-price">
           <div className="flex flex-wrap items-center justify-between gap-2">
