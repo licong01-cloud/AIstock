@@ -27,15 +27,15 @@
   "expected": "Recognize only exact registered suspend schedule and date-strategy pairs with independently closed zero-row by-date evidence strictly after source cutoff; retain unknown, historical, positive, failed and unbounded rejection.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json",
       "backend/services/dataset_release/monthly_repair_journal.py",
-      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json",
       "backend/services/dataset_release/monthly_repair_journal.py",
-      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-04T04:48:30.559422Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+  "fixed_at": "2026-10-04T04:56:12Z",
   "github_issue_number": 5439,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5439",
   "last_seen_at": "2026-10-04T04:48:30.559422Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5440",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,6 +131,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -141,7 +143,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1725",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3e13d8322e3da1ad",
+    "recorded_at": "2026-10-04T04:57:23.740476Z",
+    "runtime_contract_digest": "986ad9dcb33f12aeefd7f3e233f59566a2e2c57a201478777cc60b89f7413e5f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "236e49b1c76752be2dad9567ca11e00601f1522f",
+    "source_merge_commit": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5440",
+    "validation_evidence": [
+      "gh run view 37178298588 --repo licong01-cloud/AIstock --json status,conclusion,headSha -> completed success for236e49b1c76752be2dad9567ca11e00601f1522f; local98 and DEV13 passed; production DDL/dependency/runtime actions noop"
+    ],
+    "validation_evidence_digest": "33a14406f694c8b5e0812a594e92eadcf6f8c81f60641f9670e9093f57cfdacc"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -150,6 +173,9 @@
     "fingerprint": "56bfb5ca3c88f4341dde847c",
     "source_event_id": "FE-20261004-56bfb5ca3c88"
   },
+  "validation_evidence": [
+    "gh run view 37178298588 --repo licong01-cloud/AIstock --json status,conclusion,headSha -> completed success for236e49b1c76752be2dad9567ca11e00601f1522f; local98 and DEV13 passed; production DDL/dependency/runtime actions noop"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
