@@ -113,6 +113,8 @@ M1卡片与旧v3类型隔离。自动按当前program和visible list target/list
 
 完整空链追加验证先因临时runner错误调用predict_day(packet=...)失败，修正为实际kwargs/SCOPE_KEYS后发现真实BUG-1726（Issue #5446）。独立BUG树修改前精确登记3个Advisory叶源码、3个对应测试及BUG JSON；分别修复空object数值map后的isfinite错误、sector空分类键merge dtype错误、family空键dtype误判。71项相关测试保留非空数学、空输入schema/hash/count、外来分类及未来quote拒绝；真实冻结模型+合成空名单完整family返回NO_CANDIDATES。源码67d65b4b8，同步main后本地HEAD e121e4942b2f99622ea631eaa13a51ac228e9c47，4收据绑定、scope/Ruff/L0通过，尚未创建BUG PR/合入。唯一官方交付阻断是canonical workflow缺该新GET的target-owned业务smoke语义，交公共流程owner登记，不改公共脚本或换泛health验证绕过。这个空链BUG不是行情缺口/QE缺陷；分类覆盖是另一已明确的数据消费限制，不混作同一问题。完整空链属于组合未合入源码、合成空输入验证，不冒称原published空名单或生产HTTP验收。
 
+最新main接续复核（2026-10-05 06:30）：同步4f7793a0f，M6～M9源码/结果作为既有main继承，未重复实现或拟合；业务文件自动合并，仅蓝图三段冲突精确协调。相对该main仍仅原13个登记文件。合并工作区的43个本叶测试、本文及上位F2各8项校验通过；前端六场景spec SHA仍为9481e9919743a5050266a58a25400a215dbb07ec67bced35f7eadb1500df2623，未借用旧UI收据或旧HEAD CI。四项设计符合性复核：未把待UI/BUG交付的切片称完整、不吞真实错误/伪造空结果、原名单及模型语义不变、不新增QE策略包资格门。M1仍是显式recipe/Program/两腿作用域内模型；扩展为通用价格模型需另立独立输入和价值标签设计，不能取消真实数学兼容检查。新HEAD CI和六UI、公共端点smoke均分别记录，未完成者仍PENDING。
+
 ## 9. Risks / 审核与设计符合性
 
 最大风险：用旧native-only九字段来源阻断M1、把当前pool重新筛股票、把原review hash错当模型shadow hash、把UNKNOWN当SKIP、把单D7秒误设整批CPU30秒预算，以及API/UI已实现误报已证收益。每轮本窗口不同视角自审，不冒称独立外审；问题修复后仅重跑相关节点，稳定后一次最小矩阵。
