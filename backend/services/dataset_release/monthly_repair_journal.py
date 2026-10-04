@@ -51,6 +51,18 @@ MANAGED_SOURCE_DATASETS = frozenset(
     }
 )
 
+# Exact producer contracts registered in backend/db/init_tushare_schedules.py.
+# A schedule-name prefix or a date strategy alone cannot prove writer scope.
+_EMPTY_FUTURE_SUSPEND_SCHEDULES = frozenset({
+    ('suspend_d', 'current_and_next_trading_day'),
+    ('_suspend_d_tminus1_1730', 'next_trading_day'),
+    ('_suspend_d_morning_0730', 'current_or_next_trading_day'),
+    ('_suspend_d_preopen_0850', 'current_or_next_trading_day'),
+    ('_suspend_d_preopen_0905', 'current_or_next_trading_day'),
+    ('_suspend_d_midday_1240', 'current_or_next_trading_day'),
+    ('_suspend_d_close_1610', 'current_and_next_trading_day'),
+})
+
 
 def _watermark(value: str) -> datetime:
     prefix = "managed-writer-ledgers-v2:"
@@ -97,10 +109,14 @@ class ManagedRepairImpactJournal:
             return False
         expected = {
             'dataset': 'suspend_d', 'actual_dataset': 'suspend_d',
-            'schedule_dataset': 'suspend_d', 'mode': 'incremental',
-            'date_strategy': 'current_and_next_trading_day',
+            'mode': 'incremental',
         }
         if any(scope.get(key) != value for key, value in expected.items()):
+            return False
+        schedule, strategy = scope.get('schedule_dataset'), scope.get('date_strategy')
+        if not isinstance(schedule, str) or not isinstance(strategy, str):
+            return False
+        if (schedule, strategy) not in _EMPTY_FUTURE_SUSPEND_SCHEDULES:
             return False
         stats = scope.get('stats')
         if type(scope.get('inserted_rows')) is not int or scope['inserted_rows'] != 0:
