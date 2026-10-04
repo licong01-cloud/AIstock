@@ -1,10 +1,10 @@
 # Advisory D可见选股状态持续性条件价格价值 F2详细设计 v1
 
-2026-10-04；48h任务接续M5，研究类型EXPLORATORY_SCREEN、RISK_MANAGED_ADVISORY、NAVIGATION_ONLY。仅新信息假设，不重训QE包，不把排名状态的机械持有期可预测性当盈利证明。设计先合入；允许在独立M5工作树提前实现和测试，但不修改M1冻结工作树。M5源码合入、正式登记/拟合仍等待M1终态及其源码交付，不改变实验顺序。
+2026-10-04；M5研究类型EXPLORATORY_SCREEN、RISK_MANAGED_ADVISORY、NAVIGATION_ONLY。按用户最新[QE包直接消费合同](advisory_qe_package_direct_consumer_v1_f2_design_20261004.md)，不再以父训练时钟、历史native或M1正导航阻止本独立新信息研究。M1已终态并完成#5414交付，后续同步源码/登记后可执行；原排名、权重、指标和M1结果不改。未确认的机械持有期可预测性不能冒称盈利。
 
 ## 1. Background / 当前事实与研究问题
 
-R2的M2/M3/M4源码#5404已合入、11物理fit及1索引完成，三个精确candidate均负向停止；M1设计#5411已合入，源码候选#5414已实现并完成7720键的prepare，拟合因QE multi-alpha running2暂不执行。当前48h截止2026-10-06 02:36不变，拟合等待只暂停拟合，允许本设计/只读可识别性检查并行。
+R2的M2/M3/M4源码#5404已合入、11物理fit及1索引完成，三个精确candidate均负向停止；M1设计#5411及源码#5414已合入，已完成7720键prepare、四fit与完整四臂，开发导航为正但两增量区间跨零。早前QE multi-alpha running2导致的拟合暂停是历史检查点，不是当前状态；新fit前按实际资源状态检查。当前48h截止2026-10-06 02:36不变。
 
 一次只读源核定：父frozen_rankings.parquet包含405个D/16200行，逐D恰好40个唯一证券、rank1～40完整，无重复证券；386个原候选D。这里只读取排名/键/来源，不读收益、不生成模型结果。历史原生身份和PIT恢复限制照旧，并不因完整40名就升级证据等级。
 
@@ -12,11 +12,9 @@ H-SELECTION-STATE-VALUE-1：某股票连续进入当前包前5/前20及D前排�
 
 ## 2. Scope / 精确文件及依赖
 
-初版设计#5415已合入并完成自身清理；本次仅在`F:/Dev/AIstock_worktrees/advisory-m5-isolated-preparation-20261004` / `docs/advisory-m5-isolated-preparation-20261004`修订本设计与蓝图§16.6/P2。源码合入前同步蓝图当前队列，不能把未实现设计列为已完成模型。
+初版设计#5415及准备修订#5416已合入、原自身树已清理。本次方向修订使用`advisory-qe-package-direct-use-design-20261004`独立树，精确五文档范围见直接消费合同§2。源码合入前同步蓝图当前队列，不把准备或设计当已完成研究。
 
-本设计合入后，仅在自己的M5源码树提前实现纯D状态、固定模型/薄编排及必要共核提取；可接收自己的M1源码分支作为开发依赖，但不得改M1工作树、重写其分支或把M5变更合并回M1。M1仍按原已登记implementation hash执行。M5准备阶段只运行合成直接测试及无收益来源检查，不登记研究、不读取真实收益、不fit真实研究模型。M5源码PR保持draft，源码合入、正式登记/拟合等待M1正式终态及#5414交付；若M1为正导航，先确认设计，不默认启动M5搜索。允许源码范围仅：
-
-源码树登记：`F:/Dev/AIstock_worktrees/advisory-selection-state-price-v1-20261004` / `feat/advisory-selection-state-price-v1-20261004`。当前仅新增D状态计算及直接测试；共用模型/阶段、M5fit仍未开始，不报F2业务整体完成。
+仅在自己的M5源码树实现/测试固定三字段、模型和薄编排，保留M1旧研究和其原implementation receipt。M1已终态/#5414已交付，正导航不再禁止M5：更新源码合同、冻结清洁HEAD并独立登记后可读原开发收益、一次fit/四臂；不称为新独立确认。正式结果前不调seed/窗口/支持/风险或回选控制。允许源码范围仅：
 
 - backend/services/advisory_model_first/economic_selection_state_price_v1.py（纯D历史信息、plan与固定模型适配）
 - backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py（来源、登记、prepare/fit/evaluate的薄适配）
@@ -78,9 +76,9 @@ M5为新的显式lineage/campaign`advisory_price_selection_state_v1_20261004`，
 
 plan携带`budget_anchor_ref`（role=`price_campaign_budget_anchor`），指向原R2已登记研究的`<campaign_root>/<experiment_id>/preregistered/manifest.json`。纯plan校验绝对非C盘路径/manifest层级，根只能从锚点推导；登记/拟合编排再只读验证锚点hash、原manifest/plan、同父数据/政策、registry及累计journal。只有目录结构不够；清空journal、外来锚点、源hash或输出根不符均fail closed，不借新lineage建立空预算账本。
 
-M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit。因此48h本批累计上限19物理fit+1索引，不将旧11fit清零，也不把单测fit计成研究trial。独立M5预算不得挪给M1或旧模型，M5partial fit不得隐式retry；单候选generated/selected及物理fit分账登记。M5 fit只有M1负向或真实阻断终态、M1源码交付后及公开QE三running路径空闲才放行；任一路running/unknown只暂停fit，不停其它允许研发。若M1出现正开发导航，先制定其独立确认设计，不默认继续搜索更好开发收益的M5，也不读取holdout。
+M2/3/4已11fit+1索引，M1已4fit，本设计M5最多4fit，累计19物理fit+1索引为计算预算，旧计数不清零。单测fit和研究trial分账，partial不隐式retry。M1无论正/负/执行阻断都不形成M5收益准入；仅核对该真实前序身份及实际累计预算。fit与QE训练互斥沿用户既有资源边界，running/unknown只暂停fit，不停止其它研发；不控制QE，不读holdout。
 
-当前薄编排的可验证前序合同是原M1完整stage链及registry引用的`evaluated/manifest.json`：仅负导航或执行/估值BLOCKED可放行，正导航/缺链/来源不同/累计四fit不符均拒绝。若M1在更早的源码或输入阶段失败而未产生该终态工件，M5正式入口仍BLOCKED，必须另行制定真实终态证据合同；不能用失败消息、目录存在或手工状态替代receipt。
+薄编排核对原M1真实stage链、registry及累计四fit，接受包括正导航在内的真实终态；不按收益门真假或缺父训练时钟拒绝。身份链或实际预算矛盾属于输入/编排错误，不造手工receipt。现有正导航拒绝代码必须在下一源码PR移除；本设计修订不是假称代码已生效。
 
 ## 9. Evaluation / 同冻结四臂与分流
 
@@ -88,11 +86,11 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 
 候选减baseline及matched日均net都≥5bps，两个实际进入差异≥12D且≥15%原D，真实模型TAKE≥30episode；MDD恶化≤200bps、最差5%日均恶化≤20bps，block5/reps2000/seed20261004区间仅NAV。只在相同新共同cohort内判断信息增量，胜率不能替代净收益，机械持有期相关不能替代净价值标签。
 
-负向停止M5，不回选matched、不调窗口/seed/loss/门，48h任务可继续新的有经济解释且预登记的信息假设；不能为凑时间无限网格。正开发候选仅制定未消费一次确认设计，不读取sealed、绑定或激活。开发多模型选择偏差累计披露，不以各次成功测试等同整体荐股有效。
+本次M5结果无论正负均如实报告，不结果后调参或回选matched；可继续不同信息假设和正常消费者功能研发，不因正结果全项目暂停等待确认。可另行安排独立效果研究，当前不读取sealed、绑定或激活。开发多模型选择偏差累计披露，不以各次成功测试等同整体荐股有效。
 
 ## 10. Implementation Plan / 执行顺序与终止
 
-本设计三轮审核修订/校验/合入→独立M5树预备三字段/固定模型/薄编排、最小共核及合成M1精确回归，多轮源码审核和最小测试（不改变M1树，不读取真实收益/登记/fit）→M1正式研究终态及#5414交付→同步最新main及依赖差异，重新核定clean source/hash→一candidate四fit预登记/完整prepare→QE空闲时单次fit/完整四臂→真实蓝图结果/ready PR/CI/合入/自身清理。M1正导航时此研究入口不放行，转独立确认设计。
+用户方向修订多轮审核/合入→同步自己的M5树与最新main，移除正前序限制并核对M1冻结reader真实兼容→源码多轮审核/最小测试、清洁提交及独立登记→原开发窗prepare→QE空闲时一次四fit/完整四臂→真实结果/源码PR/必需CI/合入/自身清理。M1正导航及缺父时钟不再阻断，不等待收益确认或天然交易日累积；旧M1研究不重跑。
 
 工程≤4h、四fit≤30min、2线程/RSS≤2GiB/新增工件≤2GiB、≤7720候选/500000价行，不另建大数据或UI平台；长实验30min检查，短实验立即接续。截止沿48h总任务，不重计48h；源不成立或负向只结束本候选，用户停止或总预算到期才结束本轮。
 
@@ -119,9 +117,7 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 
 ## 13. Design Acceptance Matrix
 
-设计已交付；独立源码候选已实现纯D状态、冻结plan、固定四头GBDT与薄编排，以及M1同核/原子阶段的最小提取；18个直接测试/Ruff/差异检查PASS。M1冻结树未修改；M5真实登记/fit/完整四臂仍0。下面保持设计验收状态，源码单测不等于全链研究或经济通过。
-
-实现准备检查点：设计#5415及隔离准备修订#5416均合入/自身清理。方法轮核定13/16同核、共同mature监督与无标签global支持，合成同值信息的M1/M5 JSON树和支持精确一致、身份不同；时钟轮拒绝重复rank、外来候选及非next-session T，缺日/不完整名单保留UNKNOWN，T实际查询只读open、未来close不参与；工程轮修复测试fixture缺label_cutoff与PREPARED登记，追加原三研究manifest/registry及journal计数绑定，拒绝清空/换根与正M1前序。18个直接测试通过，均为合成单测；真实M5收益、activation及runtime完成均未宣称。
+设计已交付；独立源码候选`16e953938c0be9c20084c4c8ce5bde55958cc475`已实现纯D状态、模型和薄编排，18直接测试通过、已提交推送但尚未PR合入。新正前序合同仍待源码修订；正式登记/研究fit/四臂均0。下面是设计验收，不是源码完整交付或经济通过。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -136,7 +132,7 @@ M2/3/4已11fit+1索引，M1获准4fit（当前0）；本设计新增M5最多4fit
 
 ## 14. Risks / 不可误读
 
-排名历史信号可能仅重复已有ret/排名或预测机械持有期，无经济增量；模型能学分类/久期不代表能盈利。新增状态同源/相关，不能当多个独立发现。D历史缺名单或早期warmup降低共同可估性，不得补当前名单或删样本掩盖。跨实验监督人口不同不能判哪个信息块更赚钱。多候选同已消费窗的正结果仍需新确认设计，当前不读holdout。
+排名历史信号可能仅重复已有ret/排名或预测机械持有期，无经济增量；模型能学分类/久期不代表能盈利。新增状态同源/相关，不能当多个独立发现。D历史缺名单或早期warmup降低共同可估性，不得补当前名单或删样本掩盖。跨实验监督人口不同不能判哪个信息块更赚钱。多候选同已消费窗的正结果不冒称独立确认；确认可另行设计，不作为功能研发或包使用门禁，当前不读holdout。
 
 ## 15. Rollout / Rollback / Production Gates
 
@@ -146,4 +142,4 @@ DESIGN-COMPLIANCE-001逐项：实现和研究/经济/激活分报；未知/矛�
 
 ## 16. 三轮设计自审
 
-方法轮：只比较同共同监督13/16信息增量，不将持有期机械可预测性当收益；固定三字段而非未来搜索目录。时钟/来源轮：20个完整calendarD不是20个稀疏名单，Top40外右删失41不冒称全市场rank，缺名单不能记0，保留所有原键。工程/预算轮：独立树开发不会修改M1冻结树，正式合入/登记/fit仍后置；旧11fit及拟合待执行4不清零，新lineage加4令整批cap19；不复制模拟器、不读旧失败评价、不改公共模块，设计通过不代表fit或盈利。本窗口三视角自审非独立外审。
+方法轮：只比较同共同监督13/16信息增量，不将持有期机械可预测性当收益；固定三字段。输入轮：完整calendarD、Top40外右删失41、缺名单保留UNKNOWN。当前执行轮：15已发生fit不清零，M5最多4令整批cap19；接受正M1终态，不再重复父资格或等待确认；更新真实源码身份再登记，不覆盖旧模型/结果，不复制模拟器或修改公共模块。三视角为本窗口自审非独立外审。
