@@ -2,7 +2,6 @@
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
-import time
 
 import numpy as np
 import pandas as pd
@@ -83,11 +82,10 @@ def _price_set(fitted, features, context, decision, target):
 class EconomicSectorPriceDailyFamilyV1:
     """One computation path for single-day and bounded historical batches."""
 
-    def __init__(self, *, bundle, source, classification_source, monotonic=None):
+    def __init__(self, *, bundle, source, classification_source):
         if bundle.plan.model_id != 'M1':
             _invalid('M1 daily family requires the actual M1 bundle')
         self._bundle, self._source, self._classification = bundle, source, classification_source
-        self._clock = monotonic or time.monotonic
 
     def predict_day(self, **packet):
         return self.predict_batch(packets=[packet])[0]
@@ -95,7 +93,6 @@ class EconomicSectorPriceDailyFamilyV1:
     def predict_batch(self, *, packets):
         if not isinstance(packets, (list, tuple)) or not 1 <= len(packets) <= 20:
             _invalid('M1 daily batch needs one to twenty original day packets')
-        deadline = self._clock()+30.
         self._bundle.verify_unchanged()
         packets, inputs, class_receipts = deepcopy(packets), [], []
         for packet in packets:
@@ -133,8 +130,6 @@ class EconomicSectorPriceDailyFamilyV1:
             features.loc[:, FEATURES].map(_number)
             candidates = []
             for position, row in enumerate(features.to_dict('records')):
-                if self._clock() > deadline:
-                    _invalid('M1 daily batch exceeded its thirty-second computation budget')
                 symbol = row['instrument']
                 context = packet['price_contexts'].get(symbol)
                 candidates.append(dict(instrument=symbol, selection_effective_rank=int(packet['candidates'].iloc[position].selection_effective_rank),
@@ -154,6 +149,4 @@ class EconomicSectorPriceDailyFamilyV1:
             result['prediction_sha256'] = sha(result)
             results.append(result)
         self._bundle.verify_unchanged()
-        if self._clock() > deadline:
-            _invalid('M1 daily batch exceeded its thirty-second computation budget')
         return results

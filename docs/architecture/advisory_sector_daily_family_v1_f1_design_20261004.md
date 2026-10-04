@@ -30,7 +30,7 @@ D特征15维，actual_gap_bps仅作为query第16维。使用原sector_nodes_v1�
 
 每价格带报告原条件expected_net_bps范围与path downside_q90_bps最大值；不是盈利概率、统计CI、最佳时点、订单成交承诺或卖出目标。多段/空集合/全部UNKNOWN分别展示。UNKNOWN不使用研究baseline控制制造产品TAKE，也不自动资金仓位。模型原NAVIGATION_ONLY/deployable=false、RECOVERED_LIMITED/native UNPROVEN只披露、不作为消费拒绝。
 
-family原scope检查只防模型与输入拿错；source输出必须与原候选顺序、日期及15字段内容相符，pandas行号不是业务身份。内容hash绑定本次计算，不冒充原生捕获。batch总计算预算30秒，超预算明确错误、不返回伪完整结果。最小真实功能验证使用已消费2024-08-01原20候选，不读T行情/label/新收益；与旧M1价格集合和15D作直接parity。
+family原scope检查只防模型与输入拿错；source输出必须与原候选顺序、日期及15字段内容相符，pandas行号不是业务身份。内容hash绑定本次计算，不冒充原生捕获。SQL沿用既有source的30秒预算；CPU按20日×20股×5000完整点有界，不另加整批30秒阻断，使批量正常增加工作量时能继续计算。最小真实功能验证使用已消费2024-08-01原20候选，不读T行情/label/新收益；与旧M1价格集合和15D作直接parity。
 
 ## Implementation Plan
 
@@ -61,7 +61,7 @@ family原scope检查只防模型与输入拿错；source输出必须与原候选
 
 ## 审核修订与真实功能验证
 
-方法轮：核对candidate16维、唯一query缩放、原四头不重fit；修正负净值测试样本（原.98在低价点仍有净值，改为确实全负的合成JSON头，不改生产阈值）。时钟/输入轮：补原symbol/D/分类receipt、未来known_from和非as-known拒绝；修复不应把pandas行号当身份的问题，补畸形上市日期、严格数值/禁止数字字符串及超预算原请求数量。交付轮：核对7文件范围、QE直接使用、NORMAL UNKNOWN不删除、没有HTTP/UI或资金执行的冒称。三轮均为本窗口不同视角自审，不冒称独立外审。
+方法轮：核对candidate16维、唯一query缩放、原四头不重fit；修正负净值测试样本（原.98在低价点仍有净值，改为确实全负的合成JSON头，不改生产阈值）。时钟/输入轮：补原symbol/D/分类receipt、未来known_from和非as-known拒绝；修复不应把pandas行号当身份的问题，补畸形上市日期、严格数值/禁止数字字符串及超预算原请求数量。交付轮：核对7文件范围、QE直接使用、NORMAL UNKNOWN不删除、没有HTTP/UI或资金执行的冒称；追加复核移除整批30秒CPU阻断（SQL仍用既有source预算，计算按最大节点量有界），避免20日batch被单日时间预算误拒绝。各轮均为本窗口不同视角自审，不冒称独立外审。
 
 最终27直接测试和changed-file Ruff通过。真实原D验证从冻结原20候选、公开IndustryPitResolver D请求、既存只读DB源到真实M1 JSON头，得到9条ACCEPTABLE_PRICE_SET/11条UNKNOWN_INPUT_OR_SUPPORT；15D按rtol=0/atol=1e-12/equal_nan及全部区间与原M1数学严格一致，完整tick最多1491、行情source 7 SELECT，端到端约8.516秒。原model SHA 872acff3894c7a64b1b87c51ebd440d739a82069d68be0e30ea27dee9c81931e不变。只查询已消费2024-08-01 D及之前行情；原研究report由既有reader读回，不读取新收益/label/T行情/sealed、无fit/DB写入/QE提交/角色启用。
 
