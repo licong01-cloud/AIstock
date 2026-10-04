@@ -223,6 +223,30 @@ def test_future_observation_change_does_not_change_earlier_predictions(inputs, p
     assert old == new
 
 
+def test_finite_inactive_continuation_is_diagnostic_not_prediction_gate(inputs, predicted, monkeypatch):
+    frozen, observations = copy.deepcopy(inputs)
+    for name in ("fit_entry", "select_restart", "preprocess_fit"):
+        monkeypatch.setattr(model_module, name, lambda *_a, **_kw: pytest.fail("refit/selection reached"))
+    code = "801207.SI"
+    obs = observations["sectors"][code]
+    slot = obs["positions"].index(observations["calendar"].index("2026-03-05"))
+    obs["values"][slot][19] = -0.007118292485459976
+    observations = reseal(observations)
+    before = canonical_sha256([frozen, observations])
+    changed = subject.predict(frozen, observations)
+    assert changed["predictions"] == predicted["predictions"]
+    diagnostics = changed["inactive_dimension_observation_receipts"]
+    nonzero = [r for r in diagnostics if r["inactive_feature_observed_non_zero"]]
+    assert len(nonzero) == 1
+    row = nonzero[0]
+    assert row["as_of_date"] == "2026-03-05" and row["trade_date"] == "2026-03-06"
+    assert row["raw_value_f64"] == -0.007118292485459976
+    assert row["preprocessed_value_f64"] == row["raw_value_f64"]
+    assert row["projection_sha256"] == frozen["models"][code]["projection"]["receipt_sha256"]
+    subject.verify_receipt(row)
+    assert canonical_sha256([frozen, observations]) == before
+
+
 def test_legitimate_observation_na_does_not_make_transition_only_prediction(inputs):
     frozen, observations = copy.deepcopy(inputs)
     code = frozen["catalog"][0]
@@ -350,6 +374,11 @@ def acceptance(inputs, predicted):
     params = {c: m["model_sha256"] for c, m in frozen["models"].items()}
     semantics = {c: [m["mapping"], m["utility_means"]] for c, m in frozen["models"].items()}
     identity = {
+        "frozen_model_set_sha256": frozen["receipt_sha256"],
+        "model_entry_sha256_by_sector": {c: canonical_sha256(m) for c, m in frozen["models"].items()},
+        "projection_sha256_by_sector": {c: m["projection"]["receipt_sha256"] for c, m in frozen["models"].items()},
+        "observation_sha256": observations["receipt_sha256"],
+        "inactive_dimension_observation_receipts": predicted["inactive_dimension_observation_receipts"],
         "source_calendar": observations["source_calendar"],
         "model_parameter_sha256_by_sector": params,
         "model_parameter_set_sha256": canonical_sha256(params),
@@ -390,6 +419,29 @@ def test_explicit_product_version_preserves_frozen_semantics_and_null_mapping(ac
         for row in rows
         if row["sector_code"] in subject.UNMAPPED
     )
+
+
+@pytest.mark.parametrize("fault", ["missing", "duplicate", "value_hash", "projection", "flag"])
+def test_product_rejects_rehashed_inactive_observation_diagnostic_drift(acceptance, fault):
+    bad = copy.deepcopy(acceptance)
+    rows = bad["evaluation_input_identity"]["inactive_dimension_observation_receipts"]
+    if fault == "missing":
+        rows.pop()
+    elif fault == "duplicate":
+        rows.append(copy.deepcopy(rows[-1]))
+    else:
+        row = rows[0]
+        field, value = {
+            "value_hash": ("raw_value_float64_sha256", "f" * 64),
+            "projection": ("projection_sha256", "f" * 64),
+            "flag": ("inactive_feature_observed_non_zero", True),
+        }[fault]
+        row[field] = value
+        rows[0] = reseal(row)
+    bad["input_hash"] = canonical_sha256(bad["evaluation_input_identity"])
+    bad["acceptance_sha256"] = canonical_sha256({k: v for k, v in bad.items() if k != "acceptance_sha256"})
+    with pytest.raises(model_module.FormalStateError, match="inactive observation"):
+        subject.validate_acceptance(bad)
 
 
 @pytest.mark.parametrize(
@@ -499,6 +551,7 @@ def test_parent_prediction_is_sealed_before_first_label_access(inputs, monkeypat
         )
     )
     assert events == ["sealed", "labels"] and result["fits"] == 0
+    assert result["evaluation_input_identity"]["inactive_dimension_observation_receipts"]
 
 
 def test_model_extraction_authenticates_original_parameters_without_fitting(inputs, monkeypatch):

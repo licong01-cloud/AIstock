@@ -1,0 +1,314 @@
+{
+  "actual": "hmm_risk_model_inactive_dimension_contract_invalid: validation inactive raw coordinate not exact zero; child1 failed, child2 not started, zero fits.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/formal_state_model.py",
+    "backend/services/hmm_risk/formal_state_effect.py",
+    "backend/services/hmm_risk/formal_state_executor.py",
+    "backend/tests/hmm_risk/test_formal_state_model.py",
+    "backend/tests/hmm_risk/test_formal_state_effect.py",
+    "backend/tests/hmm_risk/test_formal_state_executor.py",
+    "tests/aistock_validation/bugs/20261003_BUG-1717-hmm-l2-frozen-inference-incorrectly-rejects-finite-inactive-observations.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1717",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-03T19:12:51.293867Z",
+  "description": "hmm_risk_model_inactive_dimension_contract_invalid: validation inactive raw coordinate not exact zero; child1 failed, child2 not started, zero fits.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261003-8f0a4d9f844d",
+      "timestamp": "2026-10-03T19:12:51.293852Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1710/run/process_1.json.failure.json"
+  ],
+  "expected": "Training exact-zero eligibility unchanged; inference validates full20 finite observations, applies frozen full preprocessing and19D mask without dynamic activation. Persist authenticated inactive-observation diagnostics in evaluation input identity. No refit, D5, target access before prediction sealing, or source mutation.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/formal_state_effect.py",
+      "backend/services/hmm_risk/formal_state_executor.py",
+      "backend/services/hmm_risk/formal_state_model.py",
+      "backend/tests/hmm_risk/test_formal_state_effect.py",
+      "backend/tests/hmm_risk/test_formal_state_model.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1717-hmm-l2-frozen-inference-incorrectly-rejects-finite-inactive-observations.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/formal_state_effect.py",
+      "backend/services/hmm_risk/formal_state_executor.py",
+      "backend/services/hmm_risk/formal_state_model.py",
+      "backend/tests/hmm_risk/test_formal_state_effect.py",
+      "backend/tests/hmm_risk/test_formal_state_model.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1717-hmm-l2-frozen-inference-incorrectly-rejects-finite-inactive-observations.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/formal_state_model.py",
+        "backend/services/hmm_risk/formal_state_effect.py",
+        "backend/services/hmm_risk/formal_state_executor.py",
+        "backend/tests/hmm_risk/test_formal_state_model.py",
+        "backend/tests/hmm_risk/test_formal_state_effect.py",
+        "backend/tests/hmm_risk/test_formal_state_executor.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/formal_state_model.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/formal_state_effect.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/formal_state_executor.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_formal_state_model.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_formal_state_effect.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_formal_state_executor.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/formal_state_model.py",
+        "backend/services/hmm_risk/formal_state_effect.py",
+        "backend/services/hmm_risk/formal_state_executor.py",
+        "backend/tests/hmm_risk/test_formal_state_model.py",
+        "backend/tests/hmm_risk/test_formal_state_effect.py",
+        "backend/tests/hmm_risk/test_formal_state_executor.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/formal_state_model.py",
+      "backend/services/hmm_risk/formal_state_effect.py",
+      "backend/services/hmm_risk/formal_state_executor.py",
+      "backend/tests/hmm_risk/test_formal_state_model.py",
+      "backend/tests/hmm_risk/test_formal_state_effect.py",
+      "backend/tests/hmm_risk/test_formal_state_executor.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/formal_state_model.py",
+      "backend/services/hmm_risk/formal_state_effect.py",
+      "backend/services/hmm_risk/formal_state_executor.py",
+      "backend/tests/hmm_risk/test_formal_state_model.py",
+      "backend/tests/hmm_risk/test_formal_state_effect.py",
+      "backend/tests/hmm_risk/test_formal_state_executor.py"
+    ]
+  },
+  "first_seen_at": "2026-10-03T19:12:51.293867Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "formal_review": {
+    "actual_request_prediction_smoke": "28951预测行、221个当前inactive诊断、18个真实非零；原182日posterior bitwise一致；模型/观测/request文件hash不变；fits=0、selection=false、target/tail未访问。",
+    "design_compliance_001": {
+      "no_business_logic_drift": "PASS：仅恢复已批准D1-B推断规则；训练资格、特征、seed47、模型参数、预处理和projection不变。",
+      "no_silent_errors": "PASS：非有限值、mask/hash漂移及诊断缺失/重复/错误均显式失败，不补零。",
+      "no_simplified_delivery": "PASS：保留131行业×221日，固定20D输入/19D模型，不缩窗、不剔除行业。",
+      "no_unapproved_gates": "PASS：移除未经批准的未来非零阻断；持久化诊断不参与availability或效果promotion。"
+    },
+    "related_matrix": "rtk pytest backend/tests/hmm_risk/test_formal_state_model.py backend/tests/hmm_risk/test_formal_state_effect.py backend/tests/hmm_risk/test_formal_state_executor.py -q -p no:cacheprovider -> 103 passed",
+    "round_1": "发现并修复训练/推断资格混淆，补充当前回放诊断的hash绑定和readback；2个直接测试RED后GREEN。",
+    "round_2": "复查训练exact-zero、完整20D有限值、mask/preprocess/model身份、未来因果边界、原posterior前缀和诊断漂移拒绝；没有剩余阻断finding。"
+  },
+  "github_issue_number": 5401,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5401",
+  "last_seen_at": "2026-10-03T19:12:51.293867Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "risk_area": "bug",
+  "root_cause": "project_validation 将训练期 exact-zero 资格错误扩展为所有未来推断观测的门禁，违反已批准 D1-B §4：有限非零 inactive 观测只记诊断，固定19D mask永久不动态激活。真实801207.SI新观察中18日变为非零，原182日前缀仍为零。",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1717_smoke.py F:/Dev/AIstock_worktrees/BUG-1717-hmm-l2-frozen-inference-incorrectly-rejects-fini-20261003 -> PASS; task PYTHONPATH; HMM/health router imports; actual frozen prediction28951 rows;18 finite nonzero diagnostic; original182-day prefix bitwise; DB/fit/selection/outcome poison; fits=0, targets/tail not accessed",
+      "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1717_smoke.py F:/Dev/AIstock_worktrees/BUG-1717-hmm-l2-frozen-inference-incorrectly-rejects-fini-20261003 -> PASS; explicit PYTHONPATH; backend.routers.hmm_risk and backend.routers.health imports; real request 28951 rows,221 diagnostics,18 finite nonzero; prefix bitwise and model/input hashes unchanged; zero fit, no DB/target/tail"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM L2 frozen inference incorrectly rejects finite inactive observations",
+  "trigger_condition": {
+    "fingerprint": "8f0a4d9f844d9e54cc893177",
+    "source_event_id": "FE-20261003-8f0a4d9f844d"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
