@@ -116,3 +116,31 @@ def test_actual_M6_query_consumes_T_open_not_future_HLC_and_preserves_unknown():
     inputs['moneyflow_feature_visible_through'] = key[KEY[1]]
     with pytest.raises(ValueError, match='future feature'):
         pipeline.moneyflow_actual_decisions_v1(**args)
+
+
+def test_explicit_M7_extension27_keeps_M6_default23_and_requires_terminal_identity(tmp_path):
+    from backend.services.advisory_model_first.economic_price_path_pipeline_v1 import _price_path_fit_event
+    from backend.tests.advisory_model_first.test_economic_price_path_pipeline_v1 import price_path_plan_fixture
+    extension, prior, _, events = price_path_plan_fixture(tmp_path)
+    assert pipeline.verify_moneyflow_budget_v1(prior) == tmp_path
+    assert pipeline.verify_moneyflow_budget_v1(prior, price_path_extension=extension) == tmp_path
+    (tmp_path/extension.experiment_id).mkdir()
+    for arm in ('matched', 'candidate'):
+        for head in ('mean', 'path'):
+            _price_path_fit_event(extension, tmp_path/extension.experiment_id, arm+'_'+head)
+    assert pipeline.verify_moneyflow_budget_v1(prior, price_path_extension=extension) == tmp_path
+    with pytest.raises(ValueError, match='foreign'):
+        pipeline.verify_moneyflow_budget_v1(prior)
+    with pytest.raises(ValueError, match='cumulative'):
+        _price_path_fit_event(extension, tmp_path/extension.experiment_id, 'extra')
+    journal = tmp_path/'campaign_fit_journal.jsonl'
+    journal.write_text(''.join(json.dumps(event)+'\n' for event in events[:-1]), encoding='utf-8')
+    with pytest.raises(ValueError, match='four completed'):
+        pipeline.verify_moneyflow_budget_v1(prior, price_path_extension=extension)
+    journal.write_text(''.join(json.dumps(event)+'\n' for event in events), encoding='utf-8')
+    foreign = extension.model_copy(update={'profile_sha256': 'f'*64})
+    with pytest.raises(ValueError, match='root/source'):
+        pipeline.verify_moneyflow_budget_v1(prior, price_path_extension=foreign)
+    (tmp_path/prior.experiment_id/'evaluated/unit.json').write_bytes(b'{"tampered":true}')
+    with pytest.raises(Exception, match='hash|size|artifact'):
+        pipeline.verify_moneyflow_budget_v1(prior, price_path_extension=extension)
