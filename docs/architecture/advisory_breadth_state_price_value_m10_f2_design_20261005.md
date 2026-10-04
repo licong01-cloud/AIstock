@@ -119,3 +119,13 @@ DESIGN-COMPLIANCE四项：不把设计/prepare/mock-only冒称完整；矛盾拒
 ## 13. Rollout / Rollback / Production Gates
 
 仅离线设计/研究交付backend_restart_required=false。无数据库migration/依赖/数据或模型activation，既有M1 consumer不绑定M10、不改变实时运行配置；用户后端无操作。负研究不复活，完整新工件保留但不另开归档项目；设计/源码合入、研究结果、经济确认和生产状态分别报告。
+
+## 14. 源码预检断点（2026-10-05）
+
+设计#5458 HEADa45673bb0/CI37240953708 SUCCESS后合入9e39c3c1c并自身官方cleanup_done，源码独立树从该main开始、修改前登记原12文件。仅两新Advisory叶模块及已有同核M10字段/身份/status、显式39 budget扩展；旧23/27/31/35和旧模型hash公式保持，0新SQL。
+
+三视角实施自审：信息/时钟轮用20值手算、常数零slope、严格0.5与未来值/clock毒化检查历史计算；编排/预算轮核原source KEY、原子prepare retry、partial/QE未知不fit、旧默认及真实M9完整四fit/terminal要求，M10 extension重验证typed plan避免model_copy绕过literal；消费/兼容轮发现新增status及fit-identity路由遗漏，精确修复后仅复跑三个失败/新增节点，稳定后38项直接矩阵、Ruff、两L0静态入口PASS/阻断0。未新增重复快照或大fixture，不冒称外审。
+
+真实原M1 published JSON bundle在本次新路由下读回/verify_unchanged通过：model SHA872acff3894c7a64b1b87c51ebd440d739a82069d68be0e30ea27dee9c81931e、bundle SHAc674a38822a9bf37a6afb90478a8200029636ccbf4d8ec005b47c8d97302bf14不变；未读行情/label arrays、查DB、fit或激活。旧bundle元数据/evaluation摘要为公开消费者既有读取，不冒称整个检查没读任何结果元数据。首轮python -m ruff在AIstock环境无模块，未作为PASS；改用既存C:/Users/lc999/miniconda3/Scripts/ruff.exe经RTK执行通过，无安装。
+
+本断点只源码验证；正式新plan/prepare/研究拟合及四臂评价尚未执行，实际仍35物理研究fit+1index。单元合成小拟合与正式研究journal分账。F-912仍仅设计验收，矩阵在实际研究后更新，不先标经济确认/源码合入或运行完成。四项DESIGN-COMPLIANCE再次核对：不交付partial为完整，不吞输入错误，原名单/五有效复评/成本不改，不增策略包资格或确认审批。
