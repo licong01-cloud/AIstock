@@ -56,16 +56,16 @@ M5独立登记允许已完成正M1前序；旧M1正/负结论均不被改判。�
 
 ## 8. Design Acceptance Matrix
 
-以下为设计范围，源码与真实M5研究在实施PR逐项更新，不把设计通过当功能已交付。
+消费者切片C1已实现并完成多轮自审与直接验证；M5切片C2及完整日频family/API/UI仍是后续工作，不以本次交付称整项完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-739 | §1/3 | artifact: 用户2026-10-04直接使用指令及责任边界 | DESIGN_VERIFIED | none |
-| F-740 | §2/4 | artifact: preflight精确行为与字段语义 | DESIGN_VERIFIED | none |
-| F-741 | §4/7 | artifact: 原模型与当前reader ABI分离 | DESIGN_VERIFIED | none |
+| F-739 | backend/services/advisory_delivery_preflight.py | backend/tests/watchlist/test_advisory_delivery_preflight.py | VERIFIED_C1 | none |
+| F-740 | backend/services/advisory_delivery_preflight.py | backend/tests/watchlist/test_advisory_delivery_preflight.py; backend/tests/watchlist/test_advisory_delivery_preflight_api.py | VERIFIED_C1 | none |
+| F-741 | backend/services/advisory_model_first/economic_sector_price_readonly_bundle_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_readonly_bundle_v1.py; artifact: 原20候选15D数值兼容 | VERIFIED_C1 | none |
 | F-742 | §5/6 | artifact: 正前序/预算/研究证据合同 | DESIGN_VERIFIED | none |
-| F-743 | §3/4/7 | artifact: 计算错误和证据不伪造 | DESIGN_VERIFIED | none |
-| F-744 | §2/6/7/9 | artifact: 精确边界与多轮验收 | DESIGN_VERIFIED | none |
+| F-743 | backend/services/advisory_delivery_preflight.py; backend/services/advisory_model_first/economic_sector_price_readonly_bundle_v1.py | backend/tests/watchlist/test_advisory_delivery_preflight.py; backend/tests/advisory_model_first/test_economic_sector_price_readonly_bundle_v1.py | VERIFIED_C1 | none |
+| F-744 | §2/6/7/9 | artifact: C1精确五源码/测试加本文、三视角自审、39直接测试/Ruff/原D兼容 | VERIFIED_C1 | none |
 
 ## 9. Risks / Rollout / Rollback / Production Gates
 
@@ -74,3 +74,9 @@ M5独立登记允许已完成正M1前序；旧M1正/负结论均不被改判。�
 DESIGN-COMPLIANCE-001：用户最新指令是当前方向，旧历史试验结论不改判；不设置第二资格体系、不伪造证明；真实输入错误与资格拒绝分开；源码/功能/效果/运行时各自报告。
 
 三轮一致性自审：职责轮检查QE资格完全委托、无原conf/native/80%确认前置；事实轮核对M1四fit/正开发结果、M5源码18测试但正式研究0及累计15fit，不修改历史成果；执行轮清理日频/M5/确认文档中的旧等待和“资格后API/UI”叙述，限定五文档及后续两个Advisory源码切片。均为本窗口不同视角自审；修订后重跑F2与差异检查。
+
+### C1实现审核与交付状态
+
+职责轮：资产资格属性读取即失败的测试仍可接受现存包，退役字段只展示，非primary一致股票池声明直接用；矛盾声明仍是实际输入错误。兼容轮：原source receipt仍须与原plan一致，reader不调用当前producer指纹；正/负/执行阻断报告均可读。发现实际执行阻断报告缺gates后修正，不要求收益门齐全或通过。第三轮保留原reader scope及bundle hash，不往冻结身份添加新资格字段；原权重、recipe、支持和价格数学不变。39直接测试及真实已消费2024-08-01全20候选15D兼容通过（9完整/11正常未知），原M1权重SHA保持872acff3894c7a64b1b87c51ebd440d739a82069d68be0e30ea27dee9c81931e。
+
+源码服务交付backend_restart_required=true，运行进程仍待用户重启；不是收益确认或完整daily/API/UI完成。此次源码验证0研究fit/0新窗口/0数据库/0QE提交/0服务操作；F-742仅本PR设计验收，下一C2实现允许正M1前序。源码、必需CI、合入、自身清理及用户运行态分别报告。

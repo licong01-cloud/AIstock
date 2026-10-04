@@ -36,7 +36,7 @@ def _study(tmp_path, mode=None):
         reusable_prepared_manifest_ref={**opaque, 'role': 'campaign_value_labels'},
         crosswalk_ref={**opaque, 'role': 'sector_structural_crosswalk'}, profile_path=str(tmp_path / 'NEVER_OPEN_PROFILE'),
         profile_sha256='e'*64, universe_selection=dict(mode='stock_universe', pool_ids=[]),
-        implementation_sha256=reader.sector_implementation_sha256_v1())
+        implementation_sha256='1'*64)
     root = tmp_path / plan.experiment_id
     tree = dict(left=[-1], right=[-1], feature=[-2], threshold=[-2.0], value=[0.0])
     models = {arm+'_'+head: dict(kind='gbdt', features=16 if arm == 'candidate' else 13,
@@ -66,6 +66,12 @@ def _study(tmp_path, mode=None):
         preparation['native_identity'] = 'COMPLETE'
     elif mode == 'test_training':
         diagnostic['test_used_for_training_or_calibration'] = True
+    elif mode == 'negative':
+        report['navigation'] = 'STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION'
+        report['gates']['net_increment'] = False
+    elif mode == 'execution_blocked':
+        report['navigation'] = 'BLOCKED_EXECUTION_OR_MARK_UNPROVEN'
+        report.pop('gates')
     fitted_support = reader.ValueAnchorGapSupportV1(((-150., -100.), (0., 100.)))
     metadata = dict(recipe=recipe, models=models, support=support, diagnostics=diagnostic,
         model_sha256=reader.sector_fit_identity_v1(recipe, models, fitted_support), parameters=plan.parameters)
@@ -75,6 +81,8 @@ def _study(tmp_path, mode=None):
             'profile_identity.json': dict(profile_sha256=plan.profile_sha256)},
         'prepared': {'preparation.json': preparation}, 'trained': {'metadata.json': metadata},
         'evaluated': {'evaluation.json': report}}
+    if mode == 'source_identity':
+        files['preregistered']['source_receipt.json']['implementation_sha256'] = '2'*64
     previous, records = None, []
     for stage, artifacts in files.items():
         desc = {name: write(root/stage/name, body) for name, body in artifacts.items()}
@@ -121,10 +129,30 @@ def test_reader_keeps_research_only_holes_and_does_not_read_data(tmp_path, monke
     loaded.verify_unchanged()
 
 
-@pytest.mark.parametrize('mode', ['dimension', 'cycle', 'boolean', 'order', 'support', 'qualification', 'test_training', 'registry_window'])
-def test_frozen_model_or_qualification_changes_fail_closed(tmp_path, mode):
+@pytest.mark.parametrize('mode', ['dimension', 'cycle', 'boolean', 'order', 'support', 'qualification',
+                                'test_training', 'registry_window', 'source_identity'])
+def test_frozen_model_or_recorded_evidence_corruption_fails_closed(tmp_path, mode):
     with pytest.raises(ValueError):
         reader.load_sector_research_bundle_v1(**_study(tmp_path, mode))
+
+
+@pytest.mark.parametrize('mode', [None, 'negative', 'execution_blocked'])
+def test_original_source_and_profit_report_do_not_gate_frozen_inference(tmp_path, monkeypatch, mode):
+    from backend.services.advisory_model_first import economic_sector_price_pipeline_v1 as pipeline
+
+    def forbidden():
+        pytest.fail('reader must not require current producer implementation identity')
+
+    monkeypatch.setattr(pipeline, 'sector_implementation_sha256_v1', forbidden)
+    loaded = reader.load_sector_research_bundle_v1(**_study(tmp_path, mode))
+    assert loaded.plan.implementation_sha256 == '1'*64
+    assert loaded.scope['parent_model_information_end'] == 'UNPROVEN'
+    assert loaded.native_identity == 'UNPROVEN' and not loaded.deployable
+    prices = sector_price_set_v1(fitted=loaded.fitted, d_features=dict.fromkeys(
+        (*reader.D_FEATURES, *reader.SECTOR_FEATURES), 0.), arm='candidate',
+        reference_cny=10., legal_low_cny=9.9, legal_high_cny=10.1)
+    assert prices.intervals_cny
+    loaded.verify_unchanged()
 
 
 @pytest.mark.parametrize('body', [b'{"a":1,"a":2}', b'{"a":1e999}', b'{"a":NaN}', b'[]'])

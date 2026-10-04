@@ -26,6 +26,8 @@ class _PreflightService:
                 "source_id": "qe_test",
                 "asset_eligible": True,
                 "asset_blockers": [],
+                "qualification_authority": "QE_STRATEGY_PACKAGE",
+                "qualification_rechecked": False,
             },
             "universe_compatibility": {
                 "status": "LEGACY_UNIVERSE_UNSPECIFIED",
@@ -76,6 +78,8 @@ def test_delivery_preflight_api_returns_read_only_business_classification() -> N
     payload = response.json()
     assert payload["ok"] is True
     assert payload["overall_status"] == "READY_BASELINE_ONLY"
+    assert payload["package"]["qualification_authority"] == "QE_STRATEGY_PACKAGE"
+    assert payload["package"]["qualification_rechecked"] is False
     assert payload["universe_compatibility"]["status"] == "LEGACY_UNIVERSE_UNSPECIFIED"
     assert service.calls == [
         {
