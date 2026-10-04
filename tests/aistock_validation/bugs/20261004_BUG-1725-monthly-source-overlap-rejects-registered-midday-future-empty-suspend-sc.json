@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Recognize only exact registered suspend schedule and date-strategy pairs with independently closed zero-row by-date evidence strictly after source cutoff; retain unknown, historical, positive, failed and unbounded rejection.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json",
       "backend/services/dataset_release/monthly_repair_journal.py",
       "backend/tests/dataset_release/test_monthly_repair_journal.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261004_BUG-1725-monthly-source-overlap-rejects-registered-midday-future-empty-suspend-sc.json",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_repair_journal.py",
@@ -109,11 +115,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows fresh process loaded tracked journal from task worktree. Existing DEV SELECT-only production SQL CTE13 passed. Production READ ONLY actual journal global8 bounded0 at cutoff2026-09-30 with closed future empty suspend schedule evidence; current worker has old runtime and source seal remains pending. No database/profile/candidate/process writes. Runtime restart user-owned.",
+      "Windows fresh process loaded task tracked journal. Production READ ONLY actual journal global8/bounded0 at cutoff2026-09-30; same-job empty_valid future scope verified. Existing DEV SELECT-only SQL13 passed. Current deployed worker still old runtime and actual SOURCE seal pending; no DB/profile/candidate/process writes."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

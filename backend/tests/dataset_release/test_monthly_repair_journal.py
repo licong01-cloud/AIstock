@@ -74,16 +74,82 @@ def test_evidenced_empty_future_suspend_does_not_invalidate_september_source() -
     ) == ()
 
 
+REGISTERED_SUSPEND_SCOPES = (
+    ('suspend_d', 'current_and_next_trading_day'),
+    ('_suspend_d_tminus1_1730', 'next_trading_day'),
+    ('_suspend_d_morning_0730', 'current_or_next_trading_day'),
+    ('_suspend_d_preopen_0850', 'current_or_next_trading_day'),
+    ('_suspend_d_preopen_0905', 'current_or_next_trading_day'),
+    ('_suspend_d_midday_1240', 'current_or_next_trading_day'),
+    ('_suspend_d_close_1610', 'current_and_next_trading_day'),
+)
+
+
+@pytest.mark.parametrize('schedule,strategy', REGISTERED_SUSPEND_SCOPES)
+@pytest.mark.parametrize('ledger', ['ingestion_jobs', 'data_sync_attempts'])
+def test_registered_empty_future_suspend_scopes_are_non_overlapping(
+    schedule: str, strategy: str, ledger: str,
+) -> None:
+    connection = Connection()
+    row = _future_empty_suspend(connection, ledger=ledger)
+    row[7].update(schedule_dataset=schedule, date_strategy=strategy)
+    connection.overlaps = [row]
+    assert ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30)).overlapping_repairs(
+        connection, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00',
+    ) == ()
+
+
+def test_suspend_scope_contract_matches_registered_default_schedules() -> None:
+    import ast
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[2] / 'db' / 'init_tushare_schedules.py'
+    tree = ast.parse(source.read_text(encoding='utf-8'))
+    registration = next(node for node in tree.body if isinstance(node, ast.AnnAssign)
+                        and isinstance(node.target, ast.Name)
+                        and node.target.id == '_DEFAULT_SCHEDULES')
+    schedules = ast.literal_eval(registration.value)
+    assert set(REGISTERED_SUSPEND_SCOPES) == {
+        (row['dataset'], row['date_strategy']) for row in schedules
+        if row['dataset'] == 'suspend_d' or row['dataset'].startswith('_suspend_d_')
+    }
+
+
+@pytest.mark.parametrize('schedule,strategy', [
+    ('_suspend_d_custom', 'current_or_next_trading_day'),
+    ('_suspend_d_midday_1240', 'current_and_next_trading_day'),
+    ('suspend_d', 'current_or_next_trading_day'),
+    (None, 'current_or_next_trading_day'),
+    ([], 'current_or_next_trading_day'),
+    ('_suspend_d_midday_1240', {}),
+])
+def test_unknown_or_mismatched_suspend_scope_is_still_an_overlap(schedule, strategy) -> None:
+    connection = Connection()
+    row = _future_empty_suspend(connection)
+    row[7].update(schedule_dataset=schedule, date_strategy=strategy)
+    connection.overlaps = [row]
+    assert len(ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30)).overlapping_repairs(
+        connection, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00',
+    )) == 1
+
+
+@pytest.mark.parametrize('schedule,strategy', [
+    ('suspend_d', 'current_and_next_trading_day'),
+    ('_suspend_d_midday_1240', 'current_or_next_trading_day'),
+])
 @pytest.mark.parametrize('case', [
     'no_cutoff', 'historical', 'on_cutoff', 'two_dates', 'unknown_date', 'compact_date',
     'missing_scope', 'missing_callback', 'failed', 'unfinished', 'non_suspend',
     'wrong_dataset', 'unknown_mode', 'unknown_strategy', 'positive_job_rows',
     'positive_stats', 'failed_batch', 'extra_batch', 'missing_stats', 'null_proof',
 ])
-def test_future_scope_exception_keeps_unproven_writes_fail_closed(case: str) -> None:
+def test_future_scope_exception_keeps_unproven_writes_fail_closed(
+    case: str, schedule: str, strategy: str,
+) -> None:
     connection = Connection()
     row = list(_future_empty_suspend(connection))
     scope = row[7]
+    scope.update(schedule_dataset=schedule, date_strategy=strategy)
     cutoff = None if case == 'no_cutoff' else date(2026, 9, 30)
     if case in {'historical', 'on_cutoff', 'unknown_date', 'compact_date'}:
         value = {'historical': '2026-09-29', 'on_cutoff': '2026-09-30',
@@ -258,6 +324,7 @@ def readonly_dev_connection():  # type: ignore[no-untyped-def]
 
 @pytest.mark.parametrize('case,excluded', [
     ('closed_empty', True), ('positive', False), ('unknown_quality', False),
+    ('closed_midday', True), ('mismatched_schedule', False), ('unknown_schedule', False),
     ('wrong_job', False), ('wrong_date', False), ('wrong_scope', False),
     ('owner_failed', False), ('callback_failed', False), ('unclosed', False),
     ('historical', False),
@@ -266,6 +333,13 @@ def test_actual_overlap_sql_in_readonly_dev(readonly_dev_connection, case: str, 
     """Run the production overlap SQL on typed CTE facts, without DEV writes."""
     moment = '2026-10-02T00:00:00+00:00'
     scope = _future_empty_suspend(Connection())[7]
+    if case == 'closed_midday':
+        scope.update(schedule_dataset='_suspend_d_midday_1240',
+                     date_strategy='current_or_next_trading_day')
+    elif case == 'mismatched_schedule':
+        scope['schedule_dataset'] = '_suspend_d_midday_1240'
+    elif case == 'unknown_schedule':
+        scope['schedule_dataset'] = '_suspend_d_custom'
     if case == 'historical':
         for key in ('start_date', 'end_date', 'refresh_start_date', 'refresh_end_date'):
             scope[key] = '2026-09-30'
