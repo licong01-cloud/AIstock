@@ -11,7 +11,7 @@
 本设计文档树`advisory-qe-package-direct-use-design-20261004`只改本文、蓝图、M1日频设计、M1确认设计及M5设计五文件。源码分两小PR实施，不合并成跨模块大PR：
 
 1. 消费者修订：`backend/services/advisory_delivery_preflight.py`、`backend/tests/watchlist/test_advisory_delivery_preflight.py`、必要的同叶API测试；`backend/services/advisory_model_first/economic_sector_price_readonly_bundle_v1.py`及同叶测试。分别对应直接接受策略包与读取既存冻结模型，不新增资格平台、审批、豁免token或数据库字段。
-2. M5接续：仅自己的已登记树中的`economic_selection_state_price_v1.py`、`economic_selection_state_pipeline_v1.py`、共享`economic_sector_price_value_v1.py`/`economic_sector_price_pipeline_v1.py`及四个同叶直接测试；必要reader兼容修订按第1切片。允许正M1前序，先更新设计再新增登记/fit。旧M1数学、权重和研究产物不覆盖。
+2. M5接续：仅自己的已登记树中的`economic_selection_state_price_v1.py`、`economic_selection_state_pipeline_v1.py`、共享`economic_sector_price_value_v1.py`/`economic_sector_price_pipeline_v1.py`及四个同叶直接测试；进度只更新本文、M5设计及蓝图。必要reader兼容修订按第1切片。允许正M1前序，先更新设计再新增登记/fit。旧M1数学、权重和研究产物不覆盖。
 
 不修改QE、StrategyPackage、Selection、HMM、公共数据、Execution、Paper、CI或AGENTS；不提交QE、不写数据库/DDL/DML、不激活数据/模型或控制服务。后端重启user-owned。没有将任何旧字段改成native COMPLETE，历史恢复限制只作披露。
 
@@ -56,14 +56,14 @@ M5独立登记允许已完成正M1前序；旧M1正/负结论均不被改判。�
 
 ## 8. Design Acceptance Matrix
 
-消费者切片C1已实现并完成多轮自审与直接验证；M5切片C2及完整日频family/API/UI仍是后续工作，不以本次交付称整项完成。
+消费者C1已随#5429合入、自身清理，运行后端待用户重启；C2已完成多轮自审及一次真实M5研究，当前源码PR尚未合入。完整日频family/API/UI仍未交付，不称整项完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-739 | backend/services/advisory_delivery_preflight.py | backend/tests/watchlist/test_advisory_delivery_preflight.py | VERIFIED_C1 | none |
 | F-740 | backend/services/advisory_delivery_preflight.py | backend/tests/watchlist/test_advisory_delivery_preflight.py; backend/tests/watchlist/test_advisory_delivery_preflight_api.py | VERIFIED_C1 | none |
 | F-741 | backend/services/advisory_model_first/economic_sector_price_readonly_bundle_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_readonly_bundle_v1.py; artifact: 原20候选15D数值兼容 | VERIFIED_C1 | none |
-| F-742 | §5/6 | artifact: 正前序/预算/研究证据合同 | DESIGN_VERIFIED | none |
+| F-742 | backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_pipeline_v1.py; artifact: advselectionvalue_8f53ace471987dc7f0b99a00完整一次研究，累计19fit+1index | VERIFIED_C2_RESEARCH_COMPLETED | none |
 | F-743 | backend/services/advisory_delivery_preflight.py; backend/services/advisory_model_first/economic_sector_price_readonly_bundle_v1.py | backend/tests/watchlist/test_advisory_delivery_preflight.py; backend/tests/advisory_model_first/test_economic_sector_price_readonly_bundle_v1.py | VERIFIED_C1 | none |
 | F-744 | §2/6/7/9 | artifact: C1精确五源码/测试加本文、三视角自审、39直接测试/Ruff/原D兼容 | VERIFIED_C1 | none |
 
@@ -79,4 +79,8 @@ DESIGN-COMPLIANCE-001：用户最新指令是当前方向，旧历史试验结�
 
 职责轮：资产资格属性读取即失败的测试仍可接受现存包，退役字段只展示，非primary一致股票池声明直接用；矛盾声明仍是实际输入错误。兼容轮：原source receipt仍须与原plan一致，reader不调用当前producer指纹；正/负/执行阻断报告均可读。发现实际执行阻断报告缺gates后修正，不要求收益门齐全或通过。第三轮保留原reader scope及bundle hash，不往冻结身份添加新资格字段；原权重、recipe、支持和价格数学不变。39直接测试及真实已消费2024-08-01全20候选15D兼容通过（9完整/11正常未知），原M1权重SHA保持872acff3894c7a64b1b87c51ebd440d739a82069d68be0e30ea27dee9c81931e。
 
-源码服务交付backend_restart_required=true，运行进程仍待用户重启；不是收益确认或完整daily/API/UI完成。此次源码验证0研究fit/0新窗口/0数据库/0QE提交/0服务操作；F-742仅本PR设计验收，下一C2实现允许正M1前序。源码、必需CI、合入、自身清理及用户运行态分别报告。
+历史C1交付backend_restart_required=true，运行进程仍待用户重启；不是收益确认或完整daily/API/UI完成。C1单独验证0研究fit/0新窗口/0数据库/0QE提交/0服务操作；当时F-742仅设计验收，现由下方C2完成实现及一次研究。源码、必需CI、合入、自身清理及用户运行态分别报告。
+
+### C2接续事实
+
+C2接受真实正M1前序，修同一来源manifest的正反斜杠误判（路径解析一致且原role/hash/字节数仍核对）。清洁源码后先登记，再完整prepare/四fit/四臂；M5 run advselectionvalue_8f53ace471987dc7f0b99a00，7720键保留，7340状态可用/380 warmup未知；同3693成熟train/1591诊断validation。100共同估值日candidate/baseline/matched为13.2538%/21.3220%/4.5719%，减baseline -6.8073bps、减matched +8.0519bps，两区间跨零。模型真实TAKE82、UNKNOWN控制6；不把名义正收益当增量通过或独立确认，不救活当前candidate，不因该结果全项目停下。整批真实19fit+1index，0sealed/新窗口/数据库/QE提交/服务操作，fit前后公开QE running=0。C2 20直接测试及20冻结reader测试合计40 PASS，真实原M1冻结模型/20候选15D兼容也通过；后续正常日频功能研发不等待确认。
