@@ -19,10 +19,10 @@ R2-M1研究源码#5414已合入且自身清理；冻结开发导航通过，但�
 已批准的范围限于以下三个有独立业务价值的小切片；第1已交付，其余按条件放行，逐切片事前登记而非一次大范围业务PR：
 
 1. 纯D组合与研究查询：#5423已新增`backend/services/advisory_model_first/economic_sector_daily_core_v1.py`、对应同叶测试及F1 Card，原价格函数直接消费兼容已通过；复用common D/sector/math/reader，不改原冻结数学或fit hash，不另排重复实现。
-2. 真实来源适配：必要时新增`economic_sector_daily_source_v1.py`、对应同叶测试及F1 Card；同叶下已有只读common source复用不改，不调用Selection或父包推理生产者。板块源公开合同未明确时只暂停该适配，不建新数据集。
+2. 真实来源适配：独立`advisory-sector-daily-source-20261004`工作树已按[F1详细设计](advisory_sector_daily_source_v1_f1_design_20261004.md)实现`economic_sector_daily_source_v1.py`及同叶测试；复用common source不改，直接按既存`market.sw_daily(trade_date,ts_code,close)`合同读取本批所需21D报价。原20候选真实D读回已通过，详见§8.2；当前尚待该源码PR合入，不调用Selection或父包推理生产者，不建新数据集。
 3. 按真实功能需要登记Advisory服务/router/API类型/价格卡片精确范围；复用既有展示，不等待父包时钟、原生训练身份或独立确认。未实现项如实报告，不新建审批/资格系统。
 
-上述2/3尚未完整实现，不称功能已具备；不再要求先取得额外包资格才实现。仅在Advisory登记实际所需源码/API/UI精确范围，不修改QE、Selection、StrategyPackage、HMM、公共数据、Paper/Execution、公共CI或服务；无候选重建、DB写入/DDL、profile/模型激活或依赖安装，后端重启仍用户执行。消费者不替代QE生产者研发。
+第2的有界source切片已本地验证，第3尚未实现；不称完整每日功能已具备，不再要求先取得额外包资格才实现。仅在Advisory登记实际所需源码/API/UI精确范围，不修改QE、Selection、StrategyPackage、HMM、公共数据、Paper/Execution、公共CI或服务；无候选重建、DB写入/DDL、profile/模型激活或依赖安装，后端重启仍用户执行。消费者不替代QE生产者研发。
 
 ## 3. Architecture / 明确family，不复制平台
 
@@ -100,6 +100,12 @@ M1日频接入无需独立收益确认、父/组合时钟、原训练native或�
 
 原两腿weight的blob仍存在；已有manifest/config无完整fit/processor/学习组合时钟，唯一已明确指向的LSTM Loop9 conf只读文件GET返回404，未尝试其它路径、列举目录、下载params/数据归档或重训。这表示该证明目前不可取得，不证明全局不可学或必须新训练。M1开发结果、reader、计算兼容、原价格坐标消费与正式身份/独立确认分别报告。
 
+### 8.2 真实只读source切片
+
+本次source范围仅新叶、同叶测试/F1及本文状态四文件，核心SQL/行业公共resolver/父包/QE源码不改。每批复用原5个核心SELECT，加2个参数化sector SELECT；独立只读快照如实披露。已消费2024-08-01原20候选，calendar22行、所需sector报价168行，约1.359秒，15D与原M1输入rtol=0/atol=1e-12/equal_nan严格一致，9完整/11UNKNOWN保留。fit/收益/新窗口/DB写入/父包资格检查均0；调用方仍明确提供D可见原公司分类及既存结构映射，不能将此source切片当成已完成分类来源及daily/API/UI接入。
+
+真实读回先发现独立工作树未加载主目录既有环境文件，runner只读取既有配置、未复制或修改凭据。随后发现DB numeric的Decimal不能直接内容hash，以及float64 DB报价与原H5 float32存储产生最高7.4863e-8的sector值差异；已核对H5存储schema，仅在新source按原float32→float64表示投影，不改公共数据/纯math/权重、不放宽parity容差。定向fixture补Decimal及有损小数表示，修复后真实严格parity通过。该工程一致性处理不追加策略包准入、原native或收益确认条件。
+
 ## 9. Design Acceptance Matrix
 
 本表仅详细设计验收；reader及纯组合子切片已交付、真实原D价格消费兼容已验证，完整daily/APIUI/native/确认仍未交付。不以设计或子切片合入报告整项功能完成。
@@ -127,4 +133,4 @@ DESIGN-COMPLIANCE-001逐项：设计完整不冒充业务完整；正常UNKNOWN�
 
 ## 11. Rollout / Rollback / Production Gates
 
-本PR仅直接消费合同列出的五文档，backend_restart_required=false，DB写入/DDL/DML/profile/依赖/activation/process/QE submission=NOOP；不掩盖此前已披露的model-state GET元数据upsert事件。过去读回与本次方向修订分开：本文未调用API或运行研究。源码merge、原D功能读回、效果、用户重启及配置分别报告；原模型/输入/工件不覆盖，不删除唯一未合入M5准备。
+五文档直接消费方向修订#5428已合入，自身不改runtime。直接consumer源码#5429与M5源码#5432已合入并自身清理，后端加载仍需用户重启。当前source切片精确四文件见§8.2，尚待其PR合入；调用只读DB、0新fit/QE submission/DDL/DML/profile/依赖/activation/process，不掩盖此前已披露的model-state GET元数据upsert事件。源码merge、原D功能读回、效果、用户重启及配置分别报告，原模型/输入/工件不覆盖。下一项为真实分类来源复用及显式family/API/UI，不等待原native/收益确认或重复父包资格。
