@@ -35,3 +35,27 @@ def test_actual_query_only_uses_T_open_not_future_HLC_and_missing_rows_preserved
     inputs['feature_visible_through'] = key[KEY[1]]
     with pytest.raises(ValueError, match='future feature'):
         campaign_actual_decisions_v2(**args)
+
+
+@pytest.mark.parametrize('blocked', [False, True])
+def test_common_four_arm_helper_real_shadow_and_unproved_mark_blocks_metrics(blocked):
+    import json
+    from backend.services.advisory_model_first.economic_price_campaign_evaluation_v2 import evaluate_price_actions_v2
+    from backend.tests.advisory_model_first.test_economic_value_anchor_labels_v1 import scene as scene_fixture
+    scene = scene_fixture.__wrapped__()
+    candidates, prices = scene['candidates'], scene['prices'].copy()
+    actions = {arm: candidates.assign(model_action='TAKE', market_admissible=True, reason_code='ACCEPTABLE',
+        actual_gap_bps=100., expected_net_return_bps=200., downside_q90_bps=100.) for arm in ('matched', 'candidate')}
+    if blocked:
+        prices.loc[prices.trade_date.eq(scene['calendar'][2]) & prices.instrument.eq('000001.SZ'), 'tradability_unknown'] = True
+    plan = SimpleNamespace(experiment_id='unit_four_arm', campaign_id='unit', model_id='M1', parameters={'hypothesis': 'unit'}, plan_sha256='a'*64)
+    artifacts = evaluate_price_actions_v2(plan=plan, fitted=SimpleNamespace(diagnostics={'fitted_head_count': 4, 'index_build_count': 0}),
+        rankings=scene['rankings'], candidates=candidates, prices=prices, identity=scene['parent_identity'], calendar=scene['calendar'], actions=actions)
+    report = json.loads(artifacts['evaluation.json'])
+    assert report['continue_next_preregistered_model'] and not report['entire_campaign_stopped'] and not report['deployable']
+    if blocked:
+        assert report['metrics'] is None and report['navigation'] == 'BLOCKED_EXECUTION_OR_MARK_UNPROVEN'
+    else:
+        assert set(report['metrics']) == {'baseline', 'rule', 'matched', 'candidate'}
+        assert report['increments']['matched']['mean_bps'] == 0
+        assert report['attribution']['candidate']['actual_model_take_episodes'] == 5

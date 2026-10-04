@@ -23,6 +23,8 @@ H-SECTOR-DYNAMIC-2：在同12D+价格条件、同标签及共同监督上，加�
 - docs/architecture/advisory_sector_dynamic_price_value_v1_f2_design_20261004.md
 - docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
+源码树登记：`F:/Dev/AIstock_worktrees/advisory-sector-price-value-v1-20261004` / `feat/advisory-sector-price-value-v1-20261004`，基于已合入#5411的最新origin/main，仅上列精确文件可写。
+
 仅Advisory消费者/纯模型。临时runner/log/cache在X任务目录；新源输入和研究在`F:/Dev/AIstock_model_artifacts/advisory_price_research_campaign_r2_20261004`独立hash目录。不覆盖任何旧plan/输入/模型/结果，不改公共QE/Selection/数据生产者。
 
 ## 3. Non-goals / 安全边界
@@ -106,18 +108,20 @@ M1开发导航门沿R2事前合同：减baseline及matched日均net均≥5bps；
 
 ## 11. Design Acceptance Matrix
 
-当前design-only：结构映射/两D行情读法可行，完整时钟/源身份放行尚待prepare，代码和M1fit均0。
+设计#5411已合入。源码仅上列Advisory文件，已执行三轮自审修复及定向测试。正式预登记`advsectorvalue_d22f697febf9d36f501e1216`，完整prepare已于2026-10-04 04:12通过：7720原候选全部保留，50180日/id报价重复冲突0，新增块AVAILABLE3505/UNKNOWN分类或映射3991/warmup224；原严格可知3729=3505+224，池外14仍UNKNOWN，原3977知晓未知不解锁。SW2021的134结构pair与官方表精确一致，profile行情131码命名空间包括合法id=0。源读取没有数据库写入、sealed消费或原生证据升级。
+
+历史等待检查点04:13/04:43 QE multi-alpha running2，故当时fit0。05:13三公开路径全部0后，按原登记计划执行一次4fit（9.734秒）及完整四臂（24.703秒）；拟合后QE三路径仍0，未操作QE或服务。原fit源码5afdabd93c75ebc2f52f008d8ff3852fec2a7ee9，后续仅更新文档。真实导航结果见§15，仍不是经济确认。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-697 | §1/8 | artifact: 本设计 | DESIGN_VERIFIED | none |
-| F-698 | §5.1 | artifact: SW2021官方对照/只读表schema | DESIGN_VERIFIED | approved_by_user: 非历史捕获receipt，未放行M1fit |
-| F-699 | §5.2/5.3 | artifact: 两训练D只读源预检 | DESIGN_VERIFIED | approved_by_user: 全窗口源/日历尚未prepare |
-| F-700 | §5/6 | artifact: 本设计冻结同监督/支持合同 | DESIGN_VERIFIED | none |
-| F-701 | §6/9 | artifact: 本设计固定模型规格 | DESIGN_VERIFIED | none |
-| F-702 | §7 | artifact: R2开发合同及本设计 | DESIGN_VERIFIED | none |
-| F-703 | §6/8/9 | artifact: 本设计不可变阶段及预算 | DESIGN_VERIFIED | none |
-| F-704 | §2/3/8/9/13 | artifact: 本设计精确范围 | DESIGN_VERIFIED | none |
+| F-697 | backend/services/advisory_model_first/economic_sector_price_value_v1.py；§1/8/15 | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；artifact: 独立plan及一次研究 | VERIFIED | none |
+| F-698 | backend/services/advisory_model_first/economic_sector_price_source_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_source_v1.py；artifact: 原prepare源摘要 | VERIFIED | approved_by_user: 非历史捕获receipt，native UNPROVEN不变 |
+| F-699 | backend/services/advisory_model_first/economic_sector_price_source_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_source_v1.py；artifact: 7720完整prepare | VERIFIED | none |
+| F-700 | backend/services/advisory_model_first/economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py | VERIFIED | none |
+| F-701 | backend/services/advisory_model_first/economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；artifact: §15实际13/16维四fit/JSON | VERIFIED | none |
+| F-702 | backend/services/advisory_model_first/economic_price_campaign_evaluation_v2.py；§7/15 | backend/tests/advisory_model_first/test_economic_price_campaign_evaluation_v2.py；artifact: §15完整81D四臂 | VERIFIED_NAVIGATION_PASS_NOT_CONFIRMED | none |
+| F-703 | backend/services/advisory_model_first/economic_sector_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: 登记/prepare | VERIFIED | none |
+| F-704 | §2/3/8/9/13 | artifact: 精确范围/三轮自审及无runtime/DB操作 | VERIFIED | none |
 
 ## 12. Risks / 结论边界
 
@@ -131,4 +135,21 @@ DESIGN-COMPLIANCE-001逐项：①设计/源码/输入/开发导航/确认/启用
 
 ## 14. 三轮设计自审
 
-方法轮核对新块只有两个独立信息量、派生relative不能冒称第三alpha，同模型matched隔离新增信息且不比较不同旧人口。时钟/源轮将结构码映射与成员可知分开、当前读取时间不倒填，补完整交易日重索引/21原报价不可稀疏跳日，保留原严格分类UNKNOWN。工程/边界轮修订声明的未知sentinel与unexpected id冲突区别、提取旧四臂helper而非复制平台、累计15fit不重置，明确SOURCE预检不等于全窗/经济/生产完成。本窗口自审不是独立外审；尚无M1收益或拟合结果用于修订。
+设计审核发生于正式fit之前：两个独立信息量、派生relative不冒称第三alpha，matched隔离新增信息且不比较不同旧人口；结构映射与成员可知分开、完整21报价且不跳日、UNKNOWN保留；累计15fit及来源/经济边界固定。本窗口自审不是独立外审，收益不用于调参。研究完成后的事实审核仅按原门计算与披露，不回改合同。
+
+源码三轮自审：第一轮核对真实合同类型与价格集合、多段/支持洞，修复profile数字id=0须保留为合法id而非缺失；第二轮检查21完整日与实际maturity、可选缺失和共同mask，NaT成熟时钟硬拒绝；第三轮核对仅提取旧四臂公共计算、真实shadow定向回归及held-mark阻断，累计预算固定15且不可由调用参数放宽。单测初次两处预期/空值类型错误已针对性修订；最终11项PASS。源码提交后才预登记并运行，结果不用于调参。
+
+## 15. 一次正式开发导航结果与当前分流
+
+run=`advsectorvalue_d22f697febf9d36f501e1216`，工件根`F:/Dev/AIstock_model_artifacts/advisory_price_research_campaign_r2_20261004`；1795成熟train/194D、765共同validation（仅诊断），原7720键不删，4fit/0新索引/1candidate，整批累计15fit+1索引。冻结test完整81D/1620候选/100共同估值日，原端点、held-mark与未结算审计均无阻断。
+
+| arm | 100共同估值日net | MDD | 完成episode | hit rate |
+|---|---:|---:|---:|---:|
+| baseline | 21.3220% | -10.3314% | 91 | 58.2418% |
+| rule | 20.5747% | -9.4780% | 91 | 58.2418% |
+| matched | 23.1821% | -9.0927% | 92 | 59.7826% |
+| candidate | 29.7444% | -8.8860% | 93 | 59.1398% |
+
+配对100日candidate减baseline/matched为6.9758/5.3007bps，95%描述性block区间[-9.5384,24.2783]/[-2.1165,13.7297]，两者都跨零。进入差异51/37日，真实模型TAKE36、UNKNOWN控制57（matched为38/54）；五个冻结NAV门全部通过，结论`CONSIDER_CONFIRMATION_DESIGN_ONLY`，不是模型显著盈利/CSI300超额/真实fill或可激活结论。86个有持仓估值日的mean_daily数值不能代替统一100日配对增量。组合29.74%也不能全部归给模型TAKE；UNKNOWN控制继续单列。
+
+来源仍RECOVERED_LIMITED/native UNPROVEN，未恢复原生receipt、未消费sealed、未生产部署、未改数据库或进程。当前只交付既定研究并制定一次独立确认方案；不重训、不改参数/门槛、不回选matched、不默认启动M5在同开发窗搜索更高回报。

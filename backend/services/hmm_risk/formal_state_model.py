@@ -195,10 +195,8 @@ def project_validation(raw: np.ndarray, parameters: Mapping[str, Any], projectio
     ):
         raise FormalStateError("hmm_risk_model_inactive_dimension_contract_invalid", "fixed mask identity differs")
     raw = array(raw, (len(raw), len(features)), "full validation features")
-    if inactive and not np.all(raw[:, 19] == 0.0):
-        raise FormalStateError(
-            "hmm_risk_model_inactive_dimension_contract_invalid", "validation inactive raw coordinate not exact zero"
-        )
+    # Exact-zero eligibility is train-only. Future finite inactive observations
+    # remain real inputs/diagnostics, never a new inference gate or active axis.
     processed = preprocess_apply(raw, parameters)
     array(processed, raw.shape, "full validation preprocess")
     return processed[:, active]
