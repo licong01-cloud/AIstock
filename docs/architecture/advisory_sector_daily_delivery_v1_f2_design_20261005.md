@@ -1,6 +1,6 @@
 # Advisory M1日频名单、价格API与价格卡片 F2详细设计
 
-2026-10-05；SOURCE_IMPLEMENTED_UI_CI_VALIDATION_PENDING。承接[上位M1日频设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)第三业务切片；设计已由PR #5443合入876316279cfb3118664192ea0abc9333b4980c68，实施状态见§8.1。本轮18小时计划优先完成真实日频消费，不重做QE研究或为旧失败结果补证据。进入QE策略包的组合直接使用；本文只处理真实输入、数学和展示，不增加资格、native、父训练时钟或收益确认门。
+2026-10-05；SOURCE_IMPLEMENTED_UI_AND_EMPTY_ROSTER_FIX_PENDING。承接[上位M1日频设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)第三业务切片；设计已由PR #5443合入876316279cfb3118664192ea0abc9333b4980c68，源码草稿PR #5445及实施状态见§8.1。本轮18小时计划优先完成真实日频消费，不重做QE研究或为旧失败结果补证据。进入QE策略包的组合直接使用；本文只处理真实输入、数学和展示，不增加资格、native、父训练时钟或收益确认门。
 
 ## 1. Background / 事实与目标
 
@@ -99,13 +99,15 @@ M1卡片与旧v3类型隔离。自动按当前program和visible list target/list
 
 | 实施项 | 实际状态 | 尚缺验收 |
 |---|---|---|
-| F-791～794 | 源码/真实原名单与同核批量读回已通过 | 当前HEAD CI及最终设计符合性 |
-| F-795 | 6项隔离ASGI HTTP测试通过，无用户后端启动 | 合入后用户重启的真实HTTP语义验证 |
+| F-791～794 | 非空原名单/真实同核批量通过；原零准入适配通过，但完整空链暴露共享内核BUG-1726 | 空表dtype修复已单独29项测试通过，尚未交付/合入；不称完整空链已通过 |
+| F-795 | 6项隔离ASGI测试及真实冻结M1/DB→完整ASGI响应通过，28370字节有限JSON、HTTP200、20候选/27未估值，无用户后端启动 | 合入后用户重启的真实HTTP语义验证 |
 | F-796 | 5状态及晚返回竞态共6个精准UI场景已编写，实际类型编译通过 | 六场景浏览器收据尚未生成，不借用旧6场景收据 |
 | F-797 | 单日/三日真实业务、同值、查询及资源读回通过 | UI展示验证；不等于收益/成交证明 |
-| F-798 | 本窗口分视角自审与修复进行中 | 最新HEAD必需CI、UI验收、合入与官方清理尚未完成 |
+| F-798 | 本窗口分视角自审，源码HEAD2261aaa29 CI37219771144 SUCCESS；独立BUG-1726 29tests/Ruff/L0通过 | 文档更新后新HEAD检查另核；六UI、空链修复交付、合入与官方清理尚未完成 |
 
 当前Validation Center未找到可执行的Advisory UI专用计划；广UI由流水线/CI执行精确范围，只用runner-owned隔离端口/进程，临时产物全X，不启动用户后端或安装依赖，不修改公共计划或CI。未有收据不宣称UI通过或本切片已满足合入条件。更晚的T实价读回/自然捕获不属于此只读GET，不把历史重算伪装D原生发布。
+
+完整空链追加验证先因临时runner错误调用predict_day(packet=...)失败，修正为实际kwargs/SCOPE_KEYS后发现真实BUG-1726（Issue #5446）：纯core对空object数值列map后仍object，np.isclose触发TypeError。独立BUG树仅改本Advisory core/对应测试/BUG JSON，修复先有限数值校验再float dtype；空对象列修复前失败、后通过，29项同叶测试保留非空原数学。源码本地7abb1797c3c0bbee428bdf7945bd94129733ee4e，尚未创建BUG PR/合入；canonical workflow缺该新GET的target-owned业务smoke语义，交公共流程owner登记，不改公共脚本或换泛health验证绕过。不是行情缺口/QE缺陷/需数据补齐；正常非空HTTP真实链完整通过约6.875秒，不把它冒充空链通过或生产HTTP验收。
 
 ## 9. Risks / 审核与设计符合性
 

@@ -2017,7 +2017,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 |---|---|---|
 | 已完成 / R2三路线源码交付 | 设计#5395及源码#5404均合入/自身清理；15测试、三次真实四臂及11fit+1索引已完成 | 三candidate均负向停止，不回选matched或补证；经济确认/启用0，QE/DB/runtime不动 |
 | 已完成 / R2-M1开发导航 | [动态板块M1 F2设计](advisory_sector_dynamic_price_value_v1_f2_design_20261004.md)#5411交付，源码#5414；原7720键prepare、1795train/765validation、4fit及81D四臂完成；五个冻结导航门通过 | 点估计过门不是收益确认：两个增量区间跨零，93episode中36真TAKE/57 UNKNOWN控制；native/ENTRY_VALUE启用仍0 |
-| P1 / M1日频功能接入 | #5428/#5429/#5434及分类/family#5442已合入/自身清理，日频交付F2#5443已合入。原名单/服务/GET/M1卡片本地源码已实现；真实单日原47项保留，20模型候选8价格集合/12UNKNOWN；三日60候选单批同值，17.813秒/7特征SELECT。原模型/bundle SHA不变 | 下一步六场景UI浏览器、最新HEAD CI和最终审核，源码通过后合入及自身清理；运行配置与用户重启另报。尚未完成UI/源码交付/运行态加载，不等待父时钟/native/收益确认，不读sealed，不把价格功能可用冒称收益保证 |
+| P1 / M1日频功能接入 | #5442及F2#5443已合入/自身清理；源码草稿PR #5445 HEAD2261aaa29 CI37219771144 SUCCESS，41定向测试/原生TypeScript通过。原47项保留，20候选8价格集合/12UNKNOWN；三日60候选单批同值17.813秒/7 SELECT，实际完整ASGI JSON200约6.875秒。原模型/bundle SHA不变 | 先交付BUG-1726空object表修复（29tests/Ruff/L0通过，公共端点smoke合同待流程owner）；六UI收据/文档新HEAD CI/最终审核后源码合入及自己清理。运行配置与用户重启另报，未称完整空链/UI/运行态完成；不等父资格/native/收益确认，不读sealed |
 | 已完成 / P2 M5新信息 | #5432已合入716232d3b949d4dd0aecbe9fe210ad6fa8fe506b并完成自身清理；真实run advselectionvalue_8f53ace471987dc7f0b99a00完成7720键prepare/四fit/完整81D四臂，20直接+20reader测试PASS。成本后candidate/baseline/matched为13.2538%/21.3220%/4.5719% | 相对baseline日-6.8073bps、matched+8.0519bps，两CI跨零；原净增量条件失败，仅结束此假设不阻断包消费或项目。真实TAKE82/UNKNOWN控制6，累计19fit+1index；不救活旧模型、不重复研究或固化旧失败 |
 | P4 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
 

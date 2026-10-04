@@ -1,6 +1,6 @@
 # Advisory M1板块条件价格模型：日频消费者 F2 详细设计
 
-2026-10-05；DAILY_ROSTER_API_UI_IMPLEMENTED_UI_CI_VALIDATION_PENDING，非已合入的完整每日业务交付或收益确认。当前以[QE包直接消费合同](advisory_qe_package_direct_consumer_v1_f2_design_20261004.md)为消费者责任边界：进入策略包的组合直接使用，无父时钟、原native或收益确认准入门。复用共享D消费者推进真实日频功能；效果单独报告，不冒称已证盈利。
+2026-10-05；DAILY_ROSTER_API_UI_IMPLEMENTED_UI_AND_EMPTY_FIX_PENDING，非已合入的完整每日业务交付或收益确认。当前以[QE包直接消费合同](advisory_qe_package_direct_consumer_v1_f2_design_20261004.md)为消费者责任边界：进入策略包的组合直接使用，无父时钟、原native或收益确认准入门。复用共享D消费者推进真实日频功能；效果单独报告，不冒称已证盈利。
 
 ## 1. Background / 当前事实与业务目的
 
@@ -116,7 +116,7 @@ M1日频接入无需独立收益确认、父/组合时钟、原训练native或�
 
 [日频交付F2](advisory_sector_daily_delivery_v1_f2_design_20261005.md)PR #5443合入876316279cfb3118664192ea0abc9333b4980c68后，独立最新main树实现名单/服务/GET及显式M1卡片。2026-08-28真实原published list的47项中20原Top20进行模型计算、27旧持仓/WATCH/范围外项原动作保留；8价格集合/12UNKNOWN，完整约14.969秒。已消费08-24/25/28三日共60候选，批量17.813秒、平均5.938秒/日、特征查询7次，单批价格与15D内容SHA一致，peak working set约419MiB、线程上限2。未读取收益/label/T行情/新sealed，fit=0、DB写入=0、QE提交=0。
 
-原指数准入明确0只与Selection原空分开处理，都可正常NO_CANDIDATES；没有原声明不能将缺名单伪装为零。41项同叶定向测试（含6 HTTP）通过、前端实际原生TypeScript编译通过。六项最小UI场景已编写但未执行浏览器，本切片进入源码PR流程，尚未合入/取得当前HEAD CI及UI成功收据；详细实施矩阵见交付F2 §8.1。测试配置全在X、未改变运行环境，用户后端尚未加载此新接口。真实业务计算、UI展示、源码合入、用户重启、模型效果不互相冒充；不为旧失败候选追加收益证据。
+原指数准入明确0只与Selection原空分开处理，名单适配允许NO_CANDIDATES；没有原声明不能将缺名单伪装为零。完整空链暴露BUG-1726：共享纯core空object数值列isfinite错误；独立修复29tests/Ruff/L0通过，尚未合入，公共新端点业务smoke语义待流程owner登记。主源码PR #5445的41同叶测试（含6 HTTP）、原生TypeScript及HEAD2261aaa29 CI37219771144 SUCCESS；另有实际冻结M1/只读DB→完整ASGI JSON200，20候选/27未估值，8价格集合/12UNKNOWN、约6.875秒。六项最小UI已编写但未执行浏览器，新文档HEAD检查另核；未合入/用户后端未加载，测试配置仅X。详细矩阵见交付F2 §8.1，真实非空业务不冒充空链或收益确认，不为旧失败候选追加证据。
 
 ## 9. Design Acceptance Matrix
 
