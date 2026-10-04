@@ -142,6 +142,29 @@ def test_source_reordering_cannot_change_original_candidate_identity(packet, sec
         consumer.predict_day(**day)
 
 
+def test_object_empty_roster_preserves_source_content_validation(packet, sector_packet):
+    consumer, day, source, _, _, _ = setup(packet, sector_packet)
+    day['candidates'] = day['candidates'].iloc[:0].astype(object)
+    sector_packet['classification_rows'] = sector_packet['classification_rows'].iloc[:0].astype(object)
+    day['price_contexts'] = {}
+    result = consumer.predict_day(**day)
+    assert result['status'] == 'NO_CANDIDATES' and result['candidates'] == []
+    assert result['fit_count'] == 0 and result['database_written'] is result['outcomes_read'] is False
+    original = source.load_batch
+
+    def foreign_row(**kwargs):
+        from backend.services.advisory_model_first.economic_daily_feature_core_v1 import _records
+        frame, receipt = original(**kwargs)[0]
+        frame.loc[0] = [*day['calendar'][-2:], '600000.SH', *[float('nan')]*len(FEATURES)]
+        receipt['feature_sha256'] = sha(_records(frame))
+        receipt['identity_sha256'] = sha({key: value for key, value in receipt.items() if key != 'identity_sha256'})
+        return [(frame, receipt)]
+
+    source.load_batch = foreign_row
+    with pytest.raises(AdvisoryModelFirstError, match='content'):
+        consumer.predict_day(**day)
+
+
 def test_pandas_row_labels_are_not_candidate_identity_and_numeric_strings_are_not_features(packet, sector_packet):
     consumer, day, source, _, _, _ = setup(packet, sector_packet)
     day['candidates'].index = [700, 701]
