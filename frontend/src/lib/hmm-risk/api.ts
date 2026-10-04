@@ -215,3 +215,41 @@ export function getRiskL1(tradeDate: string, modelHash: string): Promise<{
   const query = new URLSearchParams({ trade_date: tradeDate, model_hash: modelHash });
   return request(`/risk-l1?${query.toString()}`);
 }
+
+export interface RiskL2Row {
+  run_id: string; trade_date: string; as_of_date: string; sector_level: "L2";
+  sector_code: string; sector_name: null; name_authority: "CANONICAL_CODE_ONLY";
+  probability: number | null; warning: boolean | null;
+  availability: "available" | "unavailable"; reason_code: string | null; structural_eligible: boolean;
+  outcome_status: "AVAILABLE" | "OUTCOME_LEGAL_NA" | "OUTCOME_NOT_MATURE";
+  event: 0 | 1 | null; realized_drawdown: number | null; realized_return: number | null;
+}
+
+export interface RiskL2Overview {
+  run_id: string; acceptance_hash: string; model_hash: string; model_version: string;
+  input_hash: string; mapping_hash: string; trade_date: string; as_of_date: string; dates: string[];
+  effect_status: string; validation_basis: "HISTORICAL_CAUSAL_FIXED_TRAIN_DEVELOPMENT";
+  risk_l2_capability_status: "NOT_AVAILABLE" | "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED";
+  research_surface_status: "NOT_AVAILABLE" | "AVAILABLE_EXPERIMENTAL";
+  forward_power_status: "UNAVAILABLE"; forward_confirmation: "NOT_STARTED"; advisory_status: "NOT_AVAILABLE";
+  tail_accessed: false;
+  day_summary: {
+    sector_count: number; available_count: number; unavailable_count: number;
+    warning_count: number; unknown_warning_count: number; outcome_status_counts: Record<string, number>;
+  };
+  compact_summary: {
+    overall: Record<string, number | null>; hac: Record<string, unknown>;
+    baseline: Record<string, number | boolean | null>; prediction_coverage: number | null;
+    valid_mature_day_share: number | null; outcome_status_counts: Record<string, number>; row_hash: string;
+  };
+}
+
+export interface RiskL2Detail extends RiskL2Overview { rows: RiskL2Row[] }
+
+export function getRiskL2Overview(runId: string): Promise<RiskL2Overview> {
+  return request(`/risk-l2/overview?${new URLSearchParams({ run_id: runId })}`);
+}
+
+export function getRiskL2(tradeDate: string, runId: string): Promise<RiskL2Detail> {
+  return request(`/risk-l2?${new URLSearchParams({ trade_date: tradeDate, run_id: runId })}`);
+}

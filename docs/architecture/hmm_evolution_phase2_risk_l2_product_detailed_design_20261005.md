@@ -1,9 +1,11 @@
 # HMM Evolution Phase 2：L2绝对回撤风险研究产品完整详细设计
 
-> 版本：v1.1；日期：2026-10-05；tier：F2；owner：HMM。
+> 版本：v1.2；日期：2026-10-05；tier：F2；owner：HMM。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md`，F-011/F-012/F-013。
 > 模型依据：`hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md` §8.2，用户已批准的`hmm_risk_l2_absolute_drawdown_logistic_v1`。源码PR #5444已按独立授权合入，merge=`2fa41eab6b7efc76173ae3a0ced4143006b1671c`；不由此推导产品完成。
 > 用户已于2026-10-05确认批准本完整产品包，`L2-RISK-PRODUCT-D1～D6=APPROVED_BY_USER_FOR_IMPLEMENTATION`，并授权合入#5444和本设计PR后继续源码。模型、特征、窗口、阈值和效果合同不变；批准不代表数据库、API/UI或生产验收完成，不授权数据库写入、激活、cleanup或服务控制。
+
+> 当前实现：设计PR #5447已合入`e58cea30bd07c5b2c82d165998694e8bc9e787e8`；完整reader/repository/CLI/migration/read API/UI与直接测试已在独立实现分支编写并完成三轮作者审修。真实封存资产file-only验证为55,544行/424日/131行业，DB/fit poison均零调用。新源PR尚待提交/CI及用户独立合入授权；DEV/生产DDL/DML、真实API/浏览器和runtime尚未执行，surface仍NOT_AVAILABLE。
 
 ## 1. Background、目标与Non-goals
 
@@ -139,11 +141,11 @@ run_id、日期必须显式。overview末日只表示同run的最后历史记录
 
 DEV使用**现存**`aistock_dev`，迁移/完整导入/读回按用户具体授权执行，不新建测试DB，不要求backup/export。生产目标及migration/55,544行导入另行明确授权，先完成DEV证据。source merge、DEV、生产DDL、DML、配置激活、用户重启、readback/no-mock验证和cleanup分别记录。
 
-运行影响按实际changed files分类，预计backend-main及frontend；fresh-process import覆盖`backend.routers.hmm_risk`、`backend.routers.health`及新依赖。当前文档改动runtime=none，不给未来源码降级。后端启停仍归用户；没有target授权不启动开发/生产服务。
+运行影响按实际changed files分类，本实现为`runtime_impact=backend`、`target_ids=[backend-main]`、`catalog_error=null`，并具有frontend与database源码影响；fresh-process import覆盖`backend.routers.hmm_risk`、`backend.routers.health`及新依赖。文档PR当时runtime=none只描述文档，不给本源码降级。后端启停仍归用户；没有target授权不启动开发/生产服务。
 
 回滚先停止引用新run的配置/导航（仅在授权范围内），保留不可变研究数据；迁移rollback在非空时拒绝删除。不要为回滚删除历史模型/预测或恢复旧失败状态，不碰其他业务数据。cleanup须精确授权本任务branch/worktree，忽略路径和旧validation资产不据此删除。
 
-**长任务停止条件**：完成当前授权文档/源码及最小门禁并停在新源码PR/生产授权边界；或完整真实产品验证成功；或12小时；或三轮仍有阻断/需模型合同变更。#5444及本文PR已获本次合入授权，待最终CI通过合入后实施；没有数据库或runtime权限时不伪报surface AVAILABLE。新产品源码PR合入仍另行确认。
+**长任务停止条件**：完成当前授权文档/源码及最小门禁并停在新源码PR/生产授权边界；或完整真实产品验证成功；或12小时；或三轮仍有阻断/需模型合同变更。#5444及设计PR #5447均已按最终CI和独立授权合入；没有数据库或runtime权限时不伪报surface AVAILABLE。新产品源码PR合入仍另行确认。
 
 ## 9. Design Acceptance Index
 
@@ -161,19 +163,20 @@ DEV使用**现存**`aistock_dev`，迁移/完整导入/读回按用户具体授�
 - `backend/routers/hmm_risk.py`（只加L2 risk read接口）。
 - `frontend/src/lib/hmm-risk/api.ts`、`frontend/src/components/hmm-risk/RiskL2Panel.tsx`、`frontend/src/app/hmm-risk/page.tsx`；`frontend/src/components/hmm-risk/RotationL2Dashboard.tsx`仅移除误置在L2主面的L1历史risk卡（L1历史入口保留）。
 - `backend/tests/hmm_risk/test_risk_l2_prediction.py`、`test_risk_l2_api.py`、`test_import_risk_l2_predictions.py`与`frontend/tests/hmm-risk/risk-l2.spec.ts`；相关隔离/schema/security测试只在直接合同受影响时扩展。
+- `frontend/tests/hmm-risk/risk-l1.spec.ts`仅将两处旧风险测试入口明确为`?level=l1`，直接对应L2面移除L1卡；不改变L1模型/API/效果或历史能力。
 - 本设计与父蓝图只同步实际状态/链接，不改其他设计精确模型合同、工作流/规范或其他模块。
 
 实施由同一HMM owner顺序完成：正式资产只读校验→同一PR完整代码/直接测试及最多三轮审修→最小门禁/CI→获授权合入→已授权目标DEV/生产写入与用户重启→真实API/UI验收。上述是一个包内部依赖，不是新的微阶段/不同方向。
 
 ## 11. Verification Plan与Design Acceptance Matrix
 
-下表是**本轮文档设计验收**，READY表示合同已写明且用户已批准，不表示实现完成。列出的新增测试是实现计划，未运行；源码和产品矩阵在实现时替换为最终HEAD实际结果。
+下表是合同设计闭合与当前实现引用，采用现有F2的`APPROVED_BY_USER_DESIGN_READY`，只表示完整设计已批准、无未批准的设计删减，不表示源PR/数据库/运行时或surface完成。实际执行状态：F-011原模型效果保留；F-012正式file-only已验证、真实DEV/生产事务未运行；F-013源码已实施、mocked UI待CI、真实DDL/DML/API/browser/readback/receipt与用户重启仍未执行。本地合成fixture只验证反例，不代替真实产品验收，不用自定义矩阵状态绕过F2。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | §1/§3/§5及原已批准risk模型合同 | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json；本轮零fit核验原canonical/hash/报警与代价 | APPROVED_BY_USER_DESIGN_READY | 无 |
-| F-012 | §3/§4/§7冻结身份、131目录/424日期/NA | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/process_1.sealed.json；计划backend/tests/hmm_risk/test_risk_l2_prediction.py | APPROVED_BY_USER_DESIGN_READY | 无 |
-| F-013 | §4～§8完整DB/API/UI与分域授权 | 计划backend/tests/hmm_risk/test_risk_l2_api.py；计划frontend/tests/hmm-risk/risk-l2.spec.ts；计划backend/tests/hmm_risk/test_import_risk_l2_predictions.py | APPROVED_BY_USER_DESIGN_READY | 无 |
+| F-011 | §1/§3/§5及原risk模型；backend/services/hmm_risk/risk_l2_prediction.py | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json；真实file-only validate/DB与fit poison；原效果指标精确重核 | APPROVED_BY_USER_DESIGN_READY | 无 |
+| F-012 | §3/§4/§7；backend/services/hmm_risk/risk_l2_prediction.py；scripts/hmm_risk/import_risk_l2_predictions.py | backend/tests/hmm_risk/test_risk_l2_prediction.py；正式资产55,544行/424日/131行业读回，row hash=`cd31fa9b2dbe2d72f2b4d17438113f35b2db994d5cc3d5698ac8af26636c9f95` | APPROVED_BY_USER_DESIGN_READY | 无 |
+| F-013 | §4～§8；backend/routers/hmm_risk.py；frontend/src/components/hmm-risk/RiskL2Panel.tsx；本包两份migration | backend/tests/hmm_risk/test_risk_l2_api.py；backend/tests/hmm_risk/test_import_risk_l2_predictions.py；frontend/tests/hmm-risk/risk-l2.spec.ts；frontend typecheck/lint | APPROVED_BY_USER_DESIGN_READY | 无 |
 
 文档门禁：`python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md --tier F2`；UTF-8/diff、范围与前后语义复审。设计F2只验证结构/引用，不可推导模型批准、源码或产品验收。
 
@@ -187,7 +190,7 @@ DEV使用**现存**`aistock_dev`，迁移/完整导入/读回按用户具体授�
 
 ## 13. Production gates及批准索引
 
-当前文档/零fit读回：production_ddl_gate=noop；production_dml_gate=noop；backend/frontend_dependency_gate=noop；runtime_impact=none；database_write/dataset_write/active_profile_write=false；training/new_fit/tail/QE/runtime_action/process_control=false；backend_restart_required=false。
+本轮源码/零fit读回：production_ddl_gate=pending_separate_authorization（SQL只编写未应用）；production_dml_gate=pending_separate_authorization（writer只合成事务测试）；backend/frontend_dependency_gate=noop（复用现存依赖，未安装）；runtime_impact=backend、target_ids=[backend-main]；database_write/dataset_write/active_profile_write=false；training/new_fit/tail/QE/runtime_action/process_control=false；backend_restart_required=true_for_future_activation、backend_restart_permission=false。本轮未执行DEV写入；生产须先DEV真实验证，再按具体目标授权，不从源PR/测试推导。
 
 未来代码/实际部署按其真实范围单独分类，不继承本none。本次用户明确批准产品D1～D6与#5444/设计PR合入和后续源码；新源码PR合入、DEV/生产写入、activation或cleanup仍不推导授权。
 
@@ -195,7 +198,7 @@ DEV使用**现存**`aistock_dev`，迁移/完整导入/读回按用户具体授�
 |---|---|---|
 | L2-RISK-PRODUCT-D1～D6 | APPROVED_BY_USER_FOR_IMPLEMENTATION | 已批准完整包；原模型/输入/窗口/0.20/0.05/0.25全部不变 |
 | PR #5444 | 已合入，merge=2fa41eab6 | 不因此重跑2fit或清理正式资产引用树 |
-| 本文设计PR #5447 | 合入已授权，按最终CI执行 | 合入批准状态后继续完整源码包；新源码PR合入另行确认 |
+| 本文设计PR #5447 | 已合入，merge=e58cea30b | 完整源码包已实施；新源码PR合入另行确认 |
 | DEV/生产/激活/重启/cleanup | 本轮未授权执行 | 实际动作与目标分别确认，重启归用户 |
 
 ## 14. DESIGN-COMPLIANCE-001与文档审核
@@ -213,4 +216,4 @@ DEV使用**现存**`aistock_dev`，迁移/完整导入/读回按用户具体授�
 2. 修复input/mapping/contract hash未精确定义、summary自报与每日API可能重扫全run的问题；补齐封存预测对照、原指标重算、日hash与原子commit前读回、未成熟/零报警/显示限额。
 3. 核对严格授权、sourcePR依赖、全量/展示分母、历史保留、callback/订单禁接与状态耦合；真实零fit读回验证55,544封闭概率逐字段不变，修正父蓝图preflight资产引用，未发现剩余文档阻断。
 
-当前只有文档和只读诊断，产品源代码测试、DEV/生产、API/UI、runtime均未运行。2026-10-05本次批准仅更新状态，不更改任何D1～D6公式/阈值或产品范围；复核原三轮自审结论和授权分域，F2 PASS不代替运行验收。
+上述三轮是原设计审修，保留当时事实。2026-10-05批准并合入后，新增三轮源码作者自审（非独立第三方）：第一轮闭合原receipt算法、字段投影、重排/指标重核及文件稳定性；第二轮补齐真实health进程identity、首日/零报警/末日surface receipt、旧响应隔离与L1历史入口；第三轮修复writer显式目标/实际dbname校验、损坏或断链receipt不能当缺失，并补齐UI region语义。模型、原始概率/标签和D1～D6公式/阈值未改。实际file-only validate、typecheck/lint、最小源码测试及fresh-process import已执行；UI脚本目前仅完成list，真实DEV/生产、API/browser与runtime未执行，F2不代替这些验收。
