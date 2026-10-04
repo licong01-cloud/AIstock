@@ -3,7 +3,7 @@
 > 版本：v1.3；修订日期：2026-10-04；tier：F2；owner：HMM。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.59及其后保持本L2方向的版本。
 > P0基线：`9640cf67c5c40884e0f99074224cff0f0270e1f6`。用户随后明确要求按本文开始P1完整实现，D1～D6因此作为本版本获准实施的精确合同；生产DDL/DML、runtime activation、服务重启、QE实验及tail读取仍未授权。
-> 当前状态：原P1资金流基线已完成历史评价并持久化/API可读，mean Rank IC=`0.02973212294698707`（原10D/358日口径），研究页面当前验证尚未闭合；2026-09-22的输入阻断只作历史。2026-10-04冻结HMM的独立效果合同也已完成双process零fit，IC=`0.009072776767716752 < 0.02`，不是本基线算法的结果。用户现已批准§8.2的`L2-R1-D1～D6`和`L2-RISK-D1～D6`全部精确合同，状态为`APPROVED_FOR_IMPLEMENTATION`；设计PR #5433仍待独立合入授权，源码与新实验未开始。
+> 当前状态：原P1资金流基线已完成历史评价并持久化/API可读，mean Rank IC=`0.02973212294698707`（原10D/358日口径），研究页面当前验证尚未闭合；2026-09-22的输入阻断只作历史。2026-10-04原冻结HMM效果IC=`0.009072776767716752 < 0.02`。§8.2两份精确合同已批准，设计PR #5433已合入。2026-10-05正在实施R1/risk源码，尚无新正式fit或效果结论。原request/process/acceptance只有标签hash、未保留标签值，R1不得未经授权重新构造股票历史；其标签资产问题不阻断独立risk实施。
 > 完成定义：源码合入、模型评价、产品表面及生产状态分别核算。当前用户将QE验证后置，近期按父蓝图推进轮动改进与独立风险，不要求为模型结论执行DDL/DML或发布；真实API/UI仍不得由离线结果代报。
 
 ## 1. Background、目标与非目标
@@ -312,7 +312,7 @@ R1直接测试：hidden index重排不改neutral身份；mu/hash漂移拒绝；�
 
 Risk直接测试：10日复利绝对路径MDD、无未来feature/标签访问、purge及未成熟NA；原20D/代码和当前逐日资格、单成员/正常停牌；train-only scaler、严格零方差与有限未来变化、日期权重；一类train/不收敛/非有限typed失败；class=1概率与0.20边界；precision/base_rate/recall空分母；无warning是合法输出但效果证据不足；完整人口/预算对照不按outcome重分组；双process2fit计数和DB/tail poison。必要聚焦测试与HMM slice/registry/L0按实际changed files选，不复制旧矩阵或降低现有保护。
 
-`L2-R1-D1～D6`及`L2-RISK-D1～D6`均为`APPROVED_FOR_IMPLEMENTATION`。本轮批准覆盖新score公式、10D/-8%绝对事件、classifier/训练窗、0.20/4:1报警代价、0.05/0.25效果值、证据合同和各自停止条件；数值全部沿v1.2提案，不调整模型、特征、窗口或阈值。§8.2.2～8.2.6依次为L2-RISK-D1、D2、D3、D4/D5、D6的完整定义。设计PR #5433合入与新源码/实验完成分别汇报，当前仅更新批准状态、未实施或运行；不拆多个微设计。QE消费公式及验证全部后置。
+`L2-R1-D1～D6`及`L2-RISK-D1～D6`均为`APPROVED_FOR_IMPLEMENTATION`。本轮批准覆盖新score公式、10D/-8%绝对事件、classifier/训练窗、0.20/4:1报警代价、0.05/0.25效果值、证据合同和各自停止条件；数值全部沿v1.2提案，不调整模型、特征、窗口或阈值。§8.2.2～8.2.6依次为L2-RISK-D1、D2、D3、D4/D5、D6的完整定义。设计PR #5433已合入，源码/实验状态单独记录；不拆多个微设计。QE消费公式及验证全部后置。
 
 ### 8.3 Implementation Plan与allowed scope
 
@@ -320,7 +320,7 @@ P1同一完整任务包：正式reader/公式和回放实现→定向测试及�
 
 预计新增HMM-owned `backend/services/hmm_risk/rotation_l2.py`、`rotation_l2_input.py`、`rotation_l2_prediction.py`、`scripts/hmm_risk/run_rotation_l2.py`及直接tests；允许对`rotation_l1_gbdt.py`/`rotation_l1_input_bundle.py`做经回归证明行为不变的最小纯函数抽取。共享文件用明确level/contract参数，不弱化31行L1约束、不建立兼容代理复制实现。
 
-以上是原P1已实现的范围，不重新创建模块。§8.2新合同批准后，R1仅修改既有HMM effect重评分/版本校验及直接测试，risk预计新增`backend/services/hmm_risk/risk_l2.py`、`scripts/hmm_risk/run_risk_l2.py`及`backend/tests/hmm_risk/test_risk_l2.py`，必要输入复用现有formal/C-010模块；具体文件在实施前钉住。当前只有三份HMM文档变更，不创建这些生产入口或改CI/nox/test plan。
+以上是原P1已实现的范围，不重新创建模块。§8.2的设计已由PR #5433 / `e10ba033`进入main。2026-10-05实施文件钉住：`backend/services/hmm_risk/formal_state_effect.py`、`scripts/hmm_risk/run_formal_state_effect.py`、`backend/tests/hmm_risk/test_formal_state_effect.py`；risk新增`backend/services/hmm_risk/risk_l2.py`、`scripts/hmm_risk/run_risk_l2.py`、`backend/tests/hmm_risk/test_risk_l2.py`，必要L2文件构造复用/抽取`backend/services/hmm_risk/formal_state_input.py`，直接回归`backend/tests/hmm_risk/test_formal_state_input.py`。本详细设计仅同步实施状态；不改CI/nox/test plan，不扩大模型合同。
 
 产品范围为`backend/routers/hmm_risk.py`、HMM migration、`frontend/src/lib/hmm-risk/api.ts`、`frontend/src/components/hmm-risk/`及`frontend/src/app/hmm-risk/page.tsx`和直接测试；具体文件在实施前按changed-files→ownership→module registry→test plans确认。不得修改全局CI、noxfile、数据生产、QE/Advisory/Paper源码以使门禁或消费者通过。
 
@@ -381,8 +381,8 @@ typed reason采用`hmm_risk_rotation_l2_`前缀加固定后缀；复用已有底
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 已有rotation_l2/formal_state_effect；§8.2新模型精确合同 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/run/acceptance.json；原10D基线实时API状态见父蓝图§1.5；原效果已完整计算，R1/risk仅设计 | APPROVED_BY_USER_EXISTING_EFFECT_VERIFIED_NEW_DESIGN_ONLY | 两份新合同已批准，设计PR待合入；当前基线有开发期资格，原HMM效果不足，新R1/risk均未运行 |
-| F-012 | 正式direct-v2 reader、C-010/security/provider authority及新合同数据边界 | backend/tests/hmm_risk/test_rotation_l2_input.py；artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/request.json；day.txt实际算术601/591/424/414见§8.2 | APPROVED_BY_USER_EXISTING_INPUT_VERIFIED_RISK_NOT_BUILT | 两份合同数据边界已批准；当前没有新风险feature/label面板，不读取tail，不把日历算术当全量预检通过 |
+| F-011 | formal_state_effect.neutral_rescore/neutral_effect_repeat；risk_l2.fit_predict/evaluate；两个显式CLI | backend/tests/hmm_risk/test_formal_state_effect.py；backend/tests/hmm_risk/test_risk_l2.py；原结果仍为IC=0.00907 | APPROVED_BY_USER_SOURCE_IMPLEMENTING_EXPERIMENT_PENDING | 新评分与共享风险候选独立实现；R1原标签值未封存，需现有标签或单独授权一次hash匹配重建；risk正式2-fit仍待实施门禁/文件面板 |
+| F-012 | formal_state_input._l2_stock_facts复用当前C-010/A5；risk_l2.prepare_file_inputs | backend/tests/hmm_risk/test_formal_state_input.py；test_risk_l2.py；冻结day.txt算术601/591/424/414复验通过 | APPROVED_BY_USER_INPUT_CONSTRUCTOR_IMPLEMENTING | 不访问DB/active，不排除原4个semantic不足行业；真实完整文件面板验收尚未执行，不以日历算术代替全量资格校验 |
 | F-013 | 已有rotation_l2_prediction/router/dashboard；§8.2明确不发布新版本 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；父蓝图§1.5现有L2 API/run_id读回；旧4 passed/1 live skipped仅为2026-09-22测试历史 | APPROVED_BY_USER_L2_API_READBACK_SURFACE_PENDING | 用户批准已有L2版本；当前surface=NOT_AVAILABLE，不代报浏览器或新风险产品通过，不要求生产部署才能得到模型结论 |
 
 ## 13. DESIGN-COMPLIANCE-001与审核记录

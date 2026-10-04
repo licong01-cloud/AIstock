@@ -698,3 +698,93 @@ def test_two_processes_fail_closed_on_payload_or_refit_drift():
     bad = reseal({**repeat, "unexpected_numeric_drift": 1})
     with pytest.raises(model_module.FormalStateError, match="differ"):
         subject.close_effect_processes(repeat, bad)
+
+
+def test_neutral_rescore_preserves_masks_semantics_and_never_filters(acceptance, monkeypatch):
+    monkeypatch.setattr(subject, "NEUTRAL_SOURCE_ACCEPTANCE_SHA", acceptance["acceptance_sha256"])
+    monkeypatch.setattr(subject, "causal_filter", lambda *_a, **_k: pytest.fail("HMM filtering reached"))
+    monkeypatch.setattr(subject, "restore_model", lambda *_a, **_k: pytest.fail("HMM restore reached"))
+    scored = subject.neutral_rescore(acceptance)
+    assert scored["fits"] == 0 and not scored["target_accessed"]
+    for old, new in zip(acceptance["predictions"], scored["predictions"], strict=True):
+        for key in (
+            "availability",
+            "reason_code",
+            "hard_state",
+            "semantic_state",
+            "forecast_state",
+            "feature_eligible",
+            "structural_eligible",
+            "model_parameter_sha256",
+        ):
+            assert old[key] == new[key]
+        assert new["raw_score"] == (0.0 if old["availability"] == "available" else None)
+    assert {r["daily_rank_group"] for r in scored["predictions"] if r["availability"] == "available"} == {"neutral"}
+    with pytest.raises(model_module.FormalStateError):
+        subject.validate_acceptance({**acceptance, "contract_version": subject.NEUTRAL_VERSION})
+
+
+def test_neutral_mapping_not_hidden_index_and_source_pin_rejects_drift(acceptance, monkeypatch):
+    changed = copy.deepcopy(acceptance)
+    semantics = changed["evaluation_input_identity"]["semantic_mapping_and_utility_by_sector"]
+    for mapping, utility in semantics.values():
+        if mapping:
+            mapping["0"], mapping["1"] = mapping["1"], mapping["0"]
+            utility["0"], utility["1"] = utility["1"], utility["0"]
+    for row in changed["predictions"]:
+        if row["availability"] == "available":
+            row["hard_state"] = 0
+            row["feature_contributions"]["hard_state"] = 0
+    identity = changed["evaluation_input_identity"]
+    identity["semantic_mapping_sha256"] = canonical_sha256(semantics)
+    changed["input_hash"] = canonical_sha256(identity)
+    changed["acceptance_sha256"] = canonical_sha256({k: v for k, v in changed.items() if k != "acceptance_sha256"})
+    with pytest.raises(model_module.FormalStateError, match="approved sealed"):
+        subject.neutral_rescore(changed)
+    monkeypatch.setattr(subject, "NEUTRAL_SOURCE_ACCEPTANCE_SHA", changed["acceptance_sha256"])
+    assert all(
+        r["feature_contributions"]["neutral_hidden_state"] == 0
+        for r in subject.neutral_rescore(changed)["predictions"]
+        if r["availability"] == "available"
+    )
+
+
+def test_neutral_ties_stay_undefined_and_label_pin_and_repeat_fail_closed(acceptance, inputs, monkeypatch):
+    frozen, observations = inputs
+    labels = _labels(frozen, observations["source_calendar"])
+    baseline = receipt({"predictions": _baseline(frozen, observations["source_calendar"]), "tail_accessed": False})
+    source = copy.deepcopy(acceptance)
+    source["evaluation_input_identity"].update(
+        outcome_sha256=labels["receipt_sha256"], baseline_sha256=baseline["receipt_sha256"]
+    )
+    source["evaluation_input_identity"]["prediction_sha256"] = "c" * 64
+    source["input_hash"] = canonical_sha256(source["evaluation_input_identity"])
+    source["acceptance_sha256"] = canonical_sha256({k: v for k, v in source.items() if k != "acceptance_sha256"})
+    monkeypatch.setattr(subject, "NEUTRAL_SOURCE_ACCEPTANCE_SHA", source["acceptance_sha256"])
+    repeat = subject.neutral_effect_repeat(source, labels, baseline, numeric_environment={"fixture": True})
+    assert repeat["result"]["effect_status"] == "EVIDENCE_INSUFFICIENT"
+    assert repeat["result"]["metrics"]["same_score_days"] == 221
+    assert repeat["result"]["metrics"]["valid_ic_day_count"] == 0
+    assert subject.close_neutral_processes(repeat, copy.deepcopy(repeat))["completed_fits"] == 0
+    bad = copy.deepcopy(labels)
+    bad["outcomes"][subject.START.isoformat()][frozen["catalog"][0]] = 1
+    with pytest.raises(model_module.FormalStateError, match="identity"):
+        subject.neutral_effect_repeat(source, reseal(bad), baseline, numeric_environment={"fixture": True})
+    drift = reseal({**repeat, "fits": 1})
+    with pytest.raises(model_module.FormalStateError):
+        subject.close_neutral_processes(repeat, drift)
+
+
+def test_neutral_cli_requires_existing_labels_and_never_silently_rebuilds(tmp_path, monkeypatch):
+    import sys
+    from scripts.hmm_risk import run_formal_state_effect as cli
+
+    monkeypatch.setattr(cli, "read_json", lambda _path: {})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_formal_state_effect", "run", "--source-acceptance", "sealed.json", "--output", str(tmp_path / "run")],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2 and not (tmp_path / "run").exists()
