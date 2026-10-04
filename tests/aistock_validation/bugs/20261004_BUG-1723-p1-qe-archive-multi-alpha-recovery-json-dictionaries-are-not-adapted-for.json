@@ -18,6 +18,12 @@
   "description": "HTTP500, no archive run; ProgrammingError cannot adapt dict from MULTI_ALPHA_RUN_COLUMNS",
   "events": [
     {
+      "action": "design_compliance_and_second_round_review",
+      "actor": "Codex QE",
+      "note": "两轮审核通过：第一轮核对三个既有 multi-alpha 表合同的九个 JSON 字段，补齐七个漏登记的字段；第二轮使用真实 psycopg2 adapter 验证嵌套/中文/null/哈希值保持。完整修复不简化；异常仍原样抛出、事务原子性与 provenance 校验不变；不改模型/数据/保留规则；未增加任何审批或门禁。20 项相关测试、Ruff、compile、L0 blocking=0、ownership registry 8 项通过。生产 DDL/DML、依赖安装、服务控制均 noop；正式后端写入生效等待用户重启。",
+      "timestamp": "2026-10-04T02:13:00Z"
+    },
+    {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261004-e4333e218a9b",
