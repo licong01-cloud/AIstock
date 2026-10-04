@@ -35,13 +35,18 @@
   ],
   "expected": "Known multi-alpha recovery/identity JSONB fields are adapted and complete valid results archive atomically",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/qe_archive/repository.py",
+      "backend/tests/qe_archive/test_multi_alpha_recovery_archive.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1723-p1-qe-archive-multi-alpha-recovery-json-dictionaries-are-not-adapted-for.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/qe_archive/repository.py",
       "backend/tests/qe_archive/test_multi_alpha_recovery_archive.py",
-      "backend/tests/test_qe_archive_repository_static.py"
+      "tests/aistock_validation/bugs/20261004_BUG-1723-p1-qe-archive-multi-alpha-recovery-json-dictionaries-are-not-adapted-for.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/repository.py",
@@ -134,13 +139,19 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
-    "fresh_process_evidence": ["python -m pytest backend/tests/qe_archive/test_multi_alpha_recovery_archive.py -k json_columns_roundtrip -q -> 9 passed; real psycopg2 adapter, no DB/service control"],
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/test_qe_archive_repository_static.py -k json_columns_roundtrip -q -> 9 passed; real psycopg2 adapter, no DB/service control"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

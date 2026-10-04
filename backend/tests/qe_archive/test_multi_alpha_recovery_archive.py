@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import pytest
-from psycopg2.extensions import adapt
-from psycopg2.extras import Json
 
 from backend.services.multi_alpha.durable_identity import build_execution_identity
 from backend.services.qe_archive.handlers.multi_alpha_combine_archive_handler import (
@@ -15,31 +10,7 @@ from backend.services.qe_archive.handlers.multi_alpha_combine_archive_handler im
     MultiAlphaCombineArchiveHandler,
 )
 from backend.services.qe_archive.models import sha256_json
-from backend.services.qe_archive.repository import (
-    MULTI_ALPHA_RUN_COLUMNS,
-    MULTI_ALPHA_RECOVERY_CHILD_COLUMNS,
-    MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS,
-    QEArchiveRepository,
-)
-
-
-@pytest.mark.parametrize('column', sorted({
-    column for columns in (MULTI_ALPHA_RUN_COLUMNS, MULTI_ALPHA_RECOVERY_CHILD_COLUMNS,
-                           MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS)
-    for column in columns if column.endswith('_json')
-}))
-def test_multi_alpha_json_columns_roundtrip_through_real_psycopg_adapter(column: str) -> None:
-    payload = {'identity': {'record_only': True, 'missing': ['executor_code_commit']},
-               'lineage': [None, {'source': 'original_prediction', 'sha256': 'a' * 64}]}
-    value = QEArchiveRepository._adapt_value(column, payload)
-    assert isinstance(value, Json)
-    assert json.loads(value.dumps(value.adapted)) == payload
-    assert adapt(value).getquoted()  # Real driver adaptation, no DB/server needed.
-    unicode_payload = {'sector': '半导体'}
-    unicode_value = QEArchiveRepository._adapt_value(column, unicode_payload)
-    assert json.loads(unicode_value.dumps(unicode_value.adapted)) == unicode_payload
-    assert QEArchiveRepository._adapt_value(column, None) is None
-    assert QEArchiveRepository._adapt_value('execution_identity_hash', 'b' * 64) == 'b' * 64
+from backend.services.qe_archive.repository import QEArchiveRepository
 
 
 def _identity() -> dict[str, Any]:
