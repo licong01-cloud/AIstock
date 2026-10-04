@@ -552,7 +552,7 @@ def prepare_file_request(
     )
 
 
-def _effect_stock_facts(
+def _l2_stock_facts(
     frozen: Mapping[str, Any],
     source: Mapping[str, Any],
     *,
@@ -565,10 +565,9 @@ def _effect_stock_facts(
     predecessors. No forward-fill, same-day substitution or A5 refit occurs.
     """
     from backend.services.hmm_risk import rotation_l1_input_bundle as reader
-    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, END, fail, validate_models
+    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, END, fail
     from backend.services.hmm_risk.formal_state_executor import validate_output_location
 
-    validate_models(frozen)
     if not SOURCE_START <= start <= end <= END:
         raise fail("effect source window exceeds its approved boundary")
     assets = reader.load_rotation_l1_direct_v2_source_assets(
@@ -697,6 +696,19 @@ def _effect_stock_facts(
     }
     # Tuple keys are internal only and never passed to canonical JSON.
     return assets, window, aggregates["L2"], identity
+
+
+def _effect_stock_facts(
+    frozen: Mapping[str, Any],
+    source: Mapping[str, Any],
+    *,
+    start: date,
+    end: date,
+) -> tuple[dict[str, Any], tuple[date, ...], list[Any], dict[str, Any]]:
+    from backend.services.hmm_risk.formal_state_effect import validate_models
+
+    validate_models(frozen)
+    return _l2_stock_facts(frozen, source, start=start, end=end)
 
 
 def prepare_effect_observations(frozen: Mapping[str, Any], source: Mapping[str, Any]) -> dict[str, Any]:
