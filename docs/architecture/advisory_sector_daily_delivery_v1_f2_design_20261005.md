@@ -26,14 +26,14 @@
 
 1. `AdvisoryProgramPGRepository.list_version_for_date(program_id, target, status='PUBLISHED')`或`latest_list_version`，显式list id使用`get_list_version`，随后`list_version_items`。原list的binding不可用当前active binding替换；精确参数化SELECT原binding id所需字段，避免枚举全部历史binding。
 2. 既存review身份与`SelectionCenterRepository.get_run`只读消费，不调用Selection生成或preflight资产审批。`list_version_to_dict`提供原D/T；`_resolve_decision_date`仅核对真实原D一致性。review需要同快照runtime policy字段时直接参数化SELECT该原review，而不在进行中的事务里调用会重新set_session/rollback的公共reader。
-3. 原非EXIT名单的symbol/rank确定已发布候选集合；先严格验证重复/缺失/外部项，再复用`_candidate_rows_for_recommendation_list`投影run。不得把缺失list或未知rank静默跳过，不以原run全Top50或当前池重新选Top20。`project_economic_frozen_candidate_roster_v1`复用真实normalized scores和weights，保持原rank/顺序。
+3. M1已冻结Top20维度：原非EXIT且rank 1–20的已发布名单确定该模型候选集合；先严格验证重复/缺失/外部项，再复用`_candidate_rows_for_recommendation_list`投影run。真实名单可能还含Top20外WATCH和历史持仓/EXIT，不能因原list共47项拒绝整日。API分别报告原list项数、该模型候选数、未覆盖原项及原因，旧完整业务名单不变；Top20外不冒称已被此模型估值。不得把缺失list或坏rank伪装原空名单，不以原run全Top50或当前池重新选Top20。`project_economic_frozen_candidate_roster_v1`复用真实normalized scores和weights，保持原rank/顺序。
 4. 读取21个截至D交易日与紧邻T，共22节点；调用既存`EconomicSectorPriceDailyFamilyV1.predict_day/predict_batch`和`EconomicSectorReadonlyDailySourceV1.load_batch`，数学不重写。
 5. 分类复用已发布中立行业bundle和公共resolver，只取D可见CLASSIFICATION；结构crosswalk/code map和公司分类分开。配置声明实际已发布数据来源，不强绑训练期profile，也不回退旧profile或以全池复现为条件。
 6. 原监管价格属性复用`PostgresRealtimeFeatureSource._price_range_contexts`公开只读消费者合同：每日用其真实live DB路径，历史可以显式canonical历史组件；不能把历史组件伪装成live。无价格属性逐股QUERY_DOMAIN_UNAVAILABLE；真正矛盾不吞掉。
 
 ## 4. Contracts / 名单、输入与模型配置
 
-真实list/review/run的program/binding/T、Selection run id、package manifest必须内部一致；原candidate唯一且原rank连续，权重/两腿输入与配置数学相容。池身份来自原binding/run/list的冻结声明，规范化后对比，不回填当前pool成员，不补原receipt。原名单已做准入，本消费者不得再次用当前指数成员过滤；stock_universe、single_index、index_union均保留原名单语义。M1不适配其它包/recipe时报告MODEL_INPUT_INCOMPATIBLE，不否定QE包或阻断原名单展示。
+真实list/review/run的program/binding/T、Selection run id、package manifest必须内部一致；原Top20 candidate唯一且原rank连续，权重/两腿输入与配置数学相容。范围外的WATCH/历史持仓/EXIT显式留在`unmodeled_items`并注明OUTSIDE_MODEL_TOP20_SCOPE/NOT_ENTRY_CANDIDATE，不改其业务动作；无原rank的旧持仓不作为新买入候选。池身份来自原binding/run/list的冻结声明，规范化后对比，不回填当前pool成员，不补原receipt。原名单已做准入，本消费者不得再次用当前指数成员过滤；stock_universe、single_index、index_union均保留原名单语义。M1不适配其它包/recipe时报告MODEL_INPUT_INCOMPATIBLE，不否定QE包或阻断原名单展示。
 
 原list的review policy hash从原summary/item evidence/原review runtime声明核对，禁止用当前program policy冒充历史值。它与模型标签的shadow policy不是同一种字段：分别报告`source_review_policy_sha256`、`model_parent_policy_identity`及`model_value_policy_identity`，不得把两个hash硬比成同一合同。M1估值对应其冻结shadow/cost policy，不称已按任意新review规则重新标注。没有原政策声明时如实UNKNOWN_POLICY声明，不伪造历史政策，也不新增包资格门；相互冲突则计算错误。
 
@@ -96,6 +96,8 @@ M1卡片与旧v3类型隔离。自动按当前program和visible list target/list
 DESIGN-COMPLIANCE-001：四项逐条检查完整业务/无mock-only，真实矛盾不得静默或假空；严格原数学/用户价格目标，不新加准入审批，所有未完成配置/运行态/效果如实标注。
 
 设计自审修订记录（本窗口）：第一轮接口/时钟审计确认`_candidate_rows_for_recommendation_list`只投影原名单，先验证以避免其跳过坏rank；明确review与shadow hash不同。第二轮事务/边界审计把历史binding枚举改为精确SELECT，避免公共review reader的事务内set_session，并保留source独立快照披露。第三轮模型配置/UI审计冻结具体字段，从原小identity recipe取真实权重，不允许任意路径HTTP输入；修正部分UNKNOWN下NO_ACCEPTABLE_PRICE的展示边界和list切换竞态。校验器第一次使用不支持的DESIGN_DRAFT状态而失败，现仅将已审过的详细设计标DESIGN_VERIFIED，实施仍明确PENDING，未伪造源码完成。
+
+第四轮真实输入设计复核：只读发现原program已发布名单从2026-08-14起，训练截止内没有DB业务名单，不能用训练parquet冒充真实published list；2026-08-28列表47项含Top20外WATCH/旧持仓，修正为原published Top20投影并显式保留未估值项，而非用20项上限拒绝正常业务名单。样本原review hash与model parent/value hash确实不同。未读取该日收益、T行情、sealed模型诊断或赢家。
 
 ## 10. Rollout / Rollback / Production Gates
 
