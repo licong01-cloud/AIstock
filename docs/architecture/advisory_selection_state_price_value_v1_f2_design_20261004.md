@@ -117,7 +117,7 @@ M2/3/4已11fit+1索引，M1已4fit，本设计M5最多4fit，累计19物理fit+1
 
 ## 13. Design Acceptance Matrix
 
-设计已交付；独立源码树已同步最新main，保留真实新信息/同核提取，旧M1模型数学与历史结果不变，移除正前序拒绝。19直接测试及Ruff通过；以下设计与源码验收分列。正式M5登记/研究fit/四臂当前仍0，下一清洁提交后按新身份运行，不冒充收益确认。
+设计已交付；独立源码树同步最新main，保留新信息/同核提取，旧M1模型与结果不变，移除正前序拒绝及修正同文件路径拼写误判。20直接测试和20冻结reader测试合计40 PASS，真实M1/原20候选15D兼容通过。M5新登记/四fit/完整四臂均已完成，见§17；源码PR尚未合入，经济确认/业务启用0。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -125,7 +125,7 @@ M2/3/4已11fit+1索引，M1已4fit，本设计M5最多4fit，累计19物理fit+1
 | F-706 | backend/services/advisory_model_first/economic_selection_state_price_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_price_v1.py | SOURCE_VERIFIED | none |
 | F-707 | backend/services/advisory_model_first/economic_selection_state_price_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_price_v1.py | SOURCE_VERIFIED | none |
 | F-708 | backend/services/advisory_model_first/economic_selection_state_price_v1.py; backend/services/advisory_model_first/economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py; backend/tests/advisory_model_first/test_economic_selection_state_price_v1.py | SOURCE_VERIFIED | none |
-| F-709 | backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_pipeline_v1.py; artifact: 原完整四臂helper复用 | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 下一清洁提交后运行一次新研究，未称经济完成 |
+| F-709 | backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_pipeline_v1.py; artifact: §17完整一次四臂研究 | VERIFIED_RESEARCH_COMPLETED_NEGATIVE | none |
 | F-710 | backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_pipeline_v1.py | SOURCE_VERIFIED | none |
 | F-711 | backend/services/advisory_model_first/economic_sector_price_value_v1.py; backend/services/advisory_model_first/economic_sector_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py; backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py | SOURCE_VERIFIED | none |
 | F-712 | §2/3/10/11/15/16 | artifact: 19直接测试、三视角审核及精确Advisory差异 | SOURCE_VERIFIED | none |
@@ -147,3 +147,11 @@ DESIGN-COMPLIANCE-001逐项：实现和研究/经济/激活分报；未知/矛�
 本次源码三视角复审：方法轮核对共核提取仅参数化信息块/身份，M1既有接口、训练人口、支持、gap缩放和模型SHA公式保持；时钟轮保留原calendar/完整名单/未来毒化及原UNKNOWN，不以当前包资格补证为前置；编排轮将前序正/负/执行阻断均接受并拒绝真实计数矛盾，原预算不清零。同步main的冲突分别保留新信息共核与main最新事实文档，最终差异只有登记的Advisory源码/测试及本设计，不含其它模块业务修改。
 
 实际登记前修正：M1与原M2的同一value-label manifest具有相同role/SHA/字节数，只是F盘路径分别用正反斜杠；原字符串直接比较误判来源不一致。消费者现在比较实际解析路径及其余完整reference身份，不改任何原工件或hash；外国路径、不同hash或语义仍不一致。这是未发布功能的路径兼容修正，不是QE资格门禁或恢复历史证明。
+
+## 17. 一次真实研究结果（2026-10-04）
+
+run `advselectionvalue_8f53ace471987dc7f0b99a00`，真实fit源码为登记source receipt中的c35b039提交；后续仅事实文档更新，不重训。新lineage先登记再读取原已消费开发窗，7720原键完整，7340 AVAILABLE/380 UNKNOWN_20D_WARMUP；成熟train3693行/195D，validation1591行仅诊断。4物理fit约9.078秒，完整四臂约20.969秒；fit前后统一公开QE running=0，无QE提交/控制。研究总账19fit+1index，不清零旧计数。
+
+81原决策日/1620候选、100共同估值日，candidate/baseline/matched/规则成本后名义净收益13.2538%/21.3220%/4.5719%/20.5747%；candidate减baseline日均-6.8073bps，固定block95%[-28.4257,13.3284]；减matched +8.0519bps，区间[-2.5053,19.4418]。candidate MDD -8.9867%，baseline -10.3314%，matched -11.8944%；风险改善不是收益增量。实际进入差异baseline58D/matched43D，真模型TAKE82、UNKNOWN基线控制6；基线18笔被跳过中12笔盈利/6笔亏损，不是成功风险过滤。
+
+原净增量条件未通过，保留原navigation=STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION；仅结束本精确假设，不形成包消费或全任务门禁，不调阈值/窗口/seed补救、不回选控制。各端点/held-mark/未退出限制为0，仍非真实成交证明或独立确认；模型SHA edb2bde6824ad08066c3e0fc414c5cbb7615e57a9eb2d043a3b5f2438ee8567f。原同信息对照显示新增排名状态可能含部分信息，但没有胜过原Top5；监督人口与M1不同，不能据本结果排名M1/M5经济优劣。下一主线是正常日频消费者功能，任何新模型另立事前假设，不重复当前candidate。
