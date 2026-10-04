@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1723",
-  "closed_at": null,
+  "closed_at": "2026-10-04T12:09:27.733772Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -150,10 +150,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1723\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1723",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b99dd9080153762523fe5e2c761c4d7badd6c89331b062f5807c96b665623e48",
+      "contract_digest": "1db464dc1064ba85837d4ab3ccf2f37b7336c4f500fba4cef87631bcf92913a0",
+      "expected_identity": "3e1801efea327b8a5048235550bb15f53890858d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-04T12:03:03.685107Z",
+      "mode": "read_only",
+      "observed_identity": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "96f049026d133bb0d1799cc485442b7fdaf3ec7b1a4252e8099286c5e515ac54",
+      "receipt_sha256": "182797f1cb7336cba381cc3a3f1d67f46b9bdd42c90621b872445eb174a0df65",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a9ba6ecf66647446f1ad9b643c59a110265730659534758bb3486b734e95fa0d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -185,7 +207,7 @@
     ],
     "validation_evidence_digest": "297e9a25e3b14bed884aca97b728441dc2c71731c0d51c2eb3fe459c5fad363a"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.archive"
   ],
@@ -196,7 +218,8 @@
   },
   "validation_evidence": [
     "python -m pytest backend/tests/test_qe_archive_repository_static.py -k json_columns_roundtrip -q -> 9 passed at final HEAD",
-    "python -m nox -s l0 -- exact changed files -> passed blocking=0"
+    "python -m nox -s l0 -- exact changed files -> passed blocking=0",
+    "post-restart-verify BUG-1723 backend-main verified"
   ],
   "verification_budget": {
     "budget": "standard",
