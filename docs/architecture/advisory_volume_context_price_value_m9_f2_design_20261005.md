@@ -54,7 +54,7 @@ NULL/缺报价/缺量/正常停牌缺行/不足20session整块UNKNOWN，保留�
 | signed_adjusted_volume_balance19 | sum(Q_i×sign(r_i))/sum(Q_i)，i=1..19，[-1,1] | 涨跌日量分布，不是主动买卖额或因果净流入 |
 | adjusted_volume_concentration20 | sum((Q_i/sum(Q))²)，i=0..19，[1/20,1] | 量在原20日集中度，不是流动性/成交概率保证 |
 
-三个字段同时有效才AVAILABLE，candidate/matched共享同一mask。纯共同价格/量尺度变化不改值；股票数量与因子拆股坐标手算直接验。signed sign(0)=0，无经济epsilon；全部加权用归一化Q权重，避免直接Q×C或Q²的中间溢出，不winsorize、不以结果择特征。仅固定浮点≤1e-12端点容差。原12D/g的无标签global支持独立，不因为新块人口或未来Y/L改变。
+三个字段同时有效才AVAILABLE，candidate/matched共享同一mask。纯共同价格/量尺度变化不改值；股票数量与因子拆股坐标手算直接验。signed sign(0)=0，无经济epsilon；全部加权用各自窗口归一化Q权重，19日分布须独立归一化，不能让首日极大量权把后19日真实交易数值下溢为零；避免直接Q×C或Q²的中间溢出，不winsorize、不以结果择特征。仅固定浮点≤1e-12端点容差。原12D/g的无标签global支持独立，不因为新块人口或未来Y/L改变。
 
 ## 6. Model / 同监督及价格集合
 
@@ -102,17 +102,17 @@ baseline Top5 / 固定±300bps rule / matched / candidate，原81决策日/1620�
 
 ## 12. Design Acceptance Matrix
 
-仅详细设计；M9源码、volume值读取、prepare/fit/新run及经济结果全部PENDING。source schema可用不是数值完备或盈利。
+设计#5456已合入/自身清理；以下源码及一次完整研究验收，不将prepare或开发收益等同经济确认/正式启用。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-902 | §1/5/6 | artifact: 原12D/M6/M7/M8与新三个字段源码对照 | DESIGN_VERIFIED | none |
-| F-903 | §4/5/10 | artifact: 只读market.kline_daily_raw schema及原冻结字段/单位，精确pair规格 | DESIGN_VERIFIED | none |
-| F-904 | §5/6/10 | artifact: 三固定公式/原同核API/公平监督与拆股坐标测试规格 | DESIGN_VERIFIED | none |
-| F-905 | §8 | artifact: 原完整四臂/数值边界/未知控制分账 | DESIGN_VERIFIED | none |
-| F-906 | §7/10 | artifact: 实际累计31/1、M8终态及固定小扩展/旧默认规格 | DESIGN_VERIFIED | none |
-| F-907 | §3/7 | artifact: 只读QE状态/X-F/资源及禁止操作明细 | DESIGN_VERIFIED | none |
-| F-908 | §2/9/13/14 | artifact: 12精确源码文件、设计三轮修订与四态边界 | DESIGN_VERIFIED | none |
+| F-902 | backend/services/advisory_model_first/economic_volume_context_price_v1.py；§1/5/15 | test: backend/tests/advisory_model_first/test_economic_volume_context_price_v1.py；artifact: 12D/M6～M8与新块对照 | SOURCE_VERIFIED | none |
+| F-903 | backend/services/advisory_model_first/economic_volume_context_price_pipeline_v1.py；§4/15 | test: backend/tests/advisory_model_first/test_economic_volume_context_price_pipeline_v1.py；artifact: 一个SELECT/38168精确请求键/7720原候选 | SOURCE_VERIFIED | none |
+| F-904 | backend/services/advisory_model_first/economic_volume_context_price_v1.py；§5/6/15 | test: backend/tests/advisory_model_first/test_economic_volume_context_price_v1.py；artifact: 手算/拆股/PIT、3693共同train/195D | SOURCE_VERIFIED | none |
+| F-905 | §8/15；economic_volume_context_price_pipeline_v1.py | artifact: 原完整四臂、两个配对增量及五NAV条件、真实TAKE与UNKNOWN分账 | VERIFIED_RESEARCH_COMPLETED_NEGATIVE | none |
+| F-906 | economic_moneyflow_price_pipeline_v1.py；economic_sector_price_pipeline_v1.py；§7/15 | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 实际累计35/1、新35及旧23/27/31默认 | SOURCE_VERIFIED | none |
+| F-907 | §3/7/15 | artifact: fit前后QE三running均0、线程2/X-F、0DB写入/激活/控制 | SOURCE_VERIFIED | none |
+| F-908 | §2/13/15 | test: backend/tests/advisory_model_first/test_economic_volume_context_price_pipeline_v1.py；artifact: 43直接项/Ruff/F2/L0与三视角自审 | SOURCE_VERIFIED | none |
 
 ## 13. Risks / 设计审核与符合性
 
@@ -125,3 +125,27 @@ DESIGN-COMPLIANCE：不交付mock-only/子集为完整；未知保留而矛盾�
 ## 14. Rollout / Rollback / Production Gates
 
 离线研究不绑定API/UI/消费者family/角色，不变数据/模型/数据库/依赖/运行服务，backend_restart_required=false。改变来源/语义须新lineage，保留旧工件/计数；负候选仅停止自身。收益确认和运行启用分别需要其后独立证据及授权，本设计不代替。原任务18h/48h时限不重计，不为耗满时长创建同族搜索。
+
+## 15. 实际源码及一次研究（2026-10-05）
+
+设计#5456合入e40a37b9d并自身官方cleanup_done。源码在独立advisory-volume-context-price-value-m9-20261005树，研究producer HEAD=ee03b759dcc2d9a0e376ec9232b6a43bb2b07e16；implementation SHA=708561655bdfc970e194709ec2732a8c6b3c71fcc0efcc31c74b52485f7672ea。后续仅事实文档HEAD不冒充重新训练。
+
+来源/监督/工程三视角反复自审：手算与拆股坐标首轮15直接项通过；次轮修复单位预算fixture缺root、保持旧M8测试完整；第三轮独立数值反例复现首日量权导致后19日真实量下溢，改为各自窗口归一化，业务公式/经济阈值不变。稳定43直接项、Ruff、F2七项及两个正式L0入口PASS（feature 0finding；guardrail 3finding/0blocking）。这是本窗口不同视角自审而非独立外审；没有UI/生产或收益确认宣称。
+
+新run=advvolumecontextvalue_7c351cfc4c099c73901876c5，plan SHA=7c351cfc4c099c73901876c5cf0058ee01ad47e3e1489e6d5ac89d5ca7d979d6，工件在F:/Dev/AIstock_model_artifacts/advisory_price_research_campaign_r2_20261004同名独立目录。先登记，一次prepare11.437秒，原7720全保留：7330 AVAILABLE/380预热UNKNOWN/10源UNKNOWN；原股票380240行，单量SELECT精确请求38168对/返回38158，不拉全池。query_at=2026-10-04T21:58:22.001852+00:00，DB历史非vintage/native UNPROVEN，原RECOVERED_LIMITED不升级。
+
+fit前21:58:48UTC、后22:00:20UTC QE三个running均0。一次4fit/完整四臂21.250秒，fit阶段7.500秒；共同train3693行/195D，validation1591仅诊断，原test不训练/校准。总账真实累计35 physical-fit+1历史index，0 DB写入/分钟/sealed/QE提交/模型启用/服务控制。
+
+| 冻结读回 | 实际结果 |
+|---|---|
+| 人口/政策 | 原81决策日/1620候选/100共同估值日，VALUE_REVIEW_5_V1及原成本不变 |
+| candidate / baseline / matched / rule净收益 | 25.9681% / 21.3220% / 4.5719% / 20.5747%；零回报现金基准，不是指数超额/OOS或真实fill |
+| 配对candidate减baseline | 日+3.9776bps，描述性95% block区间[-15.1641,22.4551]，低于事前5bps |
+| 配对candidate减matched | 日+18.8368bps，描述性95% block区间[7.1167,33.9443]，不能替代基线条件 |
+| 真实贡献/干预 | candidate 83真TAKE+4 UNKNOWN控制，matched 79+4；baseline/matched进入差异55/56日 |
+| MDD candidate / baseline / matched | -9.2152% / -10.3314% / -11.8944% |
+| candidate / baseline尾部均值 | -250.2043 / -254.3254bps；风险改善不替代净增量 |
+| 条件及审计 | net_increment=false，其余四NAV条件true；四臂端点受限、held-mark和未结算阻断均0，仍非真实成交证明 |
+| 结论 | STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION / NAVIGATION_ONLY / NOT_CONFIRMED / deployable=false |
+
+回放收益改善但未满足原开发增量条件，不降至3.9bps、不调阈值/seed、不回选matched或补证救活，不进入新日频family/角色绑定。下一方向只能是真正不同信息/可识别动作的独立设计；源码PR交付中，合入/清理以实时GitHub/官方流程为准。工程交付、研究/经济确认、运行态各自报告。

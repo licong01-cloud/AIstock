@@ -90,3 +90,16 @@ def test_M8_router_keeps_old_information_identity_formula():
     assert _information_key('M8', MARKET_RISK_FEATURES) == 'market_risk_features'
     with pytest.raises(ValueError, match='block/model'):
         _information_key('M8', SECTOR_FEATURES)
+
+
+def test_M9_router_keeps_all_previous_identity_formulas_and_rejects_wrong_block():
+    from backend.services.advisory_model_first.economic_volume_context_price_v1 import VOLUME_CONTEXT_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, information_fit_identity_v1
+    from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
+    fitted = sector_fit_fixture()
+    for model in ('M1', 'M5', 'M6', 'M7', 'M8'):
+        assert information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model) == sha(
+            dict(model_id=model, recipe=fitted.recipe, models=fitted.models, support=list(fitted.support.intervals_bps)))
+    assert _information_key('M9', VOLUME_CONTEXT_FEATURES) == 'volume_context_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M9', SECTOR_FEATURES)
