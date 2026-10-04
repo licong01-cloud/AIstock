@@ -30,7 +30,7 @@ def moneyflow_implementation_sha256_v1():
         readonly_dependencies={name: hashlib.sha256((repo/name).read_bytes().replace(b'\r\n', b'\n')).hexdigest() for name in dependencies}))
 
 
-def verify_moneyflow_budget_v1(plan, *, price_path_extension=None):
+def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None):
     anchor = _verify_reference(plan.budget_anchor_ref)
     root = plan.campaign_root.resolve()
     original = PriceCampaignPlanV2.model_validate_json((anchor.parent/'plan.json').read_text(encoding='utf-8'))
@@ -46,6 +46,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None):
         raise ValueError('moneyflow original anchor/predecessor source/root/policy differs')
     journal = root/'campaign_fit_journal.jsonl'
     events = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines()]
+    if market_risk_extension is not None and price_path_extension is None:
+        raise ValueError('market risk extension requires original explicit M7 extension')
     if price_path_extension is not None:
         from backend.services.advisory_model_first.economic_price_path_value_v1 import PricePathPlanV1
         extension = PricePathPlanV1.model_validate(price_path_extension)
@@ -56,10 +58,21 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None):
                 or extension.parameters['policy_sha256'] != plan.parameters['policy_sha256']
                 or extension.parameters['cost_sha256'] != plan.parameters['cost_sha256']):
             raise ValueError('price path extension original root/source/predecessor differs')
+    if market_risk_extension is not None:
+        from backend.services.advisory_model_first.economic_market_risk_price_v1 import MarketRiskPricePlanV1
+        market_extension = MarketRiskPricePlanV1.model_validate(market_risk_extension)
+        market_predecessor = _verify_reference(market_extension.predecessor_manifest_ref)
+        if (market_extension.campaign_root.resolve() != root or not _same_sources(market_extension, extension)
+                or market_extension.budget_anchor_ref != extension.budget_anchor_ref
+                or market_predecessor != root/extension.experiment_id/'evaluated/manifest.json'
+                or market_extension.parameters['policy_sha256'] != extension.parameters['policy_sha256']
+                or market_extension.parameters['cost_sha256'] != extension.parameters['cost_sha256']):
+            raise ValueError('market risk extension original root/source/predecessor differs')
     expected = {'M2': (4, PriceCampaignPlanV2), 'M3': (5, PriceCampaignPlanV2), 'M4': (2, PriceCampaignPlanV2),
                 'M1': (4, SectorPricePlanV1), 'M5': (4, SelectionStatePricePlanV1)}
     if any(event.get('state') != 'STARTED' or event.get('kind') not in ('PHYSICAL_FIT', 'INDEX_BUILD')
-           or event.get('model_id') not in (*expected, 'M6', *(('M7',) if price_path_extension is not None else ())) for event in events):
+           or event.get('model_id') not in (*expected, 'M6', *(('M7',) if price_path_extension is not None else ()),
+               *(('M8',) if market_risk_extension is not None else ())) for event in events):
         raise ValueError('moneyflow cumulative journal has foreign state/model/kind')
     for model, (count, cls) in expected.items():
         found = [event for event in events if event['kind'] == 'PHYSICAL_FIT' and event['model_id'] == model]
@@ -106,6 +119,24 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None):
             event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != extension.campaign_id
             or event['experiment_id'] != extension.experiment_id or event['head'] not in heads for event in latest):
             raise ValueError('price path extension own cumulative budget/journal differs')
+    if market_risk_extension is not None:
+        if len(latest) != 4:
+            raise ValueError('market risk extension needs actual four completed M7 fits')
+        previous_root = root/extension.experiment_id
+        registered = read_stage(previous_root/'preregistered', stage='preregistered', plan_sha256=extension.plan_sha256, parent_sha256=None)
+        _ledger(extension, previous_root, 'PREREGISTERED', previous_root/'preregistered/manifest.json')
+        frozen = PricePathPlanV1.model_validate_json((previous_root/'preregistered/plan.json').read_text(encoding='utf-8'))
+        if frozen != extension:
+            raise ValueError('market risk extension cannot substitute original M7 plan')
+        parent = registered['stage_sha256']
+        for stage in ('prepared', 'trained', 'evaluated'):
+            parent = read_stage(previous_root/stage, stage=stage, plan_sha256=extension.plan_sha256, parent_sha256=parent)['stage_sha256']
+        _ledger(extension, previous_root, 'EVALUATED', market_predecessor)
+        newest = [event for event in events if event['model_id'] == 'M8']
+        if len(newest) > 4 or len({event['head'] for event in newest}) != len(newest) or any(
+            event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != market_extension.campaign_id
+            or event['experiment_id'] != market_extension.experiment_id or event['head'] not in heads for event in newest):
+            raise ValueError('market risk extension own cumulative budget/journal differs')
     return root
 
 

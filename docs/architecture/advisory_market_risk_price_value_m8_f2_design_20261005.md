@@ -46,7 +46,7 @@ prepare冻结index_close.parquet及query_at/hash/日期范围/SELECT数的source
 
 ## 5. Frozen information block / 只三字段
 
-同20个原正式交易日，19个股票/指数log-return分别r_s[j]、r_m[j]，j=1..19；均完整有限。原KEY加以下三个值、market_risk_feature_status、market_risk_feature_visible_through=D。状态固定AVAILABLE / UNKNOWN_20D_WARMUP / UNKNOWN_MARKET_RISK_SOURCE / UNKNOWN_FLAT_BENCHMARK。
+同20个原正式交易日，19个股票/指数log-return分别r_s[j]、r_m[j]，j=1..19；实现采用log(C[j]/C[j-1])、要求结果完整有限，避免相邻绝对log相减使完全相同return产生伪方差；19个指数return完全相等时确认为零方差，不设经验epsilon、clip或最小波动阈值。原KEY加以下三个值、market_risk_feature_status、market_risk_feature_visible_through=D。状态固定AVAILABLE / UNKNOWN_20D_WARMUP / UNKNOWN_MARKET_RISK_SOURCE / UNKNOWN_FLAT_BENCHMARK。
 
 | 字段 | 精确定义/单位 | 缺失及数值 |
 |---|---|---|
