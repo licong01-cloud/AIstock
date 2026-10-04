@@ -13,6 +13,7 @@ from backend.services.advisory_model_first.economic_sector_price_pipeline_v1 imp
 from backend.services.advisory_model_first.economic_sector_price_value_v1 import SectorPricePlanV1
 from backend.services.advisory_model_first.economic_selection_state_price_v1 import STATE_FEATURES, SelectionStatePricePlanV1, selection_state_fit_identity_v1, selection_state_nodes_v1, selection_state_rows_v1, train_selection_state_price_v1
 from backend.services.advisory_model_first.research_control import AdvisoryResearchTrialRegistryV1
+from backend.services.advisory_model_first.research_control_contracts import EvidenceReferenceV1
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
 
 NAMES = ('economic_selection_state_price_v1.py', 'economic_selection_state_pipeline_v1.py')
@@ -26,7 +27,18 @@ def selection_state_implementation_sha256_v1():
 
 
 def _same_sources(left, right):
-    return all(getattr(left, name) == getattr(right, name) for name in SOURCE_FIELDS)
+    for name in SOURCE_FIELDS:
+        a, b = getattr(left, name), getattr(right, name)
+        if isinstance(a, EvidenceReferenceV1) and isinstance(b, EvidenceReferenceV1):
+            if (a.model_dump(exclude={'artifact_uri'}) != b.model_dump(exclude={'artifact_uri'})
+                    or Path(a.artifact_uri).resolve() != Path(b.artifact_uri).resolve()):
+                return False
+        elif name == 'profile_path':
+            if Path(a).resolve() != Path(b).resolve():
+                return False
+        elif a != b:
+            return False
+    return True
 
 
 def verify_selection_budget_anchor_v1(plan):

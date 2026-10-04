@@ -51,6 +51,20 @@ def test_original_anchor_and_journal_cannot_be_reset_or_relocated(tmp_path):
         pipeline.verify_selection_budget_anchor_v1(plan)
 
 
+def test_same_file_path_spelling_does_not_create_a_source_identity_mismatch(tmp_path):
+    plan, _, _ = anchored_fixture(tmp_path)
+    reference = plan.reusable_prepared_manifest_ref
+    equivalent = plan.model_copy(update={
+        'reusable_prepared_manifest_ref': reference.model_copy(update={'artifact_uri':
+            reference.artifact_uri.replace('\\', '/')}),
+        'profile_path': plan.profile_path.replace('\\', '/'),
+    })
+    assert pipeline._same_sources(plan, equivalent)
+    for field, value in (('sha256', '0'*64), ('artifact_uri', reference.artifact_uri+'.other')):
+        changed = plan.model_copy(update={'reusable_prepared_manifest_ref': reference.model_copy(update={field: value})})
+        assert not pipeline._same_sources(plan, changed)
+
+
 @pytest.mark.parametrize('navigation', ['STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION',
                                       'CONSIDER_CONFIRMATION_DESIGN_ONLY', 'BLOCKED_EXECUTION_OR_MARK_UNPROVEN'])
 def test_terminal_predecessor_records_real_chain_without_profit_admission(tmp_path, navigation):
