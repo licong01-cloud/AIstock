@@ -56,19 +56,24 @@ def sector_sources_v1(plan):
     return (*source[:5], strict.identity, authority)
 
 
-def _receipt():
+def information_source_receipt_v1(*, names=NAMES, implementation=None):
     repo = Path(__file__).resolve().parents[3]
     head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=repo, check=True, capture_output=True).stdout.decode().strip()
     if subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--', 'backend/services/advisory_model_first', 'backend/services/advisory_list_transition.py'], cwd=repo).returncode:
         raise ValueError('sector source dependencies are uncommitted')
     blobs = {}
-    for name in NAMES:
+    for name in names:
         relative = 'backend/services/advisory_model_first/'+name
         body = subprocess.run(['git', 'show', f'{head}:{relative}'], cwd=repo, check=True, capture_output=True).stdout
         if body.replace(b'\r\n', b'\n') != (repo/relative).read_bytes().replace(b'\r\n', b'\n'):
             raise ValueError('sector source/Git blob differ')
         blobs[relative] = hashlib.sha256(body).hexdigest()
-    return dict(head=head, git_blob_content_sha256=blobs, implementation_sha256=sector_implementation_sha256_v1())
+    return dict(head=head, git_blob_content_sha256=blobs,
+        implementation_sha256=sector_implementation_sha256_v1() if implementation is None else implementation)
+
+
+def _receipt():
+    return information_source_receipt_v1()
 
 
 def preregister_sector_price_v1(*, plan, output_root):
@@ -123,22 +128,24 @@ def prepare_sector_price_v1(*, plan_path, output_root):
     return root/'prepared'
 
 
-def _fit_event(plan, root, name):
+def _fit_event(plan, root, name, *, model_id='M1', campaign_fit_budget=15):
+    if (model_id, campaign_fit_budget) not in (('M1', 15), ('M5', 19)):
+        raise ValueError('fixed information campaign budget differs')
     journal = root.parent/'campaign_fit_journal.jsonl'
     with _exclusive_file_lock(root.parent/'campaign_fit.lock'):
         previous = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines()] if journal.exists() else []
-        if sum(event['kind'] == 'PHYSICAL_FIT' for event in previous) >= 15:
+        if sum(event['kind'] == 'PHYSICAL_FIT' for event in previous) >= campaign_fit_budget:
             raise ValueError('sector cumulative campaign fit budget exhausted')
-        event = dict(campaign_id=plan.campaign_id, experiment_id=plan.experiment_id, model_id='M1', head=name,
+        event = dict(campaign_id=plan.campaign_id, experiment_id=plan.experiment_id, model_id=model_id, head=name,
             kind='PHYSICAL_FIT', state='STARTED', time=datetime.now(timezone.utc).isoformat())
         _append_event(journal, event)
         _append_event(root/'fit_journal.jsonl', event)
 
 
-def train_sector_price_study_v1(*, plan_path, output_root, qe_training_idle):
+def train_information_study_v1(*, plan_path, output_root, qe_training_idle, load_study, train_model, fit_event):
     if qe_training_idle is not True:
         raise ValueError('sector fit cannot overlap QE training/unknown state')
-    plan, root, registered, source = load_sector_price_v1(plan_path=plan_path, output_root=output_root)
+    plan, root, registered, source = load_study(plan_path=plan_path, output_root=output_root)
     prepared = read_stage(root/'prepared', stage='prepared', plan_sha256=plan.plan_sha256, parent_sha256=registered['stage_sha256'])
     _ledger(plan, root, 'PREPARED', root/'prepared/manifest.json')
     with _exclusive_file_lock(root/'fit.lock'):
@@ -161,10 +168,10 @@ def train_sector_price_study_v1(*, plan_path, output_root, qe_training_idle):
             nonlocal count
             if count >= 4 or time.monotonic()-started > 1800 or psutil.Process().memory_info().rss > 2*1024**3:
                 raise ValueError('sector fit resource budget exhausted')
-            _fit_event(plan, root, name)
+            fit_event(plan, root, name)
             count += 1
 
-        fitted = train_sector_price_v1(rows=pd.read_parquet(root/'prepared/rows.parquet'), configuration=source[0].configuration, before_fit=before_fit)
+        fitted = train_model(rows=pd.read_parquet(root/'prepared/rows.parquet'), configuration=source[0].configuration, before_fit=before_fit)
         if count != 4 or time.monotonic()-started > 1800:
             raise ValueError('sector fit count/time differs; no publication')
         _publish(study_root=root, stage='trained', plan_sha256=plan.plan_sha256, parent_sha256=prepared['stage_sha256'],
@@ -174,23 +181,24 @@ def train_sector_price_study_v1(*, plan_path, output_root, qe_training_idle):
         return root/'trained'
 
 
-def load_sector_price_fit_v1(*, plan_path, output_root):
-    plan, root, registered, _ = load_sector_price_v1(plan_path=plan_path, output_root=output_root)
+def load_information_fit_v1(*, plan_path, output_root, load_study, fit_identity):
+    plan, root, registered, _ = load_study(plan_path=plan_path, output_root=output_root)
     prepared = read_stage(root/'prepared', stage='prepared', plan_sha256=plan.plan_sha256, parent_sha256=registered['stage_sha256'])
     read_stage(root/'trained', stage='trained', plan_sha256=plan.plan_sha256, parent_sha256=prepared['stage_sha256'])
     _ledger(plan, root, 'TRAINED', root/'trained/manifest.json')
     body = json.loads((root/'trained/metadata.json').read_text(encoding='utf-8'))
     support = ValueAnchorGapSupportV1(tuple(tuple(pair) for pair in body['support']['intervals_bps']))
-    if (body['parameters'] != plan.parameters or sector_fit_identity_v1(body['recipe'], body['models'], support) != body['model_sha256']
+    if (body['parameters'] != plan.parameters or fit_identity(body['recipe'], body['models'], support) != body['model_sha256']
             or body['diagnostics']['fitted_head_count'] != 4 or body['diagnostics']['index_build_count'] != 0):
         raise ValueError('sector fitted metadata differs')
     return SectorPriceFitV1(body['recipe'], body['models'], support, body['diagnostics'], body['model_sha256'])
 
 
-def sector_actual_decisions_v1(*, fitted, candidates, inputs, prices, references, identity, arm):
-    fields = [*KEY, *D_FEATURES, *SECTOR_FEATURES, 'feature_visible_through', 'sector_feature_visible_through']
+def information_actual_decisions_v1(*, fitted, candidates, inputs, prices, references, identity, arm,
+        information_features, information_clock, nodes):
+    fields = [*KEY, *D_FEATURES, *information_features, 'feature_visible_through', information_clock]
     features = _frame(inputs.loc[:, fields], KEY, set(fields))
-    if not all(pd.to_datetime(features[name]).eq(features[KEY[0]]).all() for name in ('feature_visible_through', 'sector_feature_visible_through')):
+    if not all(pd.to_datetime(features[name]).eq(features[KEY[0]]).all() for name in ('feature_visible_through', information_clock)):
         raise ValueError('sector actual query sees future feature')
     roster = _frame(candidates.loc[:, KEY+['selection_effective_rank']], KEY, set(KEY)|{'selection_effective_rank'})
     if (arm not in ARMS or not roster[KEY[0]].lt(roster[KEY[1]]).all()
@@ -227,21 +235,21 @@ def sector_actual_decisions_v1(*, fitted, candidates, inputs, prices, references
                 positions.append(len(output))
         output.append(row)
     if queries:
-        nodes = sector_nodes_v1(fitted=fitted, rows=pd.DataFrame(queries), arm=arm)
-        for position, node in zip(positions, nodes.to_dict('records'), strict=True):
+        estimated = nodes(fitted=fitted, rows=pd.DataFrame(queries), arm=arm)
+        for position, node in zip(positions, estimated.to_dict('records'), strict=True):
             output[position].update(model_action={'ACCEPTABLE': 'TAKE', 'AVOID': 'SKIP'}.get(node['status'], 'UNAVAILABLE'),
                 reason_code=node['status'], expected_net_return_bps=node['expected_net_bps'], downside_q90_bps=node['downside_q90_bps'])
     return pd.DataFrame(output)
 
 
-def evaluate_sector_price_v1(*, plan_path, output_root):
-    plan, root, registered, source = load_sector_price_v1(plan_path=plan_path, output_root=output_root)
-    parent, frozen, identity, _, _, _, _ = source
+def evaluate_information_study_v1(*, plan_path, output_root, load_study, load_fit, decisions):
+    plan, root, registered, source = load_study(plan_path=plan_path, output_root=output_root)
+    parent, frozen, identity = source[:3]
     prepared = read_stage(root/'prepared', stage='prepared', plan_sha256=plan.plan_sha256, parent_sha256=registered['stage_sha256'])
     trained = read_stage(root/'trained', stage='trained', plan_sha256=plan.plan_sha256, parent_sha256=prepared['stage_sha256'])
     _ledger(plan, root, 'TRAINED', root/'trained/manifest.json')
     if not (root/'evaluated').exists():
-        fitted = load_sector_price_fit_v1(plan_path=plan_path, output_root=output_root)
+        fitted = load_fit(plan_path=plan_path, output_root=output_root)
         rankings = pd.read_parquet(frozen/'frozen_rankings.parquet')
         rankings = rankings.loc[rankings[KEY[0]].ge(pd.Timestamp(parent.configuration.test_start))]
         candidates = rankings.loc[rankings.is_candidate_decision & rankings.selection_effective_rank.le(20)
@@ -250,7 +258,7 @@ def evaluate_sector_price_v1(*, plan_path, output_root):
         if candidates.empty or len(prices) > 500000:
             raise ValueError('sector evaluation population/price budget differs')
         inputs, refs = pd.read_parquet(root/'prepared/rows.parquet'), pd.read_parquet(frozen/'references.parquet')
-        actions = {arm: sector_actual_decisions_v1(fitted=fitted, candidates=candidates, inputs=inputs, prices=prices,
+        actions = {arm: decisions(fitted=fitted, candidates=candidates, inputs=inputs, prices=prices,
             references=refs, identity=identity, arm=arm) for arm in ARMS}
         artifacts = evaluate_price_actions_v2(plan=plan, fitted=fitted, rankings=rankings, candidates=candidates,
             prices=prices, identity=identity, calendar=json.loads((frozen/'calendar.json').read_text(encoding='utf-8')), actions=actions)
@@ -259,3 +267,24 @@ def evaluate_sector_price_v1(*, plan_path, output_root):
         read_stage(root/'evaluated', stage='evaluated', plan_sha256=plan.plan_sha256, parent_sha256=trained['stage_sha256'])
     _record(plan, root, parent, 'EVALUATED', root/'evaluated/manifest.json', generated=1, evaluated=1)
     return root/'evaluated'
+
+
+def train_sector_price_study_v1(*, plan_path, output_root, qe_training_idle):
+    return train_information_study_v1(plan_path=plan_path, output_root=output_root, qe_training_idle=qe_training_idle,
+        load_study=load_sector_price_v1, train_model=train_sector_price_v1, fit_event=_fit_event)
+
+
+def load_sector_price_fit_v1(*, plan_path, output_root):
+    return load_information_fit_v1(plan_path=plan_path, output_root=output_root,
+        load_study=load_sector_price_v1, fit_identity=sector_fit_identity_v1)
+
+
+def sector_actual_decisions_v1(*, fitted, candidates, inputs, prices, references, identity, arm):
+    return information_actual_decisions_v1(fitted=fitted, candidates=candidates, inputs=inputs, prices=prices,
+        references=references, identity=identity, arm=arm, information_features=SECTOR_FEATURES,
+        information_clock='sector_feature_visible_through', nodes=sector_nodes_v1)
+
+
+def evaluate_sector_price_v1(*, plan_path, output_root):
+    return evaluate_information_study_v1(plan_path=plan_path, output_root=output_root,
+        load_study=load_sector_price_v1, load_fit=load_sector_price_fit_v1, decisions=sector_actual_decisions_v1)
