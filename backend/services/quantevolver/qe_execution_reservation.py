@@ -375,6 +375,7 @@ class QEExecutionReservationRepository:
         node_capacity: int,
         allow_same_task_backtest_parallelism: bool = False,
         allow_same_task_parallel_training: bool = False,
+        allow_durable_prediction_replay_parallelism: bool = False,
         owner_id: str,
         lease_seconds: int,
         claim_source: SourceClaim,
@@ -397,6 +398,9 @@ class QEExecutionReservationRepository:
                     ),
                     allow_same_task_parallel_training=(
                         allow_same_task_parallel_training
+                    ),
+                    allow_durable_prediction_replay_parallelism=(
+                        allow_durable_prediction_replay_parallelism
                     ),
                 )
                 existing = self._find_source_reservation(cur, spec.source_kind, spec.source_execution_id)
@@ -1099,23 +1103,62 @@ class QEExecutionReservationRepository:
         requested_node_capacity: int,
         allow_same_task_backtest_parallelism: bool,
         allow_same_task_parallel_training: bool,
+        allow_durable_prediction_replay_parallelism: bool = False,
     ) -> int:
-        """Allow WSL=2 only for one homogeneous, explicitly proven QE task.
+        """Apply the existing WSL execution-mode safety proof under the node lock.
 
         The caller holds the node advisory lock, so this cohort proof and the
         following reservation insert are serialized against every QE source.
         Missing loop metadata, mixed modes, incompatible model policy, and
-        cross-task work all fail closed to one slot.
+        cross-task training fail closed to one slot. Durable combination attempts
+        are pure prediction replay and may share slots across parent runs.
         """
         if requested_node_capacity <= 1:
             return requested_node_capacity
         if not (
             allow_same_task_backtest_parallelism
             or allow_same_task_parallel_training
+            or allow_durable_prediction_replay_parallelism
         ):
             return requested_node_capacity
-        if allow_same_task_backtest_parallelism and allow_same_task_parallel_training:
+        if sum((allow_same_task_backtest_parallelism, allow_same_task_parallel_training,
+                allow_durable_prediction_replay_parallelism)) > 1:
             return 1
+        if allow_durable_prediction_replay_parallelism:
+            if spec.source_kind != "multi_alpha_durable_attempt":
+                return 1
+            cur.execute(
+                """
+                SELECT COUNT(*) AS eligible_count
+                FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                WHERE attempt.attempt_id = %s AND attempt.node_id = %s
+                  AND attempt.qe_task_id = %s AND attempt.qe_loop_id = %s
+                  AND attempt.submission_intent_hash = %s
+                """,
+                (spec.source_execution_id, spec.node_id, spec.qe_task_id,
+                 spec.qe_loop_id, spec.submission_intent_hash),
+            )
+            if int(cur.fetchone()["eligible_count"]) != 1:
+                return 1
+            cur.execute(
+                """
+                SELECT COUNT(*) AS incompatible_count
+                FROM infra.qe_execution_reservation AS reservation
+                LEFT JOIN strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                  ON reservation.source_kind = 'multi_alpha_durable_attempt'
+                 AND attempt.attempt_id = reservation.source_execution_id
+                 AND attempt.node_id = reservation.node_id
+                 AND attempt.qe_task_id = reservation.qe_task_id
+                 AND attempt.qe_loop_id = reservation.qe_loop_id
+                 AND attempt.submission_intent_hash = reservation.submission_intent_hash
+                WHERE reservation.node_id = %s
+                  AND reservation.status = ANY(%s)
+                  AND NOT (reservation.source_kind = 'multi_alpha_durable_attempt'
+                           AND attempt.attempt_id IS NOT NULL)
+                """,
+                (spec.node_id, list(ACTIVE_RESERVATION_STATUSES)),
+            )
+            return 1 if int(cur.fetchone()["incompatible_count"]) else requested_node_capacity
         if allow_same_task_parallel_training:
             cur.execute(
                 """

@@ -20,6 +20,12 @@
   "description": "One running pure replay and one waiting_capacity despite node_parallelism_json wsl2-5080=4",
   "events": [
     {
+      "action": "design_compliance_and_second_round_review",
+      "actor": "Codex QE",
+      "note": "两轮审核：durable adapter 的提交与只读 waiting probe 均标记纯 prediction replay；coordinator 使用请求回测容量；reservation 在原有 node advisory lock/CAS 事务中逐身份核对 durable attempt，可跨 parent 共享纯回放槽位，混入训练或未知来源仍保守串行。保留图模型串行、普通 GPU 训练最多2、纯回放最多4、once-only与恢复语义。不修改模型/策略/数据，不新增研究审批门禁。47项直接容量测试和57项提交/注册兼容测试通过，3项真实DB集成因无显式DEV DSN跳过；33项最终coordinator合同测试通过。",
+      "timestamp": "2026-10-04T02:40:00Z"
+    },
+    {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261004-443238f053b5",
@@ -170,8 +176,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine/tasks?limit=1",
+    "fresh_process_evidence": ["python -m pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py -q -> 33 passed; fresh-process real coordinator and transactional reservation code, no DB/service control"],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,

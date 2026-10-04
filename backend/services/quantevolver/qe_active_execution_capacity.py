@@ -1069,12 +1069,16 @@ class QEWorkspaceSubmissionCoordinator:
         qe_loop_id: str,
         submission_intent_hash: str,
         consumer_id: str = QE_RUN_DEFAULT_CONSUMER,
+        backtest_only: bool = False,
     ) -> QEExecutionCapacityObservation:
         """Return a read-only admission snapshot for a durable waiting source."""
 
         capacity = self._capacity_service.resolve_node_capacity(
             node_id,
             requested_node_capacity,
+            backtest_only=(
+                backtest_only and source_kind == "multi_alpha_durable_attempt"
+            ),
         )
         capacity = self._effective_consumer_capacity(capacity, consumer_id)
         spec = QEExecutionReservationSpec(
@@ -1122,10 +1126,15 @@ class QEWorkspaceSubmissionCoordinator:
             and source.source_kind == "qe_evolution_loop"
             and self._capacity_service.is_wsl_node(source.node_id)
         )
+        durable_replay_cohort = (
+            source.backtest_only
+            and source.source_kind == "multi_alpha_durable_attempt"
+            and self._capacity_service.is_wsl_node(source.node_id)
+        )
         physical_capacity = self._capacity_service.resolve_node_capacity(
             source.node_id,
             source.requested_node_capacity,
-            backtest_only=same_task_backtest_cohort,
+            backtest_only=same_task_backtest_cohort or durable_replay_cohort,
             parallel_training=same_task_parallel_training_cohort,
         )
         capacity = self._effective_consumer_capacity(
@@ -1176,6 +1185,9 @@ class QEWorkspaceSubmissionCoordinator:
             allow_same_task_parallel_training=(
                 same_task_parallel_training_cohort
                 and capacity > WSL_HARD_CAPACITY
+            ),
+            allow_durable_prediction_replay_parallelism=(
+                durable_replay_cohort and capacity > WSL_HARD_CAPACITY
             ),
             owner_id=source.owner_id,
             lease_seconds=source.lease_seconds,
