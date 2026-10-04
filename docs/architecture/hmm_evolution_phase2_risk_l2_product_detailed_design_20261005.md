@@ -52,6 +52,8 @@
 
 authority是request中独立的预期pins，不接受只改payload再自算hash的漂移。验证完整原模型CONTRACT/schema、执行COMPLETED、两process bitwise、planned/completed fits=2、no-tail、basis、feature/input/model参数hash。sealed与acceptance.model（除sealed自身receipt/predictions）逐字段一致；sealed逐行预测只能包含当时可得字段，acceptance附加outcome不能改变概率、warning、availability/as-of或人口。
 
+表中acceptance/sealed/features的canonical值沿仓库原receipt规则：`canonical_sha256({k:v for k,v in payload.items() if k != 'receipt_sha256'})`，必须同时等于原`receipt_sha256`和request独立pin；不是完整JSON（含receipt字段）的hash，也不是文件字节SHA。model parameters hash仍直接对原parameters对象canonical计算。两种身份不得混用；读前后原文件字节稳定性仅用于检测并发改写，不替代上述业务身份。
+
 features的catalog及calendar经过其原hash验证。严格要求每个424日具有同一131个正式文本代码，日期/代码唯一，as_of是同冻结calendar的严格前一开市日；不使用稀疏整数ID作数组下标，不查询当前股票列表。全部参数和input identity按原样绑定，不把quote-unavailable偷换成member不存在；C-010股票事实模型不是官方指数版。
 
 所有概率须有限且在[0,1]，warning必须精确为`probability>=0.20`。unavailable必须为null/null及非空原reason，不填0、1或no-warning。合法停牌/预热NA保持原行，不把其他行业一并判坏。全部未知身份/非法值/缺行fail closed；本验证不新增逐行业效果或三态门。
