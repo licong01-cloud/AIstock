@@ -11,7 +11,7 @@
 
 > **研究读回及源码**：已批准C-008-L2-D6-PERSISTENT-RC-A和C-008-L2-INDEPENDENT-A；全131行业zero-refit读回127/131语义有效，seed47及原模型hash不变，4项1～3日稀有状态仍不足。#5325已合入`f49ebc600ac0cb4d52689443ed2bb304e29b01e4`；效果设计#5326已合入`a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a`，效果源码#5345已合入`369e6c6a6a04ad0ea72a024cc3fb990dc4f31823`。原acceptance不回写，语义通过不推导经济有效；此前起草时的PR状态只作历史。
 >
-> **当前结果与下一步**：2026-10-04原HMM零fit IC=`0.009072776767716752 < 0.02`，同标签基线IC=`0.022023310723322743`，paired区间跨零。2026-10-05 R1双process零fit终态BELOW_BINDING_MBE，IC=`-0.009341302842128188`；独立L2风险双process共2fit终态DEVELOPMENT_RISK_EFFECT_REACHED_FORWARD_UNCONFIRMED，precision=`0.25260329190460196`、lift=`0.1174666556015582`、recall=`0.4121112481161803`。源码/结果PR #5444 OPEN，合入已授权、按最终HEAD CI执行；新risk尚无writer/API/UI，surface/advisory均NOT_AVAILABLE。下一完整包为`hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md`，产品D1～D6已获用户批准，设计PR #5447合入已授权，进入main后继续源码；不重跑旧实验或开启新候选。数据库写入、激活、cleanup和服务控制未授权；原formal/模型/结果不改写。
+> **当前结果与下一步**：2026-10-04原HMM零fit IC=`0.009072776767716752 < 0.02`，同标签基线IC=`0.022023310723322743`，paired区间跨零。2026-10-05 R1双process零fit终态BELOW_BINDING_MBE，IC=`-0.009341302842128188`；独立L2风险双process共2fit终态DEVELOPMENT_RISK_EFFECT_REACHED_FORWARD_UNCONFIRMED，precision=`0.25260329190460196`、lift=`0.1174666556015582`、recall=`0.4121112481161803`。源码/结果PR #5444已合入（`2fa41eab6b7efc76173ae3a0ced4143006b1671c`）；新risk尚无writer/API/UI，surface/advisory均NOT_AVAILABLE。下一完整包为`hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md`，产品D1～D6已获用户批准，设计PR #5447合入已授权，进入main后继续源码；不重跑旧实验或开启新候选。数据库写入、激活、cleanup和服务控制未授权；原formal/模型/结果不改写。
 
 ## 1. 执行摘要
 
@@ -59,7 +59,7 @@
 
 - 当前Design Acceptance Matrix保留17个验收项（§11.2另有3行历史原文，不重复计数），F-001～F-010A共11行已verified，`11/17=64.71%`。这是既有基础及Phase 1验收计数，**不是板块预测功能完成了64.71%**。
 - Phase 2已记录成果：rotation_L1真实历史OOF与v1.6单日预测已经交付，状态为`AVAILABLE_EXPERIMENTAL / RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`；risk_L1真实OOF/API/UI也已交付，但状态为`AVAILABLE_EXPERIMENTAL / NOT_AVAILABLE`。两者`advisory_status=NOT_AVAILABLE`、`FULL_READY=0`；前者是未forward确认的研究预测能力，后者只是诚实的实验展示面。
-- L2资金流基线development合格，原HMM及R1效果不足；独立L2风险已经实施并达到development要求，源码PR待合入、研究产品仍未闭合，QE后置。模型效果、产品、场景增量和实时日期分别报告，不继承L1结果或用基础计数/文档/fit数量计算预测业务完成度。
+- L2资金流基线development合格，原HMM及R1效果不足；独立L2风险已经实施并达到development要求，源码PR #5444已合入、研究产品仍未闭合，QE后置。模型效果、产品、场景增量和实时日期分别报告，不继承L1结果或用基础计数/文档/fit数量计算预测业务完成度。
 
 ### 1.3 A线既有五轴状态与B线完成责任
 
@@ -98,7 +98,7 @@
 - 当前HMM结果：`F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/run/acceptance.json`；canonical SHA=`309b770ccf8ae11477412970e07e222cac3fd275d9de88e020d57e503625d1b7`，文件SHA=`935380bf2fa5d932acda997c77e8f28156bbb39e54382de64aec7fe883a723b9`。执行源码`e205d34e19bccdf1770a5df66187f4692754fb05`，原模型hash=`b03bf297e97e1a88d89d2f867dd510c904c47df3e8a2afdd002b37ccafee055c`未变；双process一致、0 fits、未selection/读tail/写DB或激活新产品。28,951目录行中27,980可用、971不可用；884行为4个mapping不足行业，另外45/42行为已分类C-010观察/价格域不足，不据此要求数据窗口补数。
 - 当前结果不支持“门禁太高导致无结果”：coverage和证据均充分；0.02为原批准效果门，HAC仅诊断。两固定块IC为0.0451595/-0.0303971；区间宽且标签重叠，符号变化不证明关系时变。HMM整体95%区间为[-0.0659521,0.0840977]，结论为开发期效果不足，不等于所有HMM不可预测。
 - 2026-10-04只读现有compact预测的零fit诊断：6个可用行业仅2档raw_score、121个为3档；合法相邻状态变化7,056/27,849（25.3366%），不是状态整段不动。相邻截面Rank相关均值0.855771、Top10相邻重合75.7273%；行业间均值占合并raw_score方差59.1502%。这些是描述性结果，不能直接推断失败因果；只支持一次行业内utility中心化的待检验提案，不以诊断重选行业或提高门槛。
-- 文档状态头和矩阵同步本节事实；旧2026-09-22阻断、#5345合入前“未实施”只解释历史。模型设计#5433已合入，2026-10-05源码/实验完成且#5444未合入，当前补充见§1.6；算法数值仍以L2详细设计§8.2为准，不从批准/CI/实验推导生产完成。
+- 文档状态头和矩阵同步本节事实；旧2026-09-22阻断、#5345合入前“未实施”只解释历史。模型设计#5433已合入，2026-10-05源码/实验完成且#5444已合入，当前补充见§1.6；算法数值仍以L2详细设计§8.2为准，不从批准/CI/实验推导生产完成。
 
 ### 1.6 2026-10-05模型终态与当前可交付成果
 
@@ -108,7 +108,7 @@
 
 acceptance canonical=`88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26`，model=`37259b5e9ca2c6eee2845cf0f1f02932a8cfd6cf21ad29080d6570d274b8038d`；路径`F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json`。它是固定train的historical causal development，不是OOF/untouched；无tail/QE/DB/数据集/runtime动作。
 
-known warnings中74.7397%没有目标事件，错误报警未来均值收益+3.3874%，漏报均值回撤-10.7998%。全部报警12,444，每日0/中位25/最多131，159日超过30。显示上限不得截断计算；低概率不是安全承诺，warning不自动禁买/降仓。当前PR #5444 OPEN/CI通过，actual runtime=backend/backend-main，risk surface/advisory仍NOT_AVAILABLE。下一步优先完整真实研究产品，不扩模型网格或历史账本。
+known warnings中74.7397%没有目标事件，错误报警未来均值收益+3.3874%，漏报均值回撤-10.7998%。全部报警12,444，每日0/中位25/最多131，159日超过30。显示上限不得截断计算；低概率不是安全承诺，warning不自动禁买/降仓。当前PR #5444已合入，actual runtime=backend/backend-main，risk surface/advisory仍NOT_AVAILABLE。下一步优先完整真实研究产品，不扩模型网格或历史账本。
 
 ## 2. 总体架构
 
@@ -192,7 +192,7 @@ Phase 2已经形成两个真实L1产品component，但它们处于不同能力�
 - [x] 新HMM校准后效果D1～D6及源码已合入，2026-10-04完成双process零fit与同口径基线评价，HMM终态BELOW_BINDING_MBE。当前错误已修复，原formal失败不追认成功；完成一次评价不等于模型有效或产品生效。
 - [x] 唯一零fit行业内neutral中心化R1按批准合同完成，IC=-0.0093413效果不足且已停止，原人口/mask/hash不变；不是新可用能力。
 - [ ] B保留版本化L2输出与消费边界，QE正式验证后置；未来由QE窗口执行同场景回放，荐股/模拟盘须各自验证，不自动继承QE增益。本项不阻塞近期两个HMM模型包。
-- [x] 独立L2绝对10D/-8%风险两process2fit历史评价完成，lift=0.11747、recall=0.41211达到development要求；源码待合入，不计作产品/收益增益。
+- [x] 独立L2绝对10D/-8%风险两process2fit历史评价完成，lift=0.11747、recall=0.41211达到development要求；源码已合入，不计作产品/收益增益。
 - [ ] 把已有risk封存成果闭合到完整研究持久化/API/UI；产品D1～D6已批准，设计先合入后实施，数据库/运行权限单独处理，不等待QE或新训练。
 - [ ] 新L2研究能力、独立确认和业务采用分别验收；历史L1状态及tail权限不因L2转向升级，experimental页面不得代替capability。
 
@@ -415,7 +415,7 @@ P0/原效果/R1/risk均有真实终态，不重复。模型设计#5433已合入�
 - **F-009 / Phase 1**：top-3研究推荐语义与隔离。
 - **F-010 / Phase 1**：真实演进API/UI与可见错误态。
 - **F-010A / Phase 1**：独立自动评估worker service，不创建实验或触发训练。
-- **F-011 / Phase 2**：L1历史保留；L2资金流development合格、原HMM/R1效果不足；独立risk两process2fit达lift/recall要求，源码PR待合入，无forward/QE增益。127/131语义不是预测有效，完整计算不缩为UI子集。
+- **F-011 / Phase 2**：L1历史保留；L2资金流development合格、原HMM/R1效果不足；独立risk两process2fit达lift/recall要求，源码PR #5444已合入，无forward/QE增益。127/131语义不是预测有效，完整计算不缩为UI子集。
 - **F-012 / Phase 2**：当前真实v17效果输入已完成构造/身份与两process评价；quote cutoff等历史消费者阻断已修复，不再当活跃数据缺口。显式版本、PIT、quote authority及跨owner边界不变，合法NA仍单列。
 - **F-013 / Phase 2**：既有L2资金流DB/API可读、surface=NOT_AVAILABLE；新risk尚无writer/API/UI，产品精确设计已批准，先合入设计后实施。前10+后10/≤30只影响展示；source/DB/API/no-mock/runtime分别闭合，未验不填通过。
 
@@ -465,7 +465,7 @@ P0/原效果/R1/risk均有真实终态，不重复。模型设计#5433已合入�
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | 原formal/effect及已批准R1/risk，L1历史保留 | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json；0/2-fit两包终态见§1.6 | APPROVED_BY_USER_MODEL_RESULTS_VERIFIED_SOURCE_PR_OPEN | 原HMM/R1不足，risk development合格未forward确认；#5444未合入，无新产品/增益验收，QE后置 |
+| F-011 | 原formal/effect及已批准R1/risk，L1历史保留 | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json；0/2-fit两包终态见§1.6 | APPROVED_BY_USER_MODEL_RESULTS_VERIFIED_SOURCE_MERGED | 原HMM/R1不足，risk development合格未forward确认；#5444已合入，无新产品/增益验收，QE后置 |
 | F-012 | 正式reader、共享身份与20D risk输入 | backend/tests/hmm_risk/test_formal_state_input.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/preflight.json；131/20D及601/591/424/414闭合 | APPROVED_BY_USER_MODEL_INPUTS_VERIFIED | 不改旧失败/源/hash；156合法观测NA保留，P/S不冒充目录全无缺失 |
 | F-013 | 既有rotation产品及新risk完整设计 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；§1.5旧readback；hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md | APPROVED_BY_USER_RISK_PRODUCT_FOR_IMPLEMENTATION | 新risk无writer/API/UI，产品D1～D6已批准，DEV/生产/运行另授权；不代报产品或增益 |
 | F-014 | 本文Phase 3 UI与独立候选方向 | 目标`backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts` | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 独立实现级设计待后置任务；不是G2-A前置 |

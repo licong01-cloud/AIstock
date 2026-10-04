@@ -2,7 +2,7 @@
 
 > 版本：v1.1；日期：2026-10-05；tier：F2；owner：HMM。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md`，F-011/F-012/F-013。
-> 模型依据：`hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md` §8.2，用户已批准的`hmm_risk_l2_absolute_drawdown_logistic_v1`。源码PR #5444仍OPEN/CI通过，合入不由本设计推导。
+> 模型依据：`hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md` §8.2，用户已批准的`hmm_risk_l2_absolute_drawdown_logistic_v1`。源码PR #5444已按独立授权合入，merge=`2fa41eab6b7efc76173ae3a0ced4143006b1671c`；不由此推导产品完成。
 > 用户已于2026-10-05确认批准本完整产品包，`L2-RISK-PRODUCT-D1～D6=APPROVED_BY_USER_FOR_IMPLEMENTATION`，并授权合入#5444和本设计PR后继续源码。模型、特征、窗口、阈值和效果合同不变；批准不代表数据库、API/UI或生产验收完成，不授权数据库写入、激活、cleanup或服务控制。
 
 ## 1. Background、目标与Non-goals
@@ -194,7 +194,7 @@ DEV使用**现存**`aistock_dev`，迁移/完整导入/读回按用户具体授�
 | 决策 | 当前状态 | 推荐 |
 |---|---|---|
 | L2-RISK-PRODUCT-D1～D6 | APPROVED_BY_USER_FOR_IMPLEMENTATION | 已批准完整包；原模型/输入/窗口/0.20/0.05/0.25全部不变 |
-| PR #5444 | 合入已授权，按最终CI执行 | 不因此重跑2fit或清理正式资产引用树 |
+| PR #5444 | 已合入，merge=2fa41eab6 | 不因此重跑2fit或清理正式资产引用树 |
 | 本文设计PR #5447 | 合入已授权，按最终CI执行 | 合入批准状态后继续完整源码包；新源码PR合入另行确认 |
 | DEV/生产/激活/重启/cleanup | 本轮未授权执行 | 实际动作与目标分别确认，重启归用户 |
 
