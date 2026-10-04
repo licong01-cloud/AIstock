@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1722",
-  "closed_at": null,
+  "closed_at": "2026-10-04T12:07:34.164276Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -195,10 +195,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1722\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1722",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b99dd9080153762523fe5e2c761c4d7badd6c89331b062f5807c96b665623e48",
+      "contract_digest": "1db464dc1064ba85837d4ab3ccf2f37b7336c4f500fba4cef87631bcf92913a0",
+      "expected_identity": "e4f05843a95bf69e6b9b584b070f313c70190665",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-04T12:03:00.223629Z",
+      "mode": "read_only",
+      "observed_identity": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "96f049026d133bb0d1799cc485442b7fdaf3ec7b1a4252e8099286c5e515ac54",
+      "receipt_sha256": "625dd95b8ec9db320e68c5031dfeaadc8b01d6f80041804cd784ad2bf99b6b6e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "3bba66b9cebee833ae02364ccecd5cc67764c02822e7116ddb41482e01b5a578",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -230,7 +252,7 @@
     ],
     "validation_evidence_digest": "1e820f6334d05332c95d9f83ced5e0c019caf316e605b4e4ab59319677f0722b"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -241,7 +263,8 @@
   },
   "validation_evidence": [
     "python -m pytest backend/tests/multi_alpha/test_qe_submission_coordinator.py -q -> 33 passed final HEAD",
-    "python -m nox -s l0 -- exact changed files -> passed blocking=0"
+    "python -m nox -s l0 -- exact changed files -> passed blocking=0",
+    "post-restart-verify BUG-1722 backend-main verified"
   ],
   "verification_budget": {
     "budget": "standard",
