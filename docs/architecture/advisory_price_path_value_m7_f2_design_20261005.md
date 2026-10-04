@@ -4,7 +4,7 @@
 
 ## 1. Background / 事实、唯一变量与可行性
 
-同一连续R2任务已完成M2/M3/M4/M1/M5/M6，累计23 physical-fit+1 index；除M1正开发导航且区间跨零，其余精确candidate均负向终止。M6源码#5451已合入fa3947c4ede4a8a78918b031475ee48f76f81188；不能在同三资金流上换seed/loss/阈值或补证救活。M1日频/API/UI #5445仍待六UI，BUG-1726仍待公共端点smoke；两交付依赖不封锁其它Advisory设计。
+本次立项时，同一连续R2任务已完成M2/M3/M4/M1/M5/M6，累计23 physical-fit+1 index；除M1正开发导航且区间跨零，其余精确candidate均负向终止。M6源码#5451已合入fa3947c4ede4a8a78918b031475ee48f76f81188；不能在同三资金流上换seed/loss/阈值或补证救活。M1日频/API/UI #5445仍待六UI，BUG-1726仍待公共端点smoke；两交付依赖不封锁其它Advisory设计。M7本次完成后的当前事实与累计27计数见§14。
 
 H-DAILY-PRICE-PATH-1：相同累计收益下，平滑单向路径与反复震荡/已离开近期峰值，是否具有不同的买入后净价值与下行风险？原12D仅有ret1/5/10、ATR、当日close location等摘要；本次显式新增20个D可见复权收盘的路径形状，不换模型族/loss，也不把同基础行情来源说成新独立数据或必然alpha。新增三字段与旧returns可能冗余，需同人口matched比较。
 
@@ -12,7 +12,7 @@ H-DAILY-PRICE-PATH-1：相同累计收益下，平滑单向路径与反复震荡
 
 ## 2. Scope / 精确文件与顺序
 
-本设计仅在最新main fa3947c4e独立`advisory-price-path-value-m7-design-20261005`树新增本文件。审核、F2校验与当前HEAD CI通过后按已有授权合入/自己官方清理。源码之后从最新main独立树登记下列精确范围：
+设计阶段仅在当时最新main fa3947c4e独立`advisory-price-path-value-m7-design-20261005`树新增本文件，已按审核/F2/当前HEAD CI合入和自己官方清理。源码随后从最新main 131e6606a独立`advisory-price-path-value-m7-20261005`树事前登记下列精确范围：
 
 - backend/services/advisory_model_first/economic_price_path_value_v1.py（固定三字段/plan/M7模型包装）
 - backend/services/advisory_model_first/economic_price_path_pipeline_v1.py（原冻结行情投影/阶段薄编排）
@@ -36,7 +36,7 @@ H-DAILY-PRICE-PATH-1：相同累计收益下，平滑单向路径与反复震荡
 
 ## 4. Architecture / Contracts / 来源与原名单
 
-复用已知`campaign_sources_v2`的原消费授权、父plan/价格prepared/12Dprepared/value-label prepared/profile/包/股票池/policy hash。原raw_daily.parquet/calendar.json由父prepared manifest验证；读取金额/价格/labels前先清洁源码冻结并预登记，不能只信目录/键统计或调用当前Selection重新生成名单。
+复用已知`campaign_sources_v2`的原消费授权、父plan/价格prepared/12Dprepared/value-label prepared/profile/包/股票池/policy hash。原raw_daily.parquet/calendar.json由父prepared manifest验证；读取本次价格/labels前先清洁源码冻结并预登记，不能只信目录/键统计或调用当前Selection重新生成名单。
 
 只投影trade_date、instrument、raw_close_cny、adj_factor；raw_close_cny是父原价格坐标已经规范的元，明确拒绝再转换close_li或猜单位。20-session含D、沿原完整calendar，不把20条稀疏行情当20交易日。source读取按原最大D裁剪，纯计算对每个原D又按自身20-session窗口截取；不能用全批最大D或最后factor作为早D的尺度。原source完整证券集及hash不修改，投影不改变候选人口。
 
@@ -102,17 +102,17 @@ fit前后只读QE experiment/custom_evo/multi-alpha三running；非idle或unknow
 
 ## 11. Design Acceptance Matrix
 
-仅详细设计验收；源码、直接测试、M7正式登记/prepare/fit/经济全部PENDING，不能称功能或收益完成。
+设计#5452已合入131e6606aee54f3eadd0948a46b71ae8cfe8eefd并完成自己官方清理。源码61ed666992660c06d9818290fdabd31209deb778、30项直接测试及一次正式登记/prepare/四fit/完整四臂完成，见§14；研究结果负向结束当前candidate，经济确认/消费者接入/正式启用仍0。下表验收的是已执行的研究合同，不是收益达标或生产完成。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-888 | §1/5 | artifact: 原12D/M6字段与路径字段定义、事前元数据spike | DESIGN_VERIFIED | none |
-| F-889 | §4/5/9 | artifact: 原380240行/7720键的完整窗7330、warmup380、缺键10及来源测试规格 | DESIGN_VERIFIED | none |
-| F-890 | §6/9 | artifact: 同核真实签名/监督与原支持规格 | DESIGN_VERIFIED | none |
-| F-891 | §8 | artifact: 事前完整四臂和NAV条件 | DESIGN_VERIFIED | none |
-| F-892 | §7/9 | artifact: 原23fit/1index事实及固定扩展/partial测试规格 | DESIGN_VERIFIED | none |
-| F-893 | §3/7 | artifact: 0DB/价格值/收益/fit/sealed的工程元数据边界 | DESIGN_VERIFIED | none |
-| F-894 | §2/9/12/13 | artifact: 独立树/精确范围/三轮自审与交付分层 | DESIGN_VERIFIED | none |
+| F-888 | economic_price_path_value_v1.py；§14 | test_economic_price_path_value_v1.py；artifact: 已冻结假设/三字段 | SOURCE_VERIFIED | none |
+| F-889 | economic_price_path_value_v1.py；economic_price_path_pipeline_v1.py | test_economic_price_path_value_v1.py；test_economic_price_path_pipeline_v1.py；artifact: prepared/preparation.json完整原7720键 | SOURCE_VERIFIED | none |
+| F-890 | economic_sector_price_value_v1.py；§14 | test_economic_price_path_value_v1.py；test_economic_sector_price_value_v1.py；artifact: trained/metadata.json共同3693train/1591val | SOURCE_VERIFIED | none |
+| F-891 | §8/14；evaluate_information_study_v1 | artifact: evaluated/evaluation.json原81D/1620候选/100日完整四臂，当前候选净增量条件失败 | VERIFIED_RESEARCH_COMPLETED_NEGATIVE | none |
+| F-892 | economic_moneyflow_price_pipeline_v1.py；economic_price_path_pipeline_v1.py | test_economic_moneyflow_price_pipeline_v1.py；test_economic_price_path_pipeline_v1.py；artifact: 原23+新4实际总账27/1index，五阶段registry | SOURCE_VERIFIED | none |
+| F-893 | §3/7/14；economic_sector_price_pipeline_v1.py | test_economic_sector_price_pipeline_v1.py；artifact: 拟合前后QE三running均0、零DB/分钟/sealed/激活 | SOURCE_VERIFIED | none |
+| F-894 | §2/9/12/13/14 | artifact: 精确10源码/测试、三轮自审修复、30直接项/Ruff/L0及源/研究/经济/运行分层 | SOURCE_VERIFIED | none |
 
 ## 12. Risks / 自审与设计符合性
 
@@ -125,3 +125,21 @@ DESIGN-COMPLIANCE逐条：设计/源码/经济/运行分开，无子集/mock-onl
 ## 13. Rollout / Rollback / Production Gates
 
 纯离线：API/UI/binding/activation/DB/DDL/依赖/服务操作全部noop、backend_restart_required=false。无新增消费者功能就不请求重启。源身份或语义变化必须新lineage，原输入/计数/模型结果不覆盖；负向只停止本candidate，不把本设计变成旧失败留档项目。
+
+## 14. 本次实际研究与源码验收（2026-10-05）
+
+独立run=`advpricepathvalue_cca7c7c33e508d2b429682d2`，同原campaign根；plan SHA=`cca7c7c33e508d2b429682d2396578596ae073f69201c73ec2a7da33d9ac45bc`，implementation SHA=`c8aaacc0872a964ae0d466f0347f19340fe4b9bc4b923f3d51fba372dd505985`，真实拟合源码HEAD=`61ed666992660c06d9818290fdabd31209deb778`。先预登记后一次prepare，7.391秒：原7720键全部保留，7330 AVAILABLE、380 UNKNOWN_20D_WARMUP、10 UNKNOWN_PRICE_PATH_SOURCE，原380240行情行按声明四列投影；0数据库读写，不补数据、不查询分钟线、不重建候选。来源仍RECOVERED_LIMITED/native UNPROVEN。
+
+2026-10-04T20:50:20Z读取QE experiment/custom_evo/multi-alpha三running均0后，一次四fit、共同3693成熟train/195D、1591诊断validation；训练阶段含校验7.281秒，训练加完整四臂20.969秒。20:51:33Z三个running仍0。原23加本次4合计27 physical-fit+1历史index，单位测试拟合不计研究，原registry仅追加PREREGISTERED/PREPARED/FIT_STARTED/TRAINED/EVALUATED，无partial或重复研究。
+
+| 指标 | 本次事实 | 结论边界 |
+|---|---|---|
+| 原完整四臂 | 81决策日/1620候选/100共同估值日；candidate/baseline/matched/rule net=23.8248%/21.3220%/4.5719%/20.5747% | 同VALUE_REVIEW_5_V1/成本/全人口；非指数超额或真实fill |
+| 配对日均增量 | candidate减baseline +2.0581bps、描述性95%[-16.2035,22.1539]；减matched +16.9174bps、[5.8398,31.6462] | baseline项低于冻结5bps且跨0；matched正区间不构成整体达标或独立OOS |
+| 支持/风险 | candidate真TAKE81、UNKNOWN控制4；matched真TAKE79/控制4；干预/TAKE/MDD/tail条件通过 | 控制不算模型TAKE，不用风险或胜率替代收益 |
+| MDD/尾部 | candidate/baseline/matched MDD=-8.1173%/-10.3314%/-11.8944%；candidate/baseline最差5%日均=-230.4099/-254.3254bps | 下行改善仍不能补偿未达事前净增量 |
+| 完整性/结果 | 四臂端点限制0/held-mark问题0/未退出0；STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION | 只结束当前候选；0confirmation、consumer binding、sealed、新holdout、数据/模型激活或用户服务操作 |
+
+三轮本窗口源码自审/修复：第一轮来源/PIT核对自身20-session窗口、同session复权因子、手算/拆分/常数尺度/未来毒化、正常缺失与flat UNKNOWN；第二轮公平监督和编排核对共同13/16D、无标签global支持、成熟purge、test毒化、JSON和完整四臂复用、原M6无extension仍23cap；预算测试首次因夹具未创建研究目录失败，修正夹具，不改变产品行为。第三轮边界/可空值检查发现pd.NA允许但float转换可能失败，显式映射正常NULL为缺值并增加针对性反例；最终30直接项PASS，Ruff无问题，两官方静态入口输出X分别0finding及3finding/0blocking，F2通过。未宣称独立外审或借旧研究补证。
+
+源码PR/当前HEAD CI/合入/自身官方清理另按实际状态记录；本次后续文档修改不冒称新HEAD重新拟合。负结果不回选matched、改变收益条件或追加旧失败验证；M1工程依赖仍单独处理，不阻断下一真正不同信息的设计可行性检查。

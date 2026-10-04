@@ -65,11 +65,15 @@ def _information_key(model_id, information_features):
         from backend.services.advisory_model_first.economic_moneyflow_price_v1 import MONEYFLOW_FEATURES
         if tuple(information_features) == MONEYFLOW_FEATURES:
             return 'moneyflow_features'
+    if model_id == 'M7':
+        from backend.services.advisory_model_first.economic_price_path_value_v1 import PRICE_PATH_FEATURES
+        if tuple(information_features) == PRICE_PATH_FEATURES:
+            return 'price_path_features'
     raise ValueError('fixed information block/model differs')
 
 
 def information_fit_identity_v1(recipe, models, support, *, model_id):
-    if model_id not in ('M1', 'M5', 'M6'):
+    if model_id not in ('M1', 'M5', 'M6', 'M7'):
         raise ValueError('fixed information model differs')
     return sha(dict(model_id=model_id, recipe=recipe, models=models, support=list(support.intervals_bps)))
 
@@ -158,7 +162,7 @@ def train_information_price_v1(*, rows, configuration, before_fit, model_id, inf
     if (sklearn.__version__, scipy.__version__) != ('1.8.0', '1.16.3'):
         raise ValueError('sector exact fit runtime differs')
     information_key = _information_key(model_id, information_features)
-    if status_column != {'M1': 'sector_feature_status', 'M5': 'state_feature_status', 'M6': 'moneyflow_feature_status'}[model_id]:
+    if status_column != {'M1': 'sector_feature_status', 'M5': 'state_feature_status', 'M6': 'moneyflow_feature_status', 'M7': 'price_path_feature_status'}[model_id]:
         raise ValueError('fixed information availability contract differs')
     domain = rows.loc[rows.split.eq('train') & rows.values_available].copy()
     domain.loc[domain[KEY[1]].gt(pd.Timestamp(configuration.train_end)), 'actual_gap_bps'] = np.nan

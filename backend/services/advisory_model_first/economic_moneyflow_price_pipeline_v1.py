@@ -30,7 +30,7 @@ def moneyflow_implementation_sha256_v1():
         readonly_dependencies={name: hashlib.sha256((repo/name).read_bytes().replace(b'\r\n', b'\n')).hexdigest() for name in dependencies}))
 
 
-def verify_moneyflow_budget_v1(plan):
+def verify_moneyflow_budget_v1(plan, *, price_path_extension=None):
     anchor = _verify_reference(plan.budget_anchor_ref)
     root = plan.campaign_root.resolve()
     original = PriceCampaignPlanV2.model_validate_json((anchor.parent/'plan.json').read_text(encoding='utf-8'))
@@ -46,10 +46,20 @@ def verify_moneyflow_budget_v1(plan):
         raise ValueError('moneyflow original anchor/predecessor source/root/policy differs')
     journal = root/'campaign_fit_journal.jsonl'
     events = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines()]
+    if price_path_extension is not None:
+        from backend.services.advisory_model_first.economic_price_path_value_v1 import PricePathPlanV1
+        extension = PricePathPlanV1.model_validate(price_path_extension)
+        extension_predecessor = _verify_reference(extension.predecessor_manifest_ref)
+        if (extension.campaign_root.resolve() != root or not _same_sources(extension, plan)
+                or extension.budget_anchor_ref != plan.budget_anchor_ref
+                or extension_predecessor != root/plan.experiment_id/'evaluated/manifest.json'
+                or extension.parameters['policy_sha256'] != plan.parameters['policy_sha256']
+                or extension.parameters['cost_sha256'] != plan.parameters['cost_sha256']):
+            raise ValueError('price path extension original root/source/predecessor differs')
     expected = {'M2': (4, PriceCampaignPlanV2), 'M3': (5, PriceCampaignPlanV2), 'M4': (2, PriceCampaignPlanV2),
                 'M1': (4, SectorPricePlanV1), 'M5': (4, SelectionStatePricePlanV1)}
     if any(event.get('state') != 'STARTED' or event.get('kind') not in ('PHYSICAL_FIT', 'INDEX_BUILD')
-           or event.get('model_id') not in (*expected, 'M6') for event in events):
+           or event.get('model_id') not in (*expected, 'M6', *(('M7',) if price_path_extension is not None else ())) for event in events):
         raise ValueError('moneyflow cumulative journal has foreign state/model/kind')
     for model, (count, cls) in expected.items():
         found = [event for event in events if event['kind'] == 'PHYSICAL_FIT' and event['model_id'] == model]
@@ -78,6 +88,24 @@ def verify_moneyflow_budget_v1(plan):
     if len(added) > 4 or len({event['head'] for event in added}) != len(added) or any(
         event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != plan.campaign_id or event['experiment_id'] != plan.experiment_id or event['head'] not in heads for event in added):
         raise ValueError('moneyflow own cumulative budget/journal differs')
+    if price_path_extension is not None:
+        if len(added) != 4:
+            raise ValueError('price path extension needs actual four completed M6 fits')
+        previous_root = root/plan.experiment_id
+        registered = read_stage(previous_root/'preregistered', stage='preregistered', plan_sha256=plan.plan_sha256, parent_sha256=None)
+        _ledger(plan, previous_root, 'PREREGISTERED', previous_root/'preregistered/manifest.json')
+        frozen = MoneyflowPricePlanV1.model_validate_json((previous_root/'preregistered/plan.json').read_text(encoding='utf-8'))
+        if frozen != plan:
+            raise ValueError('price path extension cannot substitute original M6 plan')
+        parent = registered['stage_sha256']
+        for stage in ('prepared', 'trained', 'evaluated'):
+            parent = read_stage(previous_root/stage, stage=stage, plan_sha256=plan.plan_sha256, parent_sha256=parent)['stage_sha256']
+        _ledger(plan, previous_root, 'EVALUATED', extension_predecessor)
+        latest = [event for event in events if event['model_id'] == 'M7']
+        if len(latest) > 4 or len({event['head'] for event in latest}) != len(latest) or any(
+            event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != extension.campaign_id
+            or event['experiment_id'] != extension.experiment_id or event['head'] not in heads for event in latest):
+            raise ValueError('price path extension own cumulative budget/journal differs')
     return root
 
 
