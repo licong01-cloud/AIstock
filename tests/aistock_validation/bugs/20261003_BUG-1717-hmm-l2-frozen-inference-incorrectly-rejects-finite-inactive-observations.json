@@ -139,8 +139,8 @@
   },
   "first_seen_at": "2026-10-03T19:12:51.293867Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e205d34e19bccdf1770a5df66187f4692754fb05",
+  "fixed_at": "2026-10-04T01:04:10Z",
   "formal_review": {
     "actual_request_prediction_smoke": "28951预测行、221个当前inactive诊断、18个真实非零；原182日posterior bitwise一致；模型/观测/request文件hash不变；fits=0、selection=false、target/tail未访问。",
     "design_compliance_001": {
@@ -160,6 +160,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5405",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -183,6 +184,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -194,7 +196,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1717",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7d6e4c2ccea34249",
+    "recorded_at": "2026-10-04T01:05:31.390172Z",
+    "runtime_contract_digest": "a58f2386cbc41e16fdd645269cd5e80f64f4543c61df4d94612ca20006e53607",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ffdfeec66fd95556acd35be2767da2b42b400206",
+    "source_merge_commit": "e205d34e19bccdf1770a5df66187f4692754fb05",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5405",
+    "validation_evidence": [
+      "PR #5405 CI verdict SUCCESS on ffdfeec66fd95556acd35be2767da2b42b400206; 103 focused tests passed; fresh-process actual prediction smoke PASS; two formal reviews passed"
+    ],
+    "validation_evidence_digest": "3b5fe7e11e12ac42b43b7fbd05c605922fffb627627f83a43cd7910aaebb6945"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -203,6 +226,9 @@
     "fingerprint": "8f0a4d9f844d9e54cc893177",
     "source_event_id": "FE-20261003-8f0a4d9f844d"
   },
+  "validation_evidence": [
+    "PR #5405 CI verdict SUCCESS on ffdfeec66fd95556acd35be2767da2b42b400206; 103 focused tests passed; fresh-process actual prediction smoke PASS; two formal reviews passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
