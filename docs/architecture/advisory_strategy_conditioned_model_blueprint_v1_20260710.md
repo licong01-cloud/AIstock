@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.00
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.01
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-04
@@ -2020,6 +2020,10 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | P4 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
 
 v4.00当前功能进度：#5423以HEAD93ea35f4b/CI37160815000成功交付并自身cleanup_done。唯一已消费2024-08-01原20候选、原core receipt/15D与21D板块行情数值兼容通过；既有M1数学直接输出9条研究买入价格集合、11条UNKNOWN，法律完整tick最多1491，保留支持洞、多段及全部原名单。原D close/除权参考与既存冻结references逐条一致；无T实际行情、市场收益/label、新窗口、fit或角色激活。价格源确实只读DB，canonical历史组件ready不等于实时canonical切换：live仍shsz_st_pit_active_v1、component_is_live=false。首次legacy输入按合同拒绝；没有接受旧路径、改数据/公共模块或启用服务。原父模型时钟仍未知，明确原conf文件只读404不等于不存在模型或必需重训。本次事实/时钟/队列三轮自审只更新两文档及直接功能事实，不改变模型、scope、研究合同或两条跨零增量区间，不形成旧失败固化、新包装平台或人为等日期门禁；此前model-state GET元数据upsert披露保持，不能宣称整轮数据库NOOP。
+
+v4.01方法与来源进度：复用既有Advisory context/板块读取器，仅对同一已消费2024-08-01全20原候选按KEY核对，当前profile/C013严格分类和15D与原M1输入一致（9完整、11 classification_knowledge_time_unverified）；公共基础分类reference已解析，但没有查询新研究/ sealed市场窗口或收益。该context路径明确EXPLORATORY_SCREEN_ONLY且受release cutoff限制，不升级为formal/confirmation/live，不需另写历史包装层或补数据。当前核心缺口不是9/11的行情补齐，而是父/processor/学习组合时钟、真实正式源及确认可行方案。
+
+确认框架[§7.1](advisory_sector_price_value_confirmation_v1_f2_design_20261004.md)已完成一次原100日联合功效规划：保持两个5bps经济点门及原模型/NAV不变，修正“相对零假设5bps/80%单项显著性代理”不能代表含点门/绝对安全门的联合80%。在通常连续近似正态下，假设真效应恰为5bps时单个点门约50%；预登记须分开delta_min与有经济理由的delta_plan及绝对漂移，不能抬高假设来过门。固定假设场景中，500日/两配对真效应10bps/绝对漂移10bps的两配对代理84.20%，加入绝对均值下界仅43.10%；这不是M1实际功效、完整policy power或新真实样本。短窗不足不能转成多年的自然等待或把1620股票—日期当独立样本；源/窗口/联合方法/支持尚未就绪时不读sealed、不改跑M5、不补旧负研究。此方法准备只修正设计的统计定义，0新fit/研究run/确认/激活，未改任何QE/数据/Selection/其它源码。
 
 2026-10-03计算与输入切片进度：#5313已合入a473e3b502d6cb98f363d6cf73a7953eb931cce0（修复后HEAD343718cc7、CI37099710628通过），提供原8+新4共12个D字段的统一纯计算API，20D候选/指数与2D市场宽度，原名单/实际两腿、OHLC、指数中间缺日以及整日/盘中/复牌缺行情语义；27定向测试、Ruff及F1五项通过。#5319已合入7edd740a82ff91f61ed842a88c615a516a7eff13（HEADab3262320、CI37101259296通过），交付同核单D/至多20D批块只读输入：精确键集、有界5SELECT、单快照rollback；14定向测试和F1四项通过。最小真实SQL smoke只用已消费2024-07-04及两个合成候选投影，证明查询/12D计算兼容，不是原Selection名单、全批性能、native或经济验收。计算core不含query_gap、不读取收益、不拟合、不开DB连接；source显式只读数据库，两者COMPUTATION_ONLY/旧训练parity UNPROVEN，均不改变旧模型、产物或调度。后续[共享内核日频接入详细设计](advisory_economic_common_core_daily_consumer_f2_design_20261003.md)按真实模型recipe接入已有消费者；旧v3/v4缺新recipe身份时不补侧车、不默认重训或新增81D验证。十三字段新模型路由/API/UI仍未完成；旧九字段消费者#5324六UI及必需CI通过并合入68ff7aaaa，用户重启后只读默认未配置语义验证通过，不转交数据准备窗口做业务验证。
 
