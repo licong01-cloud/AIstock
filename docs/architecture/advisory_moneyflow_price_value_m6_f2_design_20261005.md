@@ -128,18 +128,18 @@ matched=12D+g（13维），candidate=12D+三资金流+g（16维）。均Gradient
 
 ## 13. Design Acceptance Matrix
 
-本矩阵只验收详细设计；源码、直接测试、正式M6预登记/prepare/四fit/四臂全部PENDING，未表示功能或收益完成。该未实施状态不是删减设计范围的例外批准。
+设计PR #5450已合入1f18c3e3bdd23007ae77f5db5a2380d63a6e98e8且自己官方cleanup_done。最新main独立源码树已实现五叶源码及三测试；48项新M6/旧M1/M5共核直接测试、Ruff、两项L0同静态入口（显式输出X，未改nox/公共脚本）PASS，blocking=0。正式M6预登记/金额prepare/四fit/四臂仍PENDING，源码功能不冒称收益确认。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-880 | §1/3/6 | artifact: 既有12D字段与工程spike的元数据比较 | DESIGN_VERIFIED | none |
-| F-881 | §4/5 | artifact: 原7720键/17013股票日两SELECT元数据核对5.891秒 | DESIGN_VERIFIED | none |
-| F-882 | §4/5/6/11 | artifact: NULL/零分母/完整calendar/normal UNKNOWN测试规格 | DESIGN_VERIFIED | none |
-| F-883 | §7/11 | artifact: 冻结GBDT/支持/共核真实签名与回归规格 | DESIGN_VERIFIED | none |
-| F-884 | §9 | artifact: 事前冻结完整四臂与两个增量/真干预规格 | DESIGN_VERIFIED | none |
-| F-885 | §8 | artifact: 原19fit事实/现有stage及journal接口核对 | DESIGN_VERIFIED | none |
-| F-886 | §3/4/8 | artifact: 0fit/0收益/sealed/DB写/分钟数据的spike边界 | DESIGN_VERIFIED | none |
-| F-887 | §2/10/11/15/16 | artifact: 文档F2及三轮自审记录 | DESIGN_VERIFIED | none |
+| F-880 | backend/services/advisory_model_first/economic_moneyflow_price_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_v1.py | SOURCE_VERIFIED | none |
+| F-881 | backend/services/advisory_model_first/economic_moneyflow_price_source_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_source_v1.py | SOURCE_VERIFIED | none |
+| F-882 | backend/services/advisory_model_first/economic_moneyflow_price_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_v1.py | SOURCE_VERIFIED | none |
+| F-883 | backend/services/advisory_model_first/economic_moneyflow_price_v1.py; backend/services/advisory_model_first/economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_v1.py; backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py | SOURCE_VERIFIED | none |
+| F-884 | backend/services/advisory_model_first/economic_moneyflow_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py; artifact: 同核完整四臂接口复用，实际新研究尚未运行 | SOURCE_VERIFIED | none |
+| F-885 | backend/services/advisory_model_first/economic_moneyflow_price_pipeline_v1.py; backend/services/advisory_model_first/economic_sector_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py; backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-886 | backend/services/advisory_model_first/economic_moneyflow_price_source_v1.py; backend/services/advisory_model_first/economic_moneyflow_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_source_v1.py; backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-887 | §2/10/11/15/16 | artifact: 精确八源码/测试加两进度文档、三轮源码自审及48直接测试 | SOURCE_VERIFIED | none |
 
 ## 14. Risks / 剩余风险
 
@@ -152,6 +152,8 @@ matched=12D+g（13维），candidate=12D+三资金流+g（16维）。均Gradient
 DESIGN-COMPLIANCE-001逐项：文档/源码/研究/收益与运行状态分开，不把子集功能称整体完成；未知与矛盾区分、无silent fallback；事前冻结完整支持/成本/政策/同对照，不结果后放宽；禁止无授权跨模块、新资格/平台/分钟执行/自然等待或旧失败固化。
 
 ## 16. 三轮设计自审 / 交付记录
+
+源码第一轮输入/时钟审核：完整原键、每D自己的五交易日、query固定原边界、八金额schema与一次CNY转换；正常NULL/缺日/零分母保留UNKNOWN，金额坏值不静默coerce。第二轮共核/身份审核：M6 recipe固定moneyflow_features/状态/独立model SHA；仅新增共核M6/23路由，M1/M5计算和身份公式不变，成熟监督/test毒化/价格洞直接回归。第三轮编排/交付审核：原19fit+1index的预算锚点与实际M5终态metadata核定、不重新读旧负收益；预登记前不取金额，prepare后精确复用快照、不重查；四fit/partial/QE未知拒绝、source只读依赖hash与X输出分别验证。均为本窗口自审，非独立外审。
 
 第一轮方法/时钟自审：确定三项订单金额分桶而非机构账户；五日金额加权而非逐日比率平均，支持/共同监督/冻结成本及导航门不变，当前DB非vintage不作因果或无修订承诺。补明确每D五日局部边界/早期向过去扩calendar，不以全批最大D容许未来金额。
 
