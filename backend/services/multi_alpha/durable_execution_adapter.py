@@ -1295,6 +1295,7 @@ class QEWorkspacePredBacktestAdapter:
             qe_task_id=intent.qe_task_id,
             qe_loop_id=intent.qe_loop_id,
             submission_intent_hash=intent.submission_intent_hash,
+            backtest_only=True,
         )
 
     async def submit(
@@ -1469,6 +1470,7 @@ class QEWorkspacePredBacktestAdapter:
             claim_source=claim_source,
             record_waiting_capacity=record_waiting,
             requested_node_capacity=requested_capacity,
+            backtest_only=True,
         )
         payload = QEWorkspaceSubmissionPayload(
             task_id=intent.qe_task_id,
