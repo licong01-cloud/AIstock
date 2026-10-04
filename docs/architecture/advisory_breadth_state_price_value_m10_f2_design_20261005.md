@@ -96,17 +96,17 @@ fit前后核定QE experiment/custom_evo/multi-alpha三running空闲；未知/不
 
 ## 11. Design Acceptance Matrix
 
-此表只验收设计，源码/新run均未开始，不能冒称业务或研究完成。
+设计#5458已合入/自己清理；以下更新为精确源码及一次完整研究验收，不将负向开发研究或元数据兼容读回等同经济确认/生产启用。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-909 | §1/4/7 | artifact: 旧信息与新宽度历史对照及开发导航边界 | DESIGN_VERIFIED | none |
-| F-910 | §3/4/9 | artifact: 7720键/386已知D/367历史完整D、原SHA和时钟方案 | DESIGN_VERIFIED | none |
-| F-911 | §4/5/9 | artifact: 固定公式/同监督/旧支持与五有效复评政策 | DESIGN_VERIFIED | none |
-| F-912 | §7/9 | artifact: 原四臂/实际干预/导航数值和描述性区间合同 | DESIGN_VERIFIED | none |
-| F-913 | §6/9 | artifact: 显式M10/39及旧23/27/31/35不变 | DESIGN_VERIFIED | none |
-| F-914 | §2/6/12/13 | artifact: QE互斥/原截止/X-F与禁止生产操作 | DESIGN_VERIFIED | none |
-| F-915 | §2/8/12 | artifact: 12精确文件/三视角审核/设计与实现分层 | DESIGN_VERIFIED | none |
+| F-909 | economic_breadth_state_price_v1.py；§1/4/15 | test: backend/tests/advisory_model_first/test_economic_breadth_state_price_v1.py；artifact: 宽度历史与旧当日值/指数风险分离 | SOURCE_VERIFIED | none |
+| F-910 | economic_breadth_state_price_pipeline_v1.py；§3/15 | test: backend/tests/advisory_model_first/test_economic_breadth_state_price_pipeline_v1.py；artifact: 原7720键/7340AVAILABLE/380预热、0SQL | SOURCE_VERIFIED | none |
+| F-911 | economic_breadth_state_price_v1.py；§4/5/15 | test: backend/tests/advisory_model_first/test_economic_breadth_state_price_v1.py；artifact: 3693成熟共同train/195D、13/16核/原支持政策 | SOURCE_VERIFIED | none |
+| F-912 | §7/15；economic_breadth_state_price_pipeline_v1.py | artifact: 一次四fit/原81D完整四臂、两个配对增量及五NAV条件、真TAKE/UNKNOWN分账 | VERIFIED_RESEARCH_COMPLETED_NEGATIVE | none |
+| F-913 | economic_moneyflow_price_pipeline_v1.py；economic_sector_price_pipeline_v1.py；§6/15 | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 实际39/1及旧23/27/31/35不变 | SOURCE_VERIFIED | none |
+| F-914 | §2/6/15 | artifact: fit前后QE三running均0、原截止/线程2/X-F、0DB/激活/控制 | SOURCE_VERIFIED | none |
+| F-915 | §2/12/14/15 | test: backend/tests/advisory_model_first/test_economic_breadth_state_price_pipeline_v1.py；artifact: 38直接项/Ruff/F2/L0、自审及原M1实际bundle兼容 | SOURCE_VERIFIED | none |
 
 ## 12. Risks / 多轮审核与符合性
 
@@ -119,3 +119,29 @@ DESIGN-COMPLIANCE四项：不把设计/prepare/mock-only冒称完整；矛盾拒
 ## 13. Rollout / Rollback / Production Gates
 
 仅离线设计/研究交付backend_restart_required=false。无数据库migration/依赖/数据或模型activation，既有M1 consumer不绑定M10、不改变实时运行配置；用户后端无操作。负研究不复活，完整新工件保留但不另开归档项目；设计/源码合入、研究结果、经济确认和生产状态分别报告。
+
+## 14. 源码预检断点（2026-10-05）
+
+设计#5458 HEADa45673bb0/CI37240953708 SUCCESS后合入9e39c3c1c并自身官方cleanup_done，源码独立树从该main开始、修改前登记原12文件。仅两新Advisory叶模块及已有同核M10字段/身份/status、显式39 budget扩展；旧23/27/31/35和旧模型hash公式保持，0新SQL。
+
+三视角实施自审：信息/时钟轮用20值手算、常数零slope、严格0.5与未来值/clock毒化检查历史计算；编排/预算轮核原source KEY、原子prepare retry、partial/QE未知不fit、旧默认及真实M9完整四fit/terminal要求，M10 extension重验证typed plan避免model_copy绕过literal；消费/兼容轮发现新增status及fit-identity路由遗漏，精确修复后仅复跑三个失败/新增节点，稳定后38项直接矩阵、Ruff、两L0静态入口PASS/阻断0。未新增重复快照或大fixture，不冒称外审。
+
+真实原M1 published JSON bundle在本次新路由下读回/verify_unchanged通过：model SHA872acff3894c7a64b1b87c51ebd440d739a82069d68be0e30ea27dee9c81931e、bundle SHAc674a38822a9bf37a6afb90478a8200029636ccbf4d8ec005b47c8d97302bf14不变；未读行情/label arrays、查DB、fit或激活。旧bundle元数据/evaluation摘要为公开消费者既有读取，不冒称整个检查没读任何结果元数据。首轮python -m ruff在AIstock环境无模块，未作为PASS；改用既存C:/Users/lc999/miniconda3/Scripts/ruff.exe经RTK执行通过，无安装。
+
+本断点只源码验证；正式新plan/prepare/研究拟合及四臂评价尚未执行，实际仍35物理研究fit+1index。单元合成小拟合与正式研究journal分账。F-912仍仅设计验收，矩阵在实际研究后更新，不先标经济确认/源码合入或运行完成。四项DESIGN-COMPLIANCE再次核对：不交付partial为完整，不吞输入错误，原名单/五有效复评/成本不改，不增策略包资格或确认审批。
+
+## 15. 一次正式开发研究及当前交付（2026-10-05）
+
+源码producer=296689715b4d24cad7680841935a1d01f85a144a，implementation SHA=e01b04a1d66ba1422ce94dc019f7e74aa1327caf562e35bcfa7bb59bbb74ad7f。先登记run advbreadthstatevalue_5f62ec8b6154418f9c10809e，plan SHA=5f62ec8b6154418f9c10809e112a95d5ea39aae7b489c17c76065b86d3e4ba91；同原F campaign root新独立目录，旧工件/fit计数不改。后续仅文档提交不冒称用新HEAD重训。
+
+一次prepare实际2.094秒，原7720 KEY/日期/顺序全保留，7340 AVAILABLE、380 UNKNOWN_20D_HISTORY；0SQL/无新DB输入，原非vintage/native UNPROVEN不升级。23:16:31UTC QE三running公开路径均0后执行一次4 physical-fit，fit阶段7.391秒、加完整四臂21.407秒；23:17:38UTC三路径亦均0，无QE提交/控制。共同成熟train3693行/195D，validation1591只诊断、不用于选择/拟合。正式研究累计39fit+1index，单位小拟合另账；无当前运行研究进程。
+
+| 同一原100共同估值日 | candidate | baseline | matched | ±300bps rule |
+|---|---:|---:|---:|---:|
+| 成本后名义组合净收益 | 11.4050% | 21.3220% | 4.5719% | 20.5747% |
+| MDD | -8.0191% | -10.3314% | -11.8944% | -9.4780% |
+| 完成episode数 | 82 | 91 | 83 | 91 |
+
+原81决策日/1620候选完整四臂，相对baseline配对mean日净增量-8.8603bps、描述性95% block区间[-26.6712,5.7706]；相对matched +5.9990bps、[-9.2232,21.8912]。实际入场差异交易日25/57（原评估列表以T记，各一一映射原D，分母81原决策日），candidate模型真TAKE78/UNKNOWN控制4，matched真TAKE79/控制4；不把控制贡献算模型收益或将T列表称D行情输入。candidate尾均值-191.0112bps较baseline -254.3254改善，仍不能替代预注册净增量条件。
+
+五NAV条件仅net_increment=false，interventions/model_takes/mdd/tail=true；完整端点检查/held mark/未结算均无阻断，不是fill证明。STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION，NOT_CONFIRMED/nondeployable；不降低5bps或救活旧窗口/seed/阈值、不进入daily绑定/confirmation/收益承诺，不读取sealed。收益、风险、工程、源码合入、用户运行状态分报。当前源码PR交付与当前HEAD必需CI仍待完成，设计已交付不冒称源码合入。
