@@ -13,6 +13,7 @@ from backend.services.advisory_model_first.model_inference import _candidate_row
 from backend.services.advisory_model_first.realtime_feature_source import PostgresRealtimeFeatureSource
 from backend.services.advisory_program import AdvisoryProgramPGRepository, list_item_to_dict, list_version_to_dict
 from backend.services.advisory_universe import normalize_advisory_universe_selection
+from backend.services.canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
 from backend.services.selection_center.repository import SelectionCenterRepository
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
 
@@ -154,7 +155,10 @@ class EconomicSectorPublishedListSourceV1:
             from backend.services.canonical_equity_pit import require_canonical_rolling_universe_key
 
             require_canonical_rolling_universe_key(pit_universe_key)
-        self._session, self._mode, self._key = read_session, price_context_mode, pit_universe_key
+        # Explicitly use the canonical rolling attributes; the shared None
+        # default still names legacy ST data and must not select our source.
+        price_key = CANONICAL_PIT_UNIVERSE_KEY if price_context_mode == "LIVE_DB" else pit_universe_key
+        self._session, self._mode, self._key = read_session, price_context_mode, price_key
 
     def load_day(
         self, *, program_id, component_roles, terminal_weights, model_scope, target_date=None, list_version_id=None

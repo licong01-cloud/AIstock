@@ -1,6 +1,6 @@
 # Advisory M1日频名单、价格API与价格卡片 F2详细设计
 
-2026-10-05；SOURCE_IMPLEMENTED_UI_AND_EMPTY_ROSTER_FIX_PENDING。承接[上位M1日频设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)第三业务切片；设计已由PR #5443合入876316279cfb3118664192ea0abc9333b4980c68，源码草稿PR #5445及实施状态见§8.1。本轮18小时计划优先完成真实日频消费，不重做QE研究或为旧失败结果补证据。进入QE策略包的组合直接使用；本文只处理真实输入、数学和展示，不增加资格、native、父训练时钟或收益确认门。
+2026-10-05；SOURCE_IMPLEMENTED_FIX_DELIVERY_AND_UI_PENDING。承接[上位M1日频设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)第三业务切片；设计已由PR #5443合入876316279cfb3118664192ea0abc9333b4980c68，源码草稿PR #5445及实施状态见§8.1。本轮18小时计划优先完成真实日频消费，不重做QE研究或为旧失败结果补证据。进入QE策略包的组合直接使用；本文只处理真实输入、数学和展示，不增加资格、native、父训练时钟或收益确认门。
 
 ## 1. Background / 事实与目标
 
@@ -29,7 +29,7 @@
 3. M1已冻结Top20维度：原非EXIT且rank 1–20的已发布名单确定该模型候选集合；先严格验证重复/缺失/外部项，再复用`_candidate_rows_for_recommendation_list`投影run。真实名单可能还含Top20外WATCH和历史持仓/EXIT，不能因原list共47项拒绝整日。API分别报告原list项数、该模型候选数、未覆盖原项及原因，旧完整业务名单不变；Top20外不冒称已被此模型估值。不得把缺失list或坏rank伪装原空名单，不以原run全Top50或当前池重新选Top20。`project_economic_frozen_candidate_roster_v1`复用真实normalized scores和weights，保持原rank/顺序。
 4. 读取21个截至D交易日与紧邻T，共22节点；调用既存`EconomicSectorPriceDailyFamilyV1.predict_day/predict_batch`和`EconomicSectorReadonlyDailySourceV1.load_batch`，数学不重写。
 5. 分类复用已发布中立行业bundle和公共resolver，只取D可见CLASSIFICATION；结构crosswalk/code map和公司分类分开。配置声明实际已发布数据来源，不强绑训练期profile，也不回退旧profile或以全池复现为条件。
-6. 原监管价格属性复用`PostgresRealtimeFeatureSource._price_range_contexts`公开只读消费者合同：每日用其真实live DB路径，历史可以显式canonical历史组件；不能把历史组件伪装成live。无价格属性逐股QUERY_DOMAIN_UNAVAILABLE；真正矛盾不吞掉。
+6. 原监管价格属性复用`PostgresRealtimeFeatureSource._price_range_contexts`公开只读消费者合同：每日LIVE_DB显式传公共canonical rolling key，不能让共享helper的None默认值选择旧ST命名空间；历史也必须显式canonical组件，不伪装成live。配置LIVE_DB的key为空表示由本适配器解析唯一公共key，消费收据记录实际读取key而非空值。此调用只读价格属性，不重新过滤原股票池、不重建/激活数据、不修改公共helper。无价格属性逐股QUERY_DOMAIN_UNAVAILABLE；真正矛盾不吞掉。
 
 ## 4. Contracts / 名单、输入与模型配置
 
@@ -91,23 +91,27 @@ M1卡片与旧v3类型隔离。自动按当前program和visible list target/list
 
 ### 8.1 实施验收与剩余边界（2026-10-05）
 
-原published list/service/GET/新family卡片源码已实现；原v3接口和完整名单不变。名单21项、组合服务14项及隔离ASGI 6项定向测试共41项通过，覆盖配置坏JSON/未知字段/错误family和原指数零准入。前端实际原生TypeScript编译通过；RTK包装的第一次npx调用没有运行正确TypeScript，未当作通过收据。
+原published list/service/GET/新family卡片源码已实现；原v3接口和完整名单不变。名单23项、组合服务14项及隔离ASGI 6项定向测试共43项通过，覆盖配置坏JSON/未知字段/错误family、原指数零准入及单日/历史模式实际canonical价格命名空间。LIVE_DB回归先复现传None选择旧ST默认路径，再仅在本适配器显式传公共canonical key；不修改共享helper，不加资格门。前端实际原生TypeScript编译通过；RTK包装的第一次npx调用没有运行正确TypeScript，未当作通过收据。
 
 真实业务只读验证使用已消费的2026-08-24、08-25、08-28。08-28原47项中20个原Top20候选进入M1、27项保留未估值；完整调用约14.969秒，8条价格集合、12条UNKNOWN。三日同核批量共60候选，17.813秒/平均5.938秒每天，合批特征查询7次；逐股条件价格及15D内容SHA与单日一致，peak working set约419MiB，推理线程上限2。三日依次8/9/8条价格集合，中间日另有1 NO_ACCEPTABLE_PRICE、9 UNKNOWN、1 QUERY_DOMAIN_OVER_BUDGET；超预算保留原股且明确未估值，不裁剪价格域。不同实时读取时间导致receipt整体hash不同，不把数值内容一致冒称整个receipt hash一致。
 
 上述验证fit=0、无收益/label/T行情/新sealed、无数据库写入/数据激活/候选重建/QE提交或进程控制。测试配置仅X盘只读测试输入，不是运行配置或模型启用。8.1的证据不得用于经济确认。
 
+恢复后按原29日spec预先取首20日（2026-08-14～09-14），400个原候选与576项模型范围外的原名单项均精确保留；组合未合入源码一次真实批量34.719秒、7特征SELECT（不含名单/价格属性元数据查询）、peak working set约425MiB。输出100价格集合/3无可接受价格/289UNKNOWN/8超预算；9月8日几乎全UNKNOWN，不能把1.736秒/日解释为全部股票都完整估值。
+
+定向源诊断确认核心12个D字段完整，9月UNKNOWN来自配置8月分类authority的eligibility截止，并非停牌或冻结零gap不支持。既存9月分类candidate经公开reader只读读回且SW2021结构不变；在另一X测试配置只换分类来源，同一冻结模型和原9月8日160候选得到66个完整15D特征，59价格集合/7无可接受价格/93UNKNOWN/1超预算。余94股缺可证明分类knowledge-time，其中一股先触发价格域预算；不删股、不补零/前填、不伪造known_from。日线与66个已知分类的板块行情完整，无须补这些数据。LIVE_DB新修复真实单日09-02约7.266秒，实际价格key为aistock_equity_pit_canonical_v2、无价格属性缺失，8价格集合/1无可接受价格/11UNKNOWN。9月bundle消费不是QE活动profile/数据发布/生产激活，也不是盈利证明；模型数学结构和业务日频分类源分别管理，不以训练release cutoff截断日频业务。
+
 | 实施项 | 实际状态 | 尚缺验收 |
 |---|---|---|
-| F-791～794 | 非空原名单/真实同核批量通过；原零准入适配通过，但完整空链暴露共享内核BUG-1726 | 空表dtype修复已单独29项测试通过，尚未交付/合入；不称完整空链已通过 |
+| F-791～794 | 原非空名单/真实20日批量及LIVE_DB canonical只读链通过；BUG-1726三层修复后真实冻结权重+合成空名单完整family返回NO_CANDIDATES，71相关测试/Ruff/L0通过 | BUG源码交付待公共端点smoke合同；不是原published空名单或生产完成，分类来源覆盖限制如实保留 |
 | F-795 | 6项隔离ASGI测试及真实冻结M1/DB→完整ASGI响应通过，28370字节有限JSON、HTTP200、20候选/27未估值，无用户后端启动 | 合入后用户重启的真实HTTP语义验证 |
 | F-796 | 5状态及晚返回竞态共6个精准UI场景已编写，实际类型编译通过 | 六场景浏览器收据尚未生成，不借用旧6场景收据 |
-| F-797 | 单日/三日真实业务、同值、查询及资源读回通过 | UI展示验证；不等于收益/成交证明 |
-| F-798 | 本窗口分视角自审，源码HEAD2261aaa29 CI37219771144 SUCCESS；独立BUG-1726 29tests/Ruff/L0通过 | 文档更新后新HEAD检查另核；六UI、空链修复交付、合入与官方清理尚未完成 |
+| F-797 | 单日/三日同值、20日真实批量及9月来源分解、查询及资源读回通过 | UI展示验证；不等于收益/成交证明，也不把UNKNOWN算模型拒绝 |
+| F-798 | 本窗口分视角自审，历史HEAD e14e3f39c CI37221697583 SUCCESS；新增LIVE_DB修复后43定向测试通过；独立BUG-1726 71tests/Ruff/L0通过 | 本次新HEAD必需检查和六UI另核；BUG源码交付、合入与官方清理尚未完成 |
 
 当前Validation Center未找到可执行的Advisory UI专用计划；广UI由流水线/CI执行精确范围，只用runner-owned隔离端口/进程，临时产物全X，不启动用户后端或安装依赖，不修改公共计划或CI。未有收据不宣称UI通过或本切片已满足合入条件。更晚的T实价读回/自然捕获不属于此只读GET，不把历史重算伪装D原生发布。
 
-完整空链追加验证先因临时runner错误调用predict_day(packet=...)失败，修正为实际kwargs/SCOPE_KEYS后发现真实BUG-1726（Issue #5446）：纯core对空object数值列map后仍object，np.isclose触发TypeError。独立BUG树仅改本Advisory core/对应测试/BUG JSON，修复先有限数值校验再float dtype；空对象列修复前失败、后通过，29项同叶测试保留非空原数学。源码本地7abb1797c3c0bbee428bdf7945bd94129733ee4e，尚未创建BUG PR/合入；canonical workflow缺该新GET的target-owned业务smoke语义，交公共流程owner登记，不改公共脚本或换泛health验证绕过。不是行情缺口/QE缺陷/需数据补齐；正常非空HTTP真实链完整通过约6.875秒，不把它冒充空链通过或生产HTTP验收。
+完整空链追加验证先因临时runner错误调用predict_day(packet=...)失败，修正为实际kwargs/SCOPE_KEYS后发现真实BUG-1726（Issue #5446）。独立BUG树修改前精确登记3个Advisory叶源码、3个对应测试及BUG JSON；分别修复空object数值map后的isfinite错误、sector空分类键merge dtype错误、family空键dtype误判。71项相关测试保留非空数学、空输入schema/hash/count、外来分类及未来quote拒绝；真实冻结模型+合成空名单完整family返回NO_CANDIDATES。源码67d65b4b8，同步main后本地HEAD e121e4942b2f99622ea631eaa13a51ac228e9c47，4收据绑定、scope/Ruff/L0通过，尚未创建BUG PR/合入。唯一官方交付阻断是canonical workflow缺该新GET的target-owned业务smoke语义，交公共流程owner登记，不改公共脚本或换泛health验证绕过。这个空链BUG不是行情缺口/QE缺陷；分类覆盖是另一已明确的数据消费限制，不混作同一问题。完整空链属于组合未合入源码、合成空输入验证，不冒称原published空名单或生产HTTP验收。
 
 ## 9. Risks / 审核与设计符合性
 
@@ -120,6 +124,8 @@ DESIGN-COMPLIANCE-001：四项逐条检查完整业务/无mock-only，真实矛�
 第四轮真实输入设计复核：只读发现原program已发布名单从2026-08-14起，训练截止内没有DB业务名单，不能用训练parquet冒充真实published list；2026-08-28列表47项含Top20外WATCH/旧持仓，修正为原published Top20投影并显式保留未估值项，而非用20项上限拒绝正常业务名单。样本原review hash与model parent/value hash确实不同。未读取该日收益、T行情、sealed模型诊断或赢家。
 
 实施多轮自审：接口/数据轮以真实47项修复WATCH正常动作与无rank旧持仓；时钟/事务轮区分旧停牌报价与声明D、原review/shadow/value政策，并在批量CPU前结束读阶段预算；边界/UI轮修复原指数合法零准入、增强实际状态/节点字段一致性和晚返回取消，未增加利润/原生/QE资格门。异常只重跑对应修复节点，稳定后一次同叶矩阵；不称独立外审。
+
+恢复后三轮自审：来源/时钟轮用失败节点确认LIVE_DB旧ST默认错误，修复为本适配器显式canonical属性读取；数据/数学轮核对九月分类当D可见、冻结结构不变及正常UNKNOWN保留，不以新candidate目录冒充活动profile；交付/边界轮核对20日原名单计数、空链组合源码与71测试状态、六UI未验收及源码/配置/运行态/经济效果分账。最终43项相关矩阵通过，未重复旧模型实验或扩大测试债务。
 
 ## 10. Rollout / Rollback / Production Gates
 

@@ -116,7 +116,7 @@ M1日频接入无需独立收益确认、父/组合时钟、原训练native或�
 
 [日频交付F2](advisory_sector_daily_delivery_v1_f2_design_20261005.md)PR #5443合入876316279cfb3118664192ea0abc9333b4980c68后，独立最新main树实现名单/服务/GET及显式M1卡片。2026-08-28真实原published list的47项中20原Top20进行模型计算、27旧持仓/WATCH/范围外项原动作保留；8价格集合/12UNKNOWN，完整约14.969秒。已消费08-24/25/28三日共60候选，批量17.813秒、平均5.938秒/日、特征查询7次，单批价格与15D内容SHA一致，peak working set约419MiB、线程上限2。未读取收益/label/T行情/新sealed，fit=0、DB写入=0、QE提交=0。
 
-原指数准入明确0只与Selection原空分开处理，名单适配允许NO_CANDIDATES；没有原声明不能将缺名单伪装为零。完整空链暴露BUG-1726：共享纯core空object数值列isfinite错误；独立修复29tests/Ruff/L0通过，尚未合入，公共新端点业务smoke语义待流程owner登记。主源码PR #5445的41同叶测试（含6 HTTP）、原生TypeScript及HEAD2261aaa29 CI37219771144 SUCCESS；另有实际冻结M1/只读DB→完整ASGI JSON200，20候选/27未估值，8价格集合/12UNKNOWN、约6.875秒。六项最小UI已编写但未执行浏览器，新文档HEAD检查另核；未合入/用户后端未加载，测试配置仅X。详细矩阵见交付F2 §8.1，真实非空业务不冒充空链或收益确认，不为旧失败候选追加证据。
+原指数准入明确0只与Selection原空分开处理，名单适配允许NO_CANDIDATES；没有原声明不能将缺名单伪装为零。BUG-1726三层空输入修复后71相关测试/Ruff/L0通过，真实冻结权重+合成空名单完整family返回NO_CANDIDATES；尚未交付合入，公共新端点smoke语义待流程owner登记。主源码PR #5445历史HEAD e14e3f39c CI37221697583 SUCCESS；恢复后仅本适配器修复LIVE_DB旧ST默认，43同叶测试通过，实际09-02 LIVE_DB/canonical价格来源读回约7.266秒，无未来行情/收益/fit/写库。原20日400候选/576未估值项批量34.719秒，9月分类源诊断见交付F2 §8.1：用既存9月candidate的X测试配置得66/160完整15D特征，不是活动profile或数据激活；94股分类knowledge-time不可证明仍保留未知/预算状态。六项最小UI已编写但未执行浏览器；本次新HEAD检查另核，未合入/用户后端未加载。原生TypeScript和真实冻结M1/DB→ASGI有限JSON200已通过，但不冒称UI、生产HTTP或收益确认，不为旧失败模型追加证据。
 
 ## 9. Design Acceptance Matrix
 

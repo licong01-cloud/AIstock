@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from backend.services.advisory_model_first import economic_sector_list_source_v1 as m
+from backend.services.canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
 
 D, T = date(2026, 8, 27), date(2026, 8, 28)
 ROLES, WEIGHTS = {"lstm": "a", "fund": "b"}, {"a": 0.6, "b": 0.4}
@@ -78,6 +79,7 @@ def original(monkeypatch):
         queries=[],
         rollbacks=0,
         price_calls=0,
+        price_keys=[],
     )
 
     class Cursor:
@@ -119,6 +121,7 @@ def original(monkeypatch):
 
     def prices(*a, symbols, **k):
         state.price_calls += 1
+        state.price_keys.append(k["pit_universe_key"])
         return {}, tuple(dict(symbol=symbol, reason_code="NORMAL_MISSING_PRICE") for symbol in symbols)
 
     monkeypatch.setattr(m.PostgresRealtimeFeatureSource, "_price_range_contexts", prices)
@@ -135,6 +138,18 @@ def load(original, **kwargs):
         model_scope=deepcopy(SCOPE),
         **kwargs,
     )
+
+
+@pytest.mark.parametrize("mode", ["LIVE_DB", "CANONICAL_HISTORICAL"])
+def test_live_and_historical_price_reads_use_canonical_namespace(original, mode):
+    original.source = m.EconomicSectorPublishedListSourceV1(
+        read_session=original.source._session,
+        price_context_mode=mode,
+        pit_universe_key=CANONICAL_PIT_UNIVERSE_KEY if mode == "CANONICAL_HISTORICAL" else None,
+    )
+    result = load(original)
+    assert original.price_keys == [CANONICAL_PIT_UNIVERSE_KEY]
+    assert result["candidate_receipt"]["pit_universe_key"] == CANONICAL_PIT_UNIVERSE_KEY
 
 
 def test_published_top20_preserves_watch_extras_policy_and_missing_prices(original):
