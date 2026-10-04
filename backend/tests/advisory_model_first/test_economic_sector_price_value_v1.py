@@ -36,6 +36,13 @@ def test_four_fixed_fits_shared_train_test_poison_and_support_not_class_filtered
     replay = train_sector_price_v1(rows=poisoned, configuration=configuration, before_fit=lambda name: None)
     assert fitted.model_sha256 == replay.model_sha256
     assert fitted.support.contains(20.)
+    # Equal information values preserve the M1 mathematical kernel exactly;
+    # M5 gets its own field names and identity, not sector-labelled sidecars.
+    from backend.services.advisory_model_first.economic_selection_state_price_v1 import STATE_FEATURES, train_selection_state_price_v1
+    renamed = rows.rename(columns={**dict(zip(SECTOR_FEATURES, STATE_FEATURES, strict=True)), 'sector_feature_status': 'state_feature_status'})
+    same = train_selection_state_price_v1(rows=renamed, configuration=configuration, before_fit=lambda _: None)
+    assert same.models == fitted.models and same.support == fitted.support
+    assert same.model_sha256 != fitted.model_sha256
     query = rows.loc[rows.split.eq('train')].iloc[1:3]
     assert sector_matrix_v1(query, arm='matched').shape == (2, 13)
     assert sector_matrix_v1(query, arm='candidate').shape == (2, 16)
