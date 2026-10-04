@@ -25,15 +25,17 @@ M10源码#5459当前HEAD696d19bb9/CI37243602139 SUCCESS后合入7aed83cc64ca35d7
 
 新入口build_generic_daily_price_input_v1接收完整原候选DataFrame、21个严格递增原交易session（前20截至D，末尾为紧邻T）、调用方已经按D可见锚调整的OHLC/原始股数volume面板、20个session的固定沪深300收盘序列、D市场宽度声明、来源说明。无I/O、无系统时钟、无model/label参数。predict_batch所需调用方式为逐D使用同一纯函数；本切片不另实现批量来源或调度。
 
+精确接口为build_generic_daily_price_input_v1(*, candidates, calendar, panel, benchmark_daily, market_state, source_context)，返回(features, receipt)。benchmark_daily列为trade_date、instrument、close；market_state键为trade_date、market_up_ratio、market_definition_id、visible_through。source_context键为package_id、run_id、list_version_id、universe_identity、source_evidence、price_basis、volume_basis、source_visible_through、benchmark_visible_through；身份/证据为非空字符串或显式null，universe_identity为不超过64KiB的有限JSON身份对象/字符串或null，不包含完整成员表。calendar为date；DataFrame日期可为规范ISO date或naive午夜Timestamp；可见时钟可为date/规范ISO date或null，不接受含时区/盘中时间。来源独立未知，不进行资格查询。
+
 原候选列固定decision_as_of_trade_date、target_trade_date、instrument、selection_effective_rank、candidate_group_size；0～50只，证券唯一、rank严格1..N、group_size=N、D/T与calendar一致。保留全部原KEY、顺序及rank元数据；它们不进入模型九字段。空名单返回NO_CANDIDATES和明确空schema，不用isfinite检查object空表；仍校验输入结构/时钟，不吞冲突。来源说明包含package_id、run_id、list_version_id、universe_identity、source_evidence、price_basis、volume_basis和source_visible_through；未知身份可以显式null并保留，不查包资格、native receipt、训练时钟、收益或数据库。
 
 universe_identity可描述stock_universe、单指数或index_union等上游已交付身份；本函数不重建成员、调用Selection或验证/改写QE股票池。相同股票、D行情与市场定义在不同包/排序中的九特征数值应相同；元数据及完整输入hash可以不同。这是算法输入可移植，不是声称全部包/全部指数池共享有效权重。
 
 OHLC/volume面板字段固定trade_date、instrument、open、high、low、close、volume：价格D_ADJUSTED_CNY，volume RAW_SHARES。最多50×20=1000唯一股日，真实键属于原候选与D历史20session；基准仅20唯一日期，固定000300.SH。拒绝未来T报价、外来股票、重复/别名日期、timezone/non-midnight、bool/数字字符串/已知inf、非正已知价格、负volume、OHLC矛盾；普通NULL/NaN、缺真实bar或来源时钟未知为正常UNKNOWN，原候选不删除。不补零/前填/压缩session；无行情的停牌不导致名单整体失败；真实零volume合法，但全20日零分母的ratio为UNKNOWN。与旧suspension-normalized特征不是默认parity，本文明确新schema只消费真实报价。
 
-source_visible_through仅表示股票价格/volume来源及D复权锚的消费时钟，已知时须<=D；晚于D是计算矛盾，未知时保留六个股票字段UNKNOWN_SOURCE_CLOCK、相对收益因股票ret_5未知而UNKNOWN，不制造D已知声明。基准/市场有自己的时钟，仍可保留各自已知值；不以某来源未知阻断其它独立字段。来源current DB NON_VINTAGE等证据等级原样保留，不伪造原生capture、不要求补native来使用数据。数学结果使用D历史，不证明历史revision曾于当时已知；源声明不将输入坐标升级为已验证历史复权版本。
+source_visible_through仅表示股票价格/volume来源及D复权锚的消费时钟，已知时须<=D且所有被消费bar日期<=该时钟；晚于D或bar比其来源声明更晚均是计算矛盾。未知时保留六个股票字段UNKNOWN_SOURCE_CLOCK、相对收益因股票ret_5未知而UNKNOWN，不制造D已知声明。基准/市场有自己的时钟，仍可保留各自已知值；不以某来源未知阻断其它独立字段。来源current DB NON_VINTAGE等证据等级原样保留，不伪造原生capture、不要求补native来使用数据。数学结果使用D历史，不证明历史revision曾于当时已知；源声明不将输入坐标升级为已验证历史复权版本。
 
-市场输入为D、market_up_ratio及market_definition_id、visible_through；ratio已知在[0,1]且visible_through<=D，分母定义须非空声明。缺值/时钟/定义时只令market_up_ratio UNKNOWN，不把缺失变为0或去掉原股票；不假设指数池宽度与全市场宽度同分母。未来市场声明/坏值/错误D报计算错误。基准来源visible_through独立声明，缺少或未知只令基准/相对收益字段UNKNOWN，未来声明报错。
+市场输入为D、market_up_ratio及market_definition_id、visible_through；ratio已知在[0,1]，已知D值的可见日期必须是D（不能使用D-1声明冒充D宽度），分母定义须非空声明。缺值/时钟/定义时只令market_up_ratio UNKNOWN，不把缺失变为0或去掉原股票；不假设指数池宽度与全市场宽度同分母。未来市场声明/坏值/错误D报计算错误。基准来源visible_through独立声明，缺少或未知只令基准/相对收益字段UNKNOWN；未来声明或消费比其声明更晚的bar报错。
 
 ## Fixed information / 九字段及无标签语义
 
@@ -96,3 +98,5 @@ schema/semantics hash必须固定公式、价格/volume单位、窗口和UNKNOWN
 设计已明确可交付边界，不把输入切片当完整荐股；正常UNKNOWN和真实矛盾分别返回/报错，不假成功；原模型、标签、退出及公共业务语义不改；不添加QE资格/native/功效审批。后续实施必须逐项证明，而不是借DESIGN_VERIFIED声称SOURCE_VERIFIED。多轮审核记录在实际完成后追加。
 
 本窗口三轮设计自审：信息/产品轮核对不要求score/leg、没有调用旧core造腿、旧权重与复评Y不能直接改名通用；PIT/UNKNOWN轮将原“价格时钟未知使九字段全部未知”修订为六股票字段及依赖相对收益未知、独立基准/市场仍保留已知，避免新增不必要的总门；数值/实施轮固定ATR14的真实session/均值、零volume与H=L未知、调整排序后按KEY比较数学而非误比整receipt，并补semantics版本及输入不可变。均为本窗口不同视角自审，不宣称独立外审；源码/业务尚未实施。
+
+追加接口/时钟复审明确七个命名参数和各输入schema、有限JSON身份预算，并拒绝“声明截至D-1却包含D bar/宽度”的自相矛盾；普通来源未知仍按字段保留，不要求补数据或原生receipt。改动后重新F1/diff验证并绑定新HEAD CI，不借旧HEAD绿灯。
