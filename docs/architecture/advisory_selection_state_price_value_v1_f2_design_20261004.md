@@ -78,7 +78,7 @@ plan携带`budget_anchor_ref`（role=`price_campaign_budget_anchor`），指向�
 
 M2/3/4已11fit+1索引，M1已4fit，本设计M5最多4fit，累计19物理fit+1索引为计算预算，旧计数不清零。单测fit和研究trial分账，partial不隐式retry。M1无论正/负/执行阻断都不形成M5收益准入；仅核对该真实前序身份及实际累计预算。fit与QE训练互斥沿用户既有资源边界，running/unknown只暂停fit，不停止其它研发；不控制QE，不读holdout。
 
-薄编排核对原M1真实stage链、registry及累计四fit，接受包括正导航在内的真实终态；不按收益门真假或缺父训练时钟拒绝。身份链或实际预算矛盾属于输入/编排错误，不造手工receipt。现有正导航拒绝代码必须在下一源码PR移除；本设计修订不是假称代码已生效。
+薄编排核对原M1真实stage链、registry及累计四fit，接受包括正导航在内的真实终态；不按收益门真假或缺父训练时钟拒绝。身份链或实际预算矛盾属于输入/编排错误。正导航拒绝已在本源码候选移除，正/负/执行阻断均有直接测试；源码尚未合入，不宣称运行后端已加载。
 
 ## 9. Evaluation / 同冻结四臂与分流
 
@@ -117,18 +117,18 @@ M2/3/4已11fit+1索引，M1已4fit，本设计M5最多4fit，累计19物理fit+1
 
 ## 13. Design Acceptance Matrix
 
-设计已交付；独立源码候选`16e953938c0be9c20084c4c8ce5bde55958cc475`已实现纯D状态、模型和薄编排，18直接测试通过、已提交推送但尚未PR合入。新正前序合同仍待源码修订；正式登记/研究fit/四臂均0。下面是设计验收，不是源码完整交付或经济通过。
+设计已交付；独立源码树已同步最新main，保留真实新信息/同核提取，旧M1模型数学与历史结果不变，移除正前序拒绝。19直接测试及Ruff通过；以下设计与源码验收分列。正式M5登记/研究fit/四臂当前仍0，下一清洁提交后按新身份运行，不冒充收益确认。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-705 | §1/8 | artifact: 本设计新lineage合同 | DESIGN_VERIFIED | none |
-| F-706 | §5/6 | artifact: 405D/16200行元数据只读核定 | DESIGN_VERIFIED | none |
-| F-707 | §4/6 | artifact: 本设计固定三D字段及时钟 | DESIGN_VERIFIED | none |
-| F-708 | §7 | artifact: 本设计同核四fit及支持 | DESIGN_VERIFIED | none |
-| F-709 | §9 | artifact: 本设计固定四臂与收益/风险门 | DESIGN_VERIFIED | none |
-| F-710 | §8/10 | artifact: 本设计新预算19而非旧fit清零 | DESIGN_VERIFIED | none |
-| F-711 | §2/3/10/11 | artifact: 独立树预备、M1冻结hash不变及正式交付/fit后置合同 | DESIGN_VERIFIED | none |
-| F-712 | §2/3/10/11/15 | artifact: 本设计精确写域及无生产变化 | DESIGN_VERIFIED | none |
+| F-705 | backend/services/advisory_model_first/economic_selection_state_price_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_price_v1.py | SOURCE_VERIFIED | none |
+| F-706 | backend/services/advisory_model_first/economic_selection_state_price_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_price_v1.py | SOURCE_VERIFIED | none |
+| F-707 | backend/services/advisory_model_first/economic_selection_state_price_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_price_v1.py | SOURCE_VERIFIED | none |
+| F-708 | backend/services/advisory_model_first/economic_selection_state_price_v1.py; backend/services/advisory_model_first/economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py; backend/tests/advisory_model_first/test_economic_selection_state_price_v1.py | SOURCE_VERIFIED | none |
+| F-709 | backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_pipeline_v1.py; artifact: 原完整四臂helper复用 | SOURCE_VERIFIED_RESEARCH_PENDING | approved_by_user: 下一清洁提交后运行一次新研究，未称经济完成 |
+| F-710 | backend/services/advisory_model_first/economic_selection_state_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_selection_state_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-711 | backend/services/advisory_model_first/economic_sector_price_value_v1.py; backend/services/advisory_model_first/economic_sector_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py; backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-712 | §2/3/10/11/15/16 | artifact: 19直接测试、三视角审核及精确Advisory差异 | SOURCE_VERIFIED | none |
 
 ## 14. Risks / 不可误读
 
@@ -143,3 +143,5 @@ DESIGN-COMPLIANCE-001逐项：实现和研究/经济/激活分报；未知/矛�
 ## 16. 三轮设计自审
 
 方法轮：只比较同共同监督13/16信息增量，不将持有期机械可预测性当收益；固定三字段。输入轮：完整calendarD、Top40外右删失41、缺名单保留UNKNOWN。当前执行轮：15已发生fit不清零，M5最多4令整批cap19；接受正M1终态，不再重复父资格或等待确认；更新真实源码身份再登记，不覆盖旧模型/结果，不复制模拟器或修改公共模块。三视角为本窗口自审非独立外审。
+
+本次源码三视角复审：方法轮核对共核提取仅参数化信息块/身份，M1既有接口、训练人口、支持、gap缩放和模型SHA公式保持；时钟轮保留原calendar/完整名单/未来毒化及原UNKNOWN，不以当前包资格补证为前置；编排轮将前序正/负/执行阻断均接受并拒绝真实计数矛盾，原预算不清零。同步main的冲突分别保留新信息共核与main最新事实文档，最终差异只有登记的Advisory源码/测试及本设计，不含其它模块业务修改。

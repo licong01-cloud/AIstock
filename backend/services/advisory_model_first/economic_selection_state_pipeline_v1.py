@@ -83,10 +83,11 @@ def verify_selection_predecessor_v1(plan, campaign_root, events):
     report = json.loads((manifest_path.parent/'evaluation.json').read_text(encoding='utf-8'))
     if (report.get('plan_sha256') != old.plan_sha256 or report.get('decision_use') != 'NAVIGATION_ONLY'
             or report.get('deployable') is not False or report.get('sealed_accessed') is not False
-            or report.get('navigation') not in ('STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION', 'BLOCKED_EXECUTION_OR_MARK_UNPROVEN')
+            or report.get('navigation') not in ('CONSIDER_CONFIRMATION_DESIGN_ONLY',
+                'STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION', 'BLOCKED_EXECUTION_OR_MARK_UNPROVEN')
             or sum(event.get('kind') == 'PHYSICAL_FIT' and event.get('model_id') == 'M1' and event.get('experiment_id') == old.experiment_id for event in events) != 4
             or any(event.get('model_id') == 'M1' and event.get('experiment_id') != old.experiment_id for event in events)):
-        raise ValueError('selection M1 is nonterminal/positive or cumulative fit proof differs')
+        raise ValueError('selection M1 terminal identity or cumulative fit accounting differs')
     return old.experiment_id
 
 

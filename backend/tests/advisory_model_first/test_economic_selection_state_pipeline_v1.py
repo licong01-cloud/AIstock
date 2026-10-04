@@ -51,8 +51,9 @@ def test_original_anchor_and_journal_cannot_be_reset_or_relocated(tmp_path):
         pipeline.verify_selection_budget_anchor_v1(plan)
 
 
-@pytest.mark.parametrize('navigation', ['STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION', 'CONSIDER_CONFIRMATION_DESIGN_ONLY'])
-def test_terminal_predecessor_requires_real_chain_and_rejects_positive_navigation(tmp_path, navigation):
+@pytest.mark.parametrize('navigation', ['STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION',
+                                      'CONSIDER_CONFIRMATION_DESIGN_ONLY', 'BLOCKED_EXECUTION_OR_MARK_UNPROVEN'])
+def test_terminal_predecessor_records_real_chain_without_profit_admission(tmp_path, navigation):
     plan, parent, events = anchored_fixture(tmp_path)
     with pytest.raises(ValueError, match='terminal M1'):
         pipeline.verify_selection_predecessor_v1(plan, tmp_path, events)
@@ -69,11 +70,9 @@ def test_terminal_predecessor_requires_real_chain_and_rejects_positive_navigatio
         previous = read_stage(path, stage=stage, plan_sha256=old.plan_sha256, parent_sha256=previous)['stage_sha256']
     _record(old, root, parent, 'EVALUATED', root/'evaluated/manifest.json')
     events += [dict(kind='PHYSICAL_FIT', model_id='M1', experiment_id=old.experiment_id) for _ in range(4)]
-    if navigation == 'CONSIDER_CONFIRMATION_DESIGN_ONLY':
-        with pytest.raises(ValueError, match='positive'):
-            pipeline.verify_selection_predecessor_v1(plan, tmp_path, events)
-    else:
-        assert pipeline.verify_selection_predecessor_v1(plan, tmp_path, events) == old.experiment_id
+    assert pipeline.verify_selection_predecessor_v1(plan, tmp_path, events) == old.experiment_id
+    with pytest.raises(ValueError, match='accounting'):
+        pipeline.verify_selection_predecessor_v1(plan, tmp_path, events[:-1])
 
 
 def test_shared_M5_budget19_partial_fit_and_QE_unknown_refusal(tmp_path, monkeypatch):
