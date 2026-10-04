@@ -1,6 +1,6 @@
 # L2冻结HMM：校准后历史轮动效果与产品消费详细设计
 
-版本：v0.4（2026-10-04进度同步）。Feature tier：F2。当前状态：APPROVED_EFFECT_COMPLETED_BELOW_BINDING_MBE。
+版本：v0.5（2026-10-04批准状态关联）。Feature tier：F2。当前状态：APPROVED_EFFECT_COMPLETED_BELOW_BINDING_MBE。
 
 2026-10-03用户明确批准PR #5326中的效果评估D1～D6精确合同，随后授权启动长任务。文档PR已合入a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a，源码#5345及后续消费者修复已合入；2026-10-04在BUG-1717合入源码e205d34e19bccdf1770a5df66187f4692754fb05上完成正式双fresh-process零fit回放，证据/coverage充分但IC未达MBE。本次只同步实际结果，不修改D1～D6；数据库写入、运行时激活和清理未执行。
 
@@ -242,6 +242,8 @@ DESIGN-COMPLIANCE-001：
 
 以上为起草时设计审核，不宣称当时实现、经济效果、QE或产品已通过。F2 PASS仅是文档格式与验收索引一致性检查。
 
-v0.4本轮复审（2026-10-04）：三轮作者自审核对正式acceptance的221/201日期、131目录/27,980可用行、coverage与效果分离、同复合标签基线及paired区间；修复旧“尚未运行”当前态。原Contracts D1～D6逐字保持；当前COMPLETED/BELOW_BINDING_MBE不等于产品部署或QE增益。新R1/risk精确提案仅在L2详细设计§8.2，本文件不批准或实施它们。三份文档F2通过，原结果文件SHA不变；本轮未新增fit、tail、DB或进程操作。DESIGN-COMPLIANCE-001保持完整目录、不静默补值、原合同/旧版本不变、无新晋升门。
+v0.4复审历史（2026-10-04）：三轮作者自审核对正式acceptance的221/201日期、131目录/27,980可用行、coverage与效果分离、同复合标签基线及paired区间；修复旧“尚未运行”当前态。原Contracts D1～D6逐字保持；当前COMPLETED/BELOW_BINDING_MBE不等于产品部署或QE增益。新R1/risk精确提案仅在L2详细设计§8.2，当时本文件不批准或实施它们。三份文档F2通过，原结果文件SHA不变；本轮未新增fit、tail、DB或进程操作。DESIGN-COMPLIANCE-001保持完整目录、不静默补值、原合同/旧版本不变、无新晋升门。
+
+v0.5关联状态：用户现已批准L2详细设计v1.3 §8.2的L2-R1/L2-RISK全部D1～D6；原本文件Contracts及旧结果不变。设计PR #5433尚未合入，新score/风险源码与0/2-fit实验未执行；不从新合同批准推导原HMM效果达标、产品部署、QE增益或服务授权。
 
 2026-10-03批准后复核（#5326合入前的历史记录）：当时仅同步批准及依赖交付状态，效果源码实施/两次零fit推断未启动，文档PR尚未获合入授权。D1～D6由用户明确批准；v0.1待批准/CI失败记录不表示当前状态。#5325根因已确认并完成测试隔离修复：CI同口径120 passed，生产环境校验和模型合同不变；最终head 9fb0b47726aff9f82aa79d91e5cee9684081b442的CI SUCCESS，按用户授权合入f49ebc600ac0cb4d52689443ed2bb304e29b01e4。此后#5326已合入a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a，新效果源码状态以上方v0.3矩阵为准。没有激活、重启或验证用户后端运行态。
