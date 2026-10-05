@@ -1,6 +1,6 @@
 # Advisory 历史非对称风险条件买价 M18 F2详细设计
 
-2026-10-05；SOURCE_VALIDATED_PREPARED_RESEARCH_QE_WAIT / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_MERGED_PREPARED_RESEARCH_QE_WAIT / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -93,7 +93,7 @@ AsymmetricRiskPlanV1/schema economic_asymmetric_risk_v1/campaign advisory_asymme
 
 ## 12. Current state / review
 
-M18源码已在latestmain e4c9f7771独立12文件范围实现，clean producer397aaa83f624a2670cef2642adf89f1635d51a96；固定三量/共同13-16核/显式71及旧caps，正常UNKNOWN和原价值锚不改。三轮自审修复后56直接项/Ruff/F2/两L0及原M1 bundle只读兼容通过，尚非模型有效。一次新预登记run advasymrisk_d7d0e9676f7177bb1fbc2cc8/plan d7d0e9676f7177bb1fbc2cc8c0c52ac056c780c864060c23725a45b6f86d17f4/impl a5022095...，0SQL prepare8.594秒/7720原键/原380828价格源：7330AVAILABLE、380不足20session、10正常缺源UNKNOWN，无删填或重选股。08:49:56UTC公开QE三running0/1/0，MA-E42R qe_20261005_162928_e86b占用，未启动M18四fit或读取评估收益；全轮实际仍67fit+1旧index，source工程可先交付但冻结源码树保留至实际消费，约30min复查QE，fit不并行。M1六UI/BUG公共smoke仍外部等待，sealed/confirmation/activation/DB写/服务控制0，原18h/48h不重计。 设计#5486已合入e4c9f7771/自身官方清理；原spike仅metadata/合成，随后price数组只按登记用于prepare，收益评估仍未运行。
+M18源码已在latestmain e4c9f7771独立12文件范围实现，clean producer397aaa83f624a2670cef2642adf89f1635d51a96；固定三量/共同13-16核/显式71及旧caps，正常UNKNOWN和原价值锚不改。三轮自审修复后56直接项/Ruff/F2/两L0及原M1 bundle只读兼容通过，尚非模型有效。一次新预登记run advasymrisk_d7d0e9676f7177bb1fbc2cc8/plan d7d0e9676f7177bb1fbc2cc8c0c52ac056c780c864060c23725a45b6f86d17f4/impl a5022095...，0SQL prepare8.594秒/7720原键/原380828价格源：7330AVAILABLE、380不足20session、10正常缺源UNKNOWN，无删填或重选股。09:21:01UTC复查公开QE三running0/1/0，MA-E42R qe_20261005_162928_e86b占用，未启动M18四fit或读取评估收益；全轮实际仍67fit+1旧index，source#5487 HEADb71f0aef7/currentCI37286496082 attempt2 SUCCESS后09:17:32UTC合入13b4c4232da82d9d0abc1cc0c5f20251da92d23b，root main clean且与origin/main一致；原attempt1仅checkout远端读取失败，重试后检出及业务检查全部通过，未改公共CI/网络配置。冻结源码树暂保留至实际消费，下一QE约09:51UTC复查，fit不并行。M1六UI/BUG公共smoke仍外部等待，sealed/confirmation/activation/DB写/服务控制0，原18h/48h不重计。 设计#5486已合入e4c9f7771/自身官方清理；原spike仅metadata/合成，随后price数组只按登记用于prepare，收益评估仍未运行。
 
 第一轮核对M7/M8/M11/M12现有特征与原D信息：不是把ATR改窗口，合成同总回报/末14/单调几何对照识别平方幅度差异；原parent frozen metadata即可，不做新SQL/QE实验或收益预筛。
 
