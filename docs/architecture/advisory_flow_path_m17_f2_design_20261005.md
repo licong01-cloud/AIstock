@@ -1,6 +1,6 @@
 # Advisory 有序资金流路径条件买价 M17 F2详细设计
 
-2026-10-05；DESIGN_ONLY_RESEARCH_NOT_STARTED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；RESEARCH_COMPLETE_STOP_CURRENT_CANDIDATE_NOT_CONFIRMED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -81,17 +81,17 @@ campaign advisory_flow_path_v1_20261005/model M17/schema economic_flow_path_v1/e
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-980 | §1/4；economic_flow_path_v1.py | test: test_economic_flow_path_v1.py；artifact: 同M6摘要/不同有序路径手算 | DESIGN_REVIEW_PASS | none |
-| F-981 | §3/4；economic_flow_path_v1.py | test: test_economic_flow_path_v1.py；artifact: 缺值/0/1/坏数/未来/empty | DESIGN_REVIEW_PASS | none |
-| F-982 | §3/6；economic_flow_path_pipeline_v1.py | test: test_economic_flow_path_pipeline_v1.py；artifact: 原M6 hash/单位/0SQL/保序/atomic | DESIGN_REVIEW_PASS | none |
-| F-983 | §5/7；economic_sector_price_value_v1.py | test: test_economic_sector_price_value_v1.py；artifact: 共同成熟/test未fit/旧bundle | DESIGN_REVIEW_PASS | none |
-| F-984 | §6；economic_moneyflow_price_pipeline_v1.py | test: test_economic_moneyflow_price_pipeline_v1.py；artifact: 真M16 stage/四heads/63→67/旧caps | DESIGN_REVIEW_PASS | none |
-| F-985 | §7/8；economic_sector_price_pipeline_v1.py | test: test_economic_sector_price_pipeline_v1.py；artifact: 同四臂/证据层/UNKNOWN控制 | DESIGN_REVIEW_PASS | none |
-| F-986 | §2/9；范围及交付 | test: test_economic_flow_path_pipeline_v1.py；artifact: scope/F2/L0/QE互斥/无公共改动 | DESIGN_REVIEW_PASS | none |
+| F-980 | §1/4；economic_flow_path_v1.py | test: test_economic_flow_path_v1.py；artifact: 同M6摘要/不同有序路径手算 | PASS | none |
+| F-981 | §3/4；economic_flow_path_v1.py | test: test_economic_flow_path_v1.py；artifact: 缺值/0/1/坏数/未来/empty | PASS | none |
+| F-982 | §3/6；economic_flow_path_pipeline_v1.py | test: test_economic_flow_path_pipeline_v1.py；artifact: 原M6 hash/单位/0SQL/保序/atomic | PASS | none |
+| F-983 | §5/7；economic_sector_price_value_v1.py | test: test_economic_sector_price_value_v1.py；artifact: 共同成熟/test未fit/旧bundle | PASS | none |
+| F-984 | §6；economic_moneyflow_price_pipeline_v1.py | test: test_economic_moneyflow_price_pipeline_v1.py；artifact: 真M16 stage/四heads/63→67/旧caps | PASS | none |
+| F-985 | §7/8；economic_sector_price_pipeline_v1.py | test: test_economic_sector_price_pipeline_v1.py；artifact: 同四臂/证据层/UNKNOWN控制 | PASS | none |
+| F-986 | §2/9；范围及交付 | test: test_economic_flow_path_pipeline_v1.py；artifact: scope/F2/L0/QE互斥/无公共改动 | PASS | none |
 
 ## 12. Current state
 
-事前spec43551563...仅17013行schema/单位attrs及合成识别对照，0行情/财务数组/Y/fit/DB。当前真实63fit+1，M14～M16已完成/仅STOP各candidate、源码#5478/#5480/#5482已合入且自身官方清理；进度文档#5483已合入bbbc181bc并清理。M17尚无source、研究预登记/prepare/fit/收益。M1 UI/公共BUG smoke仍独立待交付，不制造合格角色或停止整体。
+M17已从干净producer f5918b5一次预登记/0SQL prepare8.562秒，run advflowpath_e91edf35d6c73780264a4817/plan e91edf35.../impl d9bd5f11...；7720原键保留，7640AVAILABLE/80零gross UNKNOWN，原M6冻结17013源行只读复用。08:20:55UTC拟合前及08:22:42UTC后QE三running0，一次4fit/完整四臂28.094秒，train3980/214D、1591val仅诊断。原81D/1620候选/100共同NAV日candidate/baseline/matched/rule16.2467/21.3220/19.6497/20.5747%，paired日baseline−4.3050bps CI[−20.9002,10.9491]、matched−3.0266 CI[−18.0195,7.3037]；85真TAKE/2UNKNOWN控制、87episodes全settled，只有net不通过，仅STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION。真实累计67fit+1旧index，旧caps不变；新研究仅NAVIGATION_ONLY，0sealed/确认/activation/DB访问写入/QE公共修改/服务控制。源码54直接项/Ruff/F2/两L0/旧M1 bundle兼容通过，等待新HEAD必需CI后交付/精确自身清理；M1六UI/BUG公共smoke两树继续保留，原18h/48h时钟不重计。 原M6 prepared manifest文件SHA7c26291a...显式绑定，不是新原生receipt；DATA完整不等于模型有效。设计#5484已合入2e8c1b695，implementation producer f5918b5固定，结果更新不改已运行代码。
 
 ## 13. 三轮设计审核与修订
 
@@ -100,3 +100,11 @@ campaign advisory_flow_path_v1_20261005/model M17/schema economic_flow_path_v1/e
 第二轮逐项核对每点gross=0、quiet NaN/0/恒定/连续run、无关尺寸不消费、future/外股先请求投影与每点scale。明确没有原known_from或捕获clock时只保留D盘后声明和NON_VINTAGE限制，不能将不存在的clock当正常零或伪补原生receipt，也不由此阻断包消费；路径只依赖五点四侧，不用Y/成熟/动作筛人口。
 
 第三轮按F-980～986映射完整一次13/16核、原M6 source manifest/单位及原lineage、M16真实63/完整前驱才67、旧caps/成本/标签/支持不变、所有权12文件与研究/源码/运行状态分离。F2七项/七行0warning、精确两文档scope/diff后currentHEAD CI才合入，再开始实现。本窗口分视角自审而非独立外审，不占据QE训练或读取新sealed。
+
+## 14. 三轮源码审核与实际验证
+
+第一轮检查F-980/981/982：原五session、真实请求先投影、同旧M6摘要/不同路径、零gross/quiet缺值与合法0/1分离、极大金额每点scale与坏数不填。首轮测试18PASS一项重复键异常类型断言错误，已修正为真实AdvisoryModelFirstError后仅该节点复验，不更改业务行为。
+
+第二轮检查F-983/984：实际M16全四阶段/hash/ledger/四heads，原M6 source指针与同policy/profile/source、显式67且旧caps不变；不允许typed model_copy绕过，也不改原价值锚/价格公式。共同13/16核、test毒化不影响fit身份、正常UNKNOWN不删原候选，原真实M1 JSON权重只读加载/零fit兼容通过。
+
+第三轮按F-980～986核对12文件精确范围与实际完整研究：稳定54直接项、Ruff无问题，feature L0零finding，standard L0三P2静态复杂度提示/无blocking：新增prepare的KEY一对一join与两处未改变的原prepare join均已按7720候选上界及validate=one_to_one核对，无笛卡尔扩张；新路径仅原38600来源上界、5点定长计算，不构建全市场乘积。F2七项七行/零warning、diff/scope通过；clean producer f5918b5后预登记/prepare/四fit/四臂，前后QE三路径0。结果net未通过只STOP本candidate，所有87episode已settled；控制UNKNOWN不是模型TAKE，正胜率不抵消负净增量。仅本窗口多视角自审，不声称独立外审；待currentHEAD CI绿后交付SOURCE与自身官方cleanup，不涉及daily/runtime或后端重启。
