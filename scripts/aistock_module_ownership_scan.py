@@ -8,12 +8,12 @@ REPO_ROOT_FOR_IMPORT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT_FOR_IMPORT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT_FOR_IMPORT))
 
-from backend.services.validation.file_ownership import (
+from backend.services.validation.file_ownership import (  # noqa: E402 - bootstrap repo path for direct CLI execution.
     FileOwnershipCatalog,
     FileOwnershipError,
     write_scan_outputs,
 )
-from backend.services.validation.module_registry import ModuleRegistry, ModuleRegistryError, REPO_ROOT
+from backend.services.validation.module_registry import ModuleRegistry, ModuleRegistryError, REPO_ROOT  # noqa: E402 - after path bootstrap.
 
 
 def _build_parser() -> argparse.ArgumentParser:

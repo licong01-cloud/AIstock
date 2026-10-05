@@ -5,12 +5,16 @@ const MODEL_HASH = "d".repeat(64);
 const INPUT_HASH = "e".repeat(64);
 const MAPPING_HASH = "f".repeat(64);
 
-function rotationRows(availableCount = 131) {
+function rotationRows(availableCount = 131, tradeDate = "2026-03-31") {
   return Array.from({ length: 131 }, (_, index) => ({
     prediction_id: `10000000-0000-5000-8000-${String(index).padStart(12, "0")}`,
     run_id: RUN_ID,
-    trade_date: "2026-03-31",
-    as_of_date: "2026-03-30",
+    model_hash: MODEL_HASH,
+    input_hash: INPUT_HASH,
+    mapping_hash: MAPPING_HASH,
+    quote_authority_hash: "1".repeat(64),
+    trade_date: tradeDate,
+    as_of_date: tradeDate === "2026-03-31" ? "2026-03-30" : "2026-03-27",
     sector_code: `801${String(index).padStart(3, "0")}.SI`,
     sector_name: `Sector ${index + 1}`,
     rotation_score: index < availableCount ? index / Math.max(1, availableCount - 1) - 0.5 : null,
@@ -36,6 +40,7 @@ async function mockRotationApi(page: import("@playwright/test").Page, availableC
           run_id: RUN_ID,
           model_hash: MODEL_HASH,
           trade_date: "2026-03-31",
+          available_trade_dates: ["2026-03-30", "2026-03-31"],
           as_of_date: "2026-03-30",
           sector_count: 131,
           available_count: availableCount,
@@ -61,11 +66,12 @@ async function mockRotationApi(page: import("@playwright/test").Page, availableC
     });
   });
   await page.route("**/api/v1/hmm-risk/rotation-l2?*", async (route) => {
+    const tradeDate = new URL(route.request().url()).searchParams.get("trade_date")!;
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         status: "ok",
-        data: { run_id: RUN_ID, trade_date: "2026-03-31", rows: rotationRows(availableCount).map((row, index) => hmm ? {
+        data: { run_id: RUN_ID, trade_date: tradeDate, rows: rotationRows(availableCount, tradeDate).map((row, index) => hmm ? {
           ...row, model_version: mixed && index === 0 ? undefined : version,
           semantic_state: row.availability === "available" ? "neutral" : null,
           forecast_state: row.availability === "available" ? "neutral" : null,
@@ -92,7 +98,7 @@ test("renders configurable L2 top and bottom ranks from a complete 131-sector AP
   await mockRotationApi(page);
 
   await assertRotationSurface(page);
-  await expect(page.getByRole("region", { name: "L1 历史风险独立能力" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "L1 历史风险独立能力" })).toHaveCount(0);
   await page.getByLabel("前列数量").fill("15");
   await expect(page.getByText("合计 25 / 30", { exact: false })).toBeVisible();
   await page.getByLabel("后列数量").fill("16");
@@ -143,3 +149,58 @@ test("renders the real run-bound L2 surface without mocks", async ({ page }) => 
   test.skip(process.env.HMM_RISK_LIVE !== "1", "requires explicit DEV DDL/DML and live backend authorization");
   await assertRotationSurface(page);
 });
+
+test("reads the selected historical date and shows its own coverage and as-of", async ({ page }) => {
+  await mockRotationApi(page, 119);
+  await assertRotationSurface(page);
+  await page.getByLabel("历史预测日", { exact: true }).selectOption("2026-03-30");
+  await expect(page.getByText("2026-03-30 / 2026-03-27", { exact: true })).toBeVisible();
+  await expect(page.getByText("119 / 131", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "申万二级行业轮动排名" }).locator("article")).toHaveCount(20);
+});
+
+test("a slow previous-date response cannot overwrite the current selection", async ({ page }) => {
+  await mockRotationApi(page);
+  await assertRotationSurface(page);
+  let release!: () => void;
+  const oldResponse = new Promise<void>((resolve) => { release = resolve; });
+  let started!: () => void;
+  const oldStarted = new Promise<void>((resolve) => { started = resolve; });
+  await page.route("**/api/v1/hmm-risk/rotation-l2?*", async (route) => {
+    const tradeDate = new URL(route.request().url()).searchParams.get("trade_date")!;
+    if (tradeDate === "2026-03-30") {
+      started();
+      await oldResponse;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+      status: "ok", data: { run_id: RUN_ID, trade_date: tradeDate, rows: rotationRows(131, tradeDate) },
+    }) });
+  });
+  await page.getByLabel("历史预测日", { exact: true }).selectOption("2026-03-30");
+  await oldStarted;
+  await page.getByLabel("历史预测日", { exact: true }).selectOption("2026-03-31");
+  await expect(page.getByText("2026-03-31 / 2026-03-30", { exact: true })).toBeVisible();
+  const lateResponse = page.waitForResponse((response) => response.url().includes("rotation-l2?")
+    && new URL(response.url()).searchParams.get("trade_date") === "2026-03-30");
+  release();
+  await (await lateResponse).finished();
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByText("2026-03-30 / 2026-03-27", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("2026-03-31 / 2026-03-30", { exact: true })).toBeVisible();
+});
+
+for (const field of ["run_id", "trade_date", "model_hash", "input_hash", "mapping_hash", "quote_authority_hash"] as const) {
+  test(`rejects baseline detail ${field} drift without keeping old cards`, async ({ page }) => {
+    await mockRotationApi(page);
+    await page.route("**/api/v1/hmm-risk/rotation-l2?*", async (route) => {
+      const rows = rotationRows();
+      rows[0] = { ...rows[0], [field]: field === "trade_date" ? "2026-03-30" : "9".repeat(64) };
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({
+        status: "ok", data: { run_id: RUN_ID, trade_date: "2026-03-31", rows },
+      }) });
+    });
+    await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
+    await expect(page.getByText("hmm_risk_rotation_l2_ui_identity_invalid", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
+  });
+}

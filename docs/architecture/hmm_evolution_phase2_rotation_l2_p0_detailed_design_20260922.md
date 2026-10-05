@@ -1,9 +1,9 @@
 # HMM Evolution Phase 2：L2轮动P0完整详细设计
 
-> 版本：v1.4；修订日期：2026-10-05；tier：F2；owner：HMM。
+> 版本：v1.5；修订日期：2026-10-06；tier：F2；owner：HMM。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.59及其后保持本L2方向的版本。
 > P0基线：`9640cf67c5c40884e0f99074224cff0f0270e1f6`。用户随后明确要求按本文开始P1完整实现，D1～D6因此作为本版本获准实施的精确合同；生产DDL/DML、runtime activation、服务重启、QE实验及tail读取仍未授权。
-> 当前状态：原P1资金流基线已完成历史评价并持久化/API可读，mean Rank IC=`0.02973212294698707`（原10D/358日口径），研究页面当前验证尚未闭合；2026-09-22的输入阻断只作历史。2026-10-04原冻结HMM效果IC=`0.009072776767716752 < 0.02`。§8.2精确合同由设计PR #5433进入main。2026-10-05源码及三轮审修完成，PR #5444等待合入；R1双process零fit终态`BELOW_BINDING_MBE`，IC=`-0.009341302842128188`。独立risk双process共2fit达到development效果要求：precision lift=`0.1174666556015582`、recall=`0.4121112481161803`，仍`FORWARD_UNCONFIRMED`。原标签值经用户单独批准只重建一次，canonical hash严格匹配原`61600e85…`。真实结果见§8.4；两候选均已按各自停止条件结束，不开启新候选。
+> 当前状态：原P1资金流基线已完成历史评价并持久化/API可读，mean Rank IC=`0.02973212294698707`（原10D/358日口径），研究页面当前验证尚未闭合；2026-09-22的输入阻断只作历史。原冻结HMM效果IC=`0.009072776767716752 < 0.02`。§8.2设计#5433及源码/结果#5444均已合入，#5444 merge=`2fa41eab6b7efc76173ae3a0ced4143006b1671c`；R1双process零fit终态`BELOW_BINDING_MBE`，IC=`-0.009341302842128188`。独立risk双process共2fit达到development效果要求：precision lift=`0.1174666556015582`、recall=`0.4121112481161803`，仍`FORWARD_UNCONFIRMED`；其完整产品#5449已合入并完成DEV/生产55,544行和用户重启后真实API/UI，详见直接risk产品设计v1.3，不能代替本轮动run的surface验收。原标签经单独批准只重建一次并严格匹配`61600e85…`。两候选已停止，模型、§8.2公式和阈值不改；当前任务复用已有资金流产品，不重训/重导。
 > 完成定义：源码合入、模型评价、产品表面及生产状态分别核算。当前用户将QE验证后置，近期按父蓝图推进轮动改进与独立风险，不要求为模型结论执行DDL/DML或发布；真实API/UI仍不得由离线结果代报。
 
 ## 1. Background、目标与非目标
@@ -350,7 +350,7 @@ P1同一完整任务包：正式reader/公式和回放实现→定向测试及�
 
 各块只是预注册诊断，不改为新增AND门。整体lift HAC区间`[0.06747164189488156,0.16746166930823483]`、recall区间`[0.315783326339333,0.5084391698930275]`也只诊断；同报警预算volatility参照precision=`0.214603441040705`、recall=`0.35032196191259074`，模型点估计较高，但不是已证明统计显著的增量或交易收益。
 
-Risk终态为`DEVELOPMENT_RISK_EFFECT_REACHED_FORWARD_UNCONFIRMED`，canonical acceptance=`88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26`，model SHA=`37259b5e9ca2c6eee2845cf0f1f02932a8cfd6cf21ad29080d6570d274b8038d`。这提供可继续验证的L2风险研究模型，不是forward-confirmed、实时或QE收益证据。已知报警中约74.74%没有目标事件，错误报警未来平均收益约+3.39%，漏报事件平均回撤约-10.80%；不得把warning直接当禁买或降仓结论。当前research surface/advisory仍NOT_AVAILABLE，未执行writer/API/UI/DDL/DML或服务控制；两候选均已终止，不为填满长任务时长开新候选。
+Risk终态为`DEVELOPMENT_RISK_EFFECT_REACHED_FORWARD_UNCONFIRMED`，canonical acceptance=`88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26`，model SHA=`37259b5e9ca2c6eee2845cf0f1f02932a8cfd6cf21ad29080d6570d274b8038d`。这提供可继续验证的L2风险研究模型，不是forward-confirmed、实时或QE收益证据。已知报警中约74.74%没有目标事件，错误报警未来平均收益约+3.39%，漏报事件平均回撤约-10.80%；不得把warning直接当禁买或降仓结论。截至原模型评价时surface/advisory均NOT_AVAILABLE，writer/API/UI/DDL/DML未执行；后续risk产品#5449及真实生产/runtime验证已完成，当前surface=AVAILABLE_EXPERIMENTAL、advisory仍NOT_AVAILABLE，详见risk产品设计v1.3。两候选已终止，不为填满时长开新候选，不借risk产品验收升级本rotation surface。
 
 源码三轮审修完成；最小HMM直接矩阵99 passed，最后风险修订及主线同步后16 passed；registry 8 passed/14映射、L0无blocking、Ruff/compile/diff与F2通过。源码实际runtime分类仍backend/backend-main，fresh-process router/health及HMM依赖导入通过；合入、用户重启、运行态验证与模型/产品状态独立。下一业务优先是已有risk成果的真实研究产品闭环及误报成本验证，而非继续模型合法性普查、历史证据工程或自动扩展参数搜索；本轮没有批准这些生产动作。
 

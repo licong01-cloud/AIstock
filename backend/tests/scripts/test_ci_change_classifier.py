@@ -1257,6 +1257,14 @@ def test_frontend_uses_module_tests_while_go_uses_its_language_gate(tmp_path: Pa
     assert go_docs["backend_sessions"] == []
 
 
+def test_advisory_modeling_neighbor_plan_static_coverage_remains_closed() -> None:
+    paths = ["backend/tests/advisory_model_first/test_economic_moneyflow_price_v1.py", "backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py"]
+    result = classifier.classify_changed_files(paths, repo_root=Path.cwd())
+    assert result["backend_sessions"] == ["advisory_modeling_backend"]
+    assert result["workflow_gate"] == "passed" and result["unexecuted_test_files"] == []
+    assert all(result["changed_test_plan_coverage"]["coverage"][path] == ["advisory_modeling_backend"] for path in paths)
+
+
 def test_hmm_tests_select_dedicated_backend_session(tmp_path: Path) -> None:
     payload = classifier.classify_changed_files(
         ["backend/tests/hmm_data_source/test_integration.py"],
@@ -1697,9 +1705,9 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert set(jobs) == {"ci-verdict"}
     verdict = jobs["ci-verdict"]
     workflow_condition = (
-        "always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && "
+        "${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && "
         "steps.classify.outputs.workflow_validation_required == 'true' && "
-        "steps.classify.outputs.workflow_test_targets != '[]'"
+        "steps.classify.outputs.workflow_test_targets != '[]' }}"
     )
     workflow_validation = next(step for step in verdict["steps"] if step.get("id") == "workflow_validation")
     workflow_policy = next(step for step in verdict["steps"] if step.get("id") == "workflow_policy")

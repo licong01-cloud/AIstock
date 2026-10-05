@@ -40,6 +40,13 @@ def test_M20_route_is_only_two_raw_features_and_keeps_old_identity_formula():
     from backend.services.advisory_model_first.economic_parent_raw_trajectory_v1 import TRAJECTORY_FEATURES
     assert _information_key('M23', TRAJECTORY_FEATURES) == 'parent_raw_trajectory_features'
     assert _matched_information_v1('M23', RAW_FEATURES) == RAW_FEATURES
+    from backend.services.advisory_model_first.economic_parent_normalized_trajectory_v1 import INFORMATION_FEATURES
+    assert _information_key('M24', INFORMATION_FEATURES) == 'parent_normalized_trajectory_features'
+    assert _matched_information_v1('M24', TRAJECTORY_FEATURES) == TRAJECTORY_FEATURES
+    with pytest.raises(ValueError):
+        _matched_information_v1('M24', RAW_FEATURES)
+    with pytest.raises(ValueError):
+        _information_key('M24', TRAJECTORY_FEATURES)
     with pytest.raises(ValueError):
         _matched_information_v1('M23', ())
     with pytest.raises(ValueError):
@@ -178,3 +185,12 @@ def test_information_routes_keep_previous_identity_formulas_and_reject_wrong_blo
         _matched_information_v1('M19', ())
     with pytest.raises(ValueError, match='matched'):
         _matched_information_v1('M1', SECTOR_FEATURES)
+
+
+def test_M25_fixed_sector_path_block_and_matched_route():
+    from backend.services.advisory_model_first.economic_sector_path_price_v1 import INFORMATION_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, _matched_information_v1
+    assert _information_key('M25', INFORMATION_FEATURES) == 'sector_path_price_features'
+    assert _matched_information_v1('M25', SECTOR_FEATURES) == SECTOR_FEATURES
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M25', ())
