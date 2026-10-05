@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1746",
-  "closed_at": null,
+  "closed_at": "2026-10-05T18:51:57Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,19 +29,19 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1746-validation-catalog-is-reparsed-per-changed-file-causing-avoidable-ci-cla.json",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_issue_flow.py",
       "scripts/ci_change_classifier.py",
-      "scripts/issue_flow.py"
+      "scripts/issue_flow.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1746-validation-catalog-is-reparsed-per-changed-file-causing-avoidable-ci-cla.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1746-validation-catalog-is-reparsed-per-changed-file-causing-avoidable-ci-cla.json",
       "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_issue_flow.py",
       "scripts/ci_change_classifier.py",
-      "scripts/issue_flow.py"
+      "scripts/issue_flow.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1746-validation-catalog-is-reparsed-per-changed-file-causing-avoidable-ci-cla.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -130,8 +130,8 @@
   },
   "first_seen_at": "2026-10-05T18:44:02.726294Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "724cf636f68476d8576ff07c6deefd4fd22e014e",
+  "fixed_at": "2026-10-05T18:51:57Z",
   "github_issue_number": 5550,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5550",
   "last_seen_at": "2026-10-05T18:44:02.726294Z",
@@ -139,6 +139,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5551",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -157,6 +158,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -166,7 +168,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1746",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bb067cf661c55c91",
+    "recorded_at": "2026-10-05T18:52:33.538725Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "338ad2fb3f09f38468cb340e41e577fed141861d",
+    "source_merge_commit": "724cf636f68476d8576ff07c6deefd4fd22e014e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5551",
+    "validation_evidence": [
+      "rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_issue_flow.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1746-final --durations=5 -> 161 passed",
+      "python -m nox -s guardrail_changed_files -> passed"
+    ],
+    "validation_evidence_digest": "17ceb660ee7a814848c954a35c90264ab4101147a6da9a3f2504c3bd50059fa9"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -175,6 +199,10 @@
     "fingerprint": "db900ca9c57ae75f3ecb9135",
     "source_event_id": "FE-20261005-db900ca9c57a"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_issue_flow.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1746-final --durations=5 -> 161 passed",
+    "python -m nox -s guardrail_changed_files -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
