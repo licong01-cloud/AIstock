@@ -30,7 +30,7 @@ def moneyflow_implementation_sha256_v1():
         readonly_dependencies={name: hashlib.sha256((repo/name).read_bytes().replace(b'\r\n', b'\n')).hexdigest() for name in dependencies}))
 
 
-def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None, valuation_extension=None, limit_state_extension=None):
+def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None, valuation_extension=None, limit_state_extension=None, candidate_cohort_extension=None):
     anchor = _verify_reference(plan.budget_anchor_ref)
     root = plan.campaign_root.resolve()
     original = PriceCampaignPlanV2.model_validate_json((anchor.parent/'plan.json').read_text(encoding='utf-8'))
@@ -62,6 +62,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
         raise ValueError('valuation extension requires original explicit M13 extension')
     if limit_state_extension is not None and valuation_extension is None:
         raise ValueError('limit state extension requires original explicit M14 extension')
+    if candidate_cohort_extension is not None and limit_state_extension is None:
+        raise ValueError('candidate cohort extension requires original explicit M15 extension')
     if price_path_extension is not None:
         from backend.services.advisory_model_first.economic_price_path_value_v1 import PricePathPlanV1
         extension = PricePathPlanV1.model_validate(price_path_extension)
@@ -160,6 +162,17 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                 or limit_state.parameters['policy_sha256'] != valuation.parameters['policy_sha256']
                 or limit_state.parameters['cost_sha256'] != valuation.parameters['cost_sha256']):
             raise ValueError('limit state extension original root/source/predecessor differs')
+    if candidate_cohort_extension is not None:
+        from backend.services.advisory_model_first.economic_candidate_cohort_v1 import CandidateCohortPlanV1
+        declared = candidate_cohort_extension.model_dump() if isinstance(candidate_cohort_extension, CandidateCohortPlanV1) else candidate_cohort_extension
+        cohort = CandidateCohortPlanV1.model_validate(declared)
+        cohort_predecessor = _verify_reference(cohort.predecessor_manifest_ref)
+        if (cohort.campaign_root.resolve() != root or not _same_sources(cohort, limit_state)
+                or cohort.budget_anchor_ref != limit_state.budget_anchor_ref
+                or cohort_predecessor != root/limit_state.experiment_id/'evaluated/manifest.json'
+                or cohort.parameters['policy_sha256'] != limit_state.parameters['policy_sha256']
+                or cohort.parameters['cost_sha256'] != limit_state.parameters['cost_sha256']):
+            raise ValueError('candidate cohort extension original root/source/predecessor differs')
     expected = {'M2': (4, PriceCampaignPlanV2), 'M3': (5, PriceCampaignPlanV2), 'M4': (2, PriceCampaignPlanV2),
                 'M1': (4, SectorPricePlanV1), 'M5': (4, SelectionStatePricePlanV1)}
     if any(event.get('state') != 'STARTED' or event.get('kind') not in ('PHYSICAL_FIT', 'INDEX_BUILD')
@@ -169,7 +182,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                *(('M12',) if session_path_extension is not None else ()),
                *(('M13',) if free_float_extension is not None else ()),
                *(('M14',) if valuation_extension is not None else ()),
-               *(('M15',) if limit_state_extension is not None else ())) for event in events):
+               *(('M15',) if limit_state_extension is not None else ()),
+               *(('M16',) if candidate_cohort_extension is not None else ())) for event in events):
         raise ValueError('moneyflow cumulative journal has foreign state/model/kind')
     for model, (count, cls) in expected.items():
         found = [event for event in events if event['kind'] == 'PHYSICAL_FIT' and event['model_id'] == model]
@@ -361,6 +375,24 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
             event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != limit_state.campaign_id
             or event['experiment_id'] != limit_state.experiment_id or event['head'] not in heads for event in latest_limit):
             raise ValueError('limit state extension own cumulative budget/journal differs')
+    if candidate_cohort_extension is not None:
+        if len(latest_limit) != 4:
+            raise ValueError('candidate cohort extension needs actual four completed M15 fits')
+        previous_root = root/limit_state.experiment_id
+        registered = read_stage(previous_root/'preregistered', stage='preregistered', plan_sha256=limit_state.plan_sha256, parent_sha256=None)
+        _ledger(limit_state, previous_root, 'PREREGISTERED', previous_root/'preregistered/manifest.json')
+        frozen = LimitStatePlanV1.model_validate_json((previous_root/'preregistered/plan.json').read_text(encoding='utf-8'))
+        if frozen != limit_state:
+            raise ValueError('candidate cohort extension cannot substitute original M15 plan')
+        parent = registered['stage_sha256']
+        for stage in ('prepared', 'trained', 'evaluated'):
+            parent = read_stage(previous_root/stage, stage=stage, plan_sha256=limit_state.plan_sha256, parent_sha256=parent)['stage_sha256']
+        _ledger(limit_state, previous_root, 'EVALUATED', cohort_predecessor)
+        latest_cohort = [event for event in events if event['model_id'] == 'M16']
+        if len(latest_cohort) > 4 or len({event['head'] for event in latest_cohort}) != len(latest_cohort) or any(
+            event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != cohort.campaign_id
+            or event['experiment_id'] != cohort.experiment_id or event['head'] not in heads for event in latest_cohort):
+            raise ValueError('candidate cohort extension own cumulative budget/journal differs')
     return root
 
 
