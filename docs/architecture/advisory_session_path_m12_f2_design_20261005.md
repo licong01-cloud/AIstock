@@ -1,10 +1,10 @@
 # Advisory 历史隔夜／日内路径 M12 F2详细设计
 
-2026-10-05；DESIGN_ONLY / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；RESEARCH_COMPLETED_NEGATIVE_SOURCE_DELIVERY_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
-R2一次M11已完成，累计43 physical研究fit+1历史index，源码#5463 HEAD643ebbfe6/CI37249491174 SUCCESS后已合入f6aef87db4e50e1a2b5a2a407f0128ee8b685708并自己official cleanup_done；它相对原baseline日+1.0512bps<原5、尾部恶化46.9917bps>原20，仅停止本candidate，不补证/调参/接family。M1六UI和BUG-1726公共smoke仍仅工程辅线。通用日频输入#5461已合入，独立通用label口径待用户选择；本M12沿原明确VALUE_REVIEW_5_V1，不默选新目标，不伪装通用权重。
+本设计立项时R2一次M11已完成，累计43 physical研究fit+1历史index；本M12一次完成后累计47+1，详见§15。M11源码#5463 HEAD643ebbfe6/CI37249491174 SUCCESS后已合入f6aef87db4e50e1a2b5a2a407f0128ee8b685708并自己official cleanup_done；它相对原baseline日+1.0512bps<原5、尾部恶化46.9917bps>原20，仅停止本candidate，不补证/调参/接family。M1六UI和BUG-1726公共smoke仍仅工程辅线。通用日频输入#5461已合入，独立通用label口径待用户选择；本M12沿原明确VALUE_REVIEW_5_V1，不默选新目标，不伪装通用权重。
 
 H-DAILY-OVERNIGHT-INTRADAY-PATH-1：同一收盘路径可以由不同隔夜跳空与日内涨跌组成，19个历史间隔的两部分方向及跳空幅度，是否提供原条件买入净价值模型未表达的信息？M7只含price_drawdown20、price_path_efficiency19、price_up_day_share19；旧12D的ret1/5/10、ATR、D close_location不包含完整19间隔Open分解。M12读取已存历史raw_open，不叠加M5～M11负块，不换旧模型seed/loss或回选旧控制。不是预测T开盘价，不是实际隔夜套利收益或分钟择时；只检验不同D已知条件下的净价值集合。
 
@@ -90,13 +90,13 @@ typed plan/model_copy dump重验；foreign/partial/重复head、不一致前驱�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-930 | §1/4/5 | artifact: 新信息与旧三Close字段对照/显式角色边界 | DESIGN_VERIFIED | none |
-| F-931 | §3/4/11 | artifact: 真实消费及首Open/普通缺行/不删填合同 | DESIGN_VERIFIED | none |
-| F-932 | §4/11 | artifact: 冻结公式及平线/缩放/有限数/字段依赖验收规格 | DESIGN_VERIFIED | none |
-| F-933 | §5/7 | artifact: 同监督/原policy及四臂、旧标签不换口径 | DESIGN_VERIFIED | none |
-| F-934 | §6/11 | artifact: 43+4/原默认保持/无计数重置与原子合同 | DESIGN_VERIFIED | none |
-| F-935 | §2/6/12 | artifact: 原授权模块/时间/资源及QE互斥边界 | DESIGN_VERIFIED | none |
-| F-936 | §2/8/11/12 | artifact: 12文件与重复审核/直接测试、证据分层 | DESIGN_VERIFIED | none |
+| F-930 | economic_session_path_v1.py；§1/4/5 | test: backend/tests/advisory_model_first/test_economic_session_path_v1.py；artifact: 同Close不同Open及原角色边界 | SOURCE_VERIFIED | none |
+| F-931 | economic_session_path_v1.py；§3/4/11 | test: backend/tests/advisory_model_first/test_economic_session_path_v1.py；artifact: 首Open/未来毒化、依赖缺失/原人口保留 | SOURCE_VERIFIED | none |
+| F-932 | economic_session_path_v1.py；§4/11 | test: backend/tests/advisory_model_first/test_economic_session_path_v1.py；artifact: 手算/o+h恒等、缩放/平线/有限数与局部UNKNOWN | SOURCE_VERIFIED | none |
+| F-933 | economic_session_path_v1.py；§5/7 | test: backend/tests/advisory_model_first/test_economic_session_path_v1.py；artifact: 同13/16监督与test毒化不入fit | SOURCE_VERIFIED | none |
+| F-934 | economic_moneyflow_price_pipeline_v1.py；economic_session_path_pipeline_v1.py；§6/11 | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 原默认/显式47、四head与完整前驱/partial拒绝 | SOURCE_VERIFIED | none |
+| F-935 | §2/6/12/15 | artifact: 前后QE三running0、零DB/激活/控制与原截止/X-F资源 | SOURCE_VERIFIED | none |
+| F-936 | §2/8/11/12/14 | test: backend/tests/advisory_model_first/test_economic_session_path_pipeline_v1.py；artifact: 精确12文件、三轮自审/矩阵及兼容 | SOURCE_VERIFIED | none |
 
 ## 11. Direct tests / 最小高价值矩阵
 
@@ -113,3 +113,19 @@ DESIGN-COMPLIANCE-001逐项：设计/known-key检查非功能或模型完成，U
 信息/经济轮按真实M7源码核实旧块只消费收盘路径，M12不是price_drawdown或已有D candle位置换名；数学绑定19间隔的o+h等于原Close变化，使用Open分解仍需实测可学习与成本后收益，未承诺预测T开盘。PIT/缺失轮将“20个Open全必需”精确修订为第1～19，首Open未消费；分别列出gap的前19 Close/全20 AF与日内的后19 Close/不需AF，正常缺失只影响依赖字段，不借停牌压缩原session。工程/交付轮明确真实M11 evaluated/43计数及所有旧默认保持，禁止从新目录重计/直接调用旧implementation资格验证；本设计树已ff最新f6aef87db，只有两个文档可写，源码/收益未执行。
 
 F2七项初检PASS；最终F2/diff/精确scope与当前HEAD CI分别核实后才交付设计。此为本窗口三轮自审，不是独立外部评审。原goal继续，实际43+1不冒称拟议47；不为旧失败固化证据或发起资格审核。
+
+## 14. 历史源码预检断点
+
+设计#5464 HEADe72e2b226/CI37250275211 SUCCESS已合入5bebffe936f5729460d95ce4a20a88d6a8d9153d并自己official cleanup_done；latest-main独立source树事前登记12文件。信息/数值轮逐项对照纯公式、同Close不同Open/o+h恒等和共同单位/AF缩放，平线合法0、首Open不消费，不生成T价/执行策略。PIT/缺失轮核实消费投影在校验前、19间隔不压缩，第一Close/AF缺失保留日内、D Close缺失保留隔夜，坏已知数统一计算错误，原顺序/原键不删除；已增加真实T open观察不读T close与未来feature_clock拒绝测试。工程/交付轮修正预登记typed model_copy字面量重验及新receipt准确名称；M12身份/status/47仅显式新增，旧路由/hash/预算默认保持，partial与原子retry/未知QE同旧委托。
+
+42直接矩阵PASS，增强预登记Literal拒绝节点定向PASS；Ruff/feature L0零finding、standard L0三P2复杂度提示且零blocking，原一对一KEY/7720×20边界见§6，两旧join未修改不扩scope。原M1正式bundle在本次路由下identity872acff3...不变，0fit/行情label数组/DB/激活；不是重跑旧负实验。此为研究前检查点，当时实际43+1且尚无M12preregister/prepare/拟合或收益读取；随后F2/干净producer/新plan先绑定，再按§15一次prepare/四fit/四臂。原goal与截止不重计，不等待通用label答案而默改它。
+
+## 15. 一次真实M12研究完成（2026-10-05）
+
+producer4fb26cc9263ab46d6701396c18bad9646e004bef、implementation57588c66666cb0fc6682ee4ba7975d0157b38292e9401f71cec14d9b58ae32a9；pland7b4e1a0a513fe61c9eacf52b61b1d680c00ee935dad8ac5b236a0deef5ce049/run advsessionpathvalue_d7b4e1a0a513fe61c9eacf52。先preregister后一次6.750秒prepare，原7720/386D完整保留、7330AVAILABLE/380预热/10正常SOURCE UNKNOWN，原380240价格行只读投影，0SQL/DB写；来源非vintage/native UNPROVEN未升级。
+
+01:24:25UTC三QE running皆0后一次四physical fit及完整四臂21.406秒，01:26:13UTC后检均0；3693成熟train/195D、1591validation只诊断，原同核13/16、支持/JSON/政策/成本未改。原81D/1620候选/100共同估值日，candidate/baseline/matched/rule成本后净收益4.8425%/21.3220%/4.5719%/20.5747%；对baseline日配对-14.8813bps（描述CI[-36.0259,2.6017]），对matched-0.0220bps（[-6.8186,6.5653]）。净累计稍高于matched不等于日均或真正baseline增量通过，不回选控制或旧candidate。
+
+candidate/baseline/matched/rule MDD分别-10.8669%/-10.3314%/-11.8944%/-9.4780%；tail mean-242.5225bps，相对baseline/matched改善11.8029/39.7081bps。五NAV条件仅net_increment false，其余intervention/MDD/TAKE/tail true。74真model TAKE/4UNKNOWN研究控制、78完成episode，四臂均零未结算/held mark/端点缺口；相对baseline60、matched41个进入干预T对应原D/81，非独立样本数。34原baseline进入被跳过（24原盈利/10原亏损）提示误拒盈利机会，而非事后调门限依据。
+
+导航STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION；实际累计47physical fit+1index，不拟合第二次、加特征/调seed/阈值或补证，不确认或接daily family。源码与一次负向研究完成，仍待当前HEAD CI交付；经济确认/生产启用0，无指数alpha或真实分钟fill证明，不读sealed/新holdout。原goal继续下一有价值假设，不因本负结果、CI或M1外部依赖结束。
