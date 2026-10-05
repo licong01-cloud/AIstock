@@ -1,6 +1,6 @@
 # Advisory 策略包无关日频价格输入 v1 F1详细设计
 
-2026-10-05；DESIGN_ONLY。完整切片仅为可复用的纯输入计算，不是通用模型、价格建议、API/UI或收益验收。
+2026-10-05；SOURCE_VERIFIED。完整切片仅为可复用的纯输入计算，不是通用模型、价格建议、API/UI或收益验收。
 
 ## Background / Goal
 
@@ -44,7 +44,7 @@ source_visible_through仅表示股票价格/volume来源及D复权锚的消费�
 | ret_1 | C_D/C_(D-1)-1，两个原session收盘 | 任一真实收盘缺失 |
 | ret_5 | C_D/C_(D-5)-1，末6个原session收盘全在 | 中间缺失也不跨过 |
 | ret_10 | C_D/C_(D-10)-1，末11个原session收盘全在 | 同上 |
-| atr14_close | 最近14个TR的均值/C_D；TR=max(H-L,abs(H-C_prev),abs(L-C_prev))，15个原session；不采用指数平滑 | 所需前收/高低/收盘缺失 |
+| atr14_close | 最近14个TR的均值/C_D；TR=max(H-L,abs(H-C_prev),abs(L-C_prev))，15个原session收盘及末14个H/L；首个前收盘日H/L不消费，不采用指数平滑 | 所需前收/高低/收盘缺失 |
 | csi300_ret_5 | I_D/I_(D-5)-1，末6个原session收盘全在 | 基准任一缺失或可见时钟未知 |
 | relative_ret_5_vs_csi300 | ret_5-csi300_ret_5 | 任一未知 |
 | close_location_in_day | (C_D-L_D)/(H_D-L_D) | 当日价格缺失或H=L |
@@ -61,7 +61,7 @@ schema/semantics hash必须固定公式、价格/volume单位、窗口和UNKNOWN
 
 设计多轮自审及F1验收→设计合入/自己官方清理→最新main自己的独立树、四文件登记→纯计算/直接高价值测试→信息隔离、PIT/UNKNOWN、数值/边界三轮审核修复→一次稳定小矩阵/Ruff/F1/L0/diff/scope→当前HEAD必需CI后按授权合入/自身清理。M1六UI/公共smoke交付仍工程辅线，未获收据不冒充完成。
 
-后续另立通用价格价值模型F2设计：显式预注册label_contract（独立固定持有期或原策略policy adapter），训练/价格集合/对照/预算独立，新lineage只验证新假设；用户目标口径明确前不启动该研究。新九字段切片不向39次fit总账增加试验，不重读旧负结果或sealed，不因纯schema通用而降低模型scope/效果标准。
+后续另立通用价格价值模型F2设计：显式预注册label_contract（独立固定持有期或原策略policy adapter），训练/价格集合/对照/预算独立，新lineage只验证新假设；用户目标口径明确前不启动该研究。新九字段切片不向39次fit总账增加试验，不重读旧负结果或sealed，不因纯schema通用而降低模型scope/效果标准。模型须明确所用字段/缺失策略，不能将纯输入全部九字段必须已知设为未经设计的总门；基准/市场正常UNKNOWN不阻断已知股票计算。
 
 ## Verification Plan / Design Acceptance Index
 
@@ -79,13 +79,13 @@ schema/semantics hash必须固定公式、价格/volume单位、窗口和UNKNOWN
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-916 | Design / Fixed information | artifact: 九字段与未来模型/原M1身份边界设计 | DESIGN_VERIFIED | none |
-| F-917 | Contracts | artifact: 0～50/原KEY与空输出约定 | DESIGN_VERIFIED | none |
-| F-918 | Contracts | artifact: 原session/源坐标/clock及输入拒绝规范 | DESIGN_VERIFIED | none |
-| F-919 | Fixed information | artifact: 九公式/正常缺失手算验收规划 | DESIGN_VERIFIED | none |
-| F-920 | Contracts / receipt | artifact: hash与非原生证据声明隔离设计 | DESIGN_VERIFIED | none |
-| F-921 | Scope / Implementation Plan | artifact: 旧政策不变和研究/生产noop约束 | DESIGN_VERIFIED | none |
-| F-922 | Scope / Verification Plan | artifact: 精确四文件与三视角审核/验证计划 | DESIGN_VERIFIED | none |
+| F-916 | generic_daily_price_input_v1.py / build_generic_daily_price_input_v1 | test: test_package_identity_and_original_rank_are_metadata_not_predictors；artifact: 原20候选改包声明数学不变 | SOURCE_VERIFIED | none |
+| F-917 | generic_daily_price_input_v1.py / ROSTER | test: test_original_roster_budget_and_real_empty_float_schema；artifact: 原20个KEY/order保留 | SOURCE_VERIFIED | none |
+| F-918 | generic_daily_price_input_v1.py / _frame / _day | test: backend/tests/advisory_model_first/test_generic_daily_price_input_v1.py::test_contradictions_fail_closed_without_mutating_original_inputs | SOURCE_VERIFIED | none |
+| F-919 | generic_daily_price_input_v1.py / FEATURES | test: backend/tests/advisory_model_first/test_generic_daily_price_input_v1.py::test_nine_hand_computed_values_hashes_and_input_immutability；test_atr_only_consumes_previous_close_not_unused_first_high_low、normal missing/zero/clock节点 | SOURCE_VERIFIED | none |
+| F-920 | generic_daily_price_input_v1.py / receipt | test: 跨包source/feature hash、有限JSON、来源不重验；artifact: 实际NV/native UNPROVEN及宽度UNKNOWN | SOURCE_VERIFIED | none |
+| F-921 | §Scope / 实际四文件diff | artifact: 0fit/收益/DB/QE改动/配置或模型激活；旧core/标签/policy无diff | SOURCE_VERIFIED | none |
+| F-922 | 本文/直接测试叶/蓝图 | artifact: 26直接项/Ruff/两L0 blocking0、真实20候选D输入及多轮自审 | SOURCE_VERIFIED | none |
 
 直接测试采用一套小OHLCV fixture：手算九字段/ATR14、包与rank变动不改变数学、50/0/51边界、插入中间缺bar不压缩、来源或市场/基准时钟未知的字段级影响、停牌缺bar全候选保留、全零volume和H=L、重复/未来/外来/坏值矛盾、输入不可变及纯hash稳定；无完整实现快照/重复大fixture。现有M1源未改，不重复其43/71/20日业务或旧研究；广回归由当前HEAD必需CI承接。
 
@@ -100,3 +100,11 @@ schema/semantics hash必须固定公式、价格/volume单位、窗口和UNKNOWN
 本窗口三轮设计自审：信息/产品轮核对不要求score/leg、没有调用旧core造腿、旧权重与复评Y不能直接改名通用；PIT/UNKNOWN轮将原“价格时钟未知使九字段全部未知”修订为六股票字段及依赖相对收益未知、独立基准/市场仍保留已知，避免新增不必要的总门；数值/实施轮固定ATR14的真实session/均值、零volume与H=L未知、调整排序后按KEY比较数学而非误比整receipt，并补semantics版本及输入不可变。均为本窗口不同视角自审，不宣称独立外审；源码/业务尚未实施。
 
 追加接口/时钟复审明确七个命名参数和各输入schema、有限JSON身份预算，并拒绝“声明截至D-1却包含D bar/宽度”的自相矛盾；普通来源未知仍按字段保留，不要求补数据或原生receipt。改动后重新F1/diff验证并绑定新HEAD CI，不借旧HEAD绿灯。
+
+## Source verification / 实际实施验收
+
+设计#5460 HEADbf7e9cb26/CI37244786687 SUCCESS后合入d78b2e053a9375484c18d972948b8a9744540769并自己官方清理。独立源码树base同merge，事前scope四文件。信息/产品、PIT/正常UNKNOWN、数值/交付三轮本窗口自审；首24项通过后修正ATR14不应要求首个前收盘日未消费的H/L、Decimal signaling NaN转换须typed计算错误，并显式source_identity_rechecked=false/qualification_rechecked=false。新问题节点定向15项通过，稳定后一次26项全部通过；changed-file Ruff、两L0入口均0finding/0blocking。非独立外审，无广测试替代当前HEAD CI。
+
+只读既存冻结2024-08-01原20候选KEY+原rank，不读取score/leg/label/收益：D前20原session400真实OHLC/volume行、20基准行，8字段各20已知；宽度分母定义未证明，20个market_up_ratio保持UNKNOWN，不补定义/值或删除股票。重复调用仅改caller包声明，全部数学一致；源文件前后hash不变，总0.125秒。原feature_visible_through作为声明的D计算消费边界，不是新capture/known_from；RECOVERED_LIMITED_NON_VINTAGE/native UNPROVEN保留。0SQL/fit/T行情返回/sealed/DB写入/配置或模型激活。入口尚未被API/UI/既有family调用，不宣称通用价格建议或收益确认完成。
+
+DESIGN-COMPLIANCE-001实际四项：本输入切片完整验证但完整荐股未完成；正常UNKNOWN/矛盾可见，无补零/删股/假成功；原M1～M10/label/退出语义不改；不添加QE/native/收益/确认审批。后端、DB、profile、训练与用户进程控制NOOP；只读frozen数据不是基础数据补齐或旧失败追加研究。
