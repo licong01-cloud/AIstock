@@ -78,15 +78,15 @@ Rollout只Advisory离线研究工具，不改API/UI/订单/资金仓位/生产de
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1/4；planned economic_parent_scale_state_v1.py | artifact: spike23999b9b/跨候选反例；test: planned test_economic_parent_scale_state_v1.py | DESIGN_REVIEW_PASS | none |
-| F-002 | §3/4；planned economic_parent_scale_state_pipeline_v1.py | artifact: 原386D7720/float32残差；test: planned test_economic_parent_scale_state_pipeline_v1.py | DESIGN_REVIEW_PASS | none |
-| F-003 | §5；planned economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；planned 15/19/old bundle/test毒化 | DESIGN_REVIEW_PASS | none |
-| F-004 | §6；planned M21私有预算 | test: backend/tests/advisory_model_first/test_economic_parent_scale_state_pipeline_v1.py；planned actual M20/79/83/typed/partial | DESIGN_REVIEW_PASS | none |
-| F-005 | §7；planned nodes/evaluation | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；planned complete四臂/unknown/support | DESIGN_REVIEW_PASS | none |
-| F-006 | §8/9；planned registry/evaluation | artifact: 原研究导航/零sealed；test: planned evidence boundary | DESIGN_REVIEW_PASS | none |
-| F-007 | §2/10；精确交付 | test: backend/tests/advisory_model_first/test_economic_parent_scale_state_pipeline_v1.py；planned scope/F2/L0/currentCI/自身cleanup | DESIGN_REVIEW_PASS | none |
+| F-001 | backend/services/advisory_model_first/economic_parent_scale_state_v1.py/_moments/rows | test: backend/tests/advisory_model_first/test_economic_parent_scale_state_v1.py 同股元组不同横截面反例 | SOURCE_LOCAL_PASS | none |
+| F-002 | backend/services/advisory_model_first/economic_parent_scale_state_pipeline_v1.py/sources/dtype | test: backend/tests/advisory_model_first/test_economic_parent_scale_state_pipeline_v1.py；原身份/dtype；test: backend/tests/advisory_model_first/test_economic_parent_scale_state_v1.py 缺失/顺序 | SOURCE_LOCAL_PASS | none |
+| F-003 | backend/services/advisory_model_first/economic_sector_price_value_v1.py/M21 route | test: backend/tests/advisory_model_first/test_economic_parent_scale_state_v1.py 15/19共享train/test毒化/成熟监督；artifact: X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/m21_source_check.py 旧bundle | SOURCE_LOCAL_PASS | none |
+| F-004 | backend/services/advisory_model_first/economic_parent_scale_state_pipeline_v1.py/budget/preregister/prepare | test: backend/tests/advisory_model_first/test_economic_parent_scale_state_pipeline_v1.py M20四stage/79前缀/83/typed/foreign/duplicate/partial | SOURCE_LOCAL_PASS | none |
+| F-005 | backend/services/advisory_model_first/economic_parent_scale_state_v1.py/nodes/price_set | test: backend/tests/advisory_model_first/test_economic_parent_scale_state_v1.py 支持洞/空query/多段价；test: backend/tests/advisory_model_first/test_economic_parent_scale_state_pipeline_v1.py Topen/UNKNOWN/未来clock | SOURCE_LOCAL_PASS | none |
+| F-006 | 原registry与evaluate_information_study_v1 | artifact: 原EXPLORATORY_SCREEN/RISK_MANAGED_ADVISORY/NAVIGATION_ONLY及只计划一次研究；study 尚0 | SOURCE_LOCAL_PASS | none |
+| F-007 | §2精确十叶、自身X/F和交付 | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/m21-source-scope.json 十叶；current CI和merge/cleanup另报 | SOURCE_LOCAL_PASS | none |
 
-矩阵只为详细设计审查，M21 SOURCE/preregister/prepare/fit/evaluation均0；当前实际79fit+1index是M20及以前累计，不重复计为M21。
+源码本地实现不是研究/收益/运行启用验收；M21正式preregister/prepare/fit/evaluation仍0，当前实际79fit+1index是M20及以前累计，不预报83或拿单元fixture fit计为正式研究。SOURCE提交后先冻结clean producer再登记一次，结果独立更新。
 
 ## 13. 三轮设计审核与修订
 
@@ -95,3 +95,15 @@ Rollout只Advisory离线研究工具，不改API/UI/订单/资金仓位/生产de
 第二轮精度/缺失/PIT：spike实际读D金融分数但无价格/收益/labels，明确非0数值。存储raw float32使恒定1e-8过严，按schema16epsilon冻结数值算术而不按投资结果宽松；approx proxy非native。相同selected norm不证明全市场sigma0，改为UNKNOWN；正常缺配对保留原人口，有效两不同norm可算状态，但本股own raw未知仍UNKNOWN，不造receipt/捕获时间/全市场成员证明。
 
 第三轮预算/范围/交付：M20真实一次79+1是新lineage前提，绑定精确80原行字节，只追加四至83、老caps不改，不为失败重新扫描旧Y/收益档案。SOURCE仅十叶，原费用/支持/成熟监督/四臂与用户重启权保持。设计PASS不能替代source、研究/经济/运行态验收；M1/BUG工程依赖不假完成，旧48h时限保留。
+
+## 14. 源码多轮审核与修复
+
+第一轮实现/定向13项通过：继承原M20只读frozen raw人口，新增原norm的同D一对一配对与四尺度；实际storage dtype进入plan/recipe并消费schema核对。两新15/19臂共有可用成熟监督、原label/support/policy/费用保持。SOURCE路由只加M21及83，不改其它family维度/identity。
+
+第二轮PIT/顺序/未知/身份：发现原base任意索引与重建RangeIndex比较可能误拒绝，修正为位置对齐，并在第二次norm merge后显式验证KEY原顺序；新增同KEY非RangeIndex用例。不足/constant norm UNKNOWN保留全日，正常NaN用其余配对、不让本股raw未知变可用；禁止解析外部未请求review坏数、未来clock/源role/package/weights/normalization/dtype矛盾。源哈希链不能等同native。
+
+第三轮预算/回归/所有权：绑定实际完成M20四stage及79+1，私有有限20模型×80行metadata校验，无旧收益重跑或预算清零；partial/no QE idle/hash tamper拒绝，typed model_copy不绕Literal。最终四直接测试39PASS/Ruff0；旧M1(13/16)、M19(16/19)、M20(13/15)原bundle身份及两query只读回归、不重做旧实验。F2/L0与十叶边界核对后提交冻结producer；正式四fit/四臂研究尚未开始，current CI、合入/自己的清理另报。
+
+ALGO-COMPLEXITY-001逐项审核：十文件changed-only无finding，四源码全量三P2/0blocking分别为新私有预算20×80次有界纯metadata筛选（journal<=512KB）、新norm精确KEY one_to_one join（source<=20000/原candidate<=7720，先投影请求再解析）和旧sector source join（既存逻辑未改）。没有SQL、笛卡尔积、按历史天重跑父模型或未受限扫描；同D两腿moments合计线性7720，正式prepare运行后报告实际耗时。不是忽略finding或修改公共guardrail规则。
+
+DESIGN-COMPLIANCE-001四项逐条：①范围交付按七项矩阵的真实SOURCE本地状态报告，正式研究尚未运行/收益未确认/生产启用0不冒充完成；②请求输入类型/身份/未来clock错误显式拒绝，正常缺失保留UNKNOWN且不删填，不静默伪造成功；③原模型配置、label/support/policy/成本、人口和导航条件保持，不改变批准业务语义；④不新增包门/审批/等待实盘或公共模块阻断，既存用户重启权及源码边界保持。39直接测试及三个旧bundle回读支撑SOURCE状态，current CI/merge、研究与运行状态仍分别报告。
