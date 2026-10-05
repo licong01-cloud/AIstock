@@ -18348,6 +18348,20 @@ def _complete_pr_merge_attempt(
     }
 
 
+def _required_check_poll_schedule(attempts: int, delay_seconds: int, *, adaptive: bool = False) -> tuple[int, ...]:
+    """Short initial polls within the existing total wait budget, never an unbounded watcher."""
+    count, delay = max(1, int(attempts)) - 1, max(0, int(delay_seconds))
+    if not adaptive or not delay:
+        return (delay,) * count
+    remaining, interval, schedule = count * delay, min(5, delay), []
+    while remaining:
+        wait = min(interval, remaining)
+        schedule.append(wait)
+        remaining -= wait
+        interval = min(interval * 2, delay)
+    return tuple(schedule)
+
+
 def _await_required_pr_checks(
     pr_url: str,
     *,
@@ -18355,6 +18369,7 @@ def _await_required_pr_checks(
     bug_id: str | None = None,
     attempts: int = 6,
     delay_seconds: int = 10,
+    adaptive: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, list[str]], list[dict[str, Any]]]:
     """Poll queued required checks briefly instead of forcing manual retries.
 
@@ -18364,13 +18379,12 @@ def _await_required_pr_checks(
     becomes a long ``gh pr checks --watch`` loop.
     """
 
-    max_attempts = max(1, int(attempts))
-    wait_seconds = max(0, int(delay_seconds))
+    schedule = _required_check_poll_schedule(attempts, delay_seconds, adaptive=adaptive)
     history: list[dict[str, Any]] = []
     latest_result: dict[str, Any] = {"ok": False, "stdout": "[]", "stderr": "not run"}
     latest_fallback: dict[str, Any] | None = None
     latest_summary: dict[str, list[str]] = {"failed": [], "pending": [], "non_blocking": [], "passed": []}
-    for index in range(1, max_attempts + 1):
+    for index in range(1, len(schedule) + 2):
         latest_result, latest_fallback = _merge_required_check_result_with_transport_fallback(
             pr_url,
             payload=payload,
@@ -18387,8 +18401,8 @@ def _await_required_pr_checks(
         )
         if latest_summary["failed"] or not latest_summary["pending"]:
             return latest_result, latest_fallback, latest_summary, history
-        if index < max_attempts and wait_seconds:
-            time.sleep(wait_seconds)
+        if index <= len(schedule) and schedule[index - 1]:
+            time.sleep(schedule[index - 1])
     if bug_id:
         _append_event(
             bug_id,
@@ -18435,6 +18449,7 @@ def _merge_pr_if_ready_for_bug(
     *,
     required_check_attempts: int = 6,
     required_check_delay_seconds: int = 10,
+    adaptive_required_checks: bool = False,
 ) -> dict[str, Any]:
     payload, view_fallback = _merge_pr_view_with_transport_fallback(pr_url, bug_id=bug_id)
     if payload.get("state") == "MERGED":
@@ -18448,6 +18463,7 @@ def _merge_pr_if_ready_for_bug(
         bug_id=bug_id,
         attempts=required_check_attempts,
         delay_seconds=required_check_delay_seconds,
+        adaptive=adaptive_required_checks,
     )
     failed = check_summary["failed"]
     pending = check_summary["pending"]
@@ -19635,14 +19651,14 @@ def _merge_close_sync_pr_if_ready(
             "next_command": f"gh pr merge {pr_url} --squash",
         }
     try:
-        # Close-sync CI normally queues behind the source merge's default-branch
-        # Keep the stable CI verdict wait bounded, but long enough to avoid a
-        # guaranteed second manual finalizer invocation for an active CI job.
+        # Metadata-only CI is normally short: poll early without extending the
+        # existing total wait budget or weakening exact-HEAD required checks.
         result = _merge_pr_if_ready_for_bug(
             bug_id,
             pr_url,
             required_check_attempts=16,
             required_check_delay_seconds=30,
+            adaptive_required_checks=True,
         )
     except WorkflowError as exc:
         return {
