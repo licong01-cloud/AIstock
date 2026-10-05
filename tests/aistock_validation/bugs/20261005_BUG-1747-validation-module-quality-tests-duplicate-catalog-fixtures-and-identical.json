@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1747",
-  "closed_at": null,
+  "closed_at": "2026-10-05T19:02:03Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,17 +28,17 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1747-validation-module-quality-tests-duplicate-catalog-fixtures-and-identical.json",
       "backend/tests/test_validation_catalog_integrity.py",
       "backend/tests/test_validation_module_ownership.py",
-      "backend/tests/test_validation_ui_target_catalog.py"
+      "backend/tests/test_validation_ui_target_catalog.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1747-validation-module-quality-tests-duplicate-catalog-fixtures-and-identical.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1747-validation-module-quality-tests-duplicate-catalog-fixtures-and-identical.json",
       "backend/tests/test_validation_catalog_integrity.py",
       "backend/tests/test_validation_module_ownership.py",
-      "backend/tests/test_validation_ui_target_catalog.py"
+      "backend/tests/test_validation_ui_target_catalog.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1747-validation-module-quality-tests-duplicate-catalog-fixtures-and-identical.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -104,8 +104,8 @@
   },
   "first_seen_at": "2026-10-05T18:49:11.005123Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "00dd6d587d3606e91ce97d73681c791bed132a11",
+  "fixed_at": "2026-10-05T19:02:03Z",
   "github_issue_number": 5552,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5552",
   "last_seen_at": "2026-10-05T18:49:11.005123Z",
@@ -113,6 +113,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5554",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,6 +131,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -139,7 +141,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P3",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1747",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4561e8e1bc018d1a",
+    "recorded_at": "2026-10-05T19:02:40.064078Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ef0176dec903e07d55b12108b573cb6665547128",
+    "source_merge_commit": "00dd6d587d3606e91ce97d73681c791bed132a11",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5554",
+    "validation_evidence": [
+      "rtk pytest backend/tests/test_validation_module_ownership.py backend/tests/test_validation_catalog_integrity.py backend/tests/test_validation_ui_target_catalog.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1747-final -> 22 passed",
+      "python -m nox -s validation_module_registry_l0 -> 8 passed"
+    ],
+    "validation_evidence_digest": "0bd17acb13accb002399d40c2e75800dd6c3c50bb951920b0760c58cde5f5e9e"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -148,6 +172,10 @@
     "fingerprint": "087dc87ddef859685004805c",
     "source_event_id": "FE-20261005-087dc87ddef8"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/test_validation_module_ownership.py backend/tests/test_validation_catalog_integrity.py backend/tests/test_validation_ui_target_catalog.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1747-final -> 22 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
