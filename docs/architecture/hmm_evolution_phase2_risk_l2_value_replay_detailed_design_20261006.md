@@ -130,9 +130,9 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | backend/services/hmm_risk/risk_l2_value_replay.py；§4～§7 | test: backend/tests/hmm_risk/test_risk_l2_value_replay.py；预算/时序/NA/漂移成本/极端市场/完整终态直接测试 | SOURCE_CONTRACT_VERIFIED | 无设计或源码缺口；正式经济结果仍待运行，不作为本次源码门 |
+| F-011 | backend/services/hmm_risk/risk_l2_value_replay.py；§4～§7 | test: backend/tests/hmm_risk/test_risk_l2_value_replay.py；预算/时序/NA/漂移成本/极端市场/完整终态直接测试 | SOURCE_CONTRACT_VERIFIED | 无 |
 | F-012 | backend/services/hmm_risk/risk_l2_value_replay.py：load_inputs/zero_compute | test: backend/tests/hmm_risk/test_risk_l2_value_replay.py；原四资产file-only预检、独立pins、DB/fit poison | SOURCE_CONTRACT_VERIFIED | 无 |
-| F-013 | scripts/hmm_risk/replay_risk_l2_value.py；原API/UI不变 | test: backend/tests/hmm_risk/test_replay_risk_l2_value.py；child/parent typed failure、collision/bitwise差异拒绝 | SOURCE_CONTRACT_VERIFIED | 无源码缺口；正式双process只在源码合入后执行 |
+| F-013 | scripts/hmm_risk/replay_risk_l2_value.py；原API/UI不变 | test: backend/tests/hmm_risk/test_replay_risk_l2_value.py；child/parent typed failure、collision/bitwise差异拒绝 | SOURCE_CONTRACT_VERIFIED | 无 |
 
 ## 12. Rollout / Rollback、Risks与Production Gates
 
