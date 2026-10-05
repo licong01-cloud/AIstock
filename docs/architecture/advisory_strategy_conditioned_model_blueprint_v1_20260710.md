@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.36
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.37
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-05
@@ -8,7 +8,7 @@
 >
 > 当前真实断点：M18一次四fit/完整四臂29.719秒，candidate9.4435%对baseline21.3220%、matched4.5719%，paired日−10.5233/+4.3360bps，两区间跨零，NOT_CONFIRMED。M1日频/API/UI #5445 HEADd1ccaae19/currentCI绿，但六新UI未执行；BUG-1726修复仍待公共新端点smoke，两工程依赖未完成，不借旧收据或泛health。通用日频输入设计#5460/源码#5461已合入并清理，只证明输入可移植、不是通用权重或标签。下一真正新信息必须先冻结明确假设/标签/对照/预算，不因一批负结果关闭全方向，也不为时长同族调参或重复QE实验。sealed不读、旧结果不改判，源码/经济效果/运行配置与用户重启分别报告。
 >
-> [M19板块＋个股资金流F2](advisory_sector_moneyflow_m19_f2_design_20261005.md)一次研究完成，SOURCE十二叶三轮/52直接项通过、等待当前CI交付；16matched对19candidate同新共同监督。候选18.4501%低于基线21.3220%/新matched20.9924%，配对日−2.4563/−2.4024bps且区间跨零，只停止自身候选，实际75fit+1旧index。原两源joint3502/4218UNKNOWN、35真TAKE/54UNKNOWN控制不升级原生证据或归因；不回选M1 weights、不调旧门槛、不读sealed或启用。
+> [M19板块＋个股资金流F2](advisory_sector_moneyflow_m19_f2_design_20261005.md)一次研究和源码交付完成：#5491 HEAD38fa5c270/currentCI37313127615 SUCCESS后13:07:22UTC合入a90450239827db5d278798572fe6e9a7acc6ed30，自己的official cleanup_done/18.718秒、无blocking/warnings、正式F保留。候选18.4501%低于基线21.3220%/新matched20.9924%，配对日−2.4563/−2.4024bps且区间跨零，只停止自身候选，真实75fit+1旧index；不回选M1、不调旧门槛或启用。下一[M20原腿raw评分尺度](advisory_parent_raw_score_m20_f2_design_20261005.md)只检验现有归一化D12丢失的信息，设计三轮/F2七项通过，source/正式研究均0；未改QE、重选股或增加包资格门。
 > 较早阶段H-VALUE-ANCHOR-1事实：[H-VALUE-ANCHOR-1](advisory_economic_value_anchor_v1_f2_design_20261003.md)已完成设计、内核及一次同场景三臂研究，run=`advvalue_a4bc66a30cfa7d9d5078850c`。基线/常数锚/D模型在100共同估值日名义净收益`21.3220%/25.4597%/17.4642%`；D模型减常数/减基线日增量`-6.9022/-3.4196bps`，两个描述性区间均跨零。虽模型MDD/胜率改善且有58个实际进入差异日，仍未满足预注册收益条件，停止当前candidate，不回选常数控制、调整阈值/期限/seed或扩窗补证。独立VALUE_REVIEW_5_V1未改变生产退出，不能与旧19.17%跨场景判胜；经济确认/ENTRY_VALUE启用仍0。设计#5344及内核#5346已合入；研究源码#5347的合入状态见§16。
 > 上一轮H-TIMING-1事实：计算/来源PR #5331已合入`592fd305f9147ddfc3eaf87b8bed52d905352bed`；一次配对研究已完成，run=`advtiming_cd2ddd9832129255c14f9a80`。新15字段/同核13字段/原基线在100共同估值日的成本后名义收益分别`3.0673%/1.6174%/19.1729%`；新增两量相对控制日增量`+1.0789bps`，但相对基线`-15.0261bps`，未满足预注册的两个正增量条件，停止当前candidate、不进入消费者接入或确认。研究源码PR #5336已通过CI并合入`5ec8c8e2d1deee16a5587afd604d61481162669e`；工程交付、研究结果、经济确认和生产启用分报。下列2026-10-02及较早2026-10-03接续段是历史实施检查点，其待办只以§16的最新队列为准。
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
@@ -2138,7 +2138,7 @@ G1必须在拟合前给出明确数字：连续切分边界、实际fit总数、
 
 ### 16.6 当前R2：连续不同条件价格模型（2026-10-04）
 
-用户授权48小时预算`2026-10-04 02:36～2026-10-06 02:36 Asia/Shanghai`，是同一价格主线串行不同假设，不是六条并行项目或无限调参。最新18h工作段2026-10-05 00:08～18:08不重置原48h截止。M2/M3/M4已完成11fit+1索引，M1、M5、M6、M7、M8、M9、M10各完成4fit，整批39fit+1索引。当前M1日频源码已有真实业务但仍待六UI/公共BUG流程；M6/M7已合入/清理，M8 #5454/#5455亦已合入/自己清理，当前M9设计#5456已合入/清理，源码43直接项及一次完整研究完成、#5457已合入4f7793a0f并自身清理；M10设计#5458已合入/清理，38直接项及一次四fit/完整四臂完成，源码#5459已合入7aed83cc6并自己清理，各负候选不调参重跑。下一输入功能与独立价值目标按§16.6.3分离交付，不再同一固定信息只换参数。M8一次prepare/fit/完整四臂实际完成，不把19-return风险改善等同收益；确认可选，不阻断功能，不凑时长搜索同信息参数、不读取sealed或把开发导航当确认。
+用户授权48小时预算`2026-10-04 02:36～2026-10-06 02:36 Asia/Shanghai`，是同一价格主线串行不同假设，不是六条并行项目或无限调参。最新18h工作段2026-10-05 00:08～18:08不重置原48h截止。以下表格保留M10阶段的历史研究39fit+1索引；后续M11～M19各阶段事实见§16.6.3～12，当前累计真实75fit+1旧index，不将历史快照冒称当前队列。M1日频源码有真实业务但仍待六UI/公共BUG流程，M19源码交付完成，下一M20设计而非旧负候选补证。输入功能与独立价值目标分离，不再同一固定信息只换参数，不把风险改善等同收益；确认可选、不阻断功能，不凑时长搜索同信息参数、读取sealed或把开发导航当确认。
 
 | 顺序 | 路线 | 唯一比较与阶段边界 |
 |---|---|---|
@@ -2260,4 +2260,10 @@ M18源码#5487 HEADb71f0aef72798b4814f49b123d882283a5c4e65a/currentCI37286496082
 
 事前0trial spike8f4c58f7...仅原两Parquet schema/KEY/status，0.016秒/0SQL/0数值特征或Y数组/fit；7720原KEY/386D保持，共同parent/profile/feature/value_refs一致。原sector可用3505、flow7700，joint3502/366D与4218UNKNOWN，只有3条sector可用但flow未知；不是原生、可学或盈利证明。设计#5490 HEAD2ebd90114/currentCI37308397453 SUCCESS于12:25:41UTC合入453f4bd367/official cleanup_done20.047秒。SOURCE精确12本模块文件三轮审核/52直接项/Ruff/F2七矩阵零warning/两L0无blocking/旧M1 bundle同identity同recipe13-16推理通过；修正rank fixture、仅M19叶空查询dtype边界，旧BUG1726不冒称已修；MODEL_TRIAL是类别，实际registry沿EXPLORATORY_SCREEN/NAVIGATION_ONLY，不改公共枚举。
 
-clean producer0bdeff28ed790b04444a8fca1c00a2a6691a6715/implementation c21b014e.../plan1643dcdaff3c85460d26957713bfdafcd594299493f280ad76337a9fcd18c22b/run advsectorflow_1643dcdaff3c85460d269577一次登记后prepare2.078秒/0SQL/3502AVAILABLE/4218UNKNOWN，原7720全保留。12:51:58UTC三QE running全0后一次4fit/全四臂25.687秒，12:53:06UTC后仍全0；共同成熟train1794/194D、validation765仅诊断。原81D/1620候选/100共同NAV日candidate/baseline/新matched/rule成本后名义净收益18.4501/21.3220/20.9924/20.5747%，配对日baseline−2.4563CI[−21.327089,17.513770]、matched−2.4024CI[−10.348204,4.432458]bps。35真TAKE+54UNKNOWN研究控制共89episode全部settled、held-mark/端点无阻断；仅净增量条件不通过、其余四项通过，只STOP本candidate/NOT_CONFIRMED，不调门槛或补旧失败证据。真实75fit+1旧index；0 sealed/OOS/真实fill/activation/DB/QE源码/服务控制，无新重启需求；M1六UI/BUG公共smoke辅线未交付不冒称完成，原48h总时限不重计。
+clean producer0bdeff28ed790b04444a8fca1c00a2a6691a6715/implementation c21b014e.../plan1643dcdaff3c85460d26957713bfdafcd594299493f280ad76337a9fcd18c22b/run advsectorflow_1643dcdaff3c85460d269577一次登记后prepare2.078秒/0SQL/3502AVAILABLE/4218UNKNOWN，原7720全保留。12:51:58UTC三QE running全0后一次4fit/全四臂25.687秒，12:53:06UTC后仍全0；共同成熟train1794/194D、validation765仅诊断。原81D/1620候选/100共同NAV日candidate/baseline/新matched/rule成本后名义净收益18.4501/21.3220/20.9924/20.5747%，配对日baseline−2.4563CI[−21.327089,17.513770]、matched−2.4024CI[−10.348204,4.432458]bps。35真TAKE+54UNKNOWN研究控制共89episode全部settled、held-mark/端点无阻断；仅净增量条件不通过、其余四项通过，只STOP本candidate/NOT_CONFIRMED，不调门槛或补旧失败证据。真实75fit+1旧index；SOURCE#5491 HEAD38fa5c270ba0efb82a57d5ee79e10fe022cccf6e/currentCI37313127615 SUCCESS（13:05:04UTC）后13:07:22UTC合入a90450239827db5d278798572fe6e9a7acc6ed30。0 sealed/OOS/真实fill/activation/DB/QE源码/服务控制，无新重启需求；M1六UI/BUG公共smoke辅线未交付不冒称完成，原48h总时限不重计。
+
+#### 16.6.13 下一M20：原策略腿raw分数尺度的条件价格价值
+
+[M20 F2详细设计](advisory_parent_raw_score_m20_f2_design_20261005.md)检验D可见两原腿raw评分信息；现有D12只含归一化combined/rank/腿差，原包runtime每日zscore对正仿射变化不敏感，丢失raw均值/尺度。仅新增两raw坐标，matched13/candidate15同新共同监督，不搜索raw阈值/新因子或重训QE，也不重用旧M1权重。raw不是收益率/概率，是否跨日经济可比由本一次研究回答，不能由schema存在就称alpha。
+
+spike1cb5b432.../0.328秒只schema/KEY/rank/flag/包身份，无raw金融值或Y/收益数组/SQL/fit；原7720候选/386D精确同M19，两个raw列存在，source同原parent manifest65b095bf...。设计三轮/F2七条通过；source/preregister/prepare/fit/evaluation仍0、当前真实75+1。未来M20私有预算绑定75fit+1index的76条原journal精确字节前缀、真实M19四stage/head/hash/ledger，同root只新增四heads至79，旧11～75caps不改；不再为各旧失败复验收益或固化证据。原policy/labels/support/费用/全四臂及NV限制不变，fit前后三QE空闲，sealed/OOS/activation仍0，原48h时限和用户重启边界保留。
