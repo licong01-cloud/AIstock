@@ -1555,12 +1555,13 @@ def _static_asof_frame(
     target_index: pd.MultiIndex,
     previous_tail: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if dataset == "moneyflow":
+    if dataset in {"moneyflow", "daily_basic"}:
+        # daily_basic is an exact-date provider fact, including nullable
+        # dividend yields. Carrying yesterday's yield into a source NULL
+        # silently fabricates data and makes H5/static snapshots diverge.
         return current, pd.DataFrame()
     slow_columns: list[str] = []
-    if dataset == "daily_basic":
-        slow_columns = [value for value in ("db_dv_ratio", "db_dv_ttm") if value in current.columns]
-    elif dataset in {"bak_basic", "cyq_perf", "sector_data", "margin_detail"}:
+    if dataset in {"bak_basic", "cyq_perf", "sector_data", "margin_detail"}:
         slow_columns = list(current.columns)
     if not slow_columns:
         return current, _tail_by_instrument(current, 1)
