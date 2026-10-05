@@ -1,6 +1,6 @@
 # Advisory 成交量加权历史价格分布 M11 F2详细设计
 
-2026-10-05；DESIGN_ONLY / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_IMPLEMENTED_RESEARCH_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal / 不重复的明确假设
 
@@ -94,13 +94,13 @@ study_type=MODEL_TRIAL、objective_contract=RISK_MANAGED_ADVISORY、decision_use
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-923 | §1/4 | artifact: 原M9三定义对照及价格分布信息差设计 | DESIGN_VERIFIED | none |
-| F-924 | §3/6 | artifact: 既存来源/时钟/完整原键与UNKNOWN合同 | DESIGN_VERIFIED | none |
-| F-925 | §4/11 | artifact: 手算/缩放/边界/正常零量与非有限测试规范 | DESIGN_VERIFIED | none |
-| F-926 | §5/7 | artifact: 同核13/16与原政策/监督/四臂冻结 | DESIGN_VERIFIED | none |
-| F-927 | §6 | artifact: 累积43与旧23/27/31/35/39不变/不重fit合同 | DESIGN_VERIFIED | none |
+| F-923 | economic_traded_price_distribution_v1.py；§1/4 | test: backend/tests/advisory_model_first/test_economic_traded_price_distribution_v1.py；artifact: 同均价/日量但不同价格分布手算 | SOURCE_VERIFIED | none |
+| F-924 | economic_traded_price_distribution_pipeline_v1.py；§3/6 | test: backend/tests/advisory_model_first/test_economic_traded_price_distribution_pipeline_v1.py；artifact: 0SQL冻结消费/原键/UNKNOWN及时钟投影 | SOURCE_VERIFIED | none |
+| F-925 | economic_traded_price_distribution_v1.py；§4/11 | test: backend/tests/advisory_model_first/test_economic_traded_price_distribution_v1.py；artifact: 复权缩放/零量/ATR0/包含边界/溢出typed失败 | SOURCE_VERIFIED | none |
+| F-926 | economic_traded_price_distribution_v1.py；§5/7 | test: backend/tests/advisory_model_first/test_economic_traded_price_distribution_v1.py；artifact: 同监督13/16、test毒化不影响fit、原四臂委托 | SOURCE_VERIFIED | none |
+| F-927 | economic_moneyflow_price_pipeline_v1.py；economic_sector_price_pipeline_v1.py；§6 | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 原默认/显式43、真实前驱/partial与foreign拒绝 | SOURCE_VERIFIED | none |
 | F-928 | §2/6/12 | artifact: 模块/资源/原截止与QE互斥授权界限 | DESIGN_VERIFIED | none |
-| F-929 | §2/8/11/12 | artifact: 12文件与多轮直接审核/证据分报计划 | DESIGN_VERIFIED | none |
+| F-929 | §2/8/11/12/14 | test: backend/tests/advisory_model_first/test_economic_traded_price_distribution_pipeline_v1.py；artifact: 精确12文件、三视角源码自审与直接验证 | SOURCE_VERIFIED | none |
 
 ## 11. Direct tests / 最小高价值矩阵
 
@@ -115,3 +115,9 @@ study_type=MODEL_TRIAL、objective_contract=RISK_MANAGED_ADVISORY、decision_use
 信息/经济轮按源码核实M9三字段不是量价相关/流动性，修订为真实均价/方向量/日期量HHI并与价格密度分离；明确不是筹码或盈利持有人概率、同固定标签仍原包scope，独立generic label选择不被暗中决定。PIT/正常缺失轮明确先消费投影后值/clock校验、ATR未知只影响依赖字段、零量日未消费价格/因子不应要求完整，D锚及正量日真实价格仍必须可计算；不填缺失、不删候选。数值/预算交付轮固定D归一、权重稳定、±1ATR包含边界/允许ATR0及仅D有量、旧预算默认与39真实前驱/新43单次，不把工程spike计成研究或提前读收益。
 
 DESIGN-COMPLIANCE-001逐项设计审核通过但源码/研究尚未实施；自审不是独立外部评审。F2验证/diff/精确scope与当前HEAD CI分别核实后才设计合入；没有临时放宽或在旧结果后换数值/窗口。
+
+## 14. 源码审核与研究前断点
+
+设计#5462 HEADe2444418a/CI37248045620 SUCCESS后已合入6bb8dd7a45b32dc05cd55ceae28358086031cbb3并自己official cleanup_done；最新main独立源码树登记原12文件，无业务跨界。信息/数值轮核实三公式、零权重不消费价、仅D正量及ATR0/±1ATR包含边界，稳定权重与D归一避免共同AF/量尺度溢出；修正超大整数float转换统一ValueError，不把坏已知数当UNKNOWN。PIT/数据轮先投影实际价格/量/ATR键，宽源未来坏值不进入早D；原键顺序、warmup、真实缺行及字段级UNKNOWN不删填。工程轮核实原M9冻结prepared链/真实manifest、不调用M9 prepare/SQL，M11身份/status/43仅显式扩展，旧23/27/31/35/39和hash公式不变；原子重试/partial/QE未知拒绝沿旧委托。
+
+初轮50直接项全部PASS、Ruff PASS；typed边界新增一个参数后6定向值测试PASS；稳定51矩阵/Ruff/F2七项/feature L0零finding通过，standard L0三条P2复杂度提示/零blocking。新merge明确KEY一对一、最多7720候选行，无行膨胀；每候选仅20session，投影价格<=500000/量<=154400，复杂度O(源行+7720×20)、临时内存有界。其余两提示落在未改的M6/M1旧prepare joins，不扩范围修旧代码。当前实际仍39fit+1index，未登记/prepare/训练M11、未读新结果或sealed。原已消费窗口无独立确认，source提交与研究消费者producer绑定后才一次运行，不为旧负candidate补证。
