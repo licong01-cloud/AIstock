@@ -147,17 +147,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh Python pytest process reproduced two monthly within/prior-boundary daily_basic source NULL forward-fill failures and passed both after the tracked exporter correction; final factor_materializer matrix 8 passed. Read-only file candidate identity passed on Windows/WSL/node1; this does not assert the existing supervised worker has loaded unmerged code."
+    ],
     "inference_basis": "actual_changed_files",
-    "persistence_basis": "not_required",
-    "planned_target_ids": [],
-    "post_restart_effective_gate": "not_required",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": ["worker-scheduler"],
+    "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
-    "runtime_identity_match": "not_required",
-    "runtime_impact": "none",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": ["worker-scheduler"]
   },
   "schema_version": "aistock_validation_bug_v1",
   "scoped_readback": {
