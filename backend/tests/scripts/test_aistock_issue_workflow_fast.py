@@ -15,6 +15,36 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("attempts,delay", [(16, 30), (6, 10), (1, 30), (4, 0), (0, -1)])
+def test_required_check_schedule_preserves_budget(attempts, delay):
+    fixed = workflow._required_check_poll_schedule(attempts, delay)
+    adaptive = workflow._required_check_poll_schedule(attempts, delay, adaptive=True)
+    assert fixed == (max(0, delay),) * (max(1, attempts) - 1)
+    assert sum(adaptive) == sum(fixed)
+    assert all(0 <= value <= max(0, delay) for value in adaptive)
+    assert len(adaptive) <= len(fixed) + 3
+    if attempts > 1 and delay > 0:
+        assert adaptive[0] == min(5, delay)
+
+
+@pytest.mark.parametrize("outcome,expected_calls", [("passed", 2), ("failed", 1), ("pending", 18)])
+def test_adaptive_required_checks_stop_early_or_fail_closed(monkeypatch, outcome, expected_calls):
+    calls, waits = [], []
+    payload = {"headRefOid": "pinned-task-head"}
+    def read(url, **kwargs):
+        assert kwargs["payload"] is payload and url == "https://example.invalid/pr/1"
+        calls.append(url)
+        state = "pending" if outcome == "pending" or (outcome == "passed" and len(calls) == 1) else outcome
+        return {"state": state}, None
+    monkeypatch.setattr(workflow, "_merge_required_check_result_with_transport_fallback", read)
+    monkeypatch.setattr(workflow, "_required_pr_check_summary", lambda result: {key: (["CI verdict"] if key == result["state"] else []) for key in ("failed", "pending", "passed", "non_blocking")})
+    monkeypatch.setattr(workflow.time, "sleep", waits.append)
+    _, fallback, summary, history = workflow._await_required_pr_checks("https://example.invalid/pr/1", payload=payload, attempts=16, delay_seconds=30, adaptive=True)
+    assert fallback is None and len(calls) == len(history) == expected_calls
+    assert summary[outcome] == ["CI verdict"]
+    assert waits == ([] if outcome == "failed" else [5] if outcome == "passed" else list(workflow._required_check_poll_schedule(16, 30, adaptive=True)))
+
+
 @pytest.fixture
 def cli_task_worktree(tmp_path, monkeypatch):
     base, task = tmp_path / "authority", tmp_path / "task"

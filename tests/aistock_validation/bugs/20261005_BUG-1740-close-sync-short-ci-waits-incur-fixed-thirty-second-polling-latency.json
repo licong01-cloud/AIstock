@@ -1,43 +1,47 @@
 {
-  "actual": "Current workflow budget is 44867 production and 13451 test lines, leaving nine lines before repeated Nightly/catalog failures. Compact duplicated fixture setup in code-intelligence contracts while preserving every unique assertion, all negative/recovery cases and production semantics. Target sustainable headroom through actual deduplication, not ownership changes, denominator inflation or test exclusion.",
+  "actual": "Current metadata CI completes in 16-18 seconds, but finalizer polls required checks on a fixed 30-second interval. Add bounded adaptive initial polling with exponential backoff and preserve existing total wait budget, exact-head/mergeability/required-check fail-closed checks. No new approval, polling daemon, or runtime process operation; extract only the pure delay policy.",
   "allowed_write_scope": [
-    "backend/tests/scripts/test_code_intelligence_adapter.py",
-    "tests/aistock_validation/bugs/20261005_BUG-1739-workflow-contract-fixture-duplication-leaves-only-nine-lines-of-honest-t.json"
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20261005_BUG-1740-close-sync-short-ci-waits-incur-fixed-thirty-second-polling-latency.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1739",
-  "closed_at": "2026-10-05T18:03:46Z",
+  "bug_id": "BUG-1740",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-10-05T17:49:44.551128Z",
-  "description": "Current workflow budget is 44867 production and 13451 test lines, leaving nine lines before repeated Nightly/catalog failures. Compact duplicated fixture setup in code-intelligence contracts while preserving every unique assertion, all negative/recovery cases and production semantics. Target sustainable headroom through actual deduplication, not ownership changes, denominator inflation or test exclusion.",
+  "created_at": "2026-10-05T17:51:48.832622Z",
+  "description": "Current metadata CI completes in 16-18 seconds, but finalizer polls required checks on a fixed 30-second interval. Add bounded adaptive initial polling with exponential backoff and preserve existing total wait budget, exact-head/mergeability/required-check fail-closed checks. No new approval, polling daemon, or runtime process operation; extract only the pure delay policy.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20261005-264a3c78185d",
-      "timestamp": "2026-10-05T17:49:44.551128Z"
+      "note": "Promoted from IC-20261005-6285385996be",
+      "timestamp": "2026-10-05T17:51:48.832622Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/tests/scripts/test_code_intelligence_adapter.py",
-      "tests/aistock_validation/bugs/20261005_BUG-1739-workflow-contract-fixture-duplication-leaves-only-nine-lines-of-honest-t.json"
+      "tests/aistock_validation/bugs/20261005_BUG-1740-close-sync-short-ci-waits-incur-fixed-thirty-second-polling-latency.json",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py"
     ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/scripts/test_code_intelligence_adapter.py",
-      "tests/aistock_validation/bugs/20261005_BUG-1739-workflow-contract-fixture-duplication-leaves-only-nine-lines-of-honest-t.json"
+      "tests/aistock_validation/bugs/20261005_BUG-1740-close-sync-short-ci-waits-incur-fixed-thirty-second-polling-latency.json",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "backend/tests/scripts/test_code_intelligence_adapter.py"
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
       ],
       "impacted_modules": [
         "validation.workflow_automation",
@@ -46,7 +50,17 @@
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/scripts/test_code_intelligence_adapter.py",
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
           "impact_modules": [
             "validation.runner",
             "validation.guardrails"
@@ -60,30 +74,32 @@
         "high"
       ],
       "suggested_scope": [
-        "backend/tests/scripts/test_code_intelligence_adapter.py"
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/tests/scripts/test_code_intelligence_adapter.py"
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/scripts/test_code_intelligence_adapter.py"
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ]
   },
-  "first_seen_at": "2026-10-05T17:49:44.551128Z",
+  "first_seen_at": "2026-10-05T17:51:48.832622Z",
   "fix_branch": null,
-  "fix_commit": "c39ba7fa710a1a408bcf57596d407e57722177cc",
-  "fixed_at": "2026-10-05T18:03:46Z",
-  "github_issue_number": 5519,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5519",
-  "last_seen_at": "2026-10-05T17:49:44.551128Z",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5522,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5522",
+  "last_seen_at": "2026-10-05T17:51:48.832622Z",
   "module": "validation.workflow_automation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5527",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -101,7 +117,6 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -111,43 +126,17 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "source_merge_receipt": {
-    "bug_id": "BUG-1739",
-    "production_gates": {
-      "production_backend_dependency_gate": "noop",
-      "production_ddl_gate": "noop",
-      "production_frontend_dependency_gate": "noop"
-    },
-    "receipt_id": "f6745d93dbf2d41f",
-    "recorded_at": "2026-10-05T18:04:26.338731Z",
-    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
-    "runtime_identity_match": "not_required",
-    "runtime_verification": "not_required",
-    "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "1eafe79978c25e266b30c1ed7675942644dea2ef",
-    "source_merge_commit": "c39ba7fa710a1a408bcf57596d407e57722177cc",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5527",
-    "validation_evidence": [
-      "rtk pytest backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_aistock_validation_budget.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1739 -> 91 passed",
-      "python -m nox -s l0 -> passed"
-    ],
-    "validation_evidence_digest": "e9965eed3c740a6297d6d74aad80c5caeaa3468dcac91590cda9977428b233a1"
-  },
-  "status": "fixed",
+  "status": "open",
   "suspected_modules": [
     "validation.workflow_automation"
   ],
-  "title": "Workflow contract fixture duplication leaves only nine lines of honest test budget margin",
+  "title": "Close-sync short CI waits incur fixed thirty-second polling latency",
   "trigger_condition": {
-    "fingerprint": "264a3c78185d84acf4b0ee26",
-    "source_event_id": "FE-20261005-264a3c78185d"
+    "fingerprint": "6285385996beaf203bdb6f81",
+    "source_event_id": "FE-20261005-6285385996be"
   },
-  "validation_evidence": [
-    "rtk pytest backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_aistock_validation_budget.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1739 -> 91 passed",
-    "python -m nox -s l0 -> passed"
-  ],
   "verification_budget": {
-    "budget": "light",
+    "budget": "standard",
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
       "modules": [
@@ -191,7 +180,7 @@
       "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "25-35%"
+    "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -207,7 +196,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "light",
+      "budget": "standard",
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
         "modules": [
@@ -251,7 +240,7 @@
         "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "25-35%"
+      "target_cost_percent_of_legacy": "30-45%"
     }
   }
 }
