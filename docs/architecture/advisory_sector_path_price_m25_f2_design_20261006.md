@@ -97,7 +97,7 @@ M1六UI/BUG1726公共smoke独立KEEP；它们未交付不阻断M25研究，也�
 | F-006 | §8；registry/evaluation | artifact: 冻结原合同及用途；test: backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
 | F-007 | §2/9；ownscope | test: backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py；scope/F2/L0/currentCI | SOURCE_LOCAL_VERIFIED | none |
 
-矩阵现记录源码本地七项验收，§12是历史设计阶段记录；49直接测试/Ruff通过、F2/scope/L0及原M1-M23-M24三代表bundle局部节点另验。正式prepare/fit/evaluation仍0，实际95+1，不把计划99当发生。SOURCE交付、经济结果、runtime分别报告。
+矩阵记录源码本地七项验收：49直接测试/Ruff/F2/十叶scope/原M1-M23-M24三bundle节点通过；changed L0零、staged新一/full二P2均非blocking，有限24*96 journal/512KB/7720 KEY join/H5 chunk界限见§8/13。一次只读prepare已完成，拟合和收益评价因QE已有活动实验未启动，实际95+1不变；源码/prepare/经济/runtime分报，详§14。
 
 ## 12. 三轮设计审核修订
 
@@ -116,3 +116,7 @@ M1六UI/BUG1726公共smoke独立KEEP；它们未交付不阻断M25研究，也�
 第三轮范围/业务：shared只M25 recipe/status/matched3/cap99，旧默认/参数/原caps不变，三代表旧family做identity+各两query，不补失败收益证据。T open观察价/T close哨兵不入预测，价洞/多段/empty query与两臂jointUNKNOWN；原全四臂/停牌限价T+1/成本与未知控制归因不变。49直接项/Ruff0，通过后clean producer、一次研究与currentCI分别报告；十叶之外未编辑，0QE/公共模块/DB/服务写。
 
 DESIGN-COMPLIANCE-001逐项：①七批准项对应真实源码和最小测试，无未授权删减冒称完成；②正常UNKNOWN不吞坏数据/未来读取/partial失败伪success；③原股票/日期/标签/support/费用/执行policy与旧families无语义改变；④没有新增策略包资格、旧实验补证或未来收益门，原48h截止/重启授权/来源NV与未确认边界保留。尚无M25正式收益或runtime启用，测试PASS不代替经济效果。
+
+## 14. 新一次prepare完成，研究串行等待
+
+clean producer c4777ca5db3e011d2b9a4d488c5809a3b04890e3/implementation a162b1d8d6e67ef96cc6e489f94c96784ae4a635c0d2a26c015f8e683253a6c4，run advsectorpath_8adafb7823329af27ad01fa5/plan 8adafb7823329af27ad01fa504812ef24212d91d5603a119ce212db1df401d9a。新一次prepare5.125秒/0SQL，386D7720候选全保留；原H5只读50180唯一date/id quotes，3505AVAILABLE/4215UNKNOWN，与原M1支持人群一致，来源五文件读前后hash一致。prepared manifest fileSHA e2e4ef5565830a26331f477978a415612e246fbf85cd5d7aa554643d8dc5e64b。拟合前2026-10-05T17:43:25+00:00只读QE三路径：single0/custom_evo1/multi-alpha0，因此未调用train/evaluate，0新formal fits、无fit_attempt或trained目录；累计仍95PHYSICAL_FIT+1旧INDEX，不伪报计划99/收益结果。仅M25研究动作因用户实验串行限制待QE空闲，SOURCE及只读prepare已完成；不停止/修改QE，不重复prepare/旧研究或为失败模型补证。原截止2026-10-06 02:36不重置，若QE届时仍运行则保留该准确断点，不擅延时训练或绕过串行约束；任何新fit须fresh三running0。49直接项/Ruff/F2/scope/原M1-M23-M24三bundle/L0无blocking，源码currentCI/合入清理另报。0sealed/OOS/经济确认/activation/DB读写/服务或公共模块控制。
