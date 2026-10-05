@@ -32,16 +32,26 @@
   ],
   "expected": "overview exposes the stored run's ordered historical dates; UI reads a chosen explicit date, rejects stale/mismatched responses and preserves full 131-row denominator and <=30 display",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l2_prediction.py",
+      "backend/tests/hmm_risk/test_rotation_l2_api.py",
+      "backend/tests/hmm_risk/test_rotation_l2_prediction.py",
+      "frontend/src/components/hmm-risk/RotationL2Dashboard.tsx",
+      "frontend/src/lib/hmm-risk/api.ts",
+      "frontend/tests/hmm-risk/hmm-risk.spec.ts",
+      "tests/aistock_validation/bugs/20261005_BUG-1741-p2-hmm-l2-rotation-historical-dates-missing-from-overview-and-ui.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l2_prediction.py",
-      "backend/tests/hmm_risk/test_rotation_l2_prediction.py",
       "backend/tests/hmm_risk/test_rotation_l2_api.py",
-      "frontend/src/lib/hmm-risk/api.ts",
+      "backend/tests/hmm_risk/test_rotation_l2_prediction.py",
       "frontend/src/components/hmm-risk/RotationL2Dashboard.tsx",
-      "frontend/tests/hmm-risk/hmm-risk.spec.ts"
+      "frontend/src/lib/hmm-risk/api.ts",
+      "frontend/tests/hmm-risk/hmm-risk.spec.ts",
+      "tests/aistock_validation/bugs/20261005_BUG-1741-p2-hmm-l2-rotation-historical-dates-missing-from-overview-and-ui.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l2_prediction.py",
@@ -153,14 +163,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
-    "fresh_process_evidence": ["python -c task-root PYTHONPATH imports backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction; module.__file__ containment assertions PASS; database_write=0 fit=0"],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "python -c task-root PYTHONPATH imports backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_risk.rotation_l2_prediction; module.__file__ containment assertions PASS; database_write=0 fit=0",
+      "PYTHONPATH=task-worktree python fresh-process imports backend.routers.hmm_risk backend.routers.health backend.services.hmm_risk.rotation_l2_prediction with source containment PASS"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
