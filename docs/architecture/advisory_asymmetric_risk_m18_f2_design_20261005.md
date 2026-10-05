@@ -1,6 +1,6 @@
 # Advisory 历史非对称风险条件买价 M18 F2详细设计
 
-2026-10-05；DESIGN_ONLY_RESEARCH_NOT_STARTED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_VALIDATED_PREPARED_RESEARCH_QE_WAIT / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -83,20 +83,28 @@ AsymmetricRiskPlanV1/schema economic_asymmetric_risk_v1/campaign advisory_asymme
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-990 | §1/4；economic_asymmetric_risk_v1.py | test: test_economic_asymmetric_risk_v1.py；artifact: 同终点/末14与旧M7几何但RMS不同 | DESIGN_REVIEW_PASS | none |
-| F-991 | §3/4；economic_asymmetric_risk_v1.py | test: test_economic_asymmetric_risk_v1.py；artifact: 0/quiet NaN/normal missing/future/empty | DESIGN_REVIEW_PASS | none |
-| F-992 | §3/6；economic_asymmetric_risk_pipeline_v1.py | test: test_economic_asymmetric_risk_pipeline_v1.py；artifact: 0SQL/hash/atomic/KEY | DESIGN_REVIEW_PASS | none |
-| F-993 | §5/7；economic_sector_price_value_v1.py | test: test_economic_sector_price_value_v1.py；artifact: 共同成熟/test毒化/原bundle | DESIGN_REVIEW_PASS | none |
-| F-994 | §6；economic_moneyflow_price_pipeline_v1.py | test: test_economic_moneyflow_price_pipeline_v1.py；artifact: 真实四heads/M17 stage/71/旧caps | DESIGN_REVIEW_PASS | none |
-| F-995 | §7/8；economic_sector_price_pipeline_v1.py | test: test_economic_sector_price_pipeline_v1.py；artifact: 四臂/控制分账/非激活 | DESIGN_REVIEW_PASS | none |
-| F-996 | §2/9；范围/交付 | test: test_economic_asymmetric_risk_pipeline_v1.py；artifact: scope/F2/L0/currentCI/自己cleanup | DESIGN_REVIEW_PASS | none |
+| F-990 | §1/4；economic_asymmetric_risk_v1.py | test: test_economic_asymmetric_risk_v1.py；artifact: 同终点/末14与旧M7几何但RMS不同 | PASS | none |
+| F-991 | §3/4；economic_asymmetric_risk_v1.py | test: test_economic_asymmetric_risk_v1.py；artifact: 0/quiet NaN/normal missing/future/empty | PASS | none |
+| F-992 | §3/6；economic_asymmetric_risk_pipeline_v1.py | test: test_economic_asymmetric_risk_pipeline_v1.py；artifact: 0SQL/hash/atomic/KEY | PASS | none |
+| F-993 | §5/7；economic_sector_price_value_v1.py | test: test_economic_sector_price_value_v1.py；artifact: 共同成熟/test毒化/原bundle | PASS | none |
+| F-994 | §6；economic_moneyflow_price_pipeline_v1.py | test: test_economic_moneyflow_price_pipeline_v1.py；artifact: 真实四heads/M17 stage/71/旧caps | PASS | none |
+| F-995 | §7/8；economic_sector_price_pipeline_v1.py | test: test_economic_sector_price_pipeline_v1.py；artifact: 四臂/控制分账/非激活 | PASS | none |
+| F-996 | §2/9；范围/交付 | test: test_economic_asymmetric_risk_pipeline_v1.py；artifact: scope/F2/L0/currentCI/自己cleanup | PASS | none |
 
 ## 12. Current state / review
 
-仅spike e2858862...核对原冻结footer380828/四列及合成数学，0真实数组/DB/fit；真实累计67研究fit+1旧index，M17已完整一次NOT_CONFIRMED，源码#5485 currentCI37283603330 SUCCESS后08:35:05UTC合入4708dd6a7并自己官方清理/正式F保留。M18尚无源码、登记/prepare/研究；设计PASS不冒充源码或模型有效，M1 UI/BUG1726公共smoke仍外部待交付。
+M18源码已在latestmain e4c9f7771独立12文件范围实现，clean producer397aaa83f624a2670cef2642adf89f1635d51a96；固定三量/共同13-16核/显式71及旧caps，正常UNKNOWN和原价值锚不改。三轮自审修复后56直接项/Ruff/F2/两L0及原M1 bundle只读兼容通过，尚非模型有效。一次新预登记run advasymrisk_d7d0e9676f7177bb1fbc2cc8/plan d7d0e9676f7177bb1fbc2cc8c0c52ac056c780c864060c23725a45b6f86d17f4/impl a5022095...，0SQL prepare8.594秒/7720原键/原380828价格源：7330AVAILABLE、380不足20session、10正常缺源UNKNOWN，无删填或重选股。08:49:56UTC公开QE三running0/1/0，MA-E42R qe_20261005_162928_e86b占用，未启动M18四fit或读取评估收益；全轮实际仍67fit+1旧index，source工程可先交付但冻结源码树保留至实际消费，约30min复查QE，fit不并行。M1六UI/BUG公共smoke仍外部等待，sealed/confirmation/activation/DB写/服务控制0，原18h/48h不重计。 设计#5486已合入e4c9f7771/自身官方清理；原spike仅metadata/合成，随后price数组只按登记用于prepare，收益评估仍未运行。
 
 第一轮核对M7/M8/M11/M12现有特征与原D信息：不是把ATR改窗口，合成同总回报/末14/单调几何对照识别平方幅度差异；原parent frozen metadata即可，不做新SQL/QE实验或收益预筛。
 
 第二轮逐项核对quiet正常缺值、全平坦/单侧合法0、19/18固定分母、log坐标避免价格乘积溢出、scaled平方/乘积、真正请求先投影和原D/T。不把一切价格缺失判停牌，也不丢原股/日期；不创造known_from/capture或升级原生身份。
 
 第三轮按F-990～996核对M17真实67/全部stage才显式71、旧政策/价值标签/支持不改、12文件边界、训练互斥/反复审核/源码及模型有效性分离。设计矩阵DESIGN_REVIEW_PASS仅此设计复审；所有研究必须后续一次预登记，禁止一批负模型就停止全任务或为时长复试旧模型。
+
+## 13. 三轮源码审核与实际准备
+
+第一轮核对F-990～992：同原20session/19-18分母、完整平坦/单侧0、quiet正常缺值、极大/极小价格两log坐标、先真实请求投影和原D/T/唯一KEY。数学对照及19个新叶项首轮18PASS，prepare收据误用旧flow_source_columns被测试发现，已改为本plan stock_source_columns；研究前字段引用和错误消息亦核对，不覆盖旧输入。
+
+第二轮核对F-993/994：真实M17全四stage/hash/ledger/四heads、typed model_copy/同source-policy-profile、累计67至71及旧caps；共同13/16训练、test毒化不改模型身份、原支持与给定买价公式保持，原实际M1 JSON权重只读加载/零fit兼容通过。
+
+第三轮F-990～996/所有权/交付审计：稳定56直接项、Ruff/F2七项七行零warning、feature L0零finding、standard L0三P2复杂度提示/无blocking；候选上界7720/来源500000、固定20点、KEY one-to-one merge无笛卡尔扩张，diff/scope通过。错误消息统一后仅两pipeline项复验/Ruff通过。干净producer397aaa83后一次预登记与0SQL prepare，实际7720原键全部保留；QE running1因此未拟合、未读取评估收益。矩阵PASS是研究工具源码验收，不宣称研究完成/经济有效；冻结实施闭包保留至一次正式研究，currentCI绿后SOURCE交付与研究另报，本次不接daily/运行配置或后端重启。
