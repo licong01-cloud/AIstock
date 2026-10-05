@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 import uuid
 
@@ -807,7 +808,10 @@ class MonthlyOperationStore:
             },
         }
         checkpoint["canonical_sha256"] = _digest(checkpoint)
-        _replace_json(root / "checkpoints" / f"{stage.lower()}.json", checkpoint)
+        with _exclusive_lock(root / ".operation.lock"):
+            if self.read_state(operation_id).get("cancel_requested") is True:
+                raise MonthlyReleaseCancelled("cancelled before checkpoint publication")
+            _replace_json(root / "checkpoints" / f"{stage.lower()}.json", checkpoint)
         return receipt_path
 
     def read_checkpoint(
@@ -1535,6 +1539,65 @@ class MonthlyReleaseService:
         finalized.update(proposed)
         return self.store.replace_plan(operation_id, finalized)
 
+    def _stage_control(
+        self, operation_id: str, *, attempt: int, stage: str,
+    ) -> tuple[Callable[[], None], Callable[[Mapping[str, Any]], None]]:
+        # Diagnostic state only. It cannot seal a checkpoint, authorize reuse,
+        # or participate in release identity. Never infer totals/ETA from I/O.
+        observation: dict[str, Any] = {
+            "phase": stage, "query_id": None, "partition_key": None,
+            "rows_validated": None, "rows_sealed": None, "partitions_sealed": None,
+        }
+        last_write: float | None = None
+
+        def require_current(state: Mapping[str, Any]) -> None:
+            if state.get("attempt") != attempt or state.get("current_stage") != stage:
+                raise MonthlyReleaseConflict("stage control identity changed")
+            if state.get("cancel_requested") is True:
+                raise MonthlyReleaseCancelled("monthly release cancellation requested")
+
+        def checkpoint() -> None:
+            nonlocal last_write
+            require_current(self.store.read_state(operation_id))
+            now = time.monotonic()
+            if last_write is not None and now - last_write < 15:
+                return
+            root = self.store.operation_root(operation_id)
+            with _exclusive_lock(root / ".operation.lock"):
+                state = self.store.read_state(operation_id)
+                require_current(state)
+                observed_at = datetime.now(UTC).isoformat()
+                state["stage_progress"] = {
+                    "schema_version": "aistock_monthly_stage_progress_v1",
+                    "operation_id": operation_id, "attempt": attempt, "stage": stage,
+                    "observed_at": observed_at, **observation,
+                    "total_rows": None, "total_partitions": None,
+                }
+                state["updated_at"] = observed_at
+                _replace_json(root / "state.json", state)
+            last_write = now
+
+        def progress(value: Mapping[str, Any]) -> None:
+            nonlocal last_write
+            if not isinstance(value, Mapping) or set(value) - observation.keys():
+                raise MonthlyReleaseError("stage progress fields differ")
+            for field, item in value.items():
+                if field in {"rows_validated", "rows_sealed", "partitions_sealed"}:
+                    if type(item) is not int or item < 0 or (
+                        observation[field] is not None and item < observation[field]
+                    ):
+                        raise MonthlyReleaseError("stage progress counts are invalid")
+                elif (item is None and field == "phase") or (
+                    item is not None and (not isinstance(item, str) or not item or len(item) > 512)
+                ):
+                    raise MonthlyReleaseError("stage progress label is invalid")
+            if value.get("phase", observation["phase"]) != observation["phase"]:
+                last_write = None  # Flush phase boundaries even for a short stage.
+            observation.update(value)
+            checkpoint()
+
+        return checkpoint, progress
+
     def run(self, operation_id: str) -> dict[str, Any]:
         root = self.store.operation_root(operation_id)
         with _exclusive_lock(root / ".writer.lock", blocking=False):
@@ -1556,7 +1619,7 @@ class MonthlyReleaseService:
             }:
                 return state
             attempt = int(state.get("attempt") or 0) + 1
-            self.store.update_state(operation_id, attempt=attempt, last_error=None)
+            self.store.update_state(operation_id, attempt=attempt, last_error=None, stage_progress=None)
             prior: dict[str, Mapping[str, Any]] = {}
             request_digest = str(request["semantic_digest"])
             for stage in STAGES:
@@ -1608,9 +1671,11 @@ class MonthlyReleaseService:
                     operation_id,
                     status=entered.value,
                     current_stage=stage,
+                    stage_progress=None,
                 )
                 try:
-                    receipt = self.pipeline.run_stage(
+                    checkpoint, progress = self._stage_control(operation_id, attempt=attempt, stage=stage)
+                    arguments = dict(
                         stage=stage,
                         operation_id=operation_id,
                         attempt=attempt,
@@ -1618,6 +1683,15 @@ class MonthlyReleaseService:
                         plan=plan,
                         prior_receipts=prior,
                     )
+                    controlled_runner = getattr(self.pipeline, "run_stage_with_control", None)
+                    # Legacy/non-registered pipelines keep their original call
+                    # signature; production's registered worker supports hooks.
+                    checkpoint()
+                    if callable(controlled_runner):
+                        receipt = controlled_runner(**arguments, checkpoint=checkpoint, progress=progress)
+                    else:
+                        receipt = self.pipeline.run_stage(**arguments)
+                    checkpoint()
                     if stage == "SOURCE":
                         plan = self._finalize_plan_from_source(
                             operation_id,
@@ -1640,6 +1714,11 @@ class MonthlyReleaseService:
                         self.store.update_state(operation_id, status=ReleaseState.SOURCE_READY.value)
                     elif stage == "BUILD":
                         self.store.update_state(operation_id, status=ReleaseState.DATA_SEALED.value)
+                except MonthlyReleaseCancelled:
+                    return self.store.update_state(
+                        operation_id, status=ReleaseState.CANCELLED.value,
+                        current_stage=None, last_error=None,
+                    )
                 except MonthlyReleaseSourceBlocked as exc:
                     return self.store.update_state(
                         operation_id,

@@ -407,6 +407,7 @@ def audit_frozen_source(
     snapshot_group_id: str,
     changes: Any,
     predecessor_cutoff: date,
+    checkpoint: Callable[[], None] = lambda: None,
 ) -> tuple[tuple[SourceGateEvidence, ...], tuple[SourceArtifact, ...]]:
     # The shared builders depend on the build bridge, which imports the SOURCE
     # bundle schema. Load them only after adapter module initialization.
@@ -426,8 +427,13 @@ def audit_frozen_source(
             bounds = _BOUNDS.search(str(descriptor["partition_key"]))
             if left is not None and bounds is not None and (_day(bounds[2]) < left or _day(bounds[1]) > right):
                 continue
+            checkpoint()
             with reader.iter_rows(dataset, str(descriptor["partition_key"])) as values:
-                yield from values
+                for index, value in enumerate(values, 1):
+                    yield value
+                    if index % 100_000 == 0:
+                        checkpoint()
+            checkpoint()
 
     calendar = tuple(_day(row["cal_date"]) for row in stream("trading_calendar"))
     validate_trading_calendar(sessions=calendar, cutoff=frozen.official_cutoff)
@@ -520,6 +526,7 @@ def audit_frozen_source(
             _write(causal_path, causal)
         months = sorted({day.strftime("%Y-%m") for day in sessions})
         for month in months:
+            checkpoint()
             dates = tuple(day for day in sessions if day.strftime("%Y-%m") == month)
             audited_months.append(month)
             pools = {
@@ -552,6 +559,7 @@ def audit_frozen_source(
                 aliases=aliases,
             )
             for day in dates:
+                checkpoint()
                 counters["calendar_lifecycle"].check(
                     ("stock_universe", day),
                     [{}] if pools["stock_universe"][day] else [],
