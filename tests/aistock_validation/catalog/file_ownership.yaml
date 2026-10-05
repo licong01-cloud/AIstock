@@ -2303,13 +2303,21 @@ rules:
     priority: 95
     include:
       - backend/tests/dr/**
-      - scripts/dr_snapshot_prod_db.py
-      - scripts/dr_cleanup_old_snapshots.py
     primary_module: validation.dr
     impact_modules: [platform.db, validation.runner]
     layer: backend_test
     risk_level: high
-    ownership_reason: Stage 7.4 DR validation + the snapshot/cleanup scripts they exercise; failures here surface backup-restoration risk before any production rollout.
+    ownership_reason: Stage 7.4 DR assertions and fixtures prove backup-restoration contracts.
+  - rule_id: validation_dr_operational_scripts
+    priority: 95
+    include:
+      - scripts/dr_snapshot_prod_db.py
+      - scripts/dr_cleanup_old_snapshots.py
+    primary_module: validation.dr
+    impact_modules: [platform.db, validation.runner]
+    layer: script
+    risk_level: high
+    ownership_reason: DR snapshot and cleanup are executable operational tooling, not assertion fixtures; ownership and production authorization remain unchanged.
   - rule_id: scripts_default
     priority: 10
     include:

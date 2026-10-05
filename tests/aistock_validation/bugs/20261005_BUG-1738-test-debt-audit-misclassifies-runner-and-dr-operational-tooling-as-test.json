@@ -1,0 +1,285 @@
+{
+  "actual": "Budget counts all ownership layers containing test as tests, so test_runner nox orchestration becomes 3974 test lines and DR operational scripts sharing backend_test are wrongly treated as assertion fixtures. Correct explicit runner role and separate exact DR ops role while retaining primary ownership, test directories/helpers, unknown-role conservatism and 30 percent limit. Statistical correction is not test deletion.",
+  "allowed_write_scope": [
+    "scripts/aistock_validation_budget.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/tests/scripts/test_aistock_validation_budget.py",
+    "tests/aistock_validation/bugs/20261005_BUG-1738-test-debt-audit-misclassifies-runner-and-dr-operational-tooling-as-test.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1738",
+  "closed_at": "2026-10-05T18:00:27Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-05T17:45:46.895904Z",
+  "description": "Budget counts all ownership layers containing test as tests, so test_runner nox orchestration becomes 3974 test lines and DR operational scripts sharing backend_test are wrongly treated as assertion fixtures. Correct explicit runner role and separate exact DR ops role while retaining primary ownership, test directories/helpers, unknown-role conservatism and 30 percent limit. Statistical correction is not test deletion.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261005-5195a28b62fc",
+      "timestamp": "2026-10-05T17:45:46.895904Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "scripts/aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1738-test-debt-audit-misclassifies-runner-and-dr-operational-tooling-as-test.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "scripts/aistock_validation_budget.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1738-test-debt-audit-misclassifies-runner-and-dr-operational-tooling-as-test.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/aistock_validation_budget.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_aistock_validation_budget.py"
+      ],
+      "impacted_modules": [
+        "validation.runner",
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.validation_history"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_validation_budget.py",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "validation_test_debt_audit"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_validation_budget.py",
+          "impact_modules": [
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "validation_test_debt_audit"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_validation_budget.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/tests/scripts/test_aistock_validation_budget.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/aistock_validation_budget.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/aistock_validation_budget.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_aistock_validation_budget.py"
+    ]
+  },
+  "first_seen_at": "2026-10-05T17:45:46.895904Z",
+  "fix_branch": null,
+  "fix_commit": "9dee5807eeedbed574dff35ddfcae5e0e5b776ef",
+  "fixed_at": "2026-10-05T18:00:27Z",
+  "github_issue_number": 5517,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5517",
+  "last_seen_at": "2026-10-05T17:45:46.895904Z",
+  "module": "validation.runner",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5523",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1738",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fd7e1182cef90917",
+    "recorded_at": "2026-10-05T18:01:12.089154Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f5155e9d4128918d2a8292956ba06679df4e98f1",
+    "source_merge_commit": "9dee5807eeedbed574dff35ddfcae5e0e5b776ef",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5523",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed; 8 and 22 tests passed, findings=0"
+    ],
+    "validation_evidence_digest": "2c5824778d9cea9a04680b81a65daeb1fd5ae00a1a57c2b0375f8485ae18e3b6"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation.runner"
+  ],
+  "title": "Test debt audit misclassifies runner and DR operational tooling as test code",
+  "trigger_condition": {
+    "fingerprint": "5195a28b62fc48df0dff605e",
+    "source_event_id": "FE-20261005-5195a28b62fc"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed; 8 and 22 tests passed, findings=0"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
