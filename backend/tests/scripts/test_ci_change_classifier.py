@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import ci_change_classifier as classifier
 
 
@@ -36,6 +38,30 @@ def _write_test_file(root: Path, relative_path: str) -> None:
 
 def _write_noxfile(root: Path, body: str) -> None:
     (root / "noxfile.py").write_text(body, encoding="utf-8")
+
+
+def test_catalog_selection_reads_each_yaml_once_and_reloads_next_call(monkeypatch) -> None:
+    flow = classifier.flow
+    original = flow._load_yaml
+    reads = []
+
+    def counted(path):
+        reads.append(path.name)
+        return original(path)
+
+    monkeypatch.setattr(flow, "_load_yaml", counted)
+    paths = ["backend/services/factor_research/comparison.py", "backend/services/factor_research/repository.py"]
+    first = classifier._catalog_backend_selection(paths)
+    assert sorted(reads) == ["file_ownership.yaml", "module_registry.yaml", "test_plans.yaml"]
+    reads.clear()
+    assert classifier._catalog_backend_selection(paths) == first
+    assert sorted(reads) == ["file_ownership.yaml", "module_registry.yaml", "test_plans.yaml"]
+    def invalid(path):
+        raise flow.IssueFlowError("invalid catalog")
+
+    monkeypatch.setattr(flow, "_load_yaml", invalid)
+    with pytest.raises(flow.IssueFlowError, match="invalid catalog"):
+        classifier._catalog_backend_selection(paths)
 
 
 def test_close_sync_bug_json_skips_backend_matrix(tmp_path: Path) -> None:
