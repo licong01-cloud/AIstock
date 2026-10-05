@@ -1,10 +1,10 @@
 # Advisory 历史涨跌停状态条件买入价格 M15 F2详细设计
 
-2026-10-05；DESIGN_VERIFIED_IMPLEMENTATION_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
-M14估值研究仅输入已prepare，新plan46e89f53.../producer c58f4e6a、2952AVAILABLE/4768局部UNKNOWN，原7720候选保留；实际累计51fit+1index、M14研究fit0。源码Draft #5478 HEAD d4c2f0be4/CI37256246038 SUCCESS（02:47:23UTC），仍Draft等待真实研究，QE MA-E42 qe_20261005_102547_925d运行，M14暂不拟合。不预先假设M14正负；本设计只利用互斥等候推进一个独立下一信息假设，M15实际登记/训练必须在M14完成4fit/完整四臂及源码合入后串行，不和它或QE训练并行，不挽救旧负候选。
+M14估值研究仅输入已prepare，新plan46e89f53.../producer c58f4e6a、2952AVAILABLE/4768局部UNKNOWN，原7720候选保留；实际累计51fit+1index、M14研究fit0。源码#5478最终HEAD34981e815/CI37258371053 SUCCESS（03:18:58UTC）后已合入0146ff7aac，原206c7480...冻结工作树保留供QE空闲拟合，QE MA-E42 qe_20261005_102547_925d运行，M14暂不拟合。不预先假设M14正负；本设计只利用互斥等候推进一个独立下一信息假设，M15实际登记/训练必须在M14完成4fit/完整四臂及源码合入后串行，不和它或QE训练并行，不挽救旧负候选。
 
 H-PRIOR-LIMIT-STATE-1：同一短期OHLC动量可以对应不同的法定涨跌停幅度与过去封板/触板经历。D已知的价格限制接触状态，是否改善给定可见价格下的条件净进入价值及下行风险？三量为过去20session上/下限触及比例、D收盘在当日合法上下界内的位置。它们不是旧M7价格路径长度调参、M12隔夜/日内波动变化、QE alpha因子入库、下一日涨跌停预测或分钟成交策略；不要求必然连板或反转。
 
@@ -44,7 +44,7 @@ tick_cny=.01，比较容差固定半tick=.005仅用于浮点/原厘到分边界�
 |---|---|---|
 | prior_limit_up_touch_share20 | 原20session mean(raw_high_cny>=up_limit-.005)，每点只需high及up | 历史不足20/任一点high或up缺失 |
 | prior_limit_down_touch_share20 | 原20session mean(raw_low_cny<=down_limit+.005)，每点只需low及down | 历史不足20/任一点low或down缺失 |
-| D_limit_close_position | (raw_close_cny-down_limit)/(up_limit-down_limit)，D三字段；半tick边界归为0/1，不以极小实质越界做无条件clip | D三值缺失或known equal corridor |
+| D_limit_close_position | (raw_close_cny-down_limit)/(up_limit-down_limit)，D三字段；仅close在界外且偏离不超过半tick时归0/1，界内公式保持原值，不泛化clip | D三值缺失或known equal corridor |
 
 已知全未触板比例为0，已知全部触板为1，合法而非UNKNOWN。上/下侧历史缺值仅影响对应量；D位置单独可用，first19 history UNKNOWN不删除原股。known high/low不在所知合法界内时报错，不把“触及”当“超限允许”；字段无关的未知不抹掉已知量。正常停牌bar/limit缺失保留该字段UNKNOWN，不前填价格/limit或删日期；不从suspended/tradability_unknown未来policy合成假bar。derive数值溢出报真实数学问题，equal corridor按显式UNKNOWN处理不混作0/正常宽度，边界容差按表中声明执行；不做泛化clip/除0造值。只能用固定已知D信息，NULL状态不与label成熟度混为一谈。
 
@@ -86,20 +86,26 @@ typed plan dump-revalidate、干净producer/实施闭包/原参数profile先登�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-960 | §1/3/4；economic_limit_state_v1.py | test: backend/tests/advisory_model_first/test_economic_limit_state_v1.py；artifact: 同OHLC/不同limit与固定三量手算 | DESIGN_VERIFIED | none |
-| F-961 | §3/4；economic_limit_state_v1.py | test: backend/tests/advisory_model_first/test_economic_limit_state_v1.py；artifact: partial UNKNOWN/0与1/未来/错价/空名单 | DESIGN_VERIFIED | none |
-| F-962 | §3/6；economic_limit_state_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_limit_state_pipeline_v1.py；artifact: 0SQL/原KEY/原冻结SHA/atomic | DESIGN_VERIFIED | none |
-| F-963 | §5/7；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；artifact: 同成熟13/16与test未fit | DESIGN_VERIFIED | none |
-| F-964 | §6；economic_moneyflow_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 真实M14完整stage/55→59/旧cap | DESIGN_VERIFIED | none |
-| F-965 | §7/8/9；economic_sector_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: TAKE/UNKNOWN/完整四臂/旧bundle | DESIGN_VERIFIED | none |
-| F-966 | §2/6/9/10范围与交付 | test: backend/tests/advisory_model_first/test_economic_limit_state_pipeline_v1.py；artifact: scope/F2/L0/QE空闲/无公共改动 | DESIGN_VERIFIED | none |
+| F-960 | §1/3/4；economic_limit_state_v1.py | test: backend/tests/advisory_model_first/test_economic_limit_state_v1.py；artifact: 同OHLC/不同limit与固定三量手算 | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-961 | §3/4；economic_limit_state_v1.py | test: backend/tests/advisory_model_first/test_economic_limit_state_v1.py；artifact: partial UNKNOWN/0与1/未来/错价/空名单 | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-962 | §3/6；economic_limit_state_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_limit_state_pipeline_v1.py；artifact: 0SQL/原KEY/原冻结SHA/atomic | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-963 | §5/7；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；artifact: 同成熟13/16与test未fit | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-964 | §6；economic_moneyflow_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 真实M14完整stage/55→59/旧cap | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-965 | §7/8/9；economic_sector_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: TAKE/UNKNOWN/完整四臂/旧bundle | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-966 | §2/6/9/10范围与交付 | test: backend/tests/advisory_model_first/test_economic_limit_state_pipeline_v1.py；artifact: scope/F2/L0/QE空闲/无公共改动 | IMPLEMENTED_LOCAL_VERIFIED | none |
 
 ## 12. Current state
 
-当前仅M15设计与元数据工程spike，实际值/prepare/正式预登记/fit/收益0。实际仍51fit+1index，M14prepared后等待QE，#5478 draft；本设计不伪造M14完成、原native receipt或新研究结果。0公共模块写/DB/服务控制/部署；M1UI/BUG公共smoke独立保留。
+设计#5479已合入/自身清理，M14源码#5478已合入0146ff7aac；M15源树来自该latestmain且事前登记12文件，纯三量、0SQL冻结输入阶段、显式59与三路由均已实现。实际source价格值/prepare/正式预登记/研究fit/收益0；单元测试只合成fixture，不计研究trial。稳定57直接项/Ruff通过、feature L0零项与standard L0三P2/零阻断、真实旧M1 bundle metadata/hash兼容（0fit/市场或label数组/DB）通过。实际仍51fit+1index，M14prepared后等待QE，03:34:33UTC三running0/1/0；不得把源码局部验证、设计CI或模型束兼容称研究/业务收益确认。M14冻结闭包树保留，不被M15预算/路由漂移；M1UI/BUG公共smoke独立保留。0公共模块写/DB/服务控制/部署。
 
 ## 13. 三轮设计审核与修订
 
-第一轮已按既存冻结source七字段及纯D过去20session依赖核对“日频触板状态≠分钟成交策略”及“已有D终值/买价转换≠新模型”，不把旧窗口调参当新信息。第二轮修订区分0/1/quiet NaN、已知相等界/缺limit、越界浮点容差与实质冲突。第三轮预算/业务核对M14未fit、pending55→59真实stage要求、SOURCE/经济/runtime分层和所有旧cap；不预判M14结果，explicit先真实55再59、所有旧预算保持，单候选负向不停止整体。修订后F2七项/currentHEAD CI通过方交付本设计；本窗口分视角自审而非独立外审。
+第一轮已按既存冻结source七字段及纯D过去20session依赖核对“日频触板状态≠分钟成交策略”及“已有D终值/买价转换≠新模型”，不把旧窗口调参当新信息。第二轮修订区分0/1/quiet NaN、已知相等界/缺limit、越界浮点容差与实质冲突。第三轮预算/业务核对M14未fit、pending55→59真实stage要求、SOURCE/经济/runtime分层和所有旧cap；不预判M14结果，explicit先真实55再59、所有旧预算保持，单候选负向不停止整体。设计#5479 HEAD41e383765/currentCI37256895974 SUCCESS后已合入eba96ae43并自己清理；本窗口分视角自审而非独立外审。
 
 补充修订：初稿的“六字段（实际七）”已消除，明确上/下触板各自局部依赖、历史close无用途不消费、first19不因其它历史坏值阻断D位置。相等合法界只D位置UNKNOWN而不除0；半tick边界的0/1映射为已声明数值语义，不泛化clip。exact retry是hash身份复核而非承诺完全不读任何文件字节，未额外建cache/平台。0trial schema spike不证明全量值PASS、原生身份或经济可学；仍保持单次fit/确认/激活分层。
+
+## 14. 源码三轮审核与修复
+
+第一轮按§3～5逐项核对原KEY/D-T、七源字段及依赖，实际实现先原D请求投影，20点历史只消费H/L及limit、不消费历史close；first19保留D位置。第二轮复核quiet NaN、真实坏数/越界、已知0/1、相等界和局部缺值，并明确半tick只作界外舍入、界内不clip；首轮新增budget测试多余字符导致收集失败已修复，之后27定向项通过。第三轮复核model_copy重验证、原source/profile/政策、M14四heads与完整阶段才能55→59、新事件无显式扩展拒绝、旧identity/预算/权重保持，稳定五文件57项全部通过。未重复旧真实fit、读取sealed或以测试合成M14结果启动研究。
+
+DESIGN-COMPLIANCE-001七项分别对应F-960～966：真实三量计算、缺值/时钟、冻结0SQL/atomic、共同监督/支持、原累计预算、推理/四臂同核、范围/证据层边界均有直接源码及定向证据；IMPLEMENTED_LOCAL_VERIFIED只表示工程合同比对通过，研究依然PENDING。扫描三P2为新prepare one_to_one KEY join及两旧join；source≤500000、请求≤154400、candidate≤7720/固定20点循环和严格unique/one_to_one保序限制，无宽笛卡尔或新DB循环，不增加缓存/平台来消除告警。currentHEAD必需CI绿才能源码合入；若经济研究仍待QE，保留本冻结source树及正式F产物，后续同闭包一次研究。
