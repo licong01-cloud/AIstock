@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     ".github/workflows/test.yml",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20261005_BUG-1737-cancelled-pr-ci-continues-heavy-steps-until-five-minute-forced-cancellat.json"
   ],
   "assigned_agent": null,
