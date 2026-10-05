@@ -133,6 +133,47 @@ def test_publish_consumer_layout_creates_shared_hardlink_release(tmp_path: Path)
     assert all(path.is_file() and not path.is_symlink() for path in result.required_files)
 
 
+def test_consumer_layout_reuses_actual_writer_hashes(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_consumer_layout as module
+    root, profile, st_pit, validation = _fixture(tmp_path)
+    source = root / "factor_bundle/sector_data.h5"
+    state = source.stat()
+    pin = {"sha256": _sha(source), "size": state.st_size,
+           "signature": [state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns]}
+    original = module._sha256
+
+    def no_second_read(path):
+        if os.path.samefile(path, source):
+            pytest.fail("verified writer output must not be read again for a hardlink digest")
+        return original(path)
+
+    monkeypatch.setattr(module, "_sha256", no_second_read)
+    result = publish_consumer_layout(
+        root=root, profile=profile, cutoff=date(2024, 7, 5), release_id="qe_hmm_full_v2_20240705",
+        st_pit_manifest=st_pit, validation_authority=validation,
+        verified_output_files={"factor_bundle/sector_data.h5": pin},
+    )
+    assert result.verified_output_files["components/factor_h5_static_candidate_v2/sector_data.h5"] == pin
+    receipt = json.loads(result.receipt_path.read_bytes())
+    assert receipt["components"]["factor"]["file_count"] == len(FACTOR_H5_DATASETS) + 4
+    assert len(receipt["components"]["factor"]["content_digest"]) == 64
+
+
+def test_consumer_layout_rejects_stale_writer_hash(tmp_path):
+    root, profile, st_pit, validation = _fixture(tmp_path)
+    source = root / "factor_bundle/sector_data.h5"
+    state = source.stat()
+    pin = {"sha256": _sha(source), "size": state.st_size,
+           "signature": [state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns]}
+    source.write_bytes(b"changed")
+    with pytest.raises(MonthlyConsumerLayoutError, match="writer output changed"):
+        publish_consumer_layout(
+            root=root, profile=profile, cutoff=date(2024, 7, 5), release_id="qe_hmm_full_v2_20240705",
+            st_pit_manifest=st_pit, validation_authority=validation,
+            verified_output_files={"factor_bundle/sector_data.h5": pin},
+        )
+
+
 def test_publish_consumer_layout_is_create_exclusive(tmp_path: Path) -> None:
     root, profile, st_pit, validation = _fixture(tmp_path)
     arguments = {

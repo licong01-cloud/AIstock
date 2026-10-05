@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 import hashlib
 import os
 from pathlib import Path
 import stat
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .canonical import canonical_json_bytes, digest_named_fields
 from .factor_materializer import FACTOR_H5_DATASETS
@@ -41,6 +41,7 @@ class ConsumerReleaseLayout:
     day_instruments_path: Path
     coverage_receipt_path: Path
     receipt_path: Path
+    verified_output_files: Mapping[str, Any] = field(default_factory=dict)
 
 
 def _is_link(path: Path) -> bool:
@@ -184,9 +185,11 @@ def _benchmark_payload(index_path: Path, *, cutoff: date) -> bytes:
     return ("\t".join(matches[0]) + "\n").encode("utf-8")
 
 
-def _component_summary(root: Path, files: Sequence[Path]) -> dict[str, Any]:
+def _component_summary(
+    root: Path, files: Sequence[Path], *, pin_reader: Callable[[Path], Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     rows = {
-        path.relative_to(root).as_posix(): {
+        path.relative_to(root).as_posix(): dict(pin_reader(path)) if pin_reader else {
             "sha256": _sha256(path),
             "size": path.stat().st_size,
         }
@@ -195,10 +198,53 @@ def _component_summary(root: Path, files: Sequence[Path]) -> dict[str, Any]:
     return {
         "file_count": len(rows),
         "logical_bytes": sum(int(item["size"]) for item in rows.values()),
-        "content_digest": digest_named_fields(
-            "aistock_monthly_consumer_component_v1", rows
-        ),
+        "content_digest": digest_named_fields("aistock_monthly_consumer_component_v1", rows),
     }
+
+
+def _layout_pin_reader(root: Path, verified: Mapping[str, Any]):
+    """Reuse actual writer digests for unchanged hardlinks, hash others once."""
+    cached = {}
+    known_inodes = {}
+    outputs = {}
+
+    def signature(path):
+        state = path.stat()
+        return state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns
+
+    def key(path, state):
+        return state if state[1] else (str(path), *state)
+
+    for relative, pin in verified.items():
+        path = _plain_file(root, relative, label="verified writer output")
+        current = signature(path)
+        digest = pin.get("sha256") if isinstance(pin, Mapping) else None
+        if (not isinstance(pin, Mapping) or list(current) != pin.get("signature") or current[2] != pin.get("size")
+            or not isinstance(digest, str) or len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest)):
+            raise MonthlyConsumerLayoutError("verified writer output changed before layout publication")
+        cache_key = key(path, current)
+        if cache_key in cached and cached[cache_key] != digest:
+            raise MonthlyConsumerLayoutError("verified writer hardlink hashes disagree")
+        cached[cache_key] = digest
+        if current[1]:
+            known_inodes[current[:2]] = current
+
+    def read(path):
+        path = _plain_file(root, path.relative_to(root).as_posix(), label="consumer layout output")
+        before = signature(path)
+        if before[:2] in known_inodes and before != known_inodes[before[:2]]:
+            raise MonthlyConsumerLayoutError("verified writer output changed during layout publication")
+        cache_key = key(path, before)
+        if cache_key not in cached:
+            cached[cache_key] = _sha256(path)
+        if signature(path) != before:
+            raise MonthlyConsumerLayoutError("consumer output changed during hash readback")
+        outputs[path.relative_to(root).as_posix()] = {
+            "sha256": cached[cache_key], "size": before[2], "signature": list(before),
+        }
+        return {"sha256": cached[cache_key], "size": before[2]}
+
+    return read, outputs
 
 
 def publish_consumer_layout(
@@ -209,6 +255,7 @@ def publish_consumer_layout(
     release_id: str,
     st_pit_manifest: Mapping[str, Any],
     validation_authority: Mapping[str, Any],
+    verified_output_files: Mapping[str, Any] | None = None,
 ) -> ConsumerReleaseLayout:
     """Create the consumer tree as hardlinks to one validated internal build."""
 
@@ -218,6 +265,7 @@ def publish_consumer_layout(
         raise MonthlyConsumerLayoutError("candidate root is unavailable") from exc
     if _is_link(root) or not resolved.is_dir() or not release_id.strip():
         raise MonthlyConsumerLayoutError("candidate or release identity is invalid")
+    pin_reader, output_pins = _layout_pin_reader(resolved, verified_output_files or {})
     components_root = resolved / "components"
     if components_root.exists():
         if _is_link(components_root) or not components_root.is_dir():
@@ -377,10 +425,10 @@ def publish_consumer_layout(
         },
     )
     summaries = {
-        "day": _component_summary(resolved, day_files),
-        "minute": _component_summary(resolved, minute_files),
-        "factor": _component_summary(resolved, factor_files),
-        "index": _component_summary(resolved, index_files),
+        "day": _component_summary(resolved, day_files, pin_reader=pin_reader),
+        "minute": _component_summary(resolved, minute_files, pin_reader=pin_reader),
+        "factor": _component_summary(resolved, factor_files, pin_reader=pin_reader),
+        "index": _component_summary(resolved, index_files, pin_reader=pin_reader),
     }
     receipt_body = {
         "schema_version": CONSUMER_LAYOUT_RECEIPT_SCHEMA,
@@ -422,6 +470,7 @@ def publish_consumer_layout(
         day_instruments_path=day_root / "instruments" / "all.txt",
         coverage_receipt_path=coverage,
         receipt_path=receipt,
+        verified_output_files=output_pins,
     )
 
 

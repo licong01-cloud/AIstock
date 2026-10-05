@@ -106,7 +106,7 @@ class MonthlyPrivatePreparationExecutor:
                          if domains[name]["status"] == "ELIGIBLE")
         if selected:
             bundle = normalize_preparation_artifacts(
-                ArtifactReadySourceBuilder(self.profile, self.cas), snapshot=snapshot,
+                ArtifactReadySourceBuilder(self.profile, self.cas, month_start=snapshot.official_cutoff.replace(day=1)), snapshot=snapshot,
                 audit=audit, components=selected, checkpoint=checkpoint,
             )
             source = ArtifactReadyPreparationBuildSource(

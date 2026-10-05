@@ -45,6 +45,27 @@ class _Reader:
         )
 
 
+def test_factor_month_plan_needs_only_month_backings_not_historical_partitions():
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source.profile = SimpleNamespace(start_date=date(2018, 8, 1))
+    source.cutoff = date(2026, 9, 30)
+    datasets = ("kline_daily_raw", "adj_factor", "daily_basic", "moneyflow_ts",
+                "bak_basic", "cyq_perf", "sector_data", "margin_detail")
+    source.component_manifests = {Component.FACTOR_H5_STATIC: {"partitions": [
+        {"dataset": name, "role": "sealed_database_source", "partition_key": "2026-09-01_2026-09-30"}
+        for name in datasets
+    ]}}
+    assert source.factor_partition_plan(start=date(2026, 9, 1)) == ({
+        "partition_key": "2026-09", "start": date(2026, 9, 1), "end": source.cutoff,
+        "source_partition_key": "2026-09-01_2026-09-30",
+    },)
+    assert source.profile.start_date == date(2018, 8, 1)
+    with pytest.raises(ArtifactReadyBuildSourceError, match="backing"):
+        source.factor_partition_plan()
+    with pytest.raises(ArtifactReadyBuildSourceError, match="start"):
+        source.factor_partition_plan(start=date(2026, 10, 1))
+
+
 def test_single_code_minute_selection_opens_only_its_stable_hash_bucket() -> None:
     code = "000001.SZ"
     bucket_count = 1024

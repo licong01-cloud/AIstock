@@ -34,12 +34,7 @@ from .monthly_incremental_baseline import (
     load_monthly_incremental_baseline,
 )
 from .monthly_unified import COMPONENTS, ComponentAction as MonthlyAction
-from .mixed_planner import (
-    MixedPlannerContext,
-    build_mixed_action_plan,
-    load_artifact_ready_planning_authority,
-    pit_span_digest_by_code,
-)
+from .monthly_legacy_prefix import LegacyMonthlyPrefix, LegacyMonthlyPrefixError, load_legacy_prefix
 from .profile import DatasetProfile
 from .resolution import BUILD_INPUTS_SCHEMA_VERSION
 from .resolution_processor import (
@@ -199,6 +194,45 @@ def _manifest_identity(value: Mapping[str, Any]) -> str:
     unsigned = dict(value)
     unsigned.pop("dataset_manifest_sha256", None)
     return hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+
+
+def load_monthly_predecessor_prefix(
+    *, context_plan: Mapping[str, Any], profile: DatasetProfile,
+) -> LegacyMonthlyPrefix:
+    """Open the controller-bound file prefix, without a CAS/Merkle gate."""
+    predecessor = context_plan.get("predecessor")
+    reference = context_plan.get("predecessor_manifest_ref")
+    if not isinstance(predecessor, Mapping) or not isinstance(reference, Mapping):
+        raise MonthlyBuildBridgeError("monthly predecessor authority is incomplete")
+    raw = predecessor.get("candidate_root")
+    if not isinstance(raw, str) or not Path(raw).is_absolute():
+        raise MonthlyBuildBridgeError("monthly predecessor candidate root is invalid")
+    catalog = Path(profile.candidate_root).absolute()
+    candidate = Path(raw).absolute()
+    try:
+        relative = candidate.relative_to(catalog)
+    except ValueError as exc:
+        raise MonthlyBuildBridgeError("monthly predecessor escaped the candidate catalog") from exc
+    if len(relative.parts) != 1 or _contains_link(catalog, relative):
+        raise MonthlyBuildBridgeError("monthly predecessor must be one plain catalog child")
+    try:
+        prefix = load_legacy_prefix(
+            candidate,
+            expected_manifest_sha256=predecessor["dataset_manifest_sha256"],
+            expected_file_sha256=reference["sha256"],
+            expected_cutoff=date.fromisoformat(predecessor["cutoff"]),
+            expected_release_id=predecessor["release_id"],
+        )
+    except (LegacyMonthlyPrefixError, KeyError, ValueError, TypeError) as exc:
+        raise MonthlyBuildBridgeError("monthly predecessor prefix binding differs") from exc
+    if (
+        reference.get("id") != "qe_dataset_manifest.json"
+        or type(reference.get("size")) is not int
+        or reference["size"] != (prefix.root / "qe_dataset_manifest.json").stat().st_size
+        or reference.get("dataset_manifest_sha256") != prefix.manifest_sha256
+    ):
+        raise MonthlyBuildBridgeError("monthly predecessor manifest reference differs")
+    return prefix
 
 
 def _predecessor_baseline(
@@ -439,11 +473,10 @@ def compile_initial_monthly_build(
 ) -> CompiledMonthlyBuild:
     """Compile a unified-v2 physical build from sealed SOURCE evidence.
 
-    A pre-v2 predecessor without the candidate-local monthly baseline envelope
-    remains an explicit initial migration and rebuilds physical components.  A
-    successor produced by this workflow may use the exact mixed-component
-    planner after its active-profile, consumer-manifest, CAS and Merkle
-    identities close.
+    Inherit the controller-bound physical prefix and append the latest natural
+    month. Absence of an old CAS baseline is not a reason to export history.
+    Historical source corrections must be supplied as approved repair inputs;
+    this compiler never silently converts them into an all-history rebuild.
     """
 
     try:
@@ -476,6 +509,8 @@ def compile_initial_monthly_build(
     )
     if bundle.get("cutoff") != target_cutoff.isoformat():
         raise MonthlyBuildBridgeError("frozen source bundle cutoff differs")
+    if bundle.get("monthly_repair_inputs") != context_plan.get("monthly_repair_inputs"):
+        raise MonthlyBuildBridgeError("monthly repair inputs differ from the sealed SOURCE bundle")
     try:
         source_stage_ref = cas.verify(CASRef.from_value(bundle["source_stage_receipt_ref"]))
     except (KeyError, TypeError, ValueError) as exc:
@@ -504,50 +539,18 @@ def compile_initial_monthly_build(
         expected_source_content_root=frozen.source_content_root,
         expected_pit_snapshot_digest=frozen.pit_snapshot_digest,
     )
-    baseline = _predecessor_baseline(
-        context_plan=context_plan,
-        profile=profile,
-        cas=cas,
-    )
-    if baseline is None:
-        action_plan = _physical_action_plan(
-            monthly_actions, force_full_rebuild=True
-        )
-    else:
-        planning = load_artifact_ready_planning_authority(cas, profile, frozen)
-        fingerprints = monthly_build_fingerprints(profile)
-        compatible = (
-            baseline.manifest.semantic_profile_digest
-            == profile.semantic_profile_digest
-            and baseline.manifest.producer_fingerprint
-            == fingerprints["producer_fingerprint"]
-            and baseline.manifest.artifact_fingerprint
-            == fingerprints["artifact_fingerprint"]
-            and baseline.manifest.validation_fingerprint
-            == fingerprints["validation_fingerprint"]
-        )
-        exact = build_mixed_action_plan(
-            baseline=baseline.manifest,
-            current=planning.components,
-            context=MixedPlannerContext(
-                source_release_id=str(baseline.authority["release_id"]),
-                source_release_digest=str(baseline.authority["release_digest"]),
-                source_attestation_key=str(
-                    baseline.authority["baseline_authority_sha256"]
-                ),
-                dataset_start=profile.start_date,
-                cutoff=target_cutoff,
-                current_pit_snapshot_digest=frozen.pit_snapshot_digest,
-                current_pit_instruments=tuple(
-                    sorted({span.ts_code for span in frozen.pit_snapshot.spans})
-                ),
-                current_pit_span_digest_by_code=pit_span_digest_by_code(
-                    frozen.pit_snapshot
-                ),
-            ),
-            compatible=compatible,
-        )
-        action_plan = _reconcile_action_plan(monthly_actions, exact)
+    prefix = load_monthly_predecessor_prefix(context_plan=context_plan, profile=profile)
+    month_start = target_cutoff.replace(day=1)
+    if prefix.cutoff != month_start - date.resolution:
+        raise MonthlyBuildBridgeError("monthly predecessor must end immediately before the target month")
+    action_plan = _physical_action_plan(monthly_actions)
+    if any(item.action not in {PhysicalAction.REUSE, PhysicalAction.INCREMENTAL} for item in action_plan.actions):
+        raise MonthlyBuildBridgeError("historical source correction requires an approved repair input, not a full export")
+    # A new calendar month always needs a physical tail, even when SOURCE
+    # cannot compare an old source receipt and therefore labels it REUSE.
+    action_plan = _physical_action_plan({**monthly_actions, **{
+        name: MonthlyAction.INCREMENTAL.value for name in _PHYSICAL_COMPONENTS
+    }})
     effective_partitions: dict[str, list[dict[str, Any]]] = {}
     for component in Component:
         manifest = cas.get_json_bounded(
@@ -571,6 +574,16 @@ def compile_initial_monthly_build(
         "profile": profile.profile,
         "scope": "full",
         "cutoff": target_cutoff.isoformat(),
+        "monthly_legacy_predecessor": {
+            "predecessor": dict(predecessor),
+            "predecessor_manifest_ref": dict(context_plan["predecessor_manifest_ref"]),
+        },
+        "source_bundle_sha256": bundle_sha,
+        "monthly_repair_inputs": context_plan.get("monthly_repair_inputs"),
+        "business_validation_scope": {
+            "start": month_start.isoformat(), "end": target_cutoff.isoformat(),
+            "mode": "month_delta",
+        },
         "logical_request_key": digest_named_fields(
             "aistock_monthly_build_logical_request_v1",
             {
@@ -616,15 +629,7 @@ def compile_initial_monthly_build(
             for item in sorted(frozen.partitions, key=lambda value: value.spec.identity)
         ],
         "artifact_ready_effective_partitions": effective_partitions,
-        "baseline": (
-            _monthly_baseline_build_inputs(
-                baseline,
-                action_plan=action_plan,
-                profile=profile,
-            )
-            if baseline is not None
-            else None
-        ),
+        "baseline": None,
         "fingerprints": {
             **fingerprints,
             "sample_policy": SAMPLE_POLICY,
@@ -662,11 +667,7 @@ def compile_initial_monthly_build(
         },
         "source_bundle_sha256": bundle_sha,
         "source_stage_receipt_ref": source_stage_ref.as_dict(),
-        "predecessor_baseline_authority_sha256": (
-            baseline.authority["baseline_authority_sha256"]
-            if baseline is not None
-            else None
-        ),
+        "predecessor_baseline_authority_sha256": None,
         "database_read_performed": False,
         "database_write_performed": False,
     }

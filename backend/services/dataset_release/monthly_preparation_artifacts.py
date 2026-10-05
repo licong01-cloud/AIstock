@@ -56,7 +56,9 @@ def require_preparation_domain_audit(
         or audit.get("schema_version") != "aistock_monthly_preparation_source_audit_v1"
         or audit.get("operation_id") != snapshot.operation_id
         or audit.get("cutoff") != snapshot.official_cutoff.isoformat()
-        or audit.get("audit_start") != profile.start_date.isoformat()
+        or audit.get("audit_start") not in {
+            profile.start_date.isoformat(), snapshot.official_cutoff.replace(day=1).isoformat(),
+        }
         or audit.get("source_manifest_ref") != snapshot.source_manifest_ref.as_dict()
         or snapshot.official_cutoff != snapshot.pit_snapshot.cutoff
         or not required_gates
@@ -112,7 +114,9 @@ def normalize_preparation_artifacts(
         or not set(components) <= _SUPPORTED
         or audit.get("operation_id") != snapshot.operation_id
         or audit.get("cutoff") != snapshot.official_cutoff.isoformat()
-        or audit.get("audit_start") != builder.profile.start_date.isoformat()
+        or audit.get("audit_start") not in {
+            builder.profile.start_date.isoformat(), snapshot.official_cutoff.replace(day=1).isoformat(),
+        }
         or audit.get("schema_version") != "aistock_monthly_preparation_source_audit_v1"
         or audit.get("source_manifest_ref") != snapshot.source_manifest_ref.as_dict()
         or snapshot.official_cutoff != snapshot.pit_snapshot.cutoff

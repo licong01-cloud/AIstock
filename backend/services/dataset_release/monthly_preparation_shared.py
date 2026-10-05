@@ -325,15 +325,32 @@ def recover_prepared_shared_components(
     return result
 
 
-def _sector_rows(path: Path, *, start: date, end: date, bound: int):
+def _sector_rows(
+    path: Path, *, start: date, end: date, bound: int,
+    source_start_row: int | None = None, source_month_rows: int | None = None,
+):
     """Read only narrow rows in the policy window, never a whole-history DF."""
     with pd.HDFStore(path, "r") as store:
         if not store.get_storer("data").is_table:
             raise ComponentPreparationError("private sector H5 must support bounded reads")
+        positional = {}
+        if source_start_row is not None:
+            if (type(source_start_row) is not int or source_start_row < 0
+                or type(source_month_rows) is not int or source_month_rows <= 0
+                or source_start_row + source_month_rows != int(store.get_storer("data").nrows)):
+                raise ComponentPreparationError("sector month physical row boundary differs")
+            positional = {"start": source_start_row, "stop": source_start_row + source_month_rows}
+        elif source_month_rows is not None:
+            raise ComponentPreparationError("sector month physical row boundary is incomplete")
         where = [f"datetime >= Timestamp('{start.isoformat()}')", f"datetime <= Timestamp('{end.isoformat()}')"]
         for frame in store.select(
-            "data", where=where, columns=["l2_code_id", "sw2_pct_change", "sw2_vol", "sw2_amount"], chunksize=bound
+            "data", where=None if positional else where,
+            columns=["l2_code_id", "sw2_pct_change", "sw2_vol", "sw2_amount"], chunksize=bound, **positional,
         ):
+            if positional:
+                stamps = frame.index.get_level_values("datetime")
+                if frame.empty or stamps.min().date() < start or stamps.max().date() > end:
+                    raise ComponentPreparationError("sector physical tail contains an out-of-month date")
             for row in frame.reset_index().itertuples(index=False):
                 yield row
 
@@ -405,6 +422,8 @@ def summarize_sector_context(
     code_map: Any, quote: Any, calendar: Sequence[date],
     pit_rows: Sequence[tuple[str, date, date]], start: date, cutoff: date,
     bound: int, checkpoint: Callable[[], None],
+    market_start: date | None = None,
+    source_start_row: int | None = None, source_month_rows: int | None = None,
 ):
     """Single bounded file scan shared by preparation and final validation."""
     by_symbol: dict[str, list[tuple[date, date]]] = defaultdict(list)
@@ -422,13 +441,17 @@ def summarize_sector_context(
 
     # Market context belongs to the complete frozen source history, not only
     # the narrower membership/blacklist policy window.
+    scan_start = profile.start_date if market_start is None else market_start
+    if not profile.start_date <= scan_start <= start <= cutoff:
+        raise ComponentPreparationError("sector summary month window is invalid")
     stream = _sector_rows(
-        sector_h5, start=profile.start_date, end=cutoff, bound=bound
+        sector_h5, start=scan_start, end=cutoff, bound=bound,
+        source_start_row=source_start_row, source_month_rows=source_month_rows,
     )
     groups = iter(groupby(stream, key=lambda row: row.datetime.date()))
     upcoming = next(groups, None)
     try:
-        for day in (value for value in calendar if profile.start_date <= value <= cutoff):
+        for day in (value for value in calendar if scan_start <= value <= cutoff):
             checkpoint()
             if upcoming is not None and upcoming[0] < day:
                 raise ComponentPreparationError("private sector facts contain a non-calendar day")
