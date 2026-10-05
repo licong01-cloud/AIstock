@@ -2,8 +2,8 @@
 
 > 版本：v1.0；日期：2026-10-06；tier：F2；owner：HMM。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.71，F-011/F-012/F-013。
-> **精确消费合同：PROPOSED_NOT_APPROVED。** 用户已要求规划并执行长任务、允许文档/源码审修后自动合入；这不等同于批准下面新的D1～D6消费公式。文档可以提交为完整提案，源码实施与价值回放必须等用户精确批准。原风险产品D1～D6、模型及0.20报警阈值保持已批准状态。
-> 本轮目的：回答冻结风险warning是否在历史参考路径中减少损失，及其少持仓、错过上涨和成本代价；不是重训、补历史证据或运行QE。尚未执行本回放，所有下面阈值/公式均为推荐提案，不把计划写成测试通过。
+> **精确消费合同：APPROVED_BY_USER_FOR_IMPLEMENTATION。** 用户于2026-10-06针对明确列出的L2-RISK-VALUE D1～D6整包答复“批准完整推荐合同”：一日延迟、131行业预算、warning转现金、无overlay/同日敞口参照、423日现有facts及0/5/10/20bp敏感性；零fit、不读tail、不写数据库。按设计合入后实施，不由源码合入权限代替此次精确批准。原风险产品D1～D6、模型及0.20报警阈值保持不变。
+> 本轮目的：回答冻结风险warning是否在历史参考路径中减少损失，及其少持仓、错过上涨和成本代价；不是重训、补历史证据或运行QE。尚未执行本回放，公式已批准但不能把计划写成测试通过。
 
 ## 1. Background、目标与Scope
 
@@ -89,9 +89,9 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 ## 8. Contracts D6：实现、复现、停止与授权
 
-精确D1～D6批准后，实现薄模块`backend/services/hmm_risk/risk_l2_value_replay.py`与`scripts/hmm_risk/replay_risk_l2_value.py`及直接测试，复用原封存reader/canonical工具；不建表/API/平台。一次读取固定资产，两个fresh process执行相同预算算术，parent只比较业务canonical payload；时间/进程字段不参与bitwise判定。fit/filter/predict/database接口poison必须0调用，输出只能到显式repo-external任务目录，不覆盖原文件。
+精确D1～D6已批准，设计合入后实现薄模块`backend/services/hmm_risk/risk_l2_value_replay.py`与`scripts/hmm_risk/replay_risk_l2_value.py`及直接测试，复用原封存reader/canonical工具；不建表/API/平台。一次读取固定资产，两个fresh process执行相同预算算术，parent只比较业务canonical payload；时间/进程字段不参与bitwise判定。fit/filter/predict/database接口poison必须0调用，输出只能到显式repo-external任务目录，不覆盖原文件。
 
-最多三轮作者代码审修，至少两轮（没有发现则不作无用修改）；按实际changed files执行ownership/module最小门禁、F2及最终HEAD CI。用户已授权本次文档/源码满足合入要求后直接合入，不重复请求源码merge。该授权仍不批准生产动作或消费数值变化；本设计精确批准前不编写消费执行实现、不回放。
+最多三轮作者代码审修，至少两轮（没有发现则不作无用修改）；按实际changed files执行ownership/module最小门禁、F2及最终HEAD CI。用户已授权本次文档/源码满足合入要求后直接合入，不重复请求源码merge。该授权仍不批准生产动作或改变本次已批准消费数值；设计进入main前不启动实现/回放。
 
 停止：一个真实四分支终态并交付紧凑结果；或本长任务12小时；或需要改变输入/模型/消费公式、跨owner操作或未授权生产动作；或三轮仍有阻断。失败不自动新候选、不请求数据窗口重建旧事实，不为凑时长整理历史。合约待批准期间继续既有轮动产品安全工作；若独立工作完成仍待批准，则报告待决定项并交回用户。
 
@@ -120,11 +120,11 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 - **F-012**：只复用现有文件事实、131目录、严格时序、合法NA和身份，零重建/数据写入。
 - **F-013**：完整业务回放及真实终态/状态隔离，原风险及轮动产品不被该诊断假升级。
 
-下表验收对象是**本提案定义的完整性与可追溯性**，不是执行实现或D1～D6批准。两轮作者文档复审已完成，DESIGN_REVIEW_VERIFIED仅表示定义已复审；F2结构PASS不代表用户批准精确策略或未来测试已经运行。执行缺口独立列出，不能把下面“无设计定义缺口”理解为功能完成。
+下表验收对象是**设计定义的完整性与可追溯性**，不是执行实现。两轮作者文档复审已完成，DESIGN_REVIEW_VERIFIED仅表示定义已复审；精确合同由本页顶部明确用户回复批准，非F2结构PASS产生。执行缺口独立列出，不能把下面“无设计定义缺口”理解为功能完成。
 
 | 真实执行维度 | 状态 | 影响与下一步 |
 |---|---|---|
-| 精确消费D1～D6 | PROPOSED_NOT_APPROVED | 需用户批准整包公式，未批不实施或运行 |
+| 精确消费D1～D6 | APPROVED_BY_USER_FOR_IMPLEMENTATION | 2026-10-06整包批准；设计合入后按原公式执行，不扩大权限 |
 | 源码/直接测试 | NOT_IMPLEMENTED / NOT_RUN | 精确批准后一次完整薄实现及多轮代码审修，不靠文档F2代报 |
 | 价值回放/经济效果 | NOT_RUN / UNKNOWN | 批准后零fit双process；仅可能为参考研究结果，净增益仍未评估 |
 
@@ -140,7 +140,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 最重要风险是reference ≠ execution：股票聚合收益和每日行业预算漂移不是真实股票头寸；内部成员权重变化/成交困难/费用未建模。其次是已消费development、误报错过上涨、同敞口非同beta和缺路径区间。诚实呈现，不靠更复杂模拟器或参数搜索掩盖局限；参考正结果只能支持后续场景验证的优先级。
 
-本次文档：DDL/DML/dependency/runtime_activation/process_control/dataset_write/active_profile_write/training/tail/QE均noop/false；runtime_impact=none，后端重启权限=false。未来源码以实际changed files重新分类，不自称离线必为none。精确D1～D6待用户批准；产物写入仅在批准后显式任务目录，生产仍不授权。
+本次文档：DDL/DML/dependency/runtime_activation/process_control/dataset_write/active_profile_write/training/tail/QE均noop/false；runtime_impact=none，后端重启权限=false。未来源码以实际changed files重新分类，不自称离线必为none。精确D1～D6已批准；产物只写显式任务目录，生产仍不授权。
 
 ## 13. DESIGN-COMPLIANCE-001与文档审修记录
 
@@ -148,7 +148,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 |---|---|
 | 禁止简化交付 | 三臂、全部计划日期/目录、NA、机会成本和成本局限一包完整报告；reference不冒充QE/净收益 |
 | 禁止静默错误 | 不补0/前填/默认warning，缺路径不拼NAV，未知/identity异常typed fail closed |
-| 禁止业务逻辑迁移 | 现有模型及运行产品不变；消费规则只是待批准提案，不控制真实持仓或其他业务 |
+| 禁止业务逻辑迁移 | 现有模型及运行产品不变；消费规则已精确批准但只作参考回放，不控制真实持仓或其他业务 |
 | 禁止私增门禁审批 | 不增模型显著性/逐sector效果门；消费精确批准沿已有授权边界，不靠F2制造批准 |
 
-两轮作者文档审核（非独立第三方）：第一轮核对真实资产、已完成产品状态及事实收益口径，修正只用10D标签推导可避免损失、当日signal交易前收盘的风险，明确423日/一日延迟/stock-aggregate参考；第二轮逐条检查NA、权重与同敞口、漂移换手、成本、资本耗尽和授权终态，补齐自然极端行情不作为模型失败、NA块不拼完整净值、成本档不伪装执行净收益，并将设计定义验收与未批准/未实施/未运行真实缺口分开。没有修改原风险模型或新增已生效门禁，文档无剩余阻断；F2只作定义结构校验。
+两轮作者文档审核（非独立第三方）：第一轮核对真实资产、已完成产品状态及事实收益口径，修正只用10D标签推导可避免损失、当日signal交易前收盘的风险，明确423日/一日延迟/stock-aggregate参考；第二轮逐条检查NA、权重与同敞口、漂移换手、成本、资本耗尽和授权终态，补齐自然极端行情不作为模型失败、NA块不拼完整净值、成本档不伪装执行净收益，并将设计定义验收与未批准/未实施/未运行真实缺口分开。随后用户明确批准整包，公式未变，只同步批准状态。没有修改原风险模型或新增未授权门禁，文档无剩余阻断；F2只作定义结构校验。
