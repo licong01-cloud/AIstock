@@ -1,6 +1,6 @@
 # Advisory 历史隔夜／日内路径 M12 F2详细设计
 
-2026-10-05；DESIGN_ONLY / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_IMPLEMENTED_RESEARCH_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -90,13 +90,13 @@ typed plan/model_copy dump重验；foreign/partial/重复head、不一致前驱�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-930 | §1/4/5 | artifact: 新信息与旧三Close字段对照/显式角色边界 | DESIGN_VERIFIED | none |
-| F-931 | §3/4/11 | artifact: 真实消费及首Open/普通缺行/不删填合同 | DESIGN_VERIFIED | none |
-| F-932 | §4/11 | artifact: 冻结公式及平线/缩放/有限数/字段依赖验收规格 | DESIGN_VERIFIED | none |
-| F-933 | §5/7 | artifact: 同监督/原policy及四臂、旧标签不换口径 | DESIGN_VERIFIED | none |
-| F-934 | §6/11 | artifact: 43+4/原默认保持/无计数重置与原子合同 | DESIGN_VERIFIED | none |
+| F-930 | economic_session_path_v1.py；§1/4/5 | test: backend/tests/advisory_model_first/test_economic_session_path_v1.py；artifact: 同Close不同Open及原角色边界 | SOURCE_VERIFIED | none |
+| F-931 | economic_session_path_v1.py；§3/4/11 | test: backend/tests/advisory_model_first/test_economic_session_path_v1.py；artifact: 首Open/未来毒化、依赖缺失/原人口保留 | SOURCE_VERIFIED | none |
+| F-932 | economic_session_path_v1.py；§4/11 | test: backend/tests/advisory_model_first/test_economic_session_path_v1.py；artifact: 手算/o+h恒等、缩放/平线/有限数与局部UNKNOWN | SOURCE_VERIFIED | none |
+| F-933 | economic_session_path_v1.py；§5/7 | test: backend/tests/advisory_model_first/test_economic_session_path_v1.py；artifact: 同13/16监督与test毒化不入fit | SOURCE_VERIFIED | none |
+| F-934 | economic_moneyflow_price_pipeline_v1.py；economic_session_path_pipeline_v1.py；§6/11 | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 原默认/显式47、四head与完整前驱/partial拒绝 | SOURCE_VERIFIED | none |
 | F-935 | §2/6/12 | artifact: 原授权模块/时间/资源及QE互斥边界 | DESIGN_VERIFIED | none |
-| F-936 | §2/8/11/12 | artifact: 12文件与重复审核/直接测试、证据分层 | DESIGN_VERIFIED | none |
+| F-936 | §2/8/11/12/14 | test: backend/tests/advisory_model_first/test_economic_session_path_pipeline_v1.py；artifact: 精确12文件、三轮自审/矩阵及兼容 | SOURCE_VERIFIED | none |
 
 ## 11. Direct tests / 最小高价值矩阵
 
@@ -113,3 +113,9 @@ DESIGN-COMPLIANCE-001逐项：设计/known-key检查非功能或模型完成，U
 信息/经济轮按真实M7源码核实旧块只消费收盘路径，M12不是price_drawdown或已有D candle位置换名；数学绑定19间隔的o+h等于原Close变化，使用Open分解仍需实测可学习与成本后收益，未承诺预测T开盘。PIT/缺失轮将“20个Open全必需”精确修订为第1～19，首Open未消费；分别列出gap的前19 Close/全20 AF与日内的后19 Close/不需AF，正常缺失只影响依赖字段，不借停牌压缩原session。工程/交付轮明确真实M11 evaluated/43计数及所有旧默认保持，禁止从新目录重计/直接调用旧implementation资格验证；本设计树已ff最新f6aef87db，只有两个文档可写，源码/收益未执行。
 
 F2七项初检PASS；最终F2/diff/精确scope与当前HEAD CI分别核实后才交付设计。此为本窗口三轮自审，不是独立外部评审。原goal继续，实际43+1不冒称拟议47；不为旧失败固化证据或发起资格审核。
+
+## 14. 源码预检与尚未运行的研究
+
+设计#5464 HEADe72e2b226/CI37250275211 SUCCESS已合入5bebffe936f5729460d95ce4a20a88d6a8d9153d并自己official cleanup_done；latest-main独立source树事前登记12文件。信息/数值轮逐项对照纯公式、同Close不同Open/o+h恒等和共同单位/AF缩放，平线合法0、首Open不消费，不生成T价/执行策略。PIT/缺失轮核实消费投影在校验前、19间隔不压缩，第一Close/AF缺失保留日内、D Close缺失保留隔夜，坏已知数统一计算错误，原顺序/原键不删除；已增加真实T open观察不读T close与未来feature_clock拒绝测试。工程/交付轮修正预登记typed model_copy字面量重验及新receipt准确名称；M12身份/status/47仅显式新增，旧路由/hash/预算默认保持，partial与原子retry/未知QE同旧委托。
+
+42直接矩阵PASS，增强预登记Literal拒绝节点定向PASS；Ruff/feature L0零finding、standard L0三P2复杂度提示且零blocking，原一对一KEY/7720×20边界见§6，两旧join未修改不扩scope。原M1正式bundle在本次路由下identity872acff3...不变，0fit/行情label数组/DB/激活；不是重跑旧负实验。F2最终与干净producer/新plan先绑定，才一次prepare/四fit/四臂；现在实际43+1，尚无M12preregister/prepare/拟合或收益读取。原goal与截止不重计，不等待通用label答案而默改它。
