@@ -30,7 +30,7 @@ def moneyflow_implementation_sha256_v1():
         readonly_dependencies={name: hashlib.sha256((repo/name).read_bytes().replace(b'\r\n', b'\n')).hexdigest() for name in dependencies}))
 
 
-def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None):
+def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None, valuation_extension=None):
     anchor = _verify_reference(plan.budget_anchor_ref)
     root = plan.campaign_root.resolve()
     original = PriceCampaignPlanV2.model_validate_json((anchor.parent/'plan.json').read_text(encoding='utf-8'))
@@ -58,6 +58,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
         raise ValueError('session path extension requires original explicit M11 extension')
     if free_float_extension is not None and session_path_extension is None:
         raise ValueError('free float extension requires original explicit M12 extension')
+    if valuation_extension is not None and free_float_extension is None:
+        raise ValueError('valuation extension requires original explicit M13 extension')
     if price_path_extension is not None:
         from backend.services.advisory_model_first.economic_price_path_value_v1 import PricePathPlanV1
         extension = PricePathPlanV1.model_validate(price_path_extension)
@@ -134,6 +136,17 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                 or free_extension.parameters['policy_sha256'] != session_extension.parameters['policy_sha256']
                 or free_extension.parameters['cost_sha256'] != session_extension.parameters['cost_sha256']):
             raise ValueError('free float extension original root/source/predecessor differs')
+    if valuation_extension is not None:
+        from backend.services.advisory_model_first.economic_valuation_context_v1 import ValuationContextPlanV1
+        declared = valuation_extension.model_dump() if isinstance(valuation_extension, ValuationContextPlanV1) else valuation_extension
+        valuation = ValuationContextPlanV1.model_validate(declared)
+        valuation_predecessor = _verify_reference(valuation.predecessor_manifest_ref)
+        if (valuation.campaign_root.resolve() != root or not _same_sources(valuation, free_extension)
+                or valuation.budget_anchor_ref != free_extension.budget_anchor_ref
+                or valuation_predecessor != root/free_extension.experiment_id/'evaluated/manifest.json'
+                or valuation.parameters['policy_sha256'] != free_extension.parameters['policy_sha256']
+                or valuation.parameters['cost_sha256'] != free_extension.parameters['cost_sha256']):
+            raise ValueError('valuation extension original root/source/predecessor differs')
     expected = {'M2': (4, PriceCampaignPlanV2), 'M3': (5, PriceCampaignPlanV2), 'M4': (2, PriceCampaignPlanV2),
                 'M1': (4, SectorPricePlanV1), 'M5': (4, SelectionStatePricePlanV1)}
     if any(event.get('state') != 'STARTED' or event.get('kind') not in ('PHYSICAL_FIT', 'INDEX_BUILD')
@@ -141,7 +154,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                *(('M8',) if market_risk_extension is not None else ()), *(('M9',) if volume_context_extension is not None else ()),
                *(('M10',) if breadth_state_extension is not None else ()), *(('M11',) if traded_price_extension is not None else ()),
                *(('M12',) if session_path_extension is not None else ()),
-               *(('M13',) if free_float_extension is not None else ())) for event in events):
+               *(('M13',) if free_float_extension is not None else ()),
+               *(('M14',) if valuation_extension is not None else ())) for event in events):
         raise ValueError('moneyflow cumulative journal has foreign state/model/kind')
     for model, (count, cls) in expected.items():
         found = [event for event in events if event['kind'] == 'PHYSICAL_FIT' and event['model_id'] == model]
@@ -297,6 +311,24 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
             event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != free_extension.campaign_id
             or event['experiment_id'] != free_extension.experiment_id or event['head'] not in heads for event in latest_free):
             raise ValueError('free float extension own cumulative budget/journal differs')
+    if valuation_extension is not None:
+        if len(latest_free) != 4:
+            raise ValueError('valuation extension needs actual four completed M13 fits')
+        previous_root = root/free_extension.experiment_id
+        registered = read_stage(previous_root/'preregistered', stage='preregistered', plan_sha256=free_extension.plan_sha256, parent_sha256=None)
+        _ledger(free_extension, previous_root, 'PREREGISTERED', previous_root/'preregistered/manifest.json')
+        frozen = FreeFloatTurnoverPlanV1.model_validate_json((previous_root/'preregistered/plan.json').read_text(encoding='utf-8'))
+        if frozen != free_extension:
+            raise ValueError('valuation extension cannot substitute original M13 plan')
+        parent = registered['stage_sha256']
+        for stage in ('prepared', 'trained', 'evaluated'):
+            parent = read_stage(previous_root/stage, stage=stage, plan_sha256=free_extension.plan_sha256, parent_sha256=parent)['stage_sha256']
+        _ledger(free_extension, previous_root, 'EVALUATED', valuation_predecessor)
+        latest_valuation = [event for event in events if event['model_id'] == 'M14']
+        if len(latest_valuation) > 4 or len({event['head'] for event in latest_valuation}) != len(latest_valuation) or any(
+            event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != valuation.campaign_id
+            or event['experiment_id'] != valuation.experiment_id or event['head'] not in heads for event in latest_valuation):
+            raise ValueError('valuation extension own cumulative budget/journal differs')
     return root
 
 

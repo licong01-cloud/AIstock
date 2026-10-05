@@ -1,10 +1,10 @@
 # Advisory D日估值条件买入价格 M14 F2详细设计
 
-2026-10-05；DESIGN_VERIFIED_IMPLEMENTATION_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
-M13自由流通信息一次准备/4fit/完整四臂已完成，candidate/baseline/matched成本后净12.0020%/21.3220%/4.5719%，配对日−8.1577/+6.7015bps，两区间跨零；只有收益增量条件失败，停止该固定candidate，不调阈值/回选或再fit。当前真实51 physical fit+1原index、经济确认/激活0；M13源码#5470 HEAD1a864561f8/CI37253862090 SUCCESS后已合入e86e2ca9c48a4a6d7946a5c36d7ef42aa3fafb7e并自己official cleanup_done，M14源码实现须待自己的设计交付，不修改M13研究。M1六UI/BUG-1726公共smoke继续为独立工程辅线。
+M13自由流通信息一次准备/4fit/完整四臂已完成，candidate/baseline/matched成本后净12.0020%/21.3220%/4.5719%，配对日−8.1577/+6.7015bps，两区间跨零；只有收益增量条件失败，停止该固定candidate，不调阈值/回选或再fit。当前真实51 physical fit+1原index、经济确认/激活0；M13源码#5470 HEAD1a864561f8/CI37253862090 SUCCESS后已合入e86e2ca9c48a4a6d7946a5c36d7ef42aa3fafb7e并自己official cleanup_done，M14设计#5474已合入55d519c1e/自己清理，源码在该latestmain独立树实现，不修改M13研究。M1六UI/BUG-1726公共smoke继续为独立工程辅线。
 
 H-DAILY-VALUATION-CONTEXT-1：同样价格/量/自由流通状态可有不同D已公布的盈利、净资产及现金分红估值。用D earnings yield、book-to-price、过去12月股息率作为上下文，是否改善既有候选“以某价格买入相对当前基线动作的净价值”？不是预测五日估值回归必然成立、年化股息当短期利润、低PE直接买规则、上游alpha挖掘或变更原策略排序。已有原12D只含父两个latent score/腿分歧而非这三个原始估值维度；不叠加M5～M13负块、不换旧seed/loss。
 
@@ -84,20 +84,28 @@ M13源码CI通过交付/自己清理→本设计三轮/F2/currentCI/合入自己
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-950 | §1/3/4；economic_valuation_context_v1.py | test: backend/tests/advisory_model_first/test_economic_valuation_context_v1.py；artifact: 原单位/同OHLC不同估值 | DESIGN_VERIFIED | none |
-| F-951 | §3/4；economic_valuation_context_v1.py | test: backend/tests/advisory_model_first/test_economic_valuation_context_v1.py；artifact: 负/零/NULL/字段局部依赖/时钟 | DESIGN_VERIFIED | none |
-| F-952 | §3/6；economic_valuation_context_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_valuation_context_pipeline_v1.py；artifact: 原KEY/单SELECT/readonly/atomic | DESIGN_VERIFIED | none |
-| F-953 | §5/7；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；artifact: 成熟13/16/旧标签/test未fit | DESIGN_VERIFIED | none |
-| F-954 | §6；economic_moneyflow_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 真51→55/旧预算/partial | DESIGN_VERIFIED | none |
-| F-955 | §7/8/9；economic_sector_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: 四臂TAKE/UNKNOWN/完整结算/oldbundle | DESIGN_VERIFIED | none |
-| F-956 | §2/6/9/10授权和交付 | test: backend/tests/advisory_model_first/test_economic_valuation_context_pipeline_v1.py；artifact: 精确scope/F2/L0/fit前后QE收据 | DESIGN_VERIFIED | none |
+| F-950 | §1/3/4；economic_valuation_context_v1.py | test: backend/tests/advisory_model_first/test_economic_valuation_context_v1.py；artifact: 原单位/同OHLC不同估值 | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-951 | §3/4；economic_valuation_context_v1.py | test: backend/tests/advisory_model_first/test_economic_valuation_context_v1.py；artifact: 负/零/NULL/字段局部依赖/时钟 | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-952 | §3/6；economic_valuation_context_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_valuation_context_pipeline_v1.py；artifact: 原KEY/单SELECT/readonly/atomic | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-953 | §5/7；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；artifact: 成熟13/16/旧标签/test未fit | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-954 | §6；economic_moneyflow_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；artifact: 真51→55/旧预算/partial | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-955 | §7/8/9；economic_sector_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: 四臂TAKE/UNKNOWN/完整结算/oldbundle | IMPLEMENTED_LOCAL_VERIFIED | none |
+| F-956 | §2/6/9/10授权和交付 | test: backend/tests/advisory_model_first/test_economic_valuation_context_pipeline_v1.py；artifact: 精确scope/F2/L0/fit前后QE收据 | IMPLEMENTED_LOCAL_VERIFIED | none |
 
 ## 12. Current state
 
-当前仅新设计和0trial工程聚合，M14 source/正式登记/prepare/fit/收益0，实际51fit+1index。M13源已合入/自己清理，设计树已安全同步并更新蓝图，只有精确两文档变化；0新module/DB/activation/服务控制/收益确认。非空7720不宣称全部估值可逆或原生，后续严格处理字段正常UNKNOWN，不以旧负实验继续投资源。
+M14设计#5474已合入55d519c1e/自己清理；独立源码树登记12文件已实现纯三量、有界单SELECT、薄prepare、显式M14/55预算/同核13/16模型路由。56直接项/Ruff通过，feature L0零发现、标准L0三条P2/0blocking；原M1真实JSON bundle在新路由下metadata/hash兼容、0fit/无行情或标签数组。当前M14正式登记/prepare/研究fit/收益0，研究累计51fit+1index，经济确认/激活/DB写/公共修改/服务控制0；本地工程PASS不称研究已完成或原生身份COMPLETE。
 
 ## 13. 三轮设计审核与修订
 
 经济/信息轮以真实原12D与M13源码核对旧信息无这三个原始估值维度；限定估值是价位条件上下文而非短期必然回归、年度股息承诺、QE Alpha研究或选股重排，g只条件化不重新引用T估值。数值/时钟轮将PE/PB负值与NULL/0分母、0历史股息分别建模，并补充非零极小Decimal转换成0必须计算错误而非伪UNKNOWN；来源盘后D/NON_VINTAGE与原known_from分开，未来先投影且原7720保留，无20D预热假门。工程/业务轮确认51实际+4/55与真实M13完整前驱，旧所有cap/支持/退出保持；M13 currentHEAD CI已通过/合入/清理，设计安全ff后才改蓝图，其它owner已合入代码非本窗口修改。
 
 F2初七项/七行/warnings0 PASS；上述修订后再执行最终F2、diff和精确两文件scope，currentHEAD必需CI后交付，设计PASS不等于源码/模型/盈利完成。本窗口分视角自审，不冒称独立外审；不为旧负候选补证或将未知身份做包消费门禁。
+
+## 14. 多轮源码审核与最小验证
+
+第一轮信息/数值核对三量仅D同键、signed负倒数、0分母局部UNKNOWN与0股息合法，非零Decimal转换/派生下溢拒绝；无预热删股或假定g重算估值。第二轮来源/原子阶段审核发现新pipeline草稿收据沿用旧turnover/share单位，已在发布任何正式收据前修正为ratio_unit=dimensionless/dividend_unit=percent；测试明确读回真实字段。另修正新测试模板的自引用fixture导入后，首次最小五文件矩阵56 PASS，无生产重跑。
+
+第三轮预算/业务逐项确认真实M13完整stage/ledger/四heads，51→55显式扩展、所有旧cap及身份公式不改；同成熟13/16、test毒化不改变拟合、未来/重复/外来键错误、正常NULL原KEY保留、单SELECT/rollback/close、exact retry不重查和partial/QE未知不fit均覆盖。原M1 JSON model/bundle SHA保持872acff3.../c674a388...，不重新训练、绑定或读取收益。DESIGN-COMPLIANCE-001七项按真实实现/测试核对，源码/研究/盈利与runtime分层如§12。
+
+复杂度三条P2仅两处既有M6/M1 join和本M14 KEY一对一join；旧处未作广泛重构，新处双方上限7720、原KEY唯一与validate=one_to_one、原顺序显式比较，输出不爆行；纯逐股D投影O(source+7720)、source上限7720，单有界DB请求，不嵌套全池/20D循环。F2最终七项和精确scope/diff完成后提交干净producer，再一次准备/新研究；currentHEAD必需CI后源码交付，不以P2告警制造平台任务。
