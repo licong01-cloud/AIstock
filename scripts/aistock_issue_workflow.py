@@ -250,7 +250,7 @@ WORKTREE_BACKEND_LOG_LINE_RE = re.compile(
 )
 RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
+    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plans>[A-Za-z0-9_][A-Za-z0-9_-]*(?:\s+[A-Za-z0-9_][A-Za-z0-9_-]*)*)(?=\s+-|$)", re.IGNORECASE)),
     (
         "pytest",
         re.compile(
@@ -784,43 +784,46 @@ def _build_validation_receipts(
             errors.append(f"validation result is not an explicit pass: {item}")
             continue
         evidence_kind = ""
-        plan = ""
+        plans = [""]
         for kind, pattern in VALIDATION_COMMAND_PATTERNS:
             match = pattern.search(command)
             if not match:
                 continue
+            if kind == "nox" and re.search(r"\s(?:-s|--sessions)(?:\s|=|$)", command[match.end():]):
+                break  # Repeated selectors can override each other; never infer executed plans.
             evidence_kind = kind
-            plan = str(match.groupdict().get("plan") or "")
+            plans = list(dict.fromkeys(str(match.groupdict().get("plans") or match.groupdict().get("plan") or "").split())) or [""]
             break
         if not evidence_kind:
             errors.append(f"validation command is not allowlisted: {command}")
             continue
-        identity_inputs = {
-            "commit": commit,
-            "changed_files_digest": changed_files_digest,
-            "command": command,
-            "result": result,
-            "evidence_kind": evidence_kind,
-            "plan": plan or None,
-            "environment": environment_identity,
-        }
-        normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        receipts.append(
-            {
-                "schema_version": VALIDATION_RECEIPT_SCHEMA,
-                "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
-                "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+        for plan in plans:
+            identity_inputs = {
                 "commit": commit,
                 "changed_files_digest": changed_files_digest,
-                "environment_identity": environment_identity,
                 "command": command,
                 "result": result,
-                "status": "passed",
                 "evidence_kind": evidence_kind,
                 "plan": plan or None,
-                "recorded_at": _utc_now(),
+                "environment": environment_identity,
             }
-        )
+            normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            receipts.append(
+                {
+                    "schema_version": VALIDATION_RECEIPT_SCHEMA,
+                    "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
+                    "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+                    "commit": commit,
+                    "changed_files_digest": changed_files_digest,
+                    "environment_identity": environment_identity,
+                    "command": command,
+                    "result": result,
+                    "status": "passed",
+                    "evidence_kind": evidence_kind,
+                    "plan": plan or None,
+                    "recorded_at": _utc_now(),
+                }
+            )
     return receipts, errors
 
 
