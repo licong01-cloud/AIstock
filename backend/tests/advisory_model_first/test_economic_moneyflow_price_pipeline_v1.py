@@ -425,6 +425,44 @@ def test_explicit_M13_extension51_requires_original47_and_preserves_old_defaults
 
 
 
+def test_explicit_M17_extension67_requires_actual_M16_and_original_M6_snapshot(tmp_path):
+    from backend.services.advisory_model_first.economic_flow_path_pipeline_v1 import _flow_path_fit_event
+    from backend.tests.advisory_model_first.test_economic_flow_path_pipeline_v1 import flow_path_plan_fixture
+    newest, cohort, limit, valuation, free, session, traded, breadth, volume, market, path, original, _, events = flow_path_plan_fixture(tmp_path)
+    old_kwargs = dict(price_path_extension=path, market_risk_extension=market, volume_context_extension=volume, breadth_state_extension=breadth,
+        traded_price_extension=traded, session_path_extension=session, free_float_extension=free, valuation_extension=valuation,
+        limit_state_extension=limit, candidate_cohort_extension=cohort)
+    kwargs = dict(**old_kwargs, flow_path_extension=newest)
+    assert pipeline.verify_moneyflow_budget_v1(original, **old_kwargs) == tmp_path
+    assert pipeline.verify_moneyflow_budget_v1(original, **kwargs) == tmp_path
+    with pytest.raises(ValueError, match='explicit M16'):
+        pipeline.verify_moneyflow_budget_v1(original, flow_path_extension=newest)
+    (tmp_path/newest.experiment_id).mkdir()
+    for arm in ('matched', 'candidate'):
+        for head in ('mean', 'path'):
+            _flow_path_fit_event(newest, tmp_path/newest.experiment_id, arm+'_'+head)
+    assert pipeline.verify_moneyflow_budget_v1(original, **kwargs) == tmp_path
+    with pytest.raises(ValueError, match='foreign'):
+        pipeline.verify_moneyflow_budget_v1(original, **old_kwargs)
+    with pytest.raises(ValueError, match='cumulative'):
+        _flow_path_fit_event(newest, tmp_path/newest.experiment_id, 'extra')
+    with pytest.raises(ValueError):
+        pipeline.verify_moneyflow_budget_v1(original, **{**kwargs, 'flow_path_extension': newest.model_copy(update={'model_id': 'M16'})})
+    with pytest.raises(ValueError, match='source'):
+        pipeline.verify_moneyflow_budget_v1(original, **{**kwargs, 'flow_path_extension': newest.model_copy(update={'profile_sha256': 'f'*64})})
+    journal = tmp_path/'campaign_fit_journal.jsonl'
+    current = [json.loads(line) for line in journal.read_text(encoding='utf-8').splitlines()]
+    assert sum(event['kind'] == 'PHYSICAL_FIT' for event in current) == 67
+    partial = [event for event in current if not (event['model_id'] == 'M16' and event['head'] == 'candidate_path')]
+    journal.write_text(''.join(json.dumps(event)+'\n' for event in partial), encoding='utf-8')
+    with pytest.raises(ValueError, match='actual four completed M16'):
+        pipeline.verify_moneyflow_budget_v1(original, **kwargs)
+    journal.write_text(''.join(json.dumps(event)+'\n' for event in events), encoding='utf-8')
+    (tmp_path/cohort.experiment_id/'evaluated/unit.json').write_bytes(b'{"tampered":true}')
+    with pytest.raises(Exception, match='hash|size|artifact'):
+        pipeline.verify_moneyflow_budget_v1(original, **kwargs)
+
+
 def test_explicit_M11_extension43_requires_original39_and_preserves_old_caps(tmp_path):
     from backend.services.advisory_model_first.economic_traded_price_distribution_pipeline_v1 import _traded_price_fit_event
     from backend.tests.advisory_model_first.test_economic_traded_price_distribution_pipeline_v1 import traded_price_plan_fixture
