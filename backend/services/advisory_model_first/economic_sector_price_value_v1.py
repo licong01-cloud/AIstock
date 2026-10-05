@@ -93,11 +93,15 @@ def _information_key(model_id, information_features):
         from backend.services.advisory_model_first.economic_free_float_turnover_v1 import FREE_FLOAT_FEATURES
         if tuple(information_features) == FREE_FLOAT_FEATURES:
             return 'free_float_features'
+    if model_id == 'M14':
+        from backend.services.advisory_model_first.economic_valuation_context_v1 import VALUATION_FEATURES
+        if tuple(information_features) == VALUATION_FEATURES:
+            return 'valuation_features'
     raise ValueError('fixed information block/model differs')
 
 
 def information_fit_identity_v1(recipe, models, support, *, model_id):
-    if model_id not in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13'):
+    if model_id not in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13', 'M14'):
         raise ValueError('fixed information model differs')
     return sha(dict(model_id=model_id, recipe=recipe, models=models, support=list(support.intervals_bps)))
 
@@ -186,7 +190,7 @@ def train_information_price_v1(*, rows, configuration, before_fit, model_id, inf
     if (sklearn.__version__, scipy.__version__) != ('1.8.0', '1.16.3'):
         raise ValueError('sector exact fit runtime differs')
     information_key = _information_key(model_id, information_features)
-    if status_column != {'M1': 'sector_feature_status', 'M5': 'state_feature_status', 'M6': 'moneyflow_feature_status', 'M7': 'price_path_feature_status', 'M8': 'market_risk_feature_status', 'M9': 'volume_context_feature_status', 'M10': 'breadth_state_feature_status', 'M11': 'traded_price_distribution_feature_status', 'M12': 'session_path_feature_status', 'M13': 'free_float_feature_status'}[model_id]:
+    if status_column != {'M1': 'sector_feature_status', 'M5': 'state_feature_status', 'M6': 'moneyflow_feature_status', 'M7': 'price_path_feature_status', 'M8': 'market_risk_feature_status', 'M9': 'volume_context_feature_status', 'M10': 'breadth_state_feature_status', 'M11': 'traded_price_distribution_feature_status', 'M12': 'session_path_feature_status', 'M13': 'free_float_feature_status', 'M14': 'valuation_feature_status'}[model_id]:
         raise ValueError('fixed information availability contract differs')
     domain = rows.loc[rows.split.eq('train') & rows.values_available].copy()
     domain.loc[domain[KEY[1]].gt(pd.Timestamp(configuration.train_end)), 'actual_gap_bps'] = np.nan
