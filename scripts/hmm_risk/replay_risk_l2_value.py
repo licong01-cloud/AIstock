@@ -20,7 +20,7 @@ from backend.services.hmm_risk.formal_state_executor import (  # noqa: E402
 )
 from backend.services.hmm_risk.formal_state_model import receipt  # noqa: E402
 from backend.services.hmm_risk.formal_state_effect import verify_receipt  # noqa: E402
-from backend.services.hmm_risk.risk_l2_value_replay import VERSION, execute, require  # noqa: E402
+from backend.services.hmm_risk.risk_l2_value_replay import APPROVED_PINS, VERSION, execute, require  # noqa: E402
 
 
 def source_head() -> str:
@@ -81,6 +81,31 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 child = read_json(path)
                 verify_receipt(child)
+                require(
+                    child.get("schema_version") == VERSION + "_result"
+                    and child.get("request_sha256") == args.request_sha256
+                    and child.get("source_pins") == APPROVED_PINS
+                    and child.get("planned_return_dates") == 423
+                    and child.get("sector_count") == 131
+                    and len(child.get("daily", [])) == 423
+                    and child.get("status")
+                    in {
+                        "INSUFFICIENT_REFERENCE_PATH",
+                        "REFERENCE_RISK_REDUCTION_OBSERVED",
+                        "REFERENCE_RISK_REDUCTION_NOT_OBSERVED",
+                    }
+                    and all(
+                        type(child.get(k)) is int and child[k] == 0
+                        for k in ("new_fits", "new_filter_calls", "new_predict_calls")
+                    )
+                    and all(
+                        child.get(k) is False
+                        for k in ("database_access", "tail_accessed", "dataset_write", "runtime_action")
+                    )
+                    and child.get("zero_compute_poison_active") is True,
+                    "child envelope differs from the exact zero-compute request",
+                    "identity_mismatch",
+                )
                 children.append(child)
             require(source_head() == head, "parent source changed", "identity_mismatch")
             require(

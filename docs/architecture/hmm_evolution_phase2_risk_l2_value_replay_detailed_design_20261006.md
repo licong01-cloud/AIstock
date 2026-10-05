@@ -112,7 +112,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 | wealth/cost | 负号/峰值MDD、上涨机会成本、漂移后换手、初始建仓/末日不平仓、单边收费、零换手/无break-even、所有成本档不挑结果 |
 | true replay | 用户精确批准后使用§3四资产、两个fresh process严格bitwise相同；完整result/coverage/终态和零新增fit，不重新造数据 |
 
-已运行直接矩阵：`python -m pytest backend/tests/hmm_risk/test_risk_l2_value_replay.py backend/tests/hmm_risk/test_replay_risk_l2_value.py -q -p no:cacheprovider`，18 passed。Ruff/format、py_compile和4/4 ownership映射通过；提交前在最终HEAD重验最小门禁。真实四资产load_inputs在zero_compute poison下核对131目录/424信号/423收益日通过，不执行预算回放。F2仅审核设计结构；精确授权和正式回放结果另列。
+已运行直接矩阵：`python -m pytest backend/tests/hmm_risk/test_risk_l2_value_replay.py backend/tests/hmm_risk/test_replay_risk_l2_value.py -q -p no:cacheprovider`，19 passed。Ruff/format、py_compile和5/5 ownership映射通过；提交前在最终HEAD重验最小门禁。真实四资产load_inputs在zero_compute poison下核对131目录/424信号/423收益日通过，不执行预算回放。F2仅审核设计结构；精确授权和正式回放结果另列。
 
 ## 11. Design Acceptance Index与Design Acceptance Matrix
 
@@ -125,7 +125,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 | 真实执行维度 | 状态 | 影响与下一步 |
 |---|---|---|
 | 精确消费D1～D6 | APPROVED_BY_USER_FOR_IMPLEMENTATION | 2026-10-06整包批准；设计合入后按原公式执行，不扩大权限 |
-| 源码/直接测试 | IMPLEMENTED / DIRECT_TESTS_PASSED | 18项直接矩阵与原资产身份预检通过；两轮作者代码复审后待最终HEAD CI，不靠文档F2代报 |
+| 源码/直接测试 | IMPLEMENTED / DIRECT_TESTS_PASSED | 19项直接矩阵与原资产身份预检通过；三轮作者代码复审后待最终HEAD CI，不靠文档F2代报 |
 | 价值回放/经济效果 | NOT_RUN / UNKNOWN | 批准后零fit双process；仅可能为参考研究结果，净增益仍未评估 |
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
@@ -140,7 +140,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 最重要风险是reference ≠ execution：股票聚合收益和每日行业预算漂移不是真实股票头寸；内部成员权重变化/成交困难/费用未建模。其次是已消费development、误报错过上涨、同敞口非同beta和缺路径区间。诚实呈现，不靠更复杂模拟器或参数搜索掩盖局限；参考正结果只能支持后续场景验证的优先级。
 
-本次DDL/DML/dependency/runtime_activation/process_control/dataset_write/active_profile_write/training/tail/QE均noop/false，后端重启权限=false。实际四源码/测试文件经canonical runtime classifier分类为backend、target_ids=[backend-main]，catalog_error=null：新服务文件未在精确offline登记，不能自行降为none或修改catalog。该保守源码分类与实际薄CLI无运行API消费者分开报告；fresh-process从本任务加载新module/原reader并在poison下完成身份预检，生产backend生效仍不声称已验证。runbook=`docs/operations/backend_main_runtime_restart_runbook.md`，identity=`http://127.0.0.1:8001/api/v1/runtime-identity`，既有risk业务smoke=`/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26`。精确D1～D6已批准；产物只写显式任务目录，生产仍不授权。
+本次DDL/DML/dependency/runtime_activation/process_control/dataset_write/active_profile_write/training/tail/QE均noop/false，后端重启权限=false。实际四源码/测试文件经canonical runtime classifier分类为backend、target_ids=[backend-main]，catalog_error=null：新服务文件未在精确offline登记，不能自行降为none或修改catalog。该保守源码分类与实际薄CLI无运行API消费者分开报告；fresh-process从本任务加载新module/原reader并在poison下完成身份预检，生产backend生效仍不声称已验证。runbook=`docs/operations/backend_main_runtime_restart_runbook.md`，identity=`http://127.0.0.1:8001/api/v1/runtime-identity`；backend-main既有已登记HMM业务探针使用`/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505`，仅证明现有HMM API保持，不代替新CLI的独立执行readback。本次没有新增风险价值API或运行消费者，不用未登记risk-l2探针绕过catalog。精确D1～D6已批准；产物只写显式任务目录，生产仍不授权。
 
 ## 13. DESIGN-COMPLIANCE-001与文档审修记录
 
@@ -153,4 +153,4 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 两轮作者文档审核（非独立第三方）：第一轮核对真实资产、已完成产品状态及事实收益口径，修正只用10D标签推导可避免损失、当日signal交易前收盘的风险，明确423日/一日延迟/stock-aggregate参考；第二轮逐条检查NA、权重与同敞口、漂移换手、成本、资本耗尽和授权终态，补齐自然极端行情不作为模型失败、NA块不拼完整净值、成本档不伪装执行净收益，并将设计定义验收与未批准/未实施/未运行真实缺口分开。随后用户明确批准整包，公式未变，只同步批准状态。没有修改原风险模型或新增未授权门禁，文档无剩余阻断；F2只作定义结构校验。
 
-两轮作者源码复审（非独立第三方）：第一轮对照D1～D6及三臂时序，修复0bp在合法NA后的首个有效日不应依赖未知换手、资本耗尽与legal NA分离；第二轮反例复审补充同日期paired分块比较、现金和风险预算漂移和=1读回，严格禁止完整NAV跨NA拼接。18项测试、原四资产file-only身份预检、模型/DB poison与输出碰撞/parent差异失败保护通过，无剩余阻断。没有调整模型、消费公式或生产数据；正式双process执行与其终态仍未运行。
+三轮作者源码复审（非独立第三方）：第一轮对照D1～D6及三臂时序，修复0bp在合法NA后的首个有效日不应依赖未知换手、资本耗尽与legal NA分离；第二轮反例复审补充同日期paired分块比较、现金和风险预算漂移和=1读回，严格禁止完整NAV跨NA拼接；第三轮收敛parent必须核对child原pins、完整423/131人口、全部zero-compute标记，不能仅凭两份self-hashed payload相同制造完成。19项测试、原四资产file-only身份预检、模型/DB poison与输出碰撞/parent差异失败保护通过，无剩余阻断。没有调整模型、消费公式或生产数据；正式双process执行与其终态仍未运行。
