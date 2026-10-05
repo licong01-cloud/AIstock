@@ -29,14 +29,16 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
       "backend/tests/dataset_release/test_source_authority.py",
-      "backend/tests/dataset_release/test_monthly_preparation_source.py"
+      "tests/aistock_validation/bugs/20261005_BUG-1728-monthly-raw-source-sealer-loses-month-lineage-and-repeats-per-row-canoni.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
       "backend/tests/dataset_release/test_source_authority.py",
-      "backend/tests/dataset_release/test_monthly_preparation_source.py"
+      "tests/aistock_validation/bugs/20261005_BUG-1728-monthly-raw-source-sealer-loses-month-lineage-and-repeats-per-row-canoni.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -110,8 +112,8 @@
   },
   "first_seen_at": "2026-10-05T01:34:53.232884Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "93c600814c7833bdced36b4be2b9e26ab5400010",
+  "fixed_at": "2026-10-05T01:51:47Z",
   "github_issue_number": 5466,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5466",
   "last_seen_at": "2026-10-05T01:34:53.232884Z",
@@ -119,6 +121,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5468",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -145,6 +148,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -156,7 +160,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1728",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bc12bc1f33873574",
+    "recorded_at": "2026-10-05T01:52:29.627423Z",
+    "runtime_contract_digest": "3cadfdd00cb423ba8f78a64604fc55225058745027d1bcf8f1a16e701428f5fb",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f5d8cba15390055c6d31f2a2e98508ab4dc3c501",
+    "source_merge_commit": "93c600814c7833bdced36b4be2b9e26ab5400010",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5468",
+    "validation_evidence": [
+      "AIstock pytest 37 passed; L0 passed; PR 5468 exact-head CI SUCCESS"
+    ],
+    "validation_evidence_digest": "e7fecfdc607da61228c2a0566d9d0d95fa6fc63dfffb180fd75c93b4215d2fd8"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -165,6 +190,9 @@
     "fingerprint": "7f09c42e776700546a2d052c",
     "source_event_id": "FE-20261005-7f09c42e7767"
   },
+  "validation_evidence": [
+    "AIstock pytest 37 passed; L0 passed; PR 5468 exact-head CI SUCCESS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
