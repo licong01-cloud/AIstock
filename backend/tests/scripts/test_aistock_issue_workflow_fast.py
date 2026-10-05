@@ -15,6 +15,52 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("selection,plans", [("l0", ["l0"]), ("l0 validation_catalog_integrity", ["l0", "validation_catalog_integrity"]), ("l0 l0 -- tests", ["l0"]), ("l0,validation_catalog_integrity", []), ("l0; unknown", []), ("l0 -s validation_catalog_integrity", []), ("l0 -- -k smoke", ["l0"])])
+def test_validation_receipt_explicit_nox_sessions(monkeypatch, tmp_path, selection, plans):
+    monkeypatch.setattr(workflow, "_assert_task_git_identity", lambda _: None)
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "a" * 40)
+    command = "python -m nox -s " + selection
+    receipts, errors = workflow._build_validation_receipts([command + " -> passed"], root=tmp_path)
+    assert [receipt["plan"] for receipt in receipts] == plans
+    assert bool(errors) == (not plans)
+    assert len({receipt["receipt_id"] for receipt in receipts}) == len(plans)
+    assert all(receipt["command"] == command and receipt["commit"] == "a" * 40 for receipt in receipts)
+    coverage = workflow._validation_receipt_plan_coverage(validation={"required_plans": plans}, receipts=receipts)
+    assert coverage["missing_required_plans"] == []
+    failed, errors = workflow._build_validation_receipts([command + " -> FAILED, 1 passed"], root=tmp_path)
+    assert failed == [] and errors
+
+
+@pytest.mark.parametrize("attempts,delay", [(16, 30), (6, 10), (1, 30), (4, 0), (0, -1)])
+def test_required_check_schedule_preserves_budget(attempts, delay):
+    fixed = workflow._required_check_poll_schedule(attempts, delay)
+    adaptive = workflow._required_check_poll_schedule(attempts, delay, adaptive=True)
+    assert fixed == (max(0, delay),) * (max(1, attempts) - 1)
+    assert sum(adaptive) == sum(fixed)
+    assert all(0 <= value <= max(0, delay) for value in adaptive)
+    assert len(adaptive) <= len(fixed) + 3
+    if attempts > 1 and delay > 0:
+        assert adaptive[0] == min(5, delay)
+
+
+@pytest.mark.parametrize("outcome,expected_calls", [("passed", 2), ("failed", 1), ("pending", 18)])
+def test_adaptive_required_checks_stop_early_or_fail_closed(monkeypatch, outcome, expected_calls):
+    calls, waits = [], []
+    payload = {"headRefOid": "pinned-task-head"}
+    def read(url, **kwargs):
+        assert kwargs["payload"] is payload and url == "https://example.invalid/pr/1"
+        calls.append(url)
+        state = "pending" if outcome == "pending" or (outcome == "passed" and len(calls) == 1) else outcome
+        return {"state": state}, None
+    monkeypatch.setattr(workflow, "_merge_required_check_result_with_transport_fallback", read)
+    monkeypatch.setattr(workflow, "_required_pr_check_summary", lambda result: {key: (["CI verdict"] if key == result["state"] else []) for key in ("failed", "pending", "passed", "non_blocking")})
+    monkeypatch.setattr(workflow.time, "sleep", waits.append)
+    _, fallback, summary, history = workflow._await_required_pr_checks("https://example.invalid/pr/1", payload=payload, attempts=16, delay_seconds=30, adaptive=True)
+    assert fallback is None and len(calls) == len(history) == expected_calls
+    assert summary[outcome] == ["CI verdict"]
+    assert waits == ([] if outcome == "failed" else [5] if outcome == "passed" else list(workflow._required_check_poll_schedule(16, 30, adaptive=True)))
+
+
 @pytest.fixture
 def cli_task_worktree(tmp_path, monkeypatch):
     base, task = tmp_path / "authority", tmp_path / "task"
@@ -1477,14 +1523,15 @@ def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(
         assert result["merge_commit_containment"]["ok"] is True
 
 
-@pytest.mark.parametrize("case", ["update", "noop", "foreign", "nonancestor", "drift", "transport"])
+@pytest.mark.parametrize("case", ["update", "noop", "foreign", "nonancestor", "drift", "transport", "crlf_update", "crlf_noop", "crlf_transport", "body_change"])
 def test_owned_pr_receipt_sync_is_exact_and_recoverable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     url, branch, old, new = "https://github.com/licong01-cloud/AIstock/pull/1", "bug/task", "a" * 40, "b" * 40
     body = tmp_path / "body.md"
-    body.write_text("validated receipts", encoding="utf-8")
+    body.write_text("validated receipts\nexact task identity\n", encoding="utf-8")
     row = {"pr_number": 1, "url": url, "state": "OPEN", "head_ref": branch, "base_ref": "main",
            "head_repo": "foreign/repo" if case == "foreign" else workflow.GITHUB_REPO,
-           "head_sha": new if case == "noop" else old, "body": body.read_text() if case == "noop" else "stale"}
+           "head_sha": new if case in {"noop", "crlf_noop"} else old,
+           "body": body.read_text().replace("\n", "\r\n") if case == "crlf_noop" else body.read_text() if case == "noop" else "stale"}
     writes: list[str] = []
     monkeypatch.setattr(workflow, "_github_pull_rest_readback", lambda url: dict(row))
     def run(args: list[str], **kwargs: Any) -> dict[str, Any]:
@@ -1492,19 +1539,23 @@ def test_owned_pr_receipt_sync_is_exact_and_recoverable(tmp_path: Path, monkeypa
             return {"ok": case != "nonancestor"}
         writes.append("PATCH")
         row["body"] = body.read_text()
-        if case == "transport":
+        if case.startswith("crlf_"):
+            row["body"] = row["body"].replace("\n", "\r\n")
+        if case == "body_change":
+            row["body"] += " "
+        if case in {"transport", "crlf_transport"}:
             return {"ok": False, "stderr": "TLS handshake timeout"}
         return {"ok": True, "stdout": json.dumps({"state": "open", "body": row["body"], "number": 1, "html_url": url,
             "head": {"sha": new if case == "drift" else old, "ref": branch, "repo": {"full_name": workflow.GITHUB_REPO}},
             "base": {"ref": "main"}})}
     monkeypatch.setattr(workflow, "_run_command", run)
-    if case in {"foreign", "nonancestor", "drift"}:
+    if case in {"foreign", "nonancestor", "drift", "body_change"}:
         with pytest.raises(workflow.WorkflowError):
             workflow._sync_owned_pr_body(pr_url=url, branch=branch, body_path=body, expected_head=new, before_push=True)
-        assert len(writes) == (1 if case == "drift" else 0)
+        assert len(writes) == (1 if case in {"drift", "body_change"} else 0)
     else:
         result = workflow._sync_owned_pr_body(pr_url=url, branch=branch, body_path=body, expected_head=new, before_push=True)
-        assert result["body_updated"] == (case != "noop")
+        assert result["body_updated"] == (case not in {"noop", "crlf_noop"})
 
 
 @pytest.mark.parametrize("same_head", [False, True])
