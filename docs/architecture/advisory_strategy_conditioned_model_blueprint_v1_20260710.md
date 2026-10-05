@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.22
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.23
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-05
@@ -2025,7 +2025,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | 已完成 / M10源码交付 | [M10 F2§15](advisory_breadth_state_price_value_m10_f2_design_20261005.md)#5458设计已合入9e39c3c1c并自己清理；源码38直接项/Ruff/F2/L0及真实原M1 bundle兼容通过；一次prepare2.094秒/0SQL/7720原键、7340 AVAILABLE/380预热 | producer296689715，一次4fit/完整四臂21.407秒；candidate/baseline/matched 11.4050%/21.3220%/4.5719%，配对日-8.8603/+5.9990bps均跨零，仅STOP本候选。实际39fit+1index，0经济确认/启用；源码#5459 HEAD696d19bb9/CI37243602139 SUCCESS后合入7aed83cc6并自己清理，不改旧政策/预算/结果 |
 | 已完成 / 通用日频价格输入 | [F1详细设计](advisory_generic_price_input_v1_f1_design_20261005.md)设计#5460已合入d78b2e053/自己清理，独立四文件叶已实现；26直接项/Ruff/两L0/原20候选D输入通过，source#5461 HEAD eff5947a6/CI37245983776 SUCCESS后合入0c33faa5c并自身清理；原0～50候选+真实D股票/基准/市场九字段，不需父score或LSTM/FUND腿 | 输入可移植不等于权重/价值标签跨包有效；不改M1～M10、原label/政策，不fit、读收益或连接API/UI/DB，不以未知分类或父资格等待阻断；价值目标后续另立F2 |
 | 已完成 / M12源码交付 | [M12 F2](advisory_session_path_m12_f2_design_20261005.md)#5464已合入/自身清理；12文件三轮源码自审/42直接项/Ruff/F2/L0及原M1 bundle兼容通过，producer4fb26cc、一次6.750秒prepare/21.406秒四fit四臂，原7720全保留 | candidate4.8425%/baseline21.3220%，日增量-14.8813bps及对matched-0.0220，两区间跨零，net false其余四项true，仅STOP本candidate。实际47+1，源码#5465 HEAD0f0e8c65a/CI37251660467 SUCCESS后合入1f85b44ff并自身清理，不再fit/确认；继续不同新假设，不默选通用目标 |
-| P2 / M13新自由流通信息 | [M13 F2](advisory_free_float_turnover_m13_f2_design_20261005.md)：固定自由换手20日均值/波动和D自由股本规模，区别旧量价相对权重。0trial有界聚合检查7330完整/380预热/10正常缺行，1 SELECT/1.438秒，仅键/非空未读值/收益 | 先设计多轮审核/交付，再独立树12文件薄只读来源/13对16核/显式47→51预算；原VALUE_REVIEW_5_V1/支持/成本不改。当前0M13fit，QE idle才一次研究；非vintage/native UNPROVEN不升级，不因缺原capture阻断策略包消费 |
+| P2 / M13新自由流通信息 | [M13 F2](advisory_free_float_turnover_m13_f2_design_20261005.md)：固定自由换手20日均值/波动和D自由股本规模，区别旧量价相对权重。0trial有界聚合检查7330完整/380预热/10正常缺行，1 SELECT/1.438秒，仅键/非空未读值/收益 | 设计#5467已合入7c024171f/自身清理，最新main独立树12文件已实现，三轮源码审核/稳定52直接项/Ruff/L0通过；薄只读来源/13对16核/显式47→51预算；原VALUE_REVIEW_5_V1/支持/成本不改。当前0M13fit，QE idle才一次研究；非vintage/native UNPROVEN不升级，不因缺原capture阻断策略包消费 |
 | 已完成 / P2 M5新信息 | #5432已合入716232d3b949d4dd0aecbe9fe210ad6fa8fe506b并完成自身清理；真实run advselectionvalue_8f53ace471987dc7f0b99a00完成7720键prepare/四fit/完整81D四臂，20直接+20reader测试PASS。成本后candidate/baseline/matched为13.2538%/21.3220%/4.5719% | 相对baseline日-6.8073bps、matched+8.0519bps，两CI跨零；原净增量条件失败，仅结束此假设不阻断包消费或项目。真实TAKE82/UNKNOWN控制6，累计19fit+1index；不救活旧模型、不重复研究或固化旧失败 |
 | P4 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
 
@@ -2207,4 +2207,4 @@ M1日频模型仍有真实Program、LSTM/FUND两腿和原value-label policy作�
 
 事前0trial工程聚合spec de29a8d1...仅一条SELECT/1.438秒，38168请求对/38158现存键、7330完整非空/380预热/10正常缺行、D股本非空7720；未读实际源值/标签/收益/fit，不等于数值或模型验收。正式prepare最多单30秒参数化只读请求/rollback/close、F新basic冻结工件，再处理实际非法数。先设计三视角修订/七F2/精确两文档/当前CI交付，再最新main独立树登记12 Advisory叶/测试/文档；纯3字段与同13/16核、真实M12前驱/显式free_float_extension47→51，旧默认不改，无原包资格门。
 
-当前实际47fit+1index、M13 source/预登记/prepare/fit/收益0。设计合入后实现并多轮审核，QE三公开running0才单次4fit/完整四臂；负向只停止自身candidate，正NAV也不称独立确认/泛化/激活。X临时/F新独立，无公共模块修改/DB写/服务控制，原18h/48h截止不重计；M1工程辅线等精确六UI/公共BUG语义，目标是价格业务与可验证收益而非历史固化。
+当前实际47fit+1index、M13独立12文件source已实现/三轮审核/稳定52直接项/Ruff/L0及原M1 bundle兼容通过，预登记/prepare/fit/收益仍0。设计#5467已合入/自己清理，源码已ff最新main93c600814，QE三公开running0才单次4fit/完整四臂；负向只停止自身candidate，正NAV也不称独立确认/泛化/激活。X临时/F新独立，无公共模块修改/DB写/服务控制，原18h/48h截止不重计；M1工程辅线等精确六UI/公共BUG语义，目标是价格业务与可验证收益而非历史固化。

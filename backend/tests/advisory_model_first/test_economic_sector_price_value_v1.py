@@ -97,10 +97,11 @@ def test_information_routes_keep_previous_identity_formulas_and_reject_wrong_blo
     from backend.services.advisory_model_first.economic_breadth_state_price_v1 import BREADTH_STATE_FEATURES
     from backend.services.advisory_model_first.economic_traded_price_distribution_v1 import TRADED_PRICE_FEATURES
     from backend.services.advisory_model_first.economic_session_path_v1 import SESSION_PATH_FEATURES
+    from backend.services.advisory_model_first.economic_free_float_turnover_v1 import FREE_FLOAT_FEATURES
     from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, information_fit_identity_v1
     from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
     fitted = sector_fit_fixture()
-    for model in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12'):
+    for model in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13'):
         assert information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model) == sha(
             dict(model_id=model, recipe=fitted.recipe, models=fitted.models, support=list(fitted.support.intervals_bps)))
     assert _information_key('M9', VOLUME_CONTEXT_FEATURES) == 'volume_context_features'
@@ -115,3 +116,6 @@ def test_information_routes_keep_previous_identity_formulas_and_reject_wrong_blo
     assert _information_key('M12', SESSION_PATH_FEATURES) == 'session_path_features'
     with pytest.raises(ValueError, match='block/model'):
         _information_key('M12', TRADED_PRICE_FEATURES)
+    assert _information_key('M13', FREE_FLOAT_FEATURES) == 'free_float_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M13', SESSION_PATH_FEATURES)

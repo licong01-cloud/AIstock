@@ -1,6 +1,6 @@
 # Advisory 自由流通换手状态 M13 F2详细设计
 
-2026-10-05；DESIGN_VERIFIED_IMPLEMENTATION_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_IMPLEMENTED_VERIFIED_RESEARCH_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -86,20 +86,26 @@ campaign=advisory_free_float_turnover_v1_20261005，model_id=M13，schema=econom
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-940 | §3/4自由换手与局部依赖；economic_free_float_turnover_v1.py | backend/tests/advisory_model_first/test_economic_free_float_turnover_v1.py 手算/零/依赖/单位/大数/毒化 | DESIGN_VERIFIED | none |
-| F-941 | §3原候选时钟/只读；economic_free_float_turnover_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_free_float_turnover_pipeline_v1.py 参数化单SELECT/事务/原KEY | DESIGN_VERIFIED | none |
-| F-942 | §5共同13/16；economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py 成熟/test poison/JSON identity | DESIGN_VERIFIED | none |
-| F-943 | §6实际47→51；economic_moneyflow_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py M12四head/旧47/新51/partial | DESIGN_VERIFIED | none |
-| F-944 | §7四臂NAV；economic_sector_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py TAKE/UNKNOWN/干预/结算 | DESIGN_VERIFIED | none |
-| F-945 | §9/10多轮审核精确交付旧兼容 | test: backend/tests/advisory_model_first/test_economic_free_float_turnover_pipeline_v1.py；artifact: 精确scope、F2/Ruff/L0/原bundle兼容收据 | DESIGN_VERIFIED | none |
-| F-946 | §2/6/8/10授权/资源/QE互斥 | backend/tests/advisory_model_first/test_economic_free_float_turnover_pipeline_v1.py；fit前后X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/m13-qe-idle-pre.json及post.json收据 | DESIGN_VERIFIED | none |
+| F-940 | §3/4自由换手与局部依赖；economic_free_float_turnover_v1.py | backend/tests/advisory_model_first/test_economic_free_float_turnover_v1.py 手算/零/依赖/单位/大数/毒化 | SOURCE_VERIFIED | none |
+| F-941 | §3原候选时钟/只读；economic_free_float_turnover_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_free_float_turnover_pipeline_v1.py 参数化单SELECT/事务/原KEY | SOURCE_VERIFIED | none |
+| F-942 | §5共同13/16；economic_sector_price_value_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py 成熟/test poison/JSON identity | SOURCE_VERIFIED | none |
+| F-943 | §6实际47→51；economic_moneyflow_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py M12四head/旧47/新51/partial | SOURCE_VERIFIED | none |
+| F-944 | §7四臂NAV；economic_sector_price_pipeline_v1.py | backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py TAKE/UNKNOWN/干预/结算 | SOURCE_VERIFIED | none |
+| F-945 | §9/10多轮审核精确交付旧兼容 | test: backend/tests/advisory_model_first/test_economic_free_float_turnover_pipeline_v1.py；artifact: 精确scope、F2/Ruff/L0/原bundle兼容收据 | SOURCE_VERIFIED | none |
+| F-946 | §2/6/8/10授权/资源/QE互斥 | backend/tests/advisory_model_first/test_economic_free_float_turnover_pipeline_v1.py；fit前后X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/m13-qe-idle-pre.json及post.json收据 | SOURCE_VERIFIED | none |
 
 ## 12. Current execution state
 
-仅设计、数据源字段语义与0trial只读聚合工程检查完成；M13 source/正式预登记/prepare/fit/收益均0。实际仍47fit+1index、sealed/经济确认/激活0，M12源已合入/清理。不把7330非空几何当数值验收、原生身份或研究有效；正式prepare再进行实际值校验，普通缺失保留。源码实现必须等本设计交付后进行。
+本段立项检查点只完成设计与0trial非空键聚合，源码/正式预登记/prepare/fit/收益当时均0。设计#5467 HEAD0294872f3/CI37252593479 SUCCESS后合入7c024171f7527ed9079f0c569e38b4da0bf4917c并自身清理，之后独立源码树事前登记12文件。从93c600814最新main同步仅其他模块已交付差异，本窗口没有修改那些文件。当前新五叶实现/五直接测试已通过稳定52项、Ruff与两L0，无正式prepare或研究fit；实际仍47fit+1index、sealed/经济确认/激活0，M12源已合入/清理。7330非空几何不是数值/收益/原生验收，实际源值将仅在正式prepare校验。
 
 ## 13. 三轮设计审核与修订
 
 信息/经济轮核对真实M9/M11字段只是相对量权重，不含自由流通股本分母；按官方来源把percent除100、万股log加log10000写成固定公式，避免把自由流通与无限售流通混为一谈，不承诺新alpha。时钟/依赖轮明确仅D股本消费、前19预热仍可保留D规模、历史股本毒化与未来宽源先投影；盘后D声明与非vintage/native UNPROVEN分开，不补捕获时间或重验QE包资格。预算/业务轮按真实原评价核实尾部是最差5%而非10%，已修正；固定47实fit→51显式扩展/真实M12阶段及零partial隐式重跑；空名单0SQL、源值校验与非空几何、工程/研究/激活分开。
 
 初次F2发现章节/矩阵标识及可验证测试引用不足，已补充正式Contracts/Implementation/Verification/Production gates/Index/Matrix标题、精确F-940～946与直接测试/收据路径；修订后7/7、warnings0 PASS，未把设计检查当源码完成。本窗口分视角重复自审而非独立外审；最终diff/精确两文件scope与currentHEAD CI分别通过后才交付，不接旧负候选补证项目。
+
+## 14. 三轮源码审核及预研究核实
+
+合同/时钟轮逐行核对唯二新基本字段、原20session/D-T及D股本局部消费；零换手合法、NULL只UNKNOWN依赖字段，future/unconsumed先投影，研究T观察不进入D。数值/实现轮核对大数均值/std与log单位、原KEY顺序；初50通过/2失败均为新测试fixture的名称和JSONL换行错误，按失败节点修复后2/2通过，再稳定52直接项/Ruff PASS，未修改业务数学救活试验。预算/业务轮确认实际M12前驱、旧所有默认预算保持、partial不再fit、typed plan篡改拒绝和readonly事务rollback/close；原M1真实JSON bundle模型hash872acff3894c7a64b1b87c51ebd440d739a82069d68be0e30ea27dee9c81931e不变、native UNPROVEN/nondeployable，0fit/market或label数组/DB/激活。
+
+L0 feature0finding，standard3个P2复杂度告警/0阻断；两项是未改旧M6/M1 join，一项新KEY一对一merge：原7720行、source最多154400且实际请求38168对、每候选至多20session，O(source+7720×20)有界，无Cartesian放大/逐日SQL。不因该warning跨范围重构旧代码。正式研究尚未启动；下一干净producer/实施闭包绑定后仅一次preregister/prepare，QE前后空闲再4fit/完整四臂，事实另回写，不把单元fit记为research fit。

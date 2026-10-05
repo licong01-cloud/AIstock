@@ -30,7 +30,7 @@ def moneyflow_implementation_sha256_v1():
         readonly_dependencies={name: hashlib.sha256((repo/name).read_bytes().replace(b'\r\n', b'\n')).hexdigest() for name in dependencies}))
 
 
-def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None):
+def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None):
     anchor = _verify_reference(plan.budget_anchor_ref)
     root = plan.campaign_root.resolve()
     original = PriceCampaignPlanV2.model_validate_json((anchor.parent/'plan.json').read_text(encoding='utf-8'))
@@ -56,6 +56,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
         raise ValueError('traded price extension requires original explicit M10 extension')
     if session_path_extension is not None and traded_price_extension is None:
         raise ValueError('session path extension requires original explicit M11 extension')
+    if free_float_extension is not None and session_path_extension is None:
+        raise ValueError('free float extension requires original explicit M12 extension')
     if price_path_extension is not None:
         from backend.services.advisory_model_first.economic_price_path_value_v1 import PricePathPlanV1
         extension = PricePathPlanV1.model_validate(price_path_extension)
@@ -121,13 +123,25 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                 or session_extension.parameters['policy_sha256'] != traded_extension.parameters['policy_sha256']
                 or session_extension.parameters['cost_sha256'] != traded_extension.parameters['cost_sha256']):
             raise ValueError('session path extension original root/source/predecessor differs')
+    if free_float_extension is not None:
+        from backend.services.advisory_model_first.economic_free_float_turnover_v1 import FreeFloatTurnoverPlanV1
+        declared = free_float_extension.model_dump() if isinstance(free_float_extension, FreeFloatTurnoverPlanV1) else free_float_extension
+        free_extension = FreeFloatTurnoverPlanV1.model_validate(declared)
+        free_predecessor = _verify_reference(free_extension.predecessor_manifest_ref)
+        if (free_extension.campaign_root.resolve() != root or not _same_sources(free_extension, session_extension)
+                or free_extension.budget_anchor_ref != session_extension.budget_anchor_ref
+                or free_predecessor != root/session_extension.experiment_id/'evaluated/manifest.json'
+                or free_extension.parameters['policy_sha256'] != session_extension.parameters['policy_sha256']
+                or free_extension.parameters['cost_sha256'] != session_extension.parameters['cost_sha256']):
+            raise ValueError('free float extension original root/source/predecessor differs')
     expected = {'M2': (4, PriceCampaignPlanV2), 'M3': (5, PriceCampaignPlanV2), 'M4': (2, PriceCampaignPlanV2),
                 'M1': (4, SectorPricePlanV1), 'M5': (4, SelectionStatePricePlanV1)}
     if any(event.get('state') != 'STARTED' or event.get('kind') not in ('PHYSICAL_FIT', 'INDEX_BUILD')
            or event.get('model_id') not in (*expected, 'M6', *(('M7',) if price_path_extension is not None else ()),
                *(('M8',) if market_risk_extension is not None else ()), *(('M9',) if volume_context_extension is not None else ()),
                *(('M10',) if breadth_state_extension is not None else ()), *(('M11',) if traded_price_extension is not None else ()),
-               *(('M12',) if session_path_extension is not None else ())) for event in events):
+               *(('M12',) if session_path_extension is not None else ()),
+               *(('M13',) if free_float_extension is not None else ())) for event in events):
         raise ValueError('moneyflow cumulative journal has foreign state/model/kind')
     for model, (count, cls) in expected.items():
         found = [event for event in events if event['kind'] == 'PHYSICAL_FIT' and event['model_id'] == model]
@@ -264,6 +278,25 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
             event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != session_extension.campaign_id
             or event['experiment_id'] != session_extension.experiment_id or event['head'] not in heads for event in latest_session):
             raise ValueError('session path extension own cumulative budget/journal differs')
+    if free_float_extension is not None:
+        if len(latest_session) != 4:
+            raise ValueError('free float extension needs actual four completed M12 fits')
+        previous_root = root/session_extension.experiment_id
+        registered = read_stage(previous_root/'preregistered', stage='preregistered', plan_sha256=session_extension.plan_sha256, parent_sha256=None)
+        _ledger(session_extension, previous_root, 'PREREGISTERED', previous_root/'preregistered/manifest.json')
+        from backend.services.advisory_model_first.economic_session_path_v1 import SessionPathPlanV1
+        frozen = SessionPathPlanV1.model_validate_json((previous_root/'preregistered/plan.json').read_text(encoding='utf-8'))
+        if frozen != session_extension:
+            raise ValueError('free float extension cannot substitute original M12 plan')
+        parent = registered['stage_sha256']
+        for stage in ('prepared', 'trained', 'evaluated'):
+            parent = read_stage(previous_root/stage, stage=stage, plan_sha256=session_extension.plan_sha256, parent_sha256=parent)['stage_sha256']
+        _ledger(session_extension, previous_root, 'EVALUATED', free_predecessor)
+        latest_free = [event for event in events if event['model_id'] == 'M13']
+        if len(latest_free) > 4 or len({event['head'] for event in latest_free}) != len(latest_free) or any(
+            event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != free_extension.campaign_id
+            or event['experiment_id'] != free_extension.experiment_id or event['head'] not in heads for event in latest_free):
+            raise ValueError('free float extension own cumulative budget/journal differs')
     return root
 
 
