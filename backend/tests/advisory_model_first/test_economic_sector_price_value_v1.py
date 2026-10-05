@@ -185,3 +185,12 @@ def test_information_routes_keep_previous_identity_formulas_and_reject_wrong_blo
         _matched_information_v1('M19', ())
     with pytest.raises(ValueError, match='matched'):
         _matched_information_v1('M1', SECTOR_FEATURES)
+
+
+def test_M25_fixed_sector_path_block_and_matched_route():
+    from backend.services.advisory_model_first.economic_sector_path_price_v1 import INFORMATION_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, _matched_information_v1
+    assert _information_key('M25', INFORMATION_FEATURES) == 'sector_path_price_features'
+    assert _matched_information_v1('M25', SECTOR_FEATURES) == SECTOR_FEATURES
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M25', ())
