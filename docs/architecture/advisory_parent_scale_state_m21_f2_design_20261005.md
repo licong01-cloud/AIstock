@@ -86,7 +86,7 @@ Rollout只Advisory离线研究工具，不改API/UI/订单/资金仓位/生产de
 | F-006 | 原registry与evaluate_information_study_v1 | artifact: 原EXPLORATORY_SCREEN/RISK_MANAGED_ADVISORY/NAVIGATION_ONLY及只计划一次研究；study 尚0 | SOURCE_LOCAL_PASS | none |
 | F-007 | §2精确十叶、自身X/F和交付 | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/m21-source-scope.json 十叶；current CI和merge/cleanup另报 | SOURCE_LOCAL_PASS | none |
 
-源码本地实现不是研究/收益/运行启用验收；M21正式preregister/prepare/fit/evaluation仍0，当前实际79fit+1index是M20及以前累计，不预报83或拿单元fixture fit计为正式研究。SOURCE提交后先冻结clean producer再登记一次，结果独立更新。
+M21已实际一次正式四stage研究，但模型收益NOT_CONFIRMED、生产启用0；实际累计83fit+1旧index，未把单元fixture计入正式研究。干净producer a9129c2先于plan冻结，后续结果文档HEAD不重训或替换producer；SOURCE current CI/合入清理状态另报。
 
 ## 13. 三轮设计审核与修订
 
@@ -107,3 +107,11 @@ Rollout只Advisory离线研究工具，不改API/UI/订单/资金仓位/生产de
 ALGO-COMPLEXITY-001逐项审核：十文件changed-only无finding，四源码全量三P2/0blocking分别为新私有预算20×80次有界纯metadata筛选（journal<=512KB）、新norm精确KEY one_to_one join（source<=20000/原candidate<=7720，先投影请求再解析）和旧sector source join（既存逻辑未改）。没有SQL、笛卡尔积、按历史天重跑父模型或未受限扫描；同D两腿moments合计线性7720，正式prepare运行后报告实际耗时。不是忽略finding或修改公共guardrail规则。
 
 DESIGN-COMPLIANCE-001四项逐条：①范围交付按七项矩阵的真实SOURCE本地状态报告，正式研究尚未运行/收益未确认/生产启用0不冒充完成；②请求输入类型/身份/未来clock错误显式拒绝，正常缺失保留UNKNOWN且不删填，不静默伪造成功；③原模型配置、label/support/policy/成本、人口和导航条件保持，不改变批准业务语义；④不新增包门/审批/等待实盘或公共模块阻断，既存用户重启权及源码边界保持。39直接测试及三个旧bundle回读支撑SOURCE状态，current CI/merge、研究与运行状态仍分别报告。
+
+## 15. 一次实际研究 / 经济结论
+
+2026-10-05 14:44UTC拟合前及14:45UTC后QE三running均0；run advscalestate_c70714c6f2c8281dc3549b0b、plan c70714c6f2c8281dc3549b0b54dd9fe793c966e2f941433a814763f357d66da5，原journal79+1字节prefix2688e19fec73638d8859909628faaf80c90fbea949e80fd38b451287d9879ee2。clean producer a9129c2cfdd5dd0441610d67b877725697e8ba44/implementation7ff462ccc301ccdbeb0fb89ffbe6f9b075f40625586659e162288adefbf314f3；只一次preregister/0SQL prepare1.437秒，386D7720原键/scale状态全部可读取，但原业务缺源或价支持仍可能UNKNOWN。四fit9.719秒/完整四臂29.282秒，共同成熟train4049/214D、1591validation仅诊断，累计真实83fit+1旧index。
+
+原81D1620候选100共同NAV日candidate/base/新matched/rule净收益3.5320/21.3220/26.7299/20.5747%；paired日−16.40261bps CI[−44.37131,10.01784]、−20.86633 CI[−43.60471,−1.31542]。40真TAKE+6UNKNOWN研究控制46episode全settled，0held-mark/端点阻断；net_increment不通过，其余四条件通过。候选center/scale新增没有价值、SKIP原盈利episode39/亏损24，仅STOP当前candidate/NOT_CONFIRMED，不把回撤改善−5.2169%对base−10.3314%冒称收益目标达成，也不回选matched或再补旧失败证据。两个描述性区间及21次串行开发偏差不作独立确认。
+
+完整四stage正式F保留、evaluated manifest fileSHA9c87b484e1fb6e3d83c3df7e8ed214a2e43892f8910bc89cfe781008bdb1055e。源码测试/研究完成≠currentCI合入/收益确认/运行启用；NV/原native UNPROVEN、0sealed/OOS/real fill/activation/DB访问或写入/公共模块改动/服务控制保持。实际D moments prepare1.437秒无按日重复父运行。负向只结束本candidate，继续有经济解释的新信息或未完成消费交付，不新增父包门或重置时限。
