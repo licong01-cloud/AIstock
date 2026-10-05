@@ -1697,9 +1697,9 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert set(jobs) == {"ci-verdict"}
     verdict = jobs["ci-verdict"]
     workflow_condition = (
-        "always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && "
+        "${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && "
         "steps.classify.outputs.workflow_validation_required == 'true' && "
-        "steps.classify.outputs.workflow_test_targets != '[]'"
+        "steps.classify.outputs.workflow_test_targets != '[]' }}"
     )
     workflow_validation = next(step for step in verdict["steps"] if step.get("id") == "workflow_validation")
     workflow_policy = next(step for step in verdict["steps"] if step.get("id") == "workflow_policy")
