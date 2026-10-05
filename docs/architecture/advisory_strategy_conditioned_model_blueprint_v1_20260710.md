@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.32
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.33
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-05
@@ -2031,7 +2031,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | 已完成 / M16原候选群体状态 | [M16 F2](advisory_candidate_cohort_m16_f2_design_20261005.md)：一次0SQL prepare/4fit/完整四臂，源码#5482已合入7521de2fdd | candidate25.5593%/baseline21.3220%、paired日+3.4848bps<原5且区间跨零，83真TAKE/6UNKNOWN控制，net未过；仅STOP该candidate，真实全轮63+1，§16.6.9 |
 | 已完成 / P2 M5新信息 | #5432已合入716232d3b949d4dd0aecbe9fe210ad6fa8fe506b并完成自身清理；真实run advselectionvalue_8f53ace471987dc7f0b99a00完成7720键prepare/四fit/完整81D四臂，20直接+20reader测试PASS。成本后candidate/baseline/matched为13.2538%/21.3220%/4.5719% | 相对baseline日-6.8073bps、matched+8.0519bps，两CI跨零；原净增量条件失败，仅结束此假设不阻断包消费或项目。真实TAKE82/UNKNOWN控制6，累计19fit+1index；不救活旧模型、不重复研究或固化旧失败 |
 | 已完成价格研究 / M17有序资金流路径 | [M17 F2](advisory_flow_path_m17_f2_design_20261005.md)：原M6冻结源0SQL；一次4fit/完整四臂，paired日baseline−4.3050bps/CI跨零，85真TAKE/2UNKNOWN控制 | 本candidate停止/NOT_CONFIRMED，不重跑；源码54项/Ruff/F2/L0通过，source#5485已合入4708dd6a7/自己官方清理，实际67+1，§16.6.10 |
-| 当前价格研究 / M18非对称历史风险 | [M18 F2](advisory_asymmetric_risk_m18_f2_design_20261005.md)：56直接项/Ruff/F2/L0通过，独立plan d7d0e967...一次0SQL prepare/7720原键，研究fit0 | 08:49:56UTC QE MA-E42R running；工程currentCI后可交付/保留冻结树，30min复查再一次4fit至71；全轮实际67+1、不重复prepare，§16.6.11 |
+| 当前价格研究 / M18非对称历史风险 | [M18 F2](advisory_asymmetric_risk_m18_f2_design_20261005.md)：56直接项/Ruff/F2/L0通过，独立plan d7d0e967...一次0SQL prepare/7720原键，研究fit0 | 09:21:01UTC QE MA-E42R running；source#5487已合入13b4c4232/冻结树保留未清理，30min复查再一次4fit至71；全轮实际67+1、不重复prepare，§16.6.11 |
 | P4 / Exit后置 | 买入价格主线形成完整业务与可验证增量后，推进日级卖出vs继续持有价值 | 已有设计复用，不另开分钟择时或并行Exit训练，不把holding相关性当Exit盈利信号 |
 
 v4.00当前功能进度：#5423以HEAD93ea35f4b/CI37160815000成功交付并自身cleanup_done。唯一已消费2024-08-01原20候选、原core receipt/15D与21D板块行情数值兼容通过；既有M1数学直接输出9条研究买入价格集合、11条UNKNOWN，法律完整tick最多1491，保留支持洞、多段及全部原名单。原D close/除权参考与既存冻结references逐条一致；无T实际行情、市场收益/label、新窗口、fit或角色激活。价格源确实只读DB，canonical历史组件ready不等于实时canonical切换：live仍shsz_st_pit_active_v1、component_is_live=false。首次legacy输入按合同拒绝；没有接受旧路径、改数据/公共模块或启用服务。原父模型时钟仍未知，明确原conf文件只读404不等于不存在模型或必需重训。本次事实/时钟/队列三轮自审只更新两文档及直接功能事实，不改变模型、scope、研究合同或两条跨零增量区间，不形成旧失败固化、新包装平台或人为等日期门禁；此前model-state GET元数据upsert披露保持，不能宣称整轮数据库NOOP。
@@ -2247,4 +2247,4 @@ M17已从干净producer f5918b5一次预登记/0SQL prepare8.562秒，run advflo
 
 [M18 F2详细设计](advisory_asymmetric_risk_m18_f2_design_20261005.md)检验固定原20session的19log-return两侧RMS与18相邻下跌能量，区分同末端涨幅/趋势但幅度分布不同的历史风险。不改窗口、seed/loss/标签/成本；先log原close+log同日adj_factor避免乘积溢出，正常缺源逐股UNKNOWN，平坦或全上涨时合法0，不做QE alpha/分钟执行或重新Selection。
 
-M18源码已在latestmain e4c9f7771独立12文件范围实现，clean producer397aaa83f624a2670cef2642adf89f1635d51a96；固定三量/共同13-16核/显式71及旧caps，正常UNKNOWN和原价值锚不改。三轮自审修复后56直接项/Ruff/F2/两L0及原M1 bundle只读兼容通过，尚非模型有效。一次新预登记run advasymrisk_d7d0e9676f7177bb1fbc2cc8/plan d7d0e9676f7177bb1fbc2cc8c0c52ac056c780c864060c23725a45b6f86d17f4/impl a5022095...，0SQL prepare8.594秒/7720原键/原380828价格源：7330AVAILABLE、380不足20session、10正常缺源UNKNOWN，无删填或重选股。08:49:56UTC公开QE三running0/1/0，MA-E42R qe_20261005_162928_e86b占用，未启动M18四fit或读取评估收益；全轮实际仍67fit+1旧index，source工程可先交付但冻结源码树保留至实际消费，约30min复查QE，fit不并行。M1六UI/BUG公共smoke仍外部等待，sealed/confirmation/activation/DB写/服务控制0，原18h/48h不重计。
+M18源码已在latestmain e4c9f7771独立12文件范围实现，clean producer397aaa83f624a2670cef2642adf89f1635d51a96；固定三量/共同13-16核/显式71及旧caps，正常UNKNOWN和原价值锚不改。三轮自审修复后56直接项/Ruff/F2/两L0及原M1 bundle只读兼容通过，尚非模型有效。一次新预登记run advasymrisk_d7d0e9676f7177bb1fbc2cc8/plan d7d0e9676f7177bb1fbc2cc8c0c52ac056c780c864060c23725a45b6f86d17f4/impl a5022095...，0SQL prepare8.594秒/7720原键/原380828价格源：7330AVAILABLE、380不足20session、10正常缺源UNKNOWN，无删填或重选股。09:21:01UTC复查公开QE三running0/1/0，MA-E42R qe_20261005_162928_e86b占用，未启动M18四fit或读取评估收益；全轮实际仍67fit+1旧index，source#5487 HEADb71f0aef7/currentCI37286496082 attempt2 SUCCESS后09:17:32UTC合入13b4c4232da82d9d0abc1cc0c5f20251da92d23b，root main clean且与origin/main一致；原attempt1仅checkout远端读取失败，重试后检出及业务检查全部通过，未改公共CI/网络配置。冻结源码树暂保留至实际消费，下一QE约09:51UTC复查，fit不并行。M1六UI/BUG公共smoke仍外部等待，sealed/confirmation/activation/DB写/服务控制0，原18h/48h不重计。
