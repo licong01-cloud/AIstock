@@ -1,6 +1,6 @@
 # Advisory 原候选横截面状态条件买价 M16 F2详细设计
 
-2026-10-05；IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。本文是下一独立新信息假设，不是第二条并行训练线。
+2026-10-05；SOURCE_MERGED_RESEARCH_COMPLETE_CANDIDATE_STOPPED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY / ECONOMIC_NOT_CONFIRMED。研究严格串行完成，不是第二条并行训练线。
 
 ## 1. Background / Goal
 
@@ -100,16 +100,16 @@ typed plan dump-revalidate/干净producer/实施闭包/原recipe/profile先登�
 
 ## 12. Current state
 
-设计#5481 HEAD292c8d38/currentCI37261286842 SUCCESS（03:56:04UTC）后已合入8ffce17015、自己official cleanup_done。M16 source来自该latestmain且事前登记12文件，纯三量/0SQL原冻结D阶段/显式63与三路由已实现；实际原source值/prepare/研究预登记/fit/收益0，实际仍51+1。20定向PASS/1 fixture重复rank失败修复后该节点PASS，再稳定五文件53PASS/Ruff/feature L0零项/standard L0三P2零阻断及旧M1真实bundle metadata/hash兼容通过；合成测试不计研究trial。M14prepared等待QE/M15源码合入而研究pending，04:04:14UTC三running0/1/0、MA-E42 loop2/6；M16研究仍须真实59/evaluated前驱。M1 UI/公共smoke独立待交接，无公共模块/QE写、DB写、激活/安装/服务控制，临时X/正式F；源码验证不表示模型/收益或日频业务完成。
+设计#5481已合入8ffce17015/自身清理；12文件source稳定53项/Ruff/F2/L0/原M1 bundle兼容，#5482 HEAD5f611fe25/currentCI37262710010 SUCCESS后合入7521de2fdd。工程交付时研究0且保留原树；实际M15 evaluated/59后，run advcandidatecohort_99155bf19bf9cf1af6b5fa7e/plan99155bf1.../implementation6e97f322...一次0SQL prepare2.25秒、7720原键全群体AVAILABLE。07:18:22UTC前、07:18:55UTC后QE三count0，一次四fit/完整四臂30.844秒，train4049/214D、validation1591仅诊断。81D/1620候选/100共同NAV日candidate/baseline/matched/rule25.5593/21.3220/15.3803/20.5747%，paired日baseline+3.4848 CI[−19.1286,24.5484]、matched+8.5645 CI[−5.5995,25.6092]bps；83真TAKE/6UNKNOWN控制、89episodes全settled，其它四项通过而net未过原5bps/区间跨零，STOP本candidate。正名义收益不冒称可复现净增量/确认/上线，不重选阈值/变体。真实累计63fit+1旧index，所有旧预算/身份/标签/支持/政策保持；各冻结闭包已消费可精确自身官方清理但正式F产物保留，M1UI/BUG公共smoke两未合入树仍保留，无sealed/独立OOS/公共或QE改动、DB写/安装/激活/服务控制。
 
 ## 13. 三轮设计审核与修订
 
 第一轮按原D表schema/原12D与M5/M10范围核对信息可识别性：群体同伴D变化可在该股D信息和全市场宽度不变时改变三量，不把单股ret变换当新信息，也不修改Selection排序。第二轮修订数值边界为scale-normalized稳定计算、quiet NaN/正常缺clock与真实坏数分离、非零Decimal下溢拒绝；完整flat/N1的std0是已知状态，不以退化造UNKNOWN。第三轮修订原群体必须在监督成熟筛选前计算、禁止借Y或已买入集合定义同伴；实际51与未来59/63分开、M14/M15两冻结树保留、原source交付先于研究而研究前驱不省略。补丁曾因两个段落顺序逆向造成匹配失败、未写入；改为文档顺序的精确段落后成功，不改变方案或范围。
 
-DESIGN-COMPLIANCE-001 F-970～976逐项对照原population/clock、数值、0SQL/atomic、共同成熟/支持、真实累计budget、四臂/证据层、边界交付；设计七项满足但实现/模型/经济仍0。修订后F2七项、两文件scope/diff和当前HEAD CI通过后方交付；仅本窗口多视角自审而非独立外审。不为原失败候选收集经济补证或占据QE研究资源。
+DESIGN-COMPLIANCE-001 F-970～976逐项对照原population/clock、数值、0SQL/atomic、共同成熟/支持、真实累计budget、四臂/证据层、边界交付；设计交付时七项满足，实现/模型/经济当时仍0。修订后F2七项、两文件scope/diff和当前HEAD CI通过后方交付；仅本窗口多视角自审而非独立外审。不为原失败候选收集经济补证或占据QE研究资源。
 
 ## 14. 源码三轮审核与修复
 
 第一轮合同/时钟核对纯helper只投影原KEY五D字段、每D原群体在监督/动作筛选前定义，未来/外股毒化不消费、少一原成员不改分母；0SQL prepared只复用原D表与原名单、one_to_one保序。第二轮数值/正常缺值核对quietNaN、N1/flat的已知0/1、scale-normalized 1e308手算及非零下溢、真实坏数/未来clock typed失败；新source模板CRLF未命中时在发布前拒绝残留price字段，归一LF再生成且读回修正说明，无数据写。第三轮预算/模型核对M15完整四heads/stages才59→63、model_copy重验证、旧identity/cap公式不变、共同成熟13/16/test毒化/原支持，20定向PASS后修复fixture同日rank重复（不改业务唯一性），失败节点PASS再稳定53PASS/Ruff/F2/L0；原真实M1 bundle metadata/hash只读兼容0fit/行情或label数组/DB。
 
-DESIGN-COMPLIANCE-001 F-970～976工程逐项与源码和直接证据相符；模型/经济状态仍PENDING。新prepare one_to_one KEY join与两旧join为三P2：原source/candidates各<=7720、固定每D一次群体聚合总O(N)、键唯一/保序/无笛卡尔，已核对复杂度；不新增缓存/平台来消警。currentHEAD必需CI全绿才按长任务已有授权源码合入；保留未完成研究的冻结source树，不对其pull未来budget/routing而伪装exact-retry。所有旧负fit/20D读回均未重跑。
+DESIGN-COMPLIANCE-001 F-970～976工程逐项与源码和直接证据相符；该源码审核阶段模型/经济PENDING；随后真实研究完成而经济仍NOT_CONFIRMED见§12。新prepare one_to_one KEY join与两旧join为三P2：原source/candidates各<=7720、固定每D一次群体聚合总O(N)、键唯一/保序/无笛卡尔，已核对复杂度；不新增缓存/平台来消警。currentHEAD必需CI全绿才按长任务已有授权源码合入；保留未完成研究的冻结source树，不对其pull未来budget/routing而伪装exact-retry。所有旧负fit/20D读回均未重跑。
