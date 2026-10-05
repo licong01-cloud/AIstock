@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -413,8 +414,27 @@ def _ownership_rules() -> list[dict[str, Any]]:
     return sorted(rules, key=lambda item: int(item.get("priority") or 0), reverse=True)
 
 
-def match_changed_files(changed_files: list[str]) -> dict[str, Any]:
-    modules = _catalog_modules()
+@dataclass(frozen=True)
+class ValidationCatalogSnapshot:
+    """Read-only selection inputs, shared within one operation, never globally cached."""
+
+    modules: dict[str, dict[str, Any]]
+    plans: dict[str, dict[str, Any]]
+    rules: list[dict[str, Any]]
+
+
+def validation_catalog_snapshot() -> ValidationCatalogSnapshot:
+    return ValidationCatalogSnapshot(_catalog_modules(), _plans_by_key(), _ownership_rules())
+
+
+def match_changed_files(
+    changed_files: list[str],
+    *,
+    _modules: dict[str, dict[str, Any]] | None = None,
+    _rules: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    modules = _catalog_modules() if _modules is None else _modules
+    rules = _ownership_rules() if _rules is None else _rules
     matched_rules: list[dict[str, Any]] = []
     impacted_modules: list[str] = []
     suggested_scope: list[str] = []
@@ -423,7 +443,7 @@ def match_changed_files(changed_files: list[str]) -> dict[str, Any]:
 
     for file_path in _unique_strings(changed_files):
         matches = []
-        for rule in _ownership_rules():
+        for rule in rules:
             for pattern in _as_list(rule.get("include")):
                 if _pattern_matches(str(pattern), file_path):
                     matches.append(rule)
@@ -458,13 +478,16 @@ def match_changed_files(changed_files: list[str]) -> dict[str, Any]:
     }
 
 
-def select_validation(changed_files: list[str], module: str | None = None) -> dict[str, Any]:
+def select_validation(
+    changed_files: list[str], module: str | None = None, *, _catalog: ValidationCatalogSnapshot | None = None,
+) -> dict[str, Any]:
     docs_lite_change = _is_docs_lite_change(changed_files)
     docs_fast_tier = _docs_fast_tier(changed_files)
     docs_controlled_required = _docs_controlled_required(changed_files)
-    modules = _catalog_modules()
-    plans = _plans_by_key()
-    ownership = match_changed_files(changed_files)
+    catalog = validation_catalog_snapshot() if _catalog is None else _catalog
+    modules = catalog.modules
+    plans = catalog.plans
+    ownership = match_changed_files(changed_files, _modules=modules, _rules=catalog.rules)
     impacted = list(ownership["impacted_modules"])
     primary_modules = _unique_strings(
         str(item.get("primary_module"))
