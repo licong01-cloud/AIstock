@@ -1,5 +1,6 @@
 """One immutable M14 study, bounded readonly D-only valuation snapshot."""
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
@@ -76,6 +77,7 @@ def load_valuation_context_v1(*, candidates, calendar, session_factory=None):
     receipt = dict(selects=0, requested_pairs=len(pairs), requested_keys_sha256=sha(
         [[str(day.date()), symbol] for day, symbol in pairs]), source='market.daily_basic',
         ratio_unit='dimensionless', dividend_unit='percent',
+        missing_numeric_representation='POSTGRES_QUIET_NAN_AS_NULL_NO_FILL',
         source_evidence='CURRENT_DB_HISTORICAL_NON_VINTAGE', native_identity='UNPROVEN', database_written=False)
     if not pairs:
         return _frame(pd.DataFrame(columns=names), names[:2], set(names)), dict(receipt, returned_rows=0)
@@ -98,6 +100,8 @@ def load_valuation_context_v1(*, candidates, calendar, session_factory=None):
     frame = _frame(pd.DataFrame(values, columns=names), names[:2], set(names))
     if not set(frame[names[:2]].itertuples(index=False, name=None)).issubset(set(pairs)):
         raise ValueError('valuation returned foreign date/instrument')
+    # PostgreSQL numeric NaN is quiet Decimal NaN: canonical missing, never a filled value.
+    frame[names[2:]] = frame[names[2:]].map(lambda value: None if isinstance(value, Decimal) and value.is_qnan() else value)
     return frame, dict(receipt, query_at=query_at, selects=1, returned_rows=len(frame),
         first_day=str(pairs[0][0].date()), last_day=str(pairs[-1][0].date()))
 

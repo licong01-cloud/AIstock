@@ -73,7 +73,9 @@ def _valuation_number(value, *, dividend=False):
         return np.nan
     if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, Decimal, np.integer, np.floating)):
         raise ValueError('valuation consumed value is not real numeric or NULL')
-    if isinstance(value, Decimal) and value.is_nan():
+    if isinstance(value, Decimal) and value.is_qnan():
+        return np.nan
+    if isinstance(value, Decimal) and value.is_snan():
         raise ValueError('valuation malformed Decimal is not NULL')
     try:
         number = float(value)

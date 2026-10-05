@@ -1,4 +1,6 @@
 import json
+from decimal import Decimal
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -8,7 +10,7 @@ import pytest
 from backend.services.advisory_model_first import economic_valuation_context_pipeline_v1 as pipeline
 from backend.services.advisory_model_first.economic_daily_feature_core_v1 import D_FEATURES
 from backend.services.advisory_model_first.economic_entry_labels import KEY, candidate_roster_sha256
-from backend.services.advisory_model_first.economic_entry_pipeline import _json_bytes, publish_stage, read_stage
+from backend.services.advisory_model_first.economic_entry_pipeline import _json_bytes, _parquet_bytes, publish_stage, read_stage
 from backend.services.advisory_model_first.economic_price_campaign_pipeline_v2 import _record
 from backend.services.advisory_model_first.economic_valuation_context_v1 import CLOCK, VALUATION_FEATURES, STATUS, ValuationContextPlanV1
 from backend.services.advisory_model_first.research_control import evidence_reference_for_file
@@ -88,7 +90,7 @@ def test_M14_T_open_observation_keeps_D_clock_missing_and_no_future_close():
 
 
 
-@pytest.mark.parametrize('defect', ['none', 'missing', 'duplicate', 'foreign_symbol', 'schema', 'timeout'])
+@pytest.mark.parametrize('defect', ['none', 'missing', 'quiet_nan', 'duplicate', 'foreign_symbol', 'schema', 'timeout'])
 def test_exact_basic_pairs_single_SELECT_readonly_rollback_close(monkeypatch, defect):
     import backend.db.pg_pool as pool
     args = valuation_fixture()
@@ -97,6 +99,8 @@ def test_exact_basic_pairs_single_SELECT_readonly_rollback_close(monkeypatch, de
     rows = [(day.date(), symbol, 20., 2., 3.) for day, symbol in pairs]
     if defect == 'missing':
         rows = rows[1:]
+    elif defect == 'quiet_nan':
+        rows[0] = (rows[0][0], rows[0][1], Decimal('NaN'), Decimal('2'), Decimal('3'))
     elif defect == 'duplicate':
         rows += rows[:1]
     elif defect == 'foreign_symbol':
@@ -114,11 +118,14 @@ def test_exact_basic_pairs_single_SELECT_readonly_rollback_close(monkeypatch, de
         cursor.execute.side_effect = fail_select
     monkeypatch.setattr(pool, '_db_cfg', lambda: dict(dbname='unit', user='readonly-unit', host='unit.invalid'))
     session = BoundedEntryReadSession(EntryWorkBudget(30), connector=lambda **_: connection)
-    if defect in ('none', 'missing'):
+    if defect in ('none', 'missing', 'quiet_nan'):
         frame, receipt = pipeline.load_valuation_context_v1(candidates=args['candidates'], calendar=args['calendar'], session_factory=lambda: session)
         assert len(frame) == len(rows) and receipt['selects'] == 1 and receipt['requested_pairs'] == len(pairs)
         assert receipt['native_identity'] == 'UNPROVEN' and not receipt['database_written']
         assert receipt['ratio_unit'] == 'dimensionless' and receipt['dividend_unit'] == 'percent'
+        if defect == 'quiet_nan':
+            saved = pd.read_parquet(BytesIO(_parquet_bytes(frame)))
+            assert pd.isna(saved.loc[0, 'pe_ttm']) and saved.loc[0, 'pb'] == Decimal('2')
     else:
         with pytest.raises((TimeoutError, ValueError, AdvisoryModelFirstError)):
             pipeline.load_valuation_context_v1(candidates=args['candidates'], calendar=args['calendar'], session_factory=lambda: session)

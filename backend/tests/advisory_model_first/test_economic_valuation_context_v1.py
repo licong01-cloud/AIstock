@@ -56,7 +56,7 @@ def test_field_local_unknown_keeps_candidates_and_other_known_fields(missing):
 
 
 @pytest.mark.parametrize(('field', 'bad'), [('pe_ttm', True), ('pe_ttm', np.inf), ('pb', '2'),
-    ('pe_ttm', 10**1000), ('pb', Decimal('NaN')), ('pe_ttm', Decimal('1e-1000')),
+    ('pe_ttm', 10**1000), ('pb', Decimal('sNaN')), ('pe_ttm', Decimal('1e-1000')),
     ('pe_ttm', 1e-320), ('dv_ttm', Decimal('1e-1000')), ('dv_ttm', 5e-324), ('dv_ttm', -1.)])
 def test_consumed_bad_values_underflow_and_inverse_overflow_raise(field, bad):
     args = valuation_fixture()
@@ -64,6 +64,16 @@ def test_consumed_bad_values_underflow_and_inverse_overflow_raise(field, bad):
     args['basics'].loc[0, field] = bad
     with pytest.raises(ValueError):
         valuation_context_rows_v1(**args)
+
+
+def test_quiet_Decimal_NaN_is_field_local_missing_like_float_NaN():
+    args = valuation_fixture()
+    args['basics'].pe_ttm = args['basics'].pe_ttm.astype(object)
+    args['basics'].loc[0, 'pe_ttm'] = Decimal('NaN')
+    result = valuation_context_rows_v1(**args)
+    assert result[KEY].equals(args['candidates'][KEY])
+    assert json.loads(result.loc[0, UNKNOWN]) == {VALUATION_FEATURES[0]: 'UNKNOWN_VALUATION_SOURCE'}
+    np.testing.assert_allclose(result.loc[0, list(VALUATION_FEATURES[1:])].astype(float), [.5, .03])
 
 
 def test_projection_before_values_and_actual_duplicate_wrong_T_empty():

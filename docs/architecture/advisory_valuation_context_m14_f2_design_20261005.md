@@ -44,7 +44,7 @@ load_valuation_context_v1：单参数化unnest JOIN+BETWEEN+LIMIT(requests+1)，
 | book_to_price_D | 1/pb，无量纲净资产/现价上下文 | NULL/NaN或恰为0的比率 |
 | dividend_yield_ttm_D | dv_ttm/100，无量纲过去12月现金分红/现价 | NULL/NaN；已知0合法“零历史股息” |
 
-已知PE/PB负值是有符号盈利或净资产状态，保留负倒数，不自动当缺失、0或非法正价；0分母不是已知0 earnings yield，而是UNKNOWN_ZERO_VALUATION_DENOMINATOR。dv_ttm须>=0，负值是错误，不做abs。被消费已知量须真实numeric（含Decimal/NumPy）、非bool/string/inf，普通NULL/NaN局部UNKNOWN，Decimal signaling/非有限或巨大数转换typed ValueError；非零原始数向float转换成0、倒数overflow或非零输入下underflow为0均计算错误，不能把极小Decimal当0分母UNKNOWN或clip/伪0。
+已知PE/PB负值是有符号盈利或净资产状态，保留负倒数，不自动当缺失、0或非法正价；0分母不是已知0 earnings yield，而是UNKNOWN_ZERO_VALUATION_DENOMINATOR。dv_ttm须>=0，负值是错误，不做abs。被消费已知量须真实numeric（含Decimal/NumPy）、非bool/string/inf，普通NULL/NaN（含PostgreSQL quiet Decimal NaN）局部UNKNOWN，Decimal signaling NaN/Infinity或巨大数转换typed ValueError；非零原始数向float转换成0、倒数overflow或非零输入下underflow为0均计算错误，不能把极小Decimal当0分母UNKNOWN或clip/伪0。
 
 三量均只需D同字段、没有20session预热门；缺失只该字段UNKNOWN，已知其他字段保留，块AVAILABLE只三量已知。不用列间选择/当前行业截面归一、估计EPS/BVPS或改变假定买价来重算D估值；特征固定D，g独立条件化由模型学习。明确“同OHLC可不同估值”不表示估值是跨行业可交易alpha，后续正结果须独立归因与确认。
 
@@ -94,7 +94,7 @@ M13源码CI通过交付/自己清理→本设计三轮/F2/currentCI/合入自己
 
 ## 12. Current state
 
-M14设计#5474已合入55d519c1e/自己清理；独立源码树登记12文件已实现纯三量、有界单SELECT、薄prepare、显式M14/55预算/同核13/16模型路由。56直接项/Ruff通过，feature L0零发现、标准L0三条P2/0blocking；原M1真实JSON bundle在新路由下metadata/hash兼容、0fit/无行情或标签数组。当前M14正式登记/prepare/研究fit/收益0，研究累计51fit+1index，经济确认/激活/DB写/公共修改/服务控制0；本地工程PASS不称研究已完成或原生身份COMPLETE。
+M14设计#5474已合入55d519c1e/自己清理；独立源码树登记12文件已实现纯三量、有界单SELECT、薄prepare、显式M14/55预算/同核13/16模型路由。58直接项/Ruff通过，feature L0零发现、标准L0三条P2/0blocking；原M1真实JSON bundle在新路由下metadata/hash兼容、0fit/无行情或标签数组。当前一个旧M14预登记265ff616...在quiet Decimal NaN类型缺值处prepare失败，修复记录见§14.1；prepared/研究fit/收益0，研究累计51fit+1index，经济确认/激活/DB写/公共修改/服务控制0；本地工程PASS不称研究已完成或原生身份COMPLETE。
 
 ## 13. 三轮设计审核与修订
 
@@ -109,3 +109,9 @@ F2初七项/七行/warnings0 PASS；上述修订后再执行最终F2、diff和�
 第三轮预算/业务逐项确认真实M13完整stage/ledger/四heads，51→55显式扩展、所有旧cap及身份公式不改；同成熟13/16、test毒化不改变拟合、未来/重复/外来键错误、正常NULL原KEY保留、单SELECT/rollback/close、exact retry不重查和partial/QE未知不fit均覆盖。原M1 JSON model/bundle SHA保持872acff3.../c674a388...，不重新训练、绑定或读取收益。DESIGN-COMPLIANCE-001七项按真实实现/测试核对，源码/研究/盈利与runtime分层如§12。
 
 复杂度三条P2仅两处既有M6/M1 join和本M14 KEY一对一join；旧处未作广泛重构，新处双方上限7720、原KEY唯一与validate=one_to_one、原顺序显式比较，输出不爆行；纯逐股D投影O(source+7720)、source上限7720，单有界DB请求，不嵌套全池/20D循环。F2最终七项和精确scope/diff完成后提交干净producer，再一次准备/新研究；currentHEAD必需CI后源码交付，不以P2告警制造平台任务。
+
+### 14.1 真实prepare后的修订复核
+
+首个干净producer29ac7ac56/plan265ff616...的预登记保存成功，单只读D查询后在字段转换遇到PostgreSQL numeric NaN对应quiet Decimal NaN而停止，prepared未发布/fit0。类型语义错误不应把正常缺失当坏数据：已补齐quiet Decimal NaN与普通float NaN相同的逐字段UNKNOWN；源冻结仅将quiet NaN规范为NULL以便Parquet持久化，收据明确POSTGRES_QUIET_NAN_AS_NULL_NO_FILL，无填值/删股/DB写。signaling NaN、Infinity、非零下溢和坏数仍拒绝，负PE/PB与0股息仍不变。
+
+新增纯数学quiet NaN与真实source/Parquet往返测试，12修复直接节点PASS/Ruff通过，再稳定58项矩阵与F2/L0复核；旧265ff616...登记保留原身份、不覆盖或伪PREPARED，新实现需重新提交干净producer/独立plan身份，未发生研究fit或结果选择。此修改仅类型缺值兼容，不变三个公式、模型或研究经济条件；不因正常数据缺失停整个研发。
