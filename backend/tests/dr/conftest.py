@@ -22,7 +22,6 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
