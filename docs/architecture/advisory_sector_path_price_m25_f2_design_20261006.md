@@ -1,6 +1,6 @@
 # Advisory 板块短期压力与回撤条件价格 M25 F2详细设计
 
-设计2026-10-06；DESIGN_REVIEW / SOURCE_NOT_IMPLEMENTED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+设计2026-10-06；SOURCE_LOCAL_VERIFIED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。设计#5514/head65c50e7e/currentCI37348004254 SUCCESS已合入56a4371d/自身officialcleanup_done18.75秒；批准全文读取后自己的latestmain十叶源码实施。
 
 ## 1. Background / Goal
 
@@ -89,15 +89,15 @@ M1六UI/BUG1726公共smoke独立KEEP；它们未交付不阻断M25研究，也�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1/4；planned economic_sector_path_price_v1.py | artifact: 原M1 source schema；test: planned backend/tests/advisory_model_first/test_economic_sector_path_price_v1.py | DESIGN_REVIEW_PASS | none |
-| F-002 | §3/4；planned source loader | test: planned backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py；KEY/clock/quotes/missing | DESIGN_REVIEW_PASS | none |
-| F-003 | §5；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；planned16/18/test poison | DESIGN_REVIEW_PASS | none |
-| F-004 | §6；planned 私有预算 | test: planned backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py；actualM24/96prefix/typed/partial | DESIGN_REVIEW_PASS | none |
-| F-005 | §7；planned nodes/price_set/evaluate | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；planned四臂/价洞/UNKNOWN | DESIGN_REVIEW_PASS | none |
-| F-006 | §8；registry/evaluation | artifact: 冻结原合同及用途；test: planned backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py | DESIGN_REVIEW_PASS | none |
-| F-007 | §2/9；ownscope | test: planned backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py；scope/F2/L0/currentCI | DESIGN_REVIEW_PASS | none |
+| F-001 | §1/4；economic_sector_path_price_v1.py | artifact: 原M1 source schema；test: backend/tests/advisory_model_first/test_economic_sector_path_price_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-002 | §3/4；source loader | test: backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py；KEY/clock/quotes/missing | SOURCE_LOCAL_VERIFIED | none |
+| F-003 | §5；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；planned16/18/test poison | SOURCE_LOCAL_VERIFIED | none |
+| F-004 | §6；私有预算 | test: backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py；actualM24/96prefix/typed/partial | SOURCE_LOCAL_VERIFIED | none |
+| F-005 | §7；nodes/price_set/evaluate | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；planned四臂/价洞/UNKNOWN | SOURCE_LOCAL_VERIFIED | none |
+| F-006 | §8；registry/evaluation | artifact: 冻结原合同及用途；test: backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-007 | §2/9；ownscope | test: backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py；scope/F2/L0/currentCI | SOURCE_LOCAL_VERIFIED | none |
 
-仅设计，不代表SOURCE/prepare/fit/evaluation完成。实际95+1原M24已完成，不把计划99算发生。
+矩阵记录源码本地七项验收：49直接测试/Ruff/F2/十叶scope/原M1-M23-M24三bundle节点通过；changed L0零、staged新一/full二P2均非blocking，有限24*96 journal/512KB/7720 KEY join/H5 chunk界限见§8/13。一次只读prepare已完成，拟合和收益评价因QE已有活动实验未启动，实际95+1不变；源码/prepare/经济/runtime分报，详§14。
 
 ## 12. 三轮设计审核修订
 
@@ -106,3 +106,17 @@ M1六UI/BUG1726公共smoke独立KEEP；它们未交付不阻断M25研究，也�
 第二轮来源/PIT：不消费H5公司当前行业，仅原base D分类、原crosswalk/code_map与同(date,id)quotes；原21完整session到D，与M1支持人群一致，current未来或坏数/重复明确错误。原UNKNOWN不能解锁，normal缺失不能删股/补数据；源读前后pin不变/有限chunk/原50180报价既有schema，只新读取，不重审失败收益。
 
 第三轮预算/范围：actualM24为17/19、95fit+1index96行，而M25新16/18到99；不混淆计划/实绩或重置cap。source仅两新Advisory叶及两个shared route，三个旧代表bundle避免重跑大量旧测试，日线区间不变成执行算法。无QE/公共data/DB/服务写、原deadline保持；DESIGN-COMPLIANCE-001七项逐项，设计与SOURCE/经济/runtime分报。
+
+## 13. 三轮源码审核修订 / DESIGN-COMPLIANCE-001
+
+第一轮信息/时钟/数值：数学测试证明同ret5/vol20的不同路径可以有不同ret1/drawdown20；原M1三信息与唯一D12/Y保留，矩阵16/18、同共同成熟train、原完整support，test特征/标签毒化不改变fit。21session全部<=D、分类known_from和base clock拒绝未来；UNKNOWN/warmup/缺quote/未映射保留全部KEY，合法id0保留，NULL/qNaN不同于BOOL/string/Inf/sNaN/非正价格或finite overflow。
+
+第二轮来源/编排：loader原source_summary五路径/profile/crosswalk/code_map/H5/taxonomy exactpins，H5 read-only/两个date-id价格列/chunk100000，读前后哈希变化拒绝；只prepare读H5，后续消费自身immutable prepared，不重复原模型研究。actualM24 metadata17/19/四stage/ledger及96行95+1 prefix、typed clone/原M1 base/Crosswalk/partial与exact prepare idempotent绑定。编排夹具遗漏read_stage parent_sha参数，按真实preregistered→prepared链补齐，未放宽生产函数。
+
+第三轮范围/业务：shared只M25 recipe/status/matched3/cap99，旧默认/参数/原caps不变，三代表旧family做identity+各两query，不补失败收益证据。T open观察价/T close哨兵不入预测，价洞/多段/empty query与两臂jointUNKNOWN；原全四臂/停牌限价T+1/成本与未知控制归因不变。49直接项/Ruff0，通过后clean producer、一次研究与currentCI分别报告；十叶之外未编辑，0QE/公共模块/DB/服务写。
+
+DESIGN-COMPLIANCE-001逐项：①七批准项对应真实源码和最小测试，无未授权删减冒称完成；②正常UNKNOWN不吞坏数据/未来读取/partial失败伪success；③原股票/日期/标签/support/费用/执行policy与旧families无语义改变；④没有新增策略包资格、旧实验补证或未来收益门，原48h截止/重启授权/来源NV与未确认边界保留。尚无M25正式收益或runtime启用，测试PASS不代替经济效果。
+
+## 14. 新一次prepare完成，研究串行等待
+
+clean producer c4777ca5db3e011d2b9a4d488c5809a3b04890e3/implementation a162b1d8d6e67ef96cc6e489f94c96784ae4a635c0d2a26c015f8e683253a6c4，run advsectorpath_8adafb7823329af27ad01fa5/plan 8adafb7823329af27ad01fa504812ef24212d91d5603a119ce212db1df401d9a。新一次prepare5.125秒/0SQL，386D7720候选全保留；原H5只读50180唯一date/id quotes，3505AVAILABLE/4215UNKNOWN，与原M1支持人群一致，来源五文件读前后hash一致。prepared manifest fileSHA e2e4ef5565830a26331f477978a415612e246fbf85cd5d7aa554643d8dc5e64b。拟合前2026-10-05T17:43:25+00:00只读QE三路径：single0/custom_evo1/multi-alpha0，因此未调用train/evaluate，0新formal fits、无fit_attempt或trained目录；累计仍95PHYSICAL_FIT+1旧INDEX，不伪报计划99/收益结果。仅M25研究动作因用户实验串行限制待QE空闲，SOURCE及只读prepare已完成；不停止/修改QE，不重复prepare/旧研究或为失败模型补证。原截止2026-10-06 02:36不重置，若QE届时仍运行则保留该准确断点，不擅延时训练或绕过串行约束；任何新fit须fresh三running0。49直接项/Ruff/F2/scope/原M1-M23-M24三bundle/L0无blocking，源码currentCI/合入清理另报。0sealed/OOS/经济确认/activation/DB读写/服务或公共模块控制。
