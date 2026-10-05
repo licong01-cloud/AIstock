@@ -31,6 +31,7 @@ TYPED_EXCEPTION_REASONS = frozenset(
         "SUSPEND_INTRADAY",
         "SOURCE_NOT_APPLICABLE",
         "OFFICIAL_QUOTE_UNAVAILABLE",
+        "USER_DEFERRED_COLLECTION",
     }
 )
 
@@ -50,6 +51,10 @@ class TypedGap:
             raise ValueError("typed gap identity is incomplete")
         if self.reason_code not in TYPED_EXCEPTION_REASONS:
             raise ValueError("typed gap reason is not registered")
+        if self.reason_code == "USER_DEFERRED_COLLECTION" and (
+            self.dataset != "margin_detail" or self.symbol != "margin_detail" or self.start != self.end
+        ):
+            raise ValueError("user financing deferral cannot explain other data gaps")
         if self.authority_sha256 is None:
             raise ValueError("typed gap requires an authority hash")
         ensure_sha256(self.authority_sha256, field="authority_sha256")

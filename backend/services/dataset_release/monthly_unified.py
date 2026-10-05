@@ -24,6 +24,7 @@ from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 import uuid
 
 from .canonical import canonical_json_bytes, ensure_sha256
+from .monthly_error_diagnostics import monthly_error_diagnostics, monthly_error_message
 
 
 REQUEST_SCHEMA = "aistock_monthly_release_request_v1"
@@ -362,9 +363,15 @@ def classify_component_actions(changes: Sequence[SourceChange]) -> dict[str, str
         if dataset in {"industry_classification", "sw_daily", "stock_universe_pit"}:
             promote("sector_context", ComponentAction.SELECTIVE_REBUILD)
         if kind in {"HISTORICAL_REPAIR", "NEW_SECURITY_HISTORY", "PIT_REVISION"}:
-            for component in tuple(actions):
-                if actions[component] == ComponentAction.INCREMENTAL:
-                    actions[component] = ComponentAction.SELECTIVE_REBUILD
+            # A repair is scoped to its own source domain, not every tail
+            # encountered earlier in the batch. Otherwise daily_basic repairs
+            # rebuild unrelated minute/index data and depend on record order.
+            for component in COMPONENTS:
+                if dataset in _component_source_datasets(component) or (
+                    dataset == "stock_universe_pit"
+                    and component in {"day", "minute", "factor", "suspend"}
+                ):
+                    promote(component, ComponentAction.SELECTIVE_REBUILD)
         if kind == "ADJ_DENOMINATOR_CHANGE":
             for component in ("day", "minute", "factor"):
                 promote(component, ComponentAction.SELECTIVE_REBUILD)
@@ -1480,6 +1487,64 @@ class MonthlyReleaseService:
             last_error=None,
         )
 
+    def bind_repair_inputs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str) -> dict[str, Any]:
+        """Bind exact existing repair assets before SOURCE, never rewrite a seal.
+
+        This is an authenticated preparation command, not an activation grant
+        or READY attestation. The same worker lock serializes it with run().
+        """
+        from .monthly_legacy_prefix import load_legacy_prefix
+        from .monthly_repair_inputs import validate_monthly_repair_inputs
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get("monthly_repair_inputs")
+            if existing is not None:
+                if canonical_json_bytes(existing) != canonical_json_bytes(inputs):
+                    raise MonthlyReleaseConflict("monthly repair inputs are already bound to different assets")
+                reference = _require_content_ref(plan["monthly_repair_inputs_ref"], field="monthly repair input binding")
+                path = root / reference["id"]
+                receipt = _read_json(path, label="repair input binding")
+                if path.stat().st_size != reference["size"] or _file_sha256(path) != reference["sha256"] or receipt.get("inputs") != existing:
+                    raise MonthlyReleaseConflict("monthly repair input binding bytes differ")
+                return receipt
+            state = self.store.read_state(operation_id)
+            if state["status"] not in {ReleaseState.PLANNED.value, ReleaseState.FAILED.value,
+                    ReleaseState.SOURCE_BLOCKED.value, ReleaseState.CANCELLED.value} or any(
+                self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES
+            ) or plan.get("plan_state") != "AWAITING_SOURCE_SNAPSHOT":
+                raise MonthlyReleaseConflict("monthly repair inputs can only bind before any SOURCE seal")
+            predecessor = plan["predecessor"]
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed before repair binding")
+            try:
+                prefix = load_legacy_prefix(Path(predecessor["candidate_root"]),
+                    expected_manifest_sha256=predecessor["dataset_manifest_sha256"],
+                    expected_file_sha256=plan["predecessor_manifest_ref"]["sha256"],
+                    expected_cutoff=date.fromisoformat(predecessor["cutoff"]), expected_release_id=predecessor["release_id"])
+                normalized = validate_monthly_repair_inputs(inputs, predecessor=prefix,
+                    target_cutoff=date.fromisoformat(plan["target_cutoff"]))
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
+                raise MonthlyReleaseRequestInvalid("monthly repair input validation failed", context={"cause": str(exc)}) from exc
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed during repair binding")
+            digest = _digest(normalized)
+            relative = f"inputs/repair-{digest}.json"
+            path = root / relative
+            receipt = {"schema_version": "aistock_monthly_repair_input_binding_v1", "operation_id": operation_id,
+                "input_sha256": digest, "inputs": normalized, "bound_by": principal,
+                "bound_at": datetime.now(UTC).isoformat(), "database_write": False,
+                "active_profile_write": False, "runtime_action": False, "publication_allowed": False}
+            if path.exists():
+                receipt = _read_json(path, label="existing repair input binding")
+                if receipt.get("inputs") != normalized or receipt.get("operation_id") != operation_id:
+                    raise MonthlyReleaseConflict("existing repair input binding differs")
+            else:
+                _write_exclusive(path, receipt)
+            self.store.replace_plan(operation_id, {**plan, "monthly_repair_inputs": normalized,
+                "monthly_repair_inputs_ref": {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}})
+            return receipt
+
     def _finalize_plan_from_source(
         self,
         operation_id: str,
@@ -1549,6 +1614,7 @@ class MonthlyReleaseService:
             "rows_validated": None, "rows_sealed": None, "partitions_sealed": None,
         }
         last_write: float | None = None
+        started_at = time.monotonic()
 
         def require_current(state: Mapping[str, Any]) -> None:
             if state.get("attempt") != attempt or state.get("current_stage") != stage:
@@ -1567,11 +1633,21 @@ class MonthlyReleaseService:
                 state = self.store.read_state(operation_id)
                 require_current(state)
                 observed_at = datetime.now(UTC).isoformat()
+                elapsed = max(0.0, now - started_at)
                 state["stage_progress"] = {
                     "schema_version": "aistock_monthly_stage_progress_v1",
                     "operation_id": operation_id, "attempt": attempt, "stage": stage,
                     "observed_at": observed_at, **observation,
                     "total_rows": None, "total_partitions": None,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "rows_validated_per_second": (
+                        observation["rows_validated"] / elapsed
+                        if observation["rows_validated"] is not None and elapsed > 0 else None
+                    ),
+                    "rows_sealed_per_second": (
+                        observation["rows_sealed"] / elapsed
+                        if observation["rows_sealed"] is not None and elapsed > 0 else None
+                    ),
                 }
                 state["updated_at"] = observed_at
                 _replace_json(root / "state.json", state)
@@ -1732,7 +1808,8 @@ class MonthlyReleaseService:
                         operation_id,
                         status=ReleaseState.FAILED.value,
                         current_stage=stage,
-                        last_error={"code": code, "message": str(exc), "type": type(exc).__name__},
+                        last_error={"code": code, "message": monthly_error_message(exc), "type": type(exc).__name__,
+                                    "exception_chain": monthly_error_diagnostics(exc)},
                     )
             try:
                 ready = self._close_ready(
@@ -1752,8 +1829,9 @@ class MonthlyReleaseService:
                     current_stage="RELEASE_CLOSURE",
                     last_error={
                         "code": code,
-                        "message": str(exc),
+                        "message": monthly_error_message(exc),
                         "type": type(exc).__name__,
+                        "exception_chain": monthly_error_diagnostics(exc),
                     },
                 )
             return self.store.update_state(

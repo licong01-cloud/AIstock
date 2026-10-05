@@ -20,6 +20,7 @@ from backend.services.dataset_release.api_models import (
     UnifiedMonthlyAdoptRequest,
     UnifiedMonthlyAuthorizationIssueRequest,
     UnifiedMonthlyReleaseRequest,
+    UnifiedMonthlyRepairInputsRequest,
 )
 from backend.services.dataset_release.monthly_runtime import (
     MonthlyRuntimeConfigurationError,
@@ -177,6 +178,18 @@ def submit_monthly_release(
             "status_url": f"/api/v1/qlib/monthly-releases/{operation_id}",
         },
     }
+
+
+@router.post("/{operation_id}/repair-inputs")
+def bind_monthly_repair_inputs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_repair_inputs_response_v1", "data": _call(
+        lambda: service.bind_repair_inputs(operation_id, inputs=request.inputs, principal=principal.principal_id)
+    )}
 
 
 @router.post("/adopt", status_code=201)

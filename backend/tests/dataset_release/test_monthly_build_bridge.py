@@ -247,9 +247,11 @@ def test_resolution_processor_uses_shared_build_fingerprints() -> None:
     assert processor.validation_fingerprint == expected["validation_fingerprint"]
 
 
+@pytest.mark.parametrize("source_action", ["REUSE", "INCREMENTAL"])
 def test_initial_bridge_compiles_sealed_source_without_database_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    source_action: str,
 ) -> None:
     digest = "a" * 64
     source_stage_ref = CASRef(digest, 7, f"cas/sha256/aa/{digest}")
@@ -299,6 +301,10 @@ def test_initial_bridge_compiles_sealed_source_without_database_read(
 
     monkeypatch.setattr(bridge_module, "load_source_stage_receipt", lambda *args, **kwargs: frozen)
     monkeypatch.setattr(bridge_module, "load_artifact_ready_contract", lambda *args, **kwargs: artifact_ready)
+    def no_baseline_gate(**kwargs):
+        raise AssertionError("monthly append must not reopen historical CAS/Merkle baseline")
+
+    monkeypatch.setattr(bridge_module, "_predecessor_baseline", no_baseline_gate)
     monkeypatch.setattr(
         bridge_module,
         "monthly_build_fingerprints",
@@ -353,7 +359,7 @@ def test_initial_bridge_compiles_sealed_source_without_database_read(
             },
         },
         source_receipt={
-            "scope": {"component_actions": _actions("REUSE")},
+            "scope": {"component_actions": _actions(source_action)},
             "input_refs": [
                 {
                     "id": bundle_path.relative_to(tmp_path).as_posix(),
@@ -371,7 +377,13 @@ def test_initial_bridge_compiles_sealed_source_without_database_read(
     assert compiled.physical_plan["database_read_performed"] is False
     assert {
         row["action"] for row in compiled.physical_plan["actions"]
-    } == {"FULL_REBUILD"}
+    } == {"INCREMENTAL"}
     assert compiled.physical_plan["build_inputs"]["baseline"] is None
+    inputs = compiled.physical_plan["build_inputs"]
+    assert inputs["source_bundle_sha256"] == bundle_sha
+    assert inputs["monthly_legacy_predecessor"]["predecessor"]["candidate_root"] == str(predecessor_root)
+    assert inputs["business_validation_scope"] == {
+        "mode": "month_delta", "start": "2026-09-01", "end": "2026-09-30",
+    }
     assert compiled.physical_plan["build_inputs"]["predicted_new_bytes"] > 123
     assert json.loads(bundle_path.read_text(encoding="utf-8")) == bundle

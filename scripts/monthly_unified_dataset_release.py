@@ -27,6 +27,9 @@ def _parser() -> argparse.ArgumentParser:
         default=os.getenv("AISTOCK_BACKEND_API_ROOT", "http://127.0.0.1:8001/api/v1"),
     )
     commands = parser.add_subparsers(dest="command", required=True)
+    bind = commands.add_parser("bind-repairs")
+    bind.add_argument("--operation-id", required=True)
+    bind.add_argument("--inputs", type=Path, required=True)
     for name in ("plan", "run"):
         command = commands.add_parser(name)
         command.add_argument("--cutoff", type=date.fromisoformat, required=True)
@@ -225,7 +228,24 @@ def _adoption_body(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     _validate_args(args)
-    if args.command in {"plan", "run"}:
+    if args.command == "bind-repairs":
+        if not args.inputs.is_absolute() or not args.inputs.is_file() or args.inputs.stat().st_size > 1024 * 1024:
+            raise ValueError("repair input file must be a bounded absolute regular file")
+        for path in (args.inputs, *args.inputs.parents):
+            if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+                raise ValueError("repair input file must not be linked")
+        before = args.inputs.stat()
+        raw = args.inputs.read_bytes()
+        after = args.inputs.stat()
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("repair input file changed during read")
+        inputs = json.loads(raw)
+        if not isinstance(inputs, dict):
+            raise ValueError("repair input file must contain an object")
+        result = _call(root=args.api_root, method="POST",
+            suffix=f"/{urllib.parse.quote(args.operation_id, safe='')}/repair-inputs",
+            body={"schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": inputs}, idempotency=None)
+    elif args.command in {"plan", "run"}:
         result = _call(
             root=args.api_root,
             method="POST",

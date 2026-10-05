@@ -20,6 +20,20 @@ from backend.services.dataset_release.monthly_source_audit import (
 from backend.services.dataset_release.monthly_unified import SOURCE_GATES
 
 
+def test_user_deferred_margin_is_not_provider_absence_or_generic_exception():
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_margin_publication
+    counter = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=date(2026, 9, 30), rows=[], receipt={}, gate=counter,
+                             deferred_authority_sha256="a" * 64)
+    assert counter.expected_count == counter.explained_count == 1
+    assert counter.missing_count == counter.invalid_count == 0
+    assert counter.exceptions[0].reason_code == "USER_DEFERRED_COLLECTION"
+    assert counter.exceptions[0].start == counter.exceptions[0].end == "2026-09-30"
+    ordinary = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=date(2026, 9, 29), rows=[], receipt={}, gate=ordinary)
+    assert ordinary.missing_count == 1
+
+
 SHA = "a" * 64
 
 

@@ -253,8 +253,12 @@ class SourceQuerySpec:
             raise ValueError("non-null source values must be projected value fields")
         if not set(self.audit_non_null_value_columns).issubset(self.value_columns):
             raise ValueError("audit non-null values must be physical projected fields")
-        if self.start_policy not in {"daily", "minute", "timeless", "window_overlap"}:
+        if self.start_policy not in {"daily", "minute", "timeless", "window_overlap", "construction_facts"}:
             raise ValueError("source query start policy is invalid")
+        if self.start_policy == "construction_facts" and (
+            self.query_id != "adj_factor_construction" or self.date_expression is not None or self.audit_dataset is not None
+        ):
+            raise ValueError("construction facts require the code-owned bounded adj-factor query")
         if self.start_policy == "timeless" and self.date_expression is not None:
             raise ValueError("timeless query cannot carry a date expression")
         if self.date_range_policy not in {"inclusive_date", "timestamp_day_half_open"}:
@@ -347,6 +351,27 @@ class SourceQuerySpec:
         alias = "source_row"
         projected = tuple(dict.fromkeys((*self.key_columns, *self.value_columns)))
         payload = "jsonb_build_object(" + ",".join(f"'{column}',{alias}.{column}" for column in projected) + ")"
+        if self.query_id == "adj_factor_construction":
+            # This returns genuine facts, not manufactured factors. The
+            # lateral query computes the actual maximum through the cutoff;
+            # exact anchors come from the immutable files being appended.
+            # UNION prevents counting a maximum/anchor twice. All data reads
+            # still execute inside the caller's imported read-only snapshot.
+            return (
+                "WITH requested_anchors AS (SELECT ts_code,trade_date FROM "
+                "jsonb_to_recordset(%(anchors_json)s::jsonb) AS a(ts_code text,trade_date date)), "
+                "selected_keys AS (SELECT codes.ts_code,maximum.trade_date "
+                "FROM unnest(%(codes)s::text[]) AS codes(ts_code) CROSS JOIN LATERAL "
+                "(SELECT fact.trade_date FROM market.adj_factor AS fact "
+                "WHERE fact.ts_code=codes.ts_code AND fact.trade_date >= %(source_start)s "
+                "AND fact.trade_date <= %(cutoff)s "
+                "ORDER BY fact.adj_factor DESC NULLS LAST, fact.trade_date DESC LIMIT 1) AS maximum "
+                "UNION SELECT ts_code,trade_date FROM requested_anchors "
+                "WHERE trade_date <= %(cutoff)s AND ts_code=ANY(%(codes)s)) "
+                "SELECT jsonb_build_array(source_row.ts_code,source_row.trade_date)::text AS row_key, ("
+                + payload + ")::text AS row_payload FROM market.adj_factor AS source_row "
+                "JOIN selected_keys USING(ts_code,trade_date) ORDER BY row_key,row_payload"
+            )
         if self.query_id == "bak_basic":
             return (
                 "SELECT jsonb_build_array(source_row.ts_code,source_row.trade_date)::text "
@@ -640,6 +665,11 @@ _QUERY_SPECS = (
         date_expression="source_row.trade_date",
         audit_dataset="adj_factor",
         audit_eligible_sources=("physical_audit_seed", "tushare"),
+    ),
+    _query(
+        "adj_factor_construction", "adj_factor", _ALL_NON_INDEX,
+        ("ts_code", "trade_date"), values=("adj_factor",), non_null_values=("adj_factor",),
+        start_policy="construction_facts",
     ),
     _query(
         "stk_limit",
@@ -1837,6 +1867,7 @@ class MonthlySourceAuthority:
                 value
                 for value in PRODUCTION_QUERY_SPECS.values()
                 if value.query_id not in {"sw_index_classify", "sw_index_member"}
+                and (value.query_id != "adj_factor_construction" or value.query_id in before.schemas)
             ),
         )
         for query in query_order:
@@ -2585,7 +2616,11 @@ class MonthlySourceAuthority:
             value
             for value in PRODUCTION_QUERY_SPECS.values()
             if not (self.uses_p3a_sector_source and value.query_id == "sector_data")
+            and value.query_id != "adj_factor_construction"
         )
+
+    def _refresh_audit_start(self, cutoff: date) -> date:
+        return min(self.profile.start_date, self.profile.minute_start_date)
 
     def _freeze_refresh_audit(
         self,
@@ -2596,7 +2631,7 @@ class MonthlySourceAuthority:
         read_chunk_rows: int | None = None,
     ) -> SourceRefreshAuditLedger:
         fetch_rows = read_chunk_rows or self.profile.resource_policy.validation_read_chunk_rows
-        start = min(self.profile.start_date, self.profile.minute_start_date)
+        start = self._refresh_audit_start(cutoff)
         trading_date_values: list[date] = []
         for row_number, row in enumerate(
             session.stream(
@@ -2854,7 +2889,10 @@ class MonthlySourceAuthority:
         *,
         pit_snapshot: FrozenPitSnapshot,
         selected_stock_codes: tuple[str, ...] = (),
+        start_override: date | None = None,
     ) -> Iterable[tuple[str, dict[str, Any]]]:
+        if query.start_policy == "construction_facts":
+            raise SourceProviderContractError("construction facts require an explicitly configured monthly authority")
         codes: list[str] | None = None
         if query.code_policy == "profile_index_codes":
             codes = list(self.profile.index_codes)
@@ -2883,6 +2921,10 @@ class MonthlySourceAuthority:
             )
             return
         start = self.profile.minute_start_date if query.start_policy == "minute" else self.profile.start_date
+        if start_override is not None:
+            if type(start_override) is not date or not self.profile.start_date <= start_override <= cutoff:
+                raise SourceProviderContractError("source month start is outside the release range")
+            start = max(start, start_override)
         for chunk in build_date_chunks(
             start,
             cutoff,
