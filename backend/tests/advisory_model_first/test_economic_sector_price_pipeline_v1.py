@@ -63,3 +63,17 @@ def test_actual_query_T_open_only_unknown_preserves_candidate_and_clock():
     inputs['sector_feature_visible_through'] = key[KEY[1]]
     with pytest.raises(ValueError, match='future feature'):
         pipeline.sector_actual_decisions_v1(**args)
+
+
+@pytest.mark.parametrize(('model', 'cap'), [('M1', 15), ('M5', 19), ('M6', 23), ('M7', 27), ('M8', 31), ('M9', 35), ('M10', 39), ('M11', 43)])
+def test_fixed_budget_routes_keep_existing_caps(tmp_path, model, cap):
+    plan = sector_plan_fixture(tmp_path)
+    root = tmp_path/plan.experiment_id
+    root.mkdir()
+    journal = tmp_path/'campaign_fit_journal.jsonl'
+    journal.write_text(''.join(json.dumps(dict(kind='PHYSICAL_FIT'))+'\n' for _ in range(cap-1)), encoding='utf-8')
+    pipeline._fit_event(plan, root, 'one', model_id=model, campaign_fit_budget=cap)
+    with pytest.raises(ValueError, match='cumulative'):
+        pipeline._fit_event(plan, root, 'extra', model_id=model, campaign_fit_budget=cap)
+    with pytest.raises(ValueError, match='fixed information'):
+        pipeline._fit_event(plan, root, 'wrong', model_id=model, campaign_fit_budget=cap+1)

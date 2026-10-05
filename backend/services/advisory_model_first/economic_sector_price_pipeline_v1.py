@@ -129,7 +129,7 @@ def prepare_sector_price_v1(*, plan_path, output_root):
 
 
 def _fit_event(plan, root, name, *, model_id='M1', campaign_fit_budget=15):
-    if (model_id, campaign_fit_budget) not in (('M1', 15), ('M5', 19)):
+    if (model_id, campaign_fit_budget) not in (('M1', 15), ('M5', 19), ('M6', 23), ('M7', 27), ('M8', 31), ('M9', 35), ('M10', 39), ('M11', 43)):
         raise ValueError('fixed information campaign budget differs')
     journal = root.parent/'campaign_fit_journal.jsonl'
     with _exclusive_file_lock(root.parent/'campaign_fit.lock'):
