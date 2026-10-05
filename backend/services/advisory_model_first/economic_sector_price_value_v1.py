@@ -133,11 +133,15 @@ def _information_key(model_id, information_features):
         from backend.services.advisory_model_first.economic_parent_raw_trajectory_v1 import TRAJECTORY_FEATURES
         if tuple(information_features) == TRAJECTORY_FEATURES:
             return 'parent_raw_trajectory_features'
+    if model_id == 'M24':
+        from backend.services.advisory_model_first.economic_parent_normalized_trajectory_v1 import INFORMATION_FEATURES
+        if tuple(information_features) == INFORMATION_FEATURES:
+            return 'parent_normalized_trajectory_features'
     raise ValueError('fixed information block/model differs')
 
 
 def information_fit_identity_v1(recipe, models, support, *, model_id):
-    if model_id not in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13', 'M14', 'M15', 'M16', 'M17', 'M18', 'M19', 'M20', 'M21', 'M22', 'M23'):
+    if model_id not in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13', 'M14', 'M15', 'M16', 'M17', 'M18', 'M19', 'M20', 'M21', 'M22', 'M23', 'M24'):
         raise ValueError('fixed information model differs')
     return sha(dict(model_id=model_id, recipe=recipe, models=models, support=list(support.intervals_bps)))
 
@@ -161,6 +165,9 @@ def _matched_information_v1(model_id, matched_information_features):
     if model_id in ('M21', 'M23'):
         from backend.services.advisory_model_first.economic_parent_raw_score_v1 import RAW_FEATURES
         expected = RAW_FEATURES
+    if model_id == 'M24':
+        from backend.services.advisory_model_first.economic_parent_raw_trajectory_v1 import TRAJECTORY_FEATURES
+        expected = TRAJECTORY_FEATURES
     if tuple(matched_information_features) != expected:
         raise ValueError('fixed matched information block/model differs')
     return expected
@@ -172,7 +179,7 @@ def predict_information_price_v1(*, fitted, rows, arm, model_id, information_fea
     if (information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model_id) != fitted.model_sha256
             or fitted.recipe['d_features'] != list(D_FEATURES) or fitted.recipe[information_key] != list(information_features)):
         raise ValueError('sector fitted identity/order differs')
-    if model_id in ('M19', 'M21', 'M22', 'M23') and fitted.recipe.get('matched_information_features') != list(matched):
+    if model_id in ('M19', 'M21', 'M22', 'M23', 'M24') and fitted.recipe.get('matched_information_features') != list(matched):
         raise ValueError('fixed matched recipe/order differs')
     matrix = information_matrix_v1(rows, arm=arm, information_features=information_features, matched_information_features=matched)
     mean, lower = (predict_json_v2(fitted.models[arm+'_'+head], matrix) for head in ('mean', 'path'))
@@ -241,7 +248,7 @@ def train_information_price_v1(*, rows, configuration, before_fit, model_id, inf
         raise ValueError('sector exact fit runtime differs')
     information_key = _information_key(model_id, information_features)
     matched = _matched_information_v1(model_id, matched_information_features)
-    if status_column != {'M1': 'sector_feature_status', 'M5': 'state_feature_status', 'M6': 'moneyflow_feature_status', 'M7': 'price_path_feature_status', 'M8': 'market_risk_feature_status', 'M9': 'volume_context_feature_status', 'M10': 'breadth_state_feature_status', 'M11': 'traded_price_distribution_feature_status', 'M12': 'session_path_feature_status', 'M13': 'free_float_feature_status', 'M14': 'valuation_feature_status', 'M15': 'limit_state_feature_status', 'M16': 'candidate_cohort_feature_status', 'M17': 'flow_path_feature_status', 'M18': 'asymmetric_risk_feature_status', 'M19': 'sector_moneyflow_feature_status', 'M20': 'parent_raw_score_feature_status', 'M21': 'parent_scale_state_feature_status', 'M22': 'sector_parent_raw_feature_status', 'M23': 'parent_raw_trajectory_feature_status'}[model_id]:
+    if status_column != {'M1': 'sector_feature_status', 'M5': 'state_feature_status', 'M6': 'moneyflow_feature_status', 'M7': 'price_path_feature_status', 'M8': 'market_risk_feature_status', 'M9': 'volume_context_feature_status', 'M10': 'breadth_state_feature_status', 'M11': 'traded_price_distribution_feature_status', 'M12': 'session_path_feature_status', 'M13': 'free_float_feature_status', 'M14': 'valuation_feature_status', 'M15': 'limit_state_feature_status', 'M16': 'candidate_cohort_feature_status', 'M17': 'flow_path_feature_status', 'M18': 'asymmetric_risk_feature_status', 'M19': 'sector_moneyflow_feature_status', 'M20': 'parent_raw_score_feature_status', 'M21': 'parent_scale_state_feature_status', 'M22': 'sector_parent_raw_feature_status', 'M23': 'parent_raw_trajectory_feature_status', 'M24': 'parent_normalized_trajectory_feature_status'}[model_id]:
         raise ValueError('fixed information availability contract differs')
     domain = rows.loc[rows.split.eq('train') & rows.values_available].copy()
     domain.loc[domain[KEY[1]].gt(pd.Timestamp(configuration.train_end)), 'actual_gap_bps'] = np.nan
@@ -257,7 +264,7 @@ def train_information_price_v1(*, rows, configuration, before_fit, model_id, inf
         raise ValueError('sector lacks mature common training/support')
     recipe = dict(d_features=list(D_FEATURES), **{information_key: list(information_features)},
         common_supervision_sha256=sha([[str(value) for value in key] for key in train[[*KEY, 'label_information_end']].itertuples(index=False, name=None)]))
-    if model_id in ('M19', 'M21', 'M22', 'M23'):
+    if model_id in ('M19', 'M21', 'M22', 'M23', 'M24'):
         recipe['matched_information_features'] = list(matched)
     models, count = {}, 0
     for arm in ARMS:
