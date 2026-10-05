@@ -1,6 +1,6 @@
 # Advisory D日估值条件买入价格 M14 F2详细设计
 
-2026-10-05；IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；IMPLEMENTED_PREPARED_QE_TRAINING_WAIT / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -94,7 +94,7 @@ M13源码CI通过交付/自己清理→本设计三轮/F2/currentCI/合入自己
 
 ## 12. Current state
 
-M14设计#5474已合入55d519c1e/自己清理；独立源码树登记12文件已实现纯三量、有界单SELECT、薄prepare、显式M14/55预算/同核13/16模型路由。58直接项/Ruff通过，feature L0零发现、标准L0三条P2/0blocking；原M1真实JSON bundle在新路由下metadata/hash兼容、0fit/无行情或标签数组。当前一个旧M14预登记265ff616...在quiet Decimal NaN类型缺值处prepare失败，修复记录见§14.1；prepared/研究fit/收益0，研究累计51fit+1index，经济确认/激活/DB写/公共修改/服务控制0；本地工程PASS不称研究已完成或原生身份COMPLETE。
+M14设计#5474已合入55d519c1e/自己清理；独立源码树登记12文件已实现纯三量、有界单SELECT、薄prepare、显式M14/55预算/同核13/16模型路由。58直接项/Ruff通过，feature L0零发现、标准L0三条P2/0blocking；原M1真实JSON bundle在新路由下metadata/hash兼容、0fit/无行情或标签数组。当前一个旧M14预登记265ff616...在quiet Decimal NaN类型缺值处prepare失败，修复记录见§14.1；修复后新plan46e89f53...一次正式prepared已完成见§15，研究fit/收益0，研究累计51fit+1index，经济确认/激活/DB写/公共修改/服务控制0；本地工程PASS不称研究已完成或原生身份COMPLETE。
 
 ## 13. 三轮设计审核与修订
 
@@ -115,3 +115,9 @@ F2初七项/七行/warnings0 PASS；上述修订后再执行最终F2、diff和�
 首个干净producer29ac7ac56/plan265ff616...的预登记保存成功，单只读D查询后在字段转换遇到PostgreSQL numeric NaN对应quiet Decimal NaN而停止，prepared未发布/fit0。类型语义错误不应把正常缺失当坏数据：已补齐quiet Decimal NaN与普通float NaN相同的逐字段UNKNOWN；源冻结仅将quiet NaN规范为NULL以便Parquet持久化，收据明确POSTGRES_QUIET_NAN_AS_NULL_NO_FILL，无填值/删股/DB写。signaling NaN、Infinity、非零下溢和坏数仍拒绝，负PE/PB与0股息仍不变。
 
 新增纯数学quiet NaN与真实source/Parquet往返测试，12修复直接节点PASS/Ruff通过，再稳定58项矩阵与F2/L0复核；旧265ff616...登记保留原身份、不覆盖或伪PREPARED，新实现需重新提交干净producer/独立plan身份，未发生研究fit或结果选择。此修改仅类型缺值兼容，不变三个公式、模型或研究经济条件；不因正常数据缺失停整个研发。
+
+## 15. 实际准备与当前研究状态
+
+修复后干净producerc58f4e6a31e53379e122636083f2222c54f362f8，新plan46e89f537a689f18523151db7937020d36202bfc89da061f8b937f8bbbc7d31d/implementation206c7480a1962ea0c3431d30ef9c0f47d056a1764880e7a17b2edab0d2c92b6e/run advvaluationvalue_46e89f537a689f18523151db已一次预登记/prepare3.328秒。单SELECT原7720D键与7720basic、候选7720均保留，2952 AVAILABLE/4768 UNKNOWN_VALUATION_SOURCE；NON_VINTAGE/native UNPROVEN，NULL不变0或删股。旧265ff616预登记与失败状态保留、0fit，未覆盖任何输入或结果。
+
+2026-10-05 02:34UTC后QE三running只读查验为experiment0/custom_evo1/multi_alpha0（MA-E42 qe_20261005_102547_925d）。仅暂缓本M14四fit，prepared输入/已审核源码交付准备及独立工程设计可继续；约半小时检查，不与QE训练并行、不停止或修改其任务。当前实际仍51fit+1index，M14训练/四臂/经济效果尚未执行，0sealed/确认/部署/DB写/配置激活/服务控制；sourceCI或数据准备成功不冒充研究与盈利验证。
