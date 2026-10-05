@@ -32,18 +32,30 @@
   "evidence_uris": [],
   "expected": "SOURCE分区和行计数可读，已有取消请求在chunk或分区边界传播并回滚快照，不写SOURCE checkpoint；进度不作为READY或复用证据。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/dataset_release/monthly_unified.py",
-      "backend/services/dataset_release/monthly_worker.py",
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_composition.py",
       "backend/services/dataset_release/monthly_preparation_source.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_preparation_source.py",
-      "backend/tests/dataset_release/test_monthly_worker.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1729-monthly-source-drops-stage-cancellation-and-bounded-row-progress-hooks.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_composition.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1729-monthly-source-drops-stage-cancellation-and-bounded-row-progress-hooks.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -210,23 +222,29 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "database_readback_ref": "not_required",
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": ["AIstock interpreter fresh process: seven focused monthly SOURCE/service/worker/snapshot suites -> 141 passed, 1 existing skipped. RED 6 failures before implementation; real temporary CAS private source cancellation after 1000 validated raw rows, frozen audit interruption after 100000 rows, registered pipeline to service cancellation and checkpoint publication race all PASS. Windows temporary test state only X:/AIstock_temp/BUG-1729; no DEV/production DB, active profile, production candidate or runtime actions. Depends on BUG-1730 source merge 3aa559f71dd7056b3ccca38f7a09ef230df77273; deployed attempt 242 unchanged, runtime pending user-owned restart."],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "AIstock interpreter fresh process: seven focused monthly SOURCE/service/worker/snapshot suites -> 141 passed, 1 existing skipped. RED 6 failures before implementation; real temporary CAS private source cancellation after 1000 validated raw rows, frozen audit interruption after 100000 rows, registered pipeline to service cancellation and checkpoint publication race all PASS. Windows temporary test state only X:/AIstock_temp/BUG-1729; no DEV/production DB, active profile, production candidate or runtime actions. Depends on BUG-1730 source merge 3aa559f71dd7056b3ccca38f7a09ef230df77273; deployed attempt 242 unchanged, runtime pending user-owned restart."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": [
+    "planned_target_ids": [
       "backend-main",
       "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
