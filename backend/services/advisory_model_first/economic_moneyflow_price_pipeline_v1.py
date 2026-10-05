@@ -30,7 +30,7 @@ def moneyflow_implementation_sha256_v1():
         readonly_dependencies={name: hashlib.sha256((repo/name).read_bytes().replace(b'\r\n', b'\n')).hexdigest() for name in dependencies}))
 
 
-def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None, valuation_extension=None, limit_state_extension=None, candidate_cohort_extension=None, flow_path_extension=None):
+def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None, valuation_extension=None, limit_state_extension=None, candidate_cohort_extension=None, flow_path_extension=None, asymmetric_risk_extension=None):
     anchor = _verify_reference(plan.budget_anchor_ref)
     root = plan.campaign_root.resolve()
     original = PriceCampaignPlanV2.model_validate_json((anchor.parent/'plan.json').read_text(encoding='utf-8'))
@@ -66,6 +66,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
         raise ValueError('candidate cohort extension requires original explicit M15 extension')
     if flow_path_extension is not None and candidate_cohort_extension is None:
         raise ValueError('flow path extension requires original explicit M16 extension')
+    if asymmetric_risk_extension is not None and flow_path_extension is None:
+        raise ValueError('asymmetric risk extension requires original explicit M17 extension')
     if price_path_extension is not None:
         from backend.services.advisory_model_first.economic_price_path_value_v1 import PricePathPlanV1
         extension = PricePathPlanV1.model_validate(price_path_extension)
@@ -188,6 +190,17 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                 or flow_path.parameters['policy_sha256'] != cohort.parameters['policy_sha256']
                 or flow_path.parameters['cost_sha256'] != cohort.parameters['cost_sha256']):
             raise ValueError('candidate flow_path extension original root/source/predecessor differs')
+    if asymmetric_risk_extension is not None:
+        from backend.services.advisory_model_first.economic_asymmetric_risk_v1 import AsymmetricRiskPlanV1
+        declared = asymmetric_risk_extension.model_dump() if isinstance(asymmetric_risk_extension, AsymmetricRiskPlanV1) else asymmetric_risk_extension
+        asymmetric = AsymmetricRiskPlanV1.model_validate(declared)
+        asymmetric_predecessor = _verify_reference(asymmetric.predecessor_manifest_ref)
+        if (asymmetric.campaign_root.resolve() != root or not _same_sources(asymmetric, flow_path)
+                or asymmetric.budget_anchor_ref != flow_path.budget_anchor_ref
+                or asymmetric_predecessor != root/flow_path.experiment_id/'evaluated/manifest.json'
+                or asymmetric.parameters['policy_sha256'] != flow_path.parameters['policy_sha256']
+                or asymmetric.parameters['cost_sha256'] != flow_path.parameters['cost_sha256']):
+            raise ValueError('candidate asymmetric risk extension original root/source/predecessor differs')
     expected = {'M2': (4, PriceCampaignPlanV2), 'M3': (5, PriceCampaignPlanV2), 'M4': (2, PriceCampaignPlanV2),
                 'M1': (4, SectorPricePlanV1), 'M5': (4, SelectionStatePricePlanV1)}
     if any(event.get('state') != 'STARTED' or event.get('kind') not in ('PHYSICAL_FIT', 'INDEX_BUILD')
@@ -199,7 +212,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                *(('M14',) if valuation_extension is not None else ()),
                *(('M15',) if limit_state_extension is not None else ()),
                *(('M16',) if candidate_cohort_extension is not None else ()),
-               *(('M17',) if flow_path_extension is not None else ())) for event in events):
+               *(('M17',) if flow_path_extension is not None else ()),
+               *(('M18',) if asymmetric_risk_extension is not None else ())) for event in events):
         raise ValueError('moneyflow cumulative journal has foreign state/model/kind')
     for model, (count, cls) in expected.items():
         found = [event for event in events if event['kind'] == 'PHYSICAL_FIT' and event['model_id'] == model]
@@ -427,6 +441,24 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
             event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != flow_path.campaign_id
             or event['experiment_id'] != flow_path.experiment_id or event['head'] not in heads for event in latest_flow):
             raise ValueError('candidate flow_path extension own cumulative budget/journal differs')
+    if asymmetric_risk_extension is not None:
+        if len(latest_flow) != 4:
+            raise ValueError('candidate asymmetric risk extension needs actual four completed M17 fits')
+        previous_root = root/flow_path.experiment_id
+        registered = read_stage(previous_root/'preregistered', stage='preregistered', plan_sha256=flow_path.plan_sha256, parent_sha256=None)
+        _ledger(flow_path, previous_root, 'PREREGISTERED', previous_root/'preregistered/manifest.json')
+        frozen = FlowPathPlanV1.model_validate_json((previous_root/'preregistered/plan.json').read_text(encoding='utf-8'))
+        if frozen != flow_path:
+            raise ValueError('candidate asymmetric risk extension cannot substitute original M17 plan')
+        parent = registered['stage_sha256']
+        for stage in ('prepared', 'trained', 'evaluated'):
+            parent = read_stage(previous_root/stage, stage=stage, plan_sha256=flow_path.plan_sha256, parent_sha256=parent)['stage_sha256']
+        _ledger(flow_path, previous_root, 'EVALUATED', asymmetric_predecessor)
+        latest_asymmetric = [event for event in events if event['model_id'] == 'M18']
+        if len(latest_asymmetric) > 4 or len({event['head'] for event in latest_asymmetric}) != len(latest_asymmetric) or any(
+            event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != asymmetric.campaign_id
+            or event['experiment_id'] != asymmetric.experiment_id or event['head'] not in heads for event in latest_asymmetric):
+            raise ValueError('candidate asymmetric risk extension own cumulative budget/journal differs')
     return root
 
 

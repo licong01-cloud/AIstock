@@ -102,10 +102,11 @@ def test_information_routes_keep_previous_identity_formulas_and_reject_wrong_blo
     from backend.services.advisory_model_first.economic_limit_state_v1 import LIMIT_STATE_FEATURES
     from backend.services.advisory_model_first.economic_candidate_cohort_v1 import CANDIDATE_COHORT_FEATURES
     from backend.services.advisory_model_first.economic_flow_path_v1 import FLOW_PATH_FEATURES
+    from backend.services.advisory_model_first.economic_asymmetric_risk_v1 import ASYMMETRIC_RISK_FEATURES
     from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, information_fit_identity_v1
     from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
     fitted = sector_fit_fixture()
-    for model in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13', 'M14', 'M15', 'M16', 'M17'):
+    for model in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13', 'M14', 'M15', 'M16', 'M17', 'M18'):
         assert information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model) == sha(
             dict(model_id=model, recipe=fitted.recipe, models=fitted.models, support=list(fitted.support.intervals_bps)))
     assert _information_key('M9', VOLUME_CONTEXT_FEATURES) == 'volume_context_features'
@@ -135,3 +136,6 @@ def test_information_routes_keep_previous_identity_formulas_and_reject_wrong_blo
     assert _information_key('M17', FLOW_PATH_FEATURES) == 'flow_path_features'
     with pytest.raises(ValueError, match='block/model'):
         _information_key('M17', CANDIDATE_COHORT_FEATURES)
+    assert _information_key('M18', ASYMMETRIC_RISK_FEATURES) == 'asymmetric_risk_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M18', FLOW_PATH_FEATURES)
