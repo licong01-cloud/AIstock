@@ -1,6 +1,8 @@
 {
   "actual": "Reported missing dv_ratio/dv_ttm dates 2026-04-20..2026-06-17 and turnover_rate_f on 2026-08-31.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/factor_materializer.py",
+    "backend/tests/dataset_release/test_factor_materializer.py",
     "noxfile.py",
     "scripts/backfill_tushare_daily_basic_fields.py",
     "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
@@ -37,6 +39,8 @@
     ],
     "added_files": [],
     "changed_files": [
+      "backend/services/dataset_release/factor_materializer.py",
+      "backend/tests/dataset_release/test_factor_materializer.py",
       "tests/aistock_validation/bugs/20261005_BUG-1736-daily-basic-nullable-dividend-yield-gaps-and-free-float-turnover-omissio.json",
       "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
       "noxfile.py",
@@ -131,6 +135,13 @@
       "finding": "Reviewed fill-only SQL allowlist, provider NULL preservation, source-only rows, default 0.95 unchanged, isolated DEV connection identity and immutable candidate mutable-file list.",
       "round": 2,
       "verification": "32 focused tests passed; changed-file Ruff passed; explicit-path L0 passed. Real data verification is separate and not claimed by these tests."
+    },
+    {
+      "round": 3,
+      "finding": "Shared monthly static materialization forward-filled nullable daily_basic dividend yields, violating exact-date source NULL preservation. Only daily_basic is changed; other approved as-of datasets, schemas, formulas and raw facts are untouched.",
+      "red": "Two direct cases (within-month and prior-month context) replaced source NaN with yesterday's finite yield before correction.",
+      "green": "The same two cases passed after correction; final factor materializer matrix 8 passed, Ruff/L0 passed.",
+      "real_data_verification": "DEV and production readback PASS; exact 38 date/field candidate H5/static repair PASS; Windows/WSL/node1 changed-pin hashes and official dataset-identity complete=true PASS. September 21 days x 16 fields provider-finite/source parity PASS; September release files remain pending actual export."
     }
   ],
   "risk_area": "bug",
@@ -151,7 +162,7 @@
   "schema_version": "aistock_validation_bug_v1",
   "scoped_readback": {
     "active_profile_write": false,
-    "candidate_status": "SCOPED_FIELD_REPAIR_PASS_PENDING_NODE_READBACK",
+    "candidate_status": "SCOPED_FIELD_REPAIR_PASS_THREE_NODE_READBACK_PASS_NOT_ACTIVATED",
     "candidate_generation": "20261006-v18-unified-basicfields1",
     "candidate_root": "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20261006-r8-unified-basicfields1-candidate",
     "candidate_manifest_identity": "36fc14db370374dac56d68b81bbb80c5d020010c85ba7d1cde1d51b34c55cc5a",
@@ -168,6 +179,7 @@
     "original_release_manifest_unchanged": true,
     "existing_finite_unchanged": true,
     "provider_null_preserved": true,
+    "monthly_daily_basic_static_semantics": "EXACT_DATE_FACT_NO_FORWARD_FILL",
     "dev_target": "aistock_dev.market.daily_basic",
     "factor_evaluation": false,
     "historical_provider_response_available": false,
