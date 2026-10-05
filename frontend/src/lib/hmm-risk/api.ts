@@ -53,6 +53,10 @@ export interface RotationL2Row {
   daily_rank_group?: RotationState | null;
   prediction_id: string;
   run_id: string;
+  model_hash: string;
+  input_hash: string;
+  mapping_hash: string;
+  quote_authority_hash: string;
   trade_date: string;
   as_of_date: string;
   sector_code: string;
@@ -72,6 +76,7 @@ export interface RotationL2Overview {
   run_id: string;
   model_hash: string;
   trade_date: string;
+  available_trade_dates: string[];
   as_of_date: string;
   sector_count: number;
   available_count: number;
