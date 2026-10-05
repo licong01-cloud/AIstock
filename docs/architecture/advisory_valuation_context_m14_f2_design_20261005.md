@@ -12,7 +12,7 @@ H-DAILY-VALUATION-CONTEXT-1：同样价格/量/自由流通状态可有不同D�
 
 ## 2. Scope / Non-goals
 
-设计树从当时最新origin/main93c600814创建，事前登记仅本文与advisory_strategy_conditioned_model_blueprint_v1_20260710.md；只存在未提交新本文时，M13源合入后已安全ff最新e86e2ca9c再更新蓝图/交付，避免重复或冲突覆盖。同步其它owner已合入HMM等差异，不等于本窗口修改那些源码或执行其DDL。后续最新main独立源码树仅登记精确12文件：
+设计树从当时最新origin/main93c600814创建，事前登记仅本文与advisory_strategy_conditioned_model_blueprint_v1_20260710.md；只存在未提交新本文时，M13源合入后已安全ff最新e86e2ca9c再更新蓝图/交付，避免重复或冲突覆盖。同步其它owner已合入HMM等差异，不等于本窗口修改那些源码或执行其DDL。原先独立源码范围12文件如下；03:04UTC QE仍busy后已事前增加scope-v2，仅第三份已合入M15详细设计的实施顺序修订，当前交付范围13文件，业务源码/数学/权限不扩展：
 
 - backend/services/advisory_model_first/economic_valuation_context_v1.py：纯三个估值上下文/plan/同核薄模型入口。
 - backend/services/advisory_model_first/economic_valuation_context_pipeline_v1.py：精确D键有界只读daily_basic与冻结prepare/薄原子阶段。
@@ -25,6 +25,7 @@ H-DAILY-VALUATION-CONTEXT-1：同样价格/量/自由流通状态可有不同D�
 - backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py
 - backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py
 - 本文、上述蓝图。
+- docs/architecture/advisory_limit_state_m15_f2_design_20261005.md：scope-v2只修改源码交付与实际研究的依赖顺序，M15源码依赖M14 source已审交付、实际研究依赖M14完整evaluated；不修改M15经济/模型合同。
 
 不修改M1 daily/API/UI、generic/core、原label/支持/政策/成本、QE/Selection/HMM/StrategyPackage/公共数据/行业/Execution/Paper/CI/工作流/AGENTS。不提交QE实验或重建候选/池，不补数、写DB/DDL/DML、激活profile/模型/配置、安装依赖、控制服务或他人进程；后端重启user-owned。X临时/F独立正式，最多本价格主线及M1必要工程辅线。输入字段非空或局部UNKNOWN不构成包准入/整个研发门禁。
 
@@ -78,7 +79,7 @@ typed plan dump-revalidate拒绝model_copy绕literal，干净Gitproducer/完整�
 
 ## 10. Implementation plan / Risks / Rollout / Rollback
 
-M13源码CI通过交付/自己清理→本设计三轮/F2/currentCI/合入自己清理→latestmain独立树登记12文件→纯三量/单SQL薄prepare/预算与模型路由→多轮源码审核定向验证→干净producer/新lineage登记→一次prepare/实际值合法性→QE idle一次4fit/完整四臂→真实结果更新蓝图/currentHEAD CI绿交付及自身清理。正常0/NULL局部UNKNOWN不当整项目门；真正数学/源键/身份矛盾拒绝本计算，不补数或回填。估值可能只复刻size/value效应，短复评目标未必受益，不为该候选先收集历史补证。原18h终点2026-10-05 18:08与48h终点10-06 02:36不重计、不凑时长。
+M13源码CI通过交付/自己清理→本设计三轮/F2/currentCI/合入自己清理→latestmain独立树登记12文件→纯三量/单SQL薄prepare/预算与模型路由→多轮源码审核定向验证→干净producer/新lineage登记→一次prepare/实际值合法性→currentHEAD CI绿后先交付完整研究工具源码（模型/经济状态仍PENDING）→保留此工作树为原206c7480...冻结实施闭包→QE idle一次4fit/完整四臂→真实结果更新蓝图及自己的后续清理，不省略研究。正常0/NULL局部UNKNOWN不当整项目门；真正数学/源键/身份矛盾拒绝本计算，不补数或回填。估值可能只复刻size/value效应，短复评目标未必受益，不为该候选先收集历史补证。原18h终点2026-10-05 18:08与48h终点10-06 02:36不重计、不凑时长。
 
 ## 11. Design Acceptance Matrix
 
@@ -121,3 +122,7 @@ F2初七项/七行/warnings0 PASS；上述修订后再执行最终F2、diff和�
 修复后干净producerc58f4e6a31e53379e122636083f2222c54f362f8，新plan46e89f537a689f18523151db7937020d36202bfc89da061f8b937f8bbbc7d31d/implementation206c7480a1962ea0c3431d30ef9c0f47d056a1764880e7a17b2edab0d2c92b6e/run advvaluationvalue_46e89f537a689f18523151db已一次预登记/prepare3.328秒。单SELECT原7720D键与7720basic、候选7720均保留，2952 AVAILABLE/4768 UNKNOWN_VALUATION_SOURCE；NON_VINTAGE/native UNPROVEN，NULL不变0或删股。旧265ff616预登记与失败状态保留、0fit，未覆盖任何输入或结果。
 
 2026-10-05 02:34UTC后QE三running只读查验为experiment0/custom_evo1/multi_alpha0（MA-E42 qe_20261005_102547_925d）。仅暂缓本M14四fit，prepared输入/已审核源码交付准备及独立工程设计可继续；约半小时检查，不与QE训练并行、不停止或修改其任务。当前实际仍51fit+1index，M14训练/四臂/经济效果尚未执行，0sealed/确认/部署/DB写/配置激活/服务控制；sourceCI或数据准备成功不冒充研究与盈利验证。
+
+### 15.1 工程交付与研究互斥的实施顺序复核
+
+03:04:41UTC第二次QE三running仍0/1/0，source已实现并有真实prepare不能因研究资源互斥形成研发门禁。scope-v2事前仅加M15已合入设计文档，共13文件，三轮复核确认：完整源码/真实readonly准备与研究收益验收分离，不删任何一次4fit/四臂要求；source最终currentHEAD CI后可交付，但本研究工具/模型非部署状态、经济PENDING；原M14工作树保持干净且206c7480...闭包不拉取将来M15代码，以便原plan46e89f53稍后只拟合一次，完成才官方清理。M15源码可以从交付后的latestmain研发，实际study仍必须M14真实55与完整evaluated。无新family/UI/部署/数据库/进程操作，工程交付不计收益确认。

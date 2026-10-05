@@ -56,7 +56,7 @@ matched原12D+g=13；candidate原12D+这三量+g=16，不叠加M5～M14旧负或
 
 ## 6. Registry / Budget / Atomic stages
 
-campaign advisory_limit_state_v1_20261005/model M15/schema economic_limit_state_v1/experiment advlimitstatevalue_+plan_sha前24；budget_anchor原M2同campaign_root，predecessor_manifest_ref role=limit_state_predecessor为实际M14 evaluated。立项当前实际51并保留M14已预登记四fit；M15之前须真实55+新4 cap59，同sources/root/policy/cost/profile。显式limit_state_extension要求valuation_extension/M14完整stage/ledger/四heads；所有旧23/27/31/35/39/43/47/51/55不改、不重计index/清零counter，不伪造M14结果来启动M15。
+campaign advisory_limit_state_v1_20261005/model M15/schema economic_limit_state_v1/experiment advlimitstatevalue_+plan_sha前24；budget_anchor原M2同campaign_root，predecessor_manifest_ref role=limit_state_predecessor为实际M14 evaluated。立项当前实际51并保留M14已预登记四fit；M15实际预登记/训练之前须真实55+新4 cap59，同sources/root/policy/cost/profile。显式limit_state_extension要求valuation_extension/M14完整stage/ledger/四heads；所有旧23/27/31/35/39/43/47/51/55不改、不重计index/清零counter，不伪造M14结果来启动M15。
 
 typed plan dump-revalidate、干净producer/实施闭包/原参数profile先登记；原F独立阶段preregistered→prepared（original raw snapshot SHA/rows/preparation）→trained→evaluated原子publish/hash链、exact prepared retry仅复核原文件/阶段hash，不重新制备特征或查库、partial_attempt不再fit。资源单研究1800秒/2GiB RSS/2GiB artifact，0SQL；fit前/后QE三running空闲/未知或busy只暂停fit。negative只停止该candidate，正NAV只制定独立确认，不运行sealed或激活；不新建试验治理平台。
 
@@ -78,7 +78,7 @@ typed plan dump-revalidate、干净producer/实施闭包/原参数profile先登�
 
 ## 10. Implementation plan / Risks / Rollout / Rollback
 
-本设计三轮修订/F2/currentCI交付/自己精确清理；同时M14按半小时QE互斥检查后一次4fit/完整研究及源PR交付，不预判结论。两依赖完成→latestmain独立M15树登记12文件→纯三量/薄0SQLprepare/显式59路由→多轮代码自审与定向验证→干净producer/新lineage预登记→一次prepare→QE idle一次4fit/四臂→真实结果写蓝图/必要CI后source交付及自己的官方清理。M14负向不停止整任务；若正则独立确认设计可另优先评估，不事后改变M15假设。
+本设计三轮修订/F2/currentCI交付/自己精确清理；M14完整研究工具先通过source审核/currentHEAD CI交付，但保留原已准备study对应工作树/实施闭包等待QE后拟合，不预判经济结果。只需M15设计与M14 source两依赖交付→latestmain独立M15树登记12文件→纯三量/薄0SQLprepare/显式59路由→多轮代码自审与定向验证→干净producer（工程源码可先交付，研究状态PENDING）→等待M14真实55fit/完整evaluated→新lineage预登记→一次prepare→QE idle一次4fit/四臂→真实结果写蓝图/必要CI后source交付及自己的官方清理。M14负向不停止整任务；若正则独立确认设计可另优先评估，不事后改变M15假设。
 
 风险为触板可能仅已知动量/涨跌幅制度代理、冲击成交日收益未必可预测、不提供分钟成交证明。缺值只局部UNKNOWN、不向数据窗口索要无必要历史复现或改source；数学真矛盾报告精确原键/字段并仅阻断该计算，其它工程设计继续。原18h截止2026-10-05 18:08/48h10-06 02:36不重计，未完成如实留断点，不为时长凑假设/空等或旧负补证。
 
