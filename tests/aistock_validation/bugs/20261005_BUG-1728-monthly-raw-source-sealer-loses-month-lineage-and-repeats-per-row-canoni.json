@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-05T01:34:53.232884Z",
-  "description": "Three-month diagnostic partitions emit 0 monthly leaves; minute rows perform about 11 canonical JSON encodings each.",
+  "description": "原始源行封装隐藏日期，导致有日期的分区缺少自然月证据，阻碍已证明的月份尾部识别。本修复从已验证payload读取月份，不改变规范化行字节或原分区digest；严格校验后的文本主键直接比较，数字键保留canonical比较，并预计算字段集合。历史复用、并行、checkpoint接线和共享哈希器优化属于后续独立修复，不能将本PR称为快速月更完整交付。共享哈希器试验已撤回，避免混合backend与worker运行目标。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -27,13 +27,18 @@
   "evidence_uris": [],
   "expected": "Dated raw partitions emit complete natural-month leaves; avoid redundant encoding while existing canonical row bytes, partition identity and rejection semantics remain stable.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/source_authority.py",
       "backend/tests/dataset_release/test_source_authority.py",
       "backend/tests/dataset_release/test_monthly_preparation_source.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -126,11 +131,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "AIstock python fresh process: python -m pytest -q backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_source_manifest.py backend/tests/dataset_release/test_monthly_preparation_source.py -> 37 passed. Real X-drive temporary CAS roundtrip verifies row byte/partition digest parity and exact month leaves. No DEV/production DB, active profile, candidate or process control. Deployed worker unchanged pending user-owned restart after merge."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
