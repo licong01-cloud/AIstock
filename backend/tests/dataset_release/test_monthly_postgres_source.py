@@ -235,7 +235,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "6"
+    assert adapter.adapter_version == "7"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -476,6 +476,42 @@ def daily():
         "volume_hand": 240,
         "amount_li": 2400000,
     }
+
+
+def test_frozen_source_audit_checks_cancel_inside_stream_before_gate_or_receipt(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_frozen_source_audit as audit
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseCancelled
+
+    rows_read = checks = 0
+
+    class Reader:
+        @contextmanager
+        def iter_rows(self, *_args):
+            def rows():
+                nonlocal rows_read
+                for _ in range(200_000):
+                    rows_read += 1
+                    yield {"cal_date": "2026-09-30"}
+            yield rows()
+
+    def checkpoint():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise MonthlyReleaseCancelled("cancelled during read")
+
+    monkeypatch.setattr(audit, "CASSealedPartitionReader", lambda *_args, **_kwargs: Reader())
+    frozen = SimpleNamespace(partitions=(SimpleNamespace(as_build_input=lambda: {
+        "dataset": "trading_calendar", "partition_key": "2026-09-01_2026-09-30",
+    }),))
+    with pytest.raises(MonthlyReleaseCancelled):
+        audit.audit_frozen_source(
+            cas=None, frozen=frozen, profile=None, input_root=tmp_path, artifact_root=tmp_path,
+            snapshot_group_id="fixture", changes=(), predecessor_cutoff=date(2026, 8, 31),
+            checkpoint=checkpoint,
+        )
+    assert rows_read == 100_000
+    assert list(tmp_path.iterdir()) == []
 
 
 def minutes():

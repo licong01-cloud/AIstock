@@ -1,14 +1,14 @@
 {
   "actual": "checkpoint defaults to no-op; stage state timestamp remains at entry while raw source scan runs for hours.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_frozen_source_audit.py",
+    "backend/services/dataset_release/monthly_preparation_composition.py",
     "backend/services/dataset_release/monthly_unified.py",
-    "backend/services/dataset_release/monthly_worker.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
     "backend/services/dataset_release/monthly_preparation_source.py",
     "backend/tests/dataset_release/test_monthly_unified_v2.py",
     "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "backend/tests/dataset_release/test_monthly_preparation_source.py",
-    "backend/tests/dataset_release/test_monthly_worker.py",
     "tests/aistock_validation/bugs/20261005_BUG-1729-monthly-source-drops-stage-cancellation-and-bounded-row-progress-hooks.json"
   ],
   "assigned_agent": null,

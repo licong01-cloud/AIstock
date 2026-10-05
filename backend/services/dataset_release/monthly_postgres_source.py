@@ -51,7 +51,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "6"
+POSTGRES_SOURCE_ADAPTER_VERSION = "7"
 REFRESH_READINESS_POLICY = "same_snapshot_all_dated_ranges_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -74,6 +74,7 @@ def _preflight_refresh_readiness(
     profile: DatasetProfile,
     cutoff: date,
     operation_id: str | None = None,
+    checkpoint: Callable[[], None] = lambda: None,
 ) -> None:
     """Check the existing audit policy before streaming any source payload.
 
@@ -82,7 +83,7 @@ def _preflight_refresh_readiness(
     completeness: partition checks and the nine frozen-source gates still run.
     """
     with session_factory(profile.resource_policy) as session:
-        ledger = authority._freeze_refresh_audit(session, cutoff=cutoff, checkpoint=lambda: None)
+        ledger = authority._freeze_refresh_audit(session, cutoff=cutoff, checkpoint=checkpoint)
     ranges = sorted(
         {
             (
@@ -95,6 +96,7 @@ def _preflight_refresh_readiness(
     )
     blockers = []
     for dataset, start in ranges:
+        checkpoint()
         try:
             ledger.partition_digest(dataset, start, cutoff)
         except SourceAuditIncomplete as exc:
@@ -337,6 +339,10 @@ class PostgresMonthlySourceAdapter:
         identity: MonthlySnapshotIdentity,
         context: ProducerContext,
     ) -> MonthlySourceReadSet | MonthlySourcePreparationReadSet:
+        checkpoint = getattr(context, "checkpoint", lambda: None)
+        progress = getattr(context, "progress", lambda _value: None)
+        progress({"phase": "SOURCE_PREFLIGHT"})
+        checkpoint()
         predecessor_cutoff = date.fromisoformat(str(context.plan["predecessor"]["cutoff"]))
         target_cutoff = date.fromisoformat(str(context.plan["target_cutoff"]))
         if target_cutoff <= predecessor_cutoff:
@@ -386,6 +392,7 @@ class PostgresMonthlySourceAdapter:
                 profile=self.profile,
                 cutoff=target_cutoff,
                 operation_id=context.operation_id,
+                checkpoint=checkpoint,
             )
         except MonthlyReleaseSourceBlocked as blocked:
             # No optional caller PASS flags: only the code-owned registry may
@@ -401,6 +408,8 @@ class PostgresMonthlySourceAdapter:
                 operation_id=context.operation_id,
                 cutoff=target_cutoff,
                 blocking_datasets=tuple(plan["blocking_datasets"]),
+                checkpoint=checkpoint,
+                progress=progress,
                 # The same-snapshot preflight owns the exact unusable count.
                 # A truncated sample or a historical hole cannot authorize
                 # omitting only the tail. Keep those whole domains deferred.
@@ -426,6 +435,8 @@ class PostgresMonthlySourceAdapter:
                 / f"attempt-{context.attempt}"
             )
             private_root.mkdir(parents=True, exist_ok=False)
+            progress({"phase": "PRIVATE_SOURCE_AUDIT", "query_id": None, "partition_key": None})
+            checkpoint()
             # These are ordinary SOURCE domain checks over frozen facts, not
             # an artificial all-gate PASS. The omitted financing gate stays
             # failed and cannot seal a full SOURCE or enter its reuse catalog.
@@ -438,7 +449,9 @@ class PostgresMonthlySourceAdapter:
                 snapshot_group_id=f"postgres:{identity.snapshot_id}",
                 changes=(),
                 predecessor_cutoff=self.profile.start_date - date.resolution,
+                checkpoint=checkpoint,
             )
+            checkpoint()
             audit_path = private_root / "private-source-audit.json"
             audit_body = {
                 "schema_version": "aistock_monthly_preparation_source_audit_v1",
@@ -470,10 +483,13 @@ class PostgresMonthlySourceAdapter:
                 blocking_context=dict(blocked.context),
                 preparation_token=(frozen_private, audit_body),
             )
+        progress({"phase": "SOURCE_FREEZE"})
         frozen = authority.freeze(
             cutoff=target_cutoff,
             baseline_partitions=baseline_partitions,
+            checkpoint=checkpoint,
         )
+        checkpoint()
         current_reuse = self.cas.get_json_bounded(
             frozen.source_reuse_manifest_ref,
             max_bytes=64 * 1024 * 1024,
@@ -537,6 +553,7 @@ class PostgresMonthlySourceAdapter:
             snapshot_group_id=f"postgres:{identity.snapshot_id}",
             changes=changes,
             predecessor_cutoff=predecessor_cutoff,
+            checkpoint=checkpoint,
         )
         # Persist real blocked gate readbacks before any provider materialization
         # or seal. Failed audit evidence must never enter the reuse catalog.

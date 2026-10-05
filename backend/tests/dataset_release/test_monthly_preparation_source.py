@@ -10,7 +10,7 @@ from backend.services.dataset_release.monthly_preparation_source import freeze_p
 from backend.services.dataset_release.source_authority import MONTHLY_SECTOR_SOURCE_POLICY
 
 
-@pytest.mark.parametrize("failure", [None, "schema", "writer", "control", "null_value", "deferred_tail"])
+@pytest.mark.parametrize("failure", [None, "schema", "writer", "control", "null_value", "deferred_tail", "cancel"])
 def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_path, failure):
     from backend.services.dataset_release import monthly_preparation_source as preparation
     from backend.services.dataset_release.cas_store import CASStore
@@ -22,6 +22,7 @@ def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_
         SourceSnapshotDriftBlocked,
     )
     from backend.services.dataset_release.errors import SourceManifestError
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseCancelled
 
     ControlStore.initialize(tmp_path)
     cas = CASStore(tmp_path)
@@ -71,10 +72,12 @@ def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_
                 assert params["end"] == date(2026, 9, 29)
             query = queries[key]
             payload = payloads[key]
-            yield {
-                "row_key": json.dumps([payload[name] for name in query.key_columns]),
-                "row_payload": json.dumps(payload),
-            }
+            for index in range(2001 if failure == "cancel" and key == "kline_daily_raw" else 1):
+                current = {**payload, "ts_code": f"{index + 1:06d}.SZ"} if failure == "cancel" and key == "kline_daily_raw" else payload
+                yield {
+                    "row_key": json.dumps([current[name] for name in query.key_columns]),
+                    "row_payload": json.dumps(current),
+                }
 
     @contextmanager
     def sessions(_policy):
@@ -121,12 +124,23 @@ def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_
     monkeypatch.setattr(
         authority, "_freeze_writer_ledger", lambda *_args, **_kwargs: ("wrong" if failure == "writer" else "d" * 64, {})
     )
-    expected_error = SourceManifestError if failure == "null_value" else SourceSnapshotDriftBlocked
+    observations = []
+
+    def checkpoint():
+        if failure == "cancel" and observations and observations[-1]["rows_validated"] >= 1000:
+            raise MonthlyReleaseCancelled("cancel raw chunk")
+
+    expected_error = (MonthlyReleaseCancelled if failure == "cancel" else
+                      SourceManifestError if failure == "null_value" else SourceSnapshotDriftBlocked)
     if failure and failure != "deferred_tail":
         with pytest.raises(expected_error):
             preparation.freeze_preparation_source(
-                authority, operation_id=f"dmr_{'1' * 32}", cutoff=cutoff, blocking_datasets=("margin_detail",)
+                authority, operation_id=f"dmr_{'1' * 32}", cutoff=cutoff, blocking_datasets=("margin_detail",),
+                checkpoint=checkpoint, progress=lambda value: observations.append(dict(value)),
             )
+        if failure == "cancel":
+            assert observations[-1]["rows_validated"] == 1002  # Two classification rows plus one raw chunk.
+            assert observations[-1]["partitions_sealed"] == 2  # Daily partition never sealed.
         return
     result = preparation.freeze_preparation_source(
         authority,
@@ -134,6 +148,7 @@ def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_
         cutoff=cutoff,
         blocking_datasets=("margin_detail",),
         deferred_cutoff_datasets=("margin_detail",) if failure == "deferred_tail" else (),
+        progress=lambda value: observations.append(dict(value)),
     )
     manifest = cas.get_json(result.source_manifest_ref)
     assert manifest["schema_version"] == preparation.PREPARATION_SOURCE_SCHEMA
@@ -145,6 +160,10 @@ def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_
     )
     assert len(brackets) == 2
     assert len(result.partitions) == (4 if failure == "deferred_tail" else 3)
+    assert observations[-1]["rows_validated"] == len(result.partitions)
+    assert observations[-1]["rows_sealed"] == len(result.partitions)
+    assert observations[-1]["partitions_sealed"] == len(result.partitions)
+    assert observations[-1]["phase"] == "PRIVATE_SOURCE_BRACKET"
     daily_partition = next(item for item in result.partitions if item.spec.dataset == "kline_daily_raw")
     assert [item["month"] for item in daily_partition.monthly_content_leaves] == ["2026-09"]
     assert (

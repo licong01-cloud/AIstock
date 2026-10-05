@@ -532,6 +532,84 @@ def test_cancel_is_observed_at_stage_boundary(tmp_path: Path) -> None:
     assert service.run(operation_id)["status"] == "CANCELLED"
 
 
+@pytest.mark.parametrize("when", ["inside", "after"])
+def test_source_controlled_cancel_never_seals_checkpoint(tmp_path, when):
+    class Controlled(Pipeline):
+        def run_stage_with_control(self, *, checkpoint, progress, **kwargs):
+            checkpoint()
+            progress({"phase": "PRIVATE_SOURCE", "rows_validated": 100, "partitions_sealed": 1})
+            service.cancel(kwargs["operation_id"])
+            if when == "inside":
+                checkpoint()
+            return super().run_stage(**kwargs)
+
+    pipeline = Controlled()
+    service = _service(tmp_path, pipeline)
+    operation = service.submit(_request())["operation_id"]
+    result = service.run(operation)
+    assert result["status"] == "CANCELLED"
+    assert result["last_error"] is None
+    assert not any(service.status(operation)["checkpoints"].values())
+    assert not (service.store.operation_root(operation) / "receipts" / "ready.json").exists()
+    assert pipeline.calls == ([] if when == "inside" else ["SOURCE"])
+
+
+def test_source_progress_is_throttled_attempt_bound_and_not_readiness(tmp_path, monkeypatch):
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseConflict
+
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="SOURCE", status="CHECKING_SOURCE")
+    clock = [0.0]
+    monkeypatch.setattr(monthly_subject.time, "monotonic", lambda: clock[0])
+    checkpoint, progress = service._stage_control(operation, attempt=1, stage="SOURCE")
+    progress({"phase": "PRIVATE_SOURCE", "rows_validated": 100})
+    first = service.status(operation)["stage_progress"]
+    assert first["rows_validated"] == 100
+    assert first["total_rows"] is None
+    assert first["total_partitions"] is None
+    for value in range(101, 110):
+        clock[0] += 1
+        progress({"rows_validated": value})
+    assert service.status(operation)["stage_progress"] == first
+    clock[0] = 16
+    checkpoint()
+    assert service.status(operation)["stage_progress"]["rows_validated"] == 109
+    assert not any(service.status(operation)["checkpoints"].values())
+    service.store.update_state(operation, attempt=2)
+    with pytest.raises(MonthlyReleaseConflict, match="stage control identity"):
+        checkpoint()
+
+
+@pytest.mark.parametrize("payload", [{"rows_validated": -1}, {"rows_validated": True}, {"outcomes_read": True}])
+def test_source_progress_rejects_invalid_observation(tmp_path, payload):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="SOURCE", status="CHECKING_SOURCE")
+    _, progress = service._stage_control(operation, attempt=1, stage="SOURCE")
+    with pytest.raises(MonthlyReleaseError, match="progress"):
+        progress(payload)
+
+
+def test_registered_source_control_is_wired_through_real_service(tmp_path):
+    from types import SimpleNamespace
+    from backend.services.dataset_release.monthly_worker import RegisteredMonthlyPipeline
+
+    def produce(context):
+        context.progress({"phase": "PRIVATE_SOURCE", "rows_validated": 1000})
+        service.cancel(context.operation_id)
+        context.checkpoint()
+        pytest.fail("cancelled source must not return evidence")
+
+    pipeline = RegisteredMonthlyPipeline(
+        {stage: SimpleNamespace(produce=produce) for stage in STAGES}, artifact_roots=(tmp_path,),
+    )
+    service = _service(tmp_path, pipeline)
+    operation = service.submit(_request())["operation_id"]
+    assert service.run(operation)["status"] == "CANCELLED"
+    assert not any(service.status(operation)["checkpoints"].values())
+
+
 def test_busy_writer_preserves_operation_and_releases_only_owned_lock(tmp_path: Path) -> None:
     pipeline = Pipeline()
     service = _service(tmp_path, pipeline)
