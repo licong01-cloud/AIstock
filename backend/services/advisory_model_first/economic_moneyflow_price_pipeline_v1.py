@@ -30,7 +30,7 @@ def moneyflow_implementation_sha256_v1():
         readonly_dependencies={name: hashlib.sha256((repo/name).read_bytes().replace(b'\r\n', b'\n')).hexdigest() for name in dependencies}))
 
 
-def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None, valuation_extension=None, limit_state_extension=None, candidate_cohort_extension=None, flow_path_extension=None, asymmetric_risk_extension=None):
+def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_extension=None, volume_context_extension=None, breadth_state_extension=None, traded_price_extension=None, session_path_extension=None, free_float_extension=None, valuation_extension=None, limit_state_extension=None, candidate_cohort_extension=None, flow_path_extension=None, asymmetric_risk_extension=None, sector_moneyflow_extension=None):
     anchor = _verify_reference(plan.budget_anchor_ref)
     root = plan.campaign_root.resolve()
     original = PriceCampaignPlanV2.model_validate_json((anchor.parent/'plan.json').read_text(encoding='utf-8'))
@@ -68,6 +68,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
         raise ValueError('flow path extension requires original explicit M16 extension')
     if asymmetric_risk_extension is not None and flow_path_extension is None:
         raise ValueError('asymmetric risk extension requires original explicit M17 extension')
+    if sector_moneyflow_extension is not None and asymmetric_risk_extension is None:
+        raise ValueError('sector moneyflow extension requires original explicit M18 extension')
     if price_path_extension is not None:
         from backend.services.advisory_model_first.economic_price_path_value_v1 import PricePathPlanV1
         extension = PricePathPlanV1.model_validate(price_path_extension)
@@ -201,6 +203,20 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                 or asymmetric.parameters['policy_sha256'] != flow_path.parameters['policy_sha256']
                 or asymmetric.parameters['cost_sha256'] != flow_path.parameters['cost_sha256']):
             raise ValueError('candidate asymmetric risk extension original root/source/predecessor differs')
+    if sector_moneyflow_extension is not None:
+        from backend.services.advisory_model_first.economic_sector_moneyflow_v1 import SectorMoneyflowPlanV1
+        declared = sector_moneyflow_extension.model_dump() if isinstance(sector_moneyflow_extension, SectorMoneyflowPlanV1) else sector_moneyflow_extension
+        joint = SectorMoneyflowPlanV1.model_validate(declared)
+        joint_predecessor = _verify_reference(joint.predecessor_manifest_ref)
+        sector_snapshot = _verify_reference(joint.sector_prepared_manifest_ref)
+        moneyflow_snapshot = _verify_reference(joint.moneyflow_prepared_manifest_ref)
+        if (joint.campaign_root.resolve() != root or not _same_sources(joint, asymmetric)
+                or joint.budget_anchor_ref != asymmetric.budget_anchor_ref
+                or joint_predecessor != root/asymmetric.experiment_id/'evaluated/manifest.json'
+                or moneyflow_snapshot != root/plan.experiment_id/'prepared/manifest.json'
+                or joint.parameters['policy_sha256'] != asymmetric.parameters['policy_sha256']
+                or joint.parameters['cost_sha256'] != asymmetric.parameters['cost_sha256']):
+            raise ValueError('sector moneyflow extension original root/source/predecessor differs')
     expected = {'M2': (4, PriceCampaignPlanV2), 'M3': (5, PriceCampaignPlanV2), 'M4': (2, PriceCampaignPlanV2),
                 'M1': (4, SectorPricePlanV1), 'M5': (4, SelectionStatePricePlanV1)}
     if any(event.get('state') != 'STARTED' or event.get('kind') not in ('PHYSICAL_FIT', 'INDEX_BUILD')
@@ -213,7 +229,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                *(('M15',) if limit_state_extension is not None else ()),
                *(('M16',) if candidate_cohort_extension is not None else ()),
                *(('M17',) if flow_path_extension is not None else ()),
-               *(('M18',) if asymmetric_risk_extension is not None else ())) for event in events):
+               *(('M18',) if asymmetric_risk_extension is not None else ()),
+               *(('M19',) if sector_moneyflow_extension is not None else ())) for event in events):
         raise ValueError('moneyflow cumulative journal has foreign state/model/kind')
     for model, (count, cls) in expected.items():
         found = [event for event in events if event['kind'] == 'PHYSICAL_FIT' and event['model_id'] == model]
@@ -226,6 +243,8 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
                 or (model == 'M5' and previous.experiment_id != old.experiment_id)
                 or any(event['campaign_id'] != previous.campaign_id for event in found)):
             raise ValueError('moneyflow original journal study identity differs')
+        if model == 'M1' and sector_moneyflow_extension is not None and sector_snapshot != study_root/'prepared/manifest.json':
+            raise ValueError('sector moneyflow requires original M1 frozen snapshot')
         registered = read_stage(study_root/'preregistered', stage='preregistered', plan_sha256=previous.plan_sha256, parent_sha256=None)
         _ledger(previous, study_root, 'PREREGISTERED', study_root/'preregistered/manifest.json')
         if model == 'M5':
@@ -459,6 +478,29 @@ def verify_moneyflow_budget_v1(plan, *, price_path_extension=None, market_risk_e
             event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != asymmetric.campaign_id
             or event['experiment_id'] != asymmetric.experiment_id or event['head'] not in heads for event in latest_asymmetric):
             raise ValueError('candidate asymmetric risk extension own cumulative budget/journal differs')
+    if sector_moneyflow_extension is not None:
+        if len(latest_asymmetric) != 4:
+            raise ValueError('sector moneyflow extension needs actual four completed M18 fits')
+        previous_root = root/asymmetric.experiment_id
+        registered = read_stage(previous_root/'preregistered', stage='preregistered', plan_sha256=asymmetric.plan_sha256, parent_sha256=None)
+        _ledger(asymmetric, previous_root, 'PREREGISTERED', previous_root/'preregistered/manifest.json')
+        frozen = AsymmetricRiskPlanV1.model_validate_json((previous_root/'preregistered/plan.json').read_text(encoding='utf-8'))
+        if frozen != asymmetric:
+            raise ValueError('sector moneyflow cannot substitute original M18 plan')
+        parent = registered['stage_sha256']
+        for stage in ('prepared', 'trained', 'evaluated'):
+            parent = read_stage(previous_root/stage, stage=stage, plan_sha256=asymmetric.plan_sha256, parent_sha256=parent)['stage_sha256']
+        metadata = json.loads((previous_root/'trained/metadata.json').read_text(encoding='utf-8'))
+        if (metadata.get('parameters') != asymmetric.parameters or set(metadata.get('models', {})) != heads
+                or metadata.get('diagnostics', {}).get('fitted_head_count') != 4
+                or metadata.get('diagnostics', {}).get('index_build_count') != 0):
+            raise ValueError('sector moneyflow requires actual four M18 trained heads')
+        _ledger(asymmetric, previous_root, 'EVALUATED', joint_predecessor)
+        latest_joint = [event for event in events if event['model_id'] == 'M19']
+        if len(latest_joint) > 4 or len({event['head'] for event in latest_joint}) != len(latest_joint) or any(
+            event['kind'] != 'PHYSICAL_FIT' or event['campaign_id'] != joint.campaign_id
+            or event['experiment_id'] != joint.experiment_id or event['head'] not in heads for event in latest_joint):
+            raise ValueError('sector moneyflow own cumulative budget/journal differs')
     return root
 
 
