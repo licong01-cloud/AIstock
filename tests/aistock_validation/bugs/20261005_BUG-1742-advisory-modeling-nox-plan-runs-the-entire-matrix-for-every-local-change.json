@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "noxfile.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
+    "backend/tests/test_noxfile_validation_env.py",
     "tests/aistock_validation/bugs/20261005_BUG-1742-advisory-modeling-nox-plan-runs-the-entire-matrix-for-every-local-change.json"
   ],
   "assigned_agent": null,
