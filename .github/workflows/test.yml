@@ -222,7 +222,7 @@ jobs:
 
       - name: Validate changed dependency surface
         id: dependency_validation
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.dependency_validation_required == 'true'
+        if: ${{ !cancelled() && steps.classify.outcome == 'success' && steps.classify.outputs.dependency_validation_required == 'true' }}
         continue-on-error: true
         env:
           DEPENDENCY_FILES: ${{ steps.classify.outputs.dependency_files }}
@@ -262,7 +262,7 @@ jobs:
 
       - name: Run PR quality enforcement
         id: pr_quality_validation
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.docs_lite_required != 'true' && steps.classify.outputs.close_sync_metadata_only != 'true'
+        if: ${{ !cancelled() && steps.classify.outcome == 'success' && steps.classify.outputs.docs_lite_required != 'true' && steps.classify.outputs.close_sync_metadata_only != 'true' }}
         continue-on-error: true
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
@@ -301,7 +301,7 @@ jobs:
 
       - name: Run Semgrep guardrails
         id: semgrep_validation
-        if: always() && steps.classify.outcome == 'success' && steps.classify.outputs.docs_lite_required != 'true' && steps.classify.outputs.close_sync_metadata_only != 'true'
+        if: ${{ !cancelled() && steps.classify.outcome == 'success' && steps.classify.outputs.docs_lite_required != 'true' && steps.classify.outputs.close_sync_metadata_only != 'true' }}
         continue-on-error: true
         run: |
           command -v semgrep >/dev/null || { echo 'semgrep is not preinstalled on aistock-ci runner' >&2; exit 1; }
@@ -365,7 +365,7 @@ jobs:
 
       - name: Run selected backend sessions
         id: backend_validation
-        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.backend_required != 'false'
+        if: ${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.backend_required != 'false' }}
         continue-on-error: true
         env:
           BACKEND_SESSIONS: ${{ steps.classify.outputs.backend_sessions }}
@@ -395,7 +395,7 @@ jobs:
 
       - name: Attach lockfile-matched prebuilt frontend dependencies
         id: frontend_dependencies
-        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.frontend_required == 'true'
+        if: ${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.frontend_required == 'true' }}
         continue-on-error: true
         shell: powershell
         run: |
@@ -410,7 +410,7 @@ jobs:
 
       - name: Run selected frontend quality
         id: frontend_validation
-        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.frontend_required == 'true' && steps.frontend_dependencies.outcome == 'success'
+        if: ${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.frontend_required == 'true' && steps.frontend_dependencies.outcome == 'success' }}
         continue-on-error: true
         working-directory: frontend
         env:
@@ -427,7 +427,7 @@ jobs:
 
       - name: Run selected TDX Go tests
         id: go_validation
-        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.go_required == 'true'
+        if: ${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.go_required == 'true' }}
         continue-on-error: true
         working-directory: tdx-api-main
         env:
@@ -436,7 +436,7 @@ jobs:
 
       - name: Run selected prompt evaluation
         id: prompt_validation
-        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.prompt_evaluation_required == 'true'
+        if: ${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.prompt_evaluation_required == 'true' }}
         continue-on-error: true
         run: |
           mkdir -p tmp/validation/llm_prompt_evaluation
@@ -453,7 +453,7 @@ jobs:
 
       - name: Run focused workflow validation tests
         id: workflow_validation
-        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
+        if: ${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]' }}
         continue-on-error: true
         env:
           WORKFLOW_TEST_TARGETS: ${{ steps.classify.outputs.workflow_test_targets }}
@@ -466,7 +466,7 @@ jobs:
 
       - name: Enforce CI workflow policy
         id: workflow_policy
-        if: always() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]'
+        if: ${{ !cancelled() && steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true' && steps.classify.outputs.workflow_validation_required == 'true' && steps.classify.outputs.workflow_test_targets != '[]' }}
         continue-on-error: true
         run: |
           mkdir -p tmp/validation/ci_workflow_policy
