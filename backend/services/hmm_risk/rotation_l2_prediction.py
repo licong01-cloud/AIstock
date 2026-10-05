@@ -554,11 +554,17 @@ class RotationL2PredictionRepository:
             raise RotationL2PredictionError(REASON_CONFLICT, "explicit run id is invalid")
         with self.conn_factory() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT max(trade_date) FROM hmm_risk.rotation_l2_prediction WHERE run_id=%s", (run_id,))
-                raw = cursor.fetchone()
-        if not raw or raw[0] is None:
+                cursor.execute(
+                    "SELECT DISTINCT trade_date FROM hmm_risk.rotation_l2_prediction "
+                    "WHERE run_id=%s ORDER BY trade_date",
+                    (run_id,),
+                )
+                dates = [raw[0] for raw in cursor.fetchall()]
+        if not dates:
             raise RotationL2PredictionError(REASON_NOT_FOUND, "L2 prediction run is not found")
-        detail = self.read_date(raw[0], run_id=run_id)
+        if any(type(value) is not date for value in dates) or dates != sorted(set(dates)):
+            raise RotationL2PredictionError(REASON_READBACK, "L2 prediction date catalog is invalid")
+        detail = self.read_date(dates[-1], run_id=run_id)
         rows = detail["rows"]
         head = rows[0]
         row_hash = canonical_sha256([_row_identity(row) for row in rows])
@@ -571,6 +577,7 @@ class RotationL2PredictionRepository:
             "run_id": run_id,
             "model_hash": head["model_hash"],
             "trade_date": detail["trade_date"],
+            "available_trade_dates": [value.isoformat() for value in dates],
             "as_of_date": head["as_of_date"].isoformat(),
             "sector_count": len(rows),
             "available_count": sum(row["availability"] == "available" for row in rows),
