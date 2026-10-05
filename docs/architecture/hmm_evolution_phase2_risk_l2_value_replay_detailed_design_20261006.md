@@ -3,7 +3,7 @@
 > 版本：v1.0；日期：2026-10-06；tier：F2；owner：HMM。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.71，F-011/F-012/F-013。
 > **精确消费合同：APPROVED_BY_USER_FOR_IMPLEMENTATION。** 用户于2026-10-06针对明确列出的L2-RISK-VALUE D1～D6整包答复“批准完整推荐合同”：一日延迟、131行业预算、warning转现金、无overlay/同日敞口参照、423日现有facts及0/5/10/20bp敏感性；零fit、不读tail、不写数据库。按设计合入后实施，不由源码合入权限代替此次精确批准。原风险产品D1～D6、模型及0.20报警阈值保持不变。
-> 本轮目的：回答冻结风险warning是否在历史参考路径中减少损失，及其少持仓、错过上涨和成本代价；不是重训、补历史证据或运行QE。尚未执行本回放，公式已批准但不能把计划写成测试通过。
+> 本轮目的：回答冻结风险warning是否在历史参考路径中减少损失，及其少持仓、错过上涨和成本代价；不是重训、补历史证据或运行QE。薄源码与直接合同测试已实现，原资产file-only身份预检通过；尚未执行正式双process价值回放，不能把源码/预检通过写成价值通过。
 
 ## 1. Background、目标与Scope
 
@@ -30,7 +30,7 @@ request显式给四个绝对普通文件路径和expected canonical SHA；禁止
 | 资产 | 路径/身份 |
 |---|---|
 | acceptance | `F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json`；canonical `88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26` |
-| sealed probability | 同根`run/process_1.sealed.json`；经原`risk_l2_prediction.validate_import`核对原acceptance/process/model identity，不取其他候选 |
+| sealed probability | 同根`run/process_1.sealed.json`；经原`risk_l2_prediction.product_from_assets`（原正式`load_product`同一验证函数）核对原acceptance/process/model identity，不取其他候选 |
 | features | 同根`inputs-file-only-2/features.json`；与原input/model/contract闭合，input identity `9fd18ad4ee25efd8a76b3aaf0e07e26edee1c39fe31c05b365322c9ea41ef1dc` |
 | daily outcome facts | 同根`inputs-file-only-2/outcome_facts.json`；schema=`hmm_risk_l2_absolute_drawdown_logistic_v1_outcome_facts`；canonical `3101fcd9152eb87b8b207ac60071df5d241043cecb71fb5008d9a3f2dcd562f1`；byte SHA `4f16ad7e521adbd6cc9f3f460f234378d7728bbb4b4555150016ffa210e56c20` |
 
@@ -112,7 +112,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 | wealth/cost | 负号/峰值MDD、上涨机会成本、漂移后换手、初始建仓/末日不平仓、单边收费、零换手/无break-even、所有成本档不挑结果 |
 | true replay | 用户精确批准后使用§3四资产、两个fresh process严格bitwise相同；完整result/coverage/终态和零新增fit，不重新造数据 |
 
-拟运行命令：`python -m pytest backend/tests/hmm_risk/test_risk_l2_value_replay.py backend/tests/hmm_risk/test_replay_risk_l2_value.py -q`，Ruff/py_compile、`git diff --check`及changed-files所属最小计划。上述两个test文件尚未创建/运行，不能写passed。F2仅审核设计结构；精确消费授权和真实回放另列。
+已运行直接矩阵：`python -m pytest backend/tests/hmm_risk/test_risk_l2_value_replay.py backend/tests/hmm_risk/test_replay_risk_l2_value.py -q -p no:cacheprovider`，18 passed。Ruff/format、py_compile和4/4 ownership映射通过；提交前在最终HEAD重验最小门禁。真实四资产load_inputs在zero_compute poison下核对131目录/424信号/423收益日通过，不执行预算回放。F2仅审核设计结构；精确授权和正式回放结果另列。
 
 ## 11. Design Acceptance Index与Design Acceptance Matrix
 
@@ -125,14 +125,14 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 | 真实执行维度 | 状态 | 影响与下一步 |
 |---|---|---|
 | 精确消费D1～D6 | APPROVED_BY_USER_FOR_IMPLEMENTATION | 2026-10-06整包批准；设计合入后按原公式执行，不扩大权限 |
-| 源码/直接测试 | NOT_IMPLEMENTED / NOT_RUN | 精确批准后一次完整薄实现及多轮代码审修，不靠文档F2代报 |
+| 源码/直接测试 | IMPLEMENTED / DIRECT_TESTS_PASSED | 18项直接矩阵与原资产身份预检通过；两轮作者代码复审后待最终HEAD CI，不靠文档F2代报 |
 | 价值回放/经济效果 | NOT_RUN / UNKNOWN | 批准后零fit双process；仅可能为参考研究结果，净增益仍未评估 |
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | §1/§4～§7；原risk模型及产品设计 | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json；本文预算/回撤/成本公式双轮文档复审 | DESIGN_REVIEW_VERIFIED | 无 |
-| F-012 | §2/§3/§4，正式file-only消费范围 | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/inputs-file-only-2/outcome_facts.json；423日期/schema/identity文件读回 | DESIGN_REVIEW_VERIFIED | 无 |
-| F-013 | §7～§10及下列状态隔离 | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/product/product_validation.json；本文停止/授权/完整包复审 | DESIGN_REVIEW_VERIFIED | 无 |
+| F-011 | backend/services/hmm_risk/risk_l2_value_replay.py；§4～§7 | test: backend/tests/hmm_risk/test_risk_l2_value_replay.py；预算/时序/NA/漂移成本/极端市场/完整终态直接测试 | SOURCE_CONTRACT_VERIFIED | 无设计或源码缺口；正式经济结果仍待运行，不作为本次源码门 |
+| F-012 | backend/services/hmm_risk/risk_l2_value_replay.py：load_inputs/zero_compute | test: backend/tests/hmm_risk/test_risk_l2_value_replay.py；原四资产file-only预检、独立pins、DB/fit poison | SOURCE_CONTRACT_VERIFIED | 无 |
+| F-013 | scripts/hmm_risk/replay_risk_l2_value.py；原API/UI不变 | test: backend/tests/hmm_risk/test_replay_risk_l2_value.py；child/parent typed failure、collision/bitwise差异拒绝 | SOURCE_CONTRACT_VERIFIED | 无源码缺口；正式双process只在源码合入后执行 |
 
 ## 12. Rollout / Rollback、Risks与Production Gates
 
@@ -140,7 +140,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 最重要风险是reference ≠ execution：股票聚合收益和每日行业预算漂移不是真实股票头寸；内部成员权重变化/成交困难/费用未建模。其次是已消费development、误报错过上涨、同敞口非同beta和缺路径区间。诚实呈现，不靠更复杂模拟器或参数搜索掩盖局限；参考正结果只能支持后续场景验证的优先级。
 
-本次文档：DDL/DML/dependency/runtime_activation/process_control/dataset_write/active_profile_write/training/tail/QE均noop/false；runtime_impact=none，后端重启权限=false。未来源码以实际changed files重新分类，不自称离线必为none。精确D1～D6已批准；产物只写显式任务目录，生产仍不授权。
+本次DDL/DML/dependency/runtime_activation/process_control/dataset_write/active_profile_write/training/tail/QE均noop/false，后端重启权限=false。实际四源码/测试文件经canonical runtime classifier分类为backend、target_ids=[backend-main]，catalog_error=null：新服务文件未在精确offline登记，不能自行降为none或修改catalog。该保守源码分类与实际薄CLI无运行API消费者分开报告；fresh-process从本任务加载新module/原reader并在poison下完成身份预检，生产backend生效仍不声称已验证。runbook=`docs/operations/backend_main_runtime_restart_runbook.md`，identity=`http://127.0.0.1:8001/api/v1/runtime-identity`，既有risk业务smoke=`/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26`。精确D1～D6已批准；产物只写显式任务目录，生产仍不授权。
 
 ## 13. DESIGN-COMPLIANCE-001与文档审修记录
 
@@ -152,3 +152,5 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 | 禁止私增门禁审批 | 不增模型显著性/逐sector效果门；消费精确批准沿已有授权边界，不靠F2制造批准 |
 
 两轮作者文档审核（非独立第三方）：第一轮核对真实资产、已完成产品状态及事实收益口径，修正只用10D标签推导可避免损失、当日signal交易前收盘的风险，明确423日/一日延迟/stock-aggregate参考；第二轮逐条检查NA、权重与同敞口、漂移换手、成本、资本耗尽和授权终态，补齐自然极端行情不作为模型失败、NA块不拼完整净值、成本档不伪装执行净收益，并将设计定义验收与未批准/未实施/未运行真实缺口分开。随后用户明确批准整包，公式未变，只同步批准状态。没有修改原风险模型或新增未授权门禁，文档无剩余阻断；F2只作定义结构校验。
+
+两轮作者源码复审（非独立第三方）：第一轮对照D1～D6及三臂时序，修复0bp在合法NA后的首个有效日不应依赖未知换手、资本耗尽与legal NA分离；第二轮反例复审补充同日期paired分块比较、现金和风险预算漂移和=1读回，严格禁止完整NAV跨NA拼接。18项测试、原四资产file-only身份预检、模型/DB poison与输出碰撞/parent差异失败保护通过，无剩余阻断。没有调整模型、消费公式或生产数据；正式双process执行与其终态仍未运行。
