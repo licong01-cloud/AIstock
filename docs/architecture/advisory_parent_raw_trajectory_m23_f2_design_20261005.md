@@ -97,7 +97,7 @@ Rollout只Advisory研究叶，无API/UI/model绑定或后端重启需要。Rollb
 | F-006 | §8；registry/evaluation | artifact: 本设计冻结导航/证据合同；test: backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
 | F-007 | §2/9；所有权/交付 | artifact: scope/F2/审核记录；test: backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
 
-矩阵为七项源码局部验证，四直接叶45项、原四bundle各两节点及scope/F2/L0均通过；研究尚未启动，不冒称收益确认/运行启用。试验失败无需扩大证据或关闭整个方向。
+矩阵为七项源码局部验证，四直接叶45项、原四bundle各两节点及scope/F2/L0均通过；一次研究完成见§14，不冒称收益确认/运行启用。试验失败无需扩大证据或关闭整个方向。
 
 ## 12. 三轮设计审核与修订
 
@@ -116,3 +116,7 @@ Rollout只Advisory研究叶，无API/UI/model绑定或后端重启需要。Rollb
 第三轮预算/效率/交付：实际M22完整四stage/hash/ledger及16/18四heads/0index，87fit+1index精确88行前缀不可替换，只本M23四独特head至91；foreign/duplicate/reset/partial/typed替换测试通过，不回扫旧失败returns或更改旧caps/公共实现。四直接叶45项PASS、Ruff零问题、scope/F2/L0及原四bundle局部读回在提交前完成；删除唯一未用测试import。全路径两P2复杂度项已审：新预算22*88有界metadata/journal512KB，原helper merge既存且仅M23/91路由追加；新lag键集合/字典和原7720/source20000上限，不构造全股票日期笛卡尔积，0SQL。SOURCE局部验收不等于经济确认、API/UI/runtime或自然前向，研究尚未启动。
 
 DESIGN-COMPLIANCE-001逐条：全部七设计项有实际实现与定向证据映射，不以局部验收冒称收益或运行启用；normal UNKNOWN与真实错误严格区分、不吞异常或伪造成功；原业务policy/支持/标签/费用/四臂及现有family保持；没有新增父包审批或其它模块阻断，只有本合同计算一致性检查。精确十叶，公共QE/Selection/HMM/StrategyPackage/数据/Execution/CI与DB/服务未改。
+
+## 14. M23一次实际研究与收益边界
+
+clean producer e049ae7c040cc522687b146c8757fa0cbba45305/implementation2d7370d0ce0e11202d1f4dcd68772bd34b3598205af3c3c33b915afa50a614d6，run advrawtraj_e07df66edbfd6c60c23567e1/plan e07df66edbfd6c60c23567e105d5ddb665cd7b813b279f23c62661a152167150。一次prepare1.250秒/0SQL，原386D7720键全保留，3908AVAILABLE/3812UNKNOWN（100warmup和3712原lag缺键），无删填或重建；共同成熟train1939/208D、validation916仅诊断。16:05UTC前三QE running均0、fresh收据8c33f975...；四fit5.172秒/全四臂23.719秒，16:06:17UTC后三QE仍0，实际累计91PHYSICAL_FIT+1旧INDEX_BUILD。原81D1620候选/100共同NAV日candidate/base/新matched/rule成本后名义收益20.3087/21.3220/34.7315/20.5747%，paired日baseline−0.98257bps CI[−10.55802,7.34797]，matched−11.51046 CI[−24.85971,−0.91524]。34真实模型TAKE+57UNKNOWN研究控制91episode全部settled，0held-mark/endpoint阻断；净增量失败、其它四项通过，仅STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION/NOT_CONFIRMED。不以回撤改善或matched正点回选旧模型、改lag/阈值/seed/窗口或重跑补证；原raw轨迹在本信息/固定模型下没有增量，不证明全局不可学或QE包无效。正式F四stage/evaluated manifest fileSHA7bdbb969075c1a231c3ddfd27b7433878ead5673799b1a976c5c1df98bc6b764保留，SOURCE当前CI/合入待。第23串行已消费窗口/NV/native UNPROVEN限制不升级，0sealed/独立OOS/自然前向/real-fill/activation/QE公开源码/DB写/服务控制。
