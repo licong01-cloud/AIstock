@@ -1,6 +1,6 @@
 # Advisory 父预测归一化轨迹条件价格 M24 F2详细设计
 
-设计2026-10-06；DESIGN_REVIEW / SOURCE_NOT_IMPLEMENTED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+设计2026-10-06；SOURCE_LOCAL_VERIFIED / STUDY_COMPLETE_NOT_CONFIRMED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。设计PR #5503/current HEAD d927b7dd、必需CI37341383182 SUCCESS，已合入955fb8bd5c978cfb3de993a2700f3c59e2d11cf6并仅自身官方清理。
 
 ## 1. Background / Goal
 
@@ -93,15 +93,15 @@ preregister/prepare/train/evaluated四immutable atomic；clean producer先于数
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1/3/4；planned economic_parent_normalized_trajectory_v1.py | artifact: 原norm schema及原D12/有符号gap源码；test: planned backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_v1.py | DESIGN_REVIEW_PASS | none |
-| F-002 | §3/4；planned economic_parent_normalized_trajectory_pipeline_v1.py | test: planned backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_v1.py；key/clock/missing | DESIGN_REVIEW_PASS | none |
-| F-003 | §5；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；planned 17/19/test poison | DESIGN_REVIEW_PASS | none |
-| F-004 | §6；planned 私有预算 | test: planned backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_pipeline_v1.py；91prefix95/actual M23/typed/partial | DESIGN_REVIEW_PASS | none |
-| F-005 | §7；planned nodes/price_set/evaluate | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；planned four-arm/holes/UNKNOWN | DESIGN_REVIEW_PASS | none |
-| F-006 | §8；registry/evaluation | artifact: 冻结原分类及证据用途；test: planned backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_pipeline_v1.py | DESIGN_REVIEW_PASS | none |
-| F-007 | §2/9；own scope/delivery | test: planned backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_pipeline_v1.py；scope/F2/L0/currentCI | DESIGN_REVIEW_PASS | none |
+| F-001 | §1/3/4；economic_parent_normalized_trajectory_v1.py | artifact: 原norm schema及原D12/有符号gap源码；test: backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-002 | §3/4；economic_parent_normalized_trajectory_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_v1.py；key/clock/missing | SOURCE_LOCAL_VERIFIED | none |
+| F-003 | §5；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；17/19/test poison | SOURCE_LOCAL_VERIFIED | none |
+| F-004 | §6；私有预算 | test: backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_pipeline_v1.py；91prefix95/actual M23/typed/partial | SOURCE_LOCAL_VERIFIED | none |
+| F-005 | §7；nodes/price_set/evaluate | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；four-arm/holes/UNKNOWN | SOURCE_LOCAL_VERIFIED | none |
+| F-006 | §8；registry/evaluation | artifact: 冻结原分类及证据用途；test: backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-007 | §2/9；own scope/delivery | test: backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_pipeline_v1.py；scope/F2/L0/currentCI | SOURCE_LOCAL_VERIFIED | none |
 
-矩阵仅设计审核。M24源码/prepare/fit/evaluation0；当前91+1全为旧已完成运行，不计计划95为实际。
+矩阵记录源码本地逐项验收：47直接项/Ruff/F2七项/十叶scope、原M1-M20-M23三bundle节点兼容通过；changed L0零/staged新一项非blocking P2/full二项有限复杂度已按§8/13说明。一次M24四fit/完整四臂完成，真实95+1，具体经济负结果见§14。SOURCE合入、运行态加载及收益确认分别报告，不能将代码通过写成收益确认。
 
 ## 12. 多轮设计审核和修订
 
@@ -110,3 +110,17 @@ preregister/prepare/train/evaluated四immutable atomic；clean producer先于数
 第二轮来源/PIT/业务：源为actualM23 prepared唯一D12/Y/current raw trajectory、original raw ref与parentrankings；只请求current/lag原键、先(D,stock)投影再exact nextT，防目标日冲突误当missing。正常缺失/原UNKNOWN保留，current必须存在、oldbase clock=D，strictnumeric/overflow；原完整support、五有效review标签与四臂/Topen-only不变，NV不能升级native。
 
 第三轮预算/范围：纠正正文草稿把原predecessor宽度与M24新matched混淆的写法，actualM23是15/17，M24才17/19；92行91fit+1index仅4新fit至95，不重扫旧金融结果/提高旧cap。三旧代表bundle足够覆盖原sector、raw和实际predecessor合同，不重复五轮旧研究；十叶所有权/无QE/DB/服务写、currentCI/自己清理、源码/研究/runtime分报和原时限保持。
+
+## 13. 源码三轮审核、修订及 DESIGN-COMPLIANCE-001
+
+第一轮信息/PIT：逐段核定旧D12/TRAJECTORY4和新增norm_delta2真实矩阵17/19、同共同成熟train及原values_available完整价support；historical norm来自原rankings而非重算，原base唯一KEY/clock/status不能被解除。current必需、lag正常缺失保留UNKNOWN，先(D,stock)请求投影再exact nextT，外部无关坏数不污染；finite overflow不伪装正常missing。
+
+第二轮身份/原子/业务：actualM23 predecessor元数据15/17而非新17/19；四stage/ledger/原M20 ref URI-SHA-size及actualM23 base明确绑定。typed model_copy、92行91fit+1index不可变字节前缀、四新唯一head至95、partial拒绝隐式refit、exact prepare只读重返。新增pipeline测试发现夹具把prepared放至campaign根的错误，修正至actual predecessor run/prepared；无为测试放松业务源码。T open只观察买价，T close哨兵不入预测，价support洞、多段/空/UNKNOWN、test特征和标签毒化不入fit均覆盖。
+
+第三轮范围/交付：shared仅M24 route/recipe/status/cap分支，不改变旧family defaults、原模型或参数。新增源码只两Advisory叶，四直接文件47PASS/Ruff0；代表M1/M20/M23原bundle只identity+各两node query，不重跑旧研究/收益。有限source20000、query500000、journal512KB/23*92 metadata；公共QE/Selection/StrategyPackage/HMM/CI/数据/DB/服务不写。后续L0/scope/F2及clean producer、一次正式运行/当前CI分别回报。
+
+DESIGN-COMPLIANCE-001逐项：①原批准七项与实施/测试逐项映射，无未授权减少目标冒称完成；②输入冲突/坏数/未来时钟/partial明确错误，正常UNKNOWN不吞异常伪success；③原候选、标签、五effective review、support/费用、四臂/未知归因不改语义；④不增加QE包资格、历史补证或sealed准入，只保留本任务可计算一致性与一次运行记录。经济/运行态尚未完成，不以本地tests当收益或启用。
+
+## 14. 一次正式研究实际结果
+
+clean producer d57f02e41a241193b6c0348f2c6747e373266d09/implementation0dc07d4cf8529c364ed7585e45bf8ef76f3b8ac6274cacbc421d5308fafc3c23；run advnormtraj_cf25e8a5193c296a82e69350/plan cf25e8a5193c296a82e693503b92cfbc8460ebd5716d51574fec435c977d991e。一次prepare1.516秒/0SQL，原386D7720候选全保留，3908AVAILABLE/3812UNKNOWN；原M23 base唯一标签及全部raw trajectory保留。共同成熟train1939/208D、validation916仅诊断。fresh QE三个running前2026-10-05T16:54:53+00:00全部0，receipt d8715ed0...；四fit5.657秒/完整四臂20.703秒，post 2026-10-05T16:55:20+00:00全部0，真实累计95PHYSICAL_FIT+1旧INDEX_BUILD。原81D1620候选/100共同NAV日candidate/base/新matched/rule成本后名义收益17.3470%/21.3220%/20.3087%/20.5747%，paired日base−3.36513bps CI[−14.98539,8.76008]、matched−2.38257 CI[−9.25822,6.85087]；candidate MDD−8.4929%。36真模型TAKE+53UNKNOWN控制=89episodes全部settled，0held/端点/unsettled阻断；9profitable与4loss基线入场被跳过，UNKNOWN利润不冒称模型收益。仅net失败/其它四条件通过，只STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION/NOT_CONFIRMED；历史norm五TD变化未给原raw trajectory新增价值，不选lag/参数/旧matched或重跑补证，非全局不可学/QE无效。第24串行已消费窗口/NV/native UNPROVEN限制保留，0sealed/独立OOS/自然前向/real-fill/activation/QE public写/数据库读写/服务控制。evaluated manifest fileSHA c7be1d91377d2017206c5de57d83e1f8360166ab7b304ead57d4fcb00f21c994；正式F原四stage保留，SOURCE提交/currentCI与自己清理另报。
