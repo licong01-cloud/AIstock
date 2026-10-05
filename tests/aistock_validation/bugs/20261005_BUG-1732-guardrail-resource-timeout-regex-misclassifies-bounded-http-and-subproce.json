@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1732",
-  "closed_at": null,
+  "closed_at": "2026-10-05T16:41:20Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,15 +27,15 @@
   "expected": "显式timeout和真实受控进程无误报；缺timeout/timeout=None/未受控进程仍告警，解析失败不静默通过，每文件只读一次",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1732-guardrail-resource-timeout-regex-misclassifies-bounded-http-and-subproce.json",
       "backend/tests/test_aistock_guardrail_scan.py",
-      "scripts/aistock_guardrail_scan.py"
+      "scripts/aistock_guardrail_scan.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1732-guardrail-resource-timeout-regex-misclassifies-bounded-http-and-subproce.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1732-guardrail-resource-timeout-regex-misclassifies-bounded-http-and-subproce.json",
       "backend/tests/test_aistock_guardrail_scan.py",
-      "scripts/aistock_guardrail_scan.py"
+      "scripts/aistock_guardrail_scan.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1732-guardrail-resource-timeout-regex-misclassifies-bounded-http-and-subproce.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -93,8 +93,8 @@
   },
   "first_seen_at": "2026-10-05T16:21:43.226105Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7fdd1795f0dca7b47d58406ba7095ad96bc27163",
+  "fixed_at": "2026-10-05T16:41:20Z",
   "github_issue_number": 5500,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5500",
   "last_seen_at": "2026-10-05T16:21:43.226105Z",
@@ -102,6 +102,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5506",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -119,6 +120,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -128,7 +130,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1732",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f7b7d5efd1381acf",
+    "recorded_at": "2026-10-05T16:42:13.907061Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "408fc220adaecb7e3f4625356616373949ba01af",
+    "source_merge_commit": "7fdd1795f0dca7b47d58406ba7095ad96bc27163",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5506",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -> passed, 2/2 mapped, blocking=0",
+      "pytest backend/tests/test_aistock_guardrail_scan.py -q -> 59 passed"
+    ],
+    "validation_evidence_digest": "812b0d321e23464bab72022b8b59ea778118ae83587921797fb0f9cebf7ff633"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.guardrails"
   ],
@@ -137,6 +161,10 @@
     "fingerprint": "c1b752a89bdc708f8d11a7f6",
     "source_event_id": "FE-20261005-c1b752a89bdc"
   },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -> passed, 2/2 mapped, blocking=0",
+    "pytest backend/tests/test_aistock_guardrail_scan.py -q -> 59 passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
