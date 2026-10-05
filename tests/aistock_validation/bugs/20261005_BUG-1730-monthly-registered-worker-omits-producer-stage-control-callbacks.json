@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-05T02:10:20.170847Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3aa559f71dd7056b3ccca38f7a09ef230df77273",
+  "fixed_at": "2026-10-05T02:16:18Z",
   "github_issue_number": 5472,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5472",
   "last_seen_at": "2026-10-05T02:10:20.170847Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5473",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,6 +130,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -140,7 +142,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1730",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "17fcf92262b6db9a",
+    "recorded_at": "2026-10-05T02:16:50.718096Z",
+    "runtime_contract_digest": "fbc628dc15c3ba7e3606d62e70600408eb554abdff0145bcf5ea3ab94fa8f2d8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b207e8f1fadbd621c3817d8002d75e6e0bef02bb",
+    "source_merge_commit": "3aa559f71dd7056b3ccca38f7a09ef230df77273",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5473",
+    "validation_evidence": [
+      "AIstock pytest 19 passed; L0 and exact-head CI SUCCESS; runtime unchanged"
+    ],
+    "validation_evidence_digest": "0f16bcd90ae0a996856f8d4286bb4ecdc26409615c6c16f2e680e6489bb69b5e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -149,6 +172,9 @@
     "fingerprint": "118407d105498e0ba07b95d2",
     "source_event_id": "FE-20261005-118407d10549"
   },
+  "validation_evidence": [
+    "AIstock pytest 19 passed; L0 and exact-head CI SUCCESS; runtime unchanged"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
