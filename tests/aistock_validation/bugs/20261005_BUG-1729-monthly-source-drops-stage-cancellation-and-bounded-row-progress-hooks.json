@@ -20,7 +20,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-05T02:08:40.591735Z",
-  "description": "checkpoint defaults to no-op; stage state timestamp remains at entry while raw source scan runs for hours.",
+  "description": "月更 SOURCE adapter 未传递已有分批 checkpoint，阶段内取消与真实进度不可见。接通 BUG-1730 的代码拥有回调，记录 attempt/stage 绑定的阶段、当前分区、已校验行、已封存行和分区及心跳；未知计数与总量为 null，15秒节流且阶段切换立即刷新。raw freeze、冻结行审计、私有准备执行传递 checkpoint；取消返回 CANCELLED，checkpoint 发布时在 operation lock 内再检查取消标志，禁止取消竞态产生成功 checkpoint。进度不参与 SOURCE/READY 或复用证明；历史复用/有界并行仍为后续性能任务。当前 attempt 242 和 active profile 不变；无生产/DEV DDL/DML、服务或训练动作。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -210,8 +210,13 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": ["AIstock interpreter fresh process: seven focused monthly SOURCE/service/worker/snapshot suites -> 141 passed, 1 existing skipped. RED 6 failures before implementation; real temporary CAS private source cancellation after 1000 validated raw rows, frozen audit interruption after 100000 rows, registered pipeline to service cancellation and checkpoint publication race all PASS. Windows temporary test state only X:/AIstock_temp/BUG-1729; no DEV/production DB, active profile, production candidate or runtime actions. Depends on BUG-1730 source merge 3aa559f71dd7056b3ccca38f7a09ef230df77273; deployed attempt 242 unchanged, runtime pending user-owned restart."],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

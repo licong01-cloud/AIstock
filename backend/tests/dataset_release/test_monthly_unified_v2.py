@@ -602,10 +602,25 @@ def test_registered_source_control_is_wired_through_real_service(tmp_path):
         pytest.fail("cancelled source must not return evidence")
 
     pipeline = RegisteredMonthlyPipeline(
-        {stage: SimpleNamespace(produce=produce) for stage in STAGES}, artifact_roots=(tmp_path,),
+        {stage: SimpleNamespace(produce=produce, producer_id="fixture", producer_version="1") for stage in STAGES},
+        artifact_roots=(tmp_path,),
     )
     service = _service(tmp_path, pipeline)
     operation = service.submit(_request())["operation_id"]
+    assert service.run(operation)["status"] == "CANCELLED"
+    assert not any(service.status(operation)["checkpoints"].values())
+
+
+def test_cancel_race_before_checkpoint_publication_is_not_success(tmp_path, monkeypatch):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    original = service.store.write_checkpoint
+
+    def cancel_before_write(*args, **kwargs):
+        service.cancel(operation)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service.store, "write_checkpoint", cancel_before_write)
     assert service.run(operation)["status"] == "CANCELLED"
     assert not any(service.status(operation)["checkpoints"].values())
 

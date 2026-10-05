@@ -808,7 +808,10 @@ class MonthlyOperationStore:
             },
         }
         checkpoint["canonical_sha256"] = _digest(checkpoint)
-        _replace_json(root / "checkpoints" / f"{stage.lower()}.json", checkpoint)
+        with _exclusive_lock(root / ".operation.lock"):
+            if self.read_state(operation_id).get("cancel_requested") is True:
+                raise MonthlyReleaseCancelled("cancelled before checkpoint publication")
+            _replace_json(root / "checkpoints" / f"{stage.lower()}.json", checkpoint)
         return receipt_path
 
     def read_checkpoint(
@@ -1543,7 +1546,7 @@ class MonthlyReleaseService:
         # or participate in release identity. Never infer totals/ETA from I/O.
         observation: dict[str, Any] = {
             "phase": stage, "query_id": None, "partition_key": None,
-            "rows_validated": 0, "rows_sealed": 0, "partitions_sealed": 0,
+            "rows_validated": None, "rows_sealed": None, "partitions_sealed": None,
         }
         last_write: float | None = None
 
@@ -1580,7 +1583,9 @@ class MonthlyReleaseService:
                 raise MonthlyReleaseError("stage progress fields differ")
             for field, item in value.items():
                 if field in {"rows_validated", "rows_sealed", "partitions_sealed"}:
-                    if type(item) is not int or item < observation[field]:
+                    if type(item) is not int or item < 0 or (
+                        observation[field] is not None and item < observation[field]
+                    ):
                         raise MonthlyReleaseError("stage progress counts are invalid")
                 elif (item is None and field == "phase") or (
                     item is not None and (not isinstance(item, str) or not item or len(item) > 512)
