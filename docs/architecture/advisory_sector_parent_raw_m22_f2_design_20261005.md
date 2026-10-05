@@ -92,7 +92,7 @@ Rollout仅离线研究工具，不改API/UI/生产binding/订单/资金仓位/�
 | F-006 | §8/9；原registry/evaluate adapter | artifact: 原EXPLORATORY_SCREEN/RISK_MANAGED_ADVISORY/NAVIGATION_ONLY；正式study仍0/零sealed/activation | SOURCE_LOCAL_PASS | none |
 | F-007 | §2/9/10；SOURCE精确十叶交付 | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/m22-source-scope.json；currentCI/merge/cleanup另报 | SOURCE_LOCAL_PASS | none |
 
-SOURCE本地实现和审核通过不等同正式研究/收益确认/启用；当前83+1全为M21及以前，新M22正式preregister/prepare/fit/evaluation仍0，只计划四fit至87。后续clean producer、current CI/merge和研究状态分别更新，不以单元fixture fit充当正式研究。
+SOURCE本地审核和一次正式四stage研究已完成，但收益NOT_CONFIRMED/启用0；真累计87fit+1旧index，不以单元fixture fit充当正式研究。clean producer72f7e0bf先于登记，后续结果docs HEAD不替换producer或重训；currentCI/merge另报。
 
 ## 13. 三轮设计审核与修订
 
@@ -117,3 +117,9 @@ DESIGN-COMPLIANCE-001设计阶段四项：①七项设计矩阵按设计审核�
 ALGO-COMPLEXITY-001：changed-only十文件0finding；全量四源码三P2/0blocking，逐条为21*84有限metadata筛选/journal512KB、新原7720精确one_to_one投影join、既存sector helper merge（未改）。无多股票池笛卡尔积或按日重复父预测、0SQL；正式prepare实测耗时研究后另报，不略过告警或修改公共guardrail。
 
 DESIGN-COMPLIANCE-001源码阶段四项：①七项SOURCE本地状态如实，研究0/收益未确认/启用0不冒充完成；②计算错误显式、正常未知保留而不伪造成功；③原人口/监督/价support/policy/成本/配置及导航标准不按历史结果变化；④不加父包资格/等待实盘/额外审批，用户重启权和模块边界不变。
+
+## 15. 一次实际研究 / 经济结论
+
+clean producer72f7e0bfd39a46a086e3c3398828257d7f7e62f9/implementation5e8f2733e88f1439edb372398a0152ab93f798216703b98fd61fdeb42d831d9c，run advsectorraw_4bb8a0bec16e4f7cbe4c3ec1/plan4bb8a0bec16e4f7cbe4c3ec15be3c02eb1b2cc025e17788c9ef9c5e12f582960，一次0SQL prepare1.000秒/原386D7720键全保留/3505AVAILABLE及4215UNKNOWN；共同成熟train1795/194D、validation765仅诊断。15:28UTC前和15:31UTC后三QE公开running全部0后，只一次四fit5.266秒/完整四臂25.094秒，真实累计87fit+1旧index。原81D1620候选100共同NAV日candidate/base/新matched/rule成本后名义净收益24.2961/21.3220/29.7444/20.5747%，paired日baseline+2.54903bps CI[−14.65296,20.86557]、matched−4.42674 CI[−12.41495,3.37716]；38真TAKE+55UNKNOWN研究控制93episode全部settled，0held-mark/端点阻断。仅net_increment失败，其余四原条件通过；原sector之外加raw没有增量、两区间跨零，STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION/NOT_CONFIRMED，不用正baseline点估计改标准、回选旧matched、换参数/窗口/seed或补证。完整正式F四stage及evaluated manifest fileSHAa04855ddab91f62d5d39b8232ec790dda4fe37922fbbfc9e243f2a295800c934保留；SOURCE当前CI/合入待。串行第22假说/已消费开发窗口、NV/原native UNPROVEN限制不升级，0sealed/OOS/real fill/activation/DB/服务控制/公共模块改动；M1六UI/BUG公共smoke独立保留，原48h不重置。
+
+SOURCE §14审核为提交前研究0的快照；本节是已一次完整研究的后续状态。candidate高于Selection base不代表新raw信息有价值，因为同监督新sector matched更好；本次严格原386D prepare/81D test/100共同NAV日。UNKNOWN控制不是模型支持，38真TAKE/55控制分账；不把赢率或回撤改善代替原净增量。只结束本candidate，继续有真实不同输入信息的设计或未完成消费者交付，不重新认证父包、选择更好旧weights或把相同数据上的新点估计当确认。
