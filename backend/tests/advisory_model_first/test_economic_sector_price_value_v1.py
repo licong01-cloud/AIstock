@@ -37,6 +37,13 @@ def test_M20_route_is_only_two_raw_features_and_keeps_old_identity_formula():
     from backend.services.advisory_model_first.economic_sector_parent_raw_v1 import JOINT_FEATURES
     assert _information_key('M22', JOINT_FEATURES) == 'sector_parent_raw_features'
     assert _matched_information_v1('M22', SECTOR_FEATURES) == SECTOR_FEATURES
+    from backend.services.advisory_model_first.economic_parent_raw_trajectory_v1 import TRAJECTORY_FEATURES
+    assert _information_key('M23', TRAJECTORY_FEATURES) == 'parent_raw_trajectory_features'
+    assert _matched_information_v1('M23', RAW_FEATURES) == RAW_FEATURES
+    with pytest.raises(ValueError):
+        _matched_information_v1('M23', ())
+    with pytest.raises(ValueError):
+        _information_key('M23', RAW_FEATURES)
     with pytest.raises(ValueError, match='matched'):
         _matched_information_v1('M22', RAW_FEATURES)
     with pytest.raises(ValueError, match='block'):
