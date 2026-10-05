@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +18,171 @@ from backend.services.dataset_release.source_authority import (
     _validate_core_index_membership_authority,
     imported_source_session_factory,
 )
+
+
+@pytest.mark.parametrize("query_id", ["kline_daily_raw", "kline_minute_raw", "daily_basic"])
+def test_raw_source_sealer_keeps_row_identity_and_emits_exact_month_leaves(tmp_path, query_id):
+    import gzip
+    from dataclasses import replace
+    from backend.services.dataset_release.canonical import canonical_json_bytes
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.source_authority import MonthlySourceAuthority, SourceTableSchema
+    from backend.services.dataset_release.source_manifest import CanonicalPartitionHasher
+
+    ControlStore.initialize(tmp_path)
+    cas = CASStore(tmp_path)
+    query = PRODUCTION_QUERY_SPECS[query_id]
+    payloads = []
+    for month in (7, 8, 9):
+        payload = {"ts_code": "000001.SZ"}
+        payload["trade_time" if query_id == "kline_minute_raw" else "trade_date"] = (
+            f"2026-{month:02d}-01 09:31:00" if query_id == "kline_minute_raw" else f"2026-{month:02d}-01"
+        )
+        if query_id == "kline_minute_raw":
+            payload["freq"] = "1min"
+        payload.update({field: 1000 for field in query.value_columns})
+        payloads.append(payload)
+    expected_rows = [
+        {
+            "row_key": canonical_json_bytes([p[field] for field in query.key_columns]).decode(),
+            "row_payload": canonical_json_bytes(p).decode(),
+        }
+        for p in payloads
+    ]
+
+    class Session:
+        def stream(self, *_args, **_kwargs):
+            return iter(
+                {"row_key": json.dumps([p[field] for field in query.key_columns]), "row_payload": json.dumps(p)}
+                for p in payloads
+            )
+
+    profile = SimpleNamespace(
+        resource_policy=ResourcePolicy(), pressure_ladder={"date_chunk_months": (3,), "minute_batch": (20,)}
+    )
+    authority = MonthlySourceAuthority(profile, cas, sector_source_policy="classification_published_snapshot_v1")
+    partition = authority._seal_query_partition(
+        Session(),
+        query=query,
+        partition_key="2026-07-01_2026-09-30",
+        params={"start": date(2026, 7, 1), "end": date(2026, 9, 30)},
+        tokens=(),
+        table_schema=SourceTableSchema(query.table_identity, query.required_columns),
+    )
+    baseline_hasher = CanonicalPartitionHasher(
+        partition.spec, ingestion_audit_identity=partition.summary.ingestion_audit_identity
+    )
+    for row in expected_rows:
+        baseline_hasher.update(row)
+    assert partition.summary == baseline_hasher.finish()
+    path = tmp_path / partition.rows_ref.relative_path
+    encoded = gzip.decompress(path.read_bytes()).splitlines()[1:]
+    assert encoded == [canonical_json_bytes(row) for row in expected_rows]
+    assert [leaf["month"] for leaf in partition.monthly_content_leaves] == ["2026-07", "2026-08", "2026-09"]
+    for leaf, row in zip(partition.monthly_content_leaves, expected_rows):
+        month_hasher = CanonicalPartitionHasher(
+            replace(partition.spec, partition_key=leaf["month"]),
+            ingestion_audit_identity=partition.summary.ingestion_audit_identity,
+        )
+        month_hasher.update(row)
+        expected = month_hasher.finish()
+        assert (leaf["row_count"], leaf["merkle_root"], leaf["content_digest"]) == (
+            1,
+            expected.merkle_root,
+            expected.content_digest,
+        )
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_validated_text_keys_avoid_reencoding_without_weakening_identity(monkeypatch, mismatch):
+    from backend.services.dataset_release import source_authority as source
+    from backend.services.dataset_release.source_manifest import PartitionSpec, ColumnSpec, ColumnKind
+
+    query = PRODUCTION_QUERY_SPECS["kline_minute_raw"]
+    spec = PartitionSpec(
+        query.query_id,
+        "test",
+        query.query_version,
+        (ColumnSpec("row_key", ColumnKind.STRING, True), ColumnSpec("row_payload", ColumnKind.STRING, True)),
+        ("row_key",),
+    )
+    payload = {
+        "ts_code": "000001.SZ",
+        "trade_time": "2026-09-30 09:31:00",
+        "freq": "1min",
+        **{field: 1000 for field in query.value_columns},
+    }
+    keys = [payload[field] for field in query.key_columns]
+    if mismatch:
+        keys[0] = "000002.SZ"
+    calls = []
+    original = source.canonical_json_bytes
+
+    def counted(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(source, "canonical_json_bytes", counted)
+    row = {"row_key": json.dumps(keys), "row_payload": json.dumps(payload)}
+    if mismatch:
+        with pytest.raises(SourceManifestError, match="key/payload identity differs"):
+            source._validate_query_row(row, query, spec)
+    else:
+        result = source._validate_query_row(row, query, spec)
+        assert result == {"row_key": original(keys).decode(), "row_payload": original(payload).decode()}
+    assert len(calls) == (0 if mismatch else 2)
+
+
+@pytest.mark.parametrize("key,value", [(1, 1), (1, 1.0)])
+def test_numeric_key_identity_still_distinguishes_integer_and_float(key, value):
+    from dataclasses import replace
+    from backend.services.dataset_release.source_authority import (
+        _query_partition_spec,
+        _validate_query_row,
+        SourceTableSchema,
+    )
+
+    query = replace(PRODUCTION_QUERY_SPECS["kline_daily_raw"], key_columns=("close_li",))
+    spec = _query_partition_spec(query, "numeric-key", SourceTableSchema(query.table_identity, query.required_columns))
+    payload = {field: 1000 for field in query.value_columns}
+    payload["close_li"] = value
+    raw = {"row_key": json.dumps([key]), "row_payload": json.dumps(payload)}
+    if isinstance(value, float):
+        with pytest.raises(SourceManifestError, match="key/payload identity differs"):
+            _validate_query_row(raw, query, spec)
+    else:
+        assert json.loads(_validate_query_row(raw, query, spec)["row_key"]) == [key]
+
+
+@pytest.mark.parametrize(
+    "fault", ["null_key", "numeric_text_key", "missing_field", "extra_field", "nonfinite", "null_required"]
+)
+def test_optimized_raw_validator_retains_fail_closed_payload_contract(fault):
+    from backend.services.dataset_release.source_authority import (
+        _query_partition_spec,
+        _validate_query_row,
+        SourceTableSchema,
+    )
+
+    query = PRODUCTION_QUERY_SPECS["kline_daily_raw"]
+    spec = _query_partition_spec(query, "fail-closed", SourceTableSchema(query.table_identity, query.required_columns))
+    payload = {"ts_code": "000001.SZ", "trade_date": "2026-09-30", **{field: 1000 for field in query.value_columns}}
+    if fault == "null_key":
+        payload["ts_code"] = None
+    elif fault == "numeric_text_key":
+        payload["ts_code"] = 1
+    elif fault == "missing_field":
+        del payload["close_li"]
+    elif fault == "extra_field":
+        payload["unexpected"] = 1
+    elif fault == "nonfinite":
+        payload["close_li"] = float("nan")
+    else:
+        payload["close_li"] = None
+    raw = {"row_key": json.dumps([payload[field] for field in query.key_columns]), "row_payload": json.dumps(payload)}
+    with pytest.raises(SourceManifestError):
+        _validate_query_row(raw, query, spec)
 
 
 def test_monthly_sector_source_policy_is_explicit_and_preserves_legacy_p3a() -> None:

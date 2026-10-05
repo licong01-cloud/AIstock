@@ -145,6 +145,11 @@ def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_
     )
     assert len(brackets) == 2
     assert len(result.partitions) == (4 if failure == "deferred_tail" else 3)
+    daily_partition = next(item for item in result.partitions if item.spec.dataset == "kline_daily_raw")
+    assert [item["month"] for item in daily_partition.monthly_content_leaves] == ["2026-09"]
+    assert (
+        sum(item["row_count"] for item in daily_partition.monthly_content_leaves) == daily_partition.summary.row_count
+    )
     if failure == "deferred_tail":
         assert manifest["deferred_cutoff_datasets"] == ["margin_detail"]
         assert result.partitions[-1].spec.partition_key == "2026-09-01_2026-09-29"
