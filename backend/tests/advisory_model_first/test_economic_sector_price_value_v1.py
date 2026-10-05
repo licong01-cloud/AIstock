@@ -139,3 +139,11 @@ def test_information_routes_keep_previous_identity_formulas_and_reject_wrong_blo
     assert _information_key('M18', ASYMMETRIC_RISK_FEATURES) == 'asymmetric_risk_features'
     with pytest.raises(ValueError, match='block/model'):
         _information_key('M18', FLOW_PATH_FEATURES)
+    from backend.services.advisory_model_first.economic_sector_moneyflow_v1 import JOINT_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _matched_information_v1
+    assert _information_key('M19', JOINT_FEATURES) == 'sector_moneyflow_features'
+    assert _matched_information_v1('M19', SECTOR_FEATURES) == SECTOR_FEATURES
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M19', ())
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M1', SECTOR_FEATURES)

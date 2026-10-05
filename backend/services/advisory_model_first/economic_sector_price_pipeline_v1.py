@@ -129,7 +129,7 @@ def prepare_sector_price_v1(*, plan_path, output_root):
 
 
 def _fit_event(plan, root, name, *, model_id='M1', campaign_fit_budget=15):
-    if (model_id, campaign_fit_budget) not in (('M1', 15), ('M5', 19), ('M6', 23), ('M7', 27), ('M8', 31), ('M9', 35), ('M10', 39), ('M11', 43), ('M12', 47), ('M13', 51), ('M14', 55), ('M15', 59), ('M16', 63), ('M17', 67), ('M18', 71)):
+    if (model_id, campaign_fit_budget) not in (('M1', 15), ('M5', 19), ('M6', 23), ('M7', 27), ('M8', 31), ('M9', 35), ('M10', 39), ('M11', 43), ('M12', 47), ('M13', 51), ('M14', 55), ('M15', 59), ('M16', 63), ('M17', 67), ('M18', 71), ('M19', 75)):
         raise ValueError('fixed information campaign budget differs')
     journal = root.parent/'campaign_fit_journal.jsonl'
     with _exclusive_file_lock(root.parent/'campaign_fit.lock'):
@@ -195,8 +195,8 @@ def load_information_fit_v1(*, plan_path, output_root, load_study, fit_identity)
 
 
 def information_actual_decisions_v1(*, fitted, candidates, inputs, prices, references, identity, arm,
-        information_features, information_clock, nodes):
-    fields = [*KEY, *D_FEATURES, *information_features, 'feature_visible_through', information_clock]
+        information_features, information_clock, nodes, information_status=None):
+    fields = [*KEY, *D_FEATURES, *information_features, 'feature_visible_through', information_clock, *([information_status] if information_status else [])]
     features = _frame(inputs.loc[:, fields], KEY, set(fields))
     if not all(pd.to_datetime(features[name]).eq(features[KEY[0]]).all() for name in ('feature_visible_through', information_clock)):
         raise ValueError('sector actual query sees future feature')

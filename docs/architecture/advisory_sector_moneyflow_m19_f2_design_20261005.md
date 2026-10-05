@@ -1,6 +1,6 @@
 # Advisory 板块与个股资金流联合价格价值 M19 F2详细设计
 
-2026-10-05；DESIGN_REVIEW / SOURCE_NOT_IMPLEMENTED / MODEL_TRIAL / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_LOCAL_VERIFIED / MODEL_TRIAL_CATEGORY / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -55,7 +55,7 @@ GBDT200/.05/depth3/minleaf30/subsample1/seed20261004、mean与q10 path两臂共4
 
 SectorMoneyflowPlanV1，schema economic_sector_moneyflow_v1、campaign advisory_sector_moneyflow_v1_20261005、model M19、experiment advsectorflow_+planSHA前24。绑定sector_prepared_manifest_ref(role=sector_moneyflow_sector_snapshot)、moneyflow_prepared_manifest_ref(role=sector_moneyflow_flow_snapshot)、实际M18 evaluated predecessor(role=sector_moneyflow_predecessor)、原基础refs/profile/universe/policy/code及16/19 recipe。
 
-先证明真实M18四stage/hash/四heads/ledger及累计71；源码才为该新lineage显式sector_moneyflow_extension增加4至75，须完整asymmetric_risk_extension及前驱链。旧cap23～71/原index1不重置或放宽，typed model_copy亦重新验证，同root身份/预算替换拒绝。新研究study_type=MODEL_TRIAL、objective_contract=RISK_MANAGED_ADVISORY、decision_use=NAVIGATION_ONLY，已消费开发窗口登记，不混算成独立确认或oracle study。
+先证明真实M18四stage/hash/四heads/ledger及累计71；源码才为该新lineage显式sector_moneyflow_extension增加4至75，须完整asymmetric_risk_extension及前驱链。旧cap23～71/原index1不重置或放宽，typed model_copy亦重新验证，同root身份/预算替换拒绝。新研究类别为MODEL_TRIAL，运行registry沿既有枚举study_type=EXPLORATORY_SCREEN（非新增MODEL_TRIAL枚举）、objective_contract=RISK_MANAGED_ADVISORY、decision_use=NAVIGATION_ONLY，已消费开发窗口登记，不混算成独立确认或oracle study。
 
 0SQL prepare只原两rows投影并KEY one_to_one merge，<=7720行，不作笛卡尔扩张；原price/calendar/ref独立读取仍沿500000上界。四阶段immutable/atomic发布、partial STARTED不得隐式重训或伪称exact retry，旧输入/plan/模型不覆盖；干净implementation/producer必须先于预登记和数值读取。拟合前后三公开QE running均空闲，不提交QE实验或控制其任务。
 
@@ -93,15 +93,15 @@ SectorMoneyflowPlanV1，schema economic_sector_moneyflow_v1、campaign advisory_
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1/4；planned economic_sector_moneyflow_v1.py | artifact: spike8f4c58f7/同sector不同flow；test: planned test_economic_sector_moneyflow_v1.py | DESIGN_REVIEW_PASS | none |
-| F-002 | §3/4/6；planned economic_sector_moneyflow_pipeline_v1.py | artifact: 原7720KEY/status/同refs；test: planned test_economic_sector_moneyflow_pipeline_v1.py | DESIGN_REVIEW_PASS | none |
-| F-003 | §5；planned economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；planned 16/19/同监督/test毒化/旧M1 bundle兼容 | DESIGN_REVIEW_PASS | none |
-| F-004 | §6；planned economic_moneyflow_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；planned M18真实四stage/75/旧cap/typed clone/partial | DESIGN_REVIEW_PASS | none |
-| F-005 | §7；planned economic_sector_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；planned 16-19 node/parity/全四臂/Unknown分账 | DESIGN_REVIEW_PASS | none |
-| F-006 | §8；planned evaluation/registry | test: planned SOURCE/economic边界；artifact: 原研究导航合同 | DESIGN_REVIEW_PASS | none |
-| F-007 | §2/9；范围及交付 | test: planned scope/F2/L0/currentCI/自身cleanup；artifact: 0SQL spike | DESIGN_REVIEW_PASS | none |
+| F-001 | §1/4；economic_sector_moneyflow_v1.py | artifact: spike8f4c58f7/同sector不同flow；test: test_economic_sector_moneyflow_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-002 | §3/4/6；economic_sector_moneyflow_pipeline_v1.py | artifact: 原7720KEY/status/同refs；test: test_economic_sector_moneyflow_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-003 | §5；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；16/19/同监督/test毒化/旧M1 bundle兼容 | SOURCE_LOCAL_VERIFIED | none |
+| F-004 | §6；economic_moneyflow_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_moneyflow_price_pipeline_v1.py；M18真实四stage/75/旧cap/typed clone/partial | SOURCE_LOCAL_VERIFIED | none |
+| F-005 | §7；economic_sector_price_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；16-19 node/parity/全四臂/Unknown分账 | SOURCE_LOCAL_VERIFIED | none |
+| F-006 | §8；evaluation/registry | test: SOURCE/economic边界；artifact: 原研究导航合同 | SOURCE_LOCAL_VERIFIED | none |
+| F-007 | §2/9；范围及交付 | test: scope/F2/L0/currentCI/自身cleanup；artifact: 0SQL spike | SOURCE_LOCAL_VERIFIED | none |
 
-矩阵PASS仅完整设计复审，不宣称代码或研究已实现；当前source/preregister/prepare/fit/evaluation均0。实施和经济结果后续独立报告，不能以design PASS假称功能或收益完成。
+矩阵为SOURCE逐条验证，不代表经济达标；M19源码已实现并通过多轮定向审核，干净producer0bdeff28ed790b04444a8fca1c00a2a6691a6715后已正式preregister/prepare/四fit/完整evaluation一次完成，结果见§14。累计75研究fit+1旧index，不重训；本研究工具无API/UI或生产runtime交付。
 
 ## 12. 三轮设计审核与当前状态
 
@@ -109,4 +109,23 @@ SectorMoneyflowPlanV1，schema economic_sector_moneyflow_v1、campaign advisory_
 
 第二轮对照/时钟/标签：两源相同原基础身份、7720KEY一对一，M6只取自己的三量和状态，标签始终原M1基础行；16/19共享新共同监督不借旧matched，所有旧family/原五有效review/价格支持与D终值锚保持，UNKNOWN不回填或丢日期。
 
-第三轮数值/预算/交付：原source状态与正常缺失/坏数分开，AVAILABLE3502不是可学或原生PASS；必须真实M18 complete/71后才显式75、四heads一次、原sealed不读、12文件边界及用户重启权不变。完整设计可交付但source/研究尚未开始；详细实现继续逐条核对F-001～007。
+第三轮数值/预算/交付：原source状态与正常缺失/坏数分开，AVAILABLE3502不是可学或原生PASS；必须真实M18 complete/71后才显式75、四heads一次、原sealed不读、12文件边界及用户重启权不变。该三轮记录为设计阶段结论；后续SOURCE实现另按§13逐条核对F-001～007，不将历史设计审核冒称当前研究完成。
+
+
+## 13. M19源码多轮审核与实现验收
+
+第一轮冻结输入与控制维数：两个原source hash/共同refs及全部7720原KEY精确一对一，M6仅读自己的三量/状态/截止，不消费它的Y。新matched16/candidate19同共同监督，新增matched recipe只在M19绑定，旧family默认及identity公式不变。修正同日两个第1名的测试fixture，原候选唯一性未放宽。
+
+第二轮数值与UNKNOWN：正常NULL/quiet NaN保留UNKNOWN，真实bool/string/Inf/sNaN拒绝；保留来源两个真实截止，衍生query cutoff D不冒称捕获时间。两臂共同UNKNOWN，支持洞不连桥。新增空查询覆盖发现旧共享函数dtype边界，仅M19叶返回经身份/arm/schema验证后的空结果，不越界扩写旧BUG；失败节点已复测。
+
+第三轮身份/预算/交付：显式M19/75须实际M18四stage、四head journal及训练metadata/hash/ledger，缺项或新identity替换拒绝，旧23～71上限不改。四immutable stage、dirty producer及partial-refit拒绝沿原机制；registry使用已有EXPLORATORY_SCREEN枚举，MODEL_TRIAL只是研究类别。稳定五直接测试文件52项PASS、Ruff/F2七条矩阵零warning、changed-file L0十二叶零findings/blocking、diff/scope通过；真实M1旧bundle只读identity/recipe仍相同，13/16两臂各两原查询成功。不得借用旧六UI完成M1 API辅线。
+
+实现引用：economic_sector_moneyflow_v1.py（plan、两源union、16/19、UNKNOWN、价集）；economic_sector_moneyflow_pipeline_v1.py（冻结来源、0SQL stage、实际四臂接口）；三个原Advisory私有helper仅M19新增路由/可选matched块。五直接测试叶覆盖数学、身份、旧cap、原policy、同监督、test毒化、价格孔洞、T观测/D输入及partial/QE资源互斥。源码局部验证不代表可学习、收益确认或runtime activation。逐文件全路径L0的三项P2复杂度提示中两项为旧helper既存merge；新union按原7720键one_to_one，0SQL/无笛卡尔积/两源投影，实际prepare2.078秒，预算/复杂度已审计，无blocking。
+
+## 14. 一次实际研究与经济结果
+
+clean producer0bdeff28ed790b04444a8fca1c00a2a6691a6715、implementation c21b014e1693321875ffa86a0f0b3e7f90bdef17b4271317425e0a9735b47fe2；plan1643dcdaff3c85460d26957713bfdafcd594299493f280ad76337a9fcd18c22b/run advsectorflow_1643dcdaff3c85460d269577，正式F四immutable stage。登记后一次prepare2.078秒/0SQL/7720原键，3502AVAILABLE/4218UNKNOWN，与事前metadata一致；不是原生证明。12:51:58UTC三公开QE running全部0，5分钟内消费其收据ffd4305e...后仅一次四头训练，5.703秒训练/25.687秒完整四臂；12:53:06UTC后也全部0。共同成熟train1794/194D、validation765仅诊断，两臂16/19，test未fit/calibration。
+
+原81D/1620候选/100共同NAV日candidate/baseline/新matched/rule成本后名义收益18.4501%/21.3220%/20.9924%/20.5747%；相对baseline日−2.4563bps、95%描述性block区间[−21.327089,17.513770]，相对新matched−2.4024bps、区间[−10.348204,4.432458]。35真TAKE与54UNKNOWN控制共89episode全部settled，未结算/held-mark/端点无阻断，现金收益为0，日线名义端点不等于真实fill。仅net_increment不通过，干预/MDD/tail/真TAKE通过；风险改善不能替代收益目标。
+
+STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION / NOT_CONFIRMED，实际累计75PHYSICAL_FIT+1旧INDEX_BUILD；不回选旧M1 weights、不为本失败加阈值/seed/证据、不读取sealed或独立OOS、不部署/绑定/重启。来源native UNPROVEN/NON_VINTAGE、串行19假说选择偏差与UNKNOWN控制占多数继续披露；不把union当正交组合。该负向结果只结束M19，不把其价格价值工具当已实现盈利能力，下一步按剩余有价值主线推进。

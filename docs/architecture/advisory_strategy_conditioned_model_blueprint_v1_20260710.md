@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.35
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.36
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-05
@@ -8,7 +8,7 @@
 >
 > 当前真实断点：M18一次四fit/完整四臂29.719秒，candidate9.4435%对baseline21.3220%、matched4.5719%，paired日−10.5233/+4.3360bps，两区间跨零，NOT_CONFIRMED。M1日频/API/UI #5445 HEADd1ccaae19/currentCI绿，但六新UI未执行；BUG-1726修复仍待公共新端点smoke，两工程依赖未完成，不借旧收据或泛health。通用日频输入设计#5460/源码#5461已合入并清理，只证明输入可移植、不是通用权重或标签。下一真正新信息必须先冻结明确假设/标签/对照/预算，不因一批负结果关闭全方向，也不为时长同族调参或重复QE实验。sealed不读、旧结果不改判，源码/经济效果/运行配置与用户重启分别报告。
 >
-> 下一真正联合信息假说为[M19板块＋个股资金流F2](advisory_sector_moneyflow_m19_f2_design_20261005.md)：原M1/M6冻结KEY/status只读metadata显示7720原键相同、joint3502可用/4218UNKNOWN，0数值或收益数组/fit；16matched对19candidate只检验新增资金条件信息，不拼接旧预测。当前设计复审、source/预登记/研究均0，实际仍71+1；先完整设计/精确本模块实现和多轮审核，之后才新lineage显式4fit至75，不为旧负模型补证或凑工时。
+> [M19板块＋个股资金流F2](advisory_sector_moneyflow_m19_f2_design_20261005.md)一次研究完成，SOURCE十二叶三轮/52直接项通过、等待当前CI交付；16matched对19candidate同新共同监督。候选18.4501%低于基线21.3220%/新matched20.9924%，配对日−2.4563/−2.4024bps且区间跨零，只停止自身候选，实际75fit+1旧index。原两源joint3502/4218UNKNOWN、35真TAKE/54UNKNOWN控制不升级原生证据或归因；不回选M1 weights、不调旧门槛、不读sealed或启用。
 > 较早阶段H-VALUE-ANCHOR-1事实：[H-VALUE-ANCHOR-1](advisory_economic_value_anchor_v1_f2_design_20261003.md)已完成设计、内核及一次同场景三臂研究，run=`advvalue_a4bc66a30cfa7d9d5078850c`。基线/常数锚/D模型在100共同估值日名义净收益`21.3220%/25.4597%/17.4642%`；D模型减常数/减基线日增量`-6.9022/-3.4196bps`，两个描述性区间均跨零。虽模型MDD/胜率改善且有58个实际进入差异日，仍未满足预注册收益条件，停止当前candidate，不回选常数控制、调整阈值/期限/seed或扩窗补证。独立VALUE_REVIEW_5_V1未改变生产退出，不能与旧19.17%跨场景判胜；经济确认/ENTRY_VALUE启用仍0。设计#5344及内核#5346已合入；研究源码#5347的合入状态见§16。
 > 上一轮H-TIMING-1事实：计算/来源PR #5331已合入`592fd305f9147ddfc3eaf87b8bed52d905352bed`；一次配对研究已完成，run=`advtiming_cd2ddd9832129255c14f9a80`。新15字段/同核13字段/原基线在100共同估值日的成本后名义收益分别`3.0673%/1.6174%/19.1729%`；新增两量相对控制日增量`+1.0789bps`，但相对基线`-15.0261bps`，未满足预注册的两个正增量条件，停止当前candidate、不进入消费者接入或确认。研究源码PR #5336已通过CI并合入`5ec8c8e2d1deee16a5587afd604d61481162669e`；工程交付、研究结果、经济确认和生产启用分报。下列2026-10-02及较早2026-10-03接续段是历史实施检查点，其待办只以§16的最新队列为准。
 > 文档类型：F2 顶层架构蓝图，`docs-fast-update`
@@ -2254,8 +2254,10 @@ M17已从干净producer f5918b5一次预登记/0SQL prepare8.562秒，run advflo
 
 M18源码#5487 HEADb71f0aef72798b4814f49b123d882283a5c4e65a/currentCI37286496082 attempt2 SUCCESS已于09:17:32UTC合入13b4c4232da82d9d0abc1cc0c5f20251da92d23b。实际fit闭包仍为clean producer397aaa83f624a2670cef2642adf89f1635d51a96/implementation a5022095...，不是用后续文档HEAD重训。run advasymrisk_d7d0e9676f7177bb1fbc2cc8/plan d7d0e9676f7177bb1fbc2cc8c0c52ac056c780c864060c23725a45b6f86d17f4原一次0SQL prepare8.594秒/7720原键保留，7330AVAILABLE/380预热/10正常缺源UNKNOWN；等待QE期间未重prepare。10:51:03UTC三running全部0后仅从该冻结闭包一次四fit/完整四臂29.719秒，10:54:52UTC拟合后仍全部0；共同成熟train3693/195D、1591validation仅诊断。原81D/1620候选/100共同NAV日candidate/baseline/matched/rule成本后名义净收益9.4435%/21.3220%/4.5719%/20.5747%；paired日baseline-10.5233bps CI[−34.003257,11.675848]、matched+4.3360bps CI[−11.244744,19.361192]。76真模型TAKE/5UNKNOWN研究控制、81episodes全部settled，只有net_increment不通过，MDD/tail/干预/真TAKE通过；回撤改善不能替代原收益目标，只STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION/NOT_CONFIRMED。真实累计71研究fit+1旧index，0独立确认/sealed/真实fill/activation/DB访问写入/QE源码修改或服务控制。冻结源码闭包已实际消费后自己的官方cleanup_done/16.797秒、blocking/warnings空；正式F模型/输入/结果保留。M1六UI与BUG1726公共smoke两未合入树继续保留，原18h阶段18:08已到点而原48h总时限不重置；不重跑M18/回选matched/调门槛或为旧负候选补证。
 
-#### 16.6.12 下一M19：板块状态与个股资金流联合条件信息
+#### 16.6.12 M19：板块状态与个股资金流联合条件信息
 
 [M19 F2详细设计](advisory_sector_moneyflow_m19_f2_design_20261005.md)冻结原sector_ret5/sector_vol20/relative_ret5_sector与M6三个订单资金比例的联合输入；matched为原12D+sector3+g共16、candidate同16+flow3共19。不是把旧失败预测做集成、回选M1权重或换seed/loss；同新共同成熟监督和原VALUE_REVIEW_5_V1/支持/成本，原M1/M6及全部旧合同不改判。串行第19模型假说只作开发导航，不能消除已消费窗口/低行业支持及NON_VINTAGE偏差。
 
-事前0trial spike8f4c58f7...仅原两Parquet schema/KEY/status，0.016秒/0SQL/0数值特征或Y数组/fit；7720原KEY/386D保持，共同parent/profile/feature/value_refs一致。原sector可用3505、flow7700，joint3502/366D与4218UNKNOWN，只有3条sector可用但flow未知；不是原生、可学或盈利证明。未来prepare只消费这些已批准冻结特征，不重查行业/行情/金额、不认证父包/旧capture、不填删原股。完整设计先三轮/F2/currentCI交付，SOURCE/预登记/实际研究尚未开始，实际仍71fit+1index；必须真实M18四stage/71后新lineage显式4至75/完整四臂，fit前后QE空闲，不读sealed或绑定。M1六UI/BUG公共smoke继续必要工程辅线，原48h截至2026-10-06 02:36不重置。
+事前0trial spike8f4c58f7...仅原两Parquet schema/KEY/status，0.016秒/0SQL/0数值特征或Y数组/fit；7720原KEY/386D保持，共同parent/profile/feature/value_refs一致。原sector可用3505、flow7700，joint3502/366D与4218UNKNOWN，只有3条sector可用但flow未知；不是原生、可学或盈利证明。设计#5490 HEAD2ebd90114/currentCI37308397453 SUCCESS于12:25:41UTC合入453f4bd367/official cleanup_done20.047秒。SOURCE精确12本模块文件三轮审核/52直接项/Ruff/F2七矩阵零warning/两L0无blocking/旧M1 bundle同identity同recipe13-16推理通过；修正rank fixture、仅M19叶空查询dtype边界，旧BUG1726不冒称已修；MODEL_TRIAL是类别，实际registry沿EXPLORATORY_SCREEN/NAVIGATION_ONLY，不改公共枚举。
+
+clean producer0bdeff28ed790b04444a8fca1c00a2a6691a6715/implementation c21b014e.../plan1643dcdaff3c85460d26957713bfdafcd594299493f280ad76337a9fcd18c22b/run advsectorflow_1643dcdaff3c85460d269577一次登记后prepare2.078秒/0SQL/3502AVAILABLE/4218UNKNOWN，原7720全保留。12:51:58UTC三QE running全0后一次4fit/全四臂25.687秒，12:53:06UTC后仍全0；共同成熟train1794/194D、validation765仅诊断。原81D/1620候选/100共同NAV日candidate/baseline/新matched/rule成本后名义净收益18.4501/21.3220/20.9924/20.5747%，配对日baseline−2.4563CI[−21.327089,17.513770]、matched−2.4024CI[−10.348204,4.432458]bps。35真TAKE+54UNKNOWN研究控制共89episode全部settled、held-mark/端点无阻断；仅净增量条件不通过、其余四项通过，只STOP本candidate/NOT_CONFIRMED，不调门槛或补旧失败证据。真实75fit+1旧index；0 sealed/OOS/真实fill/activation/DB/QE源码/服务控制，无新重启需求；M1六UI/BUG公共smoke辅线未交付不冒称完成，原48h总时限不重计。
