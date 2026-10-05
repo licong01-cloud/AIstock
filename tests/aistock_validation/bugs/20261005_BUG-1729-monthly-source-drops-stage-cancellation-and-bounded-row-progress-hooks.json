@@ -202,8 +202,8 @@
   },
   "first_seen_at": "2026-10-05T02:08:40.591735Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0984a1b9668da7ee2345693b112c161a274ac7bd",
+  "fixed_at": "2026-10-05T02:23:57Z",
   "github_issue_number": 5471,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5471",
   "last_seen_at": "2026-10-05T02:08:40.591735Z",
@@ -211,6 +211,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5476",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -238,6 +239,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -249,7 +251,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1729",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fbe292a407426626",
+    "recorded_at": "2026-10-05T02:24:31.996248Z",
+    "runtime_contract_digest": "986ad9dcb33f12aeefd7f3e233f59566a2e2c57a201478777cc60b89f7413e5f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0abe60ff25e40ae730610b31b8412085a6794ddc",
+    "source_merge_commit": "0984a1b9668da7ee2345693b112c161a274ac7bd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5476",
+    "validation_evidence": [
+      "AIstock focused SOURCE integration 141 passed, 1 existing skipped; L0 and exact-head CI SUCCESS; runtime unchanged"
+    ],
+    "validation_evidence_digest": "1116c8be7137ddec7eff9a21b01362dfccb46c94cbdfd6a65a060e54a8c4da24"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -258,6 +281,9 @@
     "fingerprint": "2c4a7b58f3ebfbf5c6dd6f12",
     "source_event_id": "FE-20261005-2c4a7b58f3eb"
   },
+  "validation_evidence": [
+    "AIstock focused SOURCE integration 141 passed, 1 existing skipped; L0 and exact-head CI SUCCESS; runtime unchanged"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
