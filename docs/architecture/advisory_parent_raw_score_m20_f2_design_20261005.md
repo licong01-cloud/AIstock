@@ -97,7 +97,7 @@ typed plan/model_copy重新验证、role/root/身份/预算替换拒绝；全四
 | F-006 | §8；registry/evaluation | artifact: 原导航合同；test: evidence boundary | SOURCE_LOCAL_VERIFIED | none |
 | F-007 | §2/9；所有权及交付 | test: backend/tests/advisory_model_first/test_economic_parent_raw_score_pipeline_v1.py；scope/F2/L0/currentCI/自身cleanup | SOURCE_LOCAL_VERIFIED | none |
 
-矩阵为源码逐条局部验证，不是经济验收。源码已实现，四直接叶40项PASS；preregister/prepare/fit/evaluation当前仍0，metadata spike不是模型试验，实际研究后单独更新。
+矩阵为源码逐条局部验证，不是经济验收。源码已实现，四直接叶40项PASS；clean producer之后一次preregister/prepare/四fit/完整四臂已完成，实际结果见§14，metadata spike不混计模型试验。
 
 ## 12. 三轮设计审核
 
@@ -105,7 +105,7 @@ typed plan/model_copy重新验证、role/root/身份/预算替换拒绝；全四
 
 第二轮时钟/人口/业务：只同原冻结D预测行和原Top20，投影后数值校验、正常未知留全名单，与原normalized坐标绑定角色/包/原refs；同监督13/15、train-only完整支持与五有效review/完整四臂保持。原NV/capture限制如实披露，不制造receipt或原生身份。
 
-第三轮预算/范围/效率：M19已经完成75+1，使用不可替换76条原字节前缀及M19完整stage，只为新明确lineage增加4至79，不反复扫描所有旧失败数组。source精确十叶与公开模块边界，旧matrix/identity不变；registry采用实际枚举，设计PASS与source0分开，原时限/用户重启权不变。源码逐项验证F-001～007后才执行，当前不读raw值或Y。
+第三轮设计预算/范围/效率：当时M19已经完成75+1，使用不可替换76条原字节前缀及M19完整stage，只为新明确lineage增加4至79，不反复扫描所有旧失败数组。source精确十叶与公开模块边界，旧matrix/identity不变；registry采用实际枚举，设计PASS与当时source0分开，原时限/用户重启权不变。设计阶段未读raw值或Y，后续源码验收及实际研究分别见§13～14。
 
 ## 13. M20源码三轮审核与交付验收
 
@@ -113,4 +113,14 @@ typed plan/model_copy重新验证、role/root/身份/预算替换拒绝；全四
 
 第二轮同监督/推理：新matched13与candidate15同成熟train、support不按raw可用性重新定义；test毒化不改变模型hash，训练期不成熟标签不得fit。原value/path、终值锚和费用公式不动，多段价格集合/支持孔洞/两臂UNKNOWN/空查询按合同；TAKE只消费T实际开盘观察及D信息，不读T收盘作为预测输入。修正唯一无用测试import，业务语义未降级。
 
-第三轮预算/身份/边界：M19真实四stage/hash/ledger及16/19四head全部闭合，75fit+1index精确原字节前缀绑定；只追加当前M20四个独特head至79，foreign/reset/篡改/typed clone/partial隐式重训拒绝，不遍历原失败数值结果或更改公共预算链。两个共享私有helper只新增M20 route/status/79，旧M1与M19实际bundle按原identity/矩阵读回；四直接测试叶40PASS、Ruff通过，逐文件scope/F2/L0随后核对再提交。SOURCE可交付不等于经济结果、runtime/API/UI或自然前向完成，无后端重启要求。
+第三轮预算/身份/边界：M19真实四stage/hash/ledger及16/19四head全部闭合，75fit+1index精确原字节前缀绑定；只追加当前M20四个独特head至79，foreign/reset/篡改/typed clone/partial隐式重训拒绝，不遍历原失败数值结果或更改公共预算链。两个共享私有helper只新增M20 route/status/79，旧M1与M19实际bundle按原identity/矩阵各两查询读回；四直接测试叶40PASS、Ruff/F2七矩阵零warning/scope/diff通过，changed十叶L0零findings、staged/full路径均无blocking。全路径三P2中原helper merge既存；新raw merge严格one_to_one且原7720/source20000上限、先键投影后数值解析；预算19*76元数据循环及512KB上限，无旧数值扫描或笛卡尔积，实际prepare0.906秒。SOURCE可交付不等于经济确认、runtime/API/UI或自然前向完成，无后端重启要求。
+
+## 14. M20一次实际研究与收益边界
+
+clean producer da5ac10bdc5d01a63cdca051ba432ef7624315fc，implementation ecc07c3ca3710169d45b2afdf2c2458b8322074526c274c4fd11c68f27a94d0d；plan8fd79c3ed2248600ece1ca0e57dc534fcc12a4e8d36b9741275051d0be59fec4/run advrawscore_8fd79c3ed2248600ece1ca0e。原75fit+1index前缀58dc703b1e38730de59946f88c91895aab3dd5cc816165ae38d5359507a4fb9a，正式F四stage/hash/registry保持。原386D/7720完整候选，一次0SQL prepare0.906秒、两raw AVAILABLE7720，无删股或回填；原基础缺失仍在，AVAILABLE仅指raw字段而非整个模型/市场可用。
+
+13:38:26UTC三公开QE running全部0，消费fresh收据949684c0...后四头训练8.625秒、完整四臂26.750秒；13:41:25UTC后三QE仍0。共同成熟train4049/214D、validation1591只诊断，matched13/candidate15、test未fit/calibration。实际累计79PHYSICAL_FIT+1旧INDEX_BUILD，零其它研究候选或阈值搜索。
+
+原81D/1620候选/100共同NAV日成本后名义收益candidate26.7299%、baseline21.3220%、新matched15.3803%、固定rule20.5747%。相对baseline配对日+4.46372bps、描述性95%block区间[-17.516760,25.803493]；相对新matched+9.54339bps、区间[-5.197448,28.849147]。候选MDD -9.5016%/基线-10.3314%，完成episode胜率63.2184%/58.2418%；不是沪深300超额或真实成交证据。84真实模型TAKE和3UNKNOWN研究控制分账，87episode全部settled；baseline/matched/rule分别91/84/91全部settled，无held-mark或endpoint阻断。
+
+干预/MDD/tail/真TAKE通过，原相对baseline至少5bps的导航条件未通过（4.46372而非5），两个区间跨零，因此按原规则记录STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION / NOT_CONFIRMED；不得为差0.53628bps事后降低阈值、扩窗/换seed/调参数、补证或改判。正点估计表明本次raw信息有描述性增量，不能据此断言全局不可学，也不能称收益已确认；其分类不是新策略包消费门禁，不停止整个研发。来源仍RECOVERED_LIMITED/NON_VINTAGE/native UNPROVEN，串行20假说已消费窗口偏差保留，sealed/独立OOS/自然前向/启用0。本研究工具不接入订单、资金仓位、公共QE或运行绑定；正式evaluated manifest fileSHA ddd06a49a4329b7e60c6b3625e6436580d967ff41848728b52a96459f0876cc4。
