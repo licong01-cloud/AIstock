@@ -1,6 +1,6 @@
 # Advisory 历史涨跌停状态条件买入价格 M15 F2详细设计
 
-2026-10-05；IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_PENDING / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_MERGED_RESEARCH_COMPLETE_CANDIDATE_STOPPED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY / ECONOMIC_NOT_CONFIRMED。研究严格串行完成，不是第二条并行训练线。
 
 ## 1. Background / Goal
 
@@ -96,7 +96,7 @@ typed plan dump-revalidate、干净producer/实施闭包/原参数profile先登�
 
 ## 12. Current state
 
-设计#5479已合入/自身清理，M14源码#5478已合入0146ff7aac；M15源树来自该latestmain且事前登记12文件，纯三量、0SQL冻结输入阶段、显式59与三路由均已实现。实际source价格值/prepare/正式预登记/研究fit/收益0；单元测试只合成fixture，不计研究trial。稳定57直接项/Ruff通过、feature L0零项与standard L0三P2/零阻断、真实旧M1 bundle metadata/hash兼容（0fit/市场或label数组/DB）通过。实际仍51fit+1index，M14prepared后等待QE，03:34:33UTC三running0/1/0；不得把源码局部验证、设计CI或模型束兼容称研究/业务收益确认。M14冻结闭包树保留，不被M15预算/路由漂移；M1UI/BUG公共smoke独立保留。0公共模块写/DB/服务控制/部署。
+设计#5479已合入/自身清理，源码#5480 HEADbcd05f179/currentCI37260309258 SUCCESS后合入a8ae765ed；稳定57项/Ruff/F2/L0/原M1 bundle兼容不重跑。工程交付时研究0，待M14真实55/完整evaluated后，run advlimitstatevalue_27b72172b57b266dddc14766/plan27b72172.../implementation7ed1d3bc...一次0SQL prepare10.672秒：7720原键/7330 AVAILABLE/380预热/10正常UNKNOWN。07:17:08UTC前、07:17:39UTC后QE三count0，一次四fit/完整四臂28.672秒，train3693/195D、validation1591仅诊断。81D/1620候选/100共同NAV日candidate/baseline/matched/rule14.1018/21.3220/4.5719/20.5747%，paired日baseline−6.2150 CI[−26.2633,13.5466]、matched+8.6442 CI[−1.6249,21.2771]bps；78真TAKE/5UNKNOWN控制、83episodes全settled，只有net不通过，只STOP本candidate。该次59+1，随后M16后全轮63+1；正常UNKNOWN保留原股，不回选matched/调门槛/补证/新确认或绑定。冻结闭包已消费可精确自身官方清理但正式F产物保留；NON_VINTAGE/native UNPROVEN/NAVIGATION_ONLY/未确认未启用不升级，无DB写/公共或QE改动/安装/服务控制。
 
 ## 13. 三轮设计审核与修订
 
@@ -108,4 +108,4 @@ typed plan dump-revalidate、干净producer/实施闭包/原参数profile先登�
 
 第一轮按§3～5逐项核对原KEY/D-T、七源字段及依赖，实际实现先原D请求投影，20点历史只消费H/L及limit、不消费历史close；first19保留D位置。第二轮复核quiet NaN、真实坏数/越界、已知0/1、相等界和局部缺值，并明确半tick只作界外舍入、界内不clip；首轮新增budget测试多余字符导致收集失败已修复，之后27定向项通过。第三轮复核model_copy重验证、原source/profile/政策、M14四heads与完整阶段才能55→59、新事件无显式扩展拒绝、旧identity/预算/权重保持，稳定五文件57项全部通过。未重复旧真实fit、读取sealed或以测试合成M14结果启动研究。
 
-DESIGN-COMPLIANCE-001七项分别对应F-960～966：真实三量计算、缺值/时钟、冻结0SQL/atomic、共同监督/支持、原累计预算、推理/四臂同核、范围/证据层边界均有直接源码及定向证据；IMPLEMENTED_LOCAL_VERIFIED只表示工程合同比对通过，研究依然PENDING。扫描三P2为新prepare one_to_one KEY join及两旧join；source≤500000、请求≤154400、candidate≤7720/固定20点循环和严格unique/one_to_one保序限制，无宽笛卡尔或新DB循环，不增加缓存/平台来消除告警。currentHEAD必需CI绿才能源码合入；若经济研究仍待QE，保留本冻结source树及正式F产物，后续同闭包一次研究。
+DESIGN-COMPLIANCE-001七项分别对应F-960～966：真实三量计算、缺值/时钟、冻结0SQL/atomic、共同监督/支持、原累计预算、推理/四臂同核、范围/证据层边界均有直接源码及定向证据；IMPLEMENTED_LOCAL_VERIFIED只表示工程合同比对通过，该源码审核阶段研究PENDING，随后真实研究完成见§12。扫描三P2为新prepare one_to_one KEY join及两旧join；source≤500000、请求≤154400、candidate≤7720/固定20点循环和严格unique/one_to_one保序限制，无宽笛卡尔或新DB循环，不增加缓存/平台来消除告警。currentHEAD必需CI绿才能源码合入；若经济研究仍待QE，保留本冻结source树及正式F产物，后续同闭包一次研究。

@@ -1,6 +1,6 @@
 # Advisory D日估值条件买入价格 M14 F2详细设计
 
-2026-10-05；IMPLEMENTED_PREPARED_QE_TRAINING_WAIT / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_MERGED_RESEARCH_COMPLETE_CANDIDATE_STOPPED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY / ECONOMIC_NOT_CONFIRMED。研究严格串行完成，不是第二条并行训练线。
 
 ## 1. Background / Goal
 
@@ -95,7 +95,7 @@ M13源码CI通过交付/自己清理→本设计三轮/F2/currentCI/合入自己
 
 ## 12. Current state
 
-M14设计#5474已合入55d519c1e/自己清理；独立源码树登记12文件已实现纯三量、有界单SELECT、薄prepare、显式M14/55预算/同核13/16模型路由。58直接项/Ruff通过，feature L0零发现、标准L0三条P2/0blocking；原M1真实JSON bundle在新路由下metadata/hash兼容、0fit/无行情或标签数组。当前一个旧M14预登记265ff616...在quiet Decimal NaN类型缺值处prepare失败，修复记录见§14.1；修复后新plan46e89f53...一次正式prepared已完成见§15，研究fit/收益0，研究累计51fit+1index，经济确认/激活/DB写/公共修改/服务控制0；本地工程PASS不称研究已完成或原生身份COMPLETE。
+设计#5474合入55d519c1e，源码#5478合入0146ff7aac，58直接项/Ruff/F2/L0/原M1 bundle兼容通过。旧plan265ff616在quiet NaN处prepare失败/0fit并保留；run advvaluationvalue_46e89f537a689f18523151db一次prepare保留7720键，2952 AVAILABLE/4768正常UNKNOWN。07:14:38UTC QE三count0后从原34981e815/implementation206c7480...冻结闭包一次四fit/完整四臂26.547秒，之后三count0；train1406/212D、validation766仅诊断。81D/1620候选/100共同NAV日candidate/baseline/matched/rule净20.2050/21.3220/14.2643/20.5747%，paired日baseline−0.9490bps CI[−10.7320,8.5428]、matched+5.1142 CI[−3.0655,14.4080]；20真TAKE/69UNKNOWN控制、89episodes全settled。net与最低真TAKE不通过，仅STOP本candidate；该次55+1，随后M15/M16后全轮63+1。研究完成不等于经济确认/原生COMPLETE/真实fill或上线；冻结闭包已消费可精确自身官方清理，正式F产物保留，无新sealed/独立OOS/DB写/公共修改/激活/安装/服务控制。
 
 ## 13. 三轮设计审核与修订
 
@@ -121,7 +121,7 @@ F2初七项/七行/warnings0 PASS；上述修订后再执行最终F2、diff和�
 
 修复后干净producerc58f4e6a31e53379e122636083f2222c54f362f8，新plan46e89f537a689f18523151db7937020d36202bfc89da061f8b937f8bbbc7d31d/implementation206c7480a1962ea0c3431d30ef9c0f47d056a1764880e7a17b2edab0d2c92b6e/run advvaluationvalue_46e89f537a689f18523151db已一次预登记/prepare3.328秒。单SELECT原7720D键与7720basic、候选7720均保留，2952 AVAILABLE/4768 UNKNOWN_VALUATION_SOURCE；NON_VINTAGE/native UNPROVEN，NULL不变0或删股。旧265ff616预登记与失败状态保留、0fit，未覆盖任何输入或结果。
 
-2026-10-05 02:34UTC后QE三running只读查验为experiment0/custom_evo1/multi_alpha0（MA-E42 qe_20261005_102547_925d）。仅暂缓本M14四fit，prepared输入/已审核源码交付准备及独立工程设计可继续；约半小时检查，不与QE训练并行、不停止或修改其任务。当前实际仍51fit+1index，M14训练/四臂/经济效果尚未执行，0sealed/确认/部署/DB写/配置激活/服务控制；sourceCI或数据准备成功不冒充研究与盈利验证。
+2026-10-05 02:34UTC后QE三running只读查验为experiment0/custom_evo1/multi_alpha0（MA-E42 qe_20261005_102547_925d）。仅暂缓本M14四fit，prepared输入/已审核源码交付准备及独立工程设计可继续；约半小时检查，不与QE训练并行、不停止或修改其任务。当时实际51fit+1index，M14训练/四臂/经济效果尚未执行，0sealed/确认/部署/DB写/配置激活/服务控制；sourceCI或数据准备成功不冒充研究与盈利验证。 此为准备阶段资源等待记录，现状以§12的一次真实完成为准，不继续重复等待或研究。
 
 ### 15.1 工程交付与研究互斥的实施顺序复核
 
