@@ -19,6 +19,16 @@ def sector_fit_fixture():
     return SectorPriceFitV1(recipe, models, support, dict(fitted_head_count=4, index_build_count=0), sector_fit_identity_v1(recipe, models, support))
 
 
+def test_M20_route_is_only_two_raw_features_and_keeps_old_identity_formula():
+    from backend.services.advisory_model_first.economic_parent_raw_score_v1 import RAW_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, _matched_information_v1
+    assert _information_key('M20', RAW_FEATURES) == 'parent_raw_score_features'
+    assert _matched_information_v1('M20', ()) == ()
+    assert _information_key('M1', SECTOR_FEATURES) == 'sector_features'
+    with pytest.raises(ValueError, match='block'):
+        _information_key('M20', SECTOR_FEATURES)
+
+
 def test_four_fixed_fits_shared_train_test_poison_and_support_not_class_filtered():
     rows, configuration = rows_fixture()
     for name in SECTOR_FEATURES:
