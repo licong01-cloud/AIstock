@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "接受版本7且保留现有共享BUILD执行scope约束；未知版本仍拒绝",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_worker_runtime.py",
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1735-worker-source-v7.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_worker_runtime.py",
-      "backend/tests/dataset_release/test_monthly_worker_runtime.py"
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1735-worker-source-v7.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_worker_runtime.py",
@@ -88,8 +94,8 @@
   },
   "first_seen_at": "2026-10-05T16:53:46.741674Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1094287900245bed65a628c76901f5544424e4d8",
+  "fixed_at": "2026-10-05T17:02:46Z",
   "github_issue_number": 5510,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5510",
   "last_seen_at": "2026-10-05T16:53:46.741674Z",
@@ -97,40 +103,75 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5511",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "related_bug_ids": [
+    "BUG-1733"
+  ],
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
     "qlib_data_backend"
   ],
+  "review_results": [
+    "Round 1: actual registered adapter version7 accepted; independent RED and GREEN recorded.",
+    "Round 2: version5 behavior unchanged, version6/7 enforce the same installed shared BUILD scope, version8 and wrong adapter identity rejected. No producer weakening or data gate added.",
+    "Round 3: no service/task/database/candidate side effects in contract tests; production process identity and real monthly timing remain separate pending checks."
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh Python pytest process: v7 current contract RED=1 failure before implementation, GREEN=1 passed after fix; final test_monthly_worker_runtime.py=16 passed. This is isolated startup-contract coverage with no database/service/task execution. Actual --preflight from the isolated worktree reported MONTHLY_RELEASE_RUNTIME_UNAVAILABLE for missing process environment, not a production PASS; deployed runtime remains pending user-owned backend/managed-child restart."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
     "target_ids": [
       "worker-scheduler"
-    ],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1735",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "16635b17dd50b095",
+    "recorded_at": "2026-10-05T17:03:14.655146Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "15c87d683d6bd3c65c457c1c3df414288df3010d",
+    "source_merge_commit": "1094287900245bed65a628c76901f5544424e4d8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5511",
+    "validation_evidence": [
+      "validation-receipt: id=ada55555763d1ae1 commit=15c87d683d6bd3c65c457c1c3df414288df3010d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_worker_runtime.py -q` result=`16 passed`",
+      "validation-receipt: id=9b9b4e96c2a235ac commit=15c87d683d6bd3c65c457c1c3df414288df3010d kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_worker_runtime.py backend/tests/dataset_release/test_monthly_worker_runtime.py tests/aistock_validation/bugs/20261005_BUG-1735-worker-source-v7.json` result=`passed`",
+      "validation-receipt: id=fcea077a82ca448b commit=15c87d683d6bd3c65c457c1c3df414288df3010d kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_worker_runtime.py backend/tests/dataset_release/test_monthly_worker_runtime.py` result=`passed`",
+      "validation-receipt: id=ed059d24ddf9e8c4 commit=15c87d683d6bd3c65c457c1c3df414288df3010d kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "75ab1a092c6c9d30af3c42f79b8b5b4a2124d4fa254a0554099196d6ad12bffc"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -139,6 +180,12 @@
     "fingerprint": "e93a98040398f0cddca30e26",
     "source_event_id": "FE-20261005-e93a98040398"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ada55555763d1ae1 commit=15c87d683d6bd3c65c457c1c3df414288df3010d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_worker_runtime.py -q` result=`16 passed`",
+    "validation-receipt: id=9b9b4e96c2a235ac commit=15c87d683d6bd3c65c457c1c3df414288df3010d kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_worker_runtime.py backend/tests/dataset_release/test_monthly_worker_runtime.py tests/aistock_validation/bugs/20261005_BUG-1735-worker-source-v7.json` result=`passed`",
+    "validation-receipt: id=fcea077a82ca448b commit=15c87d683d6bd3c65c457c1c3df414288df3010d kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_worker_runtime.py backend/tests/dataset_release/test_monthly_worker_runtime.py` result=`passed`",
+    "validation-receipt: id=ed059d24ddf9e8c4 commit=15c87d683d6bd3c65c457c1c3df414288df3010d kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -246,13 +293,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "related_bug_ids": [
-    "BUG-1733"
-  ],
-  "review_results": [
-    "Round 1: actual registered adapter version7 accepted; independent RED and GREEN recorded.",
-    "Round 2: version5 behavior unchanged, version6/7 enforce the same installed shared BUILD scope, version8 and wrong adapter identity rejected. No producer weakening or data gate added.",
-    "Round 3: no service/task/database/candidate side effects in contract tests; production process identity and real monthly timing remain separate pending checks."
-  ]
+  }
 }
