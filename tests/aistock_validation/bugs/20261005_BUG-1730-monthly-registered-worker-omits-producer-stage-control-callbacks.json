@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "registered pipeline propagates code-owned stage control callbacks and checks cancellation before and after producer execution",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_worker.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1730-monthly-registered-worker-omits-producer-stage-control-callbacks.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_worker.py",
-      "backend/tests/dataset_release/test_monthly_worker.py"
+      "backend/tests/dataset_release/test_monthly_worker.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1730-monthly-registered-worker-omits-producer-stage-control-callbacks.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_worker.py",
@@ -108,17 +114,23 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "database_readback_ref": "not_required",
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": ["AIstock interpreter fresh process: test_monthly_worker.py -> 19 passed. RED 3 failures before implementation, GREEN callback propagation and before/after interruption checks. Files only under X:/AIstock_temp/BUG-1730; no DEV/production DB, dataset/profile writes or runtime actions. Runtime pending user-owned restart after BUG-1729 integration."],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "AIstock interpreter fresh process: test_monthly_worker.py -> 19 passed. RED 3 failures before implementation, GREEN callback propagation and before/after interruption checks. Files only under X:/AIstock_temp/BUG-1730; no DEV/production DB, dataset/profile writes or runtime actions. Runtime pending user-owned restart after BUG-1729 integration."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
