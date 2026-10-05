@@ -1,6 +1,6 @@
 # Advisory 父策略原始评分五交易日轨迹 M23 F2详细设计
 
-2026-10-05；DESIGN_REVIEW / SOURCE_NOT_IMPLEMENTED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+设计2026-10-05；源码局部审核2026-10-06；SOURCE_LOCAL_REVIEW / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -89,15 +89,15 @@ Rollout只Advisory研究叶，无API/UI/model绑定或后端重启需要。Rollb
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1/3/4；planned economic_parent_raw_trajectory_v1.py | artifact: 固定5TD keys-only geometry；test: planned backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_v1.py | DESIGN_REVIEW_PASS | none |
-| F-002 | §3/4；planned economic_parent_raw_trajectory_pipeline_v1.py | test: planned backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_v1.py；original requested-key/clock/missing | DESIGN_REVIEW_PASS | none |
-| F-003 | §5；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；same train/test poison/15-17 | DESIGN_REVIEW_PASS | none |
-| F-004 | §6；planned 私有预算 | test: planned backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_pipeline_v1.py；87byte-prefix/实际M22/91/typed/partial | DESIGN_REVIEW_PASS | none |
-| F-005 | §7；planned nodes/evaluation | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；four-arm/price holes/UNKNOWN | DESIGN_REVIEW_PASS | none |
-| F-006 | §8；registry/evaluation | artifact: 本设计冻结导航/证据合同；test: planned backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_pipeline_v1.py | DESIGN_REVIEW_PASS | none |
-| F-007 | §2/9；所有权/交付 | artifact: scope/F2/审核记录；test: planned backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_pipeline_v1.py | DESIGN_REVIEW_PASS | none |
+| F-001 | §1/3/4；economic_parent_raw_trajectory_v1.py | artifact: 固定5TD keys-only geometry；test: backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-002 | §3/4；economic_parent_raw_trajectory_pipeline_v1.py | test: backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_v1.py；original requested-key/clock/missing | SOURCE_LOCAL_VERIFIED | none |
+| F-003 | §5；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；same train/test poison/15-17 | SOURCE_LOCAL_VERIFIED | none |
+| F-004 | §6；私有预算 | test: backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_pipeline_v1.py；87byte-prefix/实际M22/91/typed/partial | SOURCE_LOCAL_VERIFIED | none |
+| F-005 | §7；nodes/evaluation | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；four-arm/price holes/UNKNOWN | SOURCE_LOCAL_VERIFIED | none |
+| F-006 | §8；registry/evaluation | artifact: 本设计冻结导航/证据合同；test: backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-007 | §2/9；所有权/交付 | artifact: scope/F2/审核记录；test: backend/tests/advisory_model_first/test_economic_parent_raw_trajectory_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
 
-矩阵只声明详细设计可实施，不冒称源码/收益已验证。试验失败无需扩大证据或关闭整个方向。
+矩阵为七项源码局部验证，四直接叶45项、原四bundle各两节点及scope/F2/L0均通过；研究尚未启动，不冒称收益确认/运行启用。试验失败无需扩大证据或关闭整个方向。
 
 ## 12. 三轮设计审核与修订
 
@@ -106,3 +106,13 @@ Rollout只Advisory研究叶，无API/UI/model绑定或后端重启需要。Rollb
 第二轮来源/PIT/业务：M20 snapshot必须是实际M22 raw ref指向的同一originalrun；lag采用原calendar/nextT严格同股，只有被请求历史/当前行才解析raw且clock/package一致。首五日/缺失保留UNKNOWN，finite差溢出拒绝。五TD仅信息lag、VALUE_REVIEW_5是五有效review标签，两者明确不同；原完整support/四臂/UNKNOWN分账与test禁fit保持。
 
 第三轮预算/范围/交付：真实M22四stage/ledger/16-18四头与87fit+1index不可替换前缀，只明确新lineage四fit至91；原caps/hash/default不变。精确十叶、X/F、无QE/DB/服务写及用户重启权，源码/研究/合入/运行状态分报。设计阶段零raw/Y/return/fit，SOURCE须多轮审核、直接测试、旧四bundle读回和currentCI。
+
+## 13. M23源码多轮审核与交付验收
+
+第一轮信息/数学：只固定5TD原raw差，原M20 current raw/base唯一标签来源，历史同股原预测KEY存在才计算；查询投影后解析numeric，当前raw/status/clock与原同一冻结行一致。首五日/缺失原行留下UNKNOWN，无nearest-date/ffill/zero或更换候选。零/负raw与delta合法，bool/string/Inf/sNaN拒绝，正常quiet NaN保留；有限差溢出独立测试，避免在八个参数场景重复运行同一overflow检查。
+
+第二轮来源/PIT/业务修复：审核发现仅按exact三键筛选会把同日同股target日期冲突误当缺失，修为先投影请求的(D,stock)，随后核对原exact nextT，再解析raw；该冲突现在fail closed，正常absent仍UNKNOWN。source snapshot精确绑定实际M22 raw引用artifact_uri/SHA/size和M20原SOURCE_FIELDS/package/roles/zscore，typed lag固定5不允许换3。新同成熟train15/17、原完整价support而非新feature可用人口、test毒化不影响modelhash、label未成熟不得fit；原Topen观察不读Tclose作为输入、price holes/sharedUNKNOWN/empty/modelidentity均保持。
+
+第三轮预算/效率/交付：实际M22完整四stage/hash/ledger及16/18四heads/0index，87fit+1index精确88行前缀不可替换，只本M23四独特head至91；foreign/duplicate/reset/partial/typed替换测试通过，不回扫旧失败returns或更改旧caps/公共实现。四直接叶45项PASS、Ruff零问题、scope/F2/L0及原四bundle局部读回在提交前完成；删除唯一未用测试import。全路径两P2复杂度项已审：新预算22*88有界metadata/journal512KB，原helper merge既存且仅M23/91路由追加；新lag键集合/字典和原7720/source20000上限，不构造全股票日期笛卡尔积，0SQL。SOURCE局部验收不等于经济确认、API/UI/runtime或自然前向，研究尚未启动。
+
+DESIGN-COMPLIANCE-001逐条：全部七设计项有实际实现与定向证据映射，不以局部验收冒称收益或运行启用；normal UNKNOWN与真实错误严格区分、不吞异常或伪造成功；原业务policy/支持/标签/费用/四臂及现有family保持；没有新增父包审批或其它模块阻断，只有本合同计算一致性检查。精确十叶，公共QE/Selection/HMM/StrategyPackage/数据/Execution/CI与DB/服务未改。
