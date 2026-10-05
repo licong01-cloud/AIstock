@@ -1,6 +1,6 @@
 # Advisory 历史非对称风险条件买价 M18 F2详细设计
 
-2026-10-05；SOURCE_MERGED_PREPARED_RESEARCH_QE_WAIT / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
+2026-10-05；SOURCE_MERGED_CLEANED / STUDY_COMPLETED_NOT_CONFIRMED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。
 
 ## 1. Background / Goal
 
@@ -93,7 +93,7 @@ AsymmetricRiskPlanV1/schema economic_asymmetric_risk_v1/campaign advisory_asymme
 
 ## 12. Current state / review
 
-M18源码已在latestmain e4c9f7771独立12文件范围实现，clean producer397aaa83f624a2670cef2642adf89f1635d51a96；固定三量/共同13-16核/显式71及旧caps，正常UNKNOWN和原价值锚不改。三轮自审修复后56直接项/Ruff/F2/两L0及原M1 bundle只读兼容通过，尚非模型有效。一次新预登记run advasymrisk_d7d0e9676f7177bb1fbc2cc8/plan d7d0e9676f7177bb1fbc2cc8c0c52ac056c780c864060c23725a45b6f86d17f4/impl a5022095...，0SQL prepare8.594秒/7720原键/原380828价格源：7330AVAILABLE、380不足20session、10正常缺源UNKNOWN，无删填或重选股。09:21:01UTC复查公开QE三running0/1/0，MA-E42R qe_20261005_162928_e86b占用，未启动M18四fit或读取评估收益；全轮实际仍67fit+1旧index，source#5487 HEADb71f0aef7/currentCI37286496082 attempt2 SUCCESS后09:17:32UTC合入13b4c4232da82d9d0abc1cc0c5f20251da92d23b，root main clean且与origin/main一致；原attempt1仅checkout远端读取失败，重试后检出及业务检查全部通过，未改公共CI/网络配置。冻结源码树暂保留至实际消费，下一QE约09:51UTC复查，fit不并行。M1六UI/BUG公共smoke仍外部等待，sealed/confirmation/activation/DB写/服务控制0，原18h/48h不重计。 设计#5486已合入e4c9f7771/自身官方清理；原spike仅metadata/合成，随后price数组只按登记用于prepare，收益评估仍未运行。
+M18源码#5487 HEADb71f0aef72798b4814f49b123d882283a5c4e65a/currentCI37286496082 attempt2 SUCCESS已于09:17:32UTC合入13b4c4232da82d9d0abc1cc0c5f20251da92d23b。实际fit闭包仍为clean producer397aaa83f624a2670cef2642adf89f1635d51a96/implementation a5022095...，不是用后续文档HEAD重训。run advasymrisk_d7d0e9676f7177bb1fbc2cc8/plan d7d0e9676f7177bb1fbc2cc8c0c52ac056c780c864060c23725a45b6f86d17f4原一次0SQL prepare8.594秒/7720原键保留，7330AVAILABLE/380预热/10正常缺源UNKNOWN；等待QE期间未重prepare。10:51:03UTC三running全部0后仅从该冻结闭包一次四fit/完整四臂29.719秒，10:54:52UTC拟合后仍全部0；共同成熟train3693/195D、1591validation仅诊断。原81D/1620候选/100共同NAV日candidate/baseline/matched/rule成本后名义净收益9.4435%/21.3220%/4.5719%/20.5747%；paired日baseline-10.5233bps CI[−34.003257,11.675848]、matched+4.3360bps CI[−11.244744,19.361192]。76真模型TAKE/5UNKNOWN研究控制、81episodes全部settled，只有net_increment不通过，MDD/tail/干预/真TAKE通过；回撤改善不能替代原收益目标，只STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION/NOT_CONFIRMED。真实累计71研究fit+1旧index，0独立确认/sealed/真实fill/activation/DB访问写入/QE源码修改或服务控制。冻结源码闭包已实际消费后自己的官方cleanup_done/16.797秒、blocking/warnings空；正式F模型/输入/结果保留。M1六UI与BUG1726公共smoke两未合入树继续保留，原18h阶段18:08已到点而原48h总时限不重置；不重跑M18/回选matched/调门槛或为旧负候选补证。 设计#5486已合入e4c9f7771/自身官方清理；原spike仍仅metadata/合成，后续prepare与一次研究另列真实发生阶段。
 
 第一轮核对M7/M8/M11/M12现有特征与原D信息：不是把ATR改窗口，合成同总回报/末14/单调几何对照识别平方幅度差异；原parent frozen metadata即可，不做新SQL/QE实验或收益预筛。
 
@@ -101,10 +101,16 @@ M18源码已在latestmain e4c9f7771独立12文件范围实现，clean producer39
 
 第三轮按F-990～996核对M17真实67/全部stage才显式71、旧政策/价值标签/支持不改、12文件边界、训练互斥/反复审核/源码及模型有效性分离。设计矩阵DESIGN_REVIEW_PASS仅此设计复审；所有研究必须后续一次预登记，禁止一批负模型就停止全任务或为时长复试旧模型。
 
-## 13. 三轮源码审核与实际准备
+## 13. 实施和准备阶段三轮审核记录（研究前）
 
 第一轮核对F-990～992：同原20session/19-18分母、完整平坦/单侧0、quiet正常缺值、极大/极小价格两log坐标、先真实请求投影和原D/T/唯一KEY。数学对照及19个新叶项首轮18PASS，prepare收据误用旧flow_source_columns被测试发现，已改为本plan stock_source_columns；研究前字段引用和错误消息亦核对，不覆盖旧输入。
 
 第二轮核对F-993/994：真实M17全四stage/hash/ledger/四heads、typed model_copy/同source-policy-profile、累计67至71及旧caps；共同13/16训练、test毒化不改模型身份、原支持与给定买价公式保持，原实际M1 JSON权重只读加载/零fit兼容通过。
 
-第三轮F-990～996/所有权/交付审计：稳定56直接项、Ruff/F2七项七行零warning、feature L0零finding、standard L0三P2复杂度提示/无blocking；候选上界7720/来源500000、固定20点、KEY one-to-one merge无笛卡尔扩张，diff/scope通过。错误消息统一后仅两pipeline项复验/Ruff通过。干净producer397aaa83后一次预登记与0SQL prepare，实际7720原键全部保留；QE running1因此未拟合、未读取评估收益。矩阵PASS是研究工具源码验收，不宣称研究完成/经济有效；冻结实施闭包保留至一次正式研究，currentCI绿后SOURCE交付与研究另报，本次不接daily/运行配置或后端重启。
+第三轮F-990～996/所有权/交付审计：稳定56直接项、Ruff/F2七项七行零warning、feature L0零finding、standard L0三P2复杂度提示/无blocking；候选上界7720/来源500000、固定20点、KEY one-to-one merge无笛卡尔扩张，diff/scope通过。错误消息统一后仅两pipeline项复验/Ruff通过。干净producer397aaa83后一次预登记与0SQL prepare，实际7720原键全部保留；当时QE running1，因此准备阶段尚未拟合/评估；后续实际一次研究见§12/14。矩阵PASS是研究工具源码验收，不宣称研究完成/经济有效；当时冻结实施闭包保留至一次正式研究，SOURCE交付与后续实际研究分别报告，本次不接daily/运行配置或后端重启。
+
+## 14. 实际一次研究与结果审计
+
+原81D/1620候选及100共同NAV日全部四臂结算，不缩窗、删股或回选控制。evaluated/evaluation.json SHA256=f6c4848bd4ce91ca564befa409eaee8f1b932f8e0b3dce0c01870ed780afd06e；evaluated/manifest.json文件SHA256=e19d6a393d9b8ad22fb73df66dabfe44689c526fd58d1275d9df2fd50b0dd9b7。固定bootstrap为5D block/2000次，两个配对区间跨零，仅导航而非独立OOS或激活证据。
+
+三轮结果/交付复审：①F-990～994按原plan/implementation、全部7720键与真实71 ledger核对，未改数学、价格支持、政策或标签；②F-995按完整四臂、76真TAKE与5UNKNOWN控制分账、零未结算/非真实fill核对，不能把9.4435%或回撤改善称为增量有效；③F-996与DESIGN-COMPLIANCE-001四项逐条核对，只更新本设计/蓝图、自己官方清理已消费源码树，正式F保留，UI/public smoke未完成如实留gap，无新增资格门、数据库/配置/进程操作。矩阵PASS是原研究工具及按计划完成研究的验收，不是模型经济PASS；NOT_CONFIRMED/非部署状态不变。
