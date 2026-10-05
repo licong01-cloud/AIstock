@@ -1,6 +1,7 @@
 {
   "actual": "Reported missing dv_ratio/dv_ttm dates 2026-04-20..2026-06-17 and turnover_rate_f on 2026-08-31.",
   "allowed_write_scope": [
+    "noxfile.py",
     "scripts/backfill_tushare_daily_basic_fields.py",
     "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
     "tests/aistock_validation/bugs/20261005_BUG-1736-daily-basic-nullable-dividend-yield-gaps-and-free-float-turnover-omissio.json"
@@ -23,15 +24,25 @@
       "timestamp": "2026-10-05T17:25:48.867842Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_receipts/daily_basic_1736_20261006"
+  ],
   "expected": "Provider finite values are persisted and exported; source NULL remains NULL; existing finite values and unrelated release components remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261005_BUG-1736-daily-basic-nullable-dividend-yield-gaps-and-free-float-turnover-omissio.json",
+      "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
+      "noxfile.py",
+      "scripts/backfill_tushare_daily_basic_fields.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/backfill_tushare_daily_basic_fields.py",
-      "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py"
+      "tests/aistock_validation/bugs/20261005_BUG-1736-daily-basic-nullable-dividend-yield-gaps-and-free-float-turnover-omissio.json",
+      "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
+      "noxfile.py",
+      "scripts/backfill_tushare_daily_basic_fields.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/backfill_tushare_daily_basic_fields.py",
@@ -109,20 +120,64 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    {
+      "finding": "Backfill reindex silently converts absent declared provider columns to NULL; verification did not assert all existing finite cells unchanged; nullable source fields could not explicitly allow zero finite coverage.",
+      "green": "Same three nodeids passed after implementation.",
+      "red": "Three direct regression nodeids failed before implementation.",
+      "round": 1
+    },
+    {
+      "finding": "Reviewed fill-only SQL allowlist, provider NULL preservation, source-only rows, default 0.95 unchanged, isolated DEV connection identity and immutable candidate mutable-file list.",
+      "round": 2,
+      "verification": "32 focused tests passed; changed-file Ruff passed; explicit-path L0 passed. Real data verification is separate and not claimed by these tests."
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scoped_readback": {
+    "active_profile_write": false,
+    "candidate_status": "SCOPED_FIELD_REPAIR_PASS_PENDING_NODE_READBACK",
+    "candidate_generation": "20261006-v18-unified-basicfields1",
+    "candidate_root": "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20261006-r8-unified-basicfields1-candidate",
+    "candidate_manifest_identity": "36fc14db370374dac56d68b81bbb80c5d020010c85ba7d1cde1d51b34c55cc5a",
+    "candidate_manifest_file_sha256": "55577a5f2c9a443e7d938c821432d5470ea5de458471962b05fcb644c6838186",
+    "data_apply_status": "DEV_DRY_RUN_APPLY_READBACK_PASS_PRODUCTION_APPLY_READBACK_PASS",
+    "production_authorization": "User requested scoped source repair after DEV validation; only market.daily_basic dv_ratio/dv_ttm on the exact 37 reported dates; August turnover repair required no production writes.",
+    "production_filled_cells": {"dv_ratio": 139169, "dv_ttm": 135186},
+    "release_filled_cells": {"db_dv_ratio": 129247, "db_dv_ttm": 124998, "db_turnover_rate_f": 4913},
+    "release_unresolved_provider_finite": 0,
+    "september_trade_date_count": 21,
+    "september_field_count": 16,
+    "september_provider_finite_missing_in_database": 0,
+    "september_release_file_validation": "PENDING_MONTHLY_EXPORT_NOT_CLAIMED_BY_AUGUST_CANDIDATE",
+    "original_release_manifest_unchanged": true,
+    "existing_finite_unchanged": true,
+    "provider_null_preserved": true,
+    "dev_target": "aistock_dev.market.daily_basic",
+    "factor_evaluation": false,
+    "historical_provider_response_available": false,
+    "monthly_validation_scope": "2026-09-01..2026-09-30 only",
+    "production_target": "aistock.market.daily_basic",
+    "production_turnover_rate_f_20260831_non_null": 5545,
+    "reported_dividend_partitions_confirmed": 37,
+    "root_cause_attribution": "Source database dividend gaps and independently stale frozen turnover field; provider delay vs historical fetch omission cannot be proven without original payloads.",
+    "runtime_action": false
+  },
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
