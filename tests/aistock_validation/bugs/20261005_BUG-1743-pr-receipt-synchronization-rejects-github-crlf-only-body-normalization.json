@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1743",
-  "closed_at": null,
+  "closed_at": "2026-10-05T18:16:35Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,15 +27,15 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1743-pr-receipt-synchronization-rejects-github-crlf-only-body-normalization.json",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-      "scripts/aistock_issue_workflow.py"
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1743-pr-receipt-synchronization-rejects-github-crlf-only-body-normalization.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1743-pr-receipt-synchronization-rejects-github-crlf-only-body-normalization.json",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-      "scripts/aistock_issue_workflow.py"
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1743-pr-receipt-synchronization-rejects-github-crlf-only-body-normalization.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -91,8 +91,8 @@
   },
   "first_seen_at": "2026-10-05T18:07:00.701013Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7b1d4d4b267dc70b3344ff5a80c443c14027173c",
+  "fixed_at": "2026-10-05T18:16:35Z",
   "github_issue_number": 5531,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5531",
   "last_seen_at": "2026-10-05T18:07:00.701013Z",
@@ -100,6 +100,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5538",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -117,6 +118,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -126,7 +128,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1743",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a8008a938e397fd7",
+    "recorded_at": "2026-10-05T18:17:16.958217Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5a5e4eeccff2e269ba75cbfde599522f353a07d3",
+    "source_merge_commit": "7b1d4d4b267dc70b3344ff5a80c443c14027173c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5538",
+    "validation_evidence": [
+      "rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'owned_pr_receipt or existing_source_pr' -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1743final -> 12 passed",
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3baae4a90e9f6ad7c85d3a56796cfc9aa766422f72a9b3e6701e31093e5c6a53"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.workflow_automation"
   ],
@@ -135,6 +159,10 @@
     "fingerprint": "42acf937a709d1130418eb3d",
     "source_event_id": "FE-20261005-42acf937a709"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k 'owned_pr_receipt or existing_source_pr' -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1743final -> 12 passed",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
