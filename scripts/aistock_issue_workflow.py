@@ -16238,6 +16238,11 @@ def build_watch_ci_plan(
     }
 
 
+def _pr_body_matches(actual: Any, expected: str) -> bool:
+    """GitHub may return CRLF Markdown; normalize no content except that transport representation."""
+    return isinstance(actual, str) and actual.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+
+
 def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_head: str, before_push: bool) -> dict[str, Any]:
     """Publish validated receipts before synchronize; never overwrite a foreign PR."""
     number = _github_pr_number_from_url(pr_url)
@@ -16258,14 +16263,14 @@ def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_h
         if not ancestor.get("ok"):
             raise WorkflowError("existing PR head is not an ancestor of validated task HEAD; refuse receipt overwrite")
     body = body_path.read_text(encoding="utf-8")
-    updated = current.get("body") != body
+    updated = not _pr_body_matches(current.get("body"), body)
     if updated:
         result = _run_command(["gh", "api", "--method", "PATCH", f"repos/{GITHUB_REPO}/pulls/{current['pr_number']}",
                                "-F", f"body=@{body_path}"], cwd=REPO_ROOT, timeout=30)
         if result.get("ok"):
             response = _parse_rest_object(result, context="owned PR receipt update")
             head = response.get("head") or {}
-            if (response.get("body") != body or response.get("state") != "open"
+            if (not _pr_body_matches(response.get("body"), body) or response.get("state") != "open"
                     or response.get("number") != current["pr_number"] or response.get("html_url") != pr_url
                     or head.get("sha") != old_head or head.get("ref") != branch
                     or (head.get("repo") or {}).get("full_name") != GITHUB_REPO
@@ -16273,7 +16278,7 @@ def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_h
                 raise WorkflowError("PR changed during receipt update; refuse push")
         elif _looks_like_github_transport_failure(f"{result.get('stderr')}\n{result.get('stdout')}"):
             recovered = _github_pull_rest_readback(pr_url)
-            if (recovered.get("head_sha") != old_head or recovered.get("body") != body or recovered.get("state") != "OPEN"
+            if (recovered.get("head_sha") != old_head or not _pr_body_matches(recovered.get("body"), body) or recovered.get("state") != "OPEN"
                     or recovered.get("head_ref") != branch or recovered.get("base_ref") != "main"
                     or recovered.get("head_repo") != GITHUB_REPO or recovered.get("url") != pr_url):
                 raise WorkflowError("PR receipt update outcome unavailable; do not push or repeat mutation")
