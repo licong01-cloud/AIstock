@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1737",
-  "closed_at": null,
+  "closed_at": "2026-10-05T18:08:24Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,15 +28,17 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1737-cancelled-pr-ci-continues-heavy-steps-until-five-minute-forced-cancellat.json",
       ".github/workflows/test.yml",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1737-cancelled-pr-ci-continues-heavy-steps-until-five-minute-forced-cancellat.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1737-cancelled-pr-ci-continues-heavy-steps-until-five-minute-forced-cancellat.json",
       ".github/workflows/test.yml",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1737-cancelled-pr-ci-continues-heavy-steps-until-five-minute-forced-cancellat.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -95,8 +97,8 @@
   },
   "first_seen_at": "2026-10-05T17:44:45.506197Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5f5aa664e387c5fe099e4d3b82c3223f063a6c93",
+  "fixed_at": "2026-10-05T18:08:24Z",
   "github_issue_number": 5516,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5516",
   "last_seen_at": "2026-10-05T17:44:45.506197Z",
@@ -104,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5520",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -122,6 +125,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -131,7 +135,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1737",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7987e486eee5a1a1",
+    "recorded_at": "2026-10-05T18:09:02.964435Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "89f74f885b1f73690d6dbc870ffe70a34f4ac42f",
+    "source_merge_commit": "5f5aa664e387c5fe099e4d3b82c3223f063a6c93",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5520",
+    "validation_evidence": [
+      "rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_test_plan_coverage.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1737matrix -> 144 passed",
+      "python -m nox -s guardrail_changed_files -> passed"
+    ],
+    "validation_evidence_digest": "868576a222ba4a5f8b2e73f2264c52b9dd5cdb6fb2ec791d78e82d61e1f6c803"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.workflow_automation"
   ],
@@ -140,6 +166,10 @@
     "fingerprint": "d9be86c90e065db5e8c96ad2",
     "source_event_id": "FE-20261005-d9be86c90e06"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_test_plan_coverage.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1737matrix -> 144 passed",
+    "python -m nox -s guardrail_changed_files -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
