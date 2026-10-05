@@ -89,15 +89,15 @@ typed plan/model_copy重新验证、role/root/身份/预算替换拒绝；全四
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1/3/4；planned economic_parent_raw_score_v1.py | artifact: spike1cb5b432/zscore源码只读；test: planned test_economic_parent_raw_score_v1.py | DESIGN_REVIEW_PASS | none |
-| F-002 | §3/4；planned economic_parent_raw_score_pipeline_v1.py | artifact: 原386D7720KEY/包manifest；test: planned test_economic_parent_raw_score_pipeline_v1.py | DESIGN_REVIEW_PASS | none |
-| F-003 | §5；planned economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；planned 13/15/shared train/test毒化/旧family | DESIGN_REVIEW_PASS | none |
-| F-004 | §6；planned M20私有预算 | test: backend/tests/advisory_model_first/test_economic_parent_raw_score_pipeline_v1.py；planned 75精确前缀/实际四stage/79/identity/typed/partial | DESIGN_REVIEW_PASS | none |
-| F-005 | §7；planned nodes/evaluation | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；planned complete四臂/unknown/价格支持 | DESIGN_REVIEW_PASS | none |
-| F-006 | §8；planned registry/evaluation | artifact: 原导航合同；test: planned evidence boundary | DESIGN_REVIEW_PASS | none |
-| F-007 | §2/9；所有权及交付 | test: backend/tests/advisory_model_first/test_economic_parent_raw_score_pipeline_v1.py；planned scope/F2/L0/currentCI/自身cleanup | DESIGN_REVIEW_PASS | none |
+| F-001 | §1/3/4；economic_parent_raw_score_v1.py | artifact: spike1cb5b432/zscore源码只读；test: test_economic_parent_raw_score_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-002 | §3/4；economic_parent_raw_score_pipeline_v1.py | artifact: 原386D7720KEY/包manifest；test: test_economic_parent_raw_score_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
+| F-003 | §5；economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；13/15/shared train/test毒化/旧family | SOURCE_LOCAL_VERIFIED | none |
+| F-004 | §6；M20私有预算 | test: backend/tests/advisory_model_first/test_economic_parent_raw_score_pipeline_v1.py；75精确前缀/实际四stage/79/identity/typed/partial | SOURCE_LOCAL_VERIFIED | none |
+| F-005 | §7；nodes/evaluation | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；complete四臂/unknown/价格支持 | SOURCE_LOCAL_VERIFIED | none |
+| F-006 | §8；registry/evaluation | artifact: 原导航合同；test: evidence boundary | SOURCE_LOCAL_VERIFIED | none |
+| F-007 | §2/9；所有权及交付 | test: backend/tests/advisory_model_first/test_economic_parent_raw_score_pipeline_v1.py；scope/F2/L0/currentCI/自身cleanup | SOURCE_LOCAL_VERIFIED | none |
 
-矩阵仅设计审核，source/preregister/prepare/fit/evaluation均0，不代表实现、收益或激活。metadata spike不是模型试验，实际研究后单独更新。
+矩阵为源码逐条局部验证，不是经济验收。源码已实现，四直接叶40项PASS；preregister/prepare/fit/evaluation当前仍0，metadata spike不是模型试验，实际研究后单独更新。
 
 ## 12. 三轮设计审核
 
@@ -106,3 +106,11 @@ typed plan/model_copy重新验证、role/root/身份/预算替换拒绝；全四
 第二轮时钟/人口/业务：只同原冻结D预测行和原Top20，投影后数值校验、正常未知留全名单，与原normalized坐标绑定角色/包/原refs；同监督13/15、train-only完整支持与五有效review/完整四臂保持。原NV/capture限制如实披露，不制造receipt或原生身份。
 
 第三轮预算/范围/效率：M19已经完成75+1，使用不可替换76条原字节前缀及M19完整stage，只为新明确lineage增加4至79，不反复扫描所有旧失败数组。source精确十叶与公开模块边界，旧matrix/identity不变；registry采用实际枚举，设计PASS与source0分开，原时限/用户重启权不变。源码逐项验证F-001～007后才执行，当前不读raw值或Y。
+
+## 13. M20源码三轮审核与交付验收
+
+第一轮信息/人口：数学正仿射反例只证明raw与zscore可不同，不赋予raw盈利概率单位。来源只投影原候选KEY及两raw，非请求review/future股票先排除、其坏数不影响原请求；原包/manifest/role/weights/normalized合同绑定，行数、顺序、D和下一T保持。正常NULL/quiet NaN留下UNKNOWN，零和负分数合法，bool/string/Inf/sNaN拒绝，不删股、不补值、不重建名单。
+
+第二轮同监督/推理：新matched13与candidate15同成熟train、support不按raw可用性重新定义；test毒化不改变模型hash，训练期不成熟标签不得fit。原value/path、终值锚和费用公式不动，多段价格集合/支持孔洞/两臂UNKNOWN/空查询按合同；TAKE只消费T实际开盘观察及D信息，不读T收盘作为预测输入。修正唯一无用测试import，业务语义未降级。
+
+第三轮预算/身份/边界：M19真实四stage/hash/ledger及16/19四head全部闭合，75fit+1index精确原字节前缀绑定；只追加当前M20四个独特head至79，foreign/reset/篡改/typed clone/partial隐式重训拒绝，不遍历原失败数值结果或更改公共预算链。两个共享私有helper只新增M20 route/status/79，旧M1与M19实际bundle按原identity/矩阵读回；四直接测试叶40PASS、Ruff通过，逐文件scope/F2/L0随后核对再提交。SOURCE可交付不等于经济结果、runtime/API/UI或自然前向完成，无后端重启要求。
