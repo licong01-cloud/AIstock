@@ -1,6 +1,6 @@
 # HMM 演进与风险管理系统总体蓝图（唯一产品目标权威）
 
-> **版本**：v2.69
+> **版本**：v2.70
 > **初始日期**：2026-07-16
 > **修订日期**：2026-10-05
 > **维护范围**：HMM Evolution；不接管QE、Selection、Paper、Advisory或数据生产
@@ -11,7 +11,7 @@
 
 > **研究读回及源码**：已批准C-008-L2-D6-PERSISTENT-RC-A和C-008-L2-INDEPENDENT-A；全131行业zero-refit读回127/131语义有效，seed47及原模型hash不变，4项1～3日稀有状态仍不足。#5325已合入`f49ebc600ac0cb4d52689443ed2bb304e29b01e4`；效果设计#5326已合入`a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a`，效果源码#5345已合入`369e6c6a6a04ad0ea72a024cc3fb990dc4f31823`。原acceptance不回写，语义通过不推导经济有效；此前起草时的PR状态只作历史。
 >
-> **当前结果与下一步**：2026-10-04原HMM零fit IC=`0.009072776767716752 < 0.02`，同标签基线IC=`0.022023310723322743`，paired区间跨零。2026-10-05 R1双process零fit终态BELOW_BINDING_MBE，IC=`-0.009341302842128188`；独立L2风险双process共2fit终态DEVELOPMENT_RISK_EFFECT_REACHED_FORWARD_UNCONFIRMED，precision=`0.25260329190460196`、lift=`0.1174666556015582`、recall=`0.4121112481161803`。源码/结果PR #5444已合入（`2fa41eab6b7efc76173ae3a0ced4143006b1671c`）；新risk尚无writer/API/UI，surface/advisory均NOT_AVAILABLE。下一完整包为`hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md`，产品D1～D6已获用户批准，设计PR #5447合入已授权，进入main后继续源码；不重跑旧实验或开启新候选。数据库写入、激活、cleanup和服务控制未授权；原formal/模型/结果不改写。
+> **当前结果与下一步**：2026-10-04原HMM零fit IC=`0.009072776767716752 < 0.02`，同标签基线IC=`0.022023310723322743`，paired区间跨零。2026-10-05 R1双process零fit终态BELOW_BINDING_MBE，IC=`-0.009341302842128188`；独立L2风险双process共2fit终态DEVELOPMENT_RISK_EFFECT_REACHED_FORWARD_UNCONFIRMED，precision=`0.25260329190460196`、lift=`0.1174666556015582`、recall=`0.4121112481161803`。源码/结果PR #5444已合入（`2fa41eab6b7efc76173ae3a0ced4143006b1671c`），产品设计#5447已合入（`e58cea30bd07c5b2c82d165998694e8bc9e787e8`）。完整risk writer/CLI/migration/read API/UI与直接测试已在独立实现分支编写并经三轮作者审修，正式file-only读回55,544行/424日/131行业；新源码PR待提交/CI及另行合入确认。surface/advisory仍NOT_AVAILABLE，数据库写入、激活、cleanup和服务控制未授权；原formal/模型/结果不改写，不重跑旧实验或开启新候选。
 
 ## 1. 执行摘要
 
@@ -108,7 +108,7 @@
 
 acceptance canonical=`88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26`，model=`37259b5e9ca2c6eee2845cf0f1f02932a8cfd6cf21ad29080d6570d274b8038d`；路径`F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json`。它是固定train的historical causal development，不是OOF/untouched；无tail/QE/DB/数据集/runtime动作。
 
-known warnings中74.7397%没有目标事件，错误报警未来均值收益+3.3874%，漏报均值回撤-10.7998%。全部报警12,444，每日0/中位25/最多131，159日超过30。显示上限不得截断计算；低概率不是安全承诺，warning不自动禁买/降仓。当前PR #5444已合入，actual runtime=backend/backend-main，risk surface/advisory仍NOT_AVAILABLE。下一步优先完整真实研究产品，不扩模型网格或历史账本。
+known warnings中74.7397%没有目标事件，错误报警未来均值收益+3.3874%，漏报均值回撤-10.7998%。全部报警12,444，每日0/中位25/最多131，159日超过30。显示上限不得截断计算；低概率不是安全承诺，warning不自动禁买/降仓。当前PR #5444及产品设计#5447均已合入，源码runtime分类=backend/backend-main（不表示运行态已生效），risk surface/advisory仍NOT_AVAILABLE。完整产品源码在独立实现分支编写并经三轮作者审修，模型/封存数据未改；下一步是源PR/CI及按独立授权执行真实DEV→生产→用户重启后的产品验证，不扩模型网格或历史账本。
 
 ## 2. 总体架构
 
@@ -570,12 +570,17 @@ DESIGN-COMPLIANCE-001逐项结论：不缩小计算人口或用设计冒充交�
 
 2026-10-05用户确认批准L2-RISK-PRODUCT-D1～D6及#5444/#5447合入，先核验最终HEAD CI再实施完整产品源码。只同步active批准状态；原模型/特征/窗口/阈值、封存结果与全部历史记录不变。F2只验证文档，不代报数据库或运行时；新源码PR合入、DEV/生产、activation、cleanup和服务控制仍分别授权。
 
+#### v2.70源码实施状态复核
+
+#5444/#5447均经最终CI核验后按独立授权合入。一次完整风险产品包实现reader/repository/CLI/两份HMM migration/read API/UI与直接测试，三轮作者审修，正式资产零fit/file-only验证55,544行/424日/131行业；原模型和标签不重建。源码、DEV/生产、runtime与真实API/browser状态分离，未获后续授权不执行写库或激活。DESIGN-COMPLIANCE-001四项：131全量不减为30；NA/错误不静默或默认低风险；旧L1/QE/模型算法不迁移；不增加效果/统计门禁或人工审批。现有历史记录逐字保留；未运行产品验收不报通过。
+
 ### 14.3 变更历史
 
 本表逐字保留各旧版本当时的判断，不是当前待办；v2.59取代旧行中“L1主线/L2后置/四component共同目标”等未来执行排序。已完成实验的数值、历史验收与对应合同不被新方向回写；更早记录仍在原decision log/详细设计和Git历史，不另做证据归档。
 
 | 版本 | 日期 | 变更内容 |
 |---|---|---|
+| v2.70 | 2026-10-05 | #5444/#5447最终CI通过并合入；完整风险产品源码及直接测试已实施/三轮作者审修，55,544行零fit/file-only验证；源PR与真实DB/API/browser/runtime独立待验收，不改模型/标签或历史，不增训练/平台 |
 | v2.69 | 2026-10-05 | 用户确认批准风险产品D1～D6、#5444/#5447合入及后续完整源码；原模型/结果不变，零新增fit，数据库/激活/cleanup/服务控制未授权 |
 | v2.68 | 2026-10-05 | R1零fit不足、独立risk2fit development合格真实终态，#5444待合入；下一包为冻结风险研究产品，精确设计待批准；QE后置，原批次保留历史，不重训/新候选/生产动作 |
 | v2.67 | 2026-10-04 | 用户独立批准L2-R1/L2-RISK D1～D6；仅同步批准状态与设计先合入后实施的执行边界，保持精确数值/旧模型/结果不变；新源码和0/2-fit实验未执行，QE后置 |
