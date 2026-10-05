@@ -1,9 +1,9 @@
 # HMM Evolution Phase 2：L2风险信号消费价值回放详细设计
 
-> 版本：v1.0；日期：2026-10-06；tier：F2；owner：HMM。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.71，F-011/F-012/F-013。
+> 版本：v1.1；日期：2026-10-06；tier：F2；owner：HMM。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.72，F-011/F-012/F-013。
 > **精确消费合同：APPROVED_BY_USER_FOR_IMPLEMENTATION。** 用户于2026-10-06针对明确列出的L2-RISK-VALUE D1～D6整包答复“批准完整推荐合同”：一日延迟、131行业预算、warning转现金、无overlay/同日敞口参照、423日现有facts及0/5/10/20bp敏感性；零fit、不读tail、不写数据库。按设计合入后实施，不由源码合入权限代替此次精确批准。原风险产品D1～D6、模型及0.20报警阈值保持不变。
-> 本轮目的：回答冻结风险warning是否在历史参考路径中减少损失，及其少持仓、错过上涨和成本代价；不是重训、补历史证据或运行QE。薄源码与直接合同测试已实现，原资产file-only身份预检通过；尚未执行正式双process价值回放，不能把源码/预检通过写成价值通过。
+> 本轮目的：回答冻结风险warning是否在历史参考路径中减少损失，及其少持仓、错过上涨和成本代价；不是重训、补历史证据或运行QE。源码#5547已合入，正式双fresh-process零fit回放已完成且业务payload严格bitwise一致；终态为`INSUFFICIENT_REFERENCE_PATH`，不能把执行完成或分块正结果写成全期价值通过。
 
 ## 1. Background、目标与Scope
 
@@ -87,6 +87,14 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 同敞口参照是选择贡献诊断，不能声称匹配beta/行业集中度/持仓风险完全一致。blocks/HAC若输出，只作描述；没有全路径不能以complete-case平均替代全期MDD。任何是否推广到实盘/荐股/QE的决策交用户及相应owner，研究参考终态不注册新capability enum。
 
+### 7.1 已完成正式回放结果（2026-10-06）
+
+源PR #5547 merge=`2182c7021ea9bdcc02aee59f91dedb376def6234`；按该不可变源码执行。request为`F:/Dev/AIstock_runtime/hmm_l2_risk/20261006/value-request.json`，canonical SHA=`8159cb6192eabcd9bd8bfd76785268574176c031e594833ef5a7500a78a019fb`；正式结果为`F:/Dev/AIstock_runtime/hmm_l2_risk/20261006/value-run/acceptance.json`，canonical SHA=`97dacd409b8847c3a3b3d47c45e76b66d5c1f1539f659e2787928d1ae5b54043`。两process业务payload SHA同为`8575a3045be0672ca6d73de57eaf10ebb0e4a23488691b6a6b46f283bb391998`，没有数值容差验收；新增fit/filter/predict、数据库/数据集写入、tail和runtime action均为0/false。
+
+131行业、423个计划收益日全部保留，411日paired可估值，12日有原冻结facts中的合法非零预算收益NA，形成7个连续有效块；没有参考资本耗尽。终态为`INSUFFICIENT_REFERENCE_PATH`，全期NAV/回撤与全期比较均保持null，不能跨NA拼接。未追查这些NA的个股成因，不能一概断言为已确认停牌或新漏采，不因此开启补数/重建。
+
+分块诊断中，7/7块R相对同敞口X的MDD较小，差为0.1299～1.3299个百分点；R−X的gross累计收益差5正/2负。R的已知单边名义换手合计34.74865，X为24.58184，每臂另有18日换手未知，未填0。warning行业已知次日收益均值+0.05140%，正收益占50.2976%，存在错过上涨代价。0/5/10/20bp只作分块预算成本敏感性，`net_value_status=UNASSESSED`；这些块不是独立确认，不能宣称已证明完整路径或真实成本后增益。原风险研究capability、产品与模型不变；本包达到诚实终态后结束，不自动调参/重训/推广。
+
 ## 8. Contracts D6：实现、复现、停止与授权
 
 精确D1～D6已批准，设计合入后实现薄模块`backend/services/hmm_risk/risk_l2_value_replay.py`与`scripts/hmm_risk/replay_risk_l2_value.py`及直接测试，复用原封存reader/canonical工具；不建表/API/平台。一次读取固定资产，两个fresh process执行相同预算算术，parent只比较业务canonical payload；时间/进程字段不参与bitwise判定。fit/filter/predict/database接口poison必须0调用，输出只能到显式repo-external任务目录，不覆盖原文件。
@@ -112,7 +120,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 | wealth/cost | 负号/峰值MDD、上涨机会成本、漂移后换手、初始建仓/末日不平仓、单边收费、零换手/无break-even、所有成本档不挑结果 |
 | true replay | 用户精确批准后使用§3四资产、两个fresh process严格bitwise相同；完整result/coverage/终态和零新增fit，不重新造数据 |
 
-已运行直接矩阵：`python -m pytest backend/tests/hmm_risk/test_risk_l2_value_replay.py backend/tests/hmm_risk/test_replay_risk_l2_value.py -q -p no:cacheprovider`，19 passed。Ruff/format、py_compile和5/5 ownership映射通过；提交前在最终HEAD重验最小门禁。真实四资产load_inputs在zero_compute poison下核对131目录/424信号/423收益日通过，不执行预算回放。F2仅审核设计结构；精确授权和正式回放结果另列。
+已运行直接矩阵：`python -m pytest backend/tests/hmm_risk/test_risk_l2_value_replay.py backend/tests/hmm_risk/test_replay_risk_l2_value.py -q -p no:cacheprovider`，19 passed。Ruff/format、py_compile、5/5 ownership及L0通过，三轮作者源码复审无阻断，最终PR HEAD `ec61be18e9cfed44bfc4b6aaff57e3d4ccf71ef8`的GitHub CI verdict通过后合入。原四资产file-only身份预检通过；随后在merge源码上实际运行`python scripts/hmm_risk/replay_risk_l2_value.py run --request F:/Dev/AIstock_runtime/hmm_l2_risk/20261006/value-request.json --request-sha256 8159cb6192eabcd9bd8bfd76785268574176c031e594833ef5a7500a78a019fb --output F:/Dev/AIstock_runtime/hmm_l2_risk/20261006/value-run`，exit 0，真实终态见§7.1。没有另跑广域UI矩阵，不由CI verdict推导未运行测试通过；F2仅审核设计结构。
 
 ## 11. Design Acceptance Index与Design Acceptance Matrix
 
@@ -125,8 +133,8 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 | 真实执行维度 | 状态 | 影响与下一步 |
 |---|---|---|
 | 精确消费D1～D6 | APPROVED_BY_USER_FOR_IMPLEMENTATION | 2026-10-06整包批准；设计合入后按原公式执行，不扩大权限 |
-| 源码/直接测试 | IMPLEMENTED / DIRECT_TESTS_PASSED | 19项直接矩阵与原资产身份预检通过；三轮作者代码复审后待最终HEAD CI，不靠文档F2代报 |
-| 价值回放/经济效果 | NOT_RUN / UNKNOWN | 批准后零fit双process；仅可能为参考研究结果，净增益仍未评估 |
+| 源码/直接测试 | SOURCE_MERGED / DIRECT_TESTS_PASSED | #5547最终HEAD CI verdict通过后合入；19项直接矩阵及三轮作者复审，不靠文档F2代报 |
+| 价值回放/经济效果 | COMPLETED / INSUFFICIENT_REFERENCE_PATH | 两process严格一致，411/423日paired、7块；仅分块研究诊断，全期价值不足，净增益未评估 |
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -153,4 +161,6 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 两轮作者文档审核（非独立第三方）：第一轮核对真实资产、已完成产品状态及事实收益口径，修正只用10D标签推导可避免损失、当日signal交易前收盘的风险，明确423日/一日延迟/stock-aggregate参考；第二轮逐条检查NA、权重与同敞口、漂移换手、成本、资本耗尽和授权终态，补齐自然极端行情不作为模型失败、NA块不拼完整净值、成本档不伪装执行净收益，并将设计定义验收与未批准/未实施/未运行真实缺口分开。随后用户明确批准整包，公式未变，只同步批准状态。没有修改原风险模型或新增未授权门禁，文档无剩余阻断；F2只作定义结构校验。
 
-三轮作者源码复审（非独立第三方）：第一轮对照D1～D6及三臂时序，修复0bp在合法NA后的首个有效日不应依赖未知换手、资本耗尽与legal NA分离；第二轮反例复审补充同日期paired分块比较、现金和风险预算漂移和=1读回，严格禁止完整NAV跨NA拼接；第三轮收敛parent必须核对child原pins、完整423/131人口、全部zero-compute标记，不能仅凭两份self-hashed payload相同制造完成。19项测试、原四资产file-only身份预检、模型/DB poison与输出碰撞/parent差异失败保护通过，无剩余阻断。没有调整模型、消费公式或生产数据；正式双process执行与其终态仍未运行。
+三轮作者源码复审（非独立第三方）：第一轮对照D1～D6及三臂时序，修复0bp在合法NA后的首个有效日不应依赖未知换手、资本耗尽与legal NA分离；第二轮反例复审补充同日期paired分块比较、现金和风险预算漂移和=1读回，严格禁止完整NAV跨NA拼接；第三轮收敛parent必须核对child原pins、完整423/131人口、全部zero-compute标记，不能仅凭两份self-hashed payload相同制造完成。19项测试、原四资产file-only身份预检、模型/DB poison与输出碰撞/parent差异失败保护通过，无剩余阻断。没有调整模型、消费公式或生产数据；源码交付时尚未正式回放，之后按merge执行的真实终态已同步§7.1。
+
+v1.1两轮作者结果复审：第一轮确认已批准D1～D5公式逐字不变，修正状态头/执行表/验证描述的旧未运行表述；第二轮对照正式acceptance核对source、request与结果hash、411/423日及7块、未知换手与零动作标记，将参考不足、模型资格和产品状态分开。不补NA、不建新价值门或更换消费规则，无剩余文档阻断；现有DESIGN-COMPLIANCE-001四项保持，F2/diff仅文档验证。
