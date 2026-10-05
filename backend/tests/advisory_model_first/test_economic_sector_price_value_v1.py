@@ -34,6 +34,13 @@ def test_M20_route_is_only_two_raw_features_and_keeps_old_identity_formula():
         _matched_information_v1('M21', ())
     with pytest.raises(ValueError, match='block'):
         _information_key('M21', RAW_FEATURES)
+    from backend.services.advisory_model_first.economic_sector_parent_raw_v1 import JOINT_FEATURES
+    assert _information_key('M22', JOINT_FEATURES) == 'sector_parent_raw_features'
+    assert _matched_information_v1('M22', SECTOR_FEATURES) == SECTOR_FEATURES
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M22', RAW_FEATURES)
+    with pytest.raises(ValueError, match='block'):
+        _information_key('M22', SCALE_FEATURES)
 
 
 def test_four_fixed_fits_shared_train_test_poison_and_support_not_class_filtered():

@@ -84,15 +84,15 @@ Rollout仅离线研究工具，不改API/UI/生产binding/订单/资金仓位/�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §1/4；planned economic_sector_parent_raw_v1.py | test: planned backend/tests/advisory_model_first/test_economic_sector_parent_raw_v1.py 信息/原对照 | DESIGN_REVIEW_PASS | none |
-| F-002 | §3/4；planned economic_sector_parent_raw_pipeline_v1.py | artifact: 原M1/M20 prepared manifest；test: planned backend/tests/advisory_model_first/test_economic_sector_parent_raw_pipeline_v1.py | DESIGN_REVIEW_PASS | none |
-| F-003 | §5；planned economic_sector_price_value_v1.py | test: backend/tests/advisory_model_first/test_economic_sector_price_value_v1.py；planned 16/18/test毒化/旧bundle | DESIGN_REVIEW_PASS | none |
-| F-004 | §6；planned M22私有预算 | test: planned backend/tests/advisory_model_first/test_economic_sector_parent_raw_pipeline_v1.py 原83/87/partial | DESIGN_REVIEW_PASS | none |
-| F-005 | §7；planned nodes/price_set/actual_decisions | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；planned 多段/unknown/Topen | DESIGN_REVIEW_PASS | none |
-| F-006 | §8/9；原registry/evaluate | artifact: 原EXPLORATORY_SCREEN/RISK_MANAGED_ADVISORY/NAVIGATION_ONLY；test: planned evidence boundary | DESIGN_REVIEW_PASS | none |
-| F-007 | §2/9/10；精确十叶交付 | test: planned backend/tests/advisory_model_first/test_economic_sector_parent_raw_pipeline_v1.py；planned scope/F2/L0/currentCI | DESIGN_REVIEW_PASS | none |
+| F-001 | backend/services/advisory_model_first/economic_sector_parent_raw_v1.py/rows | test: backend/tests/advisory_model_first/test_economic_sector_parent_raw_v1.py 原五信息/16-18原对照 | SOURCE_LOCAL_PASS | none |
+| F-002 | backend/services/advisory_model_first/economic_sector_parent_raw_pipeline_v1.py/sources | test: backend/tests/advisory_model_first/test_economic_sector_parent_raw_pipeline_v1.py 原snapshot/family/role/package/clock/PIT | SOURCE_LOCAL_PASS | none |
+| F-003 | backend/services/advisory_model_first/economic_sector_price_value_v1.py/M22 | test: backend/tests/advisory_model_first/test_economic_sector_parent_raw_v1.py 16/18共享train/test毒化/成熟监督；artifact: X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/m22_source_check.py 旧四bundle | SOURCE_LOCAL_PASS | none |
+| F-004 | backend/services/advisory_model_first/economic_sector_parent_raw_pipeline_v1.py/budget/stages | test: backend/tests/advisory_model_first/test_economic_sector_parent_raw_pipeline_v1.py 实际M21/83前缀/87/typed/duplicate/partial/immutable | SOURCE_LOCAL_PASS | none |
+| F-005 | backend/services/advisory_model_first/economic_sector_parent_raw_v1.py/nodes/price_set | test: backend/tests/advisory_model_first/test_economic_sector_parent_raw_v1.py 支持洞/空query/多段价；test: backend/tests/advisory_model_first/test_economic_sector_parent_raw_pipeline_v1.py Topen/UNKNOWN/未来clock | SOURCE_LOCAL_PASS | none |
+| F-006 | §8/9；原registry/evaluate adapter | artifact: 原EXPLORATORY_SCREEN/RISK_MANAGED_ADVISORY/NAVIGATION_ONLY；正式study仍0/零sealed/activation | SOURCE_LOCAL_PASS | none |
+| F-007 | §2/9/10；SOURCE精确十叶交付 | test: backend/tests/advisory_model_first/test_economic_sector_price_pipeline_v1.py；artifact: X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/m22-source-scope.json；currentCI/merge/cleanup另报 | SOURCE_LOCAL_PASS | none |
 
-矩阵只说明设计审核，不声称M22 SOURCE或研究；当前83+1全为M21及以前，新M22 SOURCE/preregister/prepare/fit/evaluation仍0。
+SOURCE本地实现和审核通过不等同正式研究/收益确认/启用；当前83+1全为M21及以前，新M22正式preregister/prepare/fit/evaluation仍0，只计划四fit至87。后续clean producer、current CI/merge和研究状态分别更新，不以单元fixture fit充当正式研究。
 
 ## 13. 三轮设计审核与修订
 
@@ -103,3 +103,17 @@ Rollout仅离线研究工具，不改API/UI/生产binding/订单/资金仓位/�
 第三轮预算/所有权/交付：实际M21四stage/83+1字节前缀，只四head至87；有限21*84metadata不扫描旧returns/重训/清零。十叶SOURCE后续登记、旧四family不变、0DB/QE公共源码/服务/sealed/activation。设计交付不能冒称source或收益完成，M1UI/BUG依赖留给对应交付，不把其缺口变成本研究门禁。
 
 DESIGN-COMPLIANCE-001设计阶段四项：①七项设计矩阵按设计审核状态，不冒称M22已实现或已获收益；②计算矛盾显式失败/正常缺失UNKNOWN保留，不能伪造身份或填平支持洞；③原人口、D/T时钟、监督、费用/policy及导航标准不因旧结果修改；④没有父包资格、native补证、等待实盘或额外审批门，用户重启权和模块边界保持。设计两docs/scope/F2/diff确认后才交付，后续SOURCE另冻结clean producer与一次研究。
+
+## 14. SOURCE多轮审核修复
+
+设计#5496 HEAD23e5525f70deb0eec29ecfd89b7cf1c4e70a2fd6/currentCI37330373549 SUCCESS后合入bd8517623403e9a01ed3dcd2f201a10bc21d3ab8，own official cleanup_done19.141秒，无blocking/warnings；SOURCE随后自己的latestmain独立树，m22-source-scope.json十叶在写前登记，不修改设计树或其它模块。
+
+第一轮数据/数值：原M1唯一D12/Y base、M20只投影KEY/raw2/status/clock，两prepared原阶段/hash/ledger和SOURCE_FIELDS/profile/universe/cost/policy一致；正常NULL/qNaN原行UNKNOWN、不填零或删日，畸形数/未来clock/原人口和角色矛盾显式拒绝，第二份raw Y毒化不消费。新16/18同成熟train、原完整values_available价支持/label/费用、TOpen而非TClose保持，第一轮15项PASS。
+
+第二轮来源/身份修复：预算消费实际M21四stage和83+1 byte prefix；raw snapshot额外精确绑定M21原M20 predecessor的prepared路径，不能换其它同family新run。两个原snapshot的profile/cost/policy/SOURCE_FIELDS、raw角色/package/manifest/normalization与plan相同；错误消息统一为M22 sector parent raw，不残留旧scale候选名。typed copy、foreign/duplicate/partial和已发布prepare只读重试均拒绝误改。
+
+第三轮路由/兼容/成本：原共享代码只新增M22 information/status/matched SECTOR与87，旧四family/identity/维度不改；最终四直接叶42PASS/Ruff零问题，真实旧M1/M19/M20/M21 bundle SHA及各两query只读校验，不重跑旧study/收益。预算21*84有界metadata/journal512KB、原source<=20000/candidate7720精确one_to_one，无SQL/笛卡尔积，原sector helper join未改；F2七项/范围/diff/L0核对后提交clean producer。正式四stage研究尚0、CI/merge另报，不以工程通过冒充收益。
+
+ALGO-COMPLEXITY-001：changed-only十文件0finding；全量四源码三P2/0blocking，逐条为21*84有限metadata筛选/journal512KB、新原7720精确one_to_one投影join、既存sector helper merge（未改）。无多股票池笛卡尔积或按日重复父预测、0SQL；正式prepare实测耗时研究后另报，不略过告警或修改公共guardrail。
+
+DESIGN-COMPLIANCE-001源码阶段四项：①七项SOURCE本地状态如实，研究0/收益未确认/启用0不冒充完成；②计算错误显式、正常未知保留而不伪造成功；③原人口/监督/价support/policy/成本/配置及导航标准不按历史结果变化；④不加父包资格/等待实盘/额外审批，用户重启权和模块边界不变。
