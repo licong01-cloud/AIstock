@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from scripts import aistock_validation_budget as audit
 
 
@@ -113,6 +115,31 @@ def test_test_path_detection_covers_helpers_and_language_conventions() -> None:
     assert audit._is_test_path("frontend/src/example.spec.ts")
     assert audit._is_test_path("frontend/src/example.test.tsx")
     assert not audit._is_test_path("backend/services/testing_policy.py")
+
+
+@pytest.mark.parametrize("path,layer,is_test", [
+    ("noxfile.py", "test_runner", False),
+    ("backend/tests/conftest.py", "test_runner", True),
+    ("support/fixture.py", "backend_test_helper", True),
+    ("support/new_fixture.py", "future_test_helper", True),
+    ("scripts/test_contract.py", "script", True),
+])
+def test_runner_role_is_not_assertion_code_but_test_paths_and_helpers_still_count(tmp_path, path, layer, is_test):
+    _write(tmp_path, path, "value = 1\n")
+    report = audit.build_audit(repo_root=tmp_path, catalog=_Catalog({path: ("validation.runner", layer)}), tracked_paths=[path])
+    assert report["totals"]["test_sloc"] == int(is_test)
+    assert report["totals"]["production_sloc"] == int(not is_test)
+
+
+def test_operational_role_split_preserves_real_owners_and_dr_fixtures():
+    catalog = audit.FileOwnershipCatalog()
+    for path in ("scripts/dr_snapshot_prod_db.py", "scripts/dr_cleanup_old_snapshots.py"):
+        owner = catalog.match_path(path)
+        assert owner.primary_module == "validation.dr" and owner.layer == "script"
+    owner = catalog.match_path("backend/tests/dr/conftest.py")
+    assert owner.primary_module == "validation.dr" and owner.layer == "backend_test"
+    owner = catalog.match_path("noxfile.py")
+    assert owner.primary_module == "validation.runner" and owner.layer == "test_runner"
 
 
 def test_only_github_workflow_yaml_counts_as_executable_source() -> None:
