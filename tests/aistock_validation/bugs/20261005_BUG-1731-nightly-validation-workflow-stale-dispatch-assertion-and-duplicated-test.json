@@ -25,11 +25,16 @@
   "evidence_uris": [],
   "expected": "Nightly L3/DR独立选择合同通过，workflow测试有效行严格低于30%，catalog定向验证通过",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1731-nightly-validation-workflow-stale-dispatch-assertion-and-duplicated-test.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/scripts/test_ci_failure_issue_summary.py"
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1731-nightly-validation-workflow-stale-dispatch-assertion-and-duplicated-test.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/scripts/test_ci_failure_issue_summary.py"
@@ -91,10 +96,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
