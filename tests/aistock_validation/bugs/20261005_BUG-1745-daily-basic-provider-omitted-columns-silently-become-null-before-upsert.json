@@ -6,6 +6,53 @@
     "tests/aistock_validation/bugs/20261005_BUG-1745-daily-basic-provider-omitted-columns-silently-become-null-before-upsert.json"
   ],
   "assigned_agent": null,
+  "runtime_contract": {
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "runtime_impact": "backend",
+    "target_id": "backend-main",
+    "target_ids": ["backend-main"],
+    "planned_target_ids": ["backend-main"],
+    "backend_restart_owner": "user",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/daily_basic/status",
+    "database_readback_ref": "not_required_no_database_migration",
+    "persistence_basis": "git_tracked_source",
+    "inference_basis": "actual_changed_files",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "pending_user_restart",
+    "fresh_process_evidence": [
+      "Fresh Python process: 8 direct malformed daily_basic cases failed before fix, then all 9 schema cases passed; independent source observation test RED then GREEN; final engine matrix 66 passed with no network, database or services. Runtime backend remains old c3e4b3ac and is not claimed effective."
+    ]
+  },
+  "review_rounds": [
+    {"round": 1, "finding": "Response zip truncates short rows and row.get silently converts omitted requested nullable fields to NULL before upsert.", "red": "8 direct schema regressions failed", "green": "9 direct schema tests passed"},
+    {"round": 2, "finding": "Explicit NULL must remain legal; repeated/malformed field names and short or long row widths must not silently pass. Schema order and extra returned fields remain compatible; existing HTTP retry is reused, not a new workflow or approval gate."},
+    {"round": 3, "finding": "Existing field receipt showed only turnover_rate_f. Added all 16 numeric field observations for the fetched batch, with no new thresholds, no provider value filling and no historical scans.", "red": "source observation test failed", "green": "source observation test passed; final engine matrix 66 passed; Ruff and diff check passed"}
+  ],
+  "design_compliance_review": {
+    "no_partial_completion_claim": "Only schema and batch observation fix delivered; September release is still not exported or validated.",
+    "no_silent_error": "Malformed response rejected before dictionary normalization and any source writes.",
+    "business_semantics_unchanged": "Explicit provider NULL, units, PIT, row population and ordinary economic field semantics unchanged.",
+    "no_extra_gate": "Uses existing source API retry path; no new completeness percentages, full-history checks, resource admission, runtime control or approval points."
+  },
+  "data_and_monthly_status": {
+    "source_delay_proven": false,
+    "historical_provider_payload_available": false,
+    "september_provider_finite_missing_in_db": 0,
+    "september_trade_date_count": 21,
+    "september_field_count": 16,
+    "september_file_validation": "PENDING_MONTHLY_EXPORT",
+    "monthly_operation": "dmr_63a313d97fd046a38d5a876265565014",
+    "monthly_status": "FAILED_SOURCE_ATTEMPT_242",
+    "performance_fix": "BUG-1733 remains independently incomplete; legacy predecessor full-rebuild fallback and 10-hour end-to-end acceptance not resolved by this fix.",
+    "database_write": false,
+    "candidate_write": false,
+    "profile_write": false,
+    "runtime_action": false
+  },
   "bug_id": "BUG-1745",
   "closed_at": null,
   "closure_requirements": [
