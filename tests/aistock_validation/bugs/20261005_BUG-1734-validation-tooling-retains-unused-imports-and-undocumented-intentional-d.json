@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1734",
-  "closed_at": null,
+  "closed_at": "2026-10-05T16:45:03Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,21 +30,21 @@
   "expected": "validation归属lint诊断归零，所有fixture/业务调用/函数AST不变，延迟导入意图明示",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1734-validation-tooling-retains-unused-imports-and-undocumented-intentional-d.json",
       "backend/tests/data_quality/conftest.py",
       "backend/tests/data_quality/test_derived_fields.py",
       "backend/tests/dr/conftest.py",
       "backend/tests/e2e/conftest.py",
-      "scripts/aistock_module_ownership_scan.py"
+      "scripts/aistock_module_ownership_scan.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1734-validation-tooling-retains-unused-imports-and-undocumented-intentional-d.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1734-validation-tooling-retains-unused-imports-and-undocumented-intentional-d.json",
       "backend/tests/data_quality/conftest.py",
       "backend/tests/data_quality/test_derived_fields.py",
       "backend/tests/dr/conftest.py",
       "backend/tests/e2e/conftest.py",
-      "scripts/aistock_module_ownership_scan.py"
+      "scripts/aistock_module_ownership_scan.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1734-validation-tooling-retains-unused-imports-and-undocumented-intentional-d.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -156,8 +156,8 @@
   },
   "first_seen_at": "2026-10-05T16:32:27.978365Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "af8faa94dadf4720c29bbbfc452e9d02b68d56d9",
+  "fixed_at": "2026-10-05T16:45:03Z",
   "github_issue_number": 5505,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5505",
   "last_seen_at": "2026-10-05T16:32:27.978365Z",
@@ -165,6 +165,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5507",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -185,6 +186,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -194,7 +196,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1734",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4b9f26de404fd3e7",
+    "recorded_at": "2026-10-05T16:45:52.027313Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e0f894044ab4efe1a4d6bc666972a2cce1981fb9",
+    "source_merge_commit": "af8faa94dadf4720c29bbbfc452e9d02b68d56d9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5507",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -> passed, 5/5 mapped, blocking=0",
+      "python -m nox -s validation_catalog_integrity -> passed, 16 passed, findings=0"
+    ],
+    "validation_evidence_digest": "5dd3a95d30f3140fc404257944606f5252633ae72233eb810ef310b055ad4f88"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.runner"
   ],
@@ -203,6 +227,10 @@
     "fingerprint": "f646a6151be2a845dee59bc2",
     "source_event_id": "FE-20261005-f646a6151be2"
   },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -> passed, 5/5 mapped, blocking=0",
+    "python -m nox -s validation_catalog_integrity -> passed, 16 passed, findings=0"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
