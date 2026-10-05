@@ -1,6 +1,6 @@
 # Advisory 父预测归一化轨迹条件价格 M24 F2详细设计
 
-设计2026-10-06；SOURCE_IMPLEMENTED_LOCAL_REVIEW / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。设计PR #5503/current HEAD d927b7dd、必需CI37341383182 SUCCESS，已合入955fb8bd5c978cfb3de993a2700f3c59e2d11cf6并仅自身官方清理。
+设计2026-10-06；SOURCE_LOCAL_VERIFIED / STUDY_COMPLETE_NOT_CONFIRMED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。设计PR #5503/current HEAD d927b7dd、必需CI37341383182 SUCCESS，已合入955fb8bd5c978cfb3de993a2700f3c59e2d11cf6并仅自身官方清理。
 
 ## 1. Background / Goal
 
@@ -101,7 +101,7 @@ preregister/prepare/train/evaluated四immutable atomic；clean producer先于数
 | F-006 | §8；registry/evaluation | artifact: 冻结原分类及证据用途；test: backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_pipeline_v1.py | SOURCE_LOCAL_VERIFIED | none |
 | F-007 | §2/9；own scope/delivery | test: backend/tests/advisory_model_first/test_economic_parent_normalized_trajectory_pipeline_v1.py；scope/F2/L0/currentCI | SOURCE_LOCAL_VERIFIED | none |
 
-矩阵现记录源码本地逐项验收；历史§12保留设计阶段事实，不冒称研究或收益完成。四直接测试47PASS/Ruff通过，SOURCE十叶仅自身。M24正式prepare/fit/evaluation仍0；实际91+1全为旧已完成运行，不计计划95为实际。
+矩阵记录源码本地逐项验收：47直接项/Ruff/F2七项/十叶scope、原M1-M20-M23三bundle节点兼容通过；changed L0零/staged新一项非blocking P2/full二项有限复杂度已按§8/13说明。一次M24四fit/完整四臂完成，真实95+1，具体经济负结果见§14。SOURCE合入、运行态加载及收益确认分别报告，不能将代码通过写成收益确认。
 
 ## 12. 多轮设计审核和修订
 
@@ -120,3 +120,7 @@ preregister/prepare/train/evaluated四immutable atomic；clean producer先于数
 第三轮范围/交付：shared仅M24 route/recipe/status/cap分支，不改变旧family defaults、原模型或参数。新增源码只两Advisory叶，四直接文件47PASS/Ruff0；代表M1/M20/M23原bundle只identity+各两node query，不重跑旧研究/收益。有限source20000、query500000、journal512KB/23*92 metadata；公共QE/Selection/StrategyPackage/HMM/CI/数据/DB/服务不写。后续L0/scope/F2及clean producer、一次正式运行/当前CI分别回报。
 
 DESIGN-COMPLIANCE-001逐项：①原批准七项与实施/测试逐项映射，无未授权减少目标冒称完成；②输入冲突/坏数/未来时钟/partial明确错误，正常UNKNOWN不吞异常伪success；③原候选、标签、五effective review、support/费用、四臂/未知归因不改语义；④不增加QE包资格、历史补证或sealed准入，只保留本任务可计算一致性与一次运行记录。经济/运行态尚未完成，不以本地tests当收益或启用。
+
+## 14. 一次正式研究实际结果
+
+clean producer d57f02e41a241193b6c0348f2c6747e373266d09/implementation0dc07d4cf8529c364ed7585e45bf8ef76f3b8ac6274cacbc421d5308fafc3c23；run advnormtraj_cf25e8a5193c296a82e69350/plan cf25e8a5193c296a82e693503b92cfbc8460ebd5716d51574fec435c977d991e。一次prepare1.516秒/0SQL，原386D7720候选全保留，3908AVAILABLE/3812UNKNOWN；原M23 base唯一标签及全部raw trajectory保留。共同成熟train1939/208D、validation916仅诊断。fresh QE三个running前2026-10-05T16:54:53+00:00全部0，receipt d8715ed0...；四fit5.657秒/完整四臂20.703秒，post 2026-10-05T16:57:20+00:00全部0，真实累计95PHYSICAL_FIT+1旧INDEX_BUILD。原81D1620候选/100共同NAV日candidate/base/新matched/rule成本后名义收益17.3470%/21.3220%/20.3087%/20.5747%，paired日base−3.36513bps CI[−14.98539,8.76008]、matched−2.38257 CI[−9.25822,6.85087]；candidate MDD−8.4929%。36真模型TAKE+53UNKNOWN控制=89episodes全部settled，0held/端点/unsettled阻断；9profitable与4loss基线入场被跳过，UNKNOWN利润不冒称模型收益。仅net失败/其它四条件通过，只STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION/NOT_CONFIRMED；历史norm五TD变化未给原raw trajectory新增价值，不选lag/参数/旧matched或重跑补证，非全局不可学/QE无效。第24串行已消费窗口/NV/native UNPROVEN限制保留，0sealed/独立OOS/自然前向/real-fill/activation/QE public写/数据库读写/服务控制。evaluated manifest fileSHA c7be1d91377d2017206c5de57d83e1f8360166ab7b304ead57d4fcb00f21c994；正式F原四stage保留，SOURCE提交/currentCI与自己清理另报。
