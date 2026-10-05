@@ -15,6 +15,22 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("selection,plans", [("l0", ["l0"]), ("l0 validation_catalog_integrity", ["l0", "validation_catalog_integrity"]), ("l0 l0 -- tests", ["l0"]), ("l0,validation_catalog_integrity", []), ("l0; unknown", []), ("l0 -s validation_catalog_integrity", []), ("l0 -- -k smoke", ["l0"])])
+def test_validation_receipt_explicit_nox_sessions(monkeypatch, tmp_path, selection, plans):
+    monkeypatch.setattr(workflow, "_assert_task_git_identity", lambda _: None)
+    monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "a" * 40)
+    command = "python -m nox -s " + selection
+    receipts, errors = workflow._build_validation_receipts([command + " -> passed"], root=tmp_path)
+    assert [receipt["plan"] for receipt in receipts] == plans
+    assert bool(errors) == (not plans)
+    assert len({receipt["receipt_id"] for receipt in receipts}) == len(plans)
+    assert all(receipt["command"] == command and receipt["commit"] == "a" * 40 for receipt in receipts)
+    coverage = workflow._validation_receipt_plan_coverage(validation={"required_plans": plans}, receipts=receipts)
+    assert coverage["missing_required_plans"] == []
+    failed, errors = workflow._build_validation_receipts([command + " -> FAILED, 1 passed"], root=tmp_path)
+    assert failed == [] and errors
+
+
 @pytest.fixture
 def cli_task_worktree(tmp_path, monkeypatch):
     base, task = tmp_path / "authority", tmp_path / "task"
