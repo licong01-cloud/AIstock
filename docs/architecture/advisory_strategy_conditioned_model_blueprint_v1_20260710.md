@@ -2217,10 +2217,10 @@ M1日频模型仍有真实Program、LSTM/FUND两腿和原value-label policy作�
 
 0trial单有界只读聚合spec8aa0aa63.../1.078秒，原386D/7720候选D/instrument与PE/PB/dv_ttm非空各7720；只键与非空，未读源值/Y/收益/fit，不当原生/数值或经济验收。后续唯一新增market.daily_basic/D三字段，最多7720请求/单30秒SELECT/rollback/close；D盘后声明与非vintage/native UNPROVEN限制保留，不重验QE父资格。
 
-当前实际51fit+1index。M14设计#5474已合入55d519c1e/自己清理，12文件源码Draft #5478当前HEADd4c2f0be4/CI37256246038 SUCCESS（02:39:27～02:47:23UTC）且保持Draft等待M14真实研究；稳定58项/Ruff/F2/L0及原M1 JSON bundle兼容通过。一次prepare曾因quiet Decimal NaN缺值类型处理停止/0fit，已修复为局部UNKNOWN且旧plan265ff616保留；新producerc58f4e6a/plan46e89f53 prepare3.328秒/1SELECT、7720原候选保留，2952AVAILABLE/4768局部UNKNOWN/native UNPROVEN。QE MA-E42 qe_20261005_102547_925d运行，三running0/1/0，只暂停M14四fit，约半小时复查；其它工程设计继续，sealed/确认/激活0。M15只下一独立涨跌停状态设计，须M14真实4fit/四臂与源交付后串行55→59，不制造假前驱或救活旧负模型；M1六UI/公共smoke继续独立保留。原18h/48h不重计、X临时/F正式，源码/研究/盈利/runtime分别报告。
+当前实际51fit+1index。M14设计#5474已合入55d519c1e/自己清理，12文件源码Draft #5478首轮HEADd4c2f0be4/CI37256246038 SUCCESS（02:39:27～02:47:23UTC）；已同步最新main eba96ae43，仅蓝图冲突合并保留最新M15设计，业务源码与producerc58完全同字节，将生成当前HEAD新CI，不借旧绿灯合入，仍Draft等真实研究；稳定58项/Ruff/F2/L0及原M1 JSON bundle兼容通过。一次prepare曾因quiet Decimal NaN缺值类型处理停止/0fit，已修复为局部UNKNOWN且旧plan265ff616保留；新producerc58f4e6a/plan46e89f53 prepare3.328秒/1SELECT、7720原候选保留，2952AVAILABLE/4768局部UNKNOWN/native UNPROVEN。QE MA-E42 qe_20261005_102547_925d运行，三running0/1/0，只暂停M14四fit，约半小时复查；其它工程设计继续，sealed/确认/激活0。M15只下一独立涨跌停状态设计，须M14真实4fit/四臂与源交付后串行55→59，不制造假前驱或救活旧负模型；M1六UI/公共smoke继续独立保留。原18h/48h不重计、X临时/F正式，源码/研究/盈利/runtime分别报告。
 
 #### 16.6.8 下一M15：历史涨跌停状态与条件进入价值
 
 [M15 F2详细设计](advisory_limit_state_m15_f2_design_20261005.md)固定D向前20session上/下合法界触及比例与D收盘在真实合法界内的位置；原raw_daily schema已有七字段，0trial spike仅metadata、0价格/收益数组/DB/fit。新增信息是法定界与历史触板状态，不是旧price-path调窗口或分钟执行研发；只评估给定可见价格下净价值，不改变原候选、政策/标签、支持、成本或涨跌停制度。
 
-当前M14 prepared后等待QE，M15只利用工程空档先独立F2三轮修订/设计交付。只有M14实际55fit及完整evaluated/source交付后才latestmain独立12文件实现、0SQL消费同原冻结raw_daily、共同13/16与显式59预算一次四fit/四臂；不并行QE训练、不预判M14负、不制造evaluated、不要求重新股票池/行情准备。缺历史/limit局部UNKNOWN、D已知位置保留/不前填删股；负candidate只停止自身，正NAV也不称确认、原生或生产启用。
+当前M14 prepared后等待QE，M15独立F2三轮修订/七项及currentHEAD41e383765/CI37256895974 SUCCESS（57秒）后设计#5479已合入eba96ae43d2c1df671a3f2332364292dde1c9801、自己的official cleanup_done。只有M14实际55fit及完整evaluated/source交付后才latestmain独立12文件实现、0SQL消费同原冻结raw_daily、共同13/16与显式59预算一次四fit/四臂；不并行QE训练、不预判M14负、不制造evaluated、不要求重新股票池/行情准备。缺历史/limit局部UNKNOWN、D已知位置保留/不前填删股；负candidate只停止自身，正NAV也不称确认、原生或生产启用。
