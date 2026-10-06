@@ -35,17 +35,17 @@
   "expected": "产品验证记录通过文件正常登记；读端按显式业务身份动态读取；禁止以环境变量选择具体实验记录；同一进程下新记录下次请求生效。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1753-hmm-product-validation-records-are-bound-to-per-experiment-environment-v.json",
       "backend/routers/hmm_risk.py",
+      "backend/services/hmm_risk/product_validation_store.py",
       "backend/services/hmm_risk/risk_l1_prediction.py",
       "backend/services/hmm_risk/risk_l2_prediction.py",
       "backend/services/hmm_risk/rotation_l1_prediction.py",
       "backend/services/hmm_risk/rotation_l2_prediction.py",
+      "backend/tests/hmm_risk/test_product_validation_store.py",
       "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
       "docs/architecture/hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md",
-      "backend/services/hmm_risk/product_validation_store.py",
-      "backend/tests/hmm_risk/test_product_validation_store.py",
-      "scripts/hmm_risk/register_product_validation.py"
+      "scripts/hmm_risk/register_product_validation.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1753-hmm-product-validation-records-are-bound-to-per-experiment-environment-v.json"
     ],
     "added_files": [
       "backend/services/hmm_risk/product_validation_store.py",
@@ -53,17 +53,17 @@
       "scripts/hmm_risk/register_product_validation.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1753-hmm-product-validation-records-are-bound-to-per-experiment-environment-v.json",
       "backend/routers/hmm_risk.py",
+      "backend/services/hmm_risk/product_validation_store.py",
       "backend/services/hmm_risk/risk_l1_prediction.py",
       "backend/services/hmm_risk/risk_l2_prediction.py",
       "backend/services/hmm_risk/rotation_l1_prediction.py",
       "backend/services/hmm_risk/rotation_l2_prediction.py",
+      "backend/tests/hmm_risk/test_product_validation_store.py",
       "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
       "docs/architecture/hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md",
-      "backend/services/hmm_risk/product_validation_store.py",
-      "backend/tests/hmm_risk/test_product_validation_store.py",
-      "scripts/hmm_risk/register_product_validation.py"
+      "scripts/hmm_risk/register_product_validation.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1753-hmm-product-validation-records-are-bound-to-per-experiment-environment-v.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -230,7 +230,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
     "fresh_process_evidence": [
       "PYTHONPATH=task-worktree python fresh-process imports backend.routers.hmm_risk, backend.routers.health, product_validation_store and four HMM prediction readers; __file__ source containment PASS; database_write=false service_control=false",
-      "PYTHONPATH=task-worktree python fresh-process imports router health four readers store with source containment -> PASS"
+      "PYTHONPATH=task-worktree python fresh-process imports router health four readers store with source containment -> PASS",
+      "PYTHONPATH=task-worktree python fresh-process imports router health store and four prediction readers with source containment -> PASS; read-only real DB same-repository registration/readback changes surface status only -> PASS"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
