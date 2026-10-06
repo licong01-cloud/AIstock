@@ -13,6 +13,7 @@ import uuid
 
 from backend.db.pg_pool import get_conn
 from backend.services.hmm_risk.contracts import canonical_json_bytes, canonical_sha256
+from backend.services.hmm_risk.product_validation_store import ProductValidationStoreError, find_receipt, read_receipt
 from backend.services.hmm_risk.rotation_l2 import ACCEPTANCE_SCHEMA, BINDING_MBE_RANK_IC
 from backend.services.hmm_risk.formal_state_effect import (
     ACCEPTANCE_SCHEMA as EFFECT_ACCEPTANCE_SCHEMA,
@@ -407,14 +408,16 @@ def _stored_row(raw: Sequence[Any]) -> dict[str, Any]:
 
 
 def _load_surface_receipt(path: Path | None, *, run_id: str, row_hash: str) -> bool:
-    if path is None or not path.is_file() or path.is_symlink():
+    if path is None:
         return False
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        value = read_receipt(path)
+    except FileNotFoundError:
         return False
-    body = {key: item for key, item in value.items() if key != "receipt_sha256"} if isinstance(value, dict) else {}
-    return bool(
+    except (OSError, ValueError, ProductValidationStoreError) as exc:
+        raise RotationL2PredictionError(REASON_READBACK, "product validation record cannot be read") from exc
+    body = {key: item for key, item in value.items() if key != "receipt_sha256"}
+    valid = bool(
         value.get("schema_version") == SURFACE_SCHEMA
         and value.get("run_id") == run_id
         and value.get("canonical_row_sha256") == row_hash
@@ -423,6 +426,9 @@ def _load_surface_receipt(path: Path | None, *, run_id: str, row_hash: str) -> b
         and value.get("browser_no_mock") is True
         and value.get("receipt_sha256") == canonical_sha256(body)
     )
+    if not valid:
+        raise RotationL2PredictionError(REASON_READBACK, "product validation record identity/checksum differs")
+    return True
 
 
 @dataclass
@@ -431,6 +437,7 @@ class RotationL2PredictionRepository:
         autocommit=False, manage_transaction=True
     )
     surface_validation_receipt_path: Path | None = None
+    surface_validation_store_root: Path | None = None
 
     def write_rows(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         validated = [_validate_row(row) for row in rows]
@@ -568,9 +575,15 @@ class RotationL2PredictionRepository:
         rows = detail["rows"]
         head = rows[0]
         row_hash = canonical_sha256([_row_identity(row) for row in rows])
+        try:
+            receipt_path = self.surface_validation_receipt_path or find_receipt(
+                "rotation_l2", identity=run_id, row_hash=row_hash, root=self.surface_validation_store_root
+            )
+        except (OSError, ProductValidationStoreError) as exc:
+            raise RotationL2PredictionError(REASON_READBACK, "product validation store cannot be read") from exc
         surface = (
             "AVAILABLE_EXPERIMENTAL"
-            if _load_surface_receipt(self.surface_validation_receipt_path, run_id=run_id, row_hash=row_hash)
+            if _load_surface_receipt(receipt_path, run_id=run_id, row_hash=row_hash)
             else "NOT_AVAILABLE"
         )
         return {

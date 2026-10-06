@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from backend.db.pg_pool import get_conn
+from backend.services.hmm_risk.product_validation_store import ProductValidationStoreError, find_receipt, read_receipt
 from backend.services.hmm_risk.risk_l1_g2b import (
     CANONICAL_SECTOR_COUNT,
     RISK_FEATURES,
@@ -97,12 +98,16 @@ def _identity_payload(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _prediction_id(row: Mapping[str, Any]) -> str:
-    canonical = json.dumps(_identity_payload(row), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    canonical = json.dumps(
+        _identity_payload(row), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
     return str(uuid.uuid5(PREDICTION_ID_NAMESPACE, canonical))
 
 
 def _finite_optional(value: Any) -> bool:
-    return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)))
+    return value is None or (
+        isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+    )
 
 
 def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -121,7 +126,11 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
                 row[field] = date.fromisoformat(row[field])
             except ValueError as exc:
                 raise RiskL1PredictionError(REASON_WRITER, f"risk prediction {field} differs") from exc
-    if not isinstance(row["trade_date"], date) or not isinstance(row["as_of_date"], date) or row["as_of_date"] >= row["trade_date"]:
+    if (
+        not isinstance(row["trade_date"], date)
+        or not isinstance(row["as_of_date"], date)
+        or row["as_of_date"] >= row["trade_date"]
+    ):
         raise RiskL1PredictionError(REASON_WRITER, "risk prediction date boundary differs")
     if row["sector_level"] != "L1" or not str(row["sector_code"]).strip() or not str(row["sector_name"]).strip():
         raise RiskL1PredictionError(REASON_WRITER, "risk prediction sector identity differs")
@@ -136,7 +145,9 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise RiskL1PredictionError(REASON_WRITER, "risk prediction revision chain differs")
     if row["availability"] == "available":
         if (
-            not all(_finite_optional(row[field]) and row[field] is not None for field in ("risk_score", "risk_percentile"))
+            not all(
+                _finite_optional(row[field]) and row[field] is not None for field in ("risk_score", "risk_percentile")
+            )
             or not 0.0 <= float(row["risk_score"]) <= 1.0
             or not 0.0 <= float(row["risk_percentile"]) <= 1.0
             or row["risk_level"] not in {"normal", "watch", "high"}
@@ -150,7 +161,16 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
             raise RiskL1PredictionError(REASON_WRITER, "available risk prediction payload differs")
     elif row["availability"] == "unavailable":
         if (
-            any(row[field] is not None for field in ("risk_score", "risk_percentile", "risk_level", "predicted_warning", "feature_contributions"))
+            any(
+                row[field] is not None
+                for field in (
+                    "risk_score",
+                    "risk_percentile",
+                    "risk_level",
+                    "predicted_warning",
+                    "feature_contributions",
+                )
+            )
             or not isinstance(row["reason_code"], str)
             or not row["reason_code"].strip()
         ):
@@ -159,13 +179,26 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise RiskL1PredictionError(REASON_WRITER, "risk prediction availability differs")
     if row["risk_l1_research_surface_status"] != "NOT_AVAILABLE":
         raise RiskL1PredictionError(REASON_WRITER, "offline risk row claims a validated product surface")
-    if row["risk_l1_capability_status"] not in {"NOT_AVAILABLE", "RESEARCH_RISK_WARNING_AVAILABLE_FORWARD_UNCONFIRMED", "ADVISORY_RISK_WARNING_AVAILABLE"}:
+    if row["risk_l1_capability_status"] not in {
+        "NOT_AVAILABLE",
+        "RESEARCH_RISK_WARNING_AVAILABLE_FORWARD_UNCONFIRMED",
+        "ADVISORY_RISK_WARNING_AVAILABLE",
+    }:
         raise RiskL1PredictionError(REASON_WRITER, "risk capability status differs")
     if row["forward_power_status"] not in {"UNAVAILABLE", "INSUFFICIENT", "SUFFICIENT"}:
         raise RiskL1PredictionError(REASON_WRITER, "risk forward power status differs")
-    if row["forward_confirmation"] not in {"NOT_STARTED", "PENDING_INSUFFICIENT_POWER", "PENDING_INCONCLUSIVE", "PASSED", "FAILED"}:
+    if row["forward_confirmation"] not in {
+        "NOT_STARTED",
+        "PENDING_INSUFFICIENT_POWER",
+        "PENDING_INCONCLUSIVE",
+        "PASSED",
+        "FAILED",
+    }:
         raise RiskL1PredictionError(REASON_WRITER, "risk forward confirmation differs")
-    if row["advisory_status"] not in {"NOT_AVAILABLE", "AVAILABLE"} or row["validation_basis"] not in {"development_causal_oof", "single_date_frozen_model"}:
+    if row["advisory_status"] not in {"NOT_AVAILABLE", "AVAILABLE"} or row["validation_basis"] not in {
+        "development_causal_oof",
+        "single_date_frozen_model",
+    }:
         raise RiskL1PredictionError(REASON_WRITER, "risk product status differs")
     if (
         row["tail_accessed"] is not False
@@ -184,10 +217,21 @@ def _validate_batch(rows: Sequence[Mapping[str, Any]]) -> None:
     if len(rows) != CANONICAL_SECTOR_COUNT or len({str(row["sector_code"]) for row in rows}) != CANONICAL_SECTOR_COUNT:
         raise RiskL1PredictionError(REASON_WRITER, "risk prediction batch does not contain 31 sectors")
     invariant = (
-        "trade_date", "as_of_date", "model_hash", "input_hash", "mapping_snapshot_hash", "revision",
-        "risk_l1_research_surface_status", "risk_l1_capability_status", "forward_power_status",
-        "forward_confirmation", "advisory_status", "validation_basis", "development_precision_lift",
-        "development_recall", "tail_accessed",
+        "trade_date",
+        "as_of_date",
+        "model_hash",
+        "input_hash",
+        "mapping_snapshot_hash",
+        "revision",
+        "risk_l1_research_surface_status",
+        "risk_l1_capability_status",
+        "forward_power_status",
+        "forward_confirmation",
+        "advisory_status",
+        "validation_basis",
+        "development_precision_lift",
+        "development_recall",
+        "tail_accessed",
     )
     head = rows[0]
     if any(row[field] != head[field] for row in rows[1:] for field in invariant):
@@ -206,7 +250,13 @@ def _stored_row(raw: Sequence[Any]) -> dict[str, Any]:
 def _insert_and_readback(cursor: Any, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     readback: list[dict[str, Any]] = []
     for row in rows:
-        cursor.execute(_INSERT_SQL, tuple(json.dumps(row[column]) if column == "feature_contributions" else row[column] for column in PREDICTION_COLUMNS))
+        cursor.execute(
+            _INSERT_SQL,
+            tuple(
+                json.dumps(row[column]) if column == "feature_contributions" else row[column]
+                for column in PREDICTION_COLUMNS
+            ),
+        )
         cursor.execute(_READ_ONE_SQL, (row["model_hash"], row["trade_date"], row["sector_code"], row["revision"]))
         stored = cursor.fetchone()
         if stored is None:
@@ -215,9 +265,7 @@ def _insert_and_readback(cursor: Any, rows: Sequence[Mapping[str, Any]]) -> list
         if _identity_payload(decoded) != _identity_payload(row):
             raise RiskL1PredictionError(REASON_CONFLICT, "risk prediction key already contains a different payload")
         readback.append(decoded)
-    readback.sort(
-        key=lambda row: (str(row["model_hash"]), row["trade_date"], str(row["sector_code"]), row["revision"])
-    )
+    readback.sort(key=lambda row: (str(row["model_hash"]), row["trade_date"], str(row["sector_code"]), row["revision"]))
     return readback
 
 
@@ -342,7 +390,9 @@ def predict_single_date_from_assets(
     except RotationL1PredictionError as exc:
         raise RiskL1PredictionError(exc.reason_code, str(exc), context=exc.context) from exc
     model = load_model(model_artifact, booster_factory=booster_factory)
-    inferred = predict_single_date(raw_features.droplevel("trade_date"), trade_date=trade_date, as_of_date=as_of_date, model=model)
+    inferred = predict_single_date(
+        raw_features.droplevel("trade_date"), trade_date=trade_date, as_of_date=as_of_date, model=model
+    )
     metrics = model_artifact.get("development_metrics")
     identity = model_artifact.get("input_identity")
     if not isinstance(metrics, Mapping) or not isinstance(identity, Mapping):
@@ -385,15 +435,21 @@ def predict_single_date_from_assets(
         row["prediction_id"] = _prediction_id(row)
         rows.append(_validate_row(row))
     _validate_batch(rows)
-    return {"rows": rows, "source_receipt": dict(receipt), "model_fit_count": 0, "target_columns_read": False, "tail_accessed": False}
+    return {
+        "rows": rows,
+        "source_receipt": dict(receipt),
+        "model_fit_count": 0,
+        "target_columns_read": False,
+        "tail_accessed": False,
+    }
 
 
 def _load_surface_receipt(path: Path | None) -> Mapping[str, Any] | None:
     if path is None:
         return None
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        value = read_receipt(path)
+    except (OSError, ValueError, ProductValidationStoreError) as exc:
         raise RiskL1PredictionError(REASON_READBACK, "risk product validation receipt cannot be read") from exc
     if not isinstance(value, Mapping):
         raise RiskL1PredictionError(REASON_READBACK, "risk product validation receipt differs")
@@ -423,8 +479,11 @@ def _surface_status(rows: Sequence[Mapping[str, Any]], receipt: Mapping[str, Any
 
 @dataclass
 class RiskL1PredictionRepository:
-    conn_factory: Callable[[], AbstractContextManager[Any]] = lambda: get_conn(autocommit=False, manage_transaction=True)
+    conn_factory: Callable[[], AbstractContextManager[Any]] = lambda: get_conn(
+        autocommit=False, manage_transaction=True
+    )
     surface_validation_receipt_path: Path | None = None
+    surface_validation_store_root: Path | None = None
 
     def write_rows(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         validated = sorted(
@@ -458,10 +517,17 @@ class RiskL1PredictionRepository:
         if trade_date is None:
             cursor.execute("SELECT DISTINCT model_hash FROM hmm_risk.risk_l1_prediction ORDER BY model_hash")
         else:
-            cursor.execute("SELECT DISTINCT model_hash FROM hmm_risk.risk_l1_prediction WHERE trade_date=%s ORDER BY model_hash", (trade_date,))
+            cursor.execute(
+                "SELECT DISTINCT model_hash FROM hmm_risk.risk_l1_prediction WHERE trade_date=%s ORDER BY model_hash",
+                (trade_date,),
+            )
         hashes = [str(row[0]).strip() for row in cursor.fetchall()]
         if len(hashes) != 1:
-            raise RiskL1PredictionError(REASON_NOT_FOUND if not hashes else REASON_MODEL_AMBIGUOUS, "risk prediction model identity is not unique", context={"model_count": len(hashes)})
+            raise RiskL1PredictionError(
+                REASON_NOT_FOUND if not hashes else REASON_MODEL_AMBIGUOUS,
+                "risk prediction model identity is not unique",
+                context={"model_count": len(hashes)},
+            )
         return hashes[0]
 
     def read_date(self, trade_date: date, *, model_hash: str | None = None) -> dict[str, Any]:
@@ -469,7 +535,7 @@ class RiskL1PredictionRepository:
             with conn.cursor() as cursor:
                 selected = self._resolve_model(cursor, model_hash, trade_date=trade_date)
                 cursor.execute(
-                    f"""SELECT {','.join('p.' + column for column in PREDICTION_COLUMNS)}
+                    f"""SELECT {",".join("p." + column for column in PREDICTION_COLUMNS)}
                     FROM hmm_risk.risk_l1_prediction p
                     WHERE p.model_hash=%s AND p.trade_date=%s AND p.revision=(
                       SELECT max(newer.revision) FROM hmm_risk.risk_l1_prediction newer
@@ -498,13 +564,27 @@ class RiskL1PredictionRepository:
                     selected = self._resolve_model(cursor, None, trade_date=found[0])
                 else:
                     selected = self._resolve_model(cursor, model_hash)
-                    cursor.execute("SELECT max(trade_date) FROM hmm_risk.risk_l1_prediction WHERE model_hash=%s", (selected,))
+                    cursor.execute(
+                        "SELECT max(trade_date) FROM hmm_risk.risk_l1_prediction WHERE model_hash=%s", (selected,)
+                    )
                     found = cursor.fetchone()
         if not found or found[0] is None:
             raise RiskL1PredictionError(REASON_NOT_FOUND, "risk prediction overview is not found")
         detail = self.read_date(found[0], model_hash=selected)
         rows = detail["rows"]
         head = rows[0]
+        if receipt is None:
+            try:
+                path = find_receipt(
+                    "risk_l1",
+                    identity=selected,
+                    trade_date=detail["trade_date"],
+                    row_hash=canonical_sha256([_identity_payload(row) for row in rows]),
+                    root=self.surface_validation_store_root,
+                )
+                receipt = _load_surface_receipt(path)
+            except (OSError, ProductValidationStoreError) as exc:
+                raise RiskL1PredictionError(REASON_READBACK, "risk validation store cannot be read") from exc
         return {
             "model_hash": selected,
             "trade_date": detail["trade_date"],
@@ -513,11 +593,21 @@ class RiskL1PredictionRepository:
             "available_count": sum(row["availability"] == "available" for row in rows),
             "high_warning_count": sum(row["predicted_warning"] is True for row in rows),
             "risk_l1_research_surface_status": _surface_status(rows, receipt),
-            **{field: head[field] for field in (
-                "risk_l1_capability_status", "forward_power_status", "forward_confirmation", "advisory_status",
-                "validation_basis", "development_precision_lift", "development_recall", "input_hash",
-                "mapping_snapshot_hash", "tail_accessed",
-            )},
+            **{
+                field: head[field]
+                for field in (
+                    "risk_l1_capability_status",
+                    "forward_power_status",
+                    "forward_confirmation",
+                    "advisory_status",
+                    "validation_basis",
+                    "development_precision_lift",
+                    "development_recall",
+                    "input_hash",
+                    "mapping_snapshot_hash",
+                    "tail_accessed",
+                )
+            },
         }
 
 
