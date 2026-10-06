@@ -34,21 +34,38 @@
   "evidence_uris": [],
   "expected": "产品验证记录通过文件正常登记；读端按显式业务身份动态读取；禁止以环境变量选择具体实验记录；同一进程下新记录下次请求生效。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1753-hmm-product-validation-records-are-bound-to-per-experiment-environment-v.json",
+      "backend/routers/hmm_risk.py",
+      "backend/services/hmm_risk/risk_l1_prediction.py",
+      "backend/services/hmm_risk/risk_l2_prediction.py",
+      "backend/services/hmm_risk/rotation_l1_prediction.py",
+      "backend/services/hmm_risk/rotation_l2_prediction.py",
+      "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
+      "docs/architecture/hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md",
+      "backend/services/hmm_risk/product_validation_store.py",
+      "backend/tests/hmm_risk/test_product_validation_store.py",
+      "scripts/hmm_risk/register_product_validation.py"
+    ],
     "added_files": [
       "backend/services/hmm_risk/product_validation_store.py",
       "backend/tests/hmm_risk/test_product_validation_store.py",
       "scripts/hmm_risk/register_product_validation.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1753-hmm-product-validation-records-are-bound-to-per-experiment-environment-v.json",
       "backend/routers/hmm_risk.py",
-      "backend/services/hmm_risk/rotation_l2_prediction.py",
+      "backend/services/hmm_risk/risk_l1_prediction.py",
       "backend/services/hmm_risk/risk_l2_prediction.py",
       "backend/services/hmm_risk/rotation_l1_prediction.py",
-      "backend/services/hmm_risk/risk_l1_prediction.py",
+      "backend/services/hmm_risk/rotation_l2_prediction.py",
+      "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
       "docs/architecture/hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md",
-      "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md"
+      "backend/services/hmm_risk/product_validation_store.py",
+      "backend/tests/hmm_risk/test_product_validation_store.py",
+      "scripts/hmm_risk/register_product_validation.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/hmm_risk.py",
@@ -210,11 +227,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
+    "fresh_process_evidence": [
+      "PYTHONPATH=task-worktree python fresh-process imports backend.routers.hmm_risk, backend.routers.health, product_validation_store and four HMM prediction readers; __file__ source containment PASS; database_write=false service_control=false",
+      "PYTHONPATH=task-worktree python fresh-process imports router health four readers store with source containment -> PASS"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

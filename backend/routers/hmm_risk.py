@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from datetime import date
-import os
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -40,9 +38,7 @@ router = APIRouter(prefix="/hmm-risk", tags=["hmm-risk"])
 def get_risk_l2_repository() -> RiskL2PredictionRepository:
     from backend.routers.health import _PROCESS_RUNTIME_IDENTITY
 
-    raw = os.environ.get("AISTOCK_HMM_RISK_L2_PRODUCT_VALIDATION_RECEIPT", "").strip()
     return RiskL2PredictionRepository(
-        surface_validation_receipt_path=Path(raw) if raw else None,
         deployment_commit=_PROCESS_RUNTIME_IDENTITY.get("merge_commit"),
     )
 
@@ -84,24 +80,15 @@ def _raise_risk_l2_api_error(exc: RiskL2PredictionError) -> None:
 
 
 def get_rotation_l1_repository() -> RotationL1PredictionRepository:
-    raw_path = os.environ.get("AISTOCK_HMM_ROTATION_L1_PRODUCT_VALIDATION_RECEIPT", "").strip()
-    return RotationL1PredictionRepository(
-        surface_validation_receipt_path=Path(raw_path) if raw_path else None,
-    )
+    return RotationL1PredictionRepository()
 
 
 def get_risk_l1_repository() -> RiskL1PredictionRepository:
-    raw_path = os.environ.get("AISTOCK_HMM_RISK_L1_PRODUCT_VALIDATION_RECEIPT", "").strip()
-    return RiskL1PredictionRepository(
-        surface_validation_receipt_path=Path(raw_path) if raw_path else None,
-    )
+    return RiskL1PredictionRepository()
 
 
 def get_rotation_l2_repository() -> RotationL2PredictionRepository:
-    raw_path = os.environ.get("AISTOCK_HMM_ROTATION_L2_PRODUCT_VALIDATION_RECEIPT", "").strip()
-    return RotationL2PredictionRepository(
-        surface_validation_receipt_path=Path(raw_path) if raw_path else None,
-    )
+    return RotationL2PredictionRepository()
 
 
 def _raise_api_error(exc: RotationL1PredictionError) -> None:
