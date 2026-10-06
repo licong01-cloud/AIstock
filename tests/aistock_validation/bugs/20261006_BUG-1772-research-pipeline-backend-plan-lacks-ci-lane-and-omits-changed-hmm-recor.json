@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Route existing research_pipeline_backend to the prebuilt Windows backend CI lane and prove changed recorder and realtime ingestion tests are covered; preserve uncovered-test blocking.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1772-research-pipeline-backend-plan-lacks-ci-lane-and-omits-changed-hmm-recor.json",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/catalog/test_plans.yaml",
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1772-research-pipeline-backend-plan-lacks-ci-lane-and-omits-changed-hmm-recor.json",
+      "tests/aistock_validation/catalog/test_plans.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/test_plans.yaml",
@@ -113,10 +119,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
