@@ -1,0 +1,483 @@
+{
+  "actual": "SOURCE final audit rejects134 taxonomy after26.79M rows; mapping would drift",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/sector_enrichment.py",
+    "backend/services/dataset_release/source_authority.py",
+    "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/services/dataset_release/monthly_preparation_source.py",
+    "backend/services/dataset_release/monthly_preparation_shared.py",
+    "backend/services/dataset_release/monthly_shared_components.py",
+    "backend/services/dataset_release/monthly_frozen_source_audit.py",
+    "backend/services/dataset_release/monthly_sector_mapping.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "backend/tests/dataset_release/test_monthly_preparation_source.py",
+    "backend/tests/dataset_release/test_monthly_shared_components.py",
+    "backend/services/dataset_release/monthly_worker_runtime.py",
+    "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20261006_BUG-1763-monthly-sw-l2-enrichment-reencodes-immutable-prefix-on-unpublished-catal.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1763",
+  "closed_at": "2026-10-06T13:27:32.265546Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-06T12:36:58.398113Z",
+  "description": "September operation attempt245 sealed 26.79M SOURCE rows but final quote-policy audit rejected raw134 SW L2 catalog versus immutable prefix131. Newly catalogued801217/801768/801786 are SW2021 is_pub=0 and have no member rows; sorting raw catalog would reencode inherited l2_code_id. Preserve raw metadata, bind pinned predecessor map through all monthly consumers, record unassigned/unpublished additions and reject required taxonomy migration. No historical price QA, DB writes, candidate activation or process controls.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261006-b11fea8de77a",
+      "timestamp": "2026-10-06T12:36:58.398095Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/5585"
+  ],
+  "expected": "Stable predecessor sector IDs, approved131 quote policy and explicit raw catalog lineage through SOURCE/BUILD",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_sector_mapping.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_worker_runtime.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1763-monthly-sw-l2-enrichment-reencodes-immutable-prefix-on-unpublished-catal.json"
+    ],
+    "added_files": [
+      "backend/services/dataset_release/monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+    ],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_sector_mapping.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_worker_runtime.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1763-monthly-sw-l2-enrichment-reencodes-immutable-prefix-on-unpublished-catal.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/sector_enrichment.py",
+        "backend/services/dataset_release/source_authority.py",
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/services/dataset_release/monthly_preparation_source.py",
+        "backend/services/dataset_release/monthly_preparation_shared.py",
+        "backend/services/dataset_release/monthly_shared_components.py",
+        "backend/services/dataset_release/monthly_frozen_source_audit.py",
+        "backend/services/dataset_release/monthly_sector_mapping.py",
+        "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/sector_enrichment.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/source_authority.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_postgres_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_preparation_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_preparation_shared.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_shared_components.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_frozen_source_audit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_sector_mapping.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/sector_enrichment.py",
+        "backend/services/dataset_release/source_authority.py",
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/services/dataset_release/monthly_preparation_source.py",
+        "backend/services/dataset_release/monthly_preparation_shared.py",
+        "backend/services/dataset_release/monthly_shared_components.py",
+        "backend/services/dataset_release/monthly_frozen_source_audit.py",
+        "backend/services/dataset_release/monthly_sector_mapping.py",
+        "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/sector_enrichment.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/sector_enrichment.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+    ]
+  },
+  "first_seen_at": "2026-10-06T12:36:58.398113Z",
+  "fix_branch": null,
+  "fix_commit": "55cf6ae200883c73732027073a393882010b9a89",
+  "fix_summary": {
+    "active_profile_write": false,
+    "canonical_catalog_count": 131,
+    "database_write": false,
+    "design_compliance": {
+      "business_semantics_unchanged": "131 shared IDs and official quote policy preserved; HMM/QE/model/contracts untouched.",
+      "no_extra_gates": "Reuse existing code-map and quote policy checks, no historical data re-audit or new approval gate.",
+      "no_partial_success": "SOURCE bug fixed; monthly candidate still pending BUILD and is not reported ready.",
+      "no_silent_errors": "Published/unknown/new member catalog entries and pin/hash drift fail explicitly; no default IDs or synthesized data."
+    },
+    "historical_business_audit_performed": false,
+    "mapping_policy": "immutable_predecessor_shared_ids_v1",
+    "metadata_member_row_count": 5914,
+    "raw_catalog_count": 134,
+    "review_rounds": [
+      "Round1: exact raw134 minus immutable131 code delta, unpublished and zero-member independent source evidence; retain131 stable IDs without changing quote policy.",
+      "Round2: SOURCE/preparation/audit/shared BUILD/readback identity closure; found and repaired SOURCE8 runtime preflight allowlist; source8 derives accepted current producer version without accepting arbitrary versions.",
+      "Round3: real private row sealer preserves134 raw records and canonical IDs, source receipt cross-map rejection, fresh-process real metadata readback, final163 targeted tests passed/1 platform symlink skipped, lint/L0/catalog passed."
+    ],
+    "source_code_map_file_sha256": "d854c78fa93a425f02949989cd4687d0dabc31a4a7dfe6ec9a0bed3d0987dbe1",
+    "unassigned_unpublished_codes": [
+      "801217.SI",
+      "801768.SI",
+      "801786.SI"
+    ]
+  },
+  "fixed_at": "2026-10-06T12:54:50Z",
+  "github_issue_number": 5585,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5585",
+  "last_seen_at": "2026-10-06T12:36:58.398113Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5591",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> fresh process mapping/pin/fail-closed verification passed; no service started or database written",
+      "python fresh-process read-only SW metadata verification -> raw134/canonical131/member5914, original code-map SHA d854c78fa93a425f02949989cd4687d0dabc31a4a7dfe6ec9a0bed3d0987dbe1, mapping_ids_unchanged=true, quote policy PASS, database_write=false, historical_business_audit=false"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1763/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1763",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eda50a3310a0bfa23b4f1d1a2ea7403e9877ce25966e51750f5f3bb1c51c634a",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "55cf6ae200883c73732027073a393882010b9a89",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-06T13:27:06.767559Z",
+      "mode": "read_only",
+      "observed_identity": "7f6371cba7a64b652ba745e477fb33d8bebf5134",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c1cafdd3085645f1f28b365b1daea5bf0df647945187cdce392be2f7d6f94ede",
+      "receipt_sha256": "0c62542158a4c99a6d4a0654df296de2d6c14c2dce7188c508a93c8690a0ead0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "174e45acb782ce5d4c80ead543799d3d3a02626b47745dd634bb40f0bd1173dc",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1763",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "92abf3cc51ab37fb",
+    "recorded_at": "2026-10-06T12:56:17.342798Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3f94308536c8d82205a004989c2555e24a490fea",
+    "source_merge_commit": "55cf6ae200883c73732027073a393882010b9a89",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5591",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_preparation_source.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_worker_runtime.py -q --basetemp=X:/AIstock_dataset_candidates/BUG-1763-test-final-20261006 -> passed",
+      "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed"
+    ],
+    "validation_evidence_digest": "d12de9fbbd501b5bb0241772a66b828837a9cac4945866453912c84b2ed63b19"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Monthly SW L2 enrichment reencodes immutable prefix on unpublished catalog additions",
+  "trigger_condition": {
+    "fingerprint": "b11fea8de77a814c1ad80884",
+    "source_event_id": "FE-20261006-b11fea8de77a"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_preparation_source.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_worker_runtime.py -q --basetemp=X:/AIstock_dataset_candidates/BUG-1763-test-final-20261006 -> passed",
+    "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --target worker-scheduler --expected-identity 7f6371cba7a64b652ba745e477fb33d8bebf5134 -> passed",
+    "post-restart-verify worker-scheduler source merge 55cf6ae200883c73732027073a393882010b9a89 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

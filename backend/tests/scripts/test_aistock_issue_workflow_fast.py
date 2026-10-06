@@ -15,6 +15,58 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("message,fallback", [("unexpected EOF", True), ("net/http: TLS handshake timeout", True),
+                                              ("HTTP 401: Bad credentials", False), ("PR not found", False)])
+def test_merge_graphql_transport_switches_once_to_strict_rest(monkeypatch, message, fallback):
+    calls, rest = [], []
+    def command(args, **kwargs):
+        calls.append(kwargs["timeout"])
+        return dict(ok=False, returncode=1, stdout="", stderr=message)
+    def read(url):
+        rest.append(url)
+        return dict(merged=False, state="OPEN", mergeable_state="clean", mergeable=True, url=url,
+                    head_sha="a" * 40, base_ref="main")
+    monkeypatch.setattr(workflow, "_run_command", command)
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", read)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: pytest.fail("failed GraphQL retried before REST"))
+    url = "https://github.com/licong01-cloud/AIstock/pull/1"
+    if fallback:
+        payload, evidence = workflow._merge_pr_view_with_transport_fallback(url)
+        assert payload["headRefOid"] == "a" * 40 and evidence["graphql_attempts"] == 1
+    else:
+        with pytest.raises(workflow.WorkflowError, match=message):
+            workflow._merge_pr_view_with_transport_fallback(url)
+    assert calls == [30] and rest == ([url] if fallback else [])
+
+
+def test_merge_check_transport_fallback_keeps_pinned_identity_and_rest_failure(monkeypatch):
+    calls, pinned = [], []
+    def command(args, **kwargs):
+        calls.append(kwargs["timeout"])
+        return dict(ok=False, returncode=1, stdout="", stderr="unexpected EOF")
+    def rest(url, *, expected_head, base_ref):
+        pinned.append((expected_head, base_ref))
+        raise workflow.WorkflowError("PR head changed before REST required-check fallback")
+    monkeypatch.setattr(workflow, "_run_command", command)
+    monkeypatch.setattr(workflow, "_rest_required_pr_check_result", rest)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: pytest.fail("failed GraphQL repeated"))
+    with pytest.raises(workflow.WorkflowError, match="PR head changed"):
+        workflow._merge_required_check_result_with_transport_fallback(
+            "https://github.com/licong01-cloud/AIstock/pull/1", payload={"headRefOid": "a" * 40, "baseRefName": "main"})
+    assert calls == [30] and pinned == [("a" * 40, "main")]
+
+
+@pytest.mark.parametrize("body,valid", [('{"state":"OPEN","mergeable":"MERGEABLE"}', True), ("invalid-json", False)])
+def test_merge_graphql_success_or_invalid_payload_never_uses_transport_fallback(monkeypatch, body, valid):
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: dict(ok=True, stdout=body, stderr=""))
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", lambda _: pytest.fail("unnecessary REST fallback"))
+    if valid:
+        assert workflow._merge_pr_view_with_transport_fallback("https://github.com/test/repo/pull/1")[1] is None
+    else:
+        with pytest.raises(workflow.WorkflowError, match="cannot parse"):
+            workflow._merge_pr_view_with_transport_fallback("https://github.com/test/repo/pull/1")
+
+
 @pytest.mark.parametrize("selection,plans", [("l0", ["l0"]), ("l0 validation_catalog_integrity", ["l0", "validation_catalog_integrity"]), ("l0 l0 -- tests", ["l0"]), ("l0,validation_catalog_integrity", []), ("l0; unknown", []), ("l0 -s validation_catalog_integrity", []), ("l0 -- -k smoke", ["l0"])])
 def test_validation_receipt_explicit_nox_sessions(monkeypatch, tmp_path, selection, plans):
     monkeypatch.setattr(workflow, "_assert_task_git_identity", lambda _: None)
@@ -586,6 +638,90 @@ def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test")
     )
 
 
+def _sector_entry_payload():
+    receipt = dict(program_id="advp_test", list_version_id="list-test", binding_version_id="binding-test",
+                   review_run_id="review-test", selection_run_id="selection-test", decision_date="2026-08-27",
+                   target_date="2026-08-28", candidate_scope="ORIGINAL_PUBLISHED_TOP20", candidate_count=0,
+                   original_list_item_count=0, candidate_roster_sha256=hashlib.sha256(b"[]").hexdigest(),
+                   source_review_policy_sha256=None, unmodeled_items=[], native_receipt_created=False,
+                   source_evidence="CURRENT_DB_ORIGINAL_PUBLISHED_LIST_NOT_ORIGINAL_DATA_CAPTURE",
+                   package_qualification_rechecked=False, database_written=False, outcomes_read=False, new_selection_runs=0)
+    payload = dict(schema_version="economic_sector_daily_service_v1", model_family="M1_SECTOR_PRICE_VALUE_V1",
+                   program_id="advp_test", requested_target_date="2026-08-28", requested_list_version_id="list-test",
+                   decision_date="2026-08-27", target_date="2026-08-28", status="NO_CANDIDATES", candidate_receipt=receipt,
+                   candidates=[], unmodeled_items=[], decision_use="NAVIGATION_ONLY", deployable=False,
+                   economic_effectiveness="NOT_CONFIRMED", fit_count=0, database_written=False, outcomes_read=False,
+                   package_qualification_rechecked=False, source_review_policy_sha256=None,
+                   **{key: "a" * 64 for key in ("model_sha256", "bundle_sha256", "config_sha256",
+                                               "model_parent_policy_identity", "model_value_policy_identity")})
+    return payload
+
+
+def _sector_entry_semantic(payload, query="target_trade_date=2026-08-28&list_version_id=list-test"):
+    payload = dict(payload)
+    payload["projection_sha256"] = workflow._runtime_identity_proof_digest(payload)
+    return _business_semantic("http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/sector-entry-price?" + query,
+                              dict(ok=True, **payload), "e" * 64)
+
+
+def test_sector_entry_semantic_proves_real_empty_roster_not_empty_response():
+    result = _sector_entry_semantic(_sector_entry_payload())
+    assert result["contract_id"] == "advisory_sector_entry_original_list"
+    assert result["verdict"] == "passed"
+    assert result["facts"]["candidate_count"] == 0
+    assert result["facts"]["status"] == "NO_CANDIDATES"
+    assert _sector_entry_semantic({})["verdict"] == "failed"
+
+
+@pytest.mark.parametrize("area,key,value", [
+    ("", "status", "NOT_CONFIGURED"), ("", "database_written", True), ("", "fit_count", False),
+    ("", "program_id", "foreign"), ("", "target_date", "2026-08-29"), ("", "model_sha256", "missing"),
+    ("candidate_receipt", "list_version_id", "foreign"), ("candidate_receipt", "candidate_count", 1),
+    ("candidate_receipt", "original_list_item_count", 1), ("candidate_receipt", "native_receipt_created", True),
+    ("candidate_receipt", "candidate_roster_sha256", "b" * 64), ("candidate_receipt", "new_selection_runs", False),
+    ("candidate_receipt", "source_evidence", "SYNTHETIC_TEST_ROSTER"),
+])
+def test_sector_entry_semantic_rejects_unbound_or_mutating_readback(area, key, value):
+    payload = _sector_entry_payload()
+    (payload[area] if area else payload)[key] = value
+    assert _sector_entry_semantic(payload)["verdict"] == "failed"
+
+
+@pytest.mark.parametrize("query", ["", "target_trade_date=2026-08-28", "target_trade_date=2026-08-28&list_version_id=",
+                                  "target_trade_date=2026-08-28&list_version_id=list-test&list_version_id=list-test"])
+def test_sector_entry_semantic_requires_explicit_unambiguous_subject(query):
+    assert _sector_entry_semantic(_sector_entry_payload(), query)["verdict"] == "failed"
+
+
+def test_offline_factor_comparison_keeps_online_and_unknown_sources_fail_closed():
+    files = ["backend/services/factor_research/comparison.py", "backend/tests/factor_research/test_comparison.py",
+             "docs/analysis/factor-comparison.md", "tests/aistock_validation/bugs/BUG-1755.json"]
+    offline = workflow._classify_runtime_impact(files)
+    assert (offline["runtime_impact"], offline["target_ids"]) == ("none", [])
+    for online in ("backend/routers/factor_metrics.py", "backend/services/factor_research/not_registered.py"):
+        mixed = workflow._classify_runtime_impact([*files, online])
+        assert (mixed["runtime_impact"], mixed["target_ids"]) == ("backend", ["backend-main"])
+
+
+def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tampered_hash():
+    payload = _sector_entry_payload()
+    payload.update(status="COMPUTED", candidates=[{"instrument": "000001.SZ"}])
+    payload["candidate_receipt"].update(candidate_count=1, original_list_item_count=1, candidate_roster_sha256="b" * 64)
+    assert _sector_entry_semantic(payload)["verdict"] == "passed"
+    payload.update(ok=True, projection_sha256="c" * 64)
+    url = "http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/sector-entry-price?target_trade_date=2026-08-28&list_version_id=list-test"
+    assert _business_semantic(url, payload, "e" * 64)["verdict"] == "failed"
+
+
+def test_factor_comparison_provisional_backend_contract_reconciles_to_offline():
+    result = workflow.build_runtime_contract(record={"runtime_contract": {
+        "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "backend",
+        "target_ids": ["backend-main"], "provisional": True, "inference_basis": "planned_scope",
+    }}, changed_files=["backend/services/factor_research/comparison.py"])
+    assert result["runtime_impact"] == "none" and result["target_ids"] == []
+    assert result["pre_pr_ready"] is True and result["backend_restart_required"] is False
+
+
 def _entry_price_payload(configured=False):
     return {
         "ok": True,
@@ -841,6 +977,10 @@ def test_required_check_unknown_bucket_fails_closed() -> None:
             ["worker-scheduler"],
         ),
         ("backend/services/hmm_risk/rotation_l1_gbdt.py", "none", []),
+        ("backend/services/hmm_risk/risk_l2_value_replay.py", "none", []),
+        ("backend/services/hmm_risk/risk_l2_prediction.py", "backend", ["backend-main"]),
+        ("backend/routers/hmm_risk.py", "backend", ["backend-main"]),
+        ("backend/services/hmm_risk/unknown_consumer.py", "backend", ["backend-main"]),
         ("scripts/aistock_runner_health.py", "none", []),
     ],
 )
@@ -853,6 +993,22 @@ def test_repository_runtime_catalog_preserves_representative_roles(
 
     assert payload["runtime_impact"] == expected_impact
     assert payload["target_ids"] == expected_targets
+
+
+def test_hmm_offline_value_family_does_not_downgrade_mixed_online_scope() -> None:
+    files = [
+        "backend/services/hmm_risk/risk_l2_value_replay.py",
+        "scripts/hmm_risk/replay_risk_l2_value.py",
+        "backend/tests/hmm_risk/test_risk_l2_value_replay.py",
+    ]
+    offline = workflow._classify_runtime_impact(files)
+    assert offline["runtime_impact"] == "none"
+    assert offline["runtime_files"] == offline["target_ids"] == []
+    assert offline["catalog_error"] is None
+    mixed = workflow._classify_runtime_impact([*files, "backend/routers/hmm_risk.py"])
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["runtime_files"] == ["backend/routers/hmm_risk.py"]
+    assert mixed["target_ids"] == ["backend-main"]
 
 
 @pytest.mark.parametrize("monthly", [True, False, "construction", "overlap_source"])
@@ -1039,6 +1195,7 @@ def test_runtime_contract_blocks_on_catalog_validation_error(invalid_runtime_cat
 @pytest.mark.parametrize("path,registered", [
     ("/api/v1/audit-unregistered-contract", False),
     ("/api/v1/factor-metrics/results", True),
+    ("/api/v1/advisory/programs/advp_test/sector-entry-price?target_trade_date=2026-08-28&list_version_id=list-test", True),
 ])
 def test_runtime_preflight_checks_semantic_registration_without_http(path, registered) -> None:
     root = workflow.REPO_ROOT

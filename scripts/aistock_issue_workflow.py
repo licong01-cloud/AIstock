@@ -3945,6 +3945,94 @@ def _validate_advisory_entry_price_status(
     )
 
 
+def _validate_advisory_sector_entry_original_list(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Validate a bound M1 readback, including proven zero candidates, not profitability."""
+    def failed(reason):
+        return "failed", reason, {}
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return failed("sector entry must report ok=true without errors")
+    if (payload.get("schema_version") != "economic_sector_daily_service_v1"
+            or payload.get("model_family") != "M1_SECTOR_PRICE_VALUE_V1"
+            or payload.get("status") not in {"NO_CANDIDATES", "COMPUTED"}):
+        return failed("sector entry needs a configured M1 computation, not an empty/unconfigured response")
+    parsed = urllib.parse.urlsplit(url)
+    match = re.fullmatch(r"/api/v1/advisory/programs/([^/]+)/sector-entry-price", parsed.path)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    if match is None or set(query) != {"target_trade_date", "list_version_id"} or any(
+        len(values) != 1 or not values[0].strip() for values in query.values()
+    ):
+        return failed("sector entry probe requires one explicit target_trade_date and list_version_id")
+    program = urllib.parse.unquote(match.group(1))
+    day, list_id = query["target_trade_date"][0], query["list_version_id"][0]
+    receipt = payload.get("candidate_receipt")
+    if not isinstance(receipt, dict):
+        return failed("sector entry is missing the original published candidate receipt")
+    if (payload.get("program_id") != program or receipt.get("program_id") != program
+            or payload.get("requested_target_date") != day or payload.get("target_date") != day
+            or receipt.get("target_date") != day or payload.get("requested_list_version_id") != list_id
+            or receipt.get("list_version_id") != list_id):
+        return failed("sector entry program/date/list identity does not match the probe")
+    if receipt.get("source_evidence") != "CURRENT_DB_ORIGINAL_PUBLISHED_LIST_NOT_ORIGINAL_DATA_CAPTURE":
+        return failed("sector entry must use the original published-list readback, not synthetic/reselected evidence")
+    try:
+        decision = datetime.strptime(payload.get("decision_date"), "%Y-%m-%d").date()
+        target = datetime.strptime(day, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return failed("sector entry dates must be ISO dates")
+    if (decision.isoformat() != payload["decision_date"] or target.isoformat() != day
+            or decision >= target or receipt.get("decision_date") != decision.isoformat()):
+        return failed("sector entry decision must precede its bound target date")
+    for key in ("database_written", "outcomes_read", "package_qualification_rechecked"):
+        if payload.get(key) is not False or receipt.get(key) is not False:
+            return failed(f"sector entry must prove {key}=false")
+    if (type(payload.get("fit_count")) is not int or payload["fit_count"] != 0
+            or type(receipt.get("new_selection_runs")) is not int or receipt["new_selection_runs"] != 0
+            or receipt.get("native_receipt_created") is not False or payload.get("deployable") is not False
+            or payload.get("decision_use") != "NAVIGATION_ONLY"
+            or payload.get("economic_effectiveness") != "NOT_CONFIRMED"):
+        return failed("sector entry must remain zero-fit, zero-selection, non-activating navigation")
+    for key in ("binding_version_id", "review_run_id", "selection_run_id"):
+        if not isinstance(receipt.get(key), str) or not receipt[key].strip():
+            return failed(f"sector entry original receipt is missing {key}")
+    for key in ("model_sha256", "bundle_sha256", "config_sha256", "projection_sha256",
+                "model_parent_policy_identity", "model_value_policy_identity"):
+        if not isinstance(payload.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", payload[key]) is None:
+            return failed(f"sector entry is missing a valid {key}")
+    policy = receipt.get("source_review_policy_sha256")
+    if payload.get("source_review_policy_sha256") != policy or (
+        policy is not None and (not isinstance(policy, str) or re.fullmatch(r"[0-9a-f]{64}", policy) is None)
+    ):
+        return failed("sector entry original review policy identity differs")
+    candidates, unmodeled = payload.get("candidates"), payload.get("unmodeled_items")
+    count, original_count = receipt.get("candidate_count"), receipt.get("original_list_item_count")
+    if (not isinstance(candidates, list) or not isinstance(unmodeled, list)
+            or type(count) is not int or not 0 <= count <= 20 or count != len(candidates)
+            or type(original_count) is not int or original_count != count + len(unmodeled)
+            or receipt.get("unmodeled_items") != unmodeled or receipt.get("candidate_scope") != "ORIGINAL_PUBLISHED_TOP20"
+            or (payload["status"] == "NO_CANDIDATES") != (count == 0)):
+        return failed("sector entry status/count/original-list partition is inconsistent")
+    roster_hash = receipt.get("candidate_roster_sha256")
+    if not isinstance(roster_hash, str) or re.fullmatch(r"[0-9a-f]{64}", roster_hash) is None:
+        return failed("sector entry original candidate roster hash is missing")
+    if count == 0 and roster_hash != hashlib.sha256(b"[]").hexdigest():
+        return failed("sector entry empty roster must have the canonical empty-list hash")
+    symbols = [row.get("instrument") if isinstance(row, dict) else None for row in candidates]
+    if any(not isinstance(symbol, str) or not symbol.strip() for symbol in symbols) or len(set(symbols)) != count:
+        return failed("sector entry candidates need unique non-empty instruments")
+    try:
+        projection = {key: value for key, value in payload.items() if key not in {"ok", "projection_sha256"}}
+        encoded = json.dumps(projection, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        projection_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    except (ValueError, TypeError):
+        return failed("sector entry projection is not canonical JSON")
+    if projection_hash != payload["projection_sha256"]:
+        return failed("sector entry projection hash does not match its readback")
+    return "passed", None, dict(program_id=program, target_date=day, list_version_id=list_id,
+                                status=payload["status"], candidate_count=count, original_list_item_count=original_count,
+                                model_sha256=payload["model_sha256"], projection_sha256=projection_hash,
+                                database_written=False, fit_count=0)
+
+
 def _validate_hmm_rotation_l2_overview(
     payload: Any,
     *,
@@ -4531,6 +4619,8 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_localsim_cutover_readiness,
     ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/sector-entry-price$"),
+     "advisory_sector_entry_original_list", _validate_advisory_sector_entry_original_list),
     (
         re.compile(r"^/api/v1/advisory/programs/[^/]+/entry-price/status$"),
         "advisory_entry_price_status",
@@ -4675,6 +4765,7 @@ def _evaluate_business_smoke_semantics(
         "factor_metrics_results",
         "hmm_rotation_l2_overview",
         "advisory_entry_price_status",
+        "advisory_sector_entry_original_list",
         "local_data_freshness",
         "monthly_release_ready",
     }:
@@ -17819,7 +17910,9 @@ def _run_merge_read_with_retry(
     event: str,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=60, attempts=2)
+    # Both callers have a head-bound REST recovery path. Repeating GraphQL
+    # delays that recovery; mutations and generic REST/Git retries stay unchanged.
+    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=30, attempts=1)
     if bug_id:
         _append_event(
             bug_id,

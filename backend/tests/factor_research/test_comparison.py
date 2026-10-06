@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from backend.services.factor_research.comparison import (
+    _daily_rank_ic,
     _last_available_price_position,
     _mature_dates,
     _partial_rank_daily,
@@ -16,6 +17,21 @@ from backend.services.factor_research.comparison import (
 from backend.services.factor_research.models import ResearchError
 
 SYMBOLS = [f"{index:06d}.SZ" for index in range(1, 11)]
+
+
+@pytest.mark.parametrize("missing", [np.nan, np.inf, -np.inf])
+def test_daily_ranks_use_common_finite_eligible_pairs(missing):
+    day = pd.Timestamp("2026-01-05")
+    left = pd.DataFrame([[1, 2, 3, missing] * 3 + [100]], index=[day])
+    right = pd.DataFrame([[1, 4, 2, 3] * 3 + [-100]], index=[day])
+    eligible = pd.DataFrame(True, index=left.index, columns=left.columns)
+    eligible.iloc[0, -1] = False
+    for x, y in ((left, right), (right, left)):
+        actual = _daily_rank_ic(x, y, eligible)
+        assert len(actual) == 1
+        assert actual[0] == {"date": "2026-01-05", "value": pytest.approx(0.5), "n": 9}
+    assert _daily_rank_ic(pd.DataFrame(1.0, index=left.index, columns=left.columns), right, eligible) == []
+    assert _daily_rank_ic(left.iloc[:, :4], right.iloc[:, :4], eligible.iloc[:, :4]) == []
 
 
 def comparison_spec():

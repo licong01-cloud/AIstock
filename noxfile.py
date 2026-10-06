@@ -632,7 +632,7 @@ def _direct_neighbor_pr_targets(
     source_test_roots: tuple[tuple[str, str], ...],
     test_globs: tuple[str, ...],
     fallback_tests: tuple[str, ...],
-    overrides: dict[str, str] | None = None,
+    overrides: dict[str, str | tuple[str, ...]] | None = None,
 ) -> list[str] | None:
     """Return a bounded CI slice, or None to preserve the existing full plan.
 
@@ -661,10 +661,11 @@ def _direct_neighbor_pr_targets(
         override = override_map.get(path)
         if override is not None:
             relevant = True
-            if not (ROOT / override).is_file():
+            consumers = (override,) if isinstance(override, str) else override
+            if not consumers or not (ROOT / path).is_file() or any(not (ROOT / test).is_file() for test in consumers):
                 full_plan_required = True
             else:
-                targets.append(override)
+                targets.extend(consumers)
             continue
         for source_root, test_root in source_test_roots:
             if not path.startswith(source_root) or not path.endswith(".py"):
@@ -751,6 +752,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_shared_consumer_probe.py",
         "backend/tests/dataset_release/test_monthly_profile_candidate.py",
         "backend/tests/dataset_release/test_monthly_shared_components.py",
+        "backend/tests/dataset_release/test_monthly_sector_mapping.py",
         "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
         "backend/tests/dataset_release/test_monthly_source_audit.py",
         "backend/tests/dataset_release/test_monthly_postgres_source.py",
@@ -972,6 +974,14 @@ def advisory_modeling_backend(session: nox.Session) -> None:
         overrides={
             "backend/services/advisory_modeling/bundle_store.py": "backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py",
             "backend/services/advisory_modeling/feature_snapshot.py": "backend/tests/advisory_modeling/test_contracts_and_features.py",
+            # The 5td policy has three direct consumer contracts; no same-stem
+            # test exists. Inference is exercised by the model contract suite.
+            "backend/services/advisory_model_first/generic_price_5td_contracts_v1.py": (
+                "backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py",
+                "backend/tests/advisory_model_first/test_generic_price_5td_models_v1.py",
+                "backend/tests/advisory_model_first/test_generic_price_5td_pipeline_v1.py",
+            ),
+            "backend/services/advisory_model_first/generic_price_5td_inference_v1.py": "backend/tests/advisory_model_first/test_generic_price_5td_models_v1.py",
         },
     )
     if pr_targets:
