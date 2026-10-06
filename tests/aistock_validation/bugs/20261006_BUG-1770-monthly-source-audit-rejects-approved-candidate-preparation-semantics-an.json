@@ -36,6 +36,13 @@
   ],
   "expected": "Validate actual prepared facts and preserve exact evidence for genuine data gaps, no speculative exemptions.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1770-monthly-source-audit-rejects-approved-candidate-preparation-semantics-an.json"
+    ],
     "added_files": [
       "backend/tests/dataset_release/test_monthly_frozen_source_audit.py"
     ],
@@ -43,9 +50,10 @@
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/source_authority.py",
-      "backend/services/dataset_release/artifact_ready_source.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1770-monthly-source-audit-rejects-approved-candidate-preparation-semantics-an.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_frozen_source_audit.py",
@@ -168,12 +176,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["rtk pytest targeted month source matrix -> 92 passed; additional provider-proof tests -> 3 passed; relocated BUG-1770 cases -> 11 passed; month-only prepared limit audit never reads minute/history or synthesizes PASS"],
+    "fresh_process_evidence": [
+      "rtk pytest targeted month source matrix -> 92 passed; additional provider-proof tests -> 3 passed; relocated BUG-1770 cases -> 11 passed; month-only prepared limit audit never reads minute/history or synthesizes PASS"
+    ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
