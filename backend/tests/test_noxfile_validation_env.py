@@ -217,6 +217,52 @@ def test_direct_neighbor_pr_targets_preserves_full_plan_without_ci_summary(
     ) is None
 
 
+@pytest.mark.parametrize("missing", [False, True])
+def test_direct_neighbor_multi_consumer_override_requires_all_targets(monkeypatch, tmp_path, missing):
+    source = "backend/services/example/contract.py"
+    consumers = ("backend/tests/example/test_reader.py", "backend/tests/example/test_writer.py")
+    changed = "backend/tests/example/test_changed.py"
+    _configure_direct_neighbor_targets(
+        monkeypatch, tmp_path, changed_files=[source, changed],
+        existing_paths=[source, changed, *(consumers[:1] if missing else consumers)],
+    )
+    targets = noxfile._direct_neighbor_pr_targets(
+        fallback_tests=("backend/tests/example",), smoke_tests=(),
+        source_test_roots=(("backend/services/example/", "backend/tests/example/"),),
+        test_globs=("backend/tests/example/test_*.py",), overrides={source: consumers},
+    )
+    assert targets == (["backend/tests/example", changed] if missing else [*consumers, changed])
+
+
+@pytest.mark.parametrize("case", ["contracts", "inference", "mixed_unknown", "shared", "nightly"])
+def test_advisory_5td_explicit_consumer_mapping_preserves_safety(monkeypatch, tmp_path, case):
+    src = "backend/services/advisory_model_first/"
+    tests = "backend/tests/advisory_model_first/"
+    consumers = [tests + f"test_generic_price_5td_{name}_v1.py" for name in ("labels", "models", "pipeline")]
+    contract, inference, unknown, shared = [src + name for name in (
+        "generic_price_5td_contracts_v1.py", "generic_price_5td_inference_v1.py",
+        "unmapped.py", "contracts.py",
+    )]
+    changed = {"contracts": [contract], "inference": [inference],
+               "mixed_unknown": [contract, unknown, consumers[0]], "shared": [contract, shared]}
+    if case == "nightly":
+        monkeypatch.delenv("AISTOCK_CI_CLASSIFIER_SUMMARY", raising=False)
+    else:
+        _configure_direct_neighbor_targets(monkeypatch, tmp_path, changed_files=changed[case],
+                                           existing_paths=[contract, inference, unknown, shared, *consumers])
+    calls = []
+    monkeypatch.setattr(noxfile, "_run_pytest", lambda _session, *args: calls.append(args))
+    noxfile.advisory_modeling_backend(object())
+    targets = calls[0][:-3]
+    full = ("backend/tests/advisory_modeling", "backend/tests/advisory_model_first")
+    if case in {"mixed_unknown", "shared", "nightly"}:
+        assert targets == ((*full, consumers[0]) if case == "mixed_unknown" else full)
+    else:
+        assert not set(full).intersection(targets)
+        assert set(consumers if case == "contracts" else [consumers[1]]).issubset(targets)
+        assert len(targets) <= 6
+
+
 @pytest.mark.parametrize(
     "session_name",
     [
