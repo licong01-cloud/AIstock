@@ -241,7 +241,7 @@
   },
   "first_seen_at": "2026-10-06T12:36:58.398113Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "55cf6ae200883c73732027073a393882010b9a89",
   "fix_summary": {
     "active_profile_write": false,
     "canonical_catalog_count": 131,
@@ -268,7 +268,7 @@
       "801786.SI"
     ]
   },
-  "fixed_at": null,
+  "fixed_at": "2026-10-06T12:54:50Z",
   "github_issue_number": 5585,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5585",
   "last_seen_at": "2026-10-06T12:36:58.398113Z",
@@ -276,6 +276,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5591",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -300,6 +301,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -311,7 +313,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1763",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "92abf3cc51ab37fb",
+    "recorded_at": "2026-10-06T12:56:17.342798Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3f94308536c8d82205a004989c2555e24a490fea",
+    "source_merge_commit": "55cf6ae200883c73732027073a393882010b9a89",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5591",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_preparation_source.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_worker_runtime.py -q --basetemp=X:/AIstock_dataset_candidates/BUG-1763-test-final-20261006 -> passed",
+      "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed"
+    ],
+    "validation_evidence_digest": "d12de9fbbd501b5bb0241772a66b828837a9cac4945866453912c84b2ed63b19"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -320,6 +344,10 @@
     "fingerprint": "b11fea8de77a814c1ad80884",
     "source_event_id": "FE-20261006-b11fea8de77a"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_preparation_source.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_worker_runtime.py -q --basetemp=X:/AIstock_dataset_candidates/BUG-1763-test-final-20261006 -> passed",
+    "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
