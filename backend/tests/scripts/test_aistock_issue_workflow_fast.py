@@ -15,18 +15,59 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
-@pytest.mark.parametrize(
-    "selection,plans",
-    [
-        ("l0", ["l0"]),
-        ("l0 validation_catalog_integrity", ["l0", "validation_catalog_integrity"]),
-        ("l0 l0 -- tests", ["l0"]),
-        ("l0,validation_catalog_integrity", []),
-        ("l0; unknown", []),
-        ("l0 -s validation_catalog_integrity", []),
-        ("l0 -- -k smoke", ["l0"]),
-    ],
-)
+@pytest.mark.parametrize("message,fallback", [("unexpected EOF", True), ("net/http: TLS handshake timeout", True),
+                                              ("HTTP 401: Bad credentials", False), ("PR not found", False)])
+def test_merge_graphql_transport_switches_once_to_strict_rest(monkeypatch, message, fallback):
+    calls, rest = [], []
+    def command(args, **kwargs):
+        calls.append(kwargs["timeout"])
+        return dict(ok=False, returncode=1, stdout="", stderr=message)
+    def read(url):
+        rest.append(url)
+        return dict(merged=False, state="OPEN", mergeable_state="clean", mergeable=True, url=url,
+                    head_sha="a" * 40, base_ref="main")
+    monkeypatch.setattr(workflow, "_run_command", command)
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", read)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: pytest.fail("failed GraphQL retried before REST"))
+    url = "https://github.com/licong01-cloud/AIstock/pull/1"
+    if fallback:
+        payload, evidence = workflow._merge_pr_view_with_transport_fallback(url)
+        assert payload["headRefOid"] == "a" * 40 and evidence["graphql_attempts"] == 1
+    else:
+        with pytest.raises(workflow.WorkflowError, match=message):
+            workflow._merge_pr_view_with_transport_fallback(url)
+    assert calls == [30] and rest == ([url] if fallback else [])
+
+
+def test_merge_check_transport_fallback_keeps_pinned_identity_and_rest_failure(monkeypatch):
+    calls, pinned = [], []
+    def command(args, **kwargs):
+        calls.append(kwargs["timeout"])
+        return dict(ok=False, returncode=1, stdout="", stderr="unexpected EOF")
+    def rest(url, *, expected_head, base_ref):
+        pinned.append((expected_head, base_ref))
+        raise workflow.WorkflowError("PR head changed before REST required-check fallback")
+    monkeypatch.setattr(workflow, "_run_command", command)
+    monkeypatch.setattr(workflow, "_rest_required_pr_check_result", rest)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: pytest.fail("failed GraphQL repeated"))
+    with pytest.raises(workflow.WorkflowError, match="PR head changed"):
+        workflow._merge_required_check_result_with_transport_fallback(
+            "https://github.com/licong01-cloud/AIstock/pull/1", payload={"headRefOid": "a" * 40, "baseRefName": "main"})
+    assert calls == [30] and pinned == [("a" * 40, "main")]
+
+
+@pytest.mark.parametrize("body,valid", [('{"state":"OPEN","mergeable":"MERGEABLE"}', True), ("invalid-json", False)])
+def test_merge_graphql_success_or_invalid_payload_never_uses_transport_fallback(monkeypatch, body, valid):
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: dict(ok=True, stdout=body, stderr=""))
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", lambda _: pytest.fail("unnecessary REST fallback"))
+    if valid:
+        assert workflow._merge_pr_view_with_transport_fallback("https://github.com/test/repo/pull/1")[1] is None
+    else:
+        with pytest.raises(workflow.WorkflowError, match="cannot parse"):
+            workflow._merge_pr_view_with_transport_fallback("https://github.com/test/repo/pull/1")
+
+
+@pytest.mark.parametrize("selection,plans", [("l0", ["l0"]), ("l0 validation_catalog_integrity", ["l0", "validation_catalog_integrity"]), ("l0 l0 -- tests", ["l0"]), ("l0,validation_catalog_integrity", []), ("l0; unknown", []), ("l0 -s validation_catalog_integrity", []), ("l0 -- -k smoke", ["l0"])])
 def test_validation_receipt_explicit_nox_sessions(monkeypatch, tmp_path, selection, plans):
     monkeypatch.setattr(workflow, "_assert_task_git_identity", lambda _: None)
     monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "a" * 40)
@@ -58,35 +99,18 @@ def test_required_check_schedule_preserves_budget(attempts, delay):
 def test_adaptive_required_checks_stop_early_or_fail_closed(monkeypatch, outcome, expected_calls):
     calls, waits = [], []
     payload = {"headRefOid": "pinned-task-head"}
-
     def read(url, **kwargs):
         assert kwargs["payload"] is payload and url == "https://example.invalid/pr/1"
         calls.append(url)
         state = "pending" if outcome == "pending" or (outcome == "passed" and len(calls) == 1) else outcome
         return {"state": state}, None
-
     monkeypatch.setattr(workflow, "_merge_required_check_result_with_transport_fallback", read)
-    monkeypatch.setattr(
-        workflow,
-        "_required_pr_check_summary",
-        lambda result: {
-            key: (["CI verdict"] if key == result["state"] else [])
-            for key in ("failed", "pending", "passed", "non_blocking")
-        },
-    )
+    monkeypatch.setattr(workflow, "_required_pr_check_summary", lambda result: {key: (["CI verdict"] if key == result["state"] else []) for key in ("failed", "pending", "passed", "non_blocking")})
     monkeypatch.setattr(workflow.time, "sleep", waits.append)
-    _, fallback, summary, history = workflow._await_required_pr_checks(
-        "https://example.invalid/pr/1", payload=payload, attempts=16, delay_seconds=30, adaptive=True
-    )
+    _, fallback, summary, history = workflow._await_required_pr_checks("https://example.invalid/pr/1", payload=payload, attempts=16, delay_seconds=30, adaptive=True)
     assert fallback is None and len(calls) == len(history) == expected_calls
     assert summary[outcome] == ["CI verdict"]
-    assert waits == (
-        []
-        if outcome == "failed"
-        else [5]
-        if outcome == "passed"
-        else list(workflow._required_check_poll_schedule(16, 30, adaptive=True))
-    )
+    assert waits == ([] if outcome == "failed" else [5] if outcome == "passed" else list(workflow._required_check_poll_schedule(16, 30, adaptive=True)))
 
 
 @pytest.fixture
@@ -95,37 +119,16 @@ def cli_task_worktree(tmp_path, monkeypatch):
     base.mkdir()
 
     def git(root, *args):
-        return subprocess.check_output(
-            ["git", "-C", str(root), *args], text=True, stderr=subprocess.STDOUT, timeout=15
-        ).strip()
+        return subprocess.check_output(["git", "-C", str(root), *args], text=True, stderr=subprocess.STDOUT, timeout=15).strip()
 
     git(base, "init", "-q")
     # Git identity is supplied per command; the shared baseline can be empty.
-    git(
-        base,
-        "-c",
-        "user.email=workflow-test@example.invalid",
-        "-c",
-        "user.name=workflow-test",
-        "commit",
-        "--allow-empty",
-        "-qm",
-        "baseline",
-    )
+    git(base, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "--allow-empty", "-qm", "baseline")
     git(base, "update-ref", "refs/remotes/origin/main", "HEAD")
     git(base, "worktree", "add", "-qb", "bug/task-context", str(task))
     (task / "task.txt").write_text("task", encoding="utf-8")
     git(task, "add", ".")
-    git(
-        task,
-        "-c",
-        "user.email=workflow-test@example.invalid",
-        "-c",
-        "user.name=workflow-test",
-        "commit",
-        "-qm",
-        "task change",
-    )
+    git(task, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "-qm", "task change")
     monkeypatch.setattr(workflow, "REPO_ROOT", base)
     monkeypatch.setattr(workflow, "BUGS_ROOT", base / "tests/aistock_validation/bugs")
     monkeypatch.setattr(workflow, "SCRIPT_ROOT", base, raising=False)
@@ -162,36 +165,22 @@ def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktre
         assert workflow._load_state("BUG-999")["worktree"] == "real-task"
         assert workflow.find_bug_record("BUG-999")[1] == bug
         assert workflow._finish_changed_files("origin/main", "HEAD") == ["task.txt", "tests/", "tmp/"]
-        receipts, errors = workflow._build_validation_receipts(
-            ["python -m nox -s l0 -> passed"], root=workflow.REPO_ROOT
-        )
+        receipts, errors = workflow._build_validation_receipts(["python -m nox -s l0 -> passed"], root=workflow.REPO_ROOT)
         assert not errors and receipts[0]["commit"] == git(task, "rev-parse", "HEAD")
         assert receipts[0]["commit"] != git(base, "rev-parse", "HEAD")
         finish = {"validation_evidence": ["passed"], "validation_receipts": receipts, "pr_body_path": "tmp/body.md"}
         monkeypatch.setattr(workflow, "_pr_worktree_guard", lambda: {"blocking": []})
         monkeypatch.setattr(workflow, "_pre_pr_gate", lambda **kwargs: {"workflow_gate": "passed", "blocking": []})
-        monkeypatch.setattr(
-            workflow,
-            "_create_pr_with_transport_fallback",
-            lambda **kwargs: calls.append(kwargs) or {"ok": True, "stdout": "https://github.com/test/repo/pull/1"},
-        )
+        monkeypatch.setattr(workflow, "_create_pr_with_transport_fallback", lambda **kwargs: calls.append(kwargs) or {"ok": True, "stdout": "https://github.com/test/repo/pull/1"})
         monkeypatch.setattr(workflow, "_append_event", lambda *args, **kwargs: None)
         monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: None)
-        workflow._maybe_create_pr(
-            bug_id="BUG-999", finish=finish, push=False, create_pr=True, watch_ci=False, pr_title=None
-        )
+        workflow._maybe_create_pr(bug_id="BUG-999", finish=finish, push=False, create_pr=True, watch_ci=False, pr_title=None)
         assert calls[0]["root"] == task and calls[0]["branch"] == "bug/task-context"
         assert calls[0]["expected_head"] == receipts[0]["commit"]
-        state.write_text(
-            json.dumps({"planned_worktree": str(task), "planned_branch": "bug/task-context"}), encoding="utf-8"
-        )
+        state.write_text(json.dumps({"planned_worktree": str(task), "planned_branch": "bug/task-context"}), encoding="utf-8")
         plan = workflow._maybe_create_worktree(
-            record={"bug_id": "BUG-999", "title": "task"},
-            bug_id="BUG-999",
-            source_bug_json=bug,
-            create=create,
-            dry_run=False,
-            task_slug=None,
+            record={"bug_id": "BUG-999", "title": "task"}, bug_id="BUG-999",
+            source_bug_json=bug, create=create, dry_run=False, task_slug=None,
         )
         assert plan["reused"] is True and not plan.get("created")
         assert plan["branch"] == "bug/task-context"
@@ -205,21 +194,7 @@ def test_canonical_cli_uses_task_for_diff_receipt_branch_and_pr(cli_task_worktre
     assert workflow.flow.REPO_ROOT == original_flow_root
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [
-        "unknown",
-        "foreign",
-        "git_override",
-        "head_drift",
-        "branch_drift",
-        "receipt_mismatch",
-        "digest_mismatch",
-        "head_argument",
-        "registered_branch_drift",
-        "workflow_error",
-    ],
-)
+@pytest.mark.parametrize("failure", ["unknown", "foreign", "git_override", "head_drift", "branch_drift", "receipt_mismatch", "digest_mismatch", "head_argument", "registered_branch_drift", "workflow_error"])
 def test_canonical_cli_task_context_fails_closed(cli_task_worktree, monkeypatch, capsys, failure):
     base, task, git = cli_task_worktree
     original_root = workflow.REPO_ROOT
@@ -234,45 +209,21 @@ def test_canonical_cli_task_context_fails_closed(cli_task_worktree, monkeypatch,
             state.parent.mkdir(parents=True)
             state.write_text(json.dumps({"worktree": str(task), "branch": "wrong/branch"}), encoding="utf-8")
             workflow._maybe_create_worktree(
-                record={"bug_id": "BUG-999"},
-                bug_id="BUG-999",
-                source_bug_json=task / "BUG-999.json",
-                create=False,
-                dry_run=False,
-                task_slug=None,
+                record={"bug_id": "BUG-999"}, bug_id="BUG-999", source_bug_json=task / "BUG-999.json",
+                create=False, dry_run=False, task_slug=None,
             )
             pytest.fail("registered branch drift must fail closed")
         if failure == "head_drift":
-            git(
-                task,
-                "-c",
-                "user.email=workflow-test@example.invalid",
-                "-c",
-                "user.name=workflow-test",
-                "commit",
-                "--allow-empty",
-                "-qm",
-                "concurrent head change",
-            )
+            git(task, "-c", "user.email=workflow-test@example.invalid", "-c", "user.name=workflow-test", "commit", "--allow-empty", "-qm", "concurrent head change")
         if failure == "branch_drift":
             git(task, "branch", "-m", "renamed-task")
         root = workflow.REPO_ROOT
         if failure == "head_argument":
-            workflow.build_finish_plan(
-                bug_id="BUG-999",
-                issue_json=None,
-                changed_files=None,
-                base="origin/main",
-                head=git(base, "rev-parse", "HEAD"),
-                validation_evidence=[],
-                plan_only=True,
-                allow_missing_evidence=False,
-            )
+            workflow.build_finish_plan(bug_id="BUG-999", issue_json=None, changed_files=None,
+                                       base="origin/main", head=git(base, "rev-parse", "HEAD"),
+                                       validation_evidence=[], plan_only=True, allow_missing_evidence=False)
         if failure in {"receipt_mismatch", "digest_mismatch"}:
-            finish = {
-                "validation_evidence": ["passed"],
-                "validation_receipts": [{"commit": git(base, "rev-parse", "HEAD")}],
-            }
+            finish = {"validation_evidence": ["passed"], "validation_receipts": [{"commit": git(base, "rev-parse", "HEAD")}]}
             if failure == "digest_mismatch":
                 finish["validation_receipts"][0]["commit"] = git(task, "rev-parse", "HEAD")
             workflow._check_pr_receipt_identity(finish, root=root)
@@ -350,19 +301,14 @@ def test_process_probe_fails_closed_without_prebuilt_psutil(monkeypatch):
 
 def _monthly_ready_payload() -> dict[str, Any]:
     from backend.services.dataset_release.monthly_unified import STAGES
-
     return {
         "schema_version": "aistock_monthly_release_status_v1",
         "data": {
             "schema_version": "aistock_monthly_release_state_v1",
             "operation_id": "dmr_" + "a" * 32,
-            "status": "READY_TO_ACTIVATE",
-            "attempt": 1,
-            "plan_sha256": "b" * 64,
-            "ready_receipt_sha256": "c" * 64,
-            "cancel_requested": False,
-            "last_error": None,
-            "current_stage": None,
+            "status": "READY_TO_ACTIVATE", "attempt": 1,
+            "plan_sha256": "b" * 64, "ready_receipt_sha256": "c" * 64,
+            "cancel_requested": False, "last_error": None, "current_stage": None,
             "checkpoints": dict.fromkeys(STAGES, True),
         },
     }
@@ -371,8 +317,7 @@ def _monthly_ready_payload() -> dict[str, Any]:
 def _monthly_verdict(payload):
     return _business_semantic(
         "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32,
-        payload,
-        "d" * 64,
+        payload, "d" * 64,
     )
 
 
@@ -382,23 +327,14 @@ def test_monthly_ready_probe_requires_operation_bound_success() -> None:
     assert verdict["verdict"] == "passed"
 
 
-@pytest.mark.parametrize(
-    ("key", "value"),
-    [
-        ("operation_id", "dmr_" + "f" * 32),
-        ("status", "FAILED"),
-        ("status", "SOURCE_READY"),
-        ("status", "ACTIVATED_VERIFY_FAILED"),
-        ("status", []),
-        ("cancel_requested", True),
-        ("cancel_requested", 0),
-        ("attempt", True),
-        ("ready_receipt_sha256", ""),
-        ("plan_sha256", "invalid"),
-        ("current_stage", "SOURCE"),
-        ("last_error", {"code": "SOURCE_INCOMPLETE"}),
-    ],
-)
+@pytest.mark.parametrize(("key", "value"), [
+    ("operation_id", "dmr_" + "f" * 32), ("status", "FAILED"),
+    ("status", "SOURCE_READY"), ("status", "ACTIVATED_VERIFY_FAILED"),
+    ("status", []),
+    ("cancel_requested", True), ("cancel_requested", 0), ("attempt", True),
+    ("ready_receipt_sha256", ""), ("plan_sha256", "invalid"),
+    ("current_stage", "SOURCE"), ("last_error", {"code": "SOURCE_INCOMPLETE"}),
+])
 def test_monthly_probe_rejects_cross_operation_or_unready_state(key, value) -> None:
     payload = _monthly_ready_payload()
     payload["data"][key] = value
@@ -444,23 +380,17 @@ def test_monthly_read_only_probe_uses_scoped_operator_file(monkeypatch, tmp_path
     assert receipt["_response_body"] == '{"status":"FAILED"}'  # HTTP success is not business success.
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://node1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32,
-        "http://127.0.0.1:8001/health",
-        "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "/activate",
-        "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "?redirect=evil",
-    ],
-)
+@pytest.mark.parametrize("url", [
+    "http://node1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32,
+    "http://127.0.0.1:8001/health",
+    "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "/activate",
+    "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_" + "a" * 32 + "?redirect=evil",
+])
 def test_other_probes_never_read_or_forward_operator_secret(monkeypatch, url) -> None:
     from scripts import monthly_unified_dataset_release as release
-
     monkeypatch.setattr(release, "_token", lambda: pytest.fail("must not load secret"))
     captured = []
-    monkeypatch.setattr(
-        workflow, "_open_read_only_url", lambda request, **kw: captured.append(request) or io.BytesIO(b"{}")
-    )
+    monkeypatch.setattr(workflow, "_open_read_only_url", lambda request, **kw: (captured.append(request) or io.BytesIO(b"{}")))
     origin = workflow._normalized_http_origin(url)
     workflow._read_only_http_probe("business_smoke_ref", url, allowed_origins=[origin])
     assert all(request.get_header("X-dataset-release-operator-token") is None for request in captured)
@@ -478,7 +408,6 @@ def test_monthly_probe_missing_secret_fails_closed_before_network(monkeypatch) -
 def test_authenticated_probe_never_records_reflected_secret(monkeypatch, reflect_in_error) -> None:
     from scripts import monthly_unified_dataset_release as release
     import urllib.error
-
     token = hashlib.sha256(b"monthly-probe-reflected-fixture").hexdigest()
     monkeypatch.setattr(release, "_token", lambda: token)
 
@@ -525,125 +454,96 @@ def test_pre_pr_gate_reuses_exact_ci_classifier_and_blocks_before_push(monkeypat
 
 
 def _local_data_payload(overview: bool = False) -> dict[str, Any]:
-    row = {
-        "data_kind": "adj_factor",
-        "stats_max_date": "2026-08-11",
-        "audit_ready_date": "2026-09-29",
-        "ready_date": "2026-09-29",
-        "audit_quality_status": "ok",
-        "physical_max_date": None,
-        "physical_max_date_source": "not_probed",
-        "stats_date_source": "data_stats_cache",
-        "readiness_source": "dataset_date_refresh_audit",
-        "cache_state": "stale",
-        "readiness_status": "audit_success",
-        "operator_action_required": False,
-    }
-    data: dict[str, Any] = {"items": [row]}
+    row = {'data_kind': 'adj_factor', 'stats_max_date': '2026-08-11',
+           'audit_ready_date': '2026-09-29', 'ready_date': '2026-09-29',
+           'audit_quality_status': 'ok', 'physical_max_date': None,
+           'physical_max_date_source': 'not_probed', 'stats_date_source': 'data_stats_cache',
+           'readiness_source': 'dataset_date_refresh_audit', 'cache_state': 'stale',
+           'readiness_status': 'audit_success', 'operator_action_required': False}
+    data: dict[str, Any] = {'items': [row]}
     if overview:
-        data = {
-            "datasets": [row],
-            "dataset_count": 1,
-            "stale_dataset_count": 1,
-            "stale_stats_cache_count": 1,
-            "readiness_unknown_count": 0,
-            "quality_blocked_dataset_count": 0,
-            "running_job_count": 0,
-            "active_alert_count": 0,
-            "blocked_target_count": 0,
-            "retry_target_count": 0,
-            "status": "yellow",
-        }
-    return {
-        "success": True,
-        "operation": "local_data_health_overview" if overview else "local_data_list_data_stats",
-        "risk_level": "read_only",
-        "data": data,
-    }
+        data = {'datasets': [row], 'dataset_count': 1, 'stale_dataset_count': 1,
+                'stale_stats_cache_count': 1, 'readiness_unknown_count': 0,
+                'quality_blocked_dataset_count': 0, 'running_job_count': 0,
+                'active_alert_count': 0, 'blocked_target_count': 0,
+                'retry_target_count': 0, 'status': 'yellow'}
+    return {'success': True, 'operation': 'local_data_health_overview' if overview else 'local_data_list_data_stats',
+            'risk_level': 'read_only', 'data': data}
 
 
-@pytest.mark.parametrize("overview", [False, True])
+@pytest.mark.parametrize('overview', [False, True])
 def test_local_data_freshness_separates_cache_and_readiness(overview: bool) -> None:
-    endpoint = "overview" if overview else "data-stats"
+    endpoint = 'overview' if overview else 'data-stats'
     _, verdict = workflow._evaluate_business_smoke_semantics(
-        f"http://127.0.0.1:8001/api/v1/local-data/{endpoint}",
-        json.dumps(_local_data_payload(overview)),
-        response_sha256="a" * 64,
-    )
-    assert verdict["verdict"] == "passed"
-    assert verdict["contract_id"] == "local_data_freshness"
-    assert verdict["facts"]["stale"] == 1
+        f'http://127.0.0.1:8001/api/v1/local-data/{endpoint}',
+        json.dumps(_local_data_payload(overview)), response_sha256='a'*64)
+    assert verdict['verdict'] == 'passed'
+    assert verdict['contract_id'] == 'local_data_freshness'
+    assert verdict['facts']['stale'] == 1
 
 
-@pytest.mark.parametrize(
-    ("key", "value"),
-    [
-        ("physical_max_date", "2026-09-29"),
-        ("physical_max_date_source", "cache"),
-        ("stats_date_source", "live"),
-        ("readiness_source", "cache"),
-        ("ready_date", "2026-08-11"),
-        ("cache_state", "fresh"),
-        ("readiness_status", "unknown"),
-        ("operator_action_required", 0),
-        ("audit_ready_date", "2026-09-31"),
-        ("stats_max_date", "2026-8-11"),
-        ("audit_quality_status", {}),
-    ],
-)
+@pytest.mark.parametrize(('key', 'value'), [
+    ('physical_max_date', '2026-09-29'), ('physical_max_date_source', 'cache'),
+    ('stats_date_source', 'live'), ('readiness_source', 'cache'),
+    ('ready_date', '2026-08-11'), ('cache_state', 'fresh'),
+    ('readiness_status', 'unknown'), ('operator_action_required', 0),
+    ('audit_ready_date', '2026-09-31'), ('stats_max_date', '2026-8-11'),
+    ('audit_quality_status', {}),
+])
 def test_local_data_freshness_rejects_conflated_evidence(key: str, value: Any) -> None:
     payload = _local_data_payload()
-    payload["data"]["items"][0][key] = value
-    status, _, _ = workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/data-stats")
-    assert status == "failed"
+    payload['data']['items'][0][key] = value
+    status, _, _ = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
+    assert status == 'failed'
 
 
-@pytest.mark.parametrize("state", ["unknown", "quality_blocked"])
+@pytest.mark.parametrize('state', ['unknown', 'quality_blocked'])
 def test_local_data_freshness_preserves_non_ready_states(state: str) -> None:
     payload = _local_data_payload()
-    row = payload["data"]["items"][0]
-    row["readiness_status"] = state
-    if state == "unknown":
-        row.update(audit_ready_date=None, ready_date=None, cache_state="audit_missing")
+    row = payload['data']['items'][0]
+    row['readiness_status'] = state
+    if state == 'unknown':
+        row.update(audit_ready_date=None, ready_date=None, cache_state='audit_missing')
     else:
-        row["audit_quality_status"] = "low_coverage"
-    status, _, facts = workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/data-stats")
-    assert status == "passed" and facts[state] == 1
+        row['audit_quality_status'] = 'low_coverage'
+    status, _, facts = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
+    assert status == 'passed' and facts[state] == 1
 
 
-@pytest.mark.parametrize(("key", "value"), [("success", False), ("operation", "wrong"), ("risk_level", "write")])
+@pytest.mark.parametrize(('key', 'value'), [('success', False), ('operation', 'wrong'), ('risk_level', 'write')])
 def test_local_data_freshness_requires_read_only_envelope(key: str, value: Any) -> None:
     payload = _local_data_payload()
     payload[key] = value
-    assert workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/data-stats")[0] == "failed"
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
 
 
 def test_local_data_overview_validates_counters_without_hiding_real_alerts() -> None:
     payload = _local_data_payload(True)
-    data = payload["data"]
-    data.update(status="red", blocked_target_count=4, active_alert_count=4)
-    assert workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/overview")[0] == "passed"
-    data["status"] = "green"
-    assert workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/overview")[0] == "failed"
-    data.update(status="red", dataset_count=2, readiness_unknown_count=1)
-    assert workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/overview")[0] == "passed"
-    data["stale_stats_cache_count"] = 0
-    assert workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/overview")[0] == "failed"
+    data = payload['data']
+    data.update(status='red', blocked_target_count=4, active_alert_count=4)
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'passed'
+    data['status'] = 'green'
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
+    data.update(status='red', dataset_count=2, readiness_unknown_count=1)
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'passed'
+    data['stale_stats_cache_count'] = 0
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
 
 
 def test_local_data_freshness_rejects_missing_and_duplicate_dataset_evidence() -> None:
     payload = _local_data_payload()
-    payload["data"]["items"].append(dict(payload["data"]["items"][0]))
-    assert workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/data-stats")[0] == "failed"
-    payload["data"]["items"] = []
-    assert workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/data-stats")[0] == "failed"
+    payload['data']['items'].append(dict(payload['data']['items'][0]))
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
+    payload['data']['items'] = []
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
 
 
-@pytest.mark.parametrize(("key", "value"), [("status", {}), ("dataset_count", True), ("readiness_unknown_count", -1)])
+@pytest.mark.parametrize(('key', 'value'), [('status', {}), ('dataset_count', True),
+                                         ('readiness_unknown_count', -1)])
 def test_local_data_overview_rejects_malformed_summary(key: str, value: Any) -> None:
     payload = _local_data_payload(True)
-    payload["data"][key] = value
-    assert workflow._validate_local_data_freshness(payload, url="/api/v1/local-data/overview")[0] == "failed"
+    payload['data'][key] = value
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/overview')[0] == 'failed'
 
 
 def _result(*, ok: bool = True, stdout: str = "", stderr: str = "", returncode: int = 0) -> dict[str, Any]:
@@ -658,32 +558,13 @@ _METRICS_PROBE = (
 
 
 def _metrics_payload() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "domain": "factor_metrics.result",
-        "summary_first": True,
-        "total": 1,
-        "items": [
-            {
-                "id": 1,
-                "factor_name": "sample",
-                "calc_batch_id": "batch1",
-                "eval_window": "full",
-                "snapshot_date": "2026-08-31",
-                "universe": "pit_v2",
-                "return_horizon": "1d",
-                "coverage": 0.9,
-                "n_trading_days": 100,
-                "ic_mean": -0.1,
-                "rank_ic_mean": -0.2,
-                "icir": -2.0,
-                "rank_icir": -3.0,
-                "ic_positive_ratio": 0.4,
-                "calculated_at": "2026-09-30T13:04:21+08:00",
-            }
-        ],
-        "pagination": {"limit": 1, "offset": 0, "next_offset": 1, "total": 1, "has_more": False},
-    }
+    return {"ok": True, "domain": "factor_metrics.result", "summary_first": True, "total": 1,
+            "items": [{"id": 1, "factor_name": "sample", "calc_batch_id": "batch1", "eval_window": "full",
+                       "snapshot_date": "2026-08-31", "universe": "pit_v2", "return_horizon": "1d",
+                       "coverage": .9, "n_trading_days": 100, "ic_mean": -.1, "rank_ic_mean": -.2,
+                       "icir": -2., "rank_icir": -3., "ic_positive_ratio": .4,
+                       "calculated_at": "2026-09-30T13:04:21+08:00"}],
+            "pagination": {"limit": 1, "offset": 0, "next_offset": 1, "total": 1, "has_more": False}}
 
 
 def test_factor_metrics_semantics_bind_real_results_without_profitability_threshold() -> None:
@@ -696,73 +577,41 @@ def test_factor_metrics_semantics_bind_real_results_without_profitability_thresh
     assert verdict["facts"]["offline_algorithm_acceptance"] == "requires_separate_bug_specific_evidence"
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "limit=1",
-        "",
-        "factor_name=sample&limit=1",
-        _METRICS_PROBE.split("?", 1)[1] + "&calc_batch_id=other",
-        _METRICS_PROBE.split("?", 1)[1].replace("batch1", "other"),
-        _METRICS_PROBE.split("?", 1)[1].replace("2026-08-31", "2026-8-31"),
-        _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=0"),
-        _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=" + "9" * 5000),
-        _METRICS_PROBE.split("?", 1)[1] + "&offset=1",
-    ],
-)
+@pytest.mark.parametrize("query", [
+    "limit=1", "", "factor_name=sample&limit=1",
+    _METRICS_PROBE.split("?", 1)[1] + "&calc_batch_id=other",
+    _METRICS_PROBE.split("?", 1)[1].replace("batch1", "other"),
+    _METRICS_PROBE.split("?", 1)[1].replace("2026-08-31", "2026-8-31"),
+    _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=0"),
+    _METRICS_PROBE.split("?", 1)[1].replace("limit=1", "limit=" + "9" * 5000),
+    _METRICS_PROBE.split("?", 1)[1] + "&offset=1",
+])
 def test_factor_metrics_semantics_reject_unbound_or_conflicting_probe(query: str) -> None:
-    assert (
-        workflow._validate_factor_metrics_results(
-            _metrics_payload(), url=_METRICS_PROBE.split("?", 1)[0] + "?" + query
-        )[0]
-        == "failed"
-    )
+    assert workflow._validate_factor_metrics_results(
+        _metrics_payload(), url=_METRICS_PROBE.split("?", 1)[0] + "?" + query
+    )[0] == "failed"
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("factor_name", "other"),
-        ("calc_batch_id", "old_batch"),
-        ("eval_window", "2024"),
-        ("snapshot_date", "2026-06-30"),
-        ("universe", "old_pool"),
-        ("return_horizon", "20d"),
-        ("id", True),
-        ("n_trading_days", 0),
-        ("coverage", float("nan")),
-        ("ic_mean", float("inf")),
-        ("rank_ic_mean", 2),
-        ("ic_positive_ratio", -1),
-        ("icir", None),
-        ("rank_icir", "1"),
-        ("h20_ic_mean", float("nan")),
-        ("ic_mean", 10**500),
-        ("calculated_at", "2026-09-30T13:04:21"),
-        ("calculated_at", "2026-08-30T13:04:21+08:00"),
-    ],
-)
+@pytest.mark.parametrize(("field", "value"), [
+    ("factor_name", "other"), ("calc_batch_id", "old_batch"), ("eval_window", "2024"),
+    ("snapshot_date", "2026-06-30"), ("universe", "old_pool"), ("return_horizon", "20d"),
+    ("id", True), ("n_trading_days", 0), ("coverage", float("nan")), ("ic_mean", float("inf")),
+    ("rank_ic_mean", 2), ("ic_positive_ratio", -1), ("icir", None), ("rank_icir", "1"),
+    ("h20_ic_mean", float("nan")), ("ic_mean", 10 ** 500),
+    ("calculated_at", "2026-09-30T13:04:21"), ("calculated_at", "2026-08-30T13:04:21+08:00"),
+])
 def test_factor_metrics_semantics_reject_invalid_business_rows(field: str, value: Any) -> None:
     payload = _metrics_payload()
     payload["items"][0][field] = value
     assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("items", []),
-        ("total", True),
-        ("total", 0),
-        ("ok", False),
-        ("domain", "other"),
-        ("errors", ["failed"]),
-        ("pagination", {}),
-        ("success", False),
-        ("status", "failed"),
-        ("pagination", {"limit": 1, "offset": 0, "next_offset": 1, "total": 2, "has_more": False}),
-    ],
-)
+@pytest.mark.parametrize(("field", "value"), [
+    ("items", []), ("total", True), ("total", 0), ("ok", False), ("domain", "other"),
+    ("errors", ["failed"]), ("pagination", {}),
+    ("success", False), ("status", "failed"),
+    ("pagination", {"limit": 1, "offset": 0, "next_offset": 1, "total": 2, "has_more": False}),
+])
 def test_factor_metrics_semantics_reject_empty_or_contradictory_envelope(field: str, value: Any) -> None:
     payload = _metrics_payload()
     payload[field] = value
@@ -774,92 +623,45 @@ def test_factor_metrics_semantics_reject_duplicate_persisted_rows() -> None:
     payload["items"] *= 2
     payload["total"] = 2
     payload["pagination"].update(limit=2, next_offset=2, total=2)
-    assert (
-        workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE.replace("limit=1", "limit=2"))[0]
-        == "failed"
-    )
+    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE.replace("limit=1", "limit=2"))[0] == "failed"
 
 
 def _business_semantic(url: str, payload: Any, response_hash: str) -> dict[str, Any]:
     return workflow._evaluate_business_smoke_semantics(
-        url,
-        json.dumps(payload),
-        response_sha256=response_hash,
+        url, json.dumps(payload), response_sha256=response_hash,
     )[1]
 
 
 def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
     return _business_semantic(
-        f"http://127.0.0.1:8001/api/v1/advisory/programs/{program_id}/entry-price/status",
-        payload,
-        "e" * 64,
+        f"http://127.0.0.1:8001/api/v1/advisory/programs/{program_id}/entry-price/status", payload, "e" * 64,
     )
 
 
 def _sector_entry_payload():
-    receipt = dict(
-        program_id="advp_test",
-        list_version_id="list-test",
-        binding_version_id="binding-test",
-        review_run_id="review-test",
-        selection_run_id="selection-test",
-        decision_date="2026-08-27",
-        target_date="2026-08-28",
-        candidate_scope="ORIGINAL_PUBLISHED_TOP20",
-        candidate_count=0,
-        original_list_item_count=0,
-        candidate_roster_sha256=hashlib.sha256(b"[]").hexdigest(),
-        source_review_policy_sha256=None,
-        unmodeled_items=[],
-        native_receipt_created=False,
-        source_evidence="CURRENT_DB_ORIGINAL_PUBLISHED_LIST_NOT_ORIGINAL_DATA_CAPTURE",
-        package_qualification_rechecked=False,
-        database_written=False,
-        outcomes_read=False,
-        new_selection_runs=0,
-    )
-    payload = dict(
-        schema_version="economic_sector_daily_service_v1",
-        model_family="M1_SECTOR_PRICE_VALUE_V1",
-        program_id="advp_test",
-        requested_target_date="2026-08-28",
-        requested_list_version_id="list-test",
-        decision_date="2026-08-27",
-        target_date="2026-08-28",
-        status="NO_CANDIDATES",
-        candidate_receipt=receipt,
-        candidates=[],
-        unmodeled_items=[],
-        decision_use="NAVIGATION_ONLY",
-        deployable=False,
-        economic_effectiveness="NOT_CONFIRMED",
-        fit_count=0,
-        database_written=False,
-        outcomes_read=False,
-        package_qualification_rechecked=False,
-        source_review_policy_sha256=None,
-        **{
-            key: "a" * 64
-            for key in (
-                "model_sha256",
-                "bundle_sha256",
-                "config_sha256",
-                "model_parent_policy_identity",
-                "model_value_policy_identity",
-            )
-        },
-    )
+    receipt = dict(program_id="advp_test", list_version_id="list-test", binding_version_id="binding-test",
+                   review_run_id="review-test", selection_run_id="selection-test", decision_date="2026-08-27",
+                   target_date="2026-08-28", candidate_scope="ORIGINAL_PUBLISHED_TOP20", candidate_count=0,
+                   original_list_item_count=0, candidate_roster_sha256=hashlib.sha256(b"[]").hexdigest(),
+                   source_review_policy_sha256=None, unmodeled_items=[], native_receipt_created=False,
+                   source_evidence="CURRENT_DB_ORIGINAL_PUBLISHED_LIST_NOT_ORIGINAL_DATA_CAPTURE",
+                   package_qualification_rechecked=False, database_written=False, outcomes_read=False, new_selection_runs=0)
+    payload = dict(schema_version="economic_sector_daily_service_v1", model_family="M1_SECTOR_PRICE_VALUE_V1",
+                   program_id="advp_test", requested_target_date="2026-08-28", requested_list_version_id="list-test",
+                   decision_date="2026-08-27", target_date="2026-08-28", status="NO_CANDIDATES", candidate_receipt=receipt,
+                   candidates=[], unmodeled_items=[], decision_use="NAVIGATION_ONLY", deployable=False,
+                   economic_effectiveness="NOT_CONFIRMED", fit_count=0, database_written=False, outcomes_read=False,
+                   package_qualification_rechecked=False, source_review_policy_sha256=None,
+                   **{key: "a" * 64 for key in ("model_sha256", "bundle_sha256", "config_sha256",
+                                               "model_parent_policy_identity", "model_value_policy_identity")})
     return payload
 
 
 def _sector_entry_semantic(payload, query="target_trade_date=2026-08-28&list_version_id=list-test"):
     payload = dict(payload)
     payload["projection_sha256"] = workflow._runtime_identity_proof_digest(payload)
-    return _business_semantic(
-        "http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/sector-entry-price?" + query,
-        dict(ok=True, **payload),
-        "e" * 64,
-    )
+    return _business_semantic("http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/sector-entry-price?" + query,
+                              dict(ok=True, **payload), "e" * 64)
 
 
 def test_sector_entry_semantic_proves_real_empty_roster_not_empty_response():
@@ -871,50 +673,29 @@ def test_sector_entry_semantic_proves_real_empty_roster_not_empty_response():
     assert _sector_entry_semantic({})["verdict"] == "failed"
 
 
-@pytest.mark.parametrize(
-    "area,key,value",
-    [
-        ("", "status", "NOT_CONFIGURED"),
-        ("", "database_written", True),
-        ("", "fit_count", False),
-        ("", "program_id", "foreign"),
-        ("", "target_date", "2026-08-29"),
-        ("", "model_sha256", "missing"),
-        ("candidate_receipt", "list_version_id", "foreign"),
-        ("candidate_receipt", "candidate_count", 1),
-        ("candidate_receipt", "original_list_item_count", 1),
-        ("candidate_receipt", "native_receipt_created", True),
-        ("candidate_receipt", "candidate_roster_sha256", "b" * 64),
-        ("candidate_receipt", "new_selection_runs", False),
-        ("candidate_receipt", "source_evidence", "SYNTHETIC_TEST_ROSTER"),
-    ],
-)
+@pytest.mark.parametrize("area,key,value", [
+    ("", "status", "NOT_CONFIGURED"), ("", "database_written", True), ("", "fit_count", False),
+    ("", "program_id", "foreign"), ("", "target_date", "2026-08-29"), ("", "model_sha256", "missing"),
+    ("candidate_receipt", "list_version_id", "foreign"), ("candidate_receipt", "candidate_count", 1),
+    ("candidate_receipt", "original_list_item_count", 1), ("candidate_receipt", "native_receipt_created", True),
+    ("candidate_receipt", "candidate_roster_sha256", "b" * 64), ("candidate_receipt", "new_selection_runs", False),
+    ("candidate_receipt", "source_evidence", "SYNTHETIC_TEST_ROSTER"),
+])
 def test_sector_entry_semantic_rejects_unbound_or_mutating_readback(area, key, value):
     payload = _sector_entry_payload()
     (payload[area] if area else payload)[key] = value
     assert _sector_entry_semantic(payload)["verdict"] == "failed"
 
 
-@pytest.mark.parametrize(
-    "query",
-    [
-        "",
-        "target_trade_date=2026-08-28",
-        "target_trade_date=2026-08-28&list_version_id=",
-        "target_trade_date=2026-08-28&list_version_id=list-test&list_version_id=list-test",
-    ],
-)
+@pytest.mark.parametrize("query", ["", "target_trade_date=2026-08-28", "target_trade_date=2026-08-28&list_version_id=",
+                                  "target_trade_date=2026-08-28&list_version_id=list-test&list_version_id=list-test"])
 def test_sector_entry_semantic_requires_explicit_unambiguous_subject(query):
     assert _sector_entry_semantic(_sector_entry_payload(), query)["verdict"] == "failed"
 
 
 def test_offline_factor_comparison_keeps_online_and_unknown_sources_fail_closed():
-    files = [
-        "backend/services/factor_research/comparison.py",
-        "backend/tests/factor_research/test_comparison.py",
-        "docs/analysis/factor-comparison.md",
-        "tests/aistock_validation/bugs/BUG-1755.json",
-    ]
+    files = ["backend/services/factor_research/comparison.py", "backend/tests/factor_research/test_comparison.py",
+             "docs/analysis/factor-comparison.md", "tests/aistock_validation/bugs/BUG-1755.json"]
     offline = workflow._classify_runtime_impact(files)
     assert (offline["runtime_impact"], offline["target_ids"]) == ("none", [])
     for online in ("backend/routers/factor_metrics.py", "backend/services/factor_research/not_registered.py"):
@@ -933,18 +714,10 @@ def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tamper
 
 
 def test_factor_comparison_provisional_backend_contract_reconciles_to_offline():
-    result = workflow.build_runtime_contract(
-        record={
-            "runtime_contract": {
-                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
-                "runtime_impact": "backend",
-                "target_ids": ["backend-main"],
-                "provisional": True,
-                "inference_basis": "planned_scope",
-            }
-        },
-        changed_files=["backend/services/factor_research/comparison.py"],
-    )
+    result = workflow.build_runtime_contract(record={"runtime_contract": {
+        "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "backend",
+        "target_ids": ["backend-main"], "provisional": True, "inference_basis": "planned_scope",
+    }}, changed_files=["backend/services/factor_research/comparison.py"])
     assert result["runtime_impact"] == "none" and result["target_ids"] == []
     assert result["pre_pr_ready"] is True and result["backend_restart_required"] is False
 
@@ -967,9 +740,9 @@ def test_entry_price_status_semantic_contract_accepts_safe_readback(configured) 
     semantic = _entry_price_status_semantic(payload)
     assert semantic["contract_id"] == "advisory_entry_price_status"
     assert semantic["verdict"] == "passed"
-    assert semantic["facts"] == {
-        key: payload[key] for key in ("program_id", "configured", "status", "database_written")
-    }
+    assert semantic["facts"] == {key: payload[key] for key in (
+        "program_id", "configured", "status", "database_written"
+    )}
 
 
 @pytest.mark.parametrize(
@@ -1023,8 +796,7 @@ def _rotation_l2_semantic(
 ) -> dict[str, Any]:
     return _business_semantic(
         f"http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?{query}",
-        payload,
-        "d" * 64,
+        payload, "d" * 64,
     )
 
 
@@ -1047,25 +819,22 @@ def test_rotation_l2_overview_semantic_contract_binds_complete_run() -> None:
 _ROTATION_RUN_QUERY = "run_id=" + "a" * 64
 
 
-@pytest.mark.parametrize(
-    "query,envelope,fields,reason",
-    [
-        (_ROTATION_RUN_QUERY, {"status": "failed"}, {}, "status=ok"),
-        (_ROTATION_RUN_QUERY, {"ok": False}, {}, "status=ok"),
-        (_ROTATION_RUN_QUERY, {"errors": ["readback failed"]}, {}, "status=ok"),
-        ("", {}, {}, "exactly one non-empty run_id"),
-        (_ROTATION_RUN_QUERY + "&" + _ROTATION_RUN_QUERY, {}, {}, "exactly one non-empty run_id"),
-        ("run_id=" + "A" * 64, {}, {"run_id": "A" * 64}, "lowercase SHA-256"),
-        (_ROTATION_RUN_QUERY, {}, {"run_id": "e" * 64}, "does not match"),
-        (_ROTATION_RUN_QUERY, {}, {"sector_count": 130}, "complete 131-sector catalog"),
-        (_ROTATION_RUN_QUERY, {}, {"sector_count": True}, "complete 131-sector catalog"),
-        (_ROTATION_RUN_QUERY, {}, {"available_count": 132}, "outside the sector catalog"),
-        (_ROTATION_RUN_QUERY, {}, {"canonical_row_sha256": None}, "lowercase SHA-256"),
-        (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-09-31"}, "ISO date"),
-        (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-9-26"}, "ISO date"),
-        (_ROTATION_RUN_QUERY, {}, {"as_of_date": "2026-09-26"}, "must precede"),
-    ],
-)
+@pytest.mark.parametrize("query,envelope,fields,reason", [
+    (_ROTATION_RUN_QUERY, {"status": "failed"}, {}, "status=ok"),
+    (_ROTATION_RUN_QUERY, {"ok": False}, {}, "status=ok"),
+    (_ROTATION_RUN_QUERY, {"errors": ["readback failed"]}, {}, "status=ok"),
+    ("", {}, {}, "exactly one non-empty run_id"),
+    (_ROTATION_RUN_QUERY + "&" + _ROTATION_RUN_QUERY, {}, {}, "exactly one non-empty run_id"),
+    ("run_id=" + "A" * 64, {}, {"run_id": "A" * 64}, "lowercase SHA-256"),
+    (_ROTATION_RUN_QUERY, {}, {"run_id": "e" * 64}, "does not match"),
+    (_ROTATION_RUN_QUERY, {}, {"sector_count": 130}, "complete 131-sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"sector_count": True}, "complete 131-sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"available_count": 132}, "outside the sector catalog"),
+    (_ROTATION_RUN_QUERY, {}, {"canonical_row_sha256": None}, "lowercase SHA-256"),
+    (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-09-31"}, "ISO date"),
+    (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-9-26"}, "ISO date"),
+    (_ROTATION_RUN_QUERY, {}, {"as_of_date": "2026-09-26"}, "must precede"),
+])
 def test_rotation_l2_overview_semantic_contract_rejects_invalid_readback(query, envelope, fields, reason):
     """One negative oracle, preserving every envelope/query/row case."""
     payload = _rotation_l2_overview_payload()
@@ -1079,8 +848,7 @@ def test_rotation_l2_overview_semantic_contract_rejects_invalid_readback(query, 
 def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
     semantic = _business_semantic(
         "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/not-registered",
-        {"status": "ok", "data": {}},
-        "f" * 64,
+        {"status": "ok", "data": {}}, "f" * 64,
     )
 
     assert semantic["contract_id"] is None
@@ -1212,7 +980,7 @@ def test_required_check_unknown_bucket_fails_closed() -> None:
         ("backend/services/hmm_risk/risk_l2_value_replay.py", "none", []),
         ("backend/services/hmm_risk/risk_l2_prediction.py", "backend", ["backend-main"]),
         ("backend/routers/hmm_risk.py", "backend", ["backend-main"]),
-        ("backend/services/hmm_risk/unregistered_consumer.py", "backend", ["backend-main"]),
+        ("backend/services/hmm_risk/unknown_consumer.py", "backend", ["backend-main"]),
         ("scripts/aistock_runner_health.py", "none", []),
     ],
 )
@@ -1263,8 +1031,7 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
         monthly_sources = ["backend/services/dataset_release/source_authority.py"]
 
     selected, error = workflow._select_runtime_probe_route(
-        target,
-        runtime_files=monthly_sources if monthly else ["backend/services/dataset_release/build_stage.py"],
+        target, runtime_files=monthly_sources if monthly else ["backend/services/dataset_release/build_stage.py"],
     )
 
     assert error is None
@@ -1331,20 +1098,14 @@ def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
     worker_path.write_text("# worker\n", encoding="utf-8")
 
     child = SimpleNamespace(
-        pid=102,
-        ppid=lambda: 101,
-        cwd=lambda: str(tmp_path),
+        pid=102, ppid=lambda: 101, cwd=lambda: str(tmp_path),
         cmdline=lambda: ["python", str(worker_path), "--serve", "--poll-seconds", "5.0"],
     )
-
     def children(*, recursive):
         assert recursive is False
         return [child]
-
     parent = SimpleNamespace(
-        pid=101,
-        cwd=child.cwd,
-        children=children,
+        pid=101, cwd=child.cwd, children=children,
         cmdline=lambda: ["python", "-m", "uvicorn", "backend.main:app", "--port", str(parent_port)],
     )
 
@@ -1404,7 +1165,9 @@ def invalid_runtime_catalog(monkeypatch: pytest.MonkeyPatch) -> str:
 
 def test_runtime_classifier_surfaces_catalog_validation_error(invalid_runtime_catalog: str) -> None:
 
-    payload = workflow._classify_runtime_impact(["backend/services/hmm_risk/contracts.py"])
+    payload = workflow._classify_runtime_impact(
+        ["backend/services/hmm_risk/contracts.py"]
+    )
 
     assert payload["runtime_impact"] == "unknown"
     assert payload["target_ids"] == ["backend-main"]
@@ -1429,30 +1192,22 @@ def test_runtime_contract_blocks_on_catalog_validation_error(invalid_runtime_cat
     assert contract["pre_pr_ready"] is False
 
 
-@pytest.mark.parametrize(
-    "path,registered",
-    [
-        ("/api/v1/audit-unregistered-contract", False),
-        ("/api/v1/factor-metrics/results", True),
-        (
-            "/api/v1/advisory/programs/advp_test/sector-entry-price?target_trade_date=2026-08-28&list_version_id=list-test",
-            True,
-        ),
-    ],
-)
+@pytest.mark.parametrize("path,registered", [
+    ("/api/v1/audit-unregistered-contract", False),
+    ("/api/v1/factor-metrics/results", True),
+    ("/api/v1/advisory/programs/advp_test/sector-entry-price?target_trade_date=2026-08-28&list_version_id=list-test", True),
+])
 def test_runtime_preflight_checks_semantic_registration_without_http(path, registered) -> None:
     root = workflow.REPO_ROOT
     runbook = next((root / "docs/operations").glob("*.md")).relative_to(root).as_posix()
     contract = workflow.build_runtime_contract(
-        record={
-            "runtime_contract": {
-                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
-                "operator_runbook_ref": runbook,
-                "identity_ref": "http://127.0.0.1:8001/api/v1/runtime/identity",
-                "business_smoke_ref": "http://127.0.0.1:8001" + path,
-                "fresh_process_evidence": ["synthetic-contract-presence-only"],
-            }
-        },
+        record={"runtime_contract": {
+            "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+            "operator_runbook_ref": runbook,
+            "identity_ref": "http://127.0.0.1:8001/api/v1/runtime/identity",
+            "business_smoke_ref": "http://127.0.0.1:8001" + path,
+            "fresh_process_evidence": ["synthetic-contract-presence-only"],
+        }},
         changed_files=["backend/main.py"],
     )
     semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
@@ -1556,13 +1311,9 @@ def test_github_issue_create_only_recovers_nested_module_labels(tmp_path, monkey
 
     def create():
         return workflow._create_github_issue_with_recovery(
-            bug_id="BUG-1461",
-            title="BUG-1461 P2: example",
-            body_path=body,
-            labels=["aistock:bug", f"module:{module}", "status:open"],
-            cwd=tmp_path,
+            bug_id="BUG-1461", title="BUG-1461 P2: example", body_path=body,
+            labels=["aistock:bug", f"module:{module}", "status:open"], cwd=tmp_path,
         )
-
     if module == "unknown":
         with pytest.raises(workflow.WorkflowError, match="module:unknown"):
             create()
@@ -1641,74 +1392,45 @@ def test_runtime_pending_close_sync_does_not_create_intermediate_pr(monkeypatch:
 @pytest.mark.parametrize("mode", ["merged", "planned", "invalid"])
 def test_post_restart_scope_comes_from_recorded_merge_not_planned_paths(cli_task_worktree, monkeypatch, mode):
     base, task, git = cli_task_worktree
-    record = {
-        "bug_id": "BUG-199",
-        "file_scope_contract": {"changed_files": ["backend/services/dataset_release/build_stage.py"]},
-    }
+    record = {"bug_id": "BUG-199", "file_scope_contract": {"changed_files": ["backend/services/dataset_release/build_stage.py"]}}
     if mode != "planned":
         record["fix_commit"] = git(task, "rev-parse", "HEAD") if mode == "merged" else "a" * 40
     monkeypatch.setattr(workflow, "find_bug_record", lambda **kwargs: (record, base / "BUG-199.json"))
-
     def capture(**kwargs):
         expected = ["task.txt"] if mode == "merged" else record["file_scope_contract"]["changed_files"]
         assert kwargs["changed_files"] == expected
         raise RuntimeError("scope captured before probes")
-
     monkeypatch.setattr(workflow, "build_runtime_contract", capture)
     # An operator identity override is not authority to replace the source delta.
-    with pytest.raises(
-        workflow.WorkflowError if mode == "invalid" else RuntimeError,
-        match=None if mode == "invalid" else "scope captured",
-    ):
-        workflow.build_post_restart_verify(
-            bug_id="BUG-199", issue_json=None, target_id="backend-main", expected_identity="b" * 40
-        )
+    with pytest.raises(workflow.WorkflowError if mode == "invalid" else RuntimeError,
+                       match=None if mode == "invalid" else "scope captured"):
+        workflow.build_post_restart_verify(bug_id="BUG-199", issue_json=None,
+                                           target_id="backend-main", expected_identity="b" * 40)
 
 
-@pytest.mark.parametrize(
-    "pr_number,commit,accepted,recovery_number,guard_accepted",
-    [
-        (199, "a", True, 199, True),
-        (200, "a", False, 199, True),
-        (199, "b", False, 199, True),
-        (199, "a", True, 200, False),
-    ],
-)
+@pytest.mark.parametrize("pr_number,commit,accepted,recovery_number,guard_accepted", [
+    (199, "a", True, 199, True), (200, "a", False, 199, True),
+    (199, "b", False, 199, True), (199, "a", True, 200, False),
+])
 def test_recoverable_close_sync_dirty_record_requires_exact_source_identity(
-    tmp_path,
-    monkeypatch,
-    pr_number,
-    commit,
-    accepted,
-    recovery_number,
-    guard_accepted,
+    tmp_path, monkeypatch, pr_number, commit, accepted, recovery_number, guard_accepted,
 ) -> None:
     dirty_path = "tests/aistock_validation/bugs/BUG-199.json"
     issue = tmp_path / dirty_path
     issue.parent.mkdir(parents=True)
-    record = {
-        "bug_id": "BUG-199",
-        "status": "fixed",
-        "fix_commit": "a" * 40,
-        "pr_url": "https://github.example/pull/199",
-    }
+    record = {"bug_id": "BUG-199", "status": "fixed", "fix_commit": "a" * 40,
+              "pr_url": "https://github.example/pull/199"}
     issue.write_text(json.dumps(record), encoding="utf-8")
     monkeypatch.setattr(workflow, "_dirty_files", lambda _root: [dirty_path])
     recovered = workflow._recoverable_close_sync_dirty_record(
-        tmp_path,
-        "BUG-199",
-        issue,
-        source_pr_url=f"https://github.example/pull/{pr_number}",
-        merge_commit=commit * 40,
+        tmp_path, "BUG-199", issue, source_pr_url=f"https://github.example/pull/{pr_number}", merge_commit=commit * 40,
     )
     if accepted:
         assert recovered is not None and recovered["path"] == dirty_path
     else:
         assert recovered is None
     monkeypatch.setattr(
-        workflow,
-        "_validate_registry_apply_target",
-        lambda _root: {
+        workflow, "_validate_registry_apply_target", lambda _root: {
             "blocking": ["registry target is dirty (1 file(s)); start from a clean task worktree"],
             "warnings": [],
             "git": {"dirty": True, "dirty_count": 1},
@@ -1752,8 +1474,7 @@ def test_backend_lifespan_logs_are_transient_only_for_exact_bounded_format(tmp_p
     log_root.mkdir(parents=True)
     (log_root / "aistock.log").write_text(
         "2026-08-13 03:10:31 INFO [backend.main] lifespan validation started\n"
-        if valid_format
-        else "Traceback: retain this evidence\n",
+        if valid_format else "Traceback: retain this evidence\n",
         encoding="utf-8",
     )
     paths = ["backend/logs/aistock.log"]
@@ -1847,13 +1568,11 @@ def test_cleanup_merged_pr_cache_is_reused_only_for_exact_identity(tmp_path, mon
         },
     }
     readbacks = []
-
     def readback(value):
         assert cache_matches is False, "cached PR check was reread"
         assert value == pr_url
         readbacks.append(value)
         return verified
-
     monkeypatch.setattr(workflow, "_verify_pr_merged", readback)
     monkeypatch.setattr(
         workflow,
@@ -1866,16 +1585,11 @@ def test_cleanup_merged_pr_cache_is_reused_only_for_exact_identity(tmp_path, mon
         pr_url,
         False,
         cwd=tmp_path,
-        verified_pr_check=verified
-        if cache_matches
-        else {
-            "checked": True,
-            "merged": True,
+        verified_pr_check=verified if cache_matches else {
+            "checked": True, "merged": True,
             "pr": {
-                "url": "https://github.example/pull/200",
-                "headRefName": "bug/BUG-200-other",
-                "headRefOid": "c" * 40,
-                "mergeCommit": {"oid": "d" * 40},
+                "url": "https://github.example/pull/200", "headRefName": "bug/BUG-200-other",
+                "headRefOid": "c" * 40, "mergeCommit": {"oid": "d" * 40},
             },
         },
     )
@@ -1919,32 +1633,24 @@ def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(
     monkeypatch.setattr(
         workflow,
         "_git_snapshot",
-        lambda root: {
-            "branch": "main",
-            "dirty": False,
-            "head": "same" if stale else "old",
-            "origin_main": "same" if stale else "new",
-        },
+        lambda root: {"branch": "main", "dirty": False, "head": "same" if stale else "old", "origin_main": "same" if stale else "new"},
     )
     monkeypatch.setattr(
         workflow,
         "_run_command",
-        lambda args, **kwargs: (
-            events.append("root_sync" if args[:2] == ["git", "merge"] else "merge_containment") or _result()
-        ),
+        lambda args, **kwargs: events.append(
+            "root_sync" if args[:2] == ["git", "merge"] else "merge_containment"
+        )
+        or _result(),
     )
     monkeypatch.setattr(
         workflow,
         "_merge_commit_changed_files",
         lambda merge_commit, root: {
             "ok": True,
-            "files": [".codex/skills/aistock-merge-aftercare/SKILL.md"]
-            if stale
-            else [
-                ".codex/skills/aistock-merge-aftercare/SKILL.md",
-                ".claude/commands/aistock-task-router.md",
-                "docs/standards/README.md",
-            ],
+            "files": [".codex/skills/aistock-merge-aftercare/SKILL.md"] if stale else [
+                ".codex/skills/aistock-merge-aftercare/SKILL.md", ".claude/commands/aistock-task-router.md",
+                "docs/standards/README.md"],
         },
     )
 
@@ -1954,24 +1660,10 @@ def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(
 
     monkeypatch.setattr(workflow, "build_client_install_plan", fake_install)
     monkeypatch.setattr(workflow, "_ClientInstallLock", lambda: workflow.contextlib.nullcontext())
-    monkeypatch.setattr(
-        workflow,
-        "_client_manifest",
-        lambda: (
-            {
-                "codex_entries": {
-                    "merge_aftercare": {"status": "current"},
-                    "validation_delegation": {"status": "stale"},
-                },
-                "claude_entries": {
-                    "validation_delegation": {"status": "stale_global"},
-                    "readonly_triage": {"status": "missing_global"},
-                },
-            }
-            if stale
-            else {}
-        ),
-    )
+    monkeypatch.setattr(workflow, "_client_manifest", lambda: {
+        "codex_entries": {"merge_aftercare": {"status": "current"}, "validation_delegation": {"status": "stale"}},
+        "claude_entries": {"validation_delegation": {"status": "stale_global"}, "readonly_triage": {"status": "missing_global"}},
+    } if stale else {})
     monkeypatch.setattr(
         workflow,
         "_client_lane_verification",
@@ -1989,54 +1681,24 @@ def test_merge_aftercare_publishes_changed_and_existing_stale_client_lanes(
         assert result["changed_lanes"] == ["merge_aftercare"]
         assert result["stale_lanes_before"] == ["readonly_triage", "validation_delegation"]
         assert [event for event in events if event.startswith("install:")] == [
-            "install:merge_aftercare",
-            "install:readonly_triage",
-            "install:validation_delegation",
-        ]
+            "install:merge_aftercare", "install:readonly_triage", "install:validation_delegation"]
     else:
         assert result["selected_lanes"] == ["merge_aftercare", "router"]
         assert events == ["root_sync", "merge_containment", "install:merge_aftercare", "install:router"]
         assert result["merge_commit_containment"]["ok"] is True
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
-        "update",
-        "noop",
-        "foreign",
-        "nonancestor",
-        "drift",
-        "transport",
-        "crlf_update",
-        "crlf_noop",
-        "crlf_transport",
-        "body_change",
-    ],
-)
-def test_owned_pr_receipt_sync_is_exact_and_recoverable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
-) -> None:
+@pytest.mark.parametrize("case", ["update", "noop", "foreign", "nonancestor", "drift", "transport", "crlf_update", "crlf_noop", "crlf_transport", "body_change"])
+def test_owned_pr_receipt_sync_is_exact_and_recoverable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     url, branch, old, new = "https://github.com/licong01-cloud/AIstock/pull/1", "bug/task", "a" * 40, "b" * 40
     body = tmp_path / "body.md"
     body.write_text("validated receipts\nexact task identity\n", encoding="utf-8")
-    row = {
-        "pr_number": 1,
-        "url": url,
-        "state": "OPEN",
-        "head_ref": branch,
-        "base_ref": "main",
-        "head_repo": "foreign/repo" if case == "foreign" else workflow.GITHUB_REPO,
-        "head_sha": new if case in {"noop", "crlf_noop"} else old,
-        "body": body.read_text().replace("\n", "\r\n")
-        if case == "crlf_noop"
-        else body.read_text()
-        if case == "noop"
-        else "stale",
-    }
+    row = {"pr_number": 1, "url": url, "state": "OPEN", "head_ref": branch, "base_ref": "main",
+           "head_repo": "foreign/repo" if case == "foreign" else workflow.GITHUB_REPO,
+           "head_sha": new if case in {"noop", "crlf_noop"} else old,
+           "body": body.read_text().replace("\n", "\r\n") if case == "crlf_noop" else body.read_text() if case == "noop" else "stale"}
     writes: list[str] = []
     monkeypatch.setattr(workflow, "_github_pull_rest_readback", lambda url: dict(row))
-
     def run(args: list[str], **kwargs: Any) -> dict[str, Any]:
         if args[0] == "git":
             return {"ok": case != "nonancestor"}
@@ -2048,40 +1710,21 @@ def test_owned_pr_receipt_sync_is_exact_and_recoverable(
             row["body"] += " "
         if case in {"transport", "crlf_transport"}:
             return {"ok": False, "stderr": "TLS handshake timeout"}
-        return {
-            "ok": True,
-            "stdout": json.dumps(
-                {
-                    "state": "open",
-                    "body": row["body"],
-                    "number": 1,
-                    "html_url": url,
-                    "head": {
-                        "sha": new if case == "drift" else old,
-                        "ref": branch,
-                        "repo": {"full_name": workflow.GITHUB_REPO},
-                    },
-                    "base": {"ref": "main"},
-                }
-            ),
-        }
-
+        return {"ok": True, "stdout": json.dumps({"state": "open", "body": row["body"], "number": 1, "html_url": url,
+            "head": {"sha": new if case == "drift" else old, "ref": branch, "repo": {"full_name": workflow.GITHUB_REPO}},
+            "base": {"ref": "main"}})}
     monkeypatch.setattr(workflow, "_run_command", run)
     if case in {"foreign", "nonancestor", "drift", "body_change"}:
         with pytest.raises(workflow.WorkflowError):
             workflow._sync_owned_pr_body(pr_url=url, branch=branch, body_path=body, expected_head=new, before_push=True)
         assert len(writes) == (1 if case in {"drift", "body_change"} else 0)
     else:
-        result = workflow._sync_owned_pr_body(
-            pr_url=url, branch=branch, body_path=body, expected_head=new, before_push=True
-        )
+        result = workflow._sync_owned_pr_body(pr_url=url, branch=branch, body_path=body, expected_head=new, before_push=True)
         assert result["body_updated"] == (case not in {"noop", "crlf_noop"})
 
 
 @pytest.mark.parametrize("same_head", [False, True])
-def test_existing_source_pr_receipts_are_published_before_push_and_reused(
-    monkeypatch: pytest.MonkeyPatch, same_head: bool
-) -> None:
+def test_existing_source_pr_receipts_are_published_before_push_and_reused(monkeypatch: pytest.MonkeyPatch, same_head: bool) -> None:
     events: list[str] = []
     url = "https://github.com/licong01-cloud/AIstock/pull/1"
     monkeypatch.setattr(workflow, "_load_state", lambda bug_id: {"pr_url": url})
@@ -2091,69 +1734,35 @@ def test_existing_source_pr_receipts_are_published_before_push_and_reused(
     monkeypatch.setattr(workflow, "_pre_pr_gate", lambda **kwargs: {"workflow_gate": "passed"})
     monkeypatch.setattr(workflow, "_git", lambda *args, **kwargs: "b" * 40)
     monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: {"ok": True, "stdout": "b" * 40})
-    monkeypatch.setattr(
-        workflow,
-        "_sync_owned_pr_body",
-        lambda **kwargs: (
-            events.append("receipt_before_push" if kwargs["before_push"] else "head_readback")
-            or {"url": url, "head_sha": ("b" if same_head else "a") * 40}
-        ),
-    )
-    monkeypatch.setattr(
-        workflow, "_execute_workflow_command", lambda *args, **kwargs: events.append("push") or {"ok": True}
-    )
-    monkeypatch.setattr(
-        workflow, "_create_pr_with_transport_fallback", lambda **kwargs: pytest.fail("existing PR recreated")
-    )
+    monkeypatch.setattr(workflow, "_sync_owned_pr_body", lambda **kwargs: events.append("receipt_before_push" if kwargs["before_push"] else "head_readback") or {"url": url, "head_sha": ("b" if same_head else "a") * 40})
+    monkeypatch.setattr(workflow, "_execute_workflow_command", lambda *args, **kwargs: events.append("push") or {"ok": True})
+    monkeypatch.setattr(workflow, "_create_pr_with_transport_fallback", lambda **kwargs: pytest.fail("existing PR recreated"))
     monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: None)
     monkeypatch.setattr(workflow, "_append_event", lambda *args, **kwargs: None)
-    result = workflow._maybe_create_pr(
-        bug_id="BUG-999",
-        finish={"validation_evidence": ["passed"], "pr_body_path": "body.md"},
-        push=True,
-        create_pr=True,
-        watch_ci=False,
-        pr_title=None,
-    )
-    assert events == (
-        ["receipt_before_push", "head_readback"] if same_head else ["receipt_before_push", "push", "head_readback"]
-    )
+    result = workflow._maybe_create_pr(bug_id="BUG-999", finish={"validation_evidence": ["passed"], "pr_body_path": "body.md"},
+        push=True, create_pr=True, watch_ci=False, pr_title=None)
+    assert events == (["receipt_before_push", "head_readback"] if same_head else ["receipt_before_push", "push", "head_readback"])
     assert result["pr_url"] == url
 
 
 @pytest.mark.skipif(workflow.os.name != "nt", reason="Windows offline mirror helper")
 @pytest.mark.parametrize("outcome", ["ready", "timeout", "mismatch", "dirty", "prefix_collision"])
-def test_post_sync_mirror_is_bounded_and_never_blocks_aftercare(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
-) -> None:
+def test_post_sync_mirror_is_bounded_and_never_blocks_aftercare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
     helper = tmp_path / "scripts" / "maintain_aistock_git_mirror.ps1"
     helper.parent.mkdir()
     helper.write_text("# fixture", encoding="utf-8")
     monkeypatch.setenv("AISTOCK_GITHUB_RUNNER_PREBUILT_ROOT", str(tmp_path))
     sha = "a" * 9 + "b" * 31
-    monkeypatch.setattr(
-        workflow,
-        "_git_snapshot",
-        lambda root: {"branch": "main", "head": sha[:9], "origin_main": sha[:9], "dirty": outcome == "dirty"},
-    )
+    monkeypatch.setattr(workflow, "_git_snapshot", lambda root: {
+        "branch": "main", "head": sha[:9], "origin_main": sha[:9], "dirty": outcome == "dirty"})
     calls: list[Any] = []
-
     def run(args: list[str], **kwargs: Any) -> dict[str, Any]:
         calls.append((args, kwargs))
         if args[:2] == ["git", "rev-parse"]:
             return {"ok": True, "stdout": sha + "\n" + ("a" * 9 + "c" * 31 if outcome == "prefix_collision" else sha)}
-        return {
-            "ok": outcome != "timeout",
-            "stdout": workflow.json.dumps(
-                {
-                    "status": "ready",
-                    "main_sha": sha if outcome == "ready" else "b" * 40,
-                    "network_accessed": False,
-                    "process_control_performed": False,
-                }
-            ),
-        }
-
+        return {"ok": outcome != "timeout", "stdout": workflow.json.dumps({
+            "status": "ready", "main_sha": sha if outcome == "ready" else "b" * 40,
+            "network_accessed": False, "process_control_performed": False})}
     monkeypatch.setattr(workflow, "_run_command", run)
     receipt = workflow._refresh_ci_git_mirror_after_root_sync(tmp_path)
     assert receipt["status"] == ("ready" if outcome == "ready" else "warning")
@@ -2164,12 +1773,8 @@ def test_post_sync_mirror_is_bounded_and_never_blocks_aftercare(
         assert helper_calls[0][1]["timeout"] == 60 and "-Apply" in helper_calls[0][0]
 
 
-@pytest.mark.parametrize(
-    "cleanup,gate", [(False, "close_sync_persisted"), (True, "complete"), (True, "fixed_source_pending_user_restart")]
-)
-def test_merge_wrapper_forwards_only_explicit_aftercare_and_does_not_recreate_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup: bool, gate: str
-) -> None:
+@pytest.mark.parametrize("cleanup,gate", [(False, "close_sync_persisted"), (True, "complete"), (True, "fixed_source_pending_user_restart")])
+def test_merge_wrapper_forwards_only_explicit_aftercare_and_does_not_recreate_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup: bool, gate: str) -> None:
     source, canonical = tmp_path / "source", tmp_path / "canonical"
     source.mkdir()
     canonical.mkdir()
@@ -2178,77 +1783,35 @@ def test_merge_wrapper_forwards_only_explicit_aftercare_and_does_not_recreate_so
     monkeypatch.setattr(workflow, "_merge_pr_if_ready_for_bug", lambda *args: {"verified": {"checked": True}})
     states: list[Any] = []
     monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: states.append(kwargs))
-
     def finalizer(**kwargs: Any) -> dict[str, Any]:
         assert kwargs["cleanup"] == cleanup and kwargs["merge_close_sync_pr"] == cleanup
         assert kwargs["source_pr_check"] == {"checked": True}
         if cleanup:
             source.rmdir()
-        return {
-            "workflow_gate": gate,
-            "cleanup": {"workflow_gate": "cleanup_done"} if cleanup else None,
-            "close_sync_pr_merge": {"workflow_gate": "merged"},
-            "source_merge_commit": "a" * 40,
-        }
-
+        return {"workflow_gate": gate, "cleanup": {"workflow_gate": "cleanup_done"} if cleanup else None,
+                "close_sync_pr_merge": {"workflow_gate": "merged"}, "source_merge_commit": "a" * 40}
     monkeypatch.setattr(workflow, "build_merge_finalizer_plan", finalizer)
-    result = workflow.build_run_plan(
-        bug_id="BUG-999",
-        mode="merge",
-        issue_json=None,
-        changed_files=[],
-        create_worktree=False,
-        dry_run=False,
-        validation_evidence=["python -m nox -s l0 -> passed"],
-        task_slug=None,
-        allow_missing_linkage=False,
-        allow_closed=False,
-        base="origin/main",
-        head="HEAD",
-        pr_url="https://github.com/licong01-cloud/AIstock/pull/1",
-        merge=True,
-        cleanup=cleanup,
-        merge_close_sync_pr=cleanup,
-        branch="bug/task",
-        worktree=str(source),
-    )
+    result = workflow.build_run_plan(bug_id="BUG-999", mode="merge", issue_json=None, changed_files=[], create_worktree=False,
+        dry_run=False, validation_evidence=["python -m nox -s l0 -> passed"], task_slug=None, allow_missing_linkage=False,
+        allow_closed=False, base="origin/main", head="HEAD", pr_url="https://github.com/licong01-cloud/AIstock/pull/1",
+        merge=True, cleanup=cleanup, merge_close_sync_pr=cleanup, branch="bug/task", worktree=str(source))
     assert states[-1]["root"] == (canonical if cleanup else source)
     assert source.exists() != cleanup
-    assert result["workflow_gate"] == (
-        "merged_runtime_verification_pending" if "pending" in gate else "merged_close_synced"
-    )
+    assert result["workflow_gate"] == ("merged_runtime_verification_pending" if "pending" in gate else "merged_close_synced")
 
 
 def test_merge_aftercare_apply_flags_and_blocked_exit_are_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        workflow.sys,
-        "argv",
-        [
-            "workflow.py",
-            "run",
-            "--bug-id",
-            "BUG-999",
-            "--mode",
-            "merge",
-            "--merge",
-            "--cleanup",
-            "--merge-close-sync-pr",
-        ],
-    )
+    monkeypatch.setattr(workflow.sys, "argv", ["workflow.py", "run", "--bug-id", "BUG-999", "--mode", "merge", "--merge", "--cleanup", "--merge-close-sync-pr"])
     args = workflow.build_parser().parse_args()
-
     def plan(**kwargs: Any) -> dict[str, Any]:
         assert kwargs["cleanup"] is True and kwargs["merge_close_sync_pr"] is True
         return {"workflow_gate": "merged_aftercare_blocked"}
-
     monkeypatch.setattr(workflow, "build_run_plan", plan)
     monkeypatch.setattr(workflow, "_emit_args", lambda *args: None)
     assert workflow.cmd_run(args) == 2
 
 
-def test_finalizer_records_state_and_postmortem_outside_deleted_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_finalizer_records_state_and_postmortem_outside_deleted_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source, canonical = tmp_path / "source", tmp_path / "canonical"
     source.mkdir()
     canonical.mkdir()
@@ -2256,42 +1819,24 @@ def test_finalizer_records_state_and_postmortem_outside_deleted_source(
     monkeypatch.setattr(workflow, "_canonical_root", lambda: canonical)
     monkeypatch.setattr(workflow, "_cwd_is_inside", lambda _: False)
     monkeypatch.setattr(workflow, "_relocate_cwd_before_cleanup", lambda _: None)
-    for name in (
-        "_close_sync_is_complete",
-        "_close_sync_pr_in_progress_marker",
-        "_source_merge_receipt_from_close_sync",
-    ):
+    for name in ("_close_sync_is_complete", "_close_sync_pr_in_progress_marker", "_source_merge_receipt_from_close_sync"):
         monkeypatch.setattr(workflow, name, lambda *args, **kwargs: None)
     monkeypatch.setattr(workflow, "_publish_changed_clients_after_merge", lambda **kwargs: {"workflow_gate": "ready"})
     monkeypatch.setattr(workflow, "build_close_sync_plan", lambda **kwargs: {"workflow_gate": "closed"})
     monkeypatch.setattr(workflow, "_persist_source_merge_receipt_for_close_sync", lambda plan, **kwargs: plan)
     monkeypatch.setattr(workflow, "_maybe_commit_and_pr_close_sync", lambda **kwargs: {"workflow_gate": "pr_opened"})
     monkeypatch.setattr(workflow, "_merge_close_sync_pr_if_ready", lambda **kwargs: {"workflow_gate": "merged"})
-
     def cleanup(**kwargs: Any) -> tuple[dict[str, Any], None]:
         source.rmdir()
         return {"workflow_gate": "cleanup_done", "sync_root": True}, None
-
     monkeypatch.setattr(workflow, "_build_cleanup_after_merge_plan_with_root_sync_deferral", cleanup)
-    monkeypatch.setattr(
-        workflow,
-        "_build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral",
-        lambda **kwargs: ({"workflow_gate": "cleanup_done"}, None),
-    )
+    monkeypatch.setattr(workflow, "_build_close_sync_cleanup_after_merge_plan_with_root_sync_deferral", lambda **kwargs: ({"workflow_gate": "cleanup_done"}, None))
     states: list[Any] = []
     monkeypatch.setattr(workflow, "_write_state", lambda *args, **kwargs: states.append(kwargs))
     monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"worktree": kwargs["worktree"]})
-    result = workflow.build_merge_finalizer_plan(
-        bug_id="BUG-999",
-        source_pr_url="https://github.com/licong01-cloud/AIstock/pull/1",
-        source_branch="bug/task",
-        source_worktree=str(source),
-        validation_evidence=["python -m nox -s l0 -> passed"],
-        cleanup=True,
-        merge_close_sync_pr=True,
-        apply=True,
-        source_pr_check={"pr": {"mergeCommit": {"oid": "a" * 40}}},
-    )
+    result = workflow.build_merge_finalizer_plan(bug_id="BUG-999", source_pr_url="https://github.com/licong01-cloud/AIstock/pull/1",
+        source_branch="bug/task", source_worktree=str(source), validation_evidence=["python -m nox -s l0 -> passed"],
+        cleanup=True, merge_close_sync_pr=True, apply=True, source_pr_check={"pr": {"mergeCommit": {"oid": "a" * 40}}})
     assert result["workflow_gate"] == "complete" and not source.exists()
     assert states[-1]["root"] == canonical and result["postmortem"]["worktree"] == str(canonical)
 
