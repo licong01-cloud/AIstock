@@ -43,6 +43,7 @@
       "backend/services/hmm_risk/rotation_l1_prediction.py",
       "backend/services/hmm_risk/rotation_l2_prediction.py",
       "backend/tests/hmm_risk/test_product_validation_store.py",
+      "backend/tests/hmm_risk/test_register_product_validation.py",
       "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
       "docs/architecture/hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md",
       "scripts/hmm_risk/register_product_validation.py",
@@ -61,6 +62,7 @@
       "backend/services/hmm_risk/rotation_l1_prediction.py",
       "backend/services/hmm_risk/rotation_l2_prediction.py",
       "backend/tests/hmm_risk/test_product_validation_store.py",
+      "backend/tests/hmm_risk/test_register_product_validation.py",
       "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
       "docs/architecture/hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md",
       "scripts/hmm_risk/register_product_validation.py",
@@ -208,8 +210,8 @@
   },
   "first_seen_at": "2026-10-06T11:54:48.375392Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "dcec0c9599ce81d48c0035f25831b9bf80d3547a",
+  "fixed_at": "2026-10-06T12:19:33Z",
   "github_issue_number": 5567,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5567",
   "last_seen_at": "2026-10-06T11:54:48.375392Z",
@@ -217,6 +219,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5571",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -243,6 +246,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -254,7 +258,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1753",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "40f61c862eef51cc",
+    "recorded_at": "2026-10-06T12:20:11.814546Z",
+    "runtime_contract_digest": "a58f2386cbc41e16fdd645269cd5e80f64f4543c61df4d94612ca20006e53607",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "bdae7f0bb223d572ec212603cbd2cc22fd0141a5",
+    "source_merge_commit": "dcec0c9599ce81d48c0035f25831b9bf80d3547a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5571",
+    "validation_evidence": [
+      "python -m nox -s l0 --no-install -> passed",
+      "python -m nox -s hmm_risk_pr_slice --no-install -- backend/tests/hmm_risk/test_product_validation_store.py backend/tests/hmm_risk/test_register_product_validation.py -> passed (23 tests)"
+    ],
+    "validation_evidence_digest": "e35a6bfbae79f911ff9efb0746390ea619c650b5a17180c2998adff9e2b35b8e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -263,6 +289,10 @@
     "fingerprint": "5646d545e49c6b8823bf4736",
     "source_event_id": "FE-20261006-5646d545e49c"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 --no-install -> passed",
+    "python -m nox -s hmm_risk_pr_slice --no-install -- backend/tests/hmm_risk/test_product_validation_store.py backend/tests/hmm_risk/test_register_product_validation.py -> passed (23 tests)"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
