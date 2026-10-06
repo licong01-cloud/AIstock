@@ -109,6 +109,7 @@ targets:
       - backend/routers/monthly_dataset_releases.py
       - backend/services/dataset_release/api_models.py
       - backend/services/dataset_release/monthly_*.py
+      - backend/services/dataset_release/monthly_frozen_source_audit.py
       - backend/services/dataset_release/candidate_consumer_smoke.py
       - backend/services/dataset_release/qlib_bounded_update.py
       - backend/services/dataset_release/a_share_limit_rule.py
@@ -165,6 +166,7 @@ targets:
           - backend/routers/monthly_dataset_releases.py
           - backend/services/dataset_release/api_models.py
           - backend/services/dataset_release/monthly_*.py
+          - backend/services/dataset_release/monthly_frozen_source_audit.py
           - backend/services/dataset_release/monthly_construction_facts.py
           - backend/services/dataset_release/candidate_consumer_smoke.py
           - backend/services/dataset_release/qlib_bounded_update.py
@@ -172,6 +174,7 @@ targets:
           - backend/services/dataset_release/source_authority.py
           - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/build_stage.py
+          - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/candidate_validator.py
           - backend/services/dataset_release/factor_materializer.py
           - backend/services/dataset_release/source_fact_history.py
@@ -180,6 +183,7 @@ targets:
           - backend/services/dataset_release/monthly_worker_nodes.py
           - backend/services/dataset_release/monthly_worker_runtime.py
         required_source_globs:
+          - backend/services/dataset_release/monthly_frozen_source_audit.py
           - backend/services/dataset_release/source_authority.py
           - backend/services/dataset_release/monthly_construction_facts.py
           - backend/services/dataset_release/monthly_consumer_layout.py

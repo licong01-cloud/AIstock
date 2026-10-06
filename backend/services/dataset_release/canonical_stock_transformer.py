@@ -16,6 +16,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -456,6 +457,7 @@ class CanonicalStockTransformer:
         adj_factor_rows: Iterable[Mapping[str, Any]],
         stk_limit_rows: Iterable[Mapping[str, Any]],
         suspend_rows: Iterable[Mapping[str, Any]],
+        daily_rows: Iterable[Mapping[str, Any]] | None = None,
         checkpoint: Callable[[], None] = lambda: None,
         checkpoint_rows: int = 10_000,
         metrics: CanonicalStockTransformMetrics | None = None,
@@ -512,6 +514,14 @@ class CanonicalStockTransformer:
             key=lambda row: (row["ts_code"], row["trade_date"]),
         )
         latest_adj_by_code = {code: float(value) for code, value in (spec.initial_adj_factors or {}).items()}
+        daily = None if daily_rows is None else _Cursor(
+            _iter_normalized(
+                daily_rows, source="kline_daily_raw", normalizer=_normalize_daily_row,
+                sort_key=lambda row: (row["ts_code"], row["trade_date"]),
+                include=lambda row: context.is_expected_day(row["ts_code"], row["trade_date"]),
+                report=report,
+            ), key=lambda row: (row["ts_code"], row["trade_date"]),
+        )
         for code, trading_day in context.expected_code_days():
             target = (code, trading_day)
             _consume_adj_through(adj, target, latest_adj_by_code)
@@ -522,6 +532,7 @@ class CanonicalStockTransformer:
             suspend = _pop_group(suspends, target)
             full_day_suspend = _is_full_day_suspend(suspend)
             raw_day_rows = _pop_group(raw, target, hard_limit=241)
+            daily_facts = None if daily is None else _pop_group(daily, target)
             report.peak_minute_stock_day_rows = max(
                 report.peak_minute_stock_day_rows,
                 len(raw_day_rows),
@@ -540,6 +551,23 @@ class CanonicalStockTransformer:
                 if row["trade_time"].time() not in MINUTE_SESSION_TIMES
                 and row["trade_time"].time() != MINUTE_OPENING_AUCTION_TIME
             )
+            if (
+                unexpected
+                and all(row["trade_time"].time().isoformat() == "13:00:00"
+                        for row in raw_day_rows if row["trade_time"].isoformat() in unexpected)
+                and daily_facts is not None
+                and suspended_zero_turnover_placeholder(
+                    full_day_suspend=full_day_suspend, has_1300=True,
+                    all_minute_turnover_zero=all(
+                        row["volume_hand"] == 0 and row["amount_li"] == 0 for row in raw_day_rows
+                    ), daily_rows=daily_facts,
+                )
+            ):
+                # Use the existing non-trading suspended-day representation,
+                # never shift raw timestamps or invent source trading bars.
+                raw_day_rows = ()
+                auction_rows = ()
+                unexpected = ()
             if unexpected:
                 raise CanonicalStockTransformError(
                     "minute stock-day contains an out-of-session row",
@@ -592,8 +620,27 @@ class CanonicalStockTransformer:
                 if report.output_rows % checkpoint_rows == 0:
                     checkpoint()
         _finish_cursors(raw, limits, suspends)
+        if daily is not None:
+            _finish_cursors(daily)
         adj.drain()
         checkpoint()
+
+
+def suspended_zero_turnover_placeholder(
+    *, full_day_suspend: bool, has_1300: bool,
+    all_minute_turnover_zero: bool, daily_rows: Iterable[Mapping[str, Any]],
+) -> bool:
+    """Frozen equivalent of the ingestion guard's independently proven no-trade case."""
+    values = tuple(daily_rows)
+    return (
+        full_day_suspend and has_1300 and all_minute_turnover_zero and len(values) <= 1
+        and all(
+            not isinstance(row.get(field), bool)
+            and isinstance(row.get(field), (int, float, Decimal))
+            and math.isfinite(float(row[field])) and row[field] == 0
+            for row in values for field in ("volume_hand", "amount_li")
+        )
+    )
 
 
 class _TransformContext:

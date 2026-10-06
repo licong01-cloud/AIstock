@@ -957,6 +957,105 @@ def test_minute_session_failure_names_missing_and_invalid_labels():
     assert issue["details"]["bar_count"] == 240
 
 
+@pytest.mark.parametrize('daily_present', [False, True])
+def test_frozen_full_suspend_zero_placeholder_is_typed_gap(daily_present):
+    data = rows()
+    data['suspend_d'] = [{'ts_code': SYMBOL, 'trade_date': DAY, 'suspend_type': 'S', 'suspend_timing': None}]
+    for row in data['kline_minute_raw'] + data['kline_daily_raw']:
+        row.update(volume_hand=0, amount_li=0)
+    data['kline_minute_raw'][119]['trade_time'] = data['kline_minute_raw'][119]['trade_time'].replace(hour=13, minute=0)
+    if not daily_present:
+        data['kline_daily_raw'] = []
+    gate = run(data)['minute_price']
+    assert gate.status == 'PASS'
+    assert gate.explained_count == 1 and gate.observed_count == 0
+    assert gate.exceptions[0].reason_code == 'SUSPEND_FULL_DAY'
+
+
+@pytest.mark.parametrize('conflict', ['no_suspend', 'partial_suspend', 'daily_volume', 'daily_amount',
+                                     'minute_volume', 'minute_amount', 'minute_null', 'duplicate', 'other_label'])
+def test_suspended_placeholder_conflicts_remain_blocked(conflict):
+    data = rows()
+    data['suspend_d'] = [{'ts_code': SYMBOL, 'trade_date': DAY, 'suspend_type': 'S', 'suspend_timing': None}]
+    for row in data['kline_minute_raw'] + data['kline_daily_raw']:
+        row.update(volume_hand=0, amount_li=0)
+    data['kline_minute_raw'][119]['trade_time'] = data['kline_minute_raw'][119]['trade_time'].replace(hour=13, minute=0)
+    if conflict == 'no_suspend':
+        data['suspend_d'] = []
+    elif conflict == 'partial_suspend':
+        data['suspend_d'][0]['suspend_timing'] = '13:00-14:00'
+    elif conflict.startswith('daily_'):
+        data['kline_daily_raw'][0]['volume_hand' if conflict == 'daily_volume' else 'amount_li'] = 1
+    elif conflict.startswith('minute_'):
+        # The invalid 13:00 row must contribute to no-trade proof as well.
+        data['kline_minute_raw'][119]['volume_hand' if conflict != 'minute_amount' else 'amount_li'] = None if conflict == 'minute_null' else 1
+    elif conflict == 'duplicate':
+        data['kline_minute_raw'].append(dict(data['kline_minute_raw'][0]))
+    elif conflict == 'other_label':
+        data['kline_minute_raw'][1]['trade_time'] = data['kline_minute_raw'][1]['trade_time'].replace(hour=9, minute=0)
+    assert run(data)['minute_price'].status == 'BLOCKED'
+
+
+@pytest.mark.parametrize('files, expected', [
+    (['monthly_frozen_source_audit.py'], 'monthly_release_worker_process'),
+    (['monthly_frozen_source_audit.py', 'canonical_stock_transformer.py', 'build_stage.py'], 'monthly_release_worker_process'),
+    (['canonical_stock_transformer.py', 'build_stage.py'], 'dataset_release_worker_heartbeat'),
+])
+def test_monthly_suspend_fix_selects_real_worker_probe(files, expected):
+    from pathlib import Path
+    import yaml
+    from scripts.aistock_issue_workflow import _select_runtime_probe_route
+    root = Path(__file__).resolve().parents[3]
+    catalog = yaml.safe_load((root / 'docs/standards/aistock_runtime_targets_v1.yaml').read_text(encoding='utf-8'))
+    selected, error = _select_runtime_probe_route(catalog['targets']['worker-scheduler'],
+        runtime_files=[f'backend/services/dataset_release/{name}' for name in files])
+    assert error is None
+    assert selected['probe_route_id'] == expected
+
+
+@pytest.mark.parametrize('case', ['missing_daily', 'zero_daily', 'no_daily_proof', 'positive_daily', 'null_daily',
+                                 'no_suspend', 'positive_minute', 'duplicate', 'other_label'])
+def test_monthly_build_suspended_1300_uses_proof_or_fails_closed(case):
+    from backend.tests.dataset_release.test_canonical_stock_transformer import (
+        DAY2, _minute_day, _daily, _spec, _adj, _limits, _full_day_suspend,
+    )
+    from backend.services.dataset_release.canonical_stock_transformer import (
+        CanonicalStockTransformer, CanonicalStockTransformError, CanonicalStockTransformMetrics,
+    )
+    raw = _minute_day(DAY2)
+    for row in raw:
+        row.update(volume_hand=0, amount_li=0)
+    raw[119]['trade_time'] = f'{DAY2} 13:00:00+08:00'
+    day = _daily(DAY2)
+    day.update(volume_hand=0, amount_li=0)
+    if case == 'positive_daily':
+        day['amount_li'] = 1
+    elif case == 'null_daily':
+        day['volume_hand'] = None
+    elif case == 'positive_minute':
+        raw[119]['amount_li'] = 1
+    elif case == 'duplicate':
+        raw.append(dict(raw[0]))
+    elif case == 'other_label':
+        raw[1]['trade_time'] = f'{DAY2} 09:00:00+08:00'
+    raw.sort(key=lambda row: row['trade_time'])
+    metrics = CanonicalStockTransformMetrics('minute_bin')
+    output = CanonicalStockTransformer().transform_minute(
+        _spec(start=DAY2), minute_rows=raw, adj_factor_rows=_adj(), stk_limit_rows=_limits(DAY2),
+        suspend_rows=[] if case == 'no_suspend' else _full_day_suspend(DAY2),
+        daily_rows=None if case == 'no_daily_proof' else [] if case == 'missing_daily' else [day], metrics=metrics,
+    )
+    if case not in ('missing_daily', 'zero_daily'):
+        with pytest.raises(CanonicalStockTransformError):
+            list(output)
+        return
+    result = list(output)
+    assert len(result) == 240 and metrics.synthesized_stock_days == 1
+    assert all(row['volume'] == row['amount'] == 0 for row in result)
+    assert result[119]['datetime'].endswith('11:30:00')
+    assert not any(row['datetime'].endswith('13:00:00') for row in result)
+
+
 def test_margin_missing_evidence_is_not_reported_as_invalid_moneyflow():
     issues = []
     gate = GateCounter("financial_moneyflow", emit=issues.append)
