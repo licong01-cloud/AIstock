@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-04T17:27:39.740201Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7f6371cba7a64b652ba745e477fb33d8bebf5134",
+  "fixed_at": "2026-10-06T13:19:26Z",
   "github_issue_number": 5446,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5446",
   "last_seen_at": "2026-10-04T17:27:39.740201Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5594",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,6 +132,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -153,7 +155,31 @@
     "reason": "实际冻结M1空名单链在修复数值dtype后，又暴露板块层空日期键merge失败和family空键dtype误判；同一正常空名单合同，非数据或模型缺口。"
   },
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1726",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1a48a5dbc2405f92",
+    "recorded_at": "2026-10-06T13:20:11.187494Z",
+    "runtime_contract_digest": "cc997ac56dd9de075e5a7a38fa5110fac23f8642f1aab6d99ddbfe3e0e80768c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768",
+    "source_merge_commit": "7f6371cba7a64b652ba745e477fb33d8bebf5134",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5594",
+    "validation_evidence": [
+      "validation-receipt: id=207e730ed34a572f commit=1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/advisory_model_first/economic_daily_feature_core_v1.py backend/services/advisory_model_first/economic_sector_daily_core_v1.py backend/services/advisory_model_first/economic_sector_daily_family_v1.py backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py tests/aistock_validation/bugs/20261004_BUG-1726-advisory-object-numpy-isfinite.json` result=`passed`",
+      "validation-receipt: id=87b5da257722b84f commit=1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py -q -p no:cacheprovider` result=`71 passed`",
+      "validation-receipt: id=0ef57d18a57e7c78 commit=1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768 kind=ruff plan=direct status=passed command=`ruff check backend/services/advisory_model_first/economic_daily_feature_core_v1.py backend/services/advisory_model_first/economic_sector_daily_core_v1.py backend/services/advisory_model_first/economic_sector_daily_family_v1.py backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py` result=`passed`",
+      "validation-receipt: id=5f0d9eff7b575e2f commit=1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "354fea102ab2ef3f3a1bf41acc8402331d11d1d0d17ec742fed397f6256ad602"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory.model_first"
   ],
@@ -162,6 +188,12 @@
     "fingerprint": "42014df42cd02aec55c4f8c2",
     "source_event_id": "FE-20261004-42014df42cd0"
   },
+  "validation_evidence": [
+    "validation-receipt: id=207e730ed34a572f commit=1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/advisory_model_first/economic_daily_feature_core_v1.py backend/services/advisory_model_first/economic_sector_daily_core_v1.py backend/services/advisory_model_first/economic_sector_daily_family_v1.py backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py tests/aistock_validation/bugs/20261004_BUG-1726-advisory-object-numpy-isfinite.json` result=`passed`",
+    "validation-receipt: id=87b5da257722b84f commit=1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py -q -p no:cacheprovider` result=`71 passed`",
+    "validation-receipt: id=0ef57d18a57e7c78 commit=1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768 kind=ruff plan=direct status=passed command=`ruff check backend/services/advisory_model_first/economic_daily_feature_core_v1.py backend/services/advisory_model_first/economic_sector_daily_core_v1.py backend/services/advisory_model_first/economic_sector_daily_family_v1.py backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py` result=`passed`",
+    "validation-receipt: id=5f0d9eff7b575e2f commit=1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
