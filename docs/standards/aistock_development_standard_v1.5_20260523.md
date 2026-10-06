@@ -125,6 +125,7 @@
 3. nightly 对当天合入变更按模块和计划去重，返回紧凑 receipt；PR 只记录直接相关的通过证据和委托计划。
 4. 过期、重复、只验证实现细节或与模块无依赖关系的测试从 active plan 移除或归档。
 5. workflow receipt 分别记录 active repair、local validation、runner queue、PR CI、merge/aftercare 的已知耗时；无法直接观测的阶段保持 `not_recorded`，禁止把相邻事件间隔伪装成代码开发时间。RTK telemetry 只消费调用方已提供的使用/回退信息，不额外探测或形成门禁。
+   pytest 执行统计复用 `scripts.ci_plan_coverage`，记录实际墙钟/测试阶段耗时、执行数及用例集合摘要；只有源码 HEAD、预构建环境指纹、计划、调用参数和用例集合均相同时才报告重复成功运行候选。PR CI 自动记录；本地/nightly 可通过该插件与 `AISTOCK_CI_TEST_COLLECTION_RECEIPT` 或 `AISTOCK_TEST_METRICS_RECEIPT` 接入，缺失数据保持未知，不宣称覆盖所有窗口。统计失败只告警，不替代真实测试结果，不自动复用或跳过测试，也不新增门禁、独立 job 或全量历史扫描。
 6. 同一计划在一个交付周期只进入一个权威执行阶段：本地仅保留 `l0`、changed-file/scope 和直接 fix-point；可在预构建 runner 执行的模块计划由 PR CI 一次完成；DEV/人工计划作为外部 pre-merge receipt；完整覆盖率、UI/business-flow 与跨模块深度回归由 nightly 去重执行。禁止为了取得 PR 前本地 receipt 重跑 CI 将要执行的完整模块套件。
 7. 阶段计划不得嵌套全模块回归或全局 catalog gate；全模块回归和 catalog integrity 在各自权威计划中各执行一次。全局 warning 只影响其自身 catalog 结果，不得把已通过的无关业务 session 改判为失败。
 
