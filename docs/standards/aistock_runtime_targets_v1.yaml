@@ -25,6 +25,8 @@ non_runtime_source_paths:
   - backend/services/dataset_release/canonical_pit_activation_envelope.py
   - backend/services/dataset_release/canonical_pit_migration.py
   - backend/services/event_signal/st_announcement_adapter.py
+  # scripts/factor_research.py -> ResearchService -> runner; no server consumer.
+  - backend/services/factor_research/comparison.py
   - backend/services/hmm_risk/rotation_l1_gbdt.py
   - backend/services/hmm_risk/rotation_l1_input_bundle.py
   - backend/services/hmm_risk/stock_fact_repository.py

@@ -34,7 +34,7 @@ from .monthly_source_audit import (
 from .monthly_source_producer import SourceArtifact
 from .monthly_unified import SOURCE_GATES
 from .sealed_source_reader import CASSealedPartitionReader
-from .sector_enrichment import FrozenSectorEnricher
+from .monthly_sector_mapping import build_bound_sector_enricher, frozen_sector_mapping_binding
 from .shared_sector_context import (
     build_release_sw_l2_code_map_payload,
     validate_release_sw_l2_code_map,
@@ -469,7 +469,10 @@ def audit_frozen_source(
         or refresh.get("profile") != profile.profile
     ):
         raise MonthlySourceAuditError("frozen refresh audit identity differs")
-    enricher = FrozenSectorEnricher.build(stream("sw_index_classify"), stream("sw_index_member"))
+    enricher = build_bound_sector_enricher(
+        stream("sw_index_classify"), stream("sw_index_member"),
+        binding=frozen_sector_mapping_binding(cas, frozen),
+    )
     map_payload = build_release_sw_l2_code_map_payload(
         code_to_id=enricher.code_map,
         member_backed_codes=sorted({span.l2_code for values in enricher.memberships.values() for span in values}),

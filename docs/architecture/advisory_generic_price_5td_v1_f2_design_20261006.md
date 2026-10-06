@@ -1,6 +1,6 @@
 # Advisory 跨策略包固定5交易日买入价格价值 GP5 v1 F2详细设计
 
-2026-10-06；DESIGN阶段。用户选择首版固定5交易日，10/20日后续扩展。新目标身份为 GENERIC_ENTRY_FIXED_5TD_V1，绝非将 VALUE_REVIEW_5_V1 五次有效复评改名；本设计通过不代表源码、模型效果、日频交付或角色激活完成。
+2026-10-06；离线SOURCE_VERIFIED，一次正式prepare/四fit/四臂cohort评估完成，当前candidate未显示增量、NOT_CONFIRMED。用户选择首版固定5交易日，10/20日后续扩展。新目标身份为 GENERIC_ENTRY_FIXED_5TD_V1，绝非将 VALUE_REVIEW_5_V1 五次有效复评改名；源码通过不代表经济确认、日频交付或角色激活完成。
 
 ## Background / Goal
 
@@ -80,6 +80,12 @@ candidate输入为九字段编码+九missing flags+scenario_gap_bps/100（19维�
 
 跨包检验首分两层：纯数值metadata变更测试证明查询解耦；实际既存多个包及指数池原名单只读业务读回证明消费可用。若现有授权输入只有一个父人口，研究报告单人口，不能伪称完成跨包经济泛化。QE负责新包/上游Alpha，本窗口不运行QE训练扩充数据。独立未消费窗口/自然前向不是功能开发等待项，经济确认状态独立保留。
 
+### 7. 本叶最小冻结来源适配
+
+generic_price_5td_pipeline_v1.py内只读适配calendar、原roster、带显式停牌/法规状态的raw_daily（既存prices snapshot）、原始股数来源volume_daily及固定CSI300 index_daily五份引用，均绑定字节hash/size；不连接数据准备、QE或生产服务。直接roster保留原0～50群体元数据；兼容旧父冻结Top40上下文时，仅提取其原is_candidate_decision及原Top20定义，不重算评分或换股票，不将该历史人口冒称Top50。plan显式声明完整decision_dates，零候选日也保留；来源截止label_cutoff约束H，不读取截止后端点。
+
+股票D特征只按当D adj_factor锚转换过去20session；未来五session的adj_factor仅用于标签。正常不足20session全部股票字段UNKNOWN且保留原候选，宽度定义未证明保持UNKNOWN。索引/成交量独立缺失不造值，已知非法因子/重复键/非显式法规状态拒绝。日频API/UI接入不在本离线scope，本叶不存在新的public worker或调度。
+
 ## Implementation Plan
 
 设计多轮自审/F2/精确三docs/CI合入→独立源码树登记10文件→标签/纯查询优先→同标签四fit模型/轻量cohort评价及已有stage引用→审核修复、失败node先重试、一次稳定小矩阵/Ruff/L0/F2→clean source commit→精确预登记/prepare→QE空闲一次研究→真实结果文档/当前HEAD CI合入/自身官方清理。不让公共smoke/UI阻断本纯研究。
@@ -101,18 +107,18 @@ candidate输入为九字段编码+九missing flags+scenario_gap_bps/100（19维�
 
 ## Design Acceptance Matrix
 
-本表只验收设计完整性与边界；DESIGN_VERIFIED不是源码已存在或测试已运行，源码/研究/经济/UI/runtime全部另验。待实施测试仅为合同定义，具体源码阶段须替换为实际测试路径和收据。
+本表验收离线源码完整性与边界，真实研究/经济/UI/runtime仍独立验收；正式输入、拟合和评估事实在真实执行后记录。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-981 | §1/2；generic_price_5td_contracts_v1.py（后续） | artifact: 新目标/用户5TD选择；artifact: 本文设计规定的待实施测试 /停牌和复评不改变H | DESIGN_VERIFIED | none |
-| F-982 | §2/3；generic_price_5td_labels_v1.py（后续） | artifact: 本文设计规定的待实施测试 /完整KEY/单位/可见时钟/端点手算 | DESIGN_VERIFIED | none |
-| F-983 | §2；generic_price_5td_labels_v1.py（后续） | artifact: 本文设计规定的待实施测试 /正常缺失/限价/未成熟与真实矛盾 | DESIGN_VERIFIED | none |
-| F-984 | §3；generic_price_5td_models_v1.py（后续） | artifact: 本文设计规定的待实施测试 /test poison/metadata不进模型/缺失原值 | DESIGN_VERIFIED | none |
-| F-985 | §4；models/pipeline（后续） | artifact: 本文设计规定的待实施测试 /四次记账/JSON parity/无未来处理 | DESIGN_VERIFIED | none |
-| F-986 | §5；generic_price_5td_inference_v1.py（后续） | artifact: 本文设计规定的待实施测试 /全tick/成本一次/未知洞/空名单 | DESIGN_VERIFIED | none |
-| F-987 | §6；generic_price_5td_pipeline_v1.py（后续） | artifact: 本文设计规定的待实施测试 /完整四臂cohort/未结算不删日期 | DESIGN_VERIFIED | none |
-| F-988 | §Scope/Implementation/Rollout | artifact: 三docs登记；多视角自审/F2/CI在真实执行后记录 | DESIGN_VERIFIED | none |
+| F-981 | generic_price_5td_contracts_v1.py / labels | test: backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py::test_five_original_sessions_hand_values_hash_and_no_mutation | SOURCE_VERIFIED | none |
+| F-982 | generic_price_5td_labels_v1.py | test: backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py::test_known_contradictions_fail_closed | SOURCE_VERIFIED | none |
+| F-983 | generic_price_5td_labels_v1.py | test: backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py::test_normal_missing_no_drop_fill_or_horizon_extension | SOURCE_VERIFIED | none |
+| F-984 | generic_price_5td_models_v1.py / inference | test: backend/tests/advisory_model_first/test_generic_price_5td_models_v1.py::test_test_poison_never_changes_training_medians_support_or_models；test_real_four_JSON_fits_missing_encoding_and_package_metadata | SOURCE_VERIFIED | none |
+| F-985 | generic_price_5td_models_v1.py / pipeline | test: backend/tests/advisory_model_first/test_generic_price_5td_pipeline_v1.py::test_partial_fit_has_durable_attempt_and_no_implicit_retry；4头JSON parity | SOURCE_VERIFIED | none |
+| F-986 | generic_price_5td_inference_v1.py | test: backend/tests/advisory_model_first/test_generic_price_5td_models_v1.py::test_complete_tick_unknown_holes_no_fake_empty_or_fill；test_cost_once_hand_point_negative_net_and_partial_unknown_not_no_price | SOURCE_VERIFIED | none |
+| F-987 | generic_price_5td_pipeline_v1.py | test: backend/tests/advisory_model_first/test_generic_price_5td_pipeline_v1.py::test_complete_cohorts_no_compounding_unknown_dates_and_no_top6 | SOURCE_VERIFIED | none |
+| F-988 | §Scope/Implementation/Rollout | artifact: 10文件事前登记、三轮本窗口自审、29项一次稳定矩阵、元数据修订3定向PASS/Ruff/changed-file L0 0blocking | SOURCE_VERIFIED | none |
 
 ## Risks / Rollout / Rollback / Production Gates
 
@@ -131,3 +137,28 @@ DESIGN-COMPLIANCE-001逐项：目标、切片与最终业务分别报告，不�
 第三轮实现/测量自审：补齐多D输入函数、decision_dates显式保留空候选日、行数预算和查询接口；修订复权坐标tick必须同步转换而不是默认raw .01。四臂cohort允许重叠、不能复利伪资金NAV；未结算/正常UNKNOWN仍保留，SOURCE和收益确认分开。上述设计修订不改旧标签/模型或公共代码，三docs scope核定后再交付设计PR。
 
 自审不是独立外审；F2表格结构PASS不是实装或经济效果。
+
+## 源码审核接续（尚未宣称交付）
+
+设计#5576 currentHEAD 7aef4b363/CI37462727455 SUCCESS后合入5a74bf87d并自身官方cleanup_done23.953秒；最新main独立源码树登记10文件。第一轮业务/价格自审覆盖新label独立、成本只扣一次、全tick/支持洞/UNKNOWN不假空集；测试发现零合法tick时numpy空支持数组dtype，修订为bool并先定向失败节点复验。第二轮PIT/来源自审补齐显式decision_dates保留空D、calendar按label_cutoff截断、未来因子只label、原带法规价格snapshot而不是缺flags的raw表；输入非法因子不再悄悄转换UNKNOWN。
+
+第三轮事务/测量审核核对原子stage及字节身份、STARTED/4fit物理journal/partial不可重跑；重叠cohort不生成资金NAV，未结算null和空候选日保留，完整日期才可block5 bootstrap、不压缩未知洞。一次29项稳定矩阵/Ruff/F2 PASS；元数据与缺失说明输出追加后仅3定向PASS，不重跑整矩阵；changed-file L0 0finding/0blocking。legacy适配只读原候选定义并保持原rank，不读父alpha数值；查询跨包数值与来源元数据分开检验。以上为本窗口多视角自审，非独立外审；真实研究尚未借测试宣称完成。
+
+## 一次真实研究与当前分流
+
+run=advgp5_cca74d0498942676713c68ad，根F:/Dev/AIstock_model_artifacts/advisory_generic_price_5td_v1_20261006。plan SHA cca74d0498942676713c68ad311a4dad4467269ff4c76c83dab5e3e52361a2ce，implementation SHA 527e28b77b3a769001361ec25770bf2157dc8c807c019b084bb0ccaa74cf42cc；clean producer e16332ac9c7787a23f588237d707efcbeecb1067。合并最新main仅继承其它owner变更，新叶与既存JSON helper字节不变，研究不重跑。
+
+2026-10-06一次prepare22.204秒/0SQL，386D7720原候选完整保留，7682 AVAILABLE/17 ENTRY_NOT_EXECUTABLE/21 UNKNOWN；380前20session预热未知仍保留，所有D宽度分母未证明保持UNKNOWN。3684成熟train/193D；validation支持1586条仅诊断：candidate/matched均值MSE .00380695/.00394729，路径低于q10比例15.13%/15.20%，不能冒称q10校准通过或盈利。原五份来源hash/size、非vintage/native限制保持，既存source、旧标签和模型无修改。
+
+拟合前12:44:43UTC三公开QE running均0；一次4fit5.156秒、四臂评估合计5.531秒，拟合后12:46:25UTC仍均0。新study四fit/0index/1candidate，历次真实总数99+4=103物理fit及1历史index，不清零、未提交QE实验。完整test81个原入场D/1620候选；80个candidate/control同时可结算组相对baseline平均5TD增量−55.3839bps、相对matched−8.3124bps，差异动作55/37D。各臂1个未结算槽、1个组net=null，日期保留；不压缩空洞作block-bootstrap，因此区间明确null，不报告完整资金净收益/NAV/MDD或显著性。
+
+| arm | 已结算买入 | 单笔胜率 | 平均盈利bps | 平均亏损bps | UNKNOWN价格判断 | 未结算槽 |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | 403 | 58.3127% | 447.8628 | -322.0848 | 0 | 1 |
+| rule | 397 | 58.4383% | 450.0748 | -316.7074 | 0 | 1 |
+| D-only matched | 229 | 59.8253% | 449.3117 | -317.9002 | 12 | 1 |
+| GP5 candidate | 249 | 56.2249% | 453.0334 | -315.9700 | 12 | 1 |
+
+结论：目前GP5有真实价格函数/固定5TD标签及跨包输入解耦功能，但候选过滤没有成本后增量，NOT_CONFIRMED，仅停止本candidate；不放宽风险/净值条件、换seed/期限、回选matched或复跑旧窗救结果。此处80组均值是明确披露缺失的描述性配对，不是删1日后宣布完整研究胜利。软件交付不以本候选盈利为门禁；下一主线只能新增真实信息或新的可识别业务目标，不重复QE上游Alpha/分钟执行。跨包数学对照和single_index/index_union元数据消费已验；研究只有既存单父候选人口，未声称跨包经济泛化。
+
+研究与事实文档复审逐项核对plan/producer/4物理journal、386D7720与81testD、标签和UNKNOWN、单位5TD非每日、1未结算/区间null/非NAV、当前源码scope及0数据库/服务/profile/角色激活。正式产物保留，不追加旧失败补证或归档工作。
