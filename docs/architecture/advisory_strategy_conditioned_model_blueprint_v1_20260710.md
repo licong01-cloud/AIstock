@@ -1,7 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.63
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.64
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-07
+
+> 下一必要日频切片：[九字段DB输入F1](advisory_generic_daily_db_input_v1_f1_design_20261007.md)，只读数据库D及更早真实行情、精确D复权锚、原20session与基准，同核单日/批量三SELECT，保留原0～50候选/正常UNKNOWN；只补DB输入，不扩UI/ModelOps、不重训或为旧负研究补证。现有纯价集消费者#5641 CI37506963574 SUCCESS、合入a3a260e5/自身官方cleanup_done18.219秒；模型输出适配与后续DB/API/收益完成分别报告。联合分布仍PREPARED_ONLY_WAITING_QE，01:53北京时间半小时检查三路径0/1/6，下一检查02:23，111研究fit+1旧index不变；原producer树保留。新DB设计当前仅合同，0 DB读取/写入/fit/激活/服务操作。
 
 > 本轮必要工程辅线：[固定5TD通用价格集合消费者F1设计](advisory_generic_price_set_consumer_v1_f1_design_20261007.md)。只完成四种显式既存权重和原D输入的标准价集投影，原candidate数学/政策不变、0fit/DB/UI/激活；不同包、stock_universe/单指数/并集仅元数据，UNKNOWN不删原股。设计#5637 CI37504903491 SUCCESS、合入a10b571a8/自身官方cleanup_done19.391秒；独立四文件源码实现，多轮自审/修复、10直接测试/Ruff通过，三个真实trained权重只读装载成功、没有读收益或新增fit。源码当前CI另报，不冒称四类模型已经接入实盘API；每日DB适配后续独立切片，不以缺旧M1配置或UI阻断主线。联合分布一次研究已prepare，源码#5635 CI通过后合入；训练仍等fresh QE三0，自己的半小时只读等待已经启动，累计111研究fit+1历史index不变。自身活动producer树保留，其他已完成树官方清理均已完成。以下原历史时点结果和限制不改判。
 
