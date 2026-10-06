@@ -500,6 +500,7 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
     control = ControlStore.initialize(tmp_path / "control")
     cas = CASStore(control.root)
     source_ref = cas.put_json({"source": "fixture"})
+    frozen.source_manifest_ref = source_ref
     bundle = tmp_path / "bundle.json"
     bundle.write_text("{}\n", encoding="utf-8")
     compiled = CompiledMonthlyBuild(
