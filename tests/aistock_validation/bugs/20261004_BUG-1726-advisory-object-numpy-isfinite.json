@@ -10,17 +10,6 @@
     "tests/aistock_validation/bugs/20261004_BUG-1726-advisory-object-numpy-isfinite.json"
   ],
   "assigned_agent": null,
-  "scope_expansion": {
-    "reason": "实际冻结M1空名单链在修复数值dtype后，又暴露板块层空日期键merge失败和family空键dtype误判；同一正常空名单合同，非数据或模型缺口。",
-    "additional_files": [
-      "backend/services/advisory_model_first/economic_sector_daily_core_v1.py",
-      "backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py",
-      "backend/services/advisory_model_first/economic_sector_daily_family_v1.py",
-      "backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py"
-    ],
-    "module_boundary": "仅Advisory；不修改公共流程、QE、Selection或数据库",
-    "evidence_ref": "X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/frozen_family_empty_smoke.py"
-  },
   "bug_id": "BUG-1726",
   "closed_at": null,
   "closure_requirements": [
@@ -43,12 +32,26 @@
   ],
   "expected": "合法零候选通过相同内核返回空特征及NO_CANDIDATES；非空数学/异常合同不变",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_family_v1.py",
+      "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1726-advisory-object-numpy-isfinite.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
-      "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py"
+      "backend/services/advisory_model_first/economic_sector_daily_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_family_v1.py",
+      "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1726-advisory-object-numpy-isfinite.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
@@ -115,17 +118,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/sector-entry-price?target_trade_date=2026-08-28&list_version_id=advlv_b5c9584f3e1020e6ef9b8947475f5254",
     "fresh_process_evidence": [
       "新Python进程定向pytest test_empty_original_roster_preserves_schema_and_no_candidate_state[True] 修复前isfinite TypeError、修复后PASS；未启动用户后端，不是生产运行态验收",
       "完整冻结M1空链组合源码验证：本BUG的core/sector/family加未合入#5445 service；真实冻结权重和合成空名单返回NO_CANDIDATES，fit=0、outcomes_read=false、database_written=false。不是原published空名单证明，也不是已合入或生产运行态验收。"
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -134,6 +141,17 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion": {
+    "additional_files": [
+      "backend/services/advisory_model_first/economic_sector_daily_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_family_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py"
+    ],
+    "evidence_ref": "X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/frozen_family_empty_smoke.py",
+    "module_boundary": "仅Advisory；不修改公共流程、QE、Selection或数据库",
+    "reason": "实际冻结M1空名单链在修复数值dtype后，又暴露板块层空日期键merge失败和family空键dtype误判；同一正常空名单合同，非数据或模型缺口。"
+  },
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
