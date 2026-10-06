@@ -1,6 +1,6 @@
 # Advisory GP5-VOLUME-PATH-1：D量价路径与固定5交易日收益型买价 F2详细设计
 
-2026-10-06设计、2026-10-07源码接续；SOURCE_READY_NOT_RESEARCHED。设计#5623合入bb7c7514并自身清理。用户要求UI后置、先重启验收后新模型长任务。旧GP5/GP5-MINUTE源码与一次研究已交付，累计107研究fit+1旧index；新候选源码已完成但没有研究fit/prepare/收益结果。本文不以源码或研究胜率承诺实际利润。
+2026-10-06设计、2026-10-07源码接续；SOURCE_VERIFIED_RESEARCH_NEGATIVE_NOT_CONFIRMED。设计#5623合入bb7c7514并自身清理。用户要求UI后置、先重启验收后新模型长任务。新候选源码、prepare及计划内一次四fit/完整四臂已完成，最新累计111研究fit+1旧index。本文不以源码或研究胜率承诺实际利润。
 
 ## Background / Goal
 
@@ -93,7 +93,7 @@ preregister→prepare→trained→evaluated四原子stage，新run身份/source 
 
 ## Design Acceptance Matrix
 
-设计提交时只验收详细设计；当前精确九文件离线源码已实装，矩阵只验收该切片，真实研究fit/效果/日频运行仍未发生。单元测试fixture拟合不是研究试验。
+设计提交时只验收详细设计；当前精确九文件离线源码已实装，矩阵只验收该切片。真实一次研究如下，经济确认、日频运行和激活未发生。单元测试fixture拟合不是研究试验。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -126,3 +126,22 @@ DESIGN-COMPLIANCE-001：完整离线合同不得简化/假完成；正常未知�
 第三轮收益/授权：拒买收益归因与unknown控制分开，完整日/槽/未结算null、重叠非NAV；旧107研究fit不重置。NOT_CONFIGURED语义验收未过只保留工程辅线，不擅自配置/改公共smoke、不阻本研究。上述为本窗口不同视角自审，不冒称独立外审。
 
 源码第一轮17项定向PASS：同33/39维、共享监督、test Inf毒化不影响训练、完整D读取不解码T、正常未知保留行、原子stage/partial不能隐式重fit、成本与原Top5槽保持。第二轮复核补齐最多386原D预算、合法tick支持空洞与读取期间源变化的2项定向PASS；新增三量范围矛盾显式失败而非伪未知。第三轮核对拒买归因：相对原Top5的已知拒绝收益严格等于避免亏损−错过上涨，UNKNOWN空槽另项且完整组总贡献与配对差额逐组代数对账；不将未结算获利猜为零。旧四类GP5/GP5-MINUTE代码、权重与正式产物未改。本切片是完整离线新模型，不包含API/UI挂载；最终最小矩阵与生产门分别报告。
+
+## 实际一次研究与结果驱动分流
+
+clean producer a55f0a6270025b4ee91ef0b404f445a846e4477a；implementation SHA 60d1d984b01cae599f9c8041bf6ceb0de832275241adb77fb7a1c585ad9b81c8。新run advgp5volume_45dbd44d9afa27fa1889191c、plan SHA 45dbd44d9afa27fa1889191c31fc99f4fae7446c1df04afc3c76125df61dc1a0，正式root为本设计声明路径。prepared/trained/evaluated stage SHA分别e6db3aba8b27b631649667871f1646236d87ac977565070ac63c662f1c5b4075 / ee6e1c4ed0cd3a86c6bffde2a95ff2542e3d1428e3039ce3e9fdc4873b79ef76 / 69b56d41bd22b2efe80a80f637d1be22ec25ed88018a42b4bad7248ddf809b8c；父GP5 prepared SHA未变。四head journal恰4项，累计107→111研究fit+1历史index。
+
+prepare11.422秒、原386D/7720KEY保留，7660完整OHLC/60partial，新三量及十分钟特征全部7720行已知（测量规则内的partial仍显式保留）；不表示完整逐笔/VWAP或历史vintage。训练同3684成熟行/193D、validation1586仅诊断，train全4380行分钟量已知。2026-10-06 16:15:21UTC fresh QE single/custom_evo/multi-alpha三0后一次四fit，TRAINED9.953秒、至四臂EVALUATED10.531秒；16:16:54UTC三0读回。0QE提交/DB写/未来分钟解码/Selection重建。
+
+80共同完整5TD cohort（四臂使用同一分母；matched单独还有1个已拒买零收益日，不与其它臂的80日均值混比）：
+
+| arm | 平均净收益bps/5TD cohort | 已结算TAKE | TAKE胜率 | known avoid / UNKNOWN / 不可执行 / 未结算 |
+|---|---:|---:|---:|---|
+| 原Top5 baseline | 129.0145 | 403 | 58.3127% | 0 / 0 / 1 / 1 |
+| 固定±300bps rule | 131.5724 | 397 | 58.4383% | 6 / 0 / 1 / 1 |
+| 33维matched | 85.3567 | 265 | 56.6038% | 127 / 12 / 1 / 0 |
+| 39维candidate | 81.4711 | 256 | 56.2500% | 135 / 12 / 1 / 1 |
+
+candidate−baseline/matched为−47.5435/−3.8856bps每5TD cohort。相对base135项已知干预/54D及3D仅UNKNOWN差异；相对matched26项已知干预/22D、UNKNOWN-only差异0。已知拒买平均避免亏损39.8462bps、错过上涨89.4341bps，净贡献−49.5879bps；UNKNOWN空槽贡献+2.0444bps不归模型，两者严格对账至−47.5435bps。TAKE统计使用各自全81D已结算事件，不能替代同80组配对净收益。81testD/1620候选保留，1配对组未结算null，block5区间null、非投资NAV/MDD，EXPLORATORY_SCREEN/NAVIGATION_ONLY，不支持经济确认或激活。
+
+结果后第四视角复核：输入十量可测量并没有解决误拒盈利股票，不能把去除VWAP缺失称为收益提升；本candidate结束，不换阈值/seed/loss补救。下一主线事前设计联合收益/风险分布模型，在同固定5TD合同内研究结构差异，旧模型与成果不覆盖、UI不阻研发。最终19项小矩阵/Ruff、九文件L0 0blocking（唯一P2是已审的<=7720 unique KEY one-to-one左join）、F2九项0warnings均PASS；结果追加后不再拟合或重复跑旧研究。当前源码待当前HEAD CI交付，backend/DB/profile/dependency/activation/process均NOOP。
