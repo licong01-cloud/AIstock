@@ -4206,8 +4206,10 @@ def _validate_hmm_research_records(payload: Any, *, url: str) -> tuple[str, str 
                 or row.get("research_domain") != "hmm" or row.get("pipeline_type") != "hmm_research"
                 or row.get("record_version") != "hmm_backtest_record_v1"):
             return "failed", "HMM research record does not match requested experiment/source identity", {}
-        for field in ("record_key_sha256", "hmm_config_sig", "non_hmm_config_sig"):
-            if not isinstance(row.get(field), str) or re.fullmatch(r"[0-9a-f]{64}", row[field]) is None:
+        for field, pattern in (("record_key_sha256", r"[0-9a-f]{64}"),
+                               ("hmm_config_sig", r"[0-9a-f]{12}"),
+                               ("non_hmm_config_sig", r"[0-9a-f]{12}")):
+            if not isinstance(row.get(field), str) or re.fullmatch(pattern, row[field]) is None:
                 return "failed", f"HMM research record is missing {field}", {}
         keys.append(row["record_key_sha256"])
     if len(set(keys)) != len(keys):

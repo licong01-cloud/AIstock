@@ -868,13 +868,16 @@ def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
 
 
 @pytest.mark.parametrize("kind,case,expected", [
-    ("worker", "valid", "passed"), ("worker", "empty", "failed"), ("worker", "no_query", "failed"),
-    ("worker", "stale", "failed"), ("worker", "future", "failed"), ("worker", "wrong_owner", "failed"),
-    ("worker", "duplicate", "failed"), ("worker", "pid_bool", "failed"),
-    ("risk", "valid", "passed"), ("risk", "no_query", "failed"), ("risk", "wrong_run", "failed"),
-    ("risk", "unvalidated", "failed"), ("risk", "tail", "failed"), ("risk", "counts", "failed"),
-    ("records", "valid", "passed"), ("records", "empty", "failed"), ("records", "wrong_task", "failed"),
-    ("records", "duplicate", "failed"), ("health", "valid", "failed"),
+    *((kind, "valid", "passed") for kind in ("worker", "risk", "records")), ("health", "valid", "failed"),
+    *(("worker", case, "failed") for case in ("empty", "no_query", "stale", "future", "wrong_owner", "duplicate", "pid_bool")),
+    *(("risk", case, "failed") for case in ("no_query", "wrong_run", "unvalidated", "tail", "counts")),
+    *(("records", case, "failed") for case in ("empty", "duplicate", "no_query")),
+    *(("records", (field, "other"), "failed") for field in (
+        "experiment_id", "source_task_id", "research_domain", "pipeline_type", "record_version")),
+    *(("records", (field, value), "failed") for field, width in (
+        ("record_key_sha256", 64), ("hmm_config_sig", 12), ("non_hmm_config_sig", 12))
+      for value in (None, False, 123, "", "a" * (width - 1), "a" * (width + 1), "g" * width, "A" * width,
+                    "a" * (12 if width == 64 else 64))),
 ])
 def test_hmm_readonly_semantics_bind_real_evidence(kind, case, expected):
     now = workflow.datetime.now(workflow.timezone.utc)
@@ -885,7 +888,7 @@ def test_hmm_readonly_semantics_bind_real_evidence(kind, case, expected):
                 unavailable_count=11, warning_count=10, unknown_warning_count=0), dates=["2026-10-06"],
                 trade_date="2026-10-06", as_of_date="2026-10-05", tail_accessed=False, research_surface_status="AVAILABLE_EXPERIMENTAL")
     record = dict(experiment_id="exp-a", source_task_id="task-a", pipeline_type="hmm_research", research_domain="hmm",
-                  record_version="hmm_backtest_record_v1", record_key_sha256="a" * 64, hmm_config_sig="b" * 64, non_hmm_config_sig="c" * 64)
+                  record_version="hmm_backtest_record_v1", record_key_sha256="a" * 64, hmm_config_sig="0123456789ab", non_hmm_config_sig="abcdef012345")
     path = {"worker": "hmm-evolution/workers?owner_id=worker-a", "risk": "hmm-risk/risk-l2/overview?run_id=" + "a" * 64,
             "records": "research-pipeline/experiments/exp-a/backtest-records?research_domain=hmm&source_task_id=task-a",
             "health": "research-pipeline/health"}[kind]
@@ -895,10 +898,10 @@ def test_hmm_readonly_semantics_bind_real_evidence(kind, case, expected):
                  "future": (worker, "last_poll_at", "2099-01-01T00:00:00+00:00"),
                  "wrong_owner": (worker, "owner_id", "other"), "pid_bool": (worker, "pid", True),
                  "wrong_run": (risk, "run_id", "f" * 64), "unvalidated": (risk, "research_surface_status", "NOT_AVAILABLE"),
-                 "tail": (risk, "tail_accessed", True), "counts": (risk["day_summary"], "available_count", True),
-                 "wrong_task": (record, "source_task_id", "other")}
-    if case in mutations:
-        target, key, value = mutations[case]
+                 "tail": (risk, "tail_accessed", True), "counts": (risk["day_summary"], "available_count", True)}
+    mutation = (record, *case) if isinstance(case, tuple) else mutations.get(case)
+    if mutation:
+        target, key, value = mutation
         target[key] = value
     if case == "empty":
         data = {"workers": []} if kind == "worker" else []
@@ -909,6 +912,10 @@ def test_hmm_readonly_semantics_bind_real_evidence(kind, case, expected):
     semantic = _business_semantic("http://127.0.0.1:8001/api/v1/" + path,
                                  {"status": "ok" if kind in {"worker", "risk"} else "success", "data": data}, "f" * 64)
     assert semantic["verdict"] == expected and semantic["contract_id"] is not None
+    if kind == "records" and isinstance(case, tuple) and case[1] == "other":
+        assert "experiment/source identity" in semantic["reason"]
+    if kind == "records" and case == "duplicate":
+        assert "duplicate canonical records" in semantic["reason"]
     if kind == "health":
         assert semantic["facts"]["route_ready"] is True and "readiness only" in semantic["reason"]
 
