@@ -123,7 +123,7 @@ def read_d_minute_features_v1(*, roster, identity, active_profile_path):
     profile = _json(profile_path)
     actual = (Path(profile["controller_paths"]["candidate_root"])/"components/minute_bin_candidate").resolve()
     if (not Path(identity.minute_root).is_absolute() or actual != root
-            or profile["generation"] != identity.generation or set(identity.pins) != set(PINS)
+            or profile["generation"] != identity.generation or not set(PINS).issubset(identity.pins)
             or profile["components"]["minute_pins"] != identity.pins):
         raise ValueError("minute actual active profile identity differs")
     for name, relative in PINS.items():
@@ -131,6 +131,8 @@ def read_d_minute_features_v1(*, roster, identity, active_profile_path):
         if path.stat().st_size > 16*1024**2 or file_sha256(path) != identity.pins[name]:
             raise ValueError("minute component metadata hash differs")
     meta = _json(root/"meta_export.json")
+    if any(meta.get(name) != identity.pins[name] for name in ("rule_version", "snapshot_id", "universe_key") if name in identity.pins):
+        raise ValueError("minute component semantic identity differs")
     if "1min" not in meta.get("freq_types", ()):
         raise ValueError("minute source frequency differs")
     calendar = pd.DatetimeIndex(pd.to_datetime((root/PINS["calendar_sha256"]).read_text().splitlines()))

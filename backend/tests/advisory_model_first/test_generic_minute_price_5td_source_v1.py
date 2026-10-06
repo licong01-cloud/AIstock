@@ -31,13 +31,14 @@ def minute_provider(tmp_path):
         future = slots[0]+pd.Timedelta(days=1)
         (root/"calendars/1min.txt").write_text("\n".join(str(v) for v in [*slots, future])+"\n")
         (root/"instruments/all.txt").write_text("000001.SZ\n")
-        (root/"meta_export.json").write_text(json.dumps(dict(freq_types=["1min"], start=day, end=str(future.date()))))
+        semantics = dict(rule_version="unit-rule", snapshot_id="minute-unit", universe_key="unit-universe")
+        (root/"meta_export.json").write_text(json.dumps(dict(freq_types=["1min"], start=day, end=str(future.date()), **semantics)))
         for field in FIELDS:
             # Infinity on T proves that the provider does not decode the later price.
             (root/"features/000001.sz"/(field+".1min.bin")).write_bytes(
                 np.r_[0., arrays[field], np.inf].astype("<f4").tobytes())
         identity = dict(generation="unit-current", minute_root=str(root),
-                        pins={name: file_sha256(root/relative) for name, relative in PINS.items()})
+                        pins={name: file_sha256(root/relative) for name, relative in PINS.items()} | semantics)
         profile = tmp_path/"active.json"
         profile.write_text(json.dumps(dict(generation="unit-current", controller_paths=dict(candidate_root=str(root.parent.parent)),
                                            components=dict(minute_pins=identity["pins"]))))
