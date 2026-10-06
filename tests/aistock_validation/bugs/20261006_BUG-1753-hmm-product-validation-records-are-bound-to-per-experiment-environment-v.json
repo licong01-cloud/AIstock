@@ -11,6 +11,7 @@
     "backend/services/hmm_risk/product_validation_store.py",
     "backend/tests/hmm_risk/test_product_validation_store.py",
     "scripts/hmm_risk/register_product_validation.py",
+    "backend/tests/hmm_risk/test_register_product_validation.py",
     "tests/aistock_validation/bugs/20261006_BUG-1753-hmm-product-validation-records-are-bound-to-per-experiment-environment-v.json"
   ],
   "assigned_agent": null,
@@ -188,6 +189,7 @@
       "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
       "backend/services/hmm_risk/product_validation_store.py",
       "backend/tests/hmm_risk/test_product_validation_store.py",
+      "backend/tests/hmm_risk/test_register_product_validation.py",
       "scripts/hmm_risk/register_product_validation.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",

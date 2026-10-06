@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import pytest
 from datetime import date
-import json
 from pathlib import Path
-import subprocess
-import sys
 
 from backend.routers import hmm_risk
 from backend.services.hmm_risk import product_validation_store as store
@@ -203,35 +200,6 @@ def test_risk_l2_same_repository_reads_new_result_and_preserves_deployment_bindi
     assert repo._surface(run) == "AVAILABLE_EXPERIMENTAL"
     repo.deployment_commit = "e" * 40
     assert repo._surface(run) == "NOT_AVAILABLE"
-
-
-@pytest.mark.parametrize("duplicate_field", [False, True])
-def test_cli_registers_an_existing_result_without_db_env_or_server(tmp_path, duplicate_field):
-    record = _record("rotation_l2")
-    source = tmp_path / "existing-result.json"
-    payload = json.dumps(record)
-    if duplicate_field:
-        payload = payload.replace('"writer_readback": true', '"writer_readback": false, "writer_readback": true')
-    source.write_text(payload, encoding="utf-8")
-    command = [
-        sys.executable,
-        "-m",
-        "scripts.hmm_risk.register_product_validation",
-        "--receipt",
-        str(source),
-        "--store-root",
-        str(tmp_path / "store"),
-    ]
-    result = subprocess.run(command, check=False, text=True, capture_output=True)
-    if duplicate_field:
-        assert result.returncode != 0
-        assert "duplicate fields" in result.stderr
-        assert not (tmp_path / "store").exists()
-        return
-    assert result.returncode == 0, result.stderr
-    value = json.loads(result.stdout)
-    assert value["registration_readback"] is True
-    assert store.read_receipt(Path(value["path"])) == record
 
 
 @pytest.mark.parametrize("raw", ['{"x":NaN}', '{"x":1,"x":2}'])
