@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "risk_l2_value_replay与CLI/test组合runtime none,target_ids空；hmm_risk router等仍backend-main。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261006_BUG-1766-cli-only-hmm-risk-value-replay-is-incorrectly-classified-as-backend-runt.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "tests/aistock_validation/bugs/20261006_BUG-1766-cli-only-hmm-risk-value-replay-is-incorrectly-classified-as-backend-runt.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "docs/standards/aistock_runtime_targets_v1.yaml",
@@ -109,10 +115,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
