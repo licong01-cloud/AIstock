@@ -418,6 +418,9 @@ def audit_margin_publication(
     gate: GateCounter,
     minimum_rows: int = 0,
     deferred_authority_sha256: str | None = None,
+    suspend_rows: Iterable[Mapping[str, Any]] = (),
+    daily_rows: Iterable[Mapping[str, Any]] = (),
+    suspend_authority_sha256: str | None = None,
 ) -> None:
     """Independently declared provider denominator, not all-equity eligibility.
 
@@ -444,11 +447,51 @@ def audit_margin_publication(
     expected = next(iter(bounds)) if declared else None
     keys = [str(row.get("ts_code")) for row in rows]
     unique = set(keys)
+    suspended: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    daily: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in suspend_rows:
+        if _day(row["trade_date"]) == day:
+            suspended[str(row["ts_code"])].append(row)
+    for row in daily_rows:
+        if _day(row["trade_date"]) == day:
+            daily[str(row["ts_code"])].append(row)
+    explained: list[tuple[str, tuple[str, ...]]] = []
+    invalid_fields: dict[str, list[str]] = {}
+    for row in rows:
+        symbol = str(row.get("ts_code"))
+        missing = tuple(name for name in _MARGIN_DETAIL_VALUES if not _finite(row.get(name)))
+        if not missing:
+            continue
+        suspensions, prices = suspended.get(symbol, []), daily.get(symbol, [])
+        full_suspensions = [item for item in suspensions if item.get("suspend_type") == "S"
+                            and not str(item.get("suspend_timing") or "").strip()]
+        eligible = (
+            bool(missing) and set(missing) <= {"rqye", "rzrqye"}
+            and all(row.get(name) is None for name in missing)
+            and isinstance(suspend_authority_sha256, str)
+            and re.fullmatch(r"[0-9a-f]{64}", suspend_authority_sha256) is not None
+            # Match the existing frozen full-day-S contract. An R event may
+            # coexist with its materialized S day; independent zero turnover
+            # is still mandatory and duplicate full-day S facts are rejected.
+            and len(full_suspensions) == 1
+            and all(item.get("suspend_type") in {"S", "R"} for item in suspensions)
+            and len(prices) == 1
+        )
+        if eligible:
+            try:
+                values = _ohlcv(prices[0])
+                eligible = values["vol"] == values["amount"] == 0
+            except MonthlySourceAuditError:
+                eligible = False
+        if eligible:
+            explained.append((symbol, missing))
+        else:
+            invalid_fields[symbol] = list(missing)
     valid = (
         declared
         and len(unique) >= max(expected, minimum_rows)
         and len(keys) == len(unique)
-        and all(all(_finite(row.get(name)) for name in _MARGIN_DETAIL_VALUES) for row in rows)
+        and not invalid_fields
     )
     reason = (
         "provider_denominator_unproven" if not declared
@@ -457,10 +500,18 @@ def audit_margin_publication(
     )
     gate.check(("margin_detail", day), [{}] if rows else [], valid=lambda _: valid, dataset="margin_detail",
                invalid_reason=reason, invalid_details={"declared_expected_rows": expected,
-                   "minimum_rows": minimum_rows, "observed_unique_rows": len(unique)},
+                   "minimum_rows": minimum_rows, "observed_unique_rows": len(unique),
+                   "invalid_fields_by_symbol": invalid_fields},
                missing_reason=reason, missing_details={"declared_expected_rows": expected,
                    "minimum_rows": minimum_rows, "observed_unique_rows": 0})
     gate.duplicate_count += len(keys) - len(unique)
+    if valid:
+        for symbol, fields in explained:
+            # The fact row remains published and unchanged. Only these NULL
+            # quote-value fields are explained; no financing quantity is filled.
+            gate.check((symbol, day), [], valid=lambda _: False, dataset="margin_detail",
+                exception=TypedGap("margin_detail", symbol, day.isoformat(), day.isoformat(),
+                    ",".join(fields), "SUSPEND_FULL_DAY", suspend_authority_sha256))
 
 
 def audit_prepared_limit_source(*, cas, frozen, profile, raw_gate, input_root, artifact_root,
@@ -801,6 +852,11 @@ def audit_frozen_source(
                     gate=counters["financial_moneyflow"],
                     minimum_rows=MARGIN_DETAIL.min_expected_rows if day > predecessor_cutoff else 0,
                     deferred_authority_sha256=deferred_margin_authority_sha256 if day == frozen.official_cutoff else None,
+                    suspend_rows=[row for (symbol, row_day), values in indexed.get("suspend_d", {}).items()
+                                  if row_day == day for row in values],
+                    daily_rows=[row for (symbol, row_day), values in indexed.get("kline_daily_raw", {}).items()
+                                if row_day == day for row in values],
+                    suspend_authority_sha256=frozen.source_manifest_ref.sha256,
                 )
     result: list[SourceGateEvidence] = []
     artifacts = [
