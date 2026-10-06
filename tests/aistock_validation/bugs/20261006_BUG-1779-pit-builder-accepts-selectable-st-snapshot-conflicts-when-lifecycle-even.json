@@ -28,34 +28,20 @@
     "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/dev-source-readback.json",
     "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/dev-pit-readback.json"
   ],
-  "fix_verification": {
-    "root_cause": "Stock ST date audits accepted empty_valid while the upstream now supplies missing historical lifecycle events; some affected dates also have provider_contract_error. Event-only span checks and snapshot-date continuity did not cross-check independent positive ST risk state. Canonical live migration remains separately tracked by BUG-1685.",
-    "repair": "Shared builder audits only the target month plus one causal ST snapshot anchor, requires positive typed restore evidence, and refuses ST/terminal eligibility conflicts before any span write. No source events, prices, availability timestamps or eligibility intervals are synthesized.",
-    "source_rows_sha256": "e35508aebc1612df3e931ed653220df9fa7c85a21012002cb0b392fd46020455",
-    "dev_validation": "22 Tushare ST source rows verified; 13 missing rows inserted in existing DEV only, 0 existing rows overwritten. Formal all-market PIT computation examined 5560 source stocks / 5662 spans; September 2026 (21 sessions) conflict_symbol_count=0 and conflict_key_count=0. No derived-span writes or candidate activation performed.",
-    "dev_receipt_sha256": "fa321effa5177bd9f87fd880dea06171e0c906280c32b119a567c14da82ddcfb",
-    "production_authorization": "pending: exact 13 insert-only market.stock_st_events keys and owning PIT rebuild require separate authorization",
-    "production_apply": "noop",
-    "profile_activation": "noop",
-    "review_rounds": [
-      "RED: missing cross-source validator caused four targeted failures. GREEN: target-month scope, causal boundary, positive restore and before-write placement pass.",
-      "Second review: same-day ST observation defeats a conflicting restore, future restores do not leak, terminal exits cannot re-enter; immutable dataclass test setup corrected. Independent fresh DEV source and all-market monthly readback passed."
-    ],
-    "design_compliance": {
-      "no_partial_as_complete": "Only source guard and DEV correction reported; production repair, immutable monthly release and canonical activation remain pending.",
-      "no_silent_error": "Independent positive ST/terminal evidence conflicts are typed failures with exact stock/date keys, not empty success or manually rewritten ready.",
-      "business_semantics_unchanged": "252-session IPO, announcement-as-of ST restore/terminal semantics and legitimate pre-risk history remain unchanged; QE/HMM/Selection consumer code untouched.",
-      "no_unapproved_gates": "Implements the user's existing ST/terminal exclusion requirement; audit stays within target month, no new full-history quote audit or approval system."
-    }
-  },
   "expected": "Latest-month PIT selectable intervals exclude authoritative ST risk state and terminal events; missing event evidence cannot yield ready; causal publication/restore semantics and historical provider data remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1779-pit-builder-accepts-selectable-st-snapshot-conflicts-when-lifecycle-even.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/test_stock_universe_pit_spans.py",
       "scripts/build_stock_universe_pit_spans.py",
-      "backend/tests/test_stock_universe_pit_spans.py"
+      "tests/aistock_validation/bugs/20261006_BUG-1779-pit-builder-accepts-selectable-st-snapshot-conflicts-when-lifecycle-even.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/build_stock_universe_pit_spans.py",
@@ -113,6 +99,26 @@
   "first_seen_at": "2026-10-06T18:47:07.126737Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_verification": {
+    "design_compliance": {
+      "business_semantics_unchanged": "252-session IPO, announcement-as-of ST restore/terminal semantics and legitimate pre-risk history remain unchanged; QE/HMM/Selection consumer code untouched.",
+      "no_partial_as_complete": "Only source guard and DEV correction reported; production repair, immutable monthly release and canonical activation remain pending.",
+      "no_silent_error": "Independent positive ST/terminal evidence conflicts are typed failures with exact stock/date keys, not empty success or manually rewritten ready.",
+      "no_unapproved_gates": "Implements the user's existing ST/terminal exclusion requirement; audit stays within target month, no new full-history quote audit or approval system."
+    },
+    "dev_receipt_sha256": "fa321effa5177bd9f87fd880dea06171e0c906280c32b119a567c14da82ddcfb",
+    "dev_validation": "22 Tushare ST source rows verified; 13 missing rows inserted in existing DEV only, 0 existing rows overwritten. Formal all-market PIT computation examined 5560 source stocks / 5662 spans; September 2026 (21 sessions) conflict_symbol_count=0 and conflict_key_count=0. No derived-span writes or candidate activation performed.",
+    "production_apply": "noop",
+    "production_authorization": "pending: exact 13 insert-only market.stock_st_events keys and owning PIT rebuild require separate authorization",
+    "profile_activation": "noop",
+    "repair": "Shared builder audits only the target month plus one causal ST snapshot anchor, requires positive typed restore evidence, and refuses ST/terminal eligibility conflicts before any span write. No source events, prices, availability timestamps or eligibility intervals are synthesized.",
+    "review_rounds": [
+      "RED: missing cross-source validator caused four targeted failures. GREEN: target-month scope, causal boundary, positive restore and before-write placement pass.",
+      "Second review: same-day ST observation defeats a conflicting restore, future restores do not leak, terminal exits cannot re-enter; immutable dataclass test setup corrected. Independent fresh DEV source and all-market monthly readback passed."
+    ],
+    "root_cause": "Stock ST date audits accepted empty_valid while the upstream now supplies missing historical lifecycle events; some affected dates also have provider_contract_error. Event-only span checks and snapshot-date continuity did not cross-check independent positive ST risk state. Canonical live migration remains separately tracked by BUG-1685.",
+    "source_rows_sha256": "e35508aebc1612df3e931ed653220df9fa7c85a21012002cb0b392fd46020455"
+  },
   "fixed_at": null,
   "github_issue_number": 5647,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5647",
@@ -134,10 +140,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
