@@ -100,13 +100,13 @@ profile仅用于来源身份，不能据其未来发布时点声称D原生captur
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-989 | generic_minute_price_5td_contracts_v1.py / pipeline._load | test: test_generic_minute_price_5td_pipeline_v1.py::test_immutable_prepare_preserves_label_rows_and_no_later_profile_dependency | SOURCE_VERIFIED | none |
-| F-990 | generic_minute_price_5td_source_v1.py | test: test_reader_only_D_bytes_keeps_missing_stocks_and_pin_errors；test_truncated_or_invalid_header_rejected；test_source_change_detected_without_lookahead | SOURCE_VERIFIED | none |
-| F-991 | source.aggregate_d_minute_features_v1 | test: test_hand_minute_values_lunch_and_activity_coordinate；test_original_denominator_endpoints_missing_activity_and_normal_halt | SOURCE_VERIFIED | none |
-| F-992 | generic_minute_price_5td_models_v1.py | test: test_four_shared_fits_dimensions_missing_and_package_invariance；test_future_poison_never_changes_weights_medians_or_support | SOURCE_VERIFIED | none |
-| F-993 | models / pipeline.train_minute_price_5td_study_v1 | test: 四真实单元fit/逐头JSON parity；test_partial_physical_fit_is_durable_and_cannot_implicitly_restart | SOURCE_VERIFIED | none |
-| F-994 | generic_minute_price_5td_inference_v1.py | test: test_cost_once_full_ticks_holes_and_not_an_open_forecast；test_bundle_identity_known_contradiction_and_all_daily_stock_unknown | SOURCE_VERIFIED | none |
-| F-995 | pipeline.evaluate_minute_price_5td_cohorts_v1 | test: test_all_dates_unknown_settlement_and_no_top6_pseudo_NAV；真实干预与仅UNKNOWN动作差异分报 | SOURCE_VERIFIED | none |
+| F-989 | generic_minute_price_5td_contracts_v1.py / pipeline._load | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_pipeline_v1.py::test_immutable_prepare_preserves_label_rows_and_no_later_profile_dependency | SOURCE_VERIFIED | none |
+| F-990 | generic_minute_price_5td_source_v1.py | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_source_v1.py::test_reader_only_D_bytes_keeps_missing_stocks_and_pin_errors；同文件truncated/header/source-change测试 | SOURCE_VERIFIED | none |
+| F-991 | source.aggregate_d_minute_features_v1 | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_source_v1.py::test_hand_minute_values_lunch_and_activity_coordinate；同文件original-denominator/missing/halt测试 | SOURCE_VERIFIED | none |
+| F-992 | generic_minute_price_5td_models_v1.py | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_models_v1.py::test_four_shared_fits_dimensions_missing_and_package_invariance；同文件future-poison测试 | SOURCE_VERIFIED | none |
+| F-993 | models / pipeline.train_minute_price_5td_study_v1 | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_pipeline_v1.py::test_partial_physical_fit_is_durable_and_cannot_implicitly_restart；模型fixture四真实单元fit/逐头JSON parity | SOURCE_VERIFIED | none |
+| F-994 | generic_minute_price_5td_inference_v1.py | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_models_v1.py::test_cost_once_full_ticks_holes_and_not_an_open_forecast；同文件bundle/known-contradiction测试 | SOURCE_VERIFIED | none |
+| F-995 | pipeline.evaluate_minute_price_5td_cohorts_v1 | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_pipeline_v1.py::test_all_dates_unknown_settlement_and_no_top6_pseudo_NAV；真实干预与仅UNKNOWN动作差异分报 | SOURCE_VERIFIED | none |
 | F-996 | pipeline/Scope/Implementation/Rollout | artifact: 精确scope、三轮修订、17最终矩阵/Ruff及explicit changed-file L0 0blocking | SOURCE_VERIFIED | none |
 
 最小测试：float32截断/坏头/未来slot/路径越界/源变化、原名单重复与正常缺文件；手工分钟OHLC/午休/amount-volume同集合/零量/80%分母/停牌；validation/test毒化不改median/support/权重、19/35维同train与四fit JSON parity/旧schema拒绝；完整tick未知洞/元数据解耦；原日期/零候选/未结算null/不补Top6/原stage及partial。复用同叶fixture，避免快照/重复测试债务；不展开QE或其它模块套件。
