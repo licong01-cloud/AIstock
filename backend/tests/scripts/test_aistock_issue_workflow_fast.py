@@ -855,7 +855,7 @@ def test_repository_runtime_catalog_preserves_representative_roles(
     assert payload["target_ids"] == expected_targets
 
 
-@pytest.mark.parametrize("monthly", [True, False])
+@pytest.mark.parametrize("monthly", [True, False, "construction"])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
@@ -869,6 +869,8 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
         "backend/services/dataset_release/monthly_worker_nodes.py",
         "backend/services/dataset_release/monthly_worker_runtime.py",
     ]
+    if monthly == "construction":
+        monthly_sources = ["backend/services/dataset_release/monthly_construction_facts.py"]
 
     selected, error = workflow._select_runtime_probe_route(
         target, runtime_files=monthly_sources if monthly else ["backend/services/dataset_release/build_stage.py"],

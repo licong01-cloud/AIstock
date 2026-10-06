@@ -1,6 +1,8 @@
 {
   "actual": "SOURCE failed 2026-10-06T01:59:10Z with MonthlyReleaseError stage progress fields differ at monthly_construction_facts.py line49.",
   "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "backend/services/dataset_release/monthly_construction_facts.py",
     "backend/tests/dataset_release/test_monthly_construction_facts.py",
     "tests/aistock_validation/bugs/20261006_BUG-1749-monthly-source-construction-boundary-telemetry-violates-durable-progress.json"
@@ -14,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-06T01:59:53.995108Z",
-  "description": "SOURCE failed 2026-10-06T01:59:10Z with MonthlyReleaseError stage progress fields differ at monthly_construction_facts.py line49.",
+  "description": "SOURCE failed 2026-10-06T01:59:10Z with MonthlyReleaseError stage progress fields differ at monthly_construction_facts.py line49. Scope extends to the exact monthly construction runtime probe route and its regression: this helper is supervised by the existing monthly worker but is missing from that route's eligibility list. Preserve identity/process supervision and restart requirements; no data gate or service control changes.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -108,6 +110,7 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
     "inference_basis": "planned_scope",
