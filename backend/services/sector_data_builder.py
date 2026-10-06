@@ -1419,11 +1419,16 @@ SELECT
     l2_mf.agg_buy_elg_vol, l2_mf.agg_sell_elg_vol,
     l2_mf.agg_net_vol
 FROM pit
-JOIN market.sw_daily sd
+LEFT JOIN market.sw_daily sd
   ON pit.l2_code = sd.ts_code
  AND sd.trade_date = %(trade_date)s
 LEFT JOIN l2_mf
   ON pit.l2_code = l2_mf.l2_code
+-- The preflight already rejects missing published quotes. Unpublished
+-- industries retain their real membership and aggregated moneyflow rows.
+WHERE sd.ts_code IS NOT NULL OR pit.l2_code IN (
+    SELECT index_code FROM market.sw_index_classify WHERE is_pub = '0'
+)
 ON CONFLICT (trade_date, ts_code) DO UPDATE SET
     sw2_open            = EXCLUDED.sw2_open,
     sw2_high            = EXCLUDED.sw2_high,
@@ -1502,7 +1507,7 @@ class SectorDataBuilder:
                     logger.warning(
                         "sector_data build_date %s: %d stocks exempted from the "
                         "sw_daily contract (unpublished is_pub=0 L2 indices); "
-                        "they are skipped for this day",
+                        "quote fields remain null; real moneyflow rows are retained",
                         trade_date,
                         unpublished_l2_exempted,
                     )
