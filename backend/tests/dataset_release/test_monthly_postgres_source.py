@@ -781,6 +781,57 @@ def test_margin_uses_independent_provider_bound_not_all_stock_count(defect):
     assert gate.status == ("PASS" if defect is None else "BLOCKED")
 
 
+@pytest.mark.parametrize("defect", [None, "resume_and_suspend_zero", "no_suspend", "intraday", "resume", "duplicate_suspend",
+    "positive_volume", "positive_amount", "missing_daily", "duplicate_daily", "other_null", "nan", "no_hash", "partial"])
+def test_margin_suspended_quote_nulls_require_independent_zero_turnover(defect):
+    from backend.services.dataset_release.source_authority import _MARGIN_DETAIL_VALUES
+    values = [{"ts_code": SYMBOL, **dict.fromkeys(_MARGIN_DETAIL_VALUES, 1.0)}]
+    values[0].update(rqye=None, rzrqye=None)
+    source = {"data_source":"tushare", "status":"success", "error_present":False,
+              "quality_status":"complete", "expected_rows":1}
+    receipt = {"eligible_sources":{"margin_detail":["tushare"]},
+               "eligible_quality_statuses":{"margin_detail":["complete"]},
+               "rows":[{"dataset":"margin_detail", "trade_date":DAY.isoformat(), "sources":[source]}]}
+    suspension = [{"ts_code":SYMBOL, "trade_date":DAY, "suspend_type":"S", "suspend_timing":None}]
+    daily = [{"ts_code":SYMBOL, "trade_date":DAY, "open_li":1000, "high_li":1000,
+              "low_li":1000, "close_li":1000, "volume_hand":0, "amount_li":0}]
+    authority = "a" * 64
+    if defect == "no_suspend":
+        suspension = []
+    elif defect == "resume_and_suspend_zero":
+        suspension.append({**suspension[0], "suspend_type":"R"})
+    elif defect == "intraday":
+        suspension[0]["suspend_timing"] = "09:30-10:00"
+    elif defect == "resume":
+        suspension[0]["suspend_type"] = "R"
+    elif defect == "duplicate_suspend":
+        suspension.append(dict(suspension[0]))
+    elif defect in {"positive_volume","positive_amount"}:
+        daily[0]["volume_hand" if defect == "positive_volume" else "amount_li"] = 1
+    elif defect == "missing_daily":
+        daily = []
+    elif defect == "duplicate_daily":
+        daily.append(dict(daily[0]))
+    elif defect == "other_null":
+        values[0]["rzye"] = None
+    elif defect == "nan":
+        values[0]["rqye"] = float("nan")
+    elif defect == "no_hash":
+        authority = None
+    elif defect == "partial":
+        source["expected_rows"] = 2
+    gate = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=DAY, rows=values, receipt=receipt, gate=gate,
+                            suspend_rows=suspension, daily_rows=daily, suspend_authority_sha256=authority)
+    assert gate.status == ("PASS" if defect in {None,"resume_and_suspend_zero"} else "BLOCKED")
+    assert values[0]["rzrqye"] is None  # Never synthesize the published value.
+    if defect in {None,"resume_and_suspend_zero"}:
+        assert gate.expected_count == 2 and gate.observed_count == 1 and gate.explained_count == 1
+        assert gate.exceptions[0].field == "rqye,rzrqye"
+        assert gate.exceptions[0].symbol == SYMBOL
+        assert gate.exceptions[0].reason_code == "SUSPEND_FULL_DAY"
+
+
 @pytest.mark.parametrize("missing", [False, True])
 @pytest.mark.parametrize("old_partition", [False, True])
 def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, missing, old_partition):

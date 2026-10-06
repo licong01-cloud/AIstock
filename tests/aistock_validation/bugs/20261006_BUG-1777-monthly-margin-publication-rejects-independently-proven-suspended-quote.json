@@ -28,12 +28,18 @@
   ],
   "expected": "Exact suspended quote-field NULL facts remain explicit and explained; trading keys and other fields fail closed.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1777-monthly-margin-publication-rejects-independently-proven-suspended-quote.json",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1777-monthly-margin-publication-rejects-independently-proven-suspended-quote.json",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_frozen_source_audit.py",
@@ -103,7 +109,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py -q -k margin_suspended_quote_nulls",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -111,11 +117,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "fresh_margin_validation.py -> PASS 20 September dates and 64 independently proven suspended quote NULL keys; receipt X:/AIstock_dataset_candidates/data_repair_staging/september-remaining-20261007/fresh-margin-validation.json SHA256 444bf93e640d4c0ee1aae25ea32ec76f91993badd8b347a95c7bde24684016ee; database_write=false",
+      "fresh_margin_validation.py -> PASS 20 September dates; 64 independently proven suspended quote NULL keys; receipt X:/AIstock_dataset_candidates/data_repair_staging/september-remaining-20261007/fresh-margin-validation.json SHA256 444bf93e640d4c0ee1aae25ea32ec76f91993badd8b347a95c7bde24684016ee; database_write=false"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
