@@ -16,7 +16,12 @@ from ...db.pg_pool import get_conn
 from ..qe_archive.models import sha256_json
 
 from .factor_official_evaluation_service import CALC_ENGINE
-from .qe_workspace_client import QEWorkspaceClient, QEWorkspaceLogEvent, QELoopWorkspaceCleanupUnavailable
+from .qe_workspace_client import (
+    QEWorkspaceClient,
+    QEWorkspaceLogEvent,
+    QELoopWorkspaceCleanupUnavailable,
+    QEWorkspaceResultReadUnavailable,
+)
 from .qe_log_broker import QELogBrokerSource, get_qe_log_broker
 from .qe_log_store import get_qe_live_log_store
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
@@ -3132,6 +3137,9 @@ class AutoEvolutionScheduler:
         except Exception as e:
             import traceback
             tb_str = traceback.format_exc()
+            if isinstance(e, QEWorkspaceResultReadUnavailable):
+                self._defer_completed_result_read(evolution_loop_db_id, e)
+                return False
             logger.error(f"Error processing completed loop {evolution_loop_db_id} for task {task_id}: {e}\n{tb_str}")
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -3150,6 +3158,32 @@ class AutoEvolutionScheduler:
                             cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
                 conn.commit()
             return False
+
+    def _defer_completed_result_read(
+        self, loop_db_id: str, error: QEWorkspaceResultReadUnavailable,
+    ) -> None:
+        """Release only our processing claim for the existing minute reconciler.
+
+        No execution POST, task terminalization, metric substitution or new
+        polling loop. Concurrent cancellation/completion must not be overwritten.
+        """
+        diagnostic = json.dumps({"_result_collection": {
+            "state": "waiting_result_read",
+            "reason_code": error.reason_code,
+            "endpoint": error.endpoint,
+            "error_type": error.error_type,
+        }})
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE qe_evolution_loops
+                    SET status = 'running',
+                        agent_analysis = COALESCE(agent_analysis, '{}'::jsonb) || %s::jsonb,
+                        updated_at = NOW()
+                    WHERE loop_id = %s AND status = 'processing'
+                """, (diagnostic, loop_db_id))
+            conn.commit()
+        logger.warning("Completed execution awaiting result reconciliation: loop=%s %s", loop_db_id, error)
 
     async def scan_running_loops(self):
         """
@@ -6238,6 +6272,10 @@ class AutoEvolutionScheduler:
                     cur.execute("""
                         UPDATE qe_evolution_loops
                         SET metrics_json = %s, status = 'completed',
+                            agent_analysis = CASE
+                                WHEN agent_analysis ? '_result_collection'
+                                THEN agent_analysis - '_result_collection'
+                                ELSE agent_analysis END,
                             experiment_id = %s, updated_at = NOW()
                         WHERE loop_id = %s
                     """, (json.dumps(metrics), experiment_id, evolution_loop_db_id))
@@ -6309,6 +6347,9 @@ class AutoEvolutionScheduler:
         except Exception as e:
             import traceback
             tb_str = traceback.format_exc()
+            if isinstance(e, QEWorkspaceResultReadUnavailable):
+                self._defer_completed_result_read(evolution_loop_db_id, e)
+                return False
             logger.error(f"策略演进 Loop {evolution_loop_db_id} 处理失败: {e}\n{tb_str}")
             try:
                 with get_conn() as conn:
