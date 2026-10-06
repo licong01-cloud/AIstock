@@ -2,9 +2,7 @@
   "actual": "用户授权修复：性能回执仅为统计记录；当前API在批次创建后等待回执写入，worker在计算前后写回执并传播异常，导致记录故障影响已持久化业务。分离性能记录失败与正式评估结果，保留真实业务状态与显式记录错误，不建新记录平台。",
   "allowed_write_scope": [
     "backend/routers/hmm_evolution.py",
-    "backend/services/hmm_evolution/worker.py",
     "backend/tests/hmm_evolution/test_api.py",
-    "backend/tests/hmm_evolution/test_worker.py",
     "tests/aistock_validation/bugs/20261006_BUG-1759-hmm-performance-telemetry-failures-block-durable-batch-submission-and-ex.json"
   ],
   "assigned_agent": null,
@@ -142,7 +140,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh-process import backend.routers.hmm_evolution and backend.routers.health -> PASS, all module paths contained in BUG-1759 task worktree"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-evolution/workers",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
