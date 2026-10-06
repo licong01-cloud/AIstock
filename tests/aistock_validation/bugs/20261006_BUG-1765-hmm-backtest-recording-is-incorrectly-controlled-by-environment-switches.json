@@ -1,6 +1,7 @@
 {
   "actual": "用户授权修复共享接口中仅HMM记录路径：移除三个实验记录环境开关，改用显式请求/既有业务配置及preview/dry_run/confirm_write，保留授权、去重、无自动历史补录和非阻断错误。仅改HMM recorder/realtime及相应测试，不改QE执行、其他研究domain或数据。",
   "allowed_write_scope": [
+    "backend/services/research_pipeline/__init__.py",
     "backend/services/research_pipeline/hmm_backtest_recorder.py",
     "backend/services/research_pipeline/realtime_ingestion.py",
     "backend/tests/research_pipeline/test_hmm_backtest_recorder.py",
@@ -30,6 +31,7 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "backend/services/research_pipeline/__init__.py",
       "backend/services/research_pipeline/hmm_backtest_recorder.py",
       "backend/services/research_pipeline/realtime_ingestion.py",
       "backend/tests/research_pipeline/test_hmm_backtest_recorder.py",
@@ -139,7 +141,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh-process import backend.routers.research_pipeline, backend.routers.health, hmm_backtest_recorder and realtime_ingestion -> PASS, all module paths contained in BUG-1765 task worktree"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/research-pipeline/health",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

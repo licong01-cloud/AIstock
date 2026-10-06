@@ -1,4 +1,3 @@
-
 """HMM backtest timeline recorder for Research Pipeline.
 
 The recorder is the single write path for both future QE completion hooks and
@@ -10,24 +9,29 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 from backend.db.pg_pool import get_conn
 from backend.services.qe_archive.models import canonical_json_dumps, normalize_json
 
-from .models import ArtifactRefRecord, BackfillRunRecord, BacktestRecord, PipelineEventRecord, StageAttemptRecord, StagePlanRecord, utc_now
+from .models import (
+    RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM,
+    ArtifactRefRecord,
+    BackfillRunRecord,
+    BacktestRecord,
+    PipelineEventRecord,
+    StageAttemptRecord,
+    StagePlanRecord,
+    utc_now,
+)
 from .repository import ResearchPipelineRepository
 
 RECORD_VERSION = "hmm_backtest_record_v1"
 BACKFILL_TYPE = "hmm_backtest_timeline"
 BACKTEST_RECORDING_STAGE = "backtest_recording"
-HMM_BACKFILL_ENABLED_ENV = "RESEARCH_PIPELINE_HMM_BACKFILL_ENABLED"
-HMM_BACKFILL_WRITE_ENABLED_ENV = "RESEARCH_PIPELINE_HMM_BACKFILL_WRITE_ENABLED"
-HMM_RECORDING_ENABLED_ENV = "RESEARCH_PIPELINE_HMM_RECORDING_ENABLED"
 
 HMM_FIELD_KEYS = {
     "enable_sector_hmm",
@@ -89,8 +93,8 @@ def as_dict(value: Any) -> dict[str, Any]:
         try:
             loaded = json.loads(value)
             return dict(loaded) if isinstance(loaded, dict) else {}
-        except Exception:
-            return {}
+        except json.JSONDecodeError as exc:
+            raise ValueError("hmm_research_record_invalid_json: expected object") from exc
     return {}
 
 
@@ -101,8 +105,8 @@ def as_list(value: Any) -> list[Any]:
         try:
             loaded = json.loads(value)
             return list(loaded) if isinstance(loaded, list) else []
-        except Exception:
-            return []
+        except json.JSONDecodeError as exc:
+            raise ValueError("hmm_research_record_invalid_json: expected list") from exc
     return []
 
 
@@ -142,18 +146,6 @@ class HMMBacktestRecorder:
     def __init__(self, repository: ResearchPipelineRepository | None = None) -> None:
         self._repo = repository or ResearchPipelineRepository()
 
-    @property
-    def backfill_enabled(self) -> bool:
-        return env_truthy(os.getenv(HMM_BACKFILL_ENABLED_ENV))
-
-    @property
-    def backfill_write_enabled(self) -> bool:
-        return env_truthy(os.getenv(HMM_BACKFILL_WRITE_ENABLED_ENV))
-
-    @property
-    def realtime_enabled(self) -> bool:
-        return env_truthy(os.getenv(HMM_RECORDING_ENABLED_ENV))
-
     def normalize_historical_record(
         self,
         payload: Mapping[str, Any],
@@ -174,7 +166,9 @@ class HMMBacktestRecorder:
         source_experiment_id = payload.get("experiment_id")
         strict_family_sig = str(payload.get("strict_family_sig") or payload.get("config_family_sig") or "") or None
         archive_family_sig = str(payload.get("archive_family_sig") or "") or None
-        non_hmm_config_sig = archive_family_sig or stable_json_hash({k: config_summary.get(k) for k in NON_HMM_CONFIG_KEYS})
+        non_hmm_config_sig = archive_family_sig or stable_json_hash(
+            {k: config_summary.get(k) for k in NON_HMM_CONFIG_KEYS}
+        )
         hmm_config_sig = stable_json_hash(hmm_summary) if hmm_summary else None
         dedup_status = (
             "excluded"
@@ -189,7 +183,9 @@ class HMMBacktestRecorder:
         )
         rejection_reason = None
         if excluded:
-            rejection_reason = str(payload.get("reason") or payload.get("rejection_reason") or "excluded_from_hmm_timeline")
+            rejection_reason = str(
+                payload.get("reason") or payload.get("rejection_reason") or "excluded_from_hmm_timeline"
+            )
         elif duplicate and not selected_representative:
             rejection_reason = "hmm_only_config_sweep_preserved_in_research_pipeline"
         record_key = self.build_record_key(
@@ -233,7 +229,9 @@ class HMMBacktestRecorder:
             recorded_by=recorded_by,
         )
 
-    def normalize_qe_loop(self, *, experiment_id: str, task_id: str, loop_id: str, loop_index: int | None = None) -> BacktestRecord | None:
+    def normalize_qe_loop(
+        self, *, experiment_id: str, task_id: str, loop_id: str, loop_index: int | None = None
+    ) -> BacktestRecord | None:
         row = self._fetch_qe_loop(task_id=task_id, loop_id=loop_id, loop_index=loop_index)
         if not row:
             return None
@@ -274,8 +272,6 @@ class HMMBacktestRecorder:
         created_by: str = "codex",
         require_enabled: bool = True,
     ) -> dict[str, Any]:
-        if require_enabled and not self.backfill_enabled:
-            raise ValueError(f"HMM backfill preview disabled; set {HMM_BACKFILL_ENABLED_ENV}=true")
         records, excluded, fingerprint = self.load_backfill_records(experiment_id, payload)
         existing_keys = self._existing_record_keys(experiment_id)
         counts = self._preview_counts(records, excluded, existing_keys)
@@ -290,7 +286,12 @@ class HMMBacktestRecorder:
                 created_by=created_by,
             )
         )
-        return {"preview_id": run["backfill_run_id"], "backfill_run": run, "counts": counts, "sample_records": [r.model_dump() for r in records[:10]]}
+        return {
+            "preview_id": run["backfill_run_id"],
+            "backfill_run": run,
+            "counts": counts,
+            "sample_records": [r.model_dump() for r in records[:10]],
+        }
 
     def execute_backfill(
         self,
@@ -300,18 +301,19 @@ class HMMBacktestRecorder:
         created_by: str = "codex",
         require_enabled: bool = True,
     ) -> dict[str, Any]:
-        if require_enabled and not self.backfill_enabled:
-            raise ValueError(f"HMM backfill disabled; set {HMM_BACKFILL_ENABLED_ENV}=true")
         data = dict(payload)
         preview_id = data.get("preview_id")
         if preview_id and not (data.get("source_file") or dict(data.get("source_scope") or {}).get("source_file")):
             preview = self._repo.get_backfill_run(str(preview_id))
             if not preview:
                 raise ValueError(f"backfill preview not found: {preview_id}")
-            data["source_scope"] = {**dict(preview.get("source_scope_json") or {}), **dict(data.get("source_scope") or {})}
+            data["source_scope"] = {
+                **dict(preview.get("source_scope_json") or {}),
+                **dict(data.get("source_scope") or {}),
+            }
         dry_run = bool(data.get("dry_run", True))
-        if not dry_run and require_enabled and not self.backfill_write_enabled:
-            raise ValueError(f"HMM backfill write disabled; set {HMM_BACKFILL_WRITE_ENABLED_ENV}=true")
+        if not dry_run and require_enabled and data.get("confirm") != RESEARCH_HMM_BACKFILL_EXECUTE_CONFIRM:
+            raise ValueError("HMM backfill write requires explicit confirmation")
         records, excluded, fingerprint = self.load_backfill_records(experiment_id, data)
         existing_keys = self._existing_record_keys(experiment_id)
         counts = self._preview_counts(records, excluded, existing_keys)
@@ -344,7 +346,9 @@ class HMMBacktestRecorder:
                         started_at=utc_now(),
                     )
                 )
-                self._repo.update_stage_plan(str(stage["stage_id"]), {"status": "running", "latest_attempt_no": attempt_no})
+                self._repo.update_stage_plan(
+                    str(stage["stage_id"]), {"status": "running", "latest_attempt_no": attempt_no}
+                )
                 for record in records:
                     record = record.model_copy(update={"stage_attempt_id": str(stage_attempt["stage_attempt_id"])})
                     existed = record.record_key_sha256 in existing_keys
@@ -354,16 +358,28 @@ class HMMBacktestRecorder:
                     else:
                         inserted += 1
                 skipped = counts.get("would_skip_duplicate", 0)
-                final_counts = {**counts, "inserted": inserted, "updated": updated, "skipped_duplicate": skipped, "excluded": excluded}
+                final_counts = {
+                    **counts,
+                    "inserted": inserted,
+                    "updated": updated,
+                    "skipped_duplicate": skipped,
+                    "excluded": excluded,
+                }
                 self._repo.update_stage_attempt(
                     str(stage_attempt["stage_attempt_id"]),
                     {
                         "status": "passed",
-                        "result_json": {"counts": final_counts, "backfill_run_id": run["backfill_run_id"], "record_version": RECORD_VERSION},
+                        "result_json": {
+                            "counts": final_counts,
+                            "backfill_run_id": run["backfill_run_id"],
+                            "record_version": RECORD_VERSION,
+                        },
                         "completed_at": utc_now(),
                     },
                 )
-                self._repo.update_stage_plan(str(stage["stage_id"]), {"status": "passed", "latest_attempt_no": attempt_no})
+                self._repo.update_stage_plan(
+                    str(stage["stage_id"]), {"status": "passed", "latest_attempt_no": attempt_no}
+                )
                 self._record_backfill_artifacts_and_event(
                     experiment_id=experiment_id,
                     stage_attempt_id=str(stage_attempt["stage_attempt_id"]),
@@ -374,16 +390,33 @@ class HMMBacktestRecorder:
                 )
                 run = self._repo.update_backfill_run(
                     str(run["backfill_run_id"]),
-                    {"status": "completed", "counts_json": final_counts, "stage_attempt_id": str(stage_attempt["stage_attempt_id"]), "completed_at": utc_now()},
+                    {
+                        "status": "completed",
+                        "counts_json": final_counts,
+                        "stage_attempt_id": str(stage_attempt["stage_attempt_id"]),
+                        "completed_at": utc_now(),
+                    },
                 )
-            return {"backfill_run_id": run["backfill_run_id"], "stage_attempt_id": stage_attempt and stage_attempt["stage_attempt_id"], "status": run["status"], "counts": run["counts_json"]}
+            return {
+                "backfill_run_id": run["backfill_run_id"],
+                "stage_attempt_id": stage_attempt and stage_attempt["stage_attempt_id"],
+                "status": run["status"],
+                "counts": run["counts_json"],
+            }
         except Exception as exc:
-            self._repo.update_backfill_run(str(run["backfill_run_id"]), {"status": "failed", "error_message": str(exc), "completed_at": utc_now()})
+            self._repo.update_backfill_run(
+                str(run["backfill_run_id"]), {"status": "failed", "error_message": str(exc), "completed_at": utc_now()}
+            )
             if stage_attempt:
-                self._repo.update_stage_attempt(str(stage_attempt["stage_attempt_id"]), {"status": "failed", "error_message": str(exc), "completed_at": utc_now()})
+                self._repo.update_stage_attempt(
+                    str(stage_attempt["stage_attempt_id"]),
+                    {"status": "failed", "error_message": str(exc), "completed_at": utc_now()},
+                )
             raise
 
-    def load_backfill_records(self, experiment_id: str, payload: Mapping[str, Any]) -> tuple[list[BacktestRecord], int, dict[str, Any]]:
+    def load_backfill_records(
+        self, experiment_id: str, payload: Mapping[str, Any]
+    ) -> tuple[list[BacktestRecord], int, dict[str, Any]]:
         source_scope = dict(payload.get("source_scope") or {})
         source_file = source_scope.get("source_file") or payload.get("source_file")
         if not source_file:
@@ -402,7 +435,9 @@ class HMMBacktestRecorder:
         seen: set[str] = set()
         for item in selected:
             if isinstance(item, Mapping):
-                record = self.normalize_historical_record(item, experiment_id=experiment_id, selected_representative=True)
+                record = self.normalize_historical_record(
+                    item, experiment_id=experiment_id, selected_representative=True
+                )
                 if record.record_key_sha256 not in seen:
                     records.append(record)
                     seen.add(record.record_key_sha256)
@@ -434,11 +469,24 @@ class HMMBacktestRecorder:
             # Keep the display order stable for older experiments created before this stage existed.
             for row in sorted(stages, key=lambda item: int(item.get("stage_order") or 0), reverse=True):
                 if int(row.get("stage_order") or 0) >= order:
-                    self._repo.update_stage_plan(str(row["stage_id"]), {"stage_order": int(row.get("stage_order") or 0) + 1})
-        return self._repo.create_stage_plan(StagePlanRecord(experiment_id=experiment_id, stage_name=BACKTEST_RECORDING_STAGE, stage_order=max(1, order), planned_config_json={"auto_added": True}))
+                    self._repo.update_stage_plan(
+                        str(row["stage_id"]), {"stage_order": int(row.get("stage_order") or 0) + 1}
+                    )
+        return self._repo.create_stage_plan(
+            StagePlanRecord(
+                experiment_id=experiment_id,
+                stage_name=BACKTEST_RECORDING_STAGE,
+                stage_order=max(1, order),
+                planned_config_json={"auto_added": True},
+            )
+        )
 
-    def record_qe_loop_completed(self, *, experiment_id: str, task_id: str, loop_id: str, loop_index: int | None = None) -> dict[str, Any]:
-        record = self.normalize_qe_loop(experiment_id=experiment_id, task_id=task_id, loop_id=loop_id, loop_index=loop_index)
+    def record_qe_loop_completed(
+        self, *, experiment_id: str, task_id: str, loop_id: str, loop_index: int | None = None
+    ) -> dict[str, Any]:
+        record = self.normalize_qe_loop(
+            experiment_id=experiment_id, task_id=task_id, loop_id=loop_id, loop_index=loop_index
+        )
         if record is None:
             return {"recorded": False, "skipped_reason": "not_hmm_research_loop"}
         row = self._repo.upsert_backtest_record(record)
@@ -479,8 +527,25 @@ class HMMBacktestRecorder:
                 )
             )
 
-    def build_record_key(self, *, experiment_id: str, source_type: str, source_task_id: str, source_loop_id: str, source_loop_index: int | None) -> str:
-        return sha256_json({"experiment_id": experiment_id, "source_type": source_type, "source_task_id": source_task_id, "source_loop_id": source_loop_id, "source_loop_index": source_loop_index, "record_version": RECORD_VERSION})
+    def build_record_key(
+        self,
+        *,
+        experiment_id: str,
+        source_type: str,
+        source_task_id: str,
+        source_loop_id: str,
+        source_loop_index: int | None,
+    ) -> str:
+        return sha256_json(
+            {
+                "experiment_id": experiment_id,
+                "source_type": source_type,
+                "source_task_id": source_task_id,
+                "source_loop_id": source_loop_id,
+                "source_loop_index": source_loop_index,
+                "record_version": RECORD_VERSION,
+            }
+        )
 
     def _preview_counts(self, records: list[BacktestRecord], excluded: int, existing_keys: set[str]) -> dict[str, int]:
         would_update = sum(1 for record in records if record.record_key_sha256 in existing_keys)
@@ -516,7 +581,9 @@ class HMMBacktestRecorder:
         return metrics
 
     def _extract_config_summary(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        summary = as_dict(payload.get("config_summary")) or as_dict(payload.get("config")) or as_dict(payload.get("family"))
+        summary = (
+            as_dict(payload.get("config_summary")) or as_dict(payload.get("config")) or as_dict(payload.get("family"))
+        )
         if not summary and "factor_sig" in payload:
             summary = {key: payload.get(key) for key in NON_HMM_CONFIG_KEYS if key in payload}
         if "factor_sig" not in summary and summary.get("factor_list"):
@@ -558,7 +625,18 @@ class HMMBacktestRecorder:
         }
 
     def _compact_source_payload(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        keys = ("task_id", "task_name", "loop_id", "loop_index", "experiment_id", "label", "archive_family_sig", "strict_family_sig", "config_family_sig", "reason")
+        keys = (
+            "task_id",
+            "task_name",
+            "loop_id",
+            "loop_index",
+            "experiment_id",
+            "label",
+            "archive_family_sig",
+            "strict_family_sig",
+            "config_family_sig",
+            "reason",
+        )
         return {key: payload.get(key) for key in keys if key in payload}
 
     def _int_or_none(self, value: Any) -> int | None:
@@ -598,5 +676,3 @@ class HMMBacktestRecorder:
                     return None
                 columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, row))
-
-

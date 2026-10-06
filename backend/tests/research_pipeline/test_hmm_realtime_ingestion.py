@@ -27,7 +27,9 @@ class FakeRecorder:
     def __init__(self) -> None:
         self._repo = FakeRecorderRepository()
 
-    def normalize_historical_record(self, payload: dict[str, Any], *, experiment_id: str, **kwargs: Any) -> BacktestRecord:
+    def normalize_historical_record(
+        self, payload: dict[str, Any], *, experiment_id: str, **kwargs: Any
+    ) -> BacktestRecord:
         return BacktestRecord(
             experiment_id=experiment_id,
             source_task_id=str(payload["task_id"]),
@@ -52,19 +54,19 @@ class FakeRecorder:
         return {key: params[key] for key in ("hmm_model_version_id", "hmm_signal_preset") if key in params}
 
 
-def test_safe_record_disabled_is_noop_without_db(monkeypatch) -> None:
+def test_safe_record_explicitly_disabled_is_noop_without_db(monkeypatch) -> None:
     def forbidden_get_conn() -> Any:
         raise AssertionError("disabled hook must not access DB")
 
     monkeypatch.delenv("RESEARCH_PIPELINE_HMM_RECORDING_ENABLED", raising=False)
     monkeypatch.setattr(realtime_module, "get_conn", forbidden_get_conn)
 
-    result = safe_record_hmm_backtest_completed(task_id="task_1", loop_id="task_1_Loop1", loop_index=1)
+    result = safe_record_hmm_backtest_completed(task_id="task_1", loop_id="task_1_Loop1", loop_index=1, enabled=False)
 
     assert result == {"recorded": False, "skipped_reason": "disabled"}
 
 
-def test_safe_record_hmm_backtest_completed_swallows_runtime_errors(monkeypatch) -> None:
+def test_safe_record_hmm_backtest_completed_reports_record_error_without_environment(monkeypatch) -> None:
     class BrokenIngestion:
         def __init__(self, **_kwargs: Any) -> None:
             pass
@@ -72,7 +74,7 @@ def test_safe_record_hmm_backtest_completed_swallows_runtime_errors(monkeypatch)
         def record_hmm_backtest_completed(self, **_kwargs: Any) -> dict[str, Any]:
             raise RuntimeError("boom")
 
-    monkeypatch.setenv("RESEARCH_PIPELINE_HMM_RECORDING_ENABLED", "true")
+    monkeypatch.setenv("RESEARCH_PIPELINE_HMM_RECORDING_ENABLED", "false")
     monkeypatch.setattr(realtime_module, "ResearchPipelineRealtimeIngestion", BrokenIngestion)
 
     result = safe_record_hmm_backtest_completed(task_id="task_1", loop_id="task_1_Loop1", loop_index=1)
@@ -213,18 +215,12 @@ def test_qe_scheduler_has_research_hook_after_both_archive_hooks() -> None:
     source = inspect.getsource(AutoEvolutionScheduler)
     tree = ast.parse(textwrap.dedent(source))
 
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    ]
-    archive_lines = sorted(
-        node.lineno for node in calls if node.func.attr == "_archive_completed_loop_best_effort"
-    )
-    research_lines = sorted(
-        node.lineno for node in calls if node.func.attr == "_record_research_backtest_best_effort"
-    )
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
+    archive_lines = sorted(node.lineno for node in calls if node.func.attr == "_archive_completed_loop_best_effort")
+    research_lines = sorted(node.lineno for node in calls if node.func.attr == "_record_research_backtest_best_effort")
 
     assert len(archive_lines) >= 2
     assert len(research_lines) == len(archive_lines)
-    assert all(archive_line < research_line for archive_line, research_line in zip(archive_lines, research_lines, strict=True))
+    assert all(
+        archive_line < research_line for archive_line, research_line in zip(archive_lines, research_lines, strict=True)
+    )
