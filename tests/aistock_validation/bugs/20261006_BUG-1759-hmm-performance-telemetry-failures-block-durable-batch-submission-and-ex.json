@@ -26,14 +26,18 @@
   "evidence_uris": [],
   "expected": "性能记录失败单独可见，不阻断提交、评估或已完成结果；真实业务异常继续fail closed。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/hmm_evolution.py",
+      "backend/tests/hmm_evolution/test_api.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1759-hmm-performance-telemetry-failures-block-durable-batch-submission-and-ex.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/routers/hmm_evolution.py",
-      "backend/services/hmm_evolution/worker.py",
       "backend/tests/hmm_evolution/test_api.py",
-      "backend/tests/hmm_evolution/test_worker.py"
+      "tests/aistock_validation/bugs/20261006_BUG-1759-hmm-performance-telemetry-failures-block-durable-batch-submission-and-ex.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/hmm_evolution.py",
@@ -140,22 +144,27 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "fresh-process import backend.routers.hmm_evolution and backend.routers.health -> PASS, all module paths contained in BUG-1759 task worktree"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-evolution/workers?owner_id=service-aistock-hmm-v3-20260722&limit=500",
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "fresh-process import backend.routers.hmm_evolution and backend.routers.health -> PASS, all module paths contained in BUG-1759 task worktree",
+      "fresh-process imports backend.routers.hmm_evolution, backend.routers.health -> PASS, all module paths contained in BUG-1759 task worktree"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": [
+    "planned_target_ids": [
       "backend-main",
       "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
