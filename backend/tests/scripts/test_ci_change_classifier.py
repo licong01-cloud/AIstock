@@ -722,28 +722,23 @@ def test_deferred_catalog_plan_maps_data_quality_without_unrelated_pr_matrix(tmp
     assert "data_quality_deep" in payload["backend_plan_keys"]
 
 
-def test_selected_gateway_and_research_assistant_plans_have_windows_executors() -> None:
-    payload = classifier.classify_changed_files(
-        [
-            "backend/tests/research_assistant/test_service.py",
-            "tests/mcp/test_gateway_profiles.py",
-            "tests/mcp/test_mcp_inventory_diff.py",
-        ]
-    )
-
-    expected_sessions = {
-        "mcp_gateway_manifest_quality",
-        "research_assistant_backend",
-    }
+@pytest.mark.parametrize("paths,expected_sessions", [
+    (["backend/tests/research_assistant/test_service.py", "tests/mcp/test_gateway_profiles.py",
+      "tests/mcp/test_mcp_inventory_diff.py"], {"mcp_gateway_manifest_quality", "research_assistant_backend"}),
+    (["backend/tests/research_pipeline/test_hmm_backtest_recorder.py",
+      "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py"], {"research_pipeline_backend"}),
+    (["backend/services/research_pipeline/__init__.py", "backend/services/research_pipeline/hmm_backtest_recorder.py",
+      "backend/services/research_pipeline/realtime_ingestion.py", "backend/tests/research_pipeline/test_hmm_backtest_recorder.py",
+      "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py"], {"platform_api_backend", "research_pipeline_backend"}),
+])
+def test_selected_research_and_gateway_plans_have_windows_executors(paths, expected_sessions) -> None:
+    payload = classifier.classify_changed_files(paths)
     assert set(payload["backend_sessions"]) == expected_sessions
-    assert payload["backend_required"] is True
-    assert payload["workflow_gate"] == "passed"
-    routing = {
-        item["plan_key"]: item["runner_kind"]
-        for item in payload["plan_routing"]
-        if item["plan_key"] in expected_sessions
-    }
+    _assert_fields(payload, backend_required=True, workflow_gate="passed", unexecuted_test_files=[])
+    routing = {item["plan_key"]: item["runner_kind"] for item in payload["plan_routing"]
+               if item["plan_key"] in expected_sessions}
     assert routing == {session: "windows_ai_stock_ci" for session in expected_sessions}
+    assert all(payload["changed_test_plan_coverage"]["coverage"].get(path) for path in payload["backend_changed_test_files"])
 
 
 def test_feature_workflow_files_use_focused_workflow_lane(tmp_path: Path) -> None:

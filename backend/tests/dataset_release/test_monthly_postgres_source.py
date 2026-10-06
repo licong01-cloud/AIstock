@@ -937,3 +937,135 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     assert readback["unexplained_missing_count"] == int(missing)
     assert readback["database_write_performed"] is False
     assert visited.count(("kline_minute_raw", key)) == 1
+
+
+def test_minute_session_failure_names_missing_and_invalid_labels():
+    data = rows()
+    bar = data["kline_minute_raw"][119]
+    bar["trade_time"] = bar["trade_time"].replace(hour=13, minute=0)
+    issues = []
+    from backend.services.dataset_release.monthly_frozen_source_audit import audit_month_rows
+    gates = run(rows())
+    for gate in gates.values():
+        gate.emit = issues.append
+    audit_month_rows(data, sessions=(DAY,), pools={"stock_universe": {DAY: {SYMBOL}}},
+                     gates=gates, authority_sha256="a" * 64, minute_start=DAY)
+    issue = next(item for item in issues if item["gate"] == "minute_price")
+    assert issue["reason"] == "minute_session_invalid"
+    assert issue["details"]["missing_labels"] == ["11:30:00"]
+    assert issue["details"]["invalid_labels"] == ["13:00:00"]
+    assert issue["details"]["bar_count"] == 240
+
+
+def test_margin_missing_evidence_is_not_reported_as_invalid_moneyflow():
+    issues = []
+    gate = GateCounter("financial_moneyflow", emit=issues.append)
+    audit_margin_publication(day=date(2026, 9, 1), rows=[{"ts_code": SYMBOL}], receipt={}, gate=gate)
+    assert gate.status == "BLOCKED"
+    assert issues[0]["dataset"] == "margin_detail"
+    assert issues[0]["reason"] == "provider_denominator_unproven"
+
+
+def test_limit_failure_names_exact_missing_field():
+    from backend.services.dataset_release.monthly_frozen_source_audit import audit_month_rows
+    data = rows()
+    data["stk_limit"][0]["pre_close"] = None
+    gates = run(rows())
+    issues = []
+    for gate in gates.values():
+        gate.emit = issues.append
+    audit_month_rows(data, sessions=(DAY,), pools={"stock_universe": {DAY: {SYMBOL}}},
+                     gates=gates, authority_sha256="a" * 64, minute_start=DAY)
+    issue = next(item for item in issues if item["gate"] == "suspend_limit")
+    assert issue["dataset"] == "stk_limit"
+    assert issue["details"]["invalid_fields"] == ["pre_close"]
+
+
+def test_only_rule_preparable_limits_can_reach_materialization(tmp_path):
+    from backend.services.dataset_release.monthly_postgres_source import _require_preparable_source
+    from backend.services.dataset_release.monthly_source_audit import MonthlySourceAuditError, SourceGateEvidence
+    from backend.services.dataset_release.monthly_unified import SOURCE_GATES
+    import pytest
+    import json
+    gates = [SourceGateEvidence(name, "snapshot", "expect.json", "read.json", 1, 1,
+                                invalid_value_count=int(name == "suspend_limit")) for name in SOURCE_GATES]
+    issues = tmp_path / "source-issues.ndjson"
+    issues.write_text(json.dumps({"gate": "suspend_limit", "dataset": "stk_limit", "reason": "invalid_fact"}) + "\n")
+    _require_preparable_source(gates=gates, issues_path=issues, cutoff=date(2026, 9, 30),
+                               predecessor_cutoff=date(2026, 8, 31), changes=())
+    issues.write_text(json.dumps({"gate": "suspend_limit", "dataset": "suspend_d", "reason": "suspend_conflicts_with_trade"}) + "\n")
+    with pytest.raises(MonthlySourceAuditError):
+        _require_preparable_source(gates=gates, issues_path=issues, cutoff=date(2026, 9, 30),
+                                   predecessor_cutoff=date(2026, 8, 31), changes=())
+
+
+@pytest.mark.parametrize("defect", [None, "null", "duplicate", "denominator"])
+def test_prepared_limits_close_actual_month_rows_not_raw_nulls(tmp_path, monkeypatch, defect):
+    import json
+    from types import SimpleNamespace
+    from backend.services.dataset_release import artifact_ready_build_source as build
+    from backend.services.dataset_release import monthly_shared_components as shared
+    from backend.services.dataset_release.monthly_frozen_source_audit import audit_prepared_limit_source
+    from backend.services.dataset_release.monthly_source_audit import SourceGateEvidence, MonthlySourceAuditError
+
+    days = (date(2026, 9, 1), date(2026, 9, 2))
+    codes = ("000001.SZ", "000002.SZ")
+    raw = GateCounter("suspend_limit")
+    for code in codes:
+        for day in days:
+            raw.check((code, day), [{"pre_close": None}], valid=lambda _: False, dataset="stk_limit")
+    (tmp_path / "raw-expect.json").write_text(json.dumps({"expected_keys_sha256": raw.expected_keys.hexdigest()}))
+    gate = SourceGateEvidence("suspend_limit", "snapshot", "raw-expect.json", "raw-read.json", 4, 4, invalid_value_count=4)
+    values = [{"ts_code": code, "trade_date": day, "pre_close": "10.00", "up_limit": "11.00", "down_limit": "9.00"}
+              for day in days for code in codes]
+    if defect == "null":
+        values[0]["pre_close"] = None
+    elif defect == "duplicate":
+        values.append(dict(values[0]))
+    elif defect == "denominator":
+        (tmp_path / "raw-expect.json").write_text(json.dumps({"expected_keys_sha256": "f" * 64}))
+    seen = []
+
+    class Source:
+        def __init__(self, **kwargs):
+            pass
+        def ordered_partitions(self, component, dataset, **kwargs):
+            seen.append((dataset, kwargs))
+            payload = [{"cal_date": day} for day in days] if dataset == "trading_calendar" else values
+            return [SimpleNamespace(rows=payload)]
+
+    monkeypatch.setattr(build, "ArtifactReadyBuildSource", Source)
+    monkeypatch.setattr(shared, "_pit_intervals", lambda *_: [(code, days[0], days[-1]) for code in codes])
+    frozen = SimpleNamespace(official_cutoff=date(2026, 9, 30), pit_snapshot=None, source_content_root="a" * 64,
+                             partitions=(), artifact_ready_contract_ref=SimpleNamespace(as_dict=lambda: {"sha256": "b" * 64}))
+    args = dict(cas=None, frozen=frozen, profile=None, raw_gate=gate, input_root=tmp_path, artifact_root=tmp_path)
+    if defect == "denominator":
+        with pytest.raises(MonthlySourceAuditError, match="denominator differs"):
+            audit_prepared_limit_source(**args)
+    else:
+        result, artifacts = audit_prepared_limit_source(**args)
+        assert result.expected_count == 4
+        assert result.payload()["status"] == ("PASS" if defect is None else "BLOCKED")
+        assert len(artifacts) == 3
+        assert result.readback_ref != gate.readback_ref
+    assert {dataset for dataset, _ in seen} == {"trading_calendar", "stk_limit"}
+    assert all(kwargs["date_ranges"] == ((date(2026, 9, 1), date(2026, 9, 30)),) for _, kwargs in seen)
+
+
+@pytest.mark.parametrize("defect", [None, "hash", "count"])
+def test_provider_publication_identity_survives_source_freeze(defect):
+    from backend.services.dataset_release.source_authority import _sanitize_refresh_audit_row, SourceAuditIncomplete
+    from datetime import datetime, timezone
+    proof = {"source": "tushare_response", "row_count": 3, "source_rows_sha256": "b" * 64}
+    raw = {"data_source": "tushare", "status": "success", "quality_status": "ok", "row_count": 3,
+           "written_rows": 3, "expected_rows": 3, "refreshed_at": datetime(2026, 10, 6, tzinfo=timezone.utc),
+           "metadata": {"provider_publication": proof}}
+    if defect == "hash":
+        proof["source_rows_sha256"] = "invalid"
+    elif defect == "count":
+        raw["expected_rows"] = 2
+    if defect:
+        with pytest.raises(SourceAuditIncomplete, match="publication proof differs"):
+            _sanitize_refresh_audit_row(raw)
+    else:
+        assert _sanitize_refresh_audit_row(raw)["provider_publication"] == proof

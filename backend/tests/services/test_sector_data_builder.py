@@ -63,6 +63,14 @@ class _Connection:
         self.commits += 1
 
 
+def test_production_sector_rows_do_not_disappear_with_unpublished_quotes():
+    sql = module._BUILD_DAY_SQL
+    assert "LEFT JOIN market.sw_daily sd" in sql
+    assert "sd.ts_code IS NOT NULL" in sql
+    assert "is_pub = '0'" in sql
+    assert "COALESCE(sd." not in sql
+
+
 def test_build_date_uses_dynamic_industry_mapping_without_persisted_identity(monkeypatch):
     cursor = _Cursor()
     connection = _Connection(cursor)

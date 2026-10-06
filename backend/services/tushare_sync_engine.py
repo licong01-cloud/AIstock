@@ -1254,6 +1254,20 @@ class TushareSyncEngine:
                     audit_metadata["required_field_coverage"] = (
                         _daily_basic_required_field_coverage_receipt(rows)
                     )
+                if spec.name == "margin_detail" and rows:
+                    # Independently bind the validated provider response, not a
+                    # subsequent database COUNT or the number written by upsert.
+                    from .dataset_release.canonical import canonical_json_bytes
+                    import hashlib
+                    audit_quality["expected_rows"] = len(rows)
+                    audit_quality["coverage_ratio"] = inserted / len(rows)
+                    audit_metadata["provider_publication"] = {
+                        "source": "tushare_response",
+                        "row_count": len(rows),
+                        "source_rows_sha256": hashlib.sha256(canonical_json_bytes(rows)).hexdigest(),
+                    }
+                    if inserted != len(rows):
+                        audit_quality.update(quality_status="low_coverage", failure_category="provider_persistence_count_differs")
                 if canonicalized_source_revisions:
                     audit_metadata["canonicalized_source_revisions"] = (
                         canonicalized_source_revisions

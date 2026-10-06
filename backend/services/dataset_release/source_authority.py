@@ -5029,6 +5029,23 @@ def _sanitize_refresh_audit_row(row: Mapping[str, Any]) -> Mapping[str, Any]:
     failure_category = row.get("failure_category")
     job_id = row.get("job_id")
     raw_identity = {str(key): value for key, value in row.items()}
+    structured_metadata = metadata
+    if isinstance(metadata, str):
+        try:
+            structured_metadata = json.loads(metadata)
+        except (ValueError, TypeError):
+            structured_metadata = None
+    proof = structured_metadata.get("provider_publication") if isinstance(structured_metadata, Mapping) else None
+    if proof is not None and (
+        not isinstance(proof, Mapping)
+        or set(proof) != {"source", "row_count", "source_rows_sha256"}
+        or proof.get("source") != "tushare_response"
+        or type(proof.get("row_count")) is not int
+        or proof["row_count"] <= 0
+        or proof["row_count"] != _audit_optional_int(row.get("expected_rows"), field="expected_rows")
+        or re.fullmatch(r"[0-9a-f]{64}", str(proof.get("source_rows_sha256", ""))) is None
+    ):
+        raise SourceAuditIncomplete("provider publication proof differs from refresh denominator")
     return {
         "data_source": str(row["data_source"]),
         "status": str(row.get("status", "")).lower(),
@@ -5048,6 +5065,7 @@ def _sanitize_refresh_audit_row(row: Mapping[str, Any]) -> Mapping[str, Any]:
         ),
         "metadata_sha256": _opaque_audit_digest(metadata),
         "audit_payload_sha256": sha256_hex(canonical_json_bytes(raw_identity)),
+        **({"provider_publication": dict(proof)} if proof is not None else {}),
     }
 
 

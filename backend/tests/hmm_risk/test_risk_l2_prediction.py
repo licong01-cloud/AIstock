@@ -302,7 +302,7 @@ def test_existing_invalid_surface_receipt_is_error_not_absent(prepared, tmp_path
         repo._surface(prepared.run)
 
 
-def test_surface_requires_real_check_flags_dates_and_actual_deployment(prepared, tmp_path):
+def test_surface_requires_real_check_flags_dates_not_unrelated_deployment(prepared, tmp_path):
     run = prepared.run
     value = {k: run[k] for k in ("run_id", "model_hash", "acceptance_hash", "input_hash")}
     value.update(
@@ -320,8 +320,7 @@ def test_surface_requires_real_check_flags_dates_and_actual_deployment(prepared,
     repo = product.RiskL2PredictionRepository(surface_validation_receipt_path=path, deployment_commit="e" * 40)
     assert repo._surface(run) == "AVAILABLE_EXPERIMENTAL"
     repo.deployment_commit = "f" * 40
-    with pytest.raises(product.RiskL2PredictionError):
-        repo._surface(run)
+    assert repo._surface(run) == "AVAILABLE_EXPERIMENTAL"
     repo.deployment_commit = "e" * 40
     value["browser_no_mock"] = False
     path.write_text(json.dumps(receipt(value)), encoding="utf-8")

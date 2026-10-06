@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -29,7 +30,7 @@ from .monthly_snapshot import MonthlySnapshotIdentity, SnapshotConnection
 from .monthly_component_preparation import component_dependencies, preparation_plan
 from .monthly_preparation_source import PreparationSourceSnapshot, freeze_preparation_source
 from .monthly_source_audit import close_source_audit
-from .monthly_frozen_source_audit import AUDIT_SCHEMA, audit_frozen_source
+from .monthly_frozen_source_audit import AUDIT_SCHEMA, audit_frozen_source, audit_prepared_limit_source
 from .monthly_source_producer import (
     MonthlySourceReadSet,
     MonthlySourcePreparationReadSet,
@@ -67,6 +68,34 @@ _CHANGE_DATASET_ALIASES = {
 
 class MonthlyPostgresSourceError(RuntimeError):
     """The frozen PostgreSQL source handoff is incomplete or ambiguous."""
+
+
+def _require_preparable_source(*, gates, issues_path, cutoff, predecessor_cutoff, changes) -> None:
+    """Defer only incomplete limit facts to the existing strict rule builder.
+
+    This is not a PASS: closure remains mandatory over its actual effective
+    rows. Any trade/suspension conflict or another gate blocks before providers.
+    """
+    blocked = [gate for gate in gates if gate.unexplained_missing_count or gate.invalid_value_count or gate.duplicate_count]
+    if not blocked:
+        close_source_audit(cutoff=cutoff, predecessor_cutoff=predecessor_cutoff, gates=gates, changes=changes)
+        return
+    if (len(gates) != len(SOURCE_GATES) or {gate.gate for gate in gates} != set(SOURCE_GATES)
+            or len({gate.snapshot_group_id for gate in gates}) != 1):
+        close_source_audit(cutoff=cutoff, predecessor_cutoff=predecessor_cutoff, gates=gates, changes=changes)
+    preparable = all(gate.gate == "suspend_limit" and not gate.duplicate_count for gate in blocked)
+    if preparable:
+        expected = sum(gate.unexplained_missing_count + gate.invalid_value_count for gate in blocked)
+        observed = 0
+        with issues_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                issue = json.loads(line)
+                if issue["gate"] == "suspend_limit":
+                    observed += 1
+                    preparable = preparable and issue.get("dataset") == "stk_limit" and issue["reason"] in {"missing_fact", "invalid_fact"}
+        preparable = preparable and observed == expected
+    if not preparable:
+        close_source_audit(cutoff=cutoff, predecessor_cutoff=predecessor_cutoff, gates=gates, changes=changes)
 
 
 def _preflight_refresh_readiness(
@@ -572,8 +601,11 @@ class PostgresMonthlySourceAdapter:
         )
         # Persist real blocked gate readbacks before any provider materialization
         # or seal. Failed audit evidence must never enter the reuse catalog.
-        close_source_audit(cutoff=target_cutoff, predecessor_cutoff=predecessor_cutoff, gates=gates, changes=changes)
-        ready = ArtifactReadySourceBuilder(self.profile, self.cas, month_start=target_cutoff.replace(day=1)).build(frozen)
+        _require_preparable_source(gates=gates, issues_path=input_root / "source-issues.ndjson",
+                                   cutoff=target_cutoff, predecessor_cutoff=predecessor_cutoff, changes=changes)
+        ready = ArtifactReadySourceBuilder(self.profile, self.cas, month_start=target_cutoff.replace(day=1)).build(
+            frozen, checkpoint=checkpoint,
+        )
         loaded = load_artifact_ready_contract(
             self.cas,
             self.profile,
@@ -589,6 +621,15 @@ class PostgresMonthlySourceAdapter:
             provider_receipt_refs=ready.provider_receipt_refs,
             artifact_ready_derived_source_receipt_refs=ready.derived_source_receipt_refs,
         )
+        raw_limit = next(gate for gate in gates if gate.gate == "suspend_limit")
+        if raw_limit.unexplained_missing_count or raw_limit.invalid_value_count:
+            prepared_limit, prepared_artifacts = audit_prepared_limit_source(
+                cas=self.cas, frozen=frozen, profile=self.profile, raw_gate=raw_limit,
+                input_root=input_root, artifact_root=self.artifact_root, checkpoint=checkpoint,
+            )
+            gates = tuple(prepared_limit if gate.gate == "suspend_limit" else gate for gate in gates)
+            audit_artifacts = (*audit_artifacts, *prepared_artifacts)
+        close_source_audit(cutoff=target_cutoff, predecessor_cutoff=predecessor_cutoff, gates=gates, changes=changes)
         source_stage_ref = seal_source_stage_receipt(self.cas, frozen, profile=self.profile.profile)
 
         bundle_path = input_root / "frozen-source-bundle.json"

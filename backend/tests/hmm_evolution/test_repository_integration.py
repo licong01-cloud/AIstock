@@ -695,6 +695,88 @@ def test_worker_uses_shared_inputs_and_bounded_candidate_concurrency() -> None:
     assert repository.finalize_args["eval_ids"] == ["eval-1", "eval-2"]
 
 
+@pytest.mark.parametrize("stage", ["batch_create", "evaluation_create", "progress", "finalize", "batch_close"])
+def test_worker_telemetry_failure_cannot_block_evaluation_or_terminal_cycle(stage, caplog) -> None:
+    class Repository(_ConcurrentRepository):
+        def create_performance_receipt(self, **kwargs):
+            if stage == f"{kwargs['receipt_level']}_create":
+                raise RuntimeError("performance record unavailable")
+            return super().create_performance_receipt(**kwargs)
+
+        def claim_evaluation(self, **kwargs):
+            row = super().claim_evaluation(**kwargs)
+            if row is not None:
+                row.update(
+                    queued_at=datetime(2026, 7, 21, tzinfo=timezone.utc),
+                    started_at=datetime(2026, 7, 21, 0, 1, tzinfo=timezone.utc),
+                )
+            return row
+
+        def merge_performance_receipt_progress(self, **kwargs):
+            if stage == "progress":
+                raise RuntimeError("performance record unavailable")
+            return super().merge_performance_receipt_progress(**kwargs)
+
+        def finalize_performance_receipt(self, **kwargs):
+            if stage == "finalize":
+                raise RuntimeError("performance record unavailable")
+            return super().finalize_performance_receipt(**kwargs)
+
+        def get_performance_receipt(self, **kwargs):
+            if stage == "batch_close":
+                raise RuntimeError("performance record unavailable")
+            key = f"hmpr_{kwargs['batch_id']}"
+            return {"receipt_id": key, "row_version": self.receipt_versions[key], "receipt_status": "partial"}
+
+        def finalize_worker_cycle(self, **kwargs):
+            super().finalize_worker_cycle(**kwargs)
+            now = datetime(2026, 7, 21, tzinfo=timezone.utc)
+            return {
+                "batch_id": kwargs["batch_id"],
+                "status": "completed",
+                "created_at": now,
+                "completed_at": now + timedelta(seconds=2),
+            }
+
+    repository = Repository()
+    executor = _ConcurrentExecutor()
+    worker = HMMEvolutionWorker(
+        repository,
+        owner_id="worker-1",
+        config=WorkerConfig(runtime_mode="api_worker", candidate_concurrency=2),
+        executor=executor,
+        submission_preparer=_SubmissionPreparer(),
+    )
+    assert worker.run_once() is True
+    assert executor.prepared_count == 1
+    assert repository.finalize_args["eval_ids"] == ["eval-1", "eval-2"]
+    assert worker.pop_cycle_status() == ("batch-1", "batch-1", False)
+    assert "hmm_evolution_performance_record_failed" in caplog.text
+
+
+def test_worker_telemetry_failure_does_not_hide_business_execution_failure(caplog) -> None:
+    class Repository(_ConcurrentRepository):
+        def create_performance_receipt(self, **kwargs):
+            raise RuntimeError("performance record unavailable")
+
+    class Executor(_ConcurrentExecutor):
+        def execute_and_finalize(self, **kwargs):
+            raise RuntimeError("business evaluation failed")
+
+    repository = Repository()
+    worker = HMMEvolutionWorker(
+        repository,
+        owner_id="worker-1",
+        config=WorkerConfig(runtime_mode="api_worker", candidate_concurrency=2),
+        executor=Executor(),
+        submission_preparer=_SubmissionPreparer(),
+    )
+    with pytest.raises(RuntimeError, match="business evaluation failed"):
+        worker.run_once()
+    assert repository.finalize_args is not None
+    assert "hmm_evolution_performance_record_failed" in caplog.text
+
+
 def test_batch_recommendations_persist_only_on_batch_items() -> None:
     repository, cursor = _repository(
         [
