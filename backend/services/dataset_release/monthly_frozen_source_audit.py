@@ -24,7 +24,7 @@ from backend.data_service.security_source_identity import (
 )
 
 from .canonical import canonical_json_bytes
-from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME
+from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME, suspended_zero_turnover_placeholder
 from .monthly_source_audit import (
     MonthlySourceAuditError,
     SourceGateEvidence,
@@ -166,12 +166,18 @@ class MinuteSummary:
     amount: float = 0
     auction: dict[str, float] | None = None
     invalid_labels: set[str] = field(default_factory=set)
+    all_turnover_zero: bool = True
+    date_mismatch: bool = False
+    placeholder_1300_count: int = 0
 
     def add(self, row: Mapping[str, Any]) -> None:
         stamp = row["trade_time"]
         stamp = stamp if isinstance(stamp, datetime) else datetime.fromisoformat(str(stamp))
         if stamp.tzinfo is not None:
             stamp = stamp.astimezone(_SHANGHAI).replace(tzinfo=None)
+        self.all_turnover_zero = self.all_turnover_zero and all(
+            _finite(row.get(name)) and row[name] == 0 for name in ("volume_hand", "amount_li")
+        )
         # The producer excludes one exact auction from its 240 core bars.
         # Raw daily economics still include that real opening trade.
         if stamp.time() == MINUTE_OPENING_AUCTION_TIME:
@@ -191,6 +197,8 @@ class MinuteSummary:
         index = minute - 571 if 571 <= minute <= 690 else minute - 781 + 120 if 781 <= minute <= 900 else -1
         if stamp.date() != self.trade_date or stamp.second or stamp.microsecond or index < 0:
             self.invalid = True
+            self.date_mismatch = self.date_mismatch or stamp.date() != self.trade_date
+            self.placeholder_1300_count += int(minute == 780 and not stamp.second and not stamp.microsecond)
             # A bounded diagnostic sample, not a second in-memory bar store.
             if len(self.invalid_labels) < 16:
                 self.invalid_labels.add(stamp.time().isoformat())
@@ -341,6 +349,17 @@ def audit_month_rows(
         if key[1] >= minute_start:
             gate = gates["minute_price"]
             summary = summaries.get(key)
+            if (
+                summary is not None and summary.invalid_labels == {"13:00:00"}
+                and summary.placeholder_1300_count == 1 and not summary.date_mismatch
+                and summary.duplicate_count == 0 and summary.count <= 240
+                and suspended_zero_turnover_placeholder(
+                    full_day_suspend=sum(row.get("suspend_type") == "S" and not row.get("suspend_timing")
+                                         for row in indexed.get("suspend_d", {}).get(key, ())) == 1,
+                    has_1300=True, all_minute_turnover_zero=summary.all_turnover_zero, daily_rows=daily,
+                )
+            ):
+                summary = None
             gate.check(
                 key, [{}] if summary is not None else [], valid=lambda _: True, exception=exception("kline_minute_raw")
             )

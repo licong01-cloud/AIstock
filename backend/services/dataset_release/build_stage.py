@@ -705,6 +705,11 @@ def _prepare(
         minute_metrics = CanonicalStockTransformMetrics("minute_bin")
         minute_rows = CanonicalStockTransformer().transform_minute(
             minute_transform,
+            daily_rows=_merged_rows(
+                source, Component.MINUTE_BIN, "kline_daily_raw", staging=staging,
+                key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
+                checkpoint=checkpoint,
+            ),
             minute_rows=_merged_rows(
                 source,
                 Component.MINUTE_BIN,
@@ -2738,6 +2743,12 @@ def _prepare_bin_patch_phase(
     else:
         rows = CanonicalStockTransformer().transform_minute(
             transform,
+            daily_rows=_merged_rows(
+                source, component, "kline_daily_raw", staging=invocation.staging_root,
+                key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
+                checkpoint=checkpoint, date_ranges=ranges, instruments=codes,
+                metrics=source_metrics("kline_daily_raw"),
+            ),
             minute_rows=_merged_rows(
                 source,
                 component,
