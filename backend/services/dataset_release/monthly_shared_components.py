@@ -28,6 +28,9 @@ from .pit import FrozenPitSnapshot
 from .profile import DatasetProfile
 from .sealed_source_reader import CASSealedPartitionReader
 from .sector_enrichment import FrozenSectorEnricher, UNKNOWN_L2_CODE_ID
+from .monthly_sector_mapping import (
+    build_bound_sector_enricher, frozen_sector_mapping_binding, sector_mapping_catalog_receipt,
+)
 from .shared_sector_context import (
     MARKET_CONTEXT_SCHEMA,
     MARKET_VOLUME_DEFINITION,
@@ -928,7 +931,8 @@ class FrozenMonthlySharedComponentBuilder:
 
         classify = _source_rows(self.cas, frozen, "sw_index_classify")
         members = _source_rows(self.cas, frozen, "sw_index_member")
-        enricher = FrozenSectorEnricher.build(classify, members)
+        mapping_binding = frozen_sector_mapping_binding(self.cas, frozen)
+        enricher = build_bound_sector_enricher(classify, members, binding=mapping_binding)
         mapping_authority_sha = digest_named_fields(
             "aistock_monthly_sw_l2_mapping_authority_v1",
             {
@@ -1103,6 +1107,9 @@ class FrozenMonthlySharedComponentBuilder:
             "database_read": False,
             "database_write": False,
             "runtime_action": False,
+            **({"monthly_catalog_lineage": sector_mapping_catalog_receipt(
+                classify, members, binding=mapping_binding,
+            )} if mapping_binding is not None else {}),
             **({"validation_scope": "month_delta", "month_validation": counts,
                 "historical_business_audit_performed": False} if native else {}),
         }

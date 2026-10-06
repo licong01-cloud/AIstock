@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from backend.db.pg_pool import get_conn
 from backend.services.hmm_risk.contracts import canonical_json_bytes, canonical_sha256
+from backend.services.hmm_risk.product_validation_store import find_receipt
 from backend.services.hmm_risk.formal_state_effect import verify_receipt
 from backend.services.hmm_risk.formal_state_model import FormalStateError
 from backend.services.hmm_risk import risk_l2 as risk
@@ -475,6 +476,7 @@ class RiskL2PredictionRepository:
         autocommit=False, manage_transaction=True
     )
     surface_validation_receipt_path: Path | None = None
+    surface_validation_store_root: Path | None = None
     deployment_commit: str | None = None
     runtime_target: str = "backend-main"
 
@@ -534,10 +536,18 @@ class RiskL2PredictionRepository:
             raise RiskL2PredictionError(REASON_WRITER, "L2 risk transaction failed") from exc
 
     def _surface(self, run: Mapping[str, Any]) -> str:
-        path = self.surface_validation_receipt_path
-        if path is None:
-            return "NOT_AVAILABLE"
         try:
+            path = self.surface_validation_receipt_path
+            if path is None and self.deployment_commit is not None:
+                path = find_receipt(
+                    "risk_l2",
+                    identity=run["run_id"],
+                    row_hash=run["compact_summary"]["row_hash"],
+                    deployment_commit=self.deployment_commit,
+                    root=self.surface_validation_store_root,
+                )
+            if path is None:
+                return "NOT_AVAILABLE"
             try:
                 path.lstat()
             except FileNotFoundError:

@@ -16,6 +16,7 @@ from .cas_store import CASRef
 from .source_manifest import SourceManifest
 from .monthly_component_preparation import ComponentPreparationError, preparation_plan
 from .sector_enrichment import FrozenSectorEnricher
+from .monthly_sector_mapping import build_bound_sector_enricher
 from .source_authority import (
     MONTHLY_SECTOR_SOURCE_POLICY,
     PRODUCTION_QUERY_SPECS,
@@ -151,7 +152,9 @@ def freeze_preparation_source(
         if query.query_id in omitted and query.query_id not in deferred_cutoff_datasets:
             continue
         if query.query_id == "sector_data":
-            enricher = FrozenSectorEnricher.build(classify_rows, member_rows)
+            enricher = build_bound_sector_enricher(
+                classify_rows, member_rows, binding=authority._monthly_sector_mapping,
+            )
             query = replace(query, query_version=f"{query.query_version}:{MONTHLY_SECTOR_SOURCE_POLICY}")
         schema = before.schemas[query.query_id]
         query_id = query.query_id
@@ -271,6 +274,8 @@ def freeze_preparation_source(
         "consistent_input_set_complete": False,
         "publication_allowed": False,
         "database_write_performed": False,
+        **({"monthly_sector_mapping": dict(authority._monthly_sector_mapping)}
+           if authority._monthly_sector_mapping is not None else {}),
     }
     source_ref = authority.cas.put_json(
         {**body, "canonical_digest": digest_named_fields(PREPARATION_SOURCE_SCHEMA, body)}

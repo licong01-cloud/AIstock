@@ -18,6 +18,7 @@ from .monthly_production import (
     build_monthly_production_registry,
 )
 from .monthly_registry import OfficialMonthlyProducerRegistry
+from .monthly_postgres_source import POSTGRES_SOURCE_ADAPTER_VERSION
 from .monthly_runtime import MonthlyRuntimeConfigurationError, MonthlyRuntimeSettings
 from .monthly_unified import ActionAuthorizationStore
 from .monthly_worker import MonthlyReleaseWorker
@@ -37,7 +38,7 @@ class MonthlyWorkerRuntime:
         adapter = getattr(getattr(self.registry, "source", None), "adapter", None)
         adapter_id = getattr(adapter, "adapter_id", None)
         version = getattr(adapter, "adapter_version", None)
-        if adapter_id != "aistock.monthly.postgres_source" or version not in ("5", "6", "7"):
+        if adapter_id != "aistock.monthly.postgres_source" or version not in ("5", "6", "7", POSTGRES_SOURCE_ADAPTER_VERSION):
             raise MonthlyRuntimeConfigurationError("monthly worker SOURCE contract is unsupported")
         preparation = getattr(adapter, "preparation_executor", None)
         shared_scope = False
