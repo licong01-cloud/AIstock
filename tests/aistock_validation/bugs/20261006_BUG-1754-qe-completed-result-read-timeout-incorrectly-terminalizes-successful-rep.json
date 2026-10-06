@@ -42,19 +42,19 @@
   "expected": "瞬时结果读取失败保留可对账状态，成功读取后正常注册和入仓，真实数据缺损继续显式失败。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1754-qe-completed-result-read-timeout-incorrectly-terminalizes-successful-rep.json",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/services/quantevolver/qe_workspace_client.py",
-      "backend/tests/unified_engine/test_qe_completed_result_read_retry.py"
+      "backend/tests/unified_engine/test_qe_completed_result_read_retry.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1754-qe-completed-result-read-timeout-incorrectly-terminalizes-successful-rep.json"
     ],
     "added_files": [
       "backend/tests/unified_engine/test_qe_completed_result_read_retry.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1754-qe-completed-result-read-timeout-incorrectly-terminalizes-successful-rep.json",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/services/quantevolver/qe_workspace_client.py",
-      "backend/tests/unified_engine/test_qe_completed_result_read_retry.py"
+      "backend/tests/unified_engine/test_qe_completed_result_read_retry.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1754-qe-completed-result-read-timeout-incorrectly-terminalizes-successful-rep.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -177,7 +177,9 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_110332_262a?detail=summary",
     "fresh_process_evidence": [
       "New independent pytest process loaded persistent QEWorkspaceResultReadUnavailable and AutoEvolutionScheduler; targeted result-only contract tests passed; no service process control",
-      "isolated pytest process loaded persistent source -> 70 passed, no process control"
+      "isolated pytest process loaded persistent source -> 70 passed, no process control",
+      "rtk pytest backend/tests/unified_engine/test_qe_completed_result_read_retry.py -q -> passed in independent fresh process loading persistent backend source, no process control",
+      "rtk pytest backend/tests/unified_engine/test_qe_completed_result_read_retry.py -q -> passed in isolated fresh process loading persistent source without services or process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
