@@ -33,21 +33,21 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1774-monthly-source-rejects-independently-proven-suspended-zero-turnover-minu.json",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261006_BUG-1774-monthly-source-rejects-independently-proven-suspended-zero-turnover-minu.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1774-monthly-source-rejects-independently-proven-suspended-zero-turnover-minu.json",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261006_BUG-1774-monthly-source-rejects-independently-proven-suspended-zero-turnover-minu.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -121,8 +121,8 @@
   },
   "first_seen_at": "2026-10-06T16:28:58.448239Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ef6aa81412f773ba8e4f3fedd1e14a15429b2da5",
+  "fixed_at": "2026-10-06T16:58:54Z",
   "github_issue_number": 5631,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5631",
   "last_seen_at": "2026-10-06T16:28:58.448239Z",
@@ -130,6 +130,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5633",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -154,6 +155,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -165,7 +167,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1774",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a7f4342cdfa67503",
+    "recorded_at": "2026-10-06T16:59:35.825414Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b21e3d8a098800ee65d1eba058663266eb5e84a1",
+    "source_merge_commit": "ef6aa81412f773ba8e4f3fedd1e14a15429b2da5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5633",
+    "validation_evidence": [
+      "validation-receipt: id=f07fa8a9a17fc4ed commit=b21e3d8a098800ee65d1eba058663266eb5e84a1 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; runtime catalog scope and 105 distinct targeted tests verified; DEV and independent source readback passed`"
+    ],
+    "validation_evidence_digest": "20ab01c2d333b98ebc308d1b82828dcc0a9a1c517f0d4660e638c123328cc8cc"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -174,6 +197,9 @@
     "fingerprint": "cbdf71bee393fe6c18f988cd",
     "source_event_id": "FE-20261006-cbdf71bee393"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f07fa8a9a17fc4ed commit=b21e3d8a098800ee65d1eba058663266eb5e84a1 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed; runtime catalog scope and 105 distinct targeted tests verified; DEV and independent source readback passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
