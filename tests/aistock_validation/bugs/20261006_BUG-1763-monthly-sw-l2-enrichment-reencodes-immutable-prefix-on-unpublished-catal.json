@@ -20,7 +20,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1763",
-  "closed_at": null,
+  "closed_at": "2026-10-06T13:27:32.265546Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -300,10 +300,32 @@
       "backend-main",
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1763/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1763",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eda50a3310a0bfa23b4f1d1a2ea7403e9877ce25966e51750f5f3bb1c51c634a",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "55cf6ae200883c73732027073a393882010b9a89",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-06T13:27:06.767559Z",
+      "mode": "read_only",
+      "observed_identity": "7f6371cba7a64b652ba745e477fb33d8bebf5134",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c1cafdd3085645f1f28b365b1daea5bf0df647945187cdce392be2f7d6f94ede",
+      "receipt_sha256": "0c62542158a4c99a6d4a0654df296de2d6c14c2dce7188c508a93c8690a0ead0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "174e45acb782ce5d4c80ead543799d3d3a02626b47745dd634bb40f0bd1173dc",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -335,7 +357,7 @@
     ],
     "validation_evidence_digest": "d12de9fbbd501b5bb0241772a66b828837a9cac4945866453912c84b2ed63b19"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -347,7 +369,8 @@
   "validation_evidence": [
     "rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_preparation_source.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_worker_runtime.py -q --basetemp=X:/AIstock_dataset_candidates/BUG-1763-test-final-20261006 -> passed",
     "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed",
-    "python scripts/aistock_issue_workflow.py post-restart-verify --target worker-scheduler --expected-identity 7f6371cba7a64b652ba745e477fb33d8bebf5134 -> passed"
+    "python scripts/aistock_issue_workflow.py post-restart-verify --target worker-scheduler --expected-identity 7f6371cba7a64b652ba745e477fb33d8bebf5134 -> passed",
+    "post-restart-verify worker-scheduler source merge 55cf6ae200883c73732027073a393882010b9a89 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
