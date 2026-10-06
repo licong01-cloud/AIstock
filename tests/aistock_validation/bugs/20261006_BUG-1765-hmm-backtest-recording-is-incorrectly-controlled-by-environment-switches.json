@@ -29,15 +29,24 @@
   "evidence_uris": [],
   "expected": "HMM记录行为由显式业务请求控制，同一进程无需改环境或重启；默认不执行历史写入，不改变QE模型策略。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/research_pipeline/__init__.py",
+      "backend/services/research_pipeline/hmm_backtest_recorder.py",
+      "backend/services/research_pipeline/realtime_ingestion.py",
+      "backend/tests/research_pipeline/test_hmm_backtest_recorder.py",
+      "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1765-hmm-backtest-recording-is-incorrectly-controlled-by-environment-switches.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/research_pipeline/__init__.py",
       "backend/services/research_pipeline/hmm_backtest_recorder.py",
       "backend/services/research_pipeline/realtime_ingestion.py",
       "backend/tests/research_pipeline/test_hmm_backtest_recorder.py",
-      "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py"
+      "backend/tests/research_pipeline/test_hmm_realtime_ingestion.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1765-hmm-backtest-recording-is-incorrectly-controlled-by-environment-switches.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/research_pipeline/hmm_backtest_recorder.py",
@@ -141,16 +150,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "fresh-process import backend.routers.research_pipeline, backend.routers.health, hmm_backtest_recorder and realtime_ingestion -> PASS, all module paths contained in BUG-1765 task worktree"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/research-pipeline/experiments/rp_exp_e089db8d6d64435e8eed52eba5939c47/backtest-records?research_domain=hmm&source_task_id=qe_20260504_014618_a9ec&limit=500",
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "fresh-process import backend.routers.research_pipeline, backend.routers.health, hmm_backtest_recorder and realtime_ingestion -> PASS, all module paths contained in BUG-1765 task worktree",
+      "fresh-process imports backend.routers.research_pipeline, backend.routers.health, backend.services.research_pipeline.hmm_backtest_recorder, backend.services.research_pipeline.realtime_ingestion -> PASS, all module paths contained in BUG-1765 task worktree"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
