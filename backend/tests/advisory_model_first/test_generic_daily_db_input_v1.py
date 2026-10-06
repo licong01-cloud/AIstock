@@ -130,6 +130,16 @@ def test_database_failure_is_not_empty_success_or_old_path_fallback():
     assert len(sessions[0].calls) == 1 and sessions[0].closed
 
 
+def test_all_missing_quotes_are_unknown_features_not_empty_original_population():
+    def missing(sql, rows):
+        return rows if "advisory_generic_calendar" in sql else []
+    value, sessions = reader(missing)
+    features, receipt = value.load_day(**packet())
+    assert len(features) == 1 and features.loc[:, source.FEATURES].isna().all().all()
+    assert receipt["status"] == "COMPUTED" and receipt["candidate_count"] == 1
+    assert len(sessions[0].calls) == 3 and sessions[0].closed
+
+
 def test_batch_contradictions_are_rejected_before_read_and_deadline_closes_snapshot():
     value, sessions = reader()
     original = packet()
