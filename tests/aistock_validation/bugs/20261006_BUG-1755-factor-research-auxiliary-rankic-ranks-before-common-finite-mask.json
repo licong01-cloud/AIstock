@@ -1,109 +1,119 @@
 {
-  "actual": "Guardrails有效测试3852行/生产5709行，67.47%；最大分类器测试1929有效行存在大量同形断言样板。",
+  "actual": "comparison._daily_rank_ic ranks each side before selecting finite pairs, biasing candidate_raw_rank_ic and candidate_to_declared_baseline_similarity under asymmetric missingness. Reproducer repeated x=[1,2,3,NaN], y=[1,4,2,3] gives 0.3273268354 instead of joint-mask Spearman 0.5. Core paired delta and independent metrics remain unchanged. Fix only common finite eligibility ranking and compact regression tests; no DB or production operations.",
   "allowed_write_scope": [
-    "backend/tests/scripts/test_ci_change_classifier.py",
-    "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json"
+    "backend/services/factor_research/comparison.py",
+    "backend/tests/factor_research/test_comparison.py",
+    "tests/aistock_validation/bugs/20261006_BUG-1755-factor-research-auxiliary-rankic-ranks-before-common-finite-mask.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1756",
-  "closed_at": "2026-10-06T12:11:53Z",
+  "bug_id": "BUG-1755",
+  "closed_at": "2026-10-06T13:08:52Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-10-06T12:03:24.355482Z",
-  "description": "Guardrails有效测试3852行/生产5709行，67.47%；最大分类器测试1929有效行存在大量同形断言样板。",
+  "created_at": "2026-10-06T12:03:06.939933Z",
+  "description": "comparison._daily_rank_ic ranks each side before selecting finite pairs, biasing candidate_raw_rank_ic and candidate_to_declared_baseline_similarity under asymmetric missingness. Reproducer repeated x=[1,2,3,NaN], y=[1,4,2,3] gives 0.3273268354 instead of joint-mask Spearman 0.5. Core paired delta and independent metrics remain unchanged. Fix only common finite eligibility ranking and compact regression tests; no DB or production operations.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20261006-8e96a5057db0",
-      "timestamp": "2026-10-06T12:03:24.355482Z"
+      "note": "Promoted from IC-20261006-734ac541a90c",
+      "timestamp": "2026-10-06T12:03:06.939916Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "等价去重字段断言，所有原场景与安全合同保留；真实统计行数，不伪报30%达标或运行时加速。",
+  "expected": "Rank both inputs on the same eligible finite pairs; preserve undefined and sample count behavior.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/tests/scripts/test_ci_change_classifier.py",
-      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json"
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_comparison.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1755-factor-research-auxiliary-rankic-ranks-before-common-finite-mask.json"
     ],
     "added_files": [],
     "changed_files": [
-      "backend/tests/scripts/test_ci_change_classifier.py",
-      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json"
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_comparison.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1755-factor-research-auxiliary-rankic-ranks-before-common-finite-mask.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "backend/tests/scripts/test_ci_change_classifier.py"
+        "backend/services/factor_research/comparison.py",
+        "backend/tests/factor_research/test_comparison.py"
       ],
       "impacted_modules": [
-        "validation.guardrails",
-        "validation.runner",
-        "validation.center",
-        "validation.workflow_automation",
-        "platform.config"
+        "factor_library.research"
       ],
       "matched_rules": [
         {
-          "file": "backend/tests/scripts/test_ci_change_classifier.py",
-          "impact_modules": [
-            "validation.runner",
-            "validation.center",
-            "validation.workflow_automation",
-            "platform.config"
-          ],
-          "primary_module": "validation.guardrails",
+          "file": "backend/services/factor_research/comparison.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
           "risk_level": "high",
-          "rule_id": "ci_change_classifier_test_owner"
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_comparison.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
         }
       ],
       "risk_levels": [
         "high"
       ],
       "suggested_scope": [
-        "backend/tests/scripts/test_ci_change_classifier.py"
+        "backend/services/factor_research/comparison.py",
+        "backend/tests/factor_research/test_comparison.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_comparison.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_comparison.py"
     ]
   },
-  "first_seen_at": "2026-10-06T12:03:24.355482Z",
+  "first_seen_at": "2026-10-06T12:03:06.939933Z",
   "fix_branch": null,
-  "fix_commit": "d8ff5ba51ebd9b4c341de703fcbe504d06944e8b",
-  "fixed_at": "2026-10-06T12:11:53Z",
-  "github_issue_number": 5570,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5570",
-  "last_seen_at": "2026-10-06T12:03:24.355482Z",
-  "module": "validation",
+  "fix_commit": "4dc6cb56d9f040e019c21bf4fbfa1dde3091a3f7",
+  "fixed_at": "2026-10-06T13:08:52Z",
+  "github_issue_number": 5569,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5569",
+  "last_seen_at": "2026-10-06T12:03:06.939933Z",
+  "module": "factor_library.research",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5572",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5593",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/factor_research/test_comparison.py -q -k daily_ranks",
   "required_verification": [
     "l0",
-    "guardrail_changed_files"
+    "factor_research_backend"
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_gap": "Resolved by merged catalog classification for the offline research tool: runtime_impact=none, backend_restart_required=false. Fresh-process targeted tests provide behavior evidence; no HTTP probe substitution.",
     "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "not_required",
-    "planned_target_ids": [],
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "not_required",
     "post_restart_receipt_ref": null,
     "provisional": false,
@@ -114,49 +124,52 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P3",
+  "severity": "P2",
   "source_merge_receipt": {
-    "bug_id": "BUG-1756",
+    "bug_id": "BUG-1755",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "182709df73a4dc3f",
-    "recorded_at": "2026-10-06T12:12:51.461416Z",
+    "receipt_id": "5209541057947107",
+    "recorded_at": "2026-10-06T13:09:47.494436Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "d99e02f3113a612077268f8894e2ecbeff22a608",
-    "source_merge_commit": "d8ff5ba51ebd9b4c341de703fcbe504d06944e8b",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5572",
+    "source_head_oid": "3274966095413d257ebe5929cf4f67c7256dfc2a",
+    "source_merge_commit": "4dc6cb56d9f040e019c21bf4fbfa1dde3091a3f7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5593",
     "validation_evidence": [
-      "rtk pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1756-final -> 100 passed",
-      "python -m nox -s guardrail_changed_files -> passed, files=1 findings=0 blocking=0 ownership=1/1"
+      "python -m nox -s factor_research_backend l0 -> passed; two reviews complete; runtime none per latest catalog"
     ],
-    "validation_evidence_digest": "886f44154a588d5ed16edb526c71838182fcc8325b0c211ba5424a24adc17483"
+    "validation_evidence_digest": "5f375593507e76701837e96b49c1f72ced03d75d30b2e7c842faf0d126d9ad00"
   },
   "status": "fixed",
   "suspected_modules": [
-    "validation"
+    "factor_library.research"
   ],
-  "title": "Guardrail classifier tests duplicate field assertion boilerplate",
+  "title": "Factor research auxiliary RankIC ranks before common finite mask",
   "trigger_condition": {
-    "fingerprint": "8e96a5057db09eca6386641a",
-    "source_event_id": "FE-20261006-8e96a5057db0"
+    "fingerprint": "734ac541a90cbdae0c63c486",
+    "source_event_id": "FE-20261006-734ac541a90c"
   },
   "validation_evidence": [
-    "rtk pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1756-final -> 100 passed",
-    "python -m nox -s guardrail_changed_files -> passed, files=1 findings=0 blocking=0 ownership=1/1"
+    "python -m nox -s factor_research_backend l0 -> passed; two reviews complete; runtime none per latest catalog"
   ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
-      "modules": [],
-      "plans": [],
-      "required": false,
+      "modules": [
+        "factor_library.research",
+        "factor_research"
+      ],
+      "plans": [
+        "factor_research_backend"
+      ],
+      "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -187,15 +200,14 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0",
-      "guardrail_changed_files"
+      "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "25-35%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
-    "batch_candidate": true,
+    "batch_candidate": false,
     "cleanup_fast_candidate": false,
     "compact_success_output": true,
     "docs_only_merge_with_related_code": true,
@@ -203,7 +215,6 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
-      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
@@ -211,9 +222,14 @@
       "budget": "light",
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
-        "modules": [],
-        "plans": [],
-        "required": false,
+        "modules": [
+          "factor_library.research",
+          "factor_research"
+        ],
+        "plans": [
+          "factor_research_backend"
+        ],
+        "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
@@ -244,8 +260,7 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0",
-        "guardrail_changed_files"
+        "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "25-35%"
