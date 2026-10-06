@@ -16,13 +16,24 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-06T12:02:45.877954Z",
-  "description": "一次ReadTimeout导致已成功回测误标failed。",
+  "description": "WSL 已成功完成 qe_20261006_110332_262a Loop3 的527日分钟回测，但结果GET发生 httpx.ReadTimeout，process_strategy_evo_completed_loop 将读取故障误当业务失败。修复仅增加有界GET重试，耗尽后释放processing CAS回到既有分钟对账，不重提交、不重训、不放宽真实结果缺损校验。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261006-c5ab68c8717e",
       "timestamp": "2026-10-06T12:02:45.877934Z"
+    },
+    {
+      "action": "existing_results_only_reconciliation",
+      "actor": "codex",
+      "note": "通过原API retry_mode=results_only恢复原Loop3，父任务及6个Loop均completed；experiment=qe_20261006_110332_262a_L3，archive=qear_run_01ef7a86f3e210aceda365e2，research_valid=true，pointer=available，warehouse_found=true；未训练、未回测、未执行直接生产SQL或进程控制。",
+      "timestamp": "2026-10-06T12:03:45.505799Z"
+    },
+    {
+      "action": "source_review_and_validation",
+      "actor": "codex",
+      "note": "RED两项在原源码复现ReadTimeout；修复后相关4文件70 passed，Ruff/py_compile/diff-check通过；nox l0/guardrail_changed_files通过，ownership 4 mapped/0 ambiguous；module registry 8 passed。两轮复审修正对账诊断保留及成功清理。DEV执行源码抽取的精确SQL，CAS/JSONB原诊断保留/成功清理/取消不复活/rollback回读全通过，无永久DEV写入、无生产迁移。DESIGN-COMPLIANCE-001逐项：完整修复非mock-only交付；瞬态告警且真实缺损失败；仅控制面对账不改模型/因子/窗口/PIT/seed/执行；无新增门禁或审批。"
     }
   ],
   "evidence_uris": [
@@ -30,15 +41,22 @@
   ],
   "expected": "瞬时结果读取失败保留可对账状态，成功读取后正常注册和入仓，真实数据缺损继续显式失败。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1754-qe-completed-result-read-timeout-incorrectly-terminalizes-successful-rep.json",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/qe_workspace_client.py",
+      "backend/tests/unified_engine/test_qe_completed_result_read_retry.py"
+    ],
     "added_files": [
       "backend/tests/unified_engine/test_qe_completed_result_read_retry.py"
     ],
     "changed_files": [
-      "backend/services/quantevolver/qe_workspace_client.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1754-qe-completed-result-read-timeout-incorrectly-terminalizes-successful-rep.json",
       "backend/services/quantevolver/qe_evolution_service.py",
-      "backend/tests/unified_engine/test_qe_evolution_metrics_sync.py"
+      "backend/services/quantevolver/qe_workspace_client.py",
+      "backend/tests/unified_engine/test_qe_completed_result_read_retry.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_workspace_client.py",
@@ -148,7 +166,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/unified_engine/test_qe_completed_result_read_retry.py -q",
   "required_verification": [
     "l0",
     "qe_read_backend"
@@ -156,11 +174,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_110332_262a?detail=summary",
+    "fresh_process_evidence": [
+      "New independent pytest process loaded persistent QEWorkspaceResultReadUnavailable and AutoEvolutionScheduler; targeted result-only contract tests passed; no service process control",
+      "isolated pytest process loaded persistent source -> 70 passed, no process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
