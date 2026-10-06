@@ -19,6 +19,44 @@ def sector_fit_fixture():
     return SectorPriceFitV1(recipe, models, support, dict(fitted_head_count=4, index_build_count=0), sector_fit_identity_v1(recipe, models, support))
 
 
+def test_M20_route_is_only_two_raw_features_and_keeps_old_identity_formula():
+    from backend.services.advisory_model_first.economic_parent_raw_score_v1 import RAW_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, _matched_information_v1
+    assert _information_key('M20', RAW_FEATURES) == 'parent_raw_score_features'
+    assert _matched_information_v1('M20', ()) == ()
+    assert _information_key('M1', SECTOR_FEATURES) == 'sector_features'
+    with pytest.raises(ValueError, match='block'):
+        _information_key('M20', SECTOR_FEATURES)
+    from backend.services.advisory_model_first.economic_parent_scale_state_v1 import SCALE_FEATURES
+    assert _information_key('M21', SCALE_FEATURES) == 'parent_scale_state_features'
+    assert _matched_information_v1('M21', RAW_FEATURES) == RAW_FEATURES
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M21', ())
+    with pytest.raises(ValueError, match='block'):
+        _information_key('M21', RAW_FEATURES)
+    from backend.services.advisory_model_first.economic_sector_parent_raw_v1 import JOINT_FEATURES
+    assert _information_key('M22', JOINT_FEATURES) == 'sector_parent_raw_features'
+    assert _matched_information_v1('M22', SECTOR_FEATURES) == SECTOR_FEATURES
+    from backend.services.advisory_model_first.economic_parent_raw_trajectory_v1 import TRAJECTORY_FEATURES
+    assert _information_key('M23', TRAJECTORY_FEATURES) == 'parent_raw_trajectory_features'
+    assert _matched_information_v1('M23', RAW_FEATURES) == RAW_FEATURES
+    from backend.services.advisory_model_first.economic_parent_normalized_trajectory_v1 import INFORMATION_FEATURES
+    assert _information_key('M24', INFORMATION_FEATURES) == 'parent_normalized_trajectory_features'
+    assert _matched_information_v1('M24', TRAJECTORY_FEATURES) == TRAJECTORY_FEATURES
+    with pytest.raises(ValueError):
+        _matched_information_v1('M24', RAW_FEATURES)
+    with pytest.raises(ValueError):
+        _information_key('M24', TRAJECTORY_FEATURES)
+    with pytest.raises(ValueError):
+        _matched_information_v1('M23', ())
+    with pytest.raises(ValueError):
+        _information_key('M23', RAW_FEATURES)
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M22', RAW_FEATURES)
+    with pytest.raises(ValueError, match='block'):
+        _information_key('M22', SCALE_FEATURES)
+
+
 def test_four_fixed_fits_shared_train_test_poison_and_support_not_class_filtered():
     rows, configuration = rows_fixture()
     for name in SECTOR_FEATURES:
@@ -64,3 +102,95 @@ def test_price_grid_holes_single_batch_and_common_unknown_mask():
     query[SECTOR_FEATURES[0]] = np.nan
     for arm in ('matched', 'candidate'):
         assert sector_nodes_v1(fitted=fitted, rows=query, arm=arm).status.eq('UNKNOWN_INPUT_OR_SUPPORT').all()
+
+
+def test_M7_router_does_not_change_old_information_identity_formula():
+    from backend.services.advisory_model_first.economic_price_path_value_v1 import PRICE_PATH_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, information_fit_identity_v1
+    from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
+    fitted = sector_fit_fixture()
+    for model in ('M1', 'M5', 'M6'):
+        assert information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model) == sha(
+            dict(model_id=model, recipe=fitted.recipe, models=fitted.models, support=list(fitted.support.intervals_bps)))
+    assert _information_key('M7', PRICE_PATH_FEATURES) == 'price_path_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M7', SECTOR_FEATURES)
+
+
+def test_M8_router_keeps_old_information_identity_formula():
+    from backend.services.advisory_model_first.economic_market_risk_price_v1 import MARKET_RISK_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, information_fit_identity_v1
+    from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
+    fitted = sector_fit_fixture()
+    for model in ('M1', 'M5', 'M6', 'M7'):
+        assert information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model) == sha(
+            dict(model_id=model, recipe=fitted.recipe, models=fitted.models, support=list(fitted.support.intervals_bps)))
+    assert _information_key('M8', MARKET_RISK_FEATURES) == 'market_risk_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M8', SECTOR_FEATURES)
+
+
+def test_information_routes_keep_previous_identity_formulas_and_reject_wrong_blocks():
+    from backend.services.advisory_model_first.economic_volume_context_price_v1 import VOLUME_CONTEXT_FEATURES
+    from backend.services.advisory_model_first.economic_breadth_state_price_v1 import BREADTH_STATE_FEATURES
+    from backend.services.advisory_model_first.economic_traded_price_distribution_v1 import TRADED_PRICE_FEATURES
+    from backend.services.advisory_model_first.economic_session_path_v1 import SESSION_PATH_FEATURES
+    from backend.services.advisory_model_first.economic_free_float_turnover_v1 import FREE_FLOAT_FEATURES
+    from backend.services.advisory_model_first.economic_valuation_context_v1 import VALUATION_FEATURES
+    from backend.services.advisory_model_first.economic_limit_state_v1 import LIMIT_STATE_FEATURES
+    from backend.services.advisory_model_first.economic_candidate_cohort_v1 import CANDIDATE_COHORT_FEATURES
+    from backend.services.advisory_model_first.economic_flow_path_v1 import FLOW_PATH_FEATURES
+    from backend.services.advisory_model_first.economic_asymmetric_risk_v1 import ASYMMETRIC_RISK_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, information_fit_identity_v1
+    from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
+    fitted = sector_fit_fixture()
+    for model in ('M1', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11', 'M12', 'M13', 'M14', 'M15', 'M16', 'M17', 'M18'):
+        assert information_fit_identity_v1(fitted.recipe, fitted.models, fitted.support, model_id=model) == sha(
+            dict(model_id=model, recipe=fitted.recipe, models=fitted.models, support=list(fitted.support.intervals_bps)))
+    assert _information_key('M9', VOLUME_CONTEXT_FEATURES) == 'volume_context_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M9', SECTOR_FEATURES)
+    assert _information_key('M10', BREADTH_STATE_FEATURES) == 'breadth_state_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M10', VOLUME_CONTEXT_FEATURES)
+    assert _information_key('M11', TRADED_PRICE_FEATURES) == 'traded_price_distribution_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M11', BREADTH_STATE_FEATURES)
+    assert _information_key('M12', SESSION_PATH_FEATURES) == 'session_path_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M12', TRADED_PRICE_FEATURES)
+    assert _information_key('M13', FREE_FLOAT_FEATURES) == 'free_float_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M13', SESSION_PATH_FEATURES)
+    assert _information_key('M14', VALUATION_FEATURES) == 'valuation_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M14', FREE_FLOAT_FEATURES)
+    assert _information_key('M15', LIMIT_STATE_FEATURES) == 'limit_state_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M15', VALUATION_FEATURES)
+    assert _information_key('M16', CANDIDATE_COHORT_FEATURES) == 'candidate_cohort_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M16', LIMIT_STATE_FEATURES)
+    assert _information_key('M17', FLOW_PATH_FEATURES) == 'flow_path_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M17', CANDIDATE_COHORT_FEATURES)
+    assert _information_key('M18', ASYMMETRIC_RISK_FEATURES) == 'asymmetric_risk_features'
+    with pytest.raises(ValueError, match='block/model'):
+        _information_key('M18', FLOW_PATH_FEATURES)
+    from backend.services.advisory_model_first.economic_sector_moneyflow_v1 import JOINT_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _matched_information_v1
+    assert _information_key('M19', JOINT_FEATURES) == 'sector_moneyflow_features'
+    assert _matched_information_v1('M19', SECTOR_FEATURES) == SECTOR_FEATURES
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M19', ())
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M1', SECTOR_FEATURES)
+
+
+def test_M25_fixed_sector_path_block_and_matched_route():
+    from backend.services.advisory_model_first.economic_sector_path_price_v1 import INFORMATION_FEATURES
+    from backend.services.advisory_model_first.economic_sector_price_value_v1 import _information_key, _matched_information_v1
+    assert _information_key('M25', INFORMATION_FEATURES) == 'sector_path_price_features'
+    assert _matched_information_v1('M25', SECTOR_FEATURES) == SECTOR_FEATURES
+    with pytest.raises(ValueError, match='matched'):
+        _matched_information_v1('M25', ())

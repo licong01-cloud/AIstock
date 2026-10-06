@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -74,55 +75,20 @@ def _write_registry(path: Path) -> None:
 
 
 def _write_plans(path: Path) -> None:
-    _write_yaml(
-        path,
-        """
-        schema_version: aistock_validation_plans_v1
-        plans:
-          - plan_key: l0
-            title: L0
-            module: validation_center
-            level: L0
-            command_key: nox_l0
-            nox_session: l0
-            enabled: true
-            requires_backend: false
-            requires_frontend: false
-            allowed_backend_ports: []
-            allowed_frontend_ports: []
-            writes_database: false
-            writes_artifacts: true
-            writes_business_state: false
-          - plan_key: validation_center_backend
-            title: Validation backend
-            module: validation_center
-            level: L2
-            command_key: nox_validation_center_backend
-            nox_session: validation_center_backend
-            enabled: true
-            requires_backend: false
-            requires_frontend: false
-            allowed_backend_ports: []
-            allowed_frontend_ports: []
-            writes_database: false
-            writes_artifacts: true
-            writes_business_state: false
-          - plan_key: qe_archive_l3
-            title: QE archive L3
-            module: qe_archive
-            level: L3
-            command_key: nox_qe_archive_l3
-            nox_session: qe_archive_l3
-            enabled: true
-            requires_backend: true
-            requires_frontend: true
-            allowed_backend_ports: [8011]
-            allowed_frontend_ports: [3011]
-            writes_database: false
-            writes_artifacts: true
-            writes_business_state: false
-        """,
-    )
+    plans = []
+    for key, title, module, level, backend_ports, frontend_ports in [
+        ("l0", "L0", "validation_center", "L0", [], []),
+        ("validation_center_backend", "Validation backend", "validation_center", "L2", [], []),
+        ("qe_archive_l3", "QE archive L3", "qe_archive", "L3", [8011], [3011]),
+    ]:
+        plans.append(dict(
+            plan_key=key, title=title, module=module, level=level,
+            command_key=f"nox_{key}", nox_session=key, enabled=True,
+            requires_backend=bool(backend_ports), requires_frontend=bool(frontend_ports),
+            allowed_backend_ports=backend_ports, allowed_frontend_ports=frontend_ports,
+            writes_database=False, writes_artifacts=True, writes_business_state=False,
+        ))
+    _write_yaml(path, yaml.safe_dump({"schema_version": "aistock_validation_plans_v1", "plans": plans}))
 
 
 def _write_targets(path: Path) -> None:

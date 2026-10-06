@@ -250,7 +250,7 @@ WORKTREE_BACKEND_LOG_LINE_RE = re.compile(
 )
 RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
+    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plans>[A-Za-z0-9_][A-Za-z0-9_-]*(?:\s+[A-Za-z0-9_][A-Za-z0-9_-]*)*)(?=\s+-|$)", re.IGNORECASE)),
     (
         "pytest",
         re.compile(
@@ -784,43 +784,46 @@ def _build_validation_receipts(
             errors.append(f"validation result is not an explicit pass: {item}")
             continue
         evidence_kind = ""
-        plan = ""
+        plans = [""]
         for kind, pattern in VALIDATION_COMMAND_PATTERNS:
             match = pattern.search(command)
             if not match:
                 continue
+            if kind == "nox" and re.search(r"\s(?:-s|--sessions)(?:\s|=|$)", command[match.end():]):
+                break  # Repeated selectors can override each other; never infer executed plans.
             evidence_kind = kind
-            plan = str(match.groupdict().get("plan") or "")
+            plans = list(dict.fromkeys(str(match.groupdict().get("plans") or match.groupdict().get("plan") or "").split())) or [""]
             break
         if not evidence_kind:
             errors.append(f"validation command is not allowlisted: {command}")
             continue
-        identity_inputs = {
-            "commit": commit,
-            "changed_files_digest": changed_files_digest,
-            "command": command,
-            "result": result,
-            "evidence_kind": evidence_kind,
-            "plan": plan or None,
-            "environment": environment_identity,
-        }
-        normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        receipts.append(
-            {
-                "schema_version": VALIDATION_RECEIPT_SCHEMA,
-                "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
-                "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+        for plan in plans:
+            identity_inputs = {
                 "commit": commit,
                 "changed_files_digest": changed_files_digest,
-                "environment_identity": environment_identity,
                 "command": command,
                 "result": result,
-                "status": "passed",
                 "evidence_kind": evidence_kind,
                 "plan": plan or None,
-                "recorded_at": _utc_now(),
+                "environment": environment_identity,
             }
-        )
+            normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            receipts.append(
+                {
+                    "schema_version": VALIDATION_RECEIPT_SCHEMA,
+                    "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
+                    "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+                    "commit": commit,
+                    "changed_files_digest": changed_files_digest,
+                    "environment_identity": environment_identity,
+                    "command": command,
+                    "result": result,
+                    "status": "passed",
+                    "evidence_kind": evidence_kind,
+                    "plan": plan or None,
+                    "recorded_at": _utc_now(),
+                }
+            )
     return receipts, errors
 
 
@@ -16235,6 +16238,11 @@ def build_watch_ci_plan(
     }
 
 
+def _pr_body_matches(actual: Any, expected: str) -> bool:
+    """GitHub may return CRLF Markdown; normalize no content except that transport representation."""
+    return isinstance(actual, str) and actual.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+
+
 def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_head: str, before_push: bool) -> dict[str, Any]:
     """Publish validated receipts before synchronize; never overwrite a foreign PR."""
     number = _github_pr_number_from_url(pr_url)
@@ -16255,14 +16263,14 @@ def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_h
         if not ancestor.get("ok"):
             raise WorkflowError("existing PR head is not an ancestor of validated task HEAD; refuse receipt overwrite")
     body = body_path.read_text(encoding="utf-8")
-    updated = current.get("body") != body
+    updated = not _pr_body_matches(current.get("body"), body)
     if updated:
         result = _run_command(["gh", "api", "--method", "PATCH", f"repos/{GITHUB_REPO}/pulls/{current['pr_number']}",
                                "-F", f"body=@{body_path}"], cwd=REPO_ROOT, timeout=30)
         if result.get("ok"):
             response = _parse_rest_object(result, context="owned PR receipt update")
             head = response.get("head") or {}
-            if (response.get("body") != body or response.get("state") != "open"
+            if (not _pr_body_matches(response.get("body"), body) or response.get("state") != "open"
                     or response.get("number") != current["pr_number"] or response.get("html_url") != pr_url
                     or head.get("sha") != old_head or head.get("ref") != branch
                     or (head.get("repo") or {}).get("full_name") != GITHUB_REPO
@@ -16270,7 +16278,7 @@ def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_h
                 raise WorkflowError("PR changed during receipt update; refuse push")
         elif _looks_like_github_transport_failure(f"{result.get('stderr')}\n{result.get('stdout')}"):
             recovered = _github_pull_rest_readback(pr_url)
-            if (recovered.get("head_sha") != old_head or recovered.get("body") != body or recovered.get("state") != "OPEN"
+            if (recovered.get("head_sha") != old_head or not _pr_body_matches(recovered.get("body"), body) or recovered.get("state") != "OPEN"
                     or recovered.get("head_ref") != branch or recovered.get("base_ref") != "main"
                     or recovered.get("head_repo") != GITHUB_REPO or recovered.get("url") != pr_url):
                 raise WorkflowError("PR receipt update outcome unavailable; do not push or repeat mutation")
@@ -18345,6 +18353,20 @@ def _complete_pr_merge_attempt(
     }
 
 
+def _required_check_poll_schedule(attempts: int, delay_seconds: int, *, adaptive: bool = False) -> tuple[int, ...]:
+    """Short initial polls within the existing total wait budget, never an unbounded watcher."""
+    count, delay = max(1, int(attempts)) - 1, max(0, int(delay_seconds))
+    if not adaptive or not delay:
+        return (delay,) * count
+    remaining, interval, schedule = count * delay, min(5, delay), []
+    while remaining:
+        wait = min(interval, remaining)
+        schedule.append(wait)
+        remaining -= wait
+        interval = min(interval * 2, delay)
+    return tuple(schedule)
+
+
 def _await_required_pr_checks(
     pr_url: str,
     *,
@@ -18352,6 +18374,7 @@ def _await_required_pr_checks(
     bug_id: str | None = None,
     attempts: int = 6,
     delay_seconds: int = 10,
+    adaptive: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, list[str]], list[dict[str, Any]]]:
     """Poll queued required checks briefly instead of forcing manual retries.
 
@@ -18361,13 +18384,12 @@ def _await_required_pr_checks(
     becomes a long ``gh pr checks --watch`` loop.
     """
 
-    max_attempts = max(1, int(attempts))
-    wait_seconds = max(0, int(delay_seconds))
+    schedule = _required_check_poll_schedule(attempts, delay_seconds, adaptive=adaptive)
     history: list[dict[str, Any]] = []
     latest_result: dict[str, Any] = {"ok": False, "stdout": "[]", "stderr": "not run"}
     latest_fallback: dict[str, Any] | None = None
     latest_summary: dict[str, list[str]] = {"failed": [], "pending": [], "non_blocking": [], "passed": []}
-    for index in range(1, max_attempts + 1):
+    for index in range(1, len(schedule) + 2):
         latest_result, latest_fallback = _merge_required_check_result_with_transport_fallback(
             pr_url,
             payload=payload,
@@ -18384,8 +18406,8 @@ def _await_required_pr_checks(
         )
         if latest_summary["failed"] or not latest_summary["pending"]:
             return latest_result, latest_fallback, latest_summary, history
-        if index < max_attempts and wait_seconds:
-            time.sleep(wait_seconds)
+        if index <= len(schedule) and schedule[index - 1]:
+            time.sleep(schedule[index - 1])
     if bug_id:
         _append_event(
             bug_id,
@@ -18432,6 +18454,7 @@ def _merge_pr_if_ready_for_bug(
     *,
     required_check_attempts: int = 6,
     required_check_delay_seconds: int = 10,
+    adaptive_required_checks: bool = False,
 ) -> dict[str, Any]:
     payload, view_fallback = _merge_pr_view_with_transport_fallback(pr_url, bug_id=bug_id)
     if payload.get("state") == "MERGED":
@@ -18445,6 +18468,7 @@ def _merge_pr_if_ready_for_bug(
         bug_id=bug_id,
         attempts=required_check_attempts,
         delay_seconds=required_check_delay_seconds,
+        adaptive=adaptive_required_checks,
     )
     failed = check_summary["failed"]
     pending = check_summary["pending"]
@@ -19632,14 +19656,14 @@ def _merge_close_sync_pr_if_ready(
             "next_command": f"gh pr merge {pr_url} --squash",
         }
     try:
-        # Close-sync CI normally queues behind the source merge's default-branch
-        # Keep the stable CI verdict wait bounded, but long enough to avoid a
-        # guaranteed second manual finalizer invocation for an active CI job.
+        # Metadata-only CI is normally short: poll early without extending the
+        # existing total wait budget or weakening exact-HEAD required checks.
         result = _merge_pr_if_ready_for_bug(
             bug_id,
             pr_url,
             required_check_attempts=16,
             required_check_delay_seconds=30,
+            adaptive_required_checks=True,
         )
     except WorkflowError as exc:
         return {

@@ -67,6 +67,7 @@ def freeze_preparation_source(
     blocking_datasets: tuple[str, ...],
     deferred_cutoff_datasets: tuple[str, ...] = (),
     checkpoint: Callable[[], None] = lambda: None,
+    progress: Callable[[Mapping[str, Any]], None] = lambda _value: None,
     disk_checkpoint: Callable[[int | None], Any] | None = None,
 ) -> PreparationSourceSnapshot:
     """Freeze healthy raw datasets once in the imported coordinator snapshot.
@@ -103,9 +104,27 @@ def freeze_preparation_source(
         raise ComponentPreparationError("private preparation control authority is incomplete")
     chunk = authority.profile.resource_policy.validation_read_chunk_rows
     budget = SourceCASBudgetTracker(disk_checkpoint=disk_checkpoint)
+    rows_validated = rows_sealed = partitions_sealed = 0
+    phase = "PRIVATE_SOURCE_CONTROL"
+    query_id: str | None = None
+    partition_key: str | None = None
+
+    def pulse() -> None:
+        progress({
+            "phase": phase, "query_id": query_id, "partition_key": partition_key,
+            "rows_validated": rows_validated, "rows_sealed": rows_sealed,
+            "partitions_sealed": partitions_sealed,
+        })
+        checkpoint()
+
+    def observe_row(_payload: Mapping[str, Any]) -> None:
+        nonlocal rows_validated
+        rows_validated += 1
+
+    pulse()
     before = authority._capture_control_snapshot(
         cutoff=cutoff,
-        pulse=checkpoint,
+        pulse=pulse,
         budget=budget,
         read_chunk_rows=chunk,
         recheck_by_identity=None,
@@ -127,15 +146,19 @@ def freeze_preparation_source(
         ),
     )
     for query in ordered:
+        if query.query_id not in before.schemas:
+            continue
         if query.query_id in omitted and query.query_id not in deferred_cutoff_datasets:
             continue
         if query.query_id == "sector_data":
             enricher = FrozenSectorEnricher.build(classify_rows, member_rows)
             query = replace(query, query_version=f"{query.query_version}:{MONTHLY_SECTOR_SOURCE_POLICY}")
         schema = before.schemas[query.query_id]
+        query_id = query.query_id
+        partition_key = None
+        phase = "PRIVATE_SOURCE_ROWS"
         observed_rows = 0
         for key, params in authority._partition_requests(query, cutoff, pit_snapshot=before.pit_snapshot):
-            checkpoint()
             if query.query_id in deferred_cutoff_datasets:
                 if query.date_expression is None:
                     raise ComponentPreparationError("private deferred cutoff source is not dated")
@@ -149,6 +172,8 @@ def freeze_preparation_source(
                         raise ComponentPreparationError("private deferred source partition boundary differs")
                     key = key.replace(original, f"{left.isoformat()}_{right.isoformat()}", 1)
                     params = {**params, "end": right}
+            partition_key = key
+            pulse()
             audit_digest = (
                 before.audit.partition_digest(
                     str(query.audit_dataset), _as_date(params["start"]), _as_date(params["end"])
@@ -170,12 +195,16 @@ def freeze_preparation_source(
                     tokens=session_tokens,
                     table_schema=schema,
                     refresh_audit_digest=audit_digest,
-                    checkpoint=checkpoint,
+                    checkpoint=pulse,
                     budget=budget,
                     read_chunk_rows=chunk,
                     payload_enricher=enricher.enrich if query.query_id == "sector_data" and enricher else None,
+                    payload_observer=observe_row,
                 )
             sealed.append(partition)
+            partitions_sealed += 1
+            rows_sealed += partition.summary.row_count
+            pulse()
             observed_rows += partition.summary.row_count
             tokens.extend(session_tokens)
             if query.query_id in {"sw_index_classify", "sw_index_member", "index_membership_pit"}:
@@ -201,16 +230,19 @@ def freeze_preparation_source(
             _validate_core_index_membership_authority(core_rows, start=authority.profile.start_date, cutoff=cutoff)
         with authority._session_factory(authority.profile.resource_policy) as session:
             ledger_digest, _ = authority._freeze_writer_ledger(
-                session, cutoff=cutoff, checkpoint=checkpoint, read_chunk_rows=chunk
+                session, cutoff=cutoff, checkpoint=pulse, read_chunk_rows=chunk
             )
             tokens.extend(authority._session_tokens(session))
         if ledger_digest != before.writer_ledger_digest:
             raise SourceSnapshotDriftBlocked(
                 "preparation source writer ledger changed", context={"query_id": query.query_id}
             )
+    phase = "PRIVATE_SOURCE_BRACKET"
+    partition_key = None
+    pulse()
     after = authority._capture_control_snapshot(
         cutoff=cutoff,
-        pulse=checkpoint,
+        pulse=pulse,
         budget=None,
         read_chunk_rows=chunk,
         recheck_by_identity=None,

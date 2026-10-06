@@ -22,6 +22,23 @@ def _log_cli_args(log_path):
             "--source-name", "AIstock CI", "--branch", "main", "--commit", "62dc1b12"]
 
 
+def _nightly_input(run_id, *, status_overrides=None, include_url=True, **extra):
+    """Fresh shared defaults; callers keep their failure and evidence distinctions."""
+    return {
+        "statuses": {"runnerPreflight": "success", "drSnapshot": "success", "drValidate": "success",
+                     "nightlyL3": "failure", "paperV2Live": "skipped", "codeIntelligence": "success",
+                     **(status_overrides or {})},
+        "run_id": run_id,
+        **({"run_url": f"https://github.com/licong01-cloud/AIstock/actions/runs/{run_id}"} if include_url else {}),
+        **extra,
+    }
+
+
+def _runner_outage_input():
+    return {"runner-preflight": "failure", "dr-snapshot": "skipped", "dr-validate": "skipped",
+            "nightly-l3": "skipped", "paper-v2-live": "skipped"}
+
+
 
 CI_LOG = """
 Backend tests (paper_v2_backend)\tUNKNOWN STEP\t2026-05-25T01:43:38.5513821Z nox > Running session paper_v2_backend
@@ -1154,24 +1171,7 @@ def test_regression_locator_is_rendered_and_carried_to_context_pack() -> None:
 
 def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     payload = summary.summarize_nightly_status(
-        {
-            "statuses": {
-                "runnerPreflight": "success",
-                "drSnapshot": "success",
-                "drValidate": "success",
-                "nightlyL3": "failure",
-                "paperV2Live": "skipped",
-                "codeIntelligence": "success",
-            },
-            "run_id": "9001",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
-            "nightly_session_results": [
-                {
-                    "session": "advisory_historical_range_backend",
-                    "result": "failure",
-                }
-            ],
-        },
+        _nightly_input("9001", nightly_session_results=[{"session": "advisory_historical_range_backend", "result": "failure"}]),
         branch="main",
         commit="abcdef1234567890",
     )
@@ -1221,20 +1221,7 @@ def test_nightly_status_cli_keeps_generic_stage_local_until_run_completes(
     summary_path = tmp_path / "summary.json"
     issue_payload_path = tmp_path / "github-issue-payload.json"
     status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                    "codeIntelligence": "success",
-                },
-                "run_id": "28973219723",
-                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/28973219723",
-            }
-        ),
+        json.dumps(_nightly_input("28973219723")),
         encoding="utf-8",
     )
 
@@ -1279,19 +1266,7 @@ def test_nightly_cli_invokes_llm_triage_when_code_refs_and_warning_mode(
     code_refs_path = tmp_path / "code-intelligence-summary.json"
     summary_path = tmp_path / "summary.json"
     status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                    "codeIntelligence": "success",
-                },
-                "run_id": "9001",
-            }
-        ),
+        json.dumps(_nightly_input("9001", include_url=False)),
         encoding="utf-8",
     )
     code_refs_path.write_text(
@@ -1367,18 +1342,7 @@ def test_nightly_cli_invokes_llm_triage_when_code_refs_and_warning_mode(
 
 def test_nightly_smoke_payload_is_explicitly_synthetic() -> None:
     payload = summary.summarize_nightly_status(
-        {
-            "statuses": {
-                "runnerPreflight": "success",
-                "drSnapshot": "success",
-                "drValidate": "success",
-                "nightlyL3": "failure",
-                "paperV2Live": "skipped",
-                "codeIntelligence": "success",
-            },
-            "run_id": "999999999",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/999999999",
-        },
+        _nightly_input("999999999"),
         branch="main",
         commit="abcdef1234567890",
     )
@@ -1394,18 +1358,7 @@ def test_nightly_smoke_payload_is_explicitly_synthetic() -> None:
 
 def test_nightly_status_summary_includes_code_intelligence_failure() -> None:
     payload = summary.summarize_nightly_status(
-        {
-            "statuses": {
-                "runnerPreflight": "success",
-                "drSnapshot": "success",
-                "drValidate": "success",
-                "nightlyL3": "success",
-                "paperV2Live": "success",
-                "codeIntelligence": "failure",
-            },
-            "run_id": "9003",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9003",
-        },
+        _nightly_input("9003", status_overrides={"nightlyL3": "success", "paperV2Live": "success", "codeIntelligence": "failure"}),
         branch="main",
         commit="abcdef1234567890",
     )
@@ -1426,18 +1379,7 @@ def test_nightly_status_summary_includes_code_intelligence_failure() -> None:
 
 def test_nightly_status_summary_keeps_payload_when_code_intelligence_fails_with_actionable_stage() -> None:
     payload = summary.summarize_nightly_status(
-        {
-            "statuses": {
-                "runnerPreflight": "success",
-                "drSnapshot": "success",
-                "drValidate": "success",
-                "nightlyL3": "failure",
-                "paperV2Live": "success",
-                "codeIntelligence": "failure",
-            },
-            "run_id": "9004",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9004",
-        },
+        _nightly_input("9004", status_overrides={"paperV2Live": "success", "codeIntelligence": "failure"}),
         branch="main",
         commit="abcdef1234567890",
     )
@@ -1451,18 +1393,7 @@ def test_nightly_status_summary_keeps_payload_when_code_intelligence_fails_with_
 
 def test_nightly_context_pack_includes_code_intelligence_refs() -> None:
     payload = summary.summarize_nightly_status(
-        {
-            "statuses": {
-                "runnerPreflight": "success",
-                "drSnapshot": "success",
-                "drValidate": "success",
-                "nightlyL3": "failure",
-                "paperV2Live": "success",
-                "codeIntelligence": "success",
-            },
-            "run_id": "9005",
-            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9005",
-        },
+        _nightly_input("9005", status_overrides={"paperV2Live": "success"}),
         branch="main",
         commit="abcdef1234567890",
     )
@@ -1486,13 +1417,7 @@ def test_nightly_context_pack_includes_code_intelligence_refs() -> None:
 
 def test_nightly_runner_outage_preserves_existing_dedupe_title() -> None:
     payload = summary.summarize_nightly_status(
-        {
-            "runner-preflight": "failure",
-            "dr-snapshot": "skipped",
-            "dr-validate": "skipped",
-            "nightly-l3": "skipped",
-            "paper-v2-live": "skipped",
-        },
+        _runner_outage_input(),
         run_id="9002",
         run_url="https://github.com/licong01-cloud/AIstock/actions/runs/9002",
     )
@@ -1557,13 +1482,7 @@ def test_nightly_runner_outage_uses_role_specific_health_evidence() -> None:
 
 def test_nightly_runner_outage_context_pack_omits_bug_promotion() -> None:
     payload = summary.summarize_nightly_status(
-        {
-            "runner-preflight": "failure",
-            "dr-snapshot": "skipped",
-            "dr-validate": "skipped",
-            "nightly-l3": "skipped",
-            "paper-v2-live": "skipped",
-        },
+        _runner_outage_input(),
         run_id="9002",
         run_url="https://github.com/licong01-cloud/AIstock/actions/runs/9002",
     )
@@ -1685,7 +1604,10 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert "inputs.run_dr" in workflow["jobs"]["dr-snapshot"]["if"]
     assert "inputs.run_dr" in workflow["jobs"]["dr-validate"]["if"]
     assert "inputs.run_nightly_l3" in workflow["jobs"]["nightly-l3"]["if"]
-    assert "github.event_name == 'workflow_dispatch' && !inputs.run_dr" in workflow["jobs"]["nightly-l3"]["if"]
+    l3_condition = workflow["jobs"]["nightly-l3"]["if"]
+    assert "inputs.run_dr" not in l3_condition  # DR opt-out must not suppress independent L3.
+    assert "always()" in l3_condition
+    assert "needs.runner-preflight.result == 'success'" in l3_condition
     assert "inputs.run_nightly_l3 && inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
     assert "inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
     code_steps = "\n".join(step.get("run", "") for step in workflow["jobs"]["code-intelligence-weekly"]["steps"])

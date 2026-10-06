@@ -1,0 +1,292 @@
+{
+  "actual": "DR file integrity and schema extraction materialize entire custom-format dumps in Python; two DEV schema tests repeat identical subset SQL/assertion. Use bounded-memory path/stream pg_restore input and merge duplicate subset check while preserving extra-table diagnostics, strict/xfail semantics, plain-SQL independence and corruption rejection. Premerge exact mocked contract tests plus guardrail; real dump/DEV DR remains natural Nightly, not claimed by fixture receipt. Only validation test infrastructure; no business, production backup, DB access, dependency install or service/experiment control.",
+  "allowed_write_scope": [
+    "backend/tests/dr/conftest.py",
+    "backend/tests/dr/test_dump_file_validity.py",
+    "backend/tests/dr/test_dump_schema_diff.py",
+    "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1748",
+  "closed_at": "2026-10-06T02:08:06Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-06T01:55:54.213708Z",
+  "description": "DR file integrity and schema extraction materialize entire custom-format dumps in Python; two DEV schema tests repeat identical subset SQL/assertion. Use bounded-memory path/stream pg_restore input and merge duplicate subset check while preserving extra-table diagnostics, strict/xfail semantics, plain-SQL independence and corruption rejection. Premerge exact mocked contract tests plus guardrail; real dump/DEV DR remains natural Nightly, not claimed by fixture receipt. Only validation test infrastructure; no business, production backup, DB access, dependency install or service/experiment control.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261006-10a649ae915f",
+      "timestamp": "2026-10-06T01:55:54.213708Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/dr/conftest.py",
+      "backend/tests/dr/test_dump_file_validity.py",
+      "backend/tests/dr/test_dump_schema_diff.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/dr/conftest.py",
+      "backend/tests/dr/test_dump_file_validity.py",
+      "backend/tests/dr/test_dump_schema_diff.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/dr/conftest.py",
+        "backend/tests/dr/test_dump_file_validity.py",
+        "backend/tests/dr/test_dump_schema_diff.py"
+      ],
+      "impacted_modules": [
+        "validation.dr",
+        "platform.db",
+        "validation.runner"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/dr/conftest.py",
+          "impact_modules": [
+            "platform.db",
+            "validation.runner"
+          ],
+          "primary_module": "validation.dr",
+          "risk_level": "high",
+          "rule_id": "validation_dr"
+        },
+        {
+          "file": "backend/tests/dr/test_dump_file_validity.py",
+          "impact_modules": [
+            "platform.db",
+            "validation.runner"
+          ],
+          "primary_module": "validation.dr",
+          "risk_level": "high",
+          "rule_id": "validation_dr"
+        },
+        {
+          "file": "backend/tests/dr/test_dump_schema_diff.py",
+          "impact_modules": [
+            "platform.db",
+            "validation.runner"
+          ],
+          "primary_module": "validation.dr",
+          "risk_level": "high",
+          "rule_id": "validation_dr"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/dr/conftest.py",
+        "backend/tests/dr/test_dump_file_validity.py",
+        "backend/tests/dr/test_dump_schema_diff.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/dr/conftest.py",
+      "backend/tests/dr/test_dump_file_validity.py",
+      "backend/tests/dr/test_dump_schema_diff.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/dr/conftest.py",
+      "backend/tests/dr/test_dump_file_validity.py",
+      "backend/tests/dr/test_dump_schema_diff.py"
+    ]
+  },
+  "first_seen_at": "2026-10-06T01:55:54.213708Z",
+  "fix_branch": null,
+  "fix_commit": "46919c344a5546360e2bbe966b50452dda9c464f",
+  "fixed_at": "2026-10-06T02:08:06Z",
+  "github_issue_number": 5558,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5558",
+  "last_seen_at": "2026-10-06T01:55:54.213708Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5560",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "dr_validate"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1748",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f5066bae681fff38",
+    "recorded_at": "2026-10-06T02:08:52.826873Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ecf39dbf0ce3d65b7847a2502f9c760f80c6c262",
+    "source_merge_commit": "46919c344a5546360e2bbe966b50452dda9c464f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5560",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dr/test_dump_file_validity.py backend/tests/dr/test_dump_schema_diff.py -k 'contract or regex' -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1748-final -> 7 passed",
+      "python -m nox -s l0 -- backend/tests/dr/conftest.py backend/tests/dr/test_dump_file_validity.py backend/tests/dr/test_dump_schema_diff.py -> passed, files=3 findings=0 blocking=0"
+    ],
+    "validation_evidence_digest": "fb59575e7634d14f55d2ee7c5932cdba460d2b714dac76ade76f9472d6ed8649"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "DR validation rereads complete custom dumps and duplicates DEV schema subset checks",
+  "trigger_condition": {
+    "fingerprint": "10a649ae915fbbafdd09ab28",
+    "source_event_id": "FE-20261006-10a649ae915f"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dr/test_dump_file_validity.py backend/tests/dr/test_dump_schema_diff.py -k 'contract or regex' -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1748-final -> 7 passed",
+    "python -m nox -s l0 -- backend/tests/dr/conftest.py backend/tests/dr/test_dump_file_validity.py backend/tests/dr/test_dump_schema_diff.py -> passed, files=3 findings=0 blocking=0"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "dr_validate"
+      ],
+      "plans": [
+        "dr_validate"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "dr_validate"
+        ],
+        "plans": [
+          "dr_validate"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

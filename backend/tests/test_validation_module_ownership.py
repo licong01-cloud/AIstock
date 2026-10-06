@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from backend.services.validation.file_ownership import FileOwnershipCatalog, write_scan_outputs
 from backend.services.validation.module_registry import ModuleRegistry, ModuleRegistryError
@@ -12,35 +13,19 @@ from scripts.aistock_module_ownership_scan import main as ownership_scan_main
 
 
 def _write_registry(path: Path) -> None:
-    path.write_text(
-        """
-schema_version: aistock_module_registry_v1
-modules:
-  - module_id: validation
-    display_name: Validation
-    module_type: cross_cutting
-    risk_level: medium
-  - module_id: validation.module_quality
-    display_name: Module quality
-    parent_module: validation
-    module_type: cross_cutting
-    risk_level: high
-  - module_id: docs
-    display_name: Docs
-    module_type: docs
-    risk_level: low
-  - module_id: docs.architecture
-    display_name: Architecture docs
-    parent_module: docs
-    module_type: docs
-    risk_level: low
-  - module_id: tests
-    display_name: Tests
-    module_type: tests
-    risk_level: medium
-""".lstrip(),
-        encoding="utf-8",
-    )
+    modules = []
+    for module_id, name, kind, risk, parent in [
+        ("validation", "Validation", "cross_cutting", "medium", None),
+        ("validation.module_quality", "Module quality", "cross_cutting", "high", "validation"),
+        ("docs", "Docs", "docs", "low", None),
+        ("docs.architecture", "Architecture docs", "docs", "low", "docs"),
+        ("tests", "Tests", "tests", "medium", None),
+    ]:
+        entry = dict(module_id=module_id, display_name=name, module_type=kind, risk_level=risk)
+        if parent:
+            entry["parent_module"] = parent
+        modules.append(entry)
+    path.write_text(yaml.safe_dump({"schema_version": "aistock_module_registry_v1", "modules": modules}), encoding="utf-8")
 
 
 def _write_ownership(path: Path) -> None:
@@ -94,64 +79,31 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
     assert match.primary_module == "validation.guardrails"
     assert "validation.module_quality" in match.impact_modules
 
-    hmm_frontend = catalog.match_path("frontend/src/app/hmm-evolution/page.tsx")
-    assert hmm_frontend.ownership_status == "mapped"
-    assert hmm_frontend.primary_module == "hmm.evolution"
-
-    root_page = catalog.match_path("frontend/src/app/page.tsx")
-    assert root_page.ownership_status == "mapped"
-    assert root_page.primary_module == "frontend_common"
-
-    platform_router = catalog.match_path("backend/routers/health.py")
-    assert platform_router.ownership_status == "mapped"
-    assert platform_router.primary_module == "platform.api"
+    for path, expected_module in [
+        ("frontend/src/app/hmm-evolution/page.tsx", "hmm.evolution"),
+        ("frontend/src/app/page.tsx", "frontend_common"),
+        ("backend/routers/health.py", "platform.api"),
+        ("backend/tests/platform_api/test_health_contract.py", "platform.api"),
+        ("backend/services/core_index_membership.py", "qlib_data"),
+        ("backend/tests/scripts/test_prepare_core_index_membership_pit.py", "qlib_data"),
+        ("backend/tests/quantevolver/test_stock_pool_sync.py", "qe.core"),
+        ("CLAUDE.md", "docs.standards"),
+        ("docs/process/research_assistant_blueprint_execution_runbook_20260531.md", "docs.standards"),
+        ("docs/process/cross_tool_review_protocol_20260510.md", "docs"),
+        ("docs/discussion/cross_tool_channel_protocol_20260510.md", "docs"),
+        ("backend/services/validation/plan_catalog.py", "validation.runner"),
+    ]:
+        matched = catalog.match_path(path)
+        assert matched.ownership_status == "mapped", path
+        assert matched.primary_module == expected_module, path
     platform_module = registry.get_module("platform.api")
     assert platform_module is not None
     assert "platform_api_backend" in platform_module.test_plans_required
-
-    platform_test = catalog.match_path("backend/tests/platform_api/test_health_contract.py")
-    assert platform_test.ownership_status == "mapped"
-    assert platform_test.primary_module == "platform.api"
-
-    core_index_service = catalog.match_path("backend/services/core_index_membership.py")
-    assert core_index_service.ownership_status == "mapped"
-    assert core_index_service.primary_module == "qlib_data"
-
-    core_index_operator_test = catalog.match_path(
-        "backend/tests/scripts/test_prepare_core_index_membership_pit.py"
-    )
-    assert core_index_operator_test.ownership_status == "mapped"
-    assert core_index_operator_test.primary_module == "qlib_data"
-
-    qe_stock_pool_transport = catalog.match_path("backend/tests/quantevolver/test_stock_pool_sync.py")
-    assert qe_stock_pool_transport.ownership_status == "mapped"
-    assert qe_stock_pool_transport.primary_module == "qe.core"
-
-    client_instruction = catalog.match_path("CLAUDE.md")
-    assert client_instruction.ownership_status == "mapped"
-    assert client_instruction.primary_module == "docs.standards"
-
-    process_doc = catalog.match_path("docs/process/research_assistant_blueprint_execution_runbook_20260531.md")
-    assert process_doc.ownership_status == "mapped"
-    assert process_doc.primary_module == "docs.standards"
-
-    legacy_process_doc = catalog.match_path("docs/process/cross_tool_review_protocol_20260510.md")
-    assert legacy_process_doc.ownership_status == "mapped"
-    assert legacy_process_doc.primary_module == "docs"
-
-    discussion_doc = catalog.match_path("docs/discussion/cross_tool_channel_protocol_20260510.md")
-    assert discussion_doc.ownership_status == "mapped"
-    assert discussion_doc.primary_module == "docs"
 
     assert registry.get_module("qmt").test_plans_required == ("l0", "qmt_client_contract")
     assert registry.get_module("qlib_data").test_plans_required == ("l0", "qlib_data_backend")
     assert registry.get_module("watchlist").test_plans_required == ("l0", "watchlist_backend")
     assert registry.get_module("validation.runner").test_plans_required == ("l0", "validation_catalog_integrity")
-
-    plan_catalog = catalog.match_path("backend/services/validation/plan_catalog.py")
-    assert plan_catalog.ownership_status == "mapped"
-    assert plan_catalog.primary_module == "validation.runner"
-
 
 def test_registry_rejects_duplicate_module_id(tmp_path: Path) -> None:
     registry_path = tmp_path / "module_registry.yaml"

@@ -44,12 +44,13 @@ def _runtime(version="6", *, installed=True, shared_scope=True):
     )
 
 
-def test_preflight_proves_source6_shared_execution_scope_without_running():
-    receipt = _runtime().preflight_receipt()
+@pytest.mark.parametrize("version", ["6", "7"])
+def test_preflight_proves_current_shared_execution_scope_without_running(version):
+    receipt = _runtime(version).preflight_receipt()
     assert receipt["status"] == "PASS"
     assert receipt["source_preparation"] == {
         "adapter_id": "aistock.monthly.postgres_source",
-        "adapter_version": "6",
+        "adapter_version": version,
         "mode": "INDEPENDENT_UNPUBLISHED_PREPARATION",
         "shared_build_execution_scope": True,
         "publication_allowed": False,
@@ -65,7 +66,7 @@ def test_source5_remains_explicit_full_source_only():
 
 @pytest.mark.parametrize("version,installed,shared", [
     ("6", False, True), ("6", True, False), ("5", True, True),
-    ("7", False, True), (None, False, True), (6, True, True),
+    ("7", False, True), ("7", True, False), ("8", True, True), (None, False, True), (6, True, True),
 ])
 def test_incomplete_or_unrecognized_source_contract_fails_closed(version, installed, shared):
     with pytest.raises(MonthlyRuntimeConfigurationError):

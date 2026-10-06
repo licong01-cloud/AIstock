@@ -222,6 +222,7 @@ def test_direct_neighbor_pr_targets_preserves_full_plan_without_ci_summary(
     [
         "qlib_data_backend",
         "advisory_phase0b_backend",
+        "advisory_modeling_backend",
         "qe_read_backend",
         "position_timing_backend",
     ],
@@ -274,6 +275,35 @@ def test_qe_read_fallback_preserves_full_plan_and_changed_test(
     noxfile.qe_read_backend(object())
 
     assert calls == [(*full_targets, changed_test, "-q", "-p", "no:cacheprovider")]
+
+
+@pytest.mark.parametrize("case", ["source", "test", "override", "unknown", "offline", "shared"])
+def test_advisory_modeling_neighbor_or_complete_fallback(monkeypatch, tmp_path, case):
+    prefix = "backend/tests/advisory_model_first/"
+    source = "backend/services/advisory_model_first/economic_moneyflow_price_v1.py"
+    neighbor = prefix + "test_economic_moneyflow_price_v1.py"
+    changed = prefix + "test_changed_contract.py"
+    override = "backend/services/advisory_modeling/bundle_store.py"
+    unknown = "backend/services/advisory_model_first/unmapped_contract.py"
+    shared = "backend/services/advisory_model_first/research_control_contracts.py"
+    calls = []
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setattr(noxfile, "_run_pytest", lambda _session, *args: calls.append(args))
+    monkeypatch.delenv("AISTOCK_CI_CLASSIFIER_SUMMARY", raising=False)
+    noxfile.advisory_modeling_backend(object())
+    full = calls.pop()[:-3]
+    assert full == ("backend/tests/advisory_modeling", "backend/tests/advisory_model_first")
+    if case != "offline":
+        paths = {"source": [source], "test": [changed], "override": [override], "unknown": [unknown, changed], "shared": [shared, changed]}[case]
+        _configure_direct_neighbor_targets(monkeypatch, tmp_path, changed_files=paths, existing_paths=[source, neighbor, changed, override, unknown, shared, prefix + "test_research_control_contracts.py", "backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py"])
+    noxfile.advisory_modeling_backend(object())
+    targets = calls.pop()[:-3]
+    if case in {"unknown", "offline", "shared"}:
+        assert targets == ((*full, changed) if case == "unknown" else full)
+    else:
+        assert not set(full).intersection(targets) and len(targets) <= 4
+        assert {"source": neighbor, "test": changed, "override": "backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py"}[case] in targets
+        assert prefix + "test_evidence_level_boundaries.py" in targets
 
 
 def test_direct_neighbor_fallback_passes_actual_collection_gate(

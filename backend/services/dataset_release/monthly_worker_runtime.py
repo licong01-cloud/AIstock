@@ -37,7 +37,7 @@ class MonthlyWorkerRuntime:
         adapter = getattr(getattr(self.registry, "source", None), "adapter", None)
         adapter_id = getattr(adapter, "adapter_id", None)
         version = getattr(adapter, "adapter_version", None)
-        if adapter_id != "aistock.monthly.postgres_source" or version not in ("5", "6"):
+        if adapter_id != "aistock.monthly.postgres_source" or version not in ("5", "6", "7"):
             raise MonthlyRuntimeConfigurationError("monthly worker SOURCE contract is unsupported")
         preparation = getattr(adapter, "preparation_executor", None)
         shared_scope = False
@@ -57,7 +57,7 @@ class MonthlyWorkerRuntime:
                 or preparation_scope is not build_scope
             ):
                 raise MonthlyRuntimeConfigurationError(
-                    "SOURCE6 preparation must share the installed formal BUILD execution scope"
+                    "SOURCE preparation must share the installed formal BUILD execution scope"
                 )
             shared_scope = True
             mode = "INDEPENDENT_UNPUBLISHED_PREPARATION"

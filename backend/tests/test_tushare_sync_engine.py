@@ -1135,6 +1135,57 @@ def test_query_tushare_dataapi_returns_rows_and_genuine_empty(monkeypatch):
     assert sync_engine._query_tushare_dataapi("sw_daily", {}, "ts_code,close", token="t") == []
 
 
+@pytest.mark.parametrize("missing", ["dv_ratio", "dv_ttm", "turnover_rate_f"])
+def test_daily_basic_rejects_missing_requested_field_before_null_normalization(monkeypatch, missing):
+    requested = ["ts_code", "trade_date", "dv_ratio", "dv_ttm", "turnover_rate_f"]
+    columns = [column for column in requested if column != missing]
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": columns, "items": [[None] * len(columns)]}},
+    ))
+    with pytest.raises(sync_engine.TushareHttpError, match="daily_basic response schema"):
+        sync_engine._query_tushare_dataapi("daily_basic", {}, ",".join(requested), token="t")
+
+
+@pytest.mark.parametrize("columns,item", [
+    (["ts_code", "dv_ratio"], ["000001.SZ"]),
+    (["ts_code", "dv_ratio"], ["000001.SZ", 1.0, 2.0]),
+    (["ts_code", "dv_ratio", "dv_ratio"], ["000001.SZ", 1.0, 2.0]),
+    (["ts_code", None, "dv_ratio"], ["000001.SZ", 1.0, 2.0]),
+])
+def test_daily_basic_rejects_malformed_field_schema_and_row_width(monkeypatch, columns, item):
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": columns, "items": [item]}},
+    ))
+    with pytest.raises(sync_engine.TushareHttpError, match="daily_basic response schema"):
+        sync_engine._query_tushare_dataapi("daily_basic", {}, "ts_code,dv_ratio", token="t")
+
+
+def test_daily_basic_preserves_explicit_null_extra_fields_and_reordered_schema(monkeypatch):
+    columns = ["dv_ttm", "ts_code", "dv_ratio", "extra"]
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": columns, "items": [[None, "000001.SZ", None, 3.0]]}},
+    ))
+    assert sync_engine._query_tushare_dataapi("daily_basic", {}, "ts_code,dv_ratio,dv_ttm", token="t") == [
+        {"dv_ttm": None, "ts_code": "000001.SZ", "dv_ratio": None, "extra": 3.0},
+    ]
+
+
+def test_daily_basic_schema_failure_retries_and_never_returns_fabricated_null(monkeypatch):
+    monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sync_engine, "get_limiter", lambda *_: SimpleNamespace(acquire=lambda: None))
+    calls = []
+    def response(*args):
+        calls.append(args)
+        return _FakeHttpResponse(200, {"code": 0, "data": {
+            "fields": ["ts_code", "trade_date"], "items": [["000001.SZ", "20260930"]],
+        }})
+    monkeypatch.setattr(sync_engine, "_http_post", response)
+    with pytest.raises(RuntimeError, match="failed after 3 retries"):
+        TushareSyncEngine()._fetch_from_tushare(DATASET_REGISTRY["daily_basic"], {"trade_date": "20260930"})
+    assert len(calls) == 3
+
+
 def test_fetch_from_tushare_retries_after_http_error_then_succeeds(monkeypatch):
     engine = TushareSyncEngine()
     monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
@@ -1386,3 +1437,20 @@ def test_daily_basic_coverage_receipt_treats_nan_string_as_non_finite():
     receipt = sync_engine._daily_basic_required_field_coverage_receipt(rows)
     assert receipt["finite_count"] == 9
     assert receipt["ratio"] == pytest.approx(0.9)
+
+
+def test_daily_basic_field_observation_includes_nullable_fields_without_new_thresholds():
+    rows = [
+        {"turnover_rate_f": 1.0, "dv_ratio": None, "dv_ttm": float("nan"), "close": 10.0},
+        {"turnover_rate_f": 2.0, "dv_ratio": 3.0, "dv_ttm": 0.0, "close": 11.0},
+    ]
+    receipt = sync_engine._daily_basic_required_field_coverage_receipt(rows)
+    fields = receipt["source_field_observation"]["fields"]
+    assert len(fields) == 16
+    assert fields["dv_ratio"] == {"finite_count": 1, "non_finite_count": 1}
+    assert fields["dv_ttm"] == {"finite_count": 1, "non_finite_count": 1}
+    assert fields["close"] == {"finite_count": 2, "non_finite_count": 0}
+    assert receipt["source_field_observation"]["scope"] == "fetched_batch_only"
+    assert receipt["source_field_observation"]["threshold_enforced"] is False
+    assert receipt["ratio"] == 1.0
+    assert receipt["required_ratio"] == 0.95

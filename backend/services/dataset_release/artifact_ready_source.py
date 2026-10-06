@@ -783,9 +783,13 @@ class ArtifactReadySourceBuilder:
         fetch_tushare_adj_factor_rows: AdjFactorTushareRows | None = None,
         fetch_tushare_daily_rows: DailyTushareRows | None = None,
         fetch_tushare_limit_reference: LimitReferenceTushareRow | None = None,
+        month_start: date | None = None,
     ) -> None:
         self.profile = profile
         self.cas = cas
+        if month_start is not None and (type(month_start) is not date or month_start.day != 1 or month_start < profile.start_date):
+            raise ArtifactReadySourceError("artifact-ready month start is invalid")
+        self.month_start = month_start
         self._tushare = _LazyTushare()
         self.fetch_tdx_rows = fetch_tdx_rows or self._fetch_tdx_rows
         self.fetch_tushare_minute_rows = fetch_tushare_minute_rows or self._fetch_tushare_minute_rows
@@ -810,6 +814,8 @@ class ArtifactReadySourceBuilder:
             raise ArtifactReadySourceError("artifact-ready cutoff differs from PIT")
         if snapshot.official_cutoff != self.profile_cutoff(snapshot):
             raise ArtifactReadySourceError("artifact-ready snapshot cutoff is invalid")
+        if self.month_start is not None and self.month_start != snapshot.official_cutoff.replace(day=1):
+            raise ArtifactReadySourceError("artifact-ready cutoff differs from target month")
         ensure_sha256(snapshot.source_content_root, field="source_content_root")
         if snapshot.pit_snapshot_digest != snapshot.pit_snapshot.spans_sha256:
             raise ArtifactReadySourceError("artifact-ready PIT digest differs")
@@ -1308,7 +1314,7 @@ class ArtifactReadySourceBuilder:
                 for row in rows:
                     if bool(row.get("is_trading")):
                         observed = _as_date(row.get("cal_date"), field="cal_date")
-                        if observed <= cutoff:
+                        if observed <= cutoff and (self.month_start is None or observed >= self.month_start):
                             dates.append(observed)
         result = tuple(sorted(set(dates)))
         if not result or len(result) != len(dates):
@@ -1990,6 +1996,32 @@ class ArtifactReadySourceBuilder:
             "overlap_mismatch_cells": 0,
         }
         previous_end: date | None = None
+        construction_month_facts: dict[tuple[str, date], Decimal] = {}
+        if self.month_start is not None:
+            seed_descriptors = view.descriptors("adj_factor_construction")
+            if len(seed_descriptors) != 1:
+                raise ArtifactReadyCoverageIncomplete("monthly QFQ construction facts are missing/ambiguous")
+            seed_rows = []
+            with _managed_partition_rows(view, seed_descriptors[0]) as rows:
+                for raw in rows:
+                    row = _normalize_adj_factor_row(raw, source="database")
+                    if row["ts_code"] not in series_hashers or row["trade_date"] > snapshot.official_cutoff:
+                        raise ArtifactReadyCoverageIncomplete("QFQ construction fact escapes PIT/cutoff")
+                    seed_rows.append(row)
+            seen = set()
+            for row in sorted(seed_rows, key=lambda value: (value["ts_code"], value["trade_date"])):
+                code, day, value = row["ts_code"], row["trade_date"], row["adj_factor"]
+                key = code, day
+                if key in seen:
+                    raise ArtifactReadyCoverageIncomplete("QFQ construction fact is duplicated")
+                seen.add(key)
+                if day >= self.month_start:
+                    construction_month_facts[key] = value
+                    continue
+                maxima[code] = max(value, maxima.get(code, value))
+                series_counts[code] += 1
+                series_last_dates[code] = day
+                series_hashers[code].update(_qfq_canonical_row_bytes(code, day, value))
         for descriptor in descriptors:
             match = _DATE_PARTITION.fullmatch(str(descriptor.get("partition_key", "")))
             if match is None:
@@ -1999,6 +2031,8 @@ class ArtifactReadySourceBuilder:
             if end < start or (previous_end is not None and start <= previous_end):
                 raise ArtifactReadyCoverageIncomplete("adj_factor partitions overlap or regress")
             previous_end = end
+            if self.month_start is not None and start < self.month_start:
+                raise ArtifactReadyCoverageIncomplete("monthly adj_factor payload reopens historical partitions")
             daily_keys = self._daily_stock_keys(
                 view,
                 start=start,
@@ -2095,6 +2129,9 @@ class ArtifactReadySourceBuilder:
             if not expected.issubset(effective):
                 raise ArtifactReadyCoverageIncomplete("adj_factor effective coverage is incomplete")
             for (code, day), value in sorted(effective.items()):
+                construction_value = construction_month_facts.pop((code, day), value)
+                if construction_value != value:
+                    raise ArtifactReadyCoverageIncomplete("QFQ maximum fact differs from same-snapshot month fact")
                 previous = series_last_dates.get(code)
                 if previous is not None and day <= previous:
                     raise ArtifactReadyCoverageIncomplete("adj_factor effective series order regressed")
@@ -2158,6 +2195,8 @@ class ArtifactReadySourceBuilder:
                 )
             )
             checkpoint()
+        if construction_month_facts:
+            raise ArtifactReadyCoverageIncomplete("QFQ month maximum has no matching month fact")
         missing_codes = sorted(set(codes).difference(maxima))
         if missing_codes:
             raise ArtifactReadyCoverageIncomplete("adj_factor cannot establish every PIT QFQ denominator")
@@ -2190,6 +2229,8 @@ class ArtifactReadySourceBuilder:
         }
         summary = {
             "source_precedence": "db_then_tushare_missing_keys_conflict_fail_v1",
+            "source_rows_scope": "month_and_authoritative_max_boundary_facts_v1" if self.month_start is not None else "full_source_series",
+            "historical_business_audit_performed": self.month_start is None,
             **totals,
             "qfq_authority_complete": True,
             "qfq_code_count": len(codes),
@@ -2765,7 +2806,10 @@ class ArtifactReadySourceBuilder:
 
     def _raw_entries(self, view: ArtifactSourceView, component: Component) -> tuple[Mapping[str, Any], ...]:
         entries: list[Mapping[str, Any]] = []
-        for dataset in _COMPONENT_DATASETS[component]:
+        datasets = _COMPONENT_DATASETS[component]
+        if self.month_start is not None and component in {Component.DAILY_BIN, Component.MINUTE_BIN, Component.FACTOR_H5_STATIC}:
+            datasets = (*datasets, "adj_factor_construction")
+        for dataset in datasets:
             descriptors = view.descriptors(dataset)
             if not descriptors:
                 raise ArtifactReadyCoverageIncomplete(

@@ -112,6 +112,21 @@ def test_repository_runner_contract_is_explicit() -> None:
     assert findings == []
 
 
+def test_pr_ci_substantive_steps_stop_when_cancelled_but_keep_failure_aggregation() -> None:
+    job = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))["jobs"]["ci-verdict"]
+    substantive = {"dependency_validation", "pr_quality_validation", "semgrep_validation", "backend_validation",
+                   "frontend_dependencies", "frontend_validation", "go_validation", "prompt_validation",
+                   "workflow_validation", "workflow_policy"}
+    steps = {step.get("id"): step for step in job["steps"]}
+    for step_id in substantive:
+        condition = steps[step_id]["if"]
+        assert condition.startswith("${{ !cancelled() && "), step_id
+        assert "success()" not in condition and "always()" not in condition, step_id
+    assert steps["prerequisite_gate"]["if"] == "always()"
+    verdict = next(step for step in job["steps"] if step.get("name") == "Require every selected CI lane to pass")
+    assert verdict["if"] == "always()" and "exit 1" in verdict["run"]
+
+
 def test_self_hosted_checkout_requires_verified_git_mirror_with_bounded_fallback(tmp_path: Path) -> None:
     workflow = tmp_path / "test.yml"
     workflow.write_text(
@@ -274,36 +289,25 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_quality_no_external_report_action_dependency" in evidence
     assert "superseded_pr_runs_cancel_in_progress" in evidence
     assert "bounded_pr_base_fetch_retry" in evidence
-    assert evidence["merge_quality_contexts_are_change_scoped"] is True
-    assert "pr_ci_no_separate_failure_publisher_job" in evidence
-    assert "pr_ci_no_external_artifact_action_dependency" in evidence
-    assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
-    assert evidence["pr_ci_selected_lanes_reuse_ci_verdict_runner"] is True
-    assert evidence["changed_tests_reachable_from_selected_ci_plan"] is True
-    assert evidence["dependency_update_pr_validation_reuses_ci_verdict"] is True
-    assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
-    assert evidence["codeql_reuses_single_security_runner_allocation"] is True
-    assert evidence["codeql_bundle_path_is_runner_independent"] is True
-    assert evidence["security_workflows_fail_fast_before_runner_allocation"] is True
-    assert evidence["nightly_code_intelligence_has_single_scheduled_owner"] is True
-    assert evidence["nightly_preflight_requires_distinct_runner_roles"] is True
-    assert evidence["redundant_issue_event_workflows_retired"] is True
-    assert "pr_workflows_no_external_report_action_dependency" in evidence
-    assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
-    assert evidence["nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies"] is True
-    assert evidence["self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe"] is True
-    assert evidence["nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed"] is True
-    assert evidence["nightly_retries_failed_or_missing_sessions_plus_new_impact"] is True
-    assert evidence["nightly_change_scoped_l0_uses_explicit_receipt_paths"] is True
-    assert evidence["bounded_dual_runner_roles"] is True
-    assert evidence["runner_lifecycle_is_pinned_and_supervised"] is True
-    assert evidence["self_hosted_workflows_use_verified_git_object_mirror"] is True
-    assert evidence["git_object_mirror_maintenance_is_bounded_and_offline"] is True
-    assert evidence["self_hosted_git_http_stalls_are_bounded"] is True
-    assert evidence["pr_ci_heavy_lanes_short_circuit_after_prerequisites"] is True
-    assert evidence["selected_validation_plans_are_subsumed_once"] is True
-    assert evidence["policy_evidence_remains_one_scanner_step"] is True
-    assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
+    required = (
+        "merge_quality_contexts_are_change_scoped", "pr_ci_no_separate_failure_publisher_job",
+        "pr_ci_no_external_artifact_action_dependency", "pr_ci_static_gate_reuses_classifier_checkout",
+        "pr_ci_selected_lanes_reuse_ci_verdict_runner", "changed_tests_reachable_from_selected_ci_plan",
+        "dependency_update_pr_validation_reuses_ci_verdict", "pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout",
+        "codeql_reuses_single_security_runner_allocation", "codeql_bundle_path_is_runner_independent",
+        "security_workflows_fail_fast_before_runner_allocation", "nightly_code_intelligence_has_single_scheduled_owner",
+        "nightly_preflight_requires_distinct_runner_roles", "redundant_issue_event_workflows_retired",
+        "pr_workflows_no_external_report_action_dependency", "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database",
+        "nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies", "self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe",
+        "nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed", "nightly_retries_failed_or_missing_sessions_plus_new_impact",
+        "nightly_change_scoped_l0_uses_explicit_receipt_paths", "bounded_dual_runner_roles",
+        "runner_lifecycle_is_pinned_and_supervised", "self_hosted_workflows_use_verified_git_object_mirror",
+        "git_object_mirror_maintenance_is_bounded_and_offline", "self_hosted_git_http_stalls_are_bounded",
+        "pr_ci_heavy_lanes_short_circuit_after_prerequisites", "selected_validation_plans_are_subsumed_once",
+        "policy_evidence_remains_one_scanner_step", "javascript_actions_use_approved_native_node24_majors",
+    )
+    for key in required:
+        assert evidence[key] is True, key
 
 
 def test_runner_lifecycle_contract_rejects_missing_supervisor(tmp_path: Path) -> None:

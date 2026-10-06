@@ -11,14 +11,19 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from datetime import datetime
+import errno
 import hashlib
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import struct
 import tempfile
-from typing import Iterable, Mapping, Sequence
+import time
+from typing import Callable, Iterable, Mapping, Sequence
+
+from .monthly_legacy_prefix import LegacyMonthlyPrefix, load_legacy_prefix
+from .stock_schema import QLIB_STOCK_FIELDS
 
 
 FLOAT32 = struct.Struct("<f")
@@ -90,6 +95,37 @@ class FeatureExtension:
     values_by_index: Mapping[int, float]
 
 
+@dataclass(frozen=True, slots=True)
+class _InheritedFeaturePrefix:
+    manifest_sha256: str
+    signature: tuple[int, int, int, int]
+
+
+def _file_signature(path: Path) -> tuple[int, int, int, int]:
+    state = path.stat()
+    return state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns
+
+
+def _copy_feature_prefix(
+    source, target, *, scale: float, digest, checkpoint: Callable[[], None],
+) -> None:
+    # The first float is the calendar offset, not a value to rescale. Only
+    # physical serialization reads the inherited payload, never a QA/hash pass.
+    header = source.read(FLOAT32.size)
+    target.write(header)
+    digest.update(header)
+    while block := source.read(1024 * 1024):
+        if scale != 1.0:
+            import numpy as np
+
+            values = np.frombuffer(block, dtype="<f4")
+            with np.errstate(over="raise", invalid="ignore"):
+                block = (values.astype("float64") * scale).astype("<f4").tobytes()
+        target.write(block)
+        digest.update(block)
+        checkpoint()
+
+
 def _read_feature_bounds(path: Path) -> tuple[int, int]:
     size = path.stat().st_size
     if size < FLOAT32.size or size % FLOAT32.size:
@@ -104,7 +140,11 @@ def _read_feature_bounds(path: Path) -> tuple[int, int]:
     return start, start + value_count - 1
 
 
-def write_feature_extension(extension: FeatureExtension, *, calendar_size: int) -> dict[str, object]:
+def write_feature_extension(
+    extension: FeatureExtension, *, calendar_size: int,
+    prefix_binding: _InheritedFeaturePrefix | None = None,
+    prefix_scale: float = 1.0, checkpoint: Callable[[], None] = lambda: None,
+) -> dict[str, object]:
     """Create one private feature file from an optional immutable predecessor."""
 
     if not extension.values_by_index:
@@ -121,7 +161,10 @@ def write_feature_extension(extension: FeatureExtension, *, calendar_size: int) 
         source = extension.source_path
         if not source.is_file() or _is_link_or_junction(source):
             raise QlibBoundedUpdateError("feature predecessor must be a regular non-link file")
-        predecessor_sha = sha256_file(source)
+        if prefix_binding is None:
+            predecessor_sha = sha256_file(source)
+        elif _file_signature(source) != prefix_binding.signature:
+            raise QlibBoundedUpdateError("manifest-bound feature prefix changed before private write")
         old_start, old_end = _read_feature_bounds(source)
         if ordered[0][0] <= old_end:
             raise QlibBoundedUpdateError("feature extension overlaps predecessor values")
@@ -135,24 +178,36 @@ def write_feature_extension(extension: FeatureExtension, *, calendar_size: int) 
     )
     temporary = Path(raw)
     written_values = 0
+    generated_digest = hashlib.sha256()
     try:
         with os.fdopen(descriptor, "wb") as target:
             if extension.source_path is not None:
                 with extension.source_path.open("rb") as source:
-                    shutil.copyfileobj(source, target, length=1024 * 1024)
+                    _copy_feature_prefix(
+                        source, target, scale=prefix_scale, digest=generated_digest,
+                        checkpoint=checkpoint,
+                    )
             else:
-                target.write(FLOAT32.pack(float(start_index)))
+                header = FLOAT32.pack(float(start_index))
+                target.write(header)
+                generated_digest.update(header)
             next_index = old_end + 1
             for index, value in ordered:
                 while next_index < index:
-                    target.write(FLOAT32.pack(float("nan")))
+                    raw = FLOAT32.pack(float("nan"))
+                    target.write(raw)
+                    generated_digest.update(raw)
                     next_index += 1
                     written_values += 1
-                target.write(FLOAT32.pack(value))
+                raw = FLOAT32.pack(value)
+                target.write(raw)
+                generated_digest.update(raw)
                 next_index += 1
                 written_values += 1
             target.flush()
             os.fsync(target.fileno())
+        if prefix_binding is not None and _file_signature(extension.source_path) != prefix_binding.signature:
+            raise QlibBoundedUpdateError("manifest-bound feature prefix changed during private write")
         os.replace(temporary, extension.target_path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -165,8 +220,11 @@ def write_feature_extension(extension: FeatureExtension, *, calendar_size: int) 
         "end_index": ordered[-1][0],
         "written_value_count": written_values,
         "predecessor_sha256": predecessor_sha,
-        "target_sha256": sha256_file(extension.target_path),
+        "predecessor_manifest_sha256": prefix_binding.manifest_sha256 if prefix_binding is not None else None,
+        "prefix_scale": prefix_scale,
+        "target_sha256": generated_digest.hexdigest(),
         "target_size": extension.target_path.stat().st_size,
+        "target_signature": list(_file_signature(extension.target_path)),
     }
 
 
@@ -230,15 +288,21 @@ def rewrite_feature_values(
     }
 
 
-def _link_tree(source: Path, target: Path) -> None:
+def _link_tree(source: Path, target: Path, checkpoint: Callable[[], None] = lambda: None) -> None:
     if target.exists():
         raise FileExistsError(f"target Qlib root already exists: {target}")
 
     def link_or_copy(src: str, dst: str) -> str:
+        checkpoint()
         try:
             os.link(src, dst)
-        except OSError:
-            shutil.copy2(src, dst)
+        except OSError as exc:
+            if exc.errno not in {errno.EXDEV, errno.EPERM, errno.EACCES, errno.ENOSYS, errno.ENOTSUP}:
+                raise
+            with Path(src).open("rb") as reader, Path(dst).open("xb") as writer:
+                while block := reader.read(1024 * 1024):
+                    writer.write(block)
+                    checkpoint()
         return dst
 
     shutil.copytree(source, target, copy_function=link_or_copy)
@@ -273,17 +337,60 @@ def extend_qlib_dataset(
     instruments_all_path: Path,
     allowed_fields: Iterable[str],
     expected_instruments: Iterable[str],
+    inherited_prefix: LegacyMonthlyPrefix | None = None,
+    qfq_basis_changes: Mapping[str, tuple[float, float]] | None = None,
+    datetime_field: str = "datetime",
+    checkpoint: Callable[[], None] = lambda: None,
+    progress: Callable[[Mapping[str, object]], None] = lambda _value: None,
 ) -> dict[str, object]:
     """Build one immutable successor using one-stock-at-a-time CSV input."""
 
+    last_checkpoint = time.monotonic()
+
+    def pulse() -> None:
+        nonlocal last_checkpoint
+        now = time.monotonic()
+        if now - last_checkpoint >= 2.0:
+            checkpoint()
+            last_checkpoint = now
+
+    checkpoint()
+    if frequency not in {"day", "1min"}:
+        raise QlibBoundedUpdateError("frequency must be day or 1min")
     if _is_link_or_junction(baseline_root):
         raise QlibBoundedUpdateError("baseline Qlib root is invalid")
     baseline = baseline_root.resolve(strict=True)
     if not baseline.is_dir():
         raise QlibBoundedUpdateError("baseline Qlib root is invalid")
     _require_plain_tree(baseline, label="baseline Qlib root")
+    inherited_identity = None
+    if inherited_prefix is not None:
+        inherited_prefix = load_legacy_prefix(
+            inherited_prefix.root, expected_manifest_sha256=inherited_prefix.manifest_sha256,
+            expected_file_sha256=inherited_prefix.manifest_file_sha256,
+            expected_cutoff=inherited_prefix.cutoff, expected_release_id=inherited_prefix.release_id,
+        )
+        pin_key = "day_meta_export" if frequency == "day" else "minute_meta_export"
+        pin = inherited_prefix.manifest["components"].get(pin_key)
+        if not isinstance(pin, Mapping) or not isinstance(pin.get("path"), str):
+            raise QlibBoundedUpdateError("manifest-bound Qlib provider metadata is missing")
+        relative = PurePosixPath(pin["path"])
+        if relative.is_absolute() or ".." in relative.parts or "\\" in pin["path"] or relative.name != "meta_export.json":
+            raise QlibBoundedUpdateError("manifest-bound Qlib provider metadata path is invalid")
+        metadata = inherited_prefix.root / relative
+        if (
+            metadata.parent != baseline or not metadata.is_file()
+            or metadata.stat().st_size != pin.get("size")
+            or sha256_file(metadata) != pin.get("sha256")
+        ):
+            raise QlibBoundedUpdateError("manifest-bound Qlib provider metadata identity differs")
+        inherited_identity = inherited_prefix.manifest_sha256
     target = target_root.expanduser().absolute()
     _require_plain_existing_chain(target.parent, label="target Qlib parent")
+    if inherited_prefix is not None and (
+        target.is_relative_to(inherited_prefix.root) or inherited_prefix.root.is_relative_to(target)
+    ):
+        raise QlibBoundedUpdateError("target Qlib root must be separate from the immutable release")
     if target == baseline or target.is_relative_to(baseline) or baseline.is_relative_to(target):
         raise QlibBoundedUpdateError("target Qlib root must be separate from the baseline")
     if _is_link_or_junction(csv_dir):
@@ -295,6 +402,8 @@ def extend_qlib_dataset(
     calendar_name = "day.txt" if frequency == "day" else "1min.txt"
     old_calendar_path = baseline / "calendars" / calendar_name
     old_calendar = read_calendar(old_calendar_path)
+    if inherited_prefix is not None and old_calendar[-1][:10] != inherited_prefix.cutoff.isoformat():
+        raise QlibBoundedUpdateError("manifest-bound Qlib calendar cutoff differs")
     new_calendar = read_calendar(new_calendar_path)
     appended = validate_calendar_extension(old_calendar, new_calendar)
     calendar_index = {value: index for index, value in enumerate(new_calendar)}
@@ -304,29 +413,52 @@ def extend_qlib_dataset(
     expected = {str(value).strip().lower() for value in expected_instruments if str(value).strip()}
     if not expected:
         raise QlibBoundedUpdateError("expected instrument set is empty")
+    if datetime_field not in {"datetime", "date"}:
+        raise QlibBoundedUpdateError("CSV datetime field is unsupported")
+    bases = {}
+    for instrument, values in (qfq_basis_changes or {}).items():
+        key = instrument.casefold()
+        if key not in expected or key in bases or not isinstance(values, (tuple, list)) or len(values) != 2:
+            raise QlibBoundedUpdateError("QFQ basis identity differs from frozen instruments")
+        old, new = (float(value) for value in values)
+        if not all(math.isfinite(value) and value > 0 for value in (old, new)):
+            raise QlibBoundedUpdateError("QFQ basis must be finite and positive")
+        if old != new and set(fields) != set(QLIB_STOCK_FIELDS):
+            raise QlibBoundedUpdateError("QFQ basis change requires the full shared feature contract")
+        scale = old / new
+        if not math.isfinite(scale) or scale <= 0 or not math.isfinite(1.0 / scale):
+            raise QlibBoundedUpdateError("QFQ scale is outside the finite numeric range")
+        bases[key] = scale
     csv_paths = sorted(csv_root.glob("*.csv"))
     csv_instruments = [_normalize_instrument(path) for path in csv_paths]
     if len(csv_instruments) != len(set(csv_instruments)) or set(csv_instruments) != expected:
         raise QlibBoundedUpdateError("CSV instrument population differs from the frozen expected set")
-    _link_tree(baseline, target)
+    _link_tree(baseline, target, pulse)
     feature_receipts: list[dict[str, object]] = []
     processed = 0
+    started = time.monotonic()
+    last_progress = started
     try:
         for csv_path in csv_paths:
+            pulse()
             instrument = _normalize_instrument(csv_path)
             if _is_link_or_junction(csv_path) or not csv_path.is_file():
                 raise QlibBoundedUpdateError(f"CSV input must be a regular non-link file: {csv_path}")
             values: dict[str, dict[int, float]] = {field: {} for field in fields}
             with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
                 reader = csv.DictReader(handle)
-                if reader.fieldnames is None or "datetime" not in reader.fieldnames:
+                if reader.fieldnames is None or datetime_field not in reader.fieldnames:
                     raise QlibBoundedUpdateError(f"CSV lacks datetime: {csv_path}")
                 actual_fields = set(reader.fieldnames).intersection(fields)
                 if actual_fields != set(fields):
                     raise QlibBoundedUpdateError(f"CSV lacks required allowed features: {csv_path}")
                 seen_indices: set[int] = set()
                 for row in reader:
-                    timestamp = _parse_datetime(str(row["datetime"]), frequency=frequency)
+                    if len(seen_indices) % 1024 == 0:
+                        pulse()
+                    if "symbol" in row and str(row["symbol"]).casefold() != instrument:
+                        raise QlibBoundedUpdateError("CSV symbol differs from its frozen instrument identity")
+                    timestamp = _parse_datetime(str(row[datetime_field]), frequency=frequency)
                     try:
                         index = calendar_index[timestamp]
                     except KeyError as exc:
@@ -351,6 +483,14 @@ def extend_qlib_dataset(
             for field in sorted(actual_fields):
                 target_path = feature_dir / f"{field}.{frequency}.bin"
                 source_path = baseline_dir / f"{field}.{frequency}.bin"
+                scale = bases.get(instrument, 1.0)
+                # Limit/pre-close fields are RAW CNY in the shared contract.
+                # Changing the QFQ anchor must not rescale them or cash amount.
+                field_scale = scale if field in {"open", "high", "low", "close", "factor"} else 1.0 / scale if field == "volume" else 1.0
+                binding = (
+                    _InheritedFeaturePrefix(inherited_identity, _file_signature(source_path))
+                    if inherited_identity is not None and source_path.is_file() else None
+                )
                 receipt = write_feature_extension(
                     FeatureExtension(
                         instrument=instrument,
@@ -360,11 +500,23 @@ def extend_qlib_dataset(
                         values_by_index=values[field],
                     ),
                     calendar_size=len(new_calendar),
+                    prefix_binding=binding, prefix_scale=field_scale,
+                    checkpoint=pulse,
                 )
                 feature_receipts.append(receipt)
                 if source_path.is_file() and os.path.samefile(source_path, target_path):
                     raise QlibBoundedUpdateError("changed feature still shares the predecessor inode")
             processed += 1
+            now = time.monotonic()
+            if now - last_progress >= 2 or processed == len(csv_paths):
+                progress({
+                    "phase": "BUILD_NATIVE_QLIB_APPEND", "frequency": frequency,
+                    "completed_instruments": processed, "total_instruments": len(csv_paths),
+                    "completed_feature_files": len(feature_receipts),
+                    "elapsed_seconds": round(now - started, 3),
+                    "instruments_per_second": round(processed / max(now - started, 0.001), 3),
+                })
+                last_progress = now
         if processed == 0:
             raise QlibBoundedUpdateError("CSV input root contains no stock files")
         _require_plain_existing_chain(instruments_all_path, label="PIT instruments sidecar")
@@ -395,6 +547,13 @@ def extend_qlib_dataset(
         # A private, unpublished target may be removed by the caller's exact
         # operation cleanup.  Do not delete it here; it is resume evidence.
         raise
+    if inherited_prefix is not None:
+        load_legacy_prefix(
+            inherited_prefix.root, expected_manifest_sha256=inherited_prefix.manifest_sha256,
+            expected_file_sha256=inherited_prefix.manifest_file_sha256,
+            expected_cutoff=inherited_prefix.cutoff, expected_release_id=inherited_prefix.release_id,
+        )
+    checkpoint()
     return {
         "schema_version": "aistock_qlib_bounded_update_receipt_v1",
         "frequency": frequency,
@@ -406,9 +565,14 @@ def extend_qlib_dataset(
         "feature_file_count": len(feature_receipts),
         "calendar_sha256": sha256_file(target / "calendars" / calendar_name),
         "instruments_sha256": sha256_file(target / "instruments" / "all.txt"),
+        "calendar_signature": list(_file_signature(target / "calendars" / calendar_name)),
+        "instruments_signature": list(_file_signature(target / "instruments" / "all.txt")),
         "feature_receipts": feature_receipts,
         "bounded_memory_unit": "one_instrument_csv",
         "baseline_mutated": False,
+        "predecessor_manifest_sha256": inherited_identity,
+        "historical_content_revalidated": inherited_identity is None,
+        "qfq_basis_changed_instrument_count": sum(scale != 1.0 for scale in bases.values()),
     }
 
 
