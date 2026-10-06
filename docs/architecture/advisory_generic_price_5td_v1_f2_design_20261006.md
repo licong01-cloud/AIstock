@@ -1,6 +1,6 @@
 # Advisory 跨策略包固定5交易日买入价格价值 GP5 v1 F2详细设计
 
-2026-10-06；离线SOURCE_VERIFIED，正式prepare/fit/evaluation接续中。用户选择首版固定5交易日，10/20日后续扩展。新目标身份为 GENERIC_ENTRY_FIXED_5TD_V1，绝非将 VALUE_REVIEW_5_V1 五次有效复评改名；源码通过不代表模型效果、日频交付或角色激活完成。
+2026-10-06；离线SOURCE_VERIFIED，一次正式prepare/四fit/四臂cohort评估完成，当前candidate未显示增量、NOT_CONFIRMED。用户选择首版固定5交易日，10/20日后续扩展。新目标身份为 GENERIC_ENTRY_FIXED_5TD_V1，绝非将 VALUE_REVIEW_5_V1 五次有效复评改名；源码通过不代表经济确认、日频交付或角色激活完成。
 
 ## Background / Goal
 
@@ -143,3 +143,22 @@ DESIGN-COMPLIANCE-001逐项：目标、切片与最终业务分别报告，不�
 设计#5576 currentHEAD 7aef4b363/CI37462727455 SUCCESS后合入5a74bf87d并自身官方cleanup_done23.953秒；最新main独立源码树登记10文件。第一轮业务/价格自审覆盖新label独立、成本只扣一次、全tick/支持洞/UNKNOWN不假空集；测试发现零合法tick时numpy空支持数组dtype，修订为bool并先定向失败节点复验。第二轮PIT/来源自审补齐显式decision_dates保留空D、calendar按label_cutoff截断、未来因子只label、原带法规价格snapshot而不是缺flags的raw表；输入非法因子不再悄悄转换UNKNOWN。
 
 第三轮事务/测量审核核对原子stage及字节身份、STARTED/4fit物理journal/partial不可重跑；重叠cohort不生成资金NAV，未结算null和空候选日保留，完整日期才可block5 bootstrap、不压缩未知洞。一次29项稳定矩阵/Ruff/F2 PASS；元数据与缺失说明输出追加后仅3定向PASS，不重跑整矩阵；changed-file L0 0finding/0blocking。legacy适配只读原候选定义并保持原rank，不读父alpha数值；查询跨包数值与来源元数据分开检验。以上为本窗口多视角自审，非独立外审；真实研究尚未借测试宣称完成。
+
+## 一次真实研究与当前分流
+
+run=advgp5_cca74d0498942676713c68ad，根F:/Dev/AIstock_model_artifacts/advisory_generic_price_5td_v1_20261006。plan SHA cca74d0498942676713c68ad311a4dad4467269ff4c76c83dab5e3e52361a2ce，implementation SHA 527e28b77b3a769001361ec25770bf2157dc8c807c019b084bb0ccaa74cf42cc；clean producer e16332ac9c7787a23f588237d707efcbeecb1067。合并最新main仅继承其它owner变更，新叶与既存JSON helper字节不变，研究不重跑。
+
+2026-10-06一次prepare22.204秒/0SQL，386D7720原候选完整保留，7682 AVAILABLE/17 ENTRY_NOT_EXECUTABLE/21 UNKNOWN；380前20session预热未知仍保留，所有D宽度分母未证明保持UNKNOWN。3684成熟train/193D；validation支持1586条仅诊断：candidate/matched均值MSE .00380695/.00394729，路径低于q10比例15.13%/15.20%，不能冒称q10校准通过或盈利。原五份来源hash/size、非vintage/native限制保持，既存source、旧标签和模型无修改。
+
+拟合前12:44:43UTC三公开QE running均0；一次4fit5.156秒、四臂评估合计5.531秒，拟合后12:46:25UTC仍均0。新study四fit/0index/1candidate，历次真实总数99+4=103物理fit及1历史index，不清零、未提交QE实验。完整test81个原入场D/1620候选；80个candidate/control同时可结算组相对baseline平均5TD增量−55.3839bps、相对matched−8.3124bps，差异动作55/37D。各臂1个未结算槽、1个组net=null，日期保留；不压缩空洞作block-bootstrap，因此区间明确null，不报告完整资金净收益/NAV/MDD或显著性。
+
+| arm | 已结算买入 | 单笔胜率 | 平均盈利bps | 平均亏损bps | UNKNOWN价格判断 | 未结算槽 |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline | 403 | 58.3127% | 447.8628 | -322.0848 | 0 | 1 |
+| rule | 397 | 58.4383% | 450.0748 | -316.7074 | 0 | 1 |
+| D-only matched | 229 | 59.8253% | 449.3117 | -317.9002 | 12 | 1 |
+| GP5 candidate | 249 | 56.2249% | 453.0334 | -315.9700 | 12 | 1 |
+
+结论：目前GP5有真实价格函数/固定5TD标签及跨包输入解耦功能，但候选过滤没有成本后增量，NOT_CONFIRMED，仅停止本candidate；不放宽风险/净值条件、换seed/期限、回选matched或复跑旧窗救结果。此处80组均值是明确披露缺失的描述性配对，不是删1日后宣布完整研究胜利。软件交付不以本候选盈利为门禁；下一主线只能新增真实信息或新的可识别业务目标，不重复QE上游Alpha/分钟执行。跨包数学对照和single_index/index_union元数据消费已验；研究只有既存单父候选人口，未声称跨包经济泛化。
+
+研究与事实文档复审逐项核对plan/producer/4物理journal、386D7720与81testD、标签和UNKNOWN、单位5TD非每日、1未结算/区间null/非NAV、当前源码scope及0数据库/服务/profile/角色激活。正式产物保留，不追加旧失败补证或归档工作。
