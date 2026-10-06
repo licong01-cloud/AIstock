@@ -135,7 +135,6 @@ def compose_sector_daily_features_v1(*, core_frame, core_receipt, calendar, clas
                   if code in mapping and mapping[code] is not None}
     normalized = sector_quotes_v1([quoted], namespace=needed_ids,
                                  first_day=sessions[0], last_day=sessions[-1])
-    joined = core.merge(classified, on=KEY, how='left', validate='one_to_one', sort=False)
     if core.empty:
         sector = pd.DataFrame(columns=[*KEY, *SECTOR_FEATURES, 'sector_feature_status',
                                       'sector_feature_visible_through'])
@@ -143,6 +142,7 @@ def compose_sector_daily_features_v1(*, core_frame, core_receipt, calendar, clas
         for name in SECTOR_FEATURES:
             result[name] = pd.Series(dtype=float)
     else:
+        joined = core.merge(classified, on=KEY, how='left', validate='one_to_one', sort=False)
         sector = sector_dynamic_rows_v1(rows=joined, quotes=normalized,
                                         calendar=calendar[:-1], crosswalk=mapping)
         result = core.merge(sector.loc[:, [*KEY, *SECTOR_FEATURES]], on=KEY,
