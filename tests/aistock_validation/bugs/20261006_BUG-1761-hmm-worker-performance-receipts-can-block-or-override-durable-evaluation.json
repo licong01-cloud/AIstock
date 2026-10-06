@@ -125,7 +125,7 @@
     "operator_runbook_ref": "docs/operations/hmm_evolution_worker_runtime_runbook.md",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-evolution/workers",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-evolution/workers?owner_id=service-aistock-hmm-v3-20260722&limit=500",
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "fresh-process import worker, worker_service and backend.routers.health -> PASS, all module paths contained in BUG-1761 task worktree; controller identity alone does not prove worker reload"
