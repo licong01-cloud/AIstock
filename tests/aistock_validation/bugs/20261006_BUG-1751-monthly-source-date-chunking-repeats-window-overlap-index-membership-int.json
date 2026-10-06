@@ -17,25 +17,6 @@
   ],
   "created_at": "2026-10-06T03:47:40.384321Z",
   "description": "月更 attempt244 的 index_membership_pit SOURCE 被通用日期分块重复读取；生产只读查询确认 csi1000/000006.SZ/2020-06-15 实际仅一行，区间终止2024-06-17。不是行情缺失或数据库重复。window_overlap 现保留一次语义查询，fetch_rows 继续限制游标内存。",
-  "fix_review": {
-    "review_round_1": "RED 两个跨年非重复区间测试失败；GREEN 五项通过。只改变执行分块，不做DISTINCT/删行/改区间/扩大股票池，真实重复继续fail closed。",
-    "review_round_2": "检查SQL语义、fingerprint与canonical hash：原完整语义查询不变，点日期/代码pressure分块保持，stream fetch_rows和既有取消检查不变。",
-    "review_round_3": "修正实际月更worker的只读验收路由，并消除与旧heartbeat路由冲突；不控制进程，源码合入与运行态/数据验收分开。",
-    "design_compliance_review": {
-      "no_unapproved_simplification": true,
-      "no_silent_error": true,
-      "approved_business_semantics_unchanged": true,
-      "no_new_data_gate": true
-    },
-    "database_read": true,
-    "database_read_scope": "single failing membership primary key plus table column metadata only",
-    "database_write": false,
-    "candidate_write": false,
-    "active_profile_write": false,
-    "runtime_action": false,
-    "monthly_operation": "dmr_63a313d97fd046a38d5a876265565014",
-    "monthly_delivery_status": "FAILED_SOURCE_pending_user_restart_after_source_merge"
-  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -47,12 +28,22 @@
   "evidence_uris": [],
   "expected": "Each PIT membership interval frozen once; point-date queries retain bounded split and genuine duplicates fail closed",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261006_BUG-1751-monthly-source-date-chunking-repeats-window-overlap-index-membership-int.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/source_authority.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261006_BUG-1751-monthly-source-date-chunking-repeats-window-overlap-index-membership-int.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -110,6 +101,25 @@
   "first_seen_at": "2026-10-06T03:47:40.384321Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_review": {
+    "active_profile_write": false,
+    "candidate_write": false,
+    "database_read": true,
+    "database_read_scope": "single failing membership primary key plus table column metadata only",
+    "database_write": false,
+    "design_compliance_review": {
+      "approved_business_semantics_unchanged": true,
+      "no_new_data_gate": true,
+      "no_silent_error": true,
+      "no_unapproved_simplification": true
+    },
+    "monthly_delivery_status": "FAILED_SOURCE_pending_user_restart_after_source_merge",
+    "monthly_operation": "dmr_63a313d97fd046a38d5a876265565014",
+    "review_round_1": "RED 两个跨年非重复区间测试失败；GREEN 五项通过。只改变执行分块，不做DISTINCT/删行/改区间/扩大股票池，真实重复继续fail closed。",
+    "review_round_2": "检查SQL语义、fingerprint与canonical hash：原完整语义查询不变，点日期/代码pressure分块保持，stream fetch_rows和既有取消检查不变。",
+    "review_round_3": "修正实际月更worker的只读验收路由，并消除与旧heartbeat路由冲突；不控制进程，源码合入与运行态/数据验收分开。",
+    "runtime_action": false
+  },
   "fixed_at": null,
   "github_issue_number": 5564,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5564",
@@ -133,11 +143,15 @@
     "fresh_process_evidence": [
       "rtk pytest backend/tests/dataset_release/test_source_authority.py -q -k 'overlap_source_seals or point_date_source_still' -> RED 2 failed/3 passed; GREEN 5 passed in fresh pytest process, real canonical partition sealer and CAS, no service started or database written"
     ],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
