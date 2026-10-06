@@ -100,7 +100,7 @@
   },
   "first_seen_at": "2026-10-06T03:47:40.384321Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "8072a840179b737ed87f9a4c7772df1b71e93dfa",
   "fix_review": {
     "active_profile_write": false,
     "candidate_write": false,
@@ -120,7 +120,7 @@
     "review_round_3": "修正实际月更worker的只读验收路由，并消除与旧heartbeat路由冲突；不控制进程，源码合入与运行态/数据验收分开。",
     "runtime_action": false
   },
-  "fixed_at": null,
+  "fixed_at": "2026-10-06T03:56:49Z",
   "github_issue_number": 5564,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5564",
   "last_seen_at": "2026-10-06T03:47:40.384321Z",
@@ -128,6 +128,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5565",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -150,6 +151,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -161,7 +163,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1751",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fa9a9eddbbe47b7a",
+    "recorded_at": "2026-10-06T03:57:27.231510Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207",
+    "source_merge_commit": "8072a840179b737ed87f9a4c7772df1b71e93dfa",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5565",
+    "validation_evidence": [
+      "validation-receipt: id=9c8c3dc72b24d519 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_source_manifest.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_release_sources_select_their_own_process_probe -q` result=`passed`",
+      "validation-receipt: id=77b234b3cf032a67 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=nox plan=l0 status=passed command=`python -m nox -s l0 guardrail_changed_files validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=0b0378be6d310a74 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 guardrail_changed_files validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=9e088d27aa3c4e5c commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s l0 guardrail_changed_files validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=5853b82ab9be7b7f commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_source_authority.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+      "validation-receipt: id=06d2c7cf002ce5f1 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "bca7672900c8ca251c46e8ad11467312030b5a8a667527d1f2ff51e638b683a6"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -170,6 +198,14 @@
     "fingerprint": "cad5cb649ef30cdd9f883636",
     "source_event_id": "FE-20261006-cad5cb649ef3"
   },
+  "validation_evidence": [
+    "validation-receipt: id=9c8c3dc72b24d519 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_source_manifest.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_release_sources_select_their_own_process_probe -q` result=`passed`",
+    "validation-receipt: id=77b234b3cf032a67 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=nox plan=l0 status=passed command=`python -m nox -s l0 guardrail_changed_files validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=0b0378be6d310a74 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 guardrail_changed_files validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=9e088d27aa3c4e5c commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s l0 guardrail_changed_files validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=5853b82ab9be7b7f commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_source_authority.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
+    "validation-receipt: id=06d2c7cf002ce5f1 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
