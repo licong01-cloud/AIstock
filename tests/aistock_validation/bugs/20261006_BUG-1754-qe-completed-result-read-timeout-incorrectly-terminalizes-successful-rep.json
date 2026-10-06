@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1754",
-  "closed_at": null,
+  "closed_at": "2026-10-06T15:31:49.316851Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -190,10 +190,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1754\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1754",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_success",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "eda50a3310a0bfa23b4f1d1a2ea7403e9877ce25966e51750f5f3bb1c51c634a",
+      "contract_digest": "0b5da4bd4b4c8561f47dd9eb61fd79c4902e6cca4e1b8d6faaef871070ad9be9",
+      "expected_identity": "fb3f3e973cc8d7a97502ea61edb22f3f621f6be4",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-06T15:28:09.842469Z",
+      "mode": "read_only",
+      "observed_identity": "6beb178b96fd1484804fc4a68c1fc9d95d2ac715",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "1c764f2bbf2f59414c530bf4a721a26c072f790f5c6fc9da348dc3c92893a878",
+      "receipt_sha256": "da2c2f4123b391f9160d07ce719b1092f00da919c187e6a5095c82f6b6e2b4dd",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a8ef2d4580eaa230ffb567016ff5a7eb5df33fb8326c238c361f63f14a1b615c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -225,7 +247,7 @@
     ],
     "validation_evidence_digest": "1b2975b20e660bb5653b5e47fa6f81ef7ef13636169e95d9f291ef3b7cc72bd3"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
