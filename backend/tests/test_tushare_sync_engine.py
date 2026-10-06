@@ -1259,7 +1259,7 @@ class _CapturingAudit:
         self.failure_calls.append(kwargs)
 
 
-def _run_by_date_with_rows(monkeypatch, spec, count):
+def _run_by_date_with_rows(monkeypatch, spec, count, *, written_count=None):
     engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
     conn = _FakeConn()
     audit = _CapturingAudit()
@@ -1276,7 +1276,7 @@ def _run_by_date_with_rows(monkeypatch, spec, count):
     rows = [_row(i) for i in range(count)]
 
     monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
-    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, fetched: len(fetched))
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, fetched: len(fetched) if written_count is None else written_count)
     monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
     monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
 
@@ -1323,19 +1323,23 @@ def test_without_min_expected_rows_partial_day_stays_ok(monkeypatch):
     assert "expected_rows" not in call
 
 
-def test_margin_success_freezes_provider_response_denominator(monkeypatch):
+@pytest.mark.parametrize("written_count", [3, 2, 4])
+def test_margin_success_freezes_provider_response_denominator(monkeypatch, written_count):
     from backend.services.tushare_dataset_specs import MARGIN_DETAIL
     spec = replace(MARGIN_DETAIL, min_expected_rows=2)
     monkeypatch.setattr(TushareSyncEngine, "_iter_sync_dates", lambda *args: [dt.date(2026, 8, 21)])
-    result, audit = _run_by_date_with_rows(monkeypatch, spec, 3)
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 3, written_count=written_count)
     assert result.failed_batches == 0
     call = audit.success_calls[0]
     assert call["expected_rows"] == 3
-    assert call["coverage_ratio"] == 1.0
+    assert call["coverage_ratio"] == pytest.approx(written_count / 3)
     proof = call["metadata"]["provider_publication"]
     assert proof["source"] == "tushare_response"
     assert proof["row_count"] == 3
     assert len(proof["source_rows_sha256"]) == 64
+    assert call["quality_status"] == ("ok" if written_count == 3 else "low_coverage")
+    if written_count != 3:
+        assert call["failure_category"] == "provider_persistence_count_differs"
 
 
 def test_min_expected_rows_does_not_change_zero_row_semantics(monkeypatch):

@@ -30,14 +30,22 @@
   ],
   "expected": "Capture real provider response count/hash; retain unpublished sector membership/moneyflow rows without fabricated quotes.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/sector_data_builder.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/services/test_sector_data_builder.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1771-daily-source-ingestion-omits-margin-provider-identity-and-skips-unpublis.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/tushare_sync_engine.py",
       "backend/services/sector_data_builder.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/services/test_sector_data_builder.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/services/test_sector_data_builder.py"
+      "tests/aistock_validation/bugs/20261006_BUG-1771-daily-source-ingestion-omits-margin-provider-identity-and-skips-unpublis.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
@@ -140,14 +148,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["rtk pytest direct margin/sector matrix -> 26 passed; existing DEV readonly actual revised sector SELECT -> 16 rows; SQL semantic check -> quote null and real moneyflow retained; database_write=false"],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "rtk pytest direct margin/sector matrix -> 26 passed; existing DEV readonly actual revised sector SELECT -> 16 rows; SQL semantic check -> quote null and real moneyflow retained; database_write=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
