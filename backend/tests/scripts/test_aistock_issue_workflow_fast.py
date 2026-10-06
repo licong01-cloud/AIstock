@@ -15,6 +15,58 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("message,fallback", [("unexpected EOF", True), ("net/http: TLS handshake timeout", True),
+                                              ("HTTP 401: Bad credentials", False), ("PR not found", False)])
+def test_merge_graphql_transport_switches_once_to_strict_rest(monkeypatch, message, fallback):
+    calls, rest = [], []
+    def command(args, **kwargs):
+        calls.append(kwargs["timeout"])
+        return dict(ok=False, returncode=1, stdout="", stderr=message)
+    def read(url):
+        rest.append(url)
+        return dict(merged=False, state="OPEN", mergeable_state="clean", mergeable=True, url=url,
+                    head_sha="a" * 40, base_ref="main")
+    monkeypatch.setattr(workflow, "_run_command", command)
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", read)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: pytest.fail("failed GraphQL retried before REST"))
+    url = "https://github.com/licong01-cloud/AIstock/pull/1"
+    if fallback:
+        payload, evidence = workflow._merge_pr_view_with_transport_fallback(url)
+        assert payload["headRefOid"] == "a" * 40 and evidence["graphql_attempts"] == 1
+    else:
+        with pytest.raises(workflow.WorkflowError, match=message):
+            workflow._merge_pr_view_with_transport_fallback(url)
+    assert calls == [30] and rest == ([url] if fallback else [])
+
+
+def test_merge_check_transport_fallback_keeps_pinned_identity_and_rest_failure(monkeypatch):
+    calls, pinned = [], []
+    def command(args, **kwargs):
+        calls.append(kwargs["timeout"])
+        return dict(ok=False, returncode=1, stdout="", stderr="unexpected EOF")
+    def rest(url, *, expected_head, base_ref):
+        pinned.append((expected_head, base_ref))
+        raise workflow.WorkflowError("PR head changed before REST required-check fallback")
+    monkeypatch.setattr(workflow, "_run_command", command)
+    monkeypatch.setattr(workflow, "_rest_required_pr_check_result", rest)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: pytest.fail("failed GraphQL repeated"))
+    with pytest.raises(workflow.WorkflowError, match="PR head changed"):
+        workflow._merge_required_check_result_with_transport_fallback(
+            "https://github.com/licong01-cloud/AIstock/pull/1", payload={"headRefOid": "a" * 40, "baseRefName": "main"})
+    assert calls == [30] and pinned == [("a" * 40, "main")]
+
+
+@pytest.mark.parametrize("body,valid", [('{"state":"OPEN","mergeable":"MERGEABLE"}', True), ("invalid-json", False)])
+def test_merge_graphql_success_or_invalid_payload_never_uses_transport_fallback(monkeypatch, body, valid):
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: dict(ok=True, stdout=body, stderr=""))
+    monkeypatch.setattr(workflow, "_github_pull_rest_readback", lambda _: pytest.fail("unnecessary REST fallback"))
+    if valid:
+        assert workflow._merge_pr_view_with_transport_fallback("https://github.com/test/repo/pull/1")[1] is None
+    else:
+        with pytest.raises(workflow.WorkflowError, match="cannot parse"):
+            workflow._merge_pr_view_with_transport_fallback("https://github.com/test/repo/pull/1")
+
+
 @pytest.mark.parametrize("selection,plans", [("l0", ["l0"]), ("l0 validation_catalog_integrity", ["l0", "validation_catalog_integrity"]), ("l0 l0 -- tests", ["l0"]), ("l0,validation_catalog_integrity", []), ("l0; unknown", []), ("l0 -s validation_catalog_integrity", []), ("l0 -- -k smoke", ["l0"])])
 def test_validation_receipt_explicit_nox_sessions(monkeypatch, tmp_path, selection, plans):
     monkeypatch.setattr(workflow, "_assert_task_git_identity", lambda _: None)

@@ -17819,7 +17819,9 @@ def _run_merge_read_with_retry(
     event: str,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=60, attempts=2)
+    # Both callers have a head-bound REST recovery path. Repeating GraphQL
+    # delays that recovery; mutations and generic REST/Git retries stay unchanged.
+    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=30, attempts=1)
     if bug_id:
         _append_event(
             bug_id,
