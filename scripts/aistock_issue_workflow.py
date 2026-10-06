@@ -4100,6 +4100,119 @@ def _validate_hmm_rotation_l2_overview(
     return "passed", None, facts
 
 
+def _validate_hmm_workers(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read one explicitly identified worker; never infer a reload from controller health."""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    owners = query.get("owner_id") or []
+    if len(owners) != 1 or not owners[0].strip():
+        return "failed", "worker probe requires exactly one non-empty owner_id", {}
+    if not isinstance(payload, dict) or payload.get("status") != "ok" or payload.get("errors") or payload.get("ok") is False:
+        return "failed", "HMM worker readback must report status=ok", {}
+    data = payload.get("data")
+    rows = data.get("workers") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return "failed", "HMM worker readback is missing worker records", {}
+    matches = [row for row in rows if row.get("owner_id") == owners[0]]
+    if len(matches) != 1:
+        return "failed", "worker owner_id must match exactly one durable record", {}
+    row = matches[0]
+    facts = {"owner_id": owners[0], "pid": row.get("pid"), "started_at": row.get("started_at")}
+    if (row.get("runtime_status") != "running" or row.get("health") != "healthy"
+            or type(row.get("pid")) is not int or row["pid"] < 1
+            or not isinstance(row.get("host"), str) or not row["host"].strip()
+            or row.get("shutdown_at") is not None or row.get("exit_code") is not None):
+        return "failed", "requested worker is not an active healthy process", facts
+    try:
+        started = datetime.fromisoformat(str(row.get("started_at", "")).replace("Z", "+00:00"))
+        poll = datetime.fromisoformat(str(row.get("last_poll_at", "")).replace("Z", "+00:00"))
+        if started.tzinfo is None or poll.tzinfo is None:
+            raise ValueError("timezone missing")
+        age = (datetime.now(timezone.utc) - poll).total_seconds()
+        if poll < started or not 0 <= age <= 120 or row.get("healthy_max_poll_age_seconds") != 120:
+            raise ValueError("stale/inconsistent heartbeat")
+    except (ValueError, TypeError):
+        return "failed", "requested worker heartbeat is stale or inconsistent", facts
+    return "passed", None, {**facts, "last_poll_at": row["last_poll_at"], "scope": "worker liveness, not code reload or evaluation completion"}
+
+
+def _validate_hmm_risk_l2_overview(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read a complete identity-bound Risk L2 run with its formal surface receipt."""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    runs = query.get("run_id") or []
+    if len(runs) != 1 or re.fullmatch(r"[0-9a-f]{64}", runs[0]) is None:
+        return "failed", "Risk L2 probe requires exactly one lowercase SHA-256 run_id", {}
+    if not isinstance(payload, dict) or payload.get("status") != "ok" or payload.get("errors") or payload.get("ok") is False:
+        return "failed", "Risk L2 overview must report status=ok", {}
+    data = payload.get("data")
+    if not isinstance(data, dict) or data.get("run_id") != runs[0]:
+        return "failed", "Risk L2 overview does not match requested run_id", {}
+    facts = {"run_id": runs[0]}
+    for field in ("model_hash", "input_hash", "acceptance_hash"):
+        value = data.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            return "failed", f"Risk L2 overview is missing {field} identity", facts
+        facts[field] = value
+    compact, summary = data.get("compact_summary"), data.get("day_summary")
+    if not isinstance(compact, dict) or not isinstance(summary, dict):
+        return "failed", "Risk L2 overview is missing persisted row/day evidence", facts
+    row_hash = compact.get("row_hash")
+    if not isinstance(row_hash, str) or re.fullmatch(r"[0-9a-f]{64}", row_hash) is None:
+        return "failed", "Risk L2 overview has invalid canonical row identity", facts
+    fields = ("sector_count", "available_count", "unavailable_count", "warning_count", "unknown_warning_count")
+    if (any(type(summary.get(key)) is not int or not 0 <= summary[key] <= 131 for key in fields)
+            or summary["sector_count"] != 131 or summary["available_count"] + summary["unavailable_count"] != 131
+            or summary["warning_count"] + summary["unknown_warning_count"] > 131):
+        return "failed", "Risk L2 overview must contain balanced 131-sector counts", facts
+    try:
+        trade = datetime.strptime(data["trade_date"], "%Y-%m-%d").date()
+        as_of = datetime.strptime(data["as_of_date"], "%Y-%m-%d").date()
+        dates = data["dates"]
+        if (trade.isoformat() != data["trade_date"] or as_of.isoformat() != data["as_of_date"]
+                or as_of >= trade or not isinstance(dates, list) or not dates or dates[-1] != trade.isoformat()):
+            raise ValueError("date mismatch")
+    except (KeyError, ValueError, TypeError):
+        return "failed", "Risk L2 overview latest-date/PIT evidence is inconsistent", facts
+    if data.get("tail_accessed") is not False or data.get("research_surface_status") != "AVAILABLE_EXPERIMENTAL":
+        return "failed", "Risk L2 requires formal surface validation and no tail access", facts
+    return "passed", None, {**facts, "row_hash": row_hash, "trade_date": trade.isoformat(),
+                            "research_surface_status": data["research_surface_status"], **summary}
+
+
+def _validate_research_pipeline_health(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """A static readiness route cannot prove HMM recording behavior."""
+    ready = (isinstance(payload, dict) and payload.get("status") == "success"
+             and payload.get("data") == {"service": "research-pipeline", "status": "ok"})
+    return "failed", "research health is readiness only; use identity-bound experiments/{id}/backtest-records", {"route_ready": ready}
+
+
+def _validate_hmm_research_records(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    parsed = urllib.parse.urlsplit(url)
+    experiment = parsed.path.split("/")[-2]
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    tasks = query.get("source_task_id") or []
+    if len(tasks) != 1 or not tasks[0].strip() or query.get("research_domain") != ["hmm"]:
+        return "failed", "HMM research probe requires explicit source_task_id and research_domain=hmm", {}
+    if not isinstance(payload, dict) or payload.get("status") != "success" or payload.get("errors") or payload.get("ok") is False:
+        return "failed", "HMM research records must report status=success", {}
+    rows = payload.get("data")
+    if not isinstance(rows, list) or not rows:
+        return "failed", "HMM research readback must contain persisted records, not an empty list", {}
+    keys = []
+    for row in rows:
+        if (not isinstance(row, dict) or row.get("experiment_id") != experiment or row.get("source_task_id") != tasks[0]
+                or row.get("research_domain") != "hmm" or row.get("pipeline_type") != "hmm_research"
+                or row.get("record_version") != "hmm_backtest_record_v1"):
+            return "failed", "HMM research record does not match requested experiment/source identity", {}
+        for field in ("record_key_sha256", "hmm_config_sig", "non_hmm_config_sig"):
+            if not isinstance(row.get(field), str) or re.fullmatch(r"[0-9a-f]{64}", row[field]) is None:
+                return "failed", f"HMM research record is missing {field}", {}
+        keys.append(row["record_key_sha256"])
+    if len(set(keys)) != len(keys):
+        return "failed", "HMM research readback contains duplicate canonical records", {}
+    return "passed", None, {"experiment_id": experiment, "source_task_id": tasks[0], "record_count": len(rows),
+                            "scope": "existing record readback, not authorization or proof of a new write"}
+
+
 def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """QE dataset-profile must identify one usable active profile."""
     if not isinstance(payload, dict) or payload.get("ok") is not True:
@@ -4602,6 +4715,10 @@ def _validate_monthly_release_ready(payload: Any, *, url: str) -> tuple[str, str
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/hmm-evolution/workers$"), "hmm_worker_liveness", _validate_hmm_workers),
+    (re.compile(r"^/api/v1/hmm-risk/risk-l2/overview$"), "hmm_risk_l2_overview", _validate_hmm_risk_l2_overview),
+    (re.compile(r"^/api/v1/research-pipeline/health$"), "research_pipeline_readiness_only", _validate_research_pipeline_health),
+    (re.compile(r"^/api/v1/research-pipeline/experiments/[^/]+/backtest-records$"), "hmm_research_records", _validate_hmm_research_records),
     (re.compile(r"^/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}$"), "monthly_release_ready", _validate_monthly_release_ready),
     (re.compile(r"^/api/v1/local-data/(?:overview|data-stats)$"), "local_data_freshness", _validate_local_data_freshness),
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
@@ -4760,6 +4877,9 @@ def _evaluate_business_smoke_semantics(
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
     elif contract_id in {
+        "hmm_worker_liveness",
+        "hmm_risk_l2_overview",
+        "hmm_research_records",
         "scheduler_verification_status",
         "factor_lifecycle_detail",
         "factor_metrics_results",
