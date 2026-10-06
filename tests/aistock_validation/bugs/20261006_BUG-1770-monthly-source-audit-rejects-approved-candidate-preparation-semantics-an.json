@@ -1,6 +1,7 @@
 {
   "actual": "attempt246 SOURCE FAILED after 26790239 September rows / 1034 partitions / 3300.5s. Exact minute readback: 1430 failures = 1292 parity mismatches + 138 session/bar failures; 1288 keys only differ by <=100 shares. All 138 session keys have 240 rows but only 239 valid labels; independently checked 002274.SZ/2026-09-01 contains zero-volume 13:00 and lacks 11:30. Other gates: 19676 null pre_close keys on Sep1-4; 336 absent sector rows (16 stocks x21 sessions in 7 formally unquoted/stopped sectors); 20 margin_detail provider-denominator declarations missing expected_rows; 1 missing bak_basic key 301139.SZ/2026-09-30. Moneyflow itself has no blocking gap. Original active profile unchanged; no BUILD/candidate READY.",
   "allowed_write_scope": [
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "backend/services/dataset_release/monthly_frozen_source_audit.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
     "backend/services/dataset_release/source_authority.py",
@@ -28,7 +29,10 @@
   ],
   "evidence_uris": [
     "X:/AIstock_dataset_release_control/monthly/dmr_63a313d97fd046a38d5a876265565014/source-inputs/attempt-246/source-issues.ndjson",
-    "X:/AIstock_dataset_candidates/data_repair_staging/bug1770-20261006/minute-failed-keys-readback.json#sha256=fb6629c9b8cdac1248d6a144443bfe93c766cdba8a985917b46010d0a209df9f"
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1770-20261006/minute-failed-keys-readback.json#sha256=fb6629c9b8cdac1248d6a144443bfe93c766cdba8a985917b46010d0a209df9f",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1770-20261006/source-production-readback.json#sha256=9814f692959a6edad6a66bc14e93c81b8a4a3dfd6f130fef622ae4bd36d0672d",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1770-20261006/dev-sector-readback.json#sha256=8d26057e7b0b317aeb7066c64d2e64089aa0fe30f224d36c125fb92a01b89437",
+    "https://github.com/licong01-cloud/AIstock/issues/5620#split-backend-source-producer"
   ],
   "expected": "Validate actual prepared facts and preserve exact evidence for genuine data gaps, no speculative exemptions.",
   "file_scope_contract": {
@@ -164,7 +168,8 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": ["rtk pytest targeted month source matrix -> 92 passed; additional provider-proof tests -> 3 passed; relocated BUG-1770 cases -> 11 passed; month-only prepared limit audit never reads minute/history or synthesizes PASS"],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
