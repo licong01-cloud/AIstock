@@ -1323,6 +1323,21 @@ def test_without_min_expected_rows_partial_day_stays_ok(monkeypatch):
     assert "expected_rows" not in call
 
 
+def test_margin_success_freezes_provider_response_denominator(monkeypatch):
+    from backend.services.tushare_dataset_specs import MARGIN_DETAIL
+    spec = replace(MARGIN_DETAIL, min_expected_rows=2)
+    monkeypatch.setattr(TushareSyncEngine, "_iter_sync_dates", lambda *args: [dt.date(2026, 8, 21)])
+    result, audit = _run_by_date_with_rows(monkeypatch, spec, 3)
+    assert result.failed_batches == 0
+    call = audit.success_calls[0]
+    assert call["expected_rows"] == 3
+    assert call["coverage_ratio"] == 1.0
+    proof = call["metadata"]["provider_publication"]
+    assert proof["source"] == "tushare_response"
+    assert proof["row_count"] == 3
+    assert len(proof["source_rows_sha256"]) == 64
+
+
 def test_min_expected_rows_does_not_change_zero_row_semantics(monkeypatch):
     spec = replace(SUSPEND_D, min_expected_rows=5000)
 
