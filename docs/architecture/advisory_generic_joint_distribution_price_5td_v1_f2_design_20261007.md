@@ -1,6 +1,6 @@
 # Advisory GP5-JOINT-DISTRIBUTION-1：固定5交易日联合收益/风险分布 F2详细设计
 
-2026-10-07，SOURCE_READY_NOT_RESEARCHED。当前量价路径run advgp5volume_45dbd44d9afa27fa1889191c一次负：candidate−base/matched为−47.5435/−3.8856bps每5TD cohort，避免亏损39.8462、错过上涨89.4341，已知拒买净贡献−49.5879bps。其源码PR #5630当前CI37495032551 SUCCESS，合入524910031f7a12d1abb087a4c3d50275ab723cff；该候选结束，不重拟合、不救阈值。当前实际111研究fit+1历史index。本文只定义新的学习器结构，不宣称已训练或能产生超额收益。 设计#5632合入df43a81aa/自身官方清理完成。两份新源与两份测试已实现，未prepare或研究fit。
+2026-10-07，SOURCE_VERIFIED_PREPARED_ONLY_WAITING_QE。当前量价路径run advgp5volume_45dbd44d9afa27fa1889191c一次负：candidate−base/matched为−47.5435/−3.8856bps每5TD cohort，避免亏损39.8462、错过上涨89.4341，已知拒买净贡献−49.5879bps。其源码PR #5630当前CI37495032551 SUCCESS，合入524910031f7a12d1abb087a4c3d50275ab723cff；该候选结束，不重拟合、不救阈值。当前实际111研究fit+1历史index。本文只定义新的学习器结构，不宣称已训练或能产生超额收益。 设计#5632合入df43a81aa/自身官方清理完成。两份新源与两份测试已实现，已prepare、未研究fit。 prepare/run与QE互斥状态见下，研究总数仍111+1。
 
 ## Background / Goal
 
@@ -114,3 +114,13 @@ joint_price_set_5td_v1扫描完整legal tick，精确Decimal边界、不将UNKNO
 源码第一轮：模型5项定向通过，原生apply与非执行JSON leaf parity在真实fixture fit中校验；train/estimation标签成熟分离、未来test Inf及非法日期不解析、frozen control训练KEY一致。编排两个fixture错误分别是误把publish_stage返回Path当dict、误期望ValueError而正式合同抛AdvisoryModelFirstError；只修本测试，失败节点逐项复测通过，未改公共stage或错误合同。
 
 源码第二轮：按模型数学/分布完整性修订持久化schema/quantile/正成对样本与median校验、CDF浮点边界、概率仅舍入clip及权重集中度解释，成本各一次与完整tick洞2项定向通过；无质量返回UNKNOWN、不计已知AVOID。第三轮：确认原始date/Top5/未结算null、拒买贡献与UNKNOWN贡献严格对账、不补Top6/不复利成NAV；stage只读父prepared/trained、partial journal不可再fit，QE忙不创建fit_attempt。最终小矩阵/Ruff/L0/F2与实际研究另报告。该完整离线切片不含API/UI挂载，不宣称经济激活；本轮无额外研究fit。
+
+## 当前prepare与未开始的研究
+
+设计#5632当前CI37497157418 SUCCESS、合入df43a81aa774046f1f0789cfefe6d0a21176707e；自身官方cleanup_done24.922秒/0blocking/warnings。源码clean producer 5cba1fc05b1677a651f337196f7ccfd71c4ea2ce，implementation SHA 311e43aa9f2fab56b77043930b03cb29f939e43468866e913f015748afb75bf6。最终两文件8项小矩阵/Ruff、六文件L0 0finding/0blocking、F2八项0warnings通过；Ruff仅删除测试未使用import，行为矩阵不重复跑。
+
+run advgp5joint_2e32e505b715885fee917178，plan SHA 2e32e505b715885fee917178d7ecd1f0244fcfef5ba5a693082ad7674e913ffd；新正式root按本设计声明。首次prepare0.500秒，原386D7720KEY完整保留；只读消费父prepared SHA e6db3aba8b27b631649667871f1646236d87ac977565070ac63c662f1c5b4075与trained SHA ee6e1c4ed0cd3a86c6bffde2a95ff2542e3d1428e3039ce3e9fdc4873b79ef76，frozen39D控制model SHA 7cae2ad628374c01344df2e0da7695863b373e318734e7dddc37d9d9a4ebc27c。0父重fit/Selection重建/DB写/原始分钟及未来价格解码，不重新读active profile。
+
+训练前最新只读状态2026-10-06 17:10:15UTC记录single/custom_evo/multi-alpha running=0/1/6：QE任务qe_20261007_004423_eda5及多alpha回测正在运行。Advisory停止在PREPARED_ONLY_WAITING_QE，fit_attempt不存在、trained/evaluated未发布，实际新增研究fit=0、累计仍111fit+1旧index。不是研究失败或算法无收益结论；等待只约束真实训练，不阻源码交付/业务设计，不控制QE或读取旧负研究补证。以后必须fresh三路径全0才能启动计划内唯一一fit，不复用本快照声称未来QE空闲。
+
+当前源码待当前HEAD CI交付，业务API/UI挂载、经济确认、角色/模型激活均未完成；backend_restart_required=false，运行/数据库/依赖/profile/服务操作均NOOP。UI不阻价格主线。
