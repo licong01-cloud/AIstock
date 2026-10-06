@@ -4,7 +4,44 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from scripts import ci_plan_coverage as coverage
+
+
+def test_execution_metrics_record_real_runs_without_changing_coverage(monkeypatch, tmp_path):
+    monkeypatch.setattr(coverage, "_metrics", {})
+    receipt = tmp_path / "collected.txt"
+    monkeypatch.setenv(coverage.RECEIPT_ENV, str(receipt))
+    monkeypatch.setenv("AISTOCK_TEST_SOURCE_HEAD", "a" * 40)
+    monkeypatch.setenv("AISTOCK_TEST_CHECKOUT_HEAD", "b" * 40)
+    monkeypatch.setenv("AISTOCK_CI_ENV_FINGERPRINT", "prebuilt-identity")
+    monkeypatch.setenv("AISTOCK_TEST_PLAN", "example")
+    session = SimpleNamespace(items=[SimpleNamespace(nodeid="test_a.py::test_x")],
+                              config=SimpleNamespace(invocation_params=SimpleNamespace(args=("-q",))))
+    coverage.pytest_sessionstart(session)
+    coverage.pytest_runtest_logreport(SimpleNamespace(nodeid="test_a.py::test_x", when="call", duration=.2))
+    coverage.pytest_sessionfinish(session, 0)
+    metrics = json.loads(receipt.with_suffix(".metrics.jsonl").read_text(encoding="utf-8"))
+    assert metrics["executed_items"] == 1 and metrics["test_phase_seconds"] == .2
+    assert metrics["source_head"] == "a" * 40 and metrics["exitstatus"] == 0
+    report = coverage.summarize_execution_metrics([metrics, dict(metrics, stage="local", execution_id="other")])
+    assert report["repeated_successful_runs"] == 1
+    assert coverage.summarize_execution_metrics([metrics, metrics])["observed_runs"] == 1
+    assert coverage.summarize_execution_metrics([metrics, dict(metrics, environment_fingerprint=None, execution_id="other")])["repeated_successful_runs"] == 0
+    assert coverage._digest(["-k", "smoke"], ordered=True) != coverage._digest(["smoke", "-k"], ordered=True)
+    monkeypatch.setattr(coverage, "_write_metrics", lambda *args: (_ for _ in ()).throw(OSError("disk unavailable")))
+    coverage.pytest_sessionfinish(session, 0)  # telemetry must never replace a real test verdict
+
+
+def test_metrics_missing_file_never_changes_actual_coverage_exit(tmp_path):
+    receipt = tmp_path / "collected.txt"
+    receipt.write_text("", encoding="utf-8")
+    output = tmp_path / "output.json"
+    assert coverage.main(["--receipt", str(receipt), "--metrics-receipt", str(tmp_path / "missing.jsonl"),
+                          "--output-json", str(output)]) == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["workflow_gate"] == "passed" and payload["execution_metrics"]["status"] == "not_recorded"
 
 
 def _write_test(root: Path, relative_path: str) -> Path:
@@ -14,35 +51,19 @@ def _write_test(root: Path, relative_path: str) -> Path:
     return path
 
 
-def test_verify_changed_test_coverage_requires_actual_collection(tmp_path: Path) -> None:
+@pytest.mark.parametrize("deleted", [False, True])
+def test_verify_changed_test_coverage_requires_live_collection(tmp_path: Path, deleted: bool) -> None:
     first = "backend/tests/example/test_first.py"
     second = "tests/aistock_validation/test_second.py"
-    _write_test(tmp_path, first)
-    _write_test(tmp_path, second)
-
+    if not deleted:
+        _write_test(tmp_path, first)
+        _write_test(tmp_path, second)
     payload = coverage.verify_changed_test_coverage(
-        [first, second],
-        collected_tests=[first],
-        repo_root=tmp_path,
+        [first, second], collected_tests=[first], repo_root=tmp_path,
     )
-
-    assert payload["workflow_gate"] == "blocked"
-    assert payload["required_changed_test_files"] == [first, second]
-    assert payload["missing_changed_test_files"] == [second]
-
-
-def test_verify_changed_test_coverage_ignores_deleted_test(tmp_path: Path) -> None:
-    deleted = "backend/tests/example/test_deleted.py"
-
-    payload = coverage.verify_changed_test_coverage(
-        [deleted],
-        collected_tests=[],
-        repo_root=tmp_path,
-    )
-
-    assert payload["workflow_gate"] == "passed"
-    assert payload["required_changed_test_files"] == []
-    assert payload["missing_changed_test_files"] == []
+    assert payload["workflow_gate"] == ("passed" if deleted else "blocked")
+    assert payload["required_changed_test_files"] == ([] if deleted else [first, second])
+    assert payload["missing_changed_test_files"] == ([] if deleted else [second])
 
 
 def test_pytest_collection_hook_appends_repo_relative_receipt(monkeypatch, tmp_path: Path) -> None:
@@ -78,18 +99,8 @@ def test_main_fails_closed_and_writes_diagnostic_json(tmp_path: Path) -> None:
     receipt.write_text("", encoding="utf-8")
     output = tmp_path / "result.json"
 
-    result = coverage.main(
-        [
-            "--changed-files-file",
-            str(changed),
-            "--receipt",
-            str(receipt),
-            "--repo-root",
-            str(tmp_path),
-            "--output-json",
-            str(output),
-        ]
-    )
+    result = coverage.main(["--changed-files-file", str(changed), "--receipt", str(receipt),
+                            "--repo-root", str(tmp_path), "--output-json", str(output)])
 
     assert result == 2
     payload = json.loads(output.read_text(encoding="utf-8"))
@@ -100,18 +111,8 @@ def test_ci_backend_step_verifies_actual_changed_test_collection() -> None:
     import yaml
 
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
-    step = next(
-        item
-        for item in workflow["jobs"]["ci-verdict"]["steps"]
-        if item.get("id") == "backend_validation"
-    )
-    env = step["env"]
-    run = str(step["run"])
-
-    assert env["AISTOCK_CI_CLASSIFIER_SUMMARY"].endswith("summary.json")
-    assert env["AISTOCK_CI_TEST_COLLECTION_RECEIPT"].endswith("collected_tests.txt")
-    assert env["PYTEST_ADDOPTS"] == "-p scripts.ci_plan_coverage"
-    assert "python scripts/ci_plan_coverage.py" in run
-    assert '--classifier-summary "${AISTOCK_CI_CLASSIFIER_SUMMARY}"' in run
-    assert '--receipt "${AISTOCK_CI_TEST_COLLECTION_RECEIPT}"' in run
-    assert 'backend_failures+=("changed_test_plan_coverage")' in run
+    step = next(item for item in workflow["jobs"]["ci-verdict"]["steps"] if item.get("id") == "backend_validation")
+    assert step["env"]["PYTEST_ADDOPTS"] == "-p scripts.ci_plan_coverage"
+    assert all(fragment in step["run"] for fragment in (
+        "python scripts/ci_plan_coverage.py", '--classifier-summary "${AISTOCK_CI_CLASSIFIER_SUMMARY}"',
+        '--receipt "${AISTOCK_CI_TEST_COLLECTION_RECEIPT}"', 'backend_failures+=("changed_test_plan_coverage")'))

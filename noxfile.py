@@ -160,7 +160,7 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
         "-m",
         "pytest",
         *args,
-        env=_env(),
+        env=_env({"AISTOCK_TEST_PLAN": str(getattr(session, "name", "not_recorded"))}),
         external=True,
     )
 

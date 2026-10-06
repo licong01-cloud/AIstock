@@ -15,6 +15,17 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("duration", [None, 0, 2.5])
+def test_workflow_timing_never_labels_event_wait_as_execution(monkeypatch, duration):
+    events = [dict(timestamp="2026-10-06T00:00:00Z", stage="fix_in_progress", duration_seconds=duration),
+              dict(timestamp="2026-10-06T01:00:00Z", stage="validation_running", duration_seconds=None)]
+    monkeypatch.setattr(workflow, "_read_events", lambda *args: events)
+    monkeypatch.setattr(workflow, "_event_phase", lambda event: event["stage"])
+    result = workflow._workflow_timing_summary("BUG-1768")
+    assert result["code_repair_seconds"] == duration
+    assert result["local_validation_seconds"] is None
+    assert result["inferred_elapsed_seconds"] == 3600
+
 @pytest.mark.parametrize("message,fallback", [("unexpected EOF", True), ("net/http: TLS handshake timeout", True),
                                               ("HTTP 401: Bad credentials", False), ("PR not found", False)])
 def test_merge_graphql_transport_switches_once_to_strict_rest(monkeypatch, message, fallback):

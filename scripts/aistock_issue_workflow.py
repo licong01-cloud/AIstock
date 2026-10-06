@@ -5626,6 +5626,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
             {
                 "event_count": 0,
                 "known_duration_seconds": 0.0,
+                "recorded_duration_event_count": 0,
                 "inferred_since_previous_seconds": 0.0,
                 "inferred_until_next_seconds": 0.0,
                 "first_at": event.get("timestamp"),
@@ -5635,8 +5636,9 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         bucket["event_count"] += 1
         bucket["last_at"] = event.get("timestamp")
         duration = event.get("duration_seconds")
-        if isinstance(duration, (int, float)):
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool) and math.isfinite(duration) and duration >= 0:
             bucket["known_duration_seconds"] = round(float(bucket["known_duration_seconds"]) + float(duration), 3)
+            bucket["recorded_duration_event_count"] += 1
             known_duration += float(duration)
         if ts and previous_ts and previous_phase:
             delta = max(0.0, (ts - previous_ts).total_seconds())
@@ -5662,12 +5664,16 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         1 for event in events if (event.get("tooling") or {}).get("rtk_used") == "not_recorded"
     )
 
-    queue_seconds = _phase_seconds(phases, "discovered")
-    context_seconds = _phase_seconds(phases, "context_ready")
-    active_fix_seconds = _phase_seconds(phases, "fix_in_progress") + _phase_seconds(phases, "fix_applied") + context_seconds
-    local_validation_seconds = _phase_seconds(phases, "validation_planned") + _phase_seconds(phases, "validation_running") + _phase_seconds(phases, "validation_passed")
-    pr_ci_seconds = _phase_seconds(phases, "pr_opened") + _phase_seconds(phases, "ci_running") + _phase_seconds(phases, "ci_green") + _phase_seconds(phases, "gh_pr_create")
-    merge_aftercare_seconds = sum(_phase_seconds(phases, phase) for phase in ("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted"))
+    def known_seconds(*names: str) -> float | None:
+        values = [_phase_seconds(phases, name) for name in names]
+        observed = [value for value in values if value is not None]
+        return round(sum(observed), 3) if observed else None
+
+    queue_seconds = known_seconds("discovered")
+    active_fix_seconds = known_seconds("fix_in_progress", "fix_applied")
+    local_validation_seconds = known_seconds("validation_planned", "validation_running", "validation_passed")
+    pr_ci_seconds = known_seconds("pr_opened", "ci_running", "ci_green", "gh_pr_create")
+    merge_aftercare_seconds = known_seconds("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted")
 
     return {
         "schema_version": "aistock_issue_workflow_timing_summary_v1",
@@ -5678,12 +5684,13 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "known_duration_seconds": round(known_duration, 3),
         "inferred_elapsed_seconds": round(inferred_duration, 3),
         "phases": phases,
-        "queue_seconds": round(queue_seconds, 3) if queue_seconds else None,
-        "active_fix_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
-        "local_validation_seconds": round(local_validation_seconds, 3) if local_validation_seconds else None,
-        "pr_ci_seconds": round(pr_ci_seconds, 3) if pr_ci_seconds else None,
-        "merge_aftercare_seconds": round(merge_aftercare_seconds, 3) if merge_aftercare_seconds else None,
-        "code_repair_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
+        "queue_seconds": queue_seconds,
+        "active_fix_seconds": active_fix_seconds,
+        "local_validation_seconds": local_validation_seconds,
+        "pr_ci_seconds": pr_ci_seconds,
+        "merge_aftercare_seconds": merge_aftercare_seconds,
+        "code_repair_seconds": active_fix_seconds,
+        "measurement_scope": "recorded_commands_only; null means not_recorded",
         "rtk_telemetry": {
             "used_event_count": rtk_used_count,
             "fallback_event_count": rtk_fallback_count,
@@ -5693,7 +5700,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "notes": [
             "known_duration_seconds comes from command-level telemetry when available",
             "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
-            "code_repair_seconds is an upper bound between automatic repair-start and finish-plan boundaries and may include local validation run before finish",
+            "phase execution fields sum observed command durations only; inferred event gaps never count as development or testing",
         ],
     }
 
@@ -5723,14 +5730,13 @@ def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, A
     return timing
 
 
-def _phase_seconds(phases: dict[str, Any], phase: str) -> float:
+def _phase_seconds(phases: dict[str, Any], phase: str) -> float | None:
     item = phases.get(phase)
     if not isinstance(item, dict):
-        return 0.0
-    return max(
-        float(item.get("known_duration_seconds") or 0),
-        float(item.get("inferred_until_next_seconds") or item.get("inferred_since_previous_seconds") or 0),
-    )
+        return None
+    if not item.get("recorded_duration_event_count"):
+        return None
+    return float(item.get("known_duration_seconds") or 0)
 
 
 def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
