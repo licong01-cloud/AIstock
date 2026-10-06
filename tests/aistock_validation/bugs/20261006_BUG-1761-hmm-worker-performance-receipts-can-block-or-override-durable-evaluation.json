@@ -1,6 +1,7 @@
 {
   "actual": "拆自已授权四项记录修复中的worker部分；worker与API runtime target不同，按单BUG要求分开。性能统计DB异常不得影响正式评估/lease/fencing状态；异常须显式报告，不吞业务故障、不新增记录平台。",
   "allowed_write_scope": [
+    "docs/operations/hmm_evolution_worker_runtime_runbook.md",
     "backend/services/hmm_evolution/worker.py",
     "backend/tests/hmm_evolution/test_worker.py",
     "backend/tests/hmm_evolution/test_repository_integration.py",
@@ -121,8 +122,14 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "operator_runbook_ref": "docs/operations/hmm_evolution_worker_runtime_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-evolution/workers",
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "fresh-process import worker, worker_service and backend.routers.health -> PASS, all module paths contained in BUG-1761 task worktree; controller identity alone does not prove worker reload"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
