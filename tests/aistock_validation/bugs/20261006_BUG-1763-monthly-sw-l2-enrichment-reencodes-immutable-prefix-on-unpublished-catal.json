@@ -10,6 +10,12 @@
     "backend/services/dataset_release/monthly_frozen_source_audit.py",
     "backend/services/dataset_release/monthly_sector_mapping.py",
     "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "backend/tests/dataset_release/test_monthly_preparation_source.py",
+    "backend/tests/dataset_release/test_monthly_shared_components.py",
+    "backend/services/dataset_release/monthly_worker_runtime.py",
+    "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20261006_BUG-1763-monthly-sw-l2-enrichment-reencodes-immutable-prefix-on-unpublished-catal.json"
   ],
   "assigned_agent": null,
@@ -21,7 +27,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-06T12:36:58.398113Z",
-  "description": "SOURCE final audit rejects134 taxonomy after26.79M rows; mapping would drift",
+  "description": "September operation attempt245 sealed 26.79M SOURCE rows but final quote-policy audit rejected raw134 SW L2 catalog versus immutable prefix131. Newly catalogued801217/801768/801786 are SW2021 is_pub=0 and have no member rows; sorting raw catalog would reencode inherited l2_code_id. Preserve raw metadata, bind pinned predecessor map through all monthly consumers, record unassigned/unpublished additions and reject required taxonomy migration. No historical price QA, DB writes, candidate activation or process controls.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -30,7 +36,31 @@
       "timestamp": "2026-10-06T12:36:58.398095Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/5585"
+  ],
+  "fix_summary": {
+    "mapping_policy": "immutable_predecessor_shared_ids_v1",
+    "raw_catalog_count": 134,
+    "canonical_catalog_count": 131,
+    "unassigned_unpublished_codes": ["801217.SI", "801768.SI", "801786.SI"],
+    "source_code_map_file_sha256": "d854c78fa93a425f02949989cd4687d0dabc31a4a7dfe6ec9a0bed3d0987dbe1",
+    "metadata_member_row_count": 5914,
+    "database_write": false,
+    "historical_business_audit_performed": false,
+    "active_profile_write": false,
+    "review_rounds": [
+      "Round1: exact raw134 minus immutable131 code delta, unpublished and zero-member independent source evidence; retain131 stable IDs without changing quote policy.",
+      "Round2: SOURCE/preparation/audit/shared BUILD/readback identity closure; found and repaired SOURCE8 runtime preflight allowlist; source8 derives accepted current producer version without accepting arbitrary versions.",
+      "Round3: real private row sealer preserves134 raw records and canonical IDs, source receipt cross-map rejection, fresh-process real metadata readback, final163 targeted tests passed/1 platform symlink skipped, lint/L0/catalog passed."
+    ],
+    "design_compliance": {
+      "no_partial_success": "SOURCE bug fixed; monthly candidate still pending BUILD and is not reported ready.",
+      "no_silent_errors": "Published/unknown/new member catalog entries and pin/hash drift fail explicitly; no default IDs or synthesized data.",
+      "business_semantics_unchanged": "131 shared IDs and official quote policy preserved; HMM/QE/model/contracts untouched.",
+      "no_extra_gates": "Reuse existing code-map and quote policy checks, no historical data re-audit or new approval gate."
+    }
+  },
   "expected": "Stable predecessor sector IDs, approved131 quote policy and explicit raw catalog lineage through SOURCE/BUILD",
   "file_scope_contract": {
     "added_files": [
@@ -229,7 +259,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> fresh process mapping/pin/fail-closed verification passed; no service started or database written",
+      "python fresh-process read-only SW metadata verification -> raw134/canonical131/member5914, original code-map SHA d854c78fa93a425f02949989cd4687d0dabc31a4a7dfe6ec9a0bed3d0987dbe1, mapping_ids_unchanged=true, quote policy PASS, database_write=false, historical_business_audit=false"
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
