@@ -1,5 +1,7 @@
 # Advisory 板块短期压力与回撤条件价格 M25 F2详细设计
 
+最新执行状态：2026-10-06用户授权同一轮六项任务全量接续且时间不限制；旧48h截止是历史，不约束本次执行。原M25方案/工件不变，仅完成尚未发生的一次4fit/完整四臂，结论NOT_CONFIRMED、只STOP本candidate，累计真实99fit+1index，详§15。SOURCE测试通过与经济效果、runtime启用分别报告。
+
 设计2026-10-06；SOURCE_LOCAL_VERIFIED / EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY。设计#5514/head65c50e7e/currentCI37348004254 SUCCESS已合入56a4371d/自身officialcleanup_done18.75秒；批准全文读取后自己的latestmain十叶源码实施。
 
 ## 1. Background / Goal
@@ -23,7 +25,7 @@ F2。设计仅本文件与蓝图；源码阶段写前登记十叶：
 - docs/architecture/advisory_sector_path_price_m25_f2_design_20261006.md
 - docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md
 
-不写QE/Selection/HMM/StrategyPackage/公共数据/Execution/Paper/CI/AGENTS，不训练父包/重建候选/股票池/变更行业映射。无SQL/DDL/DML/安装/数据或模型激活/API/UI/daily绑定/订单/服务进程控制；X临时/F正式，重启user-owned，原48h截至2026-10-06 02:36不重置。
+不写QE/Selection/HMM/StrategyPackage/公共数据/Execution/Paper/CI/AGENTS，不训练父包/重建候选/股票池/变更行业映射。无SQL/DDL/DML/安装/数据或模型激活/API/UI/daily绑定/订单/服务进程控制；X临时/F正式，重启user-owned，原48h截至2026-10-06 02:36是历史执行窗口；用户2026-10-06明确授权本轮接续时间不做限制，不改变原研究身份或其它操作边界。
 
 ## 3. Architecture / Contracts / Frozen sources / PIT
 
@@ -117,6 +119,12 @@ M1六UI/BUG1726公共smoke独立KEEP；它们未交付不阻断M25研究，也�
 
 DESIGN-COMPLIANCE-001逐项：①七批准项对应真实源码和最小测试，无未授权删减冒称完成；②正常UNKNOWN不吞坏数据/未来读取/partial失败伪success；③原股票/日期/标签/support/费用/执行policy与旧families无语义改变；④没有新增策略包资格、旧实验补证或未来收益门，原48h截止/重启授权/来源NV与未确认边界保留。尚无M25正式收益或runtime启用，测试PASS不代替经济效果。
 
-## 14. 新一次prepare完成，研究串行等待
+## 14. 原48h截至时prepare完成、研究串行等待（历史断点）
 
 clean producer c4777ca5db3e011d2b9a4d488c5809a3b04890e3/implementation a162b1d8d6e67ef96cc6e489f94c96784ae4a635c0d2a26c015f8e683253a6c4，run advsectorpath_8adafb7823329af27ad01fa5/plan 8adafb7823329af27ad01fa504812ef24212d91d5603a119ce212db1df401d9a。新一次prepare5.125秒/0SQL，386D7720候选全保留；原H5只读50180唯一date/id quotes，3505AVAILABLE/4215UNKNOWN，与原M1支持人群一致，来源五文件读前后hash一致。prepared manifest fileSHA e2e4ef5565830a26331f477978a415612e246fbf85cd5d7aa554643d8dc5e64b。拟合前2026-10-05T17:43:25+00:00只读QE三路径：single0/custom_evo1/multi-alpha0，因此未调用train/evaluate，0新formal fits、无fit_attempt或trained目录；累计仍95PHYSICAL_FIT+1旧INDEX，不伪报计划99/收益结果。仅M25研究动作因用户实验串行限制待QE空闲，SOURCE及只读prepare已完成；不停止/修改QE，不重复prepare/旧研究或为失败模型补证。原截止2026-10-06 02:36不重置，若QE届时仍运行则保留该准确断点，不擅延时训练或绕过串行约束；任何新fit须fresh三running0。49直接项/Ruff/F2/scope/原M1-M23-M24三bundle/L0无blocking，SOURCE#5518/headddae0184bfbbcd08a76b5a5c4da5458ca78a66c0/currentCI37350947957于17:57:09UTC SUCCESS，已合入c28b0ccb00d7750810b2fad9c1e5f9bf40e2ac24；官方own cleanup_done17.235秒、blocking/warnings空、SOURCE工作树/分支已删除，正式F四阶段中的已发布preregistered/prepared保留（trained/evaluated未产生）。后续只允许在clean main中消费同一plan/prepared、原implementation一致且fresh QE三0后执行尚未发生的一次fit/evaluation；不得使用已删工作树、重新prepare或另建plan绕过串行限制。0sealed/OOS/经济确认/activation/DB读写/服务或公共模块控制。
+
+## 15. 用户无时限新授权下的原研究一次接续 / 当前结论
+
+2026-10-06用户授权六项任务在同一轮全量接续、不限制时间；这仅替代旧执行窗口，不改变M25原plan/implementation/候选/标签/support/参数/成本，也不重置旧fit计数。以latestmain e595f749的clean独立树核定原code SHA a162b1d8...及prepared e2e4ef55...后，12:02:06UTC只读QE single/custom_evo/multi-alpha全0，原run advsectorpath_8adafb7823329af27ad01fa5仅执行尚未发生的一次4fit（6.656秒）及完整四臂（总29.438秒），12:04:20UTC post仍全0。共同成熟train1795/194D、validation765仅诊断，原81D1620候选/100共同NAV日candidate/base/新matched/rule成本后名义收益22.0222%/21.3220%/29.7444%/20.5747%；paired日base+0.78043bps CI[−14.67653,17.54040]、matched−6.19534bps CI[−13.41606,0.11113]。candidate MDD−10.8956%，39真模型TAKE+54UNKNOWN研究控制=93episode全部settled，0held-mark/endpoint阻断；8profitable/4loss基线入场被跳过。只有干预与真TAKE通过，net/MDD/tail未过，STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION/NOT_CONFIRMED。新增板块路径没有提供价值，不因为候选略高于base点值而回选、改阈值或重fit；控制收益不冒充模型效果。真实累计99PHYSICAL_FIT+1旧INDEX，正式四stage及evaluated manifest fileSHA e02de89e5eb9a39eb48684873efd8fb5159364c04f2211b22a18767a55acf96f保留；0sealed/独立OOS/自然前向/真实fill/模型或profile激活/DB/公共模块写/服务控制。下一步接续BUG-1726与M1日频API/UI工程，以及用户明确首版固定5交易日的跨包通用价格目标；不停止整个研发，不为M25补证或把5有效review改名为5交易日。
+
+本次三视角审核：事实轮核对原plan/implementation/prepare不变、真实4fit与完整四臂、fresh QE pre/post及当前99+1；一致性轮将旧截止/prepare-only明确标为历史，不改旧研究结果或把五有效review换成五交易日；范围轮只有本F2与蓝图两docs、源代码/数据库/公共模块/服务零修改。原F-001～007源码验收仍SOURCE_LOCAL_VERIFIED，不用经济失败改判工程，也不以工程PASS声明可部署。用户首版5交易日通用目标后续另立F2及label/policy，不挽救本M25。
