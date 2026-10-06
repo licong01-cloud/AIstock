@@ -1,6 +1,6 @@
 # Advisory GP5-VOLUME-PATH-1：D量价路径与固定5交易日收益型买价 F2详细设计
 
-2026-10-06；DESIGN_ONLY。用户要求UI后置、先重启验收后新模型长任务。旧GP5/GP5-MINUTE源码与一次研究已交付，累计107研究fit+1旧index；新候选没有fit/prepare/收益结果。本文不以源码或研究胜率承诺实际利润。
+2026-10-06设计、2026-10-07源码接续；SOURCE_READY_NOT_RESEARCHED。设计#5623合入bb7c7514并自身清理。用户要求UI后置、先重启验收后新模型长任务。旧GP5/GP5-MINUTE源码与一次研究已交付，累计107研究fit+1旧index；新候选源码已完成但没有研究fit/prepare/收益结果。本文不以源码或研究胜率承诺实际利润。
 
 ## Background / Goal
 
@@ -93,19 +93,19 @@ preregister→prepare→trained→evaluated四原子stage，新run身份/source 
 
 ## Design Acceptance Matrix
 
-设计提交只验收详细设计，源码/真实fit/效果/运行未发生。以下完整合同均须实装后才可报告SOURCE_VERIFIED。
+设计提交时只验收详细设计；当前精确九文件离线源码已实装，矩阵只验收该切片，真实研究fit/效果/日频运行仍未发生。单元测试fixture拟合不是研究试验。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-721 | contracts / pipeline | artifact: 本设计Architecture-1,-Scope | DESIGN_VERIFIED | none |
-| F-722 | source | artifact: 本设计Architecture-2 | DESIGN_VERIFIED | none |
-| F-723 | source aggregation | artifact: 本设计Architecture-3 | DESIGN_VERIFIED | none |
-| F-724 | model encoding/fit | artifact: 本设计Architecture-4 | DESIGN_VERIFIED | none |
-| F-725 | model / pipeline train | artifact: 本设计Architecture-4,-5 | DESIGN_VERIFIED | none |
-| F-726 | model pure query/set | artifact: 本设计Architecture-4 | DESIGN_VERIFIED | none |
-| F-727 | pipeline evaluate | artifact: 本设计Architecture-5 | DESIGN_VERIFIED | none |
-| F-728 | pipeline evaluate | artifact: 本设计Architecture-5 | DESIGN_VERIFIED | none |
-| F-729 | Scope / Implementation / Rollout | artifact: 本设计Scope,-Implementation,-Rollout | DESIGN_VERIFIED | none |
+| F-721 | backend/services/advisory_model_first/generic_volume_path_price_5td_contracts_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-722 | backend/services/advisory_model_first/generic_volume_path_price_5td_source_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-723 | backend/services/advisory_model_first/generic_volume_path_price_5td_source_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-724 | backend/services/advisory_model_first/generic_volume_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-725 | backend/services/advisory_model_first/generic_volume_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-726 | backend/services/advisory_model_first/generic_volume_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-727 | backend/services/advisory_model_first/generic_volume_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-728 | backend/services/advisory_model_first/generic_volume_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-729 | backend/services/advisory_model_first/generic_volume_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_volume_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
 
 最小测试复用同叶fixture：少量手工D数组覆盖三量/正尺度/午休/缺bar/零量，原native float32 header/truncated/未来毒化/路径变化；同33/39及medians/support/test Inf不影响train、metadata变化数值一致；四头JSON parity/旧schema拒绝、全tick未知洞/成本手算；空原日/未知结算/不补Top6/拒买收益代数/partial stage。无实现快照或重复fixture，不扩大QE/全modeling套件。
 
@@ -124,3 +124,5 @@ DESIGN-COMPLIANCE-001：完整离线合同不得简化/假完成；正常未知�
 第二轮PIT/数学：声明VW-bar-close非真实VWAP、尺度相消/已知零不等未知；sign pressure排午休与缺bar、不把首bar量配未来方向；尾窗口原端点/未知定义及全calendar分母不随候选缺slot缩小。
 
 第三轮收益/授权：拒买收益归因与unknown控制分开，完整日/槽/未结算null、重叠非NAV；旧107研究fit不重置。NOT_CONFIGURED语义验收未过只保留工程辅线，不擅自配置/改公共smoke、不阻本研究。上述为本窗口不同视角自审，不冒称独立外审。
+
+源码第一轮17项定向PASS：同33/39维、共享监督、test Inf毒化不影响训练、完整D读取不解码T、正常未知保留行、原子stage/partial不能隐式重fit、成本与原Top5槽保持。第二轮复核补齐最多386原D预算、合法tick支持空洞与读取期间源变化的2项定向PASS；新增三量范围矛盾显式失败而非伪未知。第三轮核对拒买归因：相对原Top5的已知拒绝收益严格等于避免亏损−错过上涨，UNKNOWN空槽另项且完整组总贡献与配对差额逐组代数对账；不将未结算获利猜为零。旧四类GP5/GP5-MINUTE代码、权重与正式产物未改。本切片是完整离线新模型，不包含API/UI挂载；最终最小矩阵与生产门分别报告。
