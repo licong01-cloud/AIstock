@@ -987,6 +987,9 @@ def _compact_phase_summary(value: Any) -> dict[str, Any] | None:
         "event_count",
         "known_duration_seconds",
         "inferred_elapsed_seconds",
+        "measurement_scope",
+        "measurement_status",
+        "queue_measurement_scope",
         "code_repair_seconds",
         "total_estimated_tokens",
         "context_estimated_tokens",
@@ -5691,6 +5694,9 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "merge_aftercare_seconds": merge_aftercare_seconds,
         "code_repair_seconds": active_fix_seconds,
         "measurement_scope": "recorded_commands_only; null means not_recorded",
+        "measurement_status": {name: ("recorded_command_time" if value is not None else "not_recorded")
+                               for name, value in (("active_fix", active_fix_seconds), ("local_validation", local_validation_seconds),
+                                                   ("pr_ci", pr_ci_seconds), ("merge_aftercare", merge_aftercare_seconds))},
         "rtk_telemetry": {
             "used_event_count": rtk_used_count,
             "fallback_event_count": rtk_fallback_count,
@@ -5722,6 +5728,7 @@ def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, A
         queue_seconds = round((started_at - created_at).total_seconds(), 3)
         existing = float(timing.get("queue_seconds") or 0)
         timing["queue_seconds"] = max(existing, queue_seconds)
+        timing["queue_measurement_scope"] = "BUG creation to first workflow event; wall elapsed, not command time"
         timing["issue_created_at"] = record.get("created_at") or record.get("first_seen_at")
         timing["active_work_started_at"] = timing.get("started_at")
         timing.setdefault("notes", []).append(
