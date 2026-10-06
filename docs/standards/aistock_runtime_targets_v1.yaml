@@ -1,5 +1,5 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-09-15"
+updated_at: "2026-10-06"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
@@ -97,6 +97,16 @@ targets:
     runtime_kind: worker_scheduler
     probe_mode: http
     source_globs:
+      # Unified monthly control plane + child share one user-owned restart:
+      # backend/main.py lifespan -> MonthlyReleaseWorkerSupervisor.start().
+      # The monthly process probe checks BOTH backend identity and supervised
+      # child health; this never marks these sources non-runtime or removes
+      # a restart/readback requirement. Unrelated backend routes stay backend-main.
+      - backend/routers/monthly_dataset_releases.py
+      - backend/services/dataset_release/api_models.py
+      - backend/services/dataset_release/monthly_*.py
+      - backend/services/dataset_release/candidate_consumer_smoke.py
+      - backend/services/dataset_release/qlib_bounded_update.py
       - backend/services/dataset_release/a_share_limit_rule.py
       - backend/services/dataset_release/artifact_ready_build_source.py
       - backend/services/dataset_release/artifact_ready_source.py
@@ -121,6 +131,7 @@ targets:
       - backend/services/dataset_release/component_artifact_manifest.py
       - backend/services/dataset_release/component_manifest_producer.py
       - backend/services/dataset_release/mixed_planner.py
+      - backend/services/dataset_release/monthly_construction_facts.py
       - backend/services/dataset_release/monthly_consumer_layout.py
       - backend/services/dataset_release/monthly_local_validation.py
       - backend/services/dataset_release/monthly_worker_nodes.py
@@ -147,6 +158,14 @@ targets:
     probe_routes:
       - route_id: monthly_release_worker_process
         source_globs:
+          - backend/routers/monthly_dataset_releases.py
+          - backend/services/dataset_release/api_models.py
+          - backend/services/dataset_release/monthly_*.py
+          - backend/services/dataset_release/monthly_construction_facts.py
+          - backend/services/dataset_release/candidate_consumer_smoke.py
+          - backend/services/dataset_release/qlib_bounded_update.py
+          - backend/services/dataset_release/artifact_ready_source.py
+          - backend/services/dataset_release/source_authority.py
           - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/build_stage.py
           - backend/services/dataset_release/candidate_validator.py
@@ -157,6 +176,8 @@ targets:
           - backend/services/dataset_release/monthly_worker_nodes.py
           - backend/services/dataset_release/monthly_worker_runtime.py
         required_source_globs:
+          - backend/services/dataset_release/source_authority.py
+          - backend/services/dataset_release/monthly_construction_facts.py
           - backend/services/dataset_release/monthly_consumer_layout.py
           - backend/services/dataset_release/monthly_local_validation.py
           - backend/services/dataset_release/monthly_worker_nodes.py
@@ -193,7 +214,6 @@ targets:
           - backend/services/dataset_release/resource_gate.py
           - backend/services/dataset_release/resource_supervisor.py
           - backend/services/dataset_release/sector_data_candidate_source.py
-          - backend/services/dataset_release/source_authority.py
           - backend/services/dataset_release/source_pool.py
           - backend/services/dataset_release/component_artifact_manifest.py
           - backend/services/dataset_release/component_manifest_producer.py

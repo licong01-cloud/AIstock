@@ -92,28 +92,22 @@ def test_source_diff_classifies_tail_history_schema_removal_and_pit() -> None:
     ) in identities
 
 
-def test_first_unified_source_forces_complete_evidenced_migration() -> None:
+def test_missing_source_baseline_does_not_invent_schema_or_historical_repairs() -> None:
     observed = _source_diffs(
         baseline=None,
-        current={"partitions": [_partition("kline_daily_raw", "2026-09-01_2026-09-30", content="tail")]},
+        current={"partitions": [
+            _partition("kline_daily_raw", "2018-08-01_2026-09-30", content="inherited-and-tail"),
+            _partition("moneyflow_ts", "2026-08-01_2026-08-31", content="historical"),
+        ]},
         predecessor_cutoff=date(2026, 8, 31),
         target_cutoff=date(2026, 9, 30),
         pit_changed=True,
     )
-    forced = {item.dataset for item in observed if item.kind == "SCHEMA_CHANGE"}
-    assert {
-        "kline_daily_raw",
-        "kline_minute_raw",
-        "adj_factor",
-        "daily_basic",
-        "moneyflow",
-        "suspend_d",
-        "stk_limit",
-        "index_daily",
-        "stock_universe_pit",
-        "index_membership_pit",
-        "industry_classification",
-    }.issubset(forced)
+    assert not any(item.kind in {"SCHEMA_CHANGE", "HISTORICAL_REPAIR", "NEW_SECURITY_HISTORY", "PIT_REVISION"} for item in observed)
+    assert {(item.dataset, item.kind) for item in observed} == {
+        ("kline_daily_raw", "TAIL_APPEND"), ("stock_universe_pit", "TAIL_APPEND"),
+    }
+    assert all(item.start == date(2026, 9, 1) and item.end == date(2026, 9, 30) for item in observed)
 
 
 def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
@@ -170,7 +164,7 @@ def test_blocked_actual_audit_prevents_materialization_and_seal(tmp_path, monkey
         source_policies.append(kwargs.get("sector_source_policy"))
         return SimpleNamespace(freeze=lambda **_kwargs: frozen)
 
-    monkeypatch.setattr(source, "MonthlySourceAuthority", authority_factory)
+    monkeypatch.setattr(source, "MonthlyObservedSourceAuthority", authority_factory)
     monkeypatch.setattr(source, "_preflight_refresh_readiness", lambda *_args, **_kwargs: None)
     seen = []
     monkeypatch.setattr(source, "ArtifactReadySourceBuilder", lambda *_args: seen.append("build"))
@@ -235,7 +229,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "6"
+    assert adapter.adapter_version == "7"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -243,6 +237,8 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             **old_fields,
             "sector_source_policy": "classification_published_snapshot_v1",
             "refresh_audit_readiness_policy": source.REFRESH_READINESS_POLICY,
+            "business_validation_scope": "target_calendar_month_only_v1",
+            "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
             "component_preparation_dependency_digest": digest_named_fields(
                 "aistock_monthly_component_dependency_v1",
                 source.component_dependencies(),
@@ -289,7 +285,7 @@ def test_canonical_pit_readiness_blocks_before_freeze(tmp_path, monkeypatch, sta
         def fetchone(self):
             return state
 
-    monkeypatch.setattr(source, "MonthlySourceAuthority", lambda *_args, **_kwargs: pytest.fail("must not freeze"))
+    monkeypatch.setattr(source, "MonthlyObservedSourceAuthority", lambda *_args, **_kwargs: pytest.fail("must not freeze"))
     adapter = PostgresMonthlySourceAdapter(
         profile=SimpleNamespace(
             profile="qe_hmm_full_v2", universe_key="aistock_equity_pit_canonical_v2", start_date=date(2018, 8, 1)
@@ -423,7 +419,32 @@ def test_refresh_readiness_pass_preserves_per_partition_fact_validation():
         profile=SimpleNamespace(start_date=date(2018, 8, 1), minute_start_date=date(2020, 1, 1), resource_policy=None),
         cutoff=DAY,
     )
-    assert checked == [("kline_minute_raw", date(2020, 1, 1), DAY)]
+    assert checked == [("kline_minute_raw", date(2026, 9, 1), DAY)]
+
+
+def test_explicit_financing_deferral_only_changes_actual_tail_query_and_audit_end(dataset_profile):
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+    from backend.services.dataset_release.source_authority import PRODUCTION_QUERY_SPECS
+    from backend.services.dataset_release import monthly_postgres_source as source
+    authority = MonthlyObservedSourceAuthority(dataset_profile, None, progress=lambda _: None,
+        month_start=date(2026, 9, 1), deferred_margin_cutoff=DAY)
+    pit = SimpleNamespace(spans=[SimpleNamespace(ts_code="000001.SZ")])
+    margin = list(authority._partition_requests(PRODUCTION_QUERY_SPECS["margin_detail"], DAY, pit_snapshot=pit))
+    basic = list(authority._partition_requests(PRODUCTION_QUERY_SPECS["daily_basic"], DAY, pit_snapshot=pit))
+    assert margin[0][0] == basic[0][0] == "2026-09-01_2026-09-30"
+    assert margin[0][1]["end"] == date(2026, 9, 29)
+    assert margin[0][1]["user_deferred_trade_date"] == DAY
+    assert basic[0][1]["end"] == DAY
+    checked = []
+    ledger = SimpleNamespace(partition_digest=lambda *args: checked.append(args))
+    audit_authority = SimpleNamespace(_freeze_refresh_audit=lambda *_a, **_kw: ledger,
+        _database_query_specs=lambda: [SimpleNamespace(date_expression="date", start_policy="daily", audit_dataset=name)
+            for name in ("daily_basic", "margin_detail")])
+    @contextmanager
+    def factory(_policy):
+        yield None
+    source._preflight_refresh_readiness(audit_authority, factory, profile=dataset_profile, cutoff=DAY, deferred_margin_cutoff=DAY)
+    assert checked == [("daily_basic", date(2026, 9, 1), DAY), ("margin_detail", date(2026, 9, 1), date(2026, 9, 29))]
 
 
 def test_adapter_readiness_failure_precedes_freeze_and_input_directory(tmp_path, monkeypatch):
@@ -442,7 +463,7 @@ def test_adapter_readiness_failure_precedes_freeze_and_input_directory(tmp_path,
     monkeypatch.setattr(source, "_preflight_refresh_readiness", fail_readiness)
     monkeypatch.setattr(
         source,
-        "MonthlySourceAuthority",
+        "MonthlyObservedSourceAuthority",
         lambda *_args, **_kwargs: SimpleNamespace(freeze=lambda **_kw: pytest.fail("payload freeze must not start")),
     )
     adapter = PostgresMonthlySourceAdapter(
@@ -476,6 +497,42 @@ def daily():
         "volume_hand": 240,
         "amount_li": 2400000,
     }
+
+
+def test_frozen_source_audit_checks_cancel_inside_stream_before_gate_or_receipt(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_frozen_source_audit as audit
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseCancelled
+
+    rows_read = checks = 0
+
+    class Reader:
+        @contextmanager
+        def iter_rows(self, *_args):
+            def rows():
+                nonlocal rows_read
+                for _ in range(200_000):
+                    rows_read += 1
+                    yield {"cal_date": "2026-09-30"}
+            yield rows()
+
+    def checkpoint():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise MonthlyReleaseCancelled("cancelled during read")
+
+    monkeypatch.setattr(audit, "CASSealedPartitionReader", lambda *_args, **_kwargs: Reader())
+    frozen = SimpleNamespace(partitions=(SimpleNamespace(as_build_input=lambda: {
+        "dataset": "trading_calendar", "partition_key": "2026-09-01_2026-09-30",
+    }),))
+    with pytest.raises(MonthlyReleaseCancelled):
+        audit.audit_frozen_source(
+            cas=None, frozen=frozen, profile=None, input_root=tmp_path, artifact_root=tmp_path,
+            snapshot_group_id="fixture", changes=(), predecessor_cutoff=date(2026, 8, 31),
+            checkpoint=checkpoint,
+        )
+    assert rows_read == 100_000
+    assert list(tmp_path.iterdir()) == []
 
 
 def minutes():
@@ -724,7 +781,8 @@ def test_margin_uses_independent_provider_bound_not_all_stock_count(defect):
 
 
 @pytest.mark.parametrize("missing", [False, True])
-def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, missing):
+@pytest.mark.parametrize("old_partition", [False, True])
+def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, missing, old_partition):
     from backend.services.dataset_release import monthly_frozen_source_audit as audit
     from backend.services.dataset_release import sw_l2_quote_policy as policy
     from backend.services.core_index_catalog import P0_POOL_IDS, POOL_DEFINITIONS
@@ -808,6 +866,8 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
 
         @contextmanager
         def iter_rows(self, dataset, partition_key):
+            if old_partition and partition_key == "2026-08-01_2026-08-31":
+                pytest.fail("monthly business audit reopened historical facts")
             visited.append((dataset, partition_key))
             yield iter(data[dataset])
 
@@ -816,7 +876,9 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     frozen = SimpleNamespace(
         partitions=[
             SimpleNamespace(as_build_input=lambda name=name: {"dataset": name, "partition_key": key}) for name in data
-        ],
+        ] + ([SimpleNamespace(as_build_input=lambda: {
+            "dataset": "kline_minute_raw", "partition_key": "2026-08-01_2026-08-31",
+        })] if old_partition else []),
         official_cutoff=DAY,
         pit_snapshot=SimpleNamespace(spans=[SimpleNamespace(ts_code=SYMBOL, eligible_start=DAY, eligible_end=DAY)]),
         source_manifest_ref=reference,
@@ -860,15 +922,16 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
         input_root=target,
         artifact_root=tmp_path,
         snapshot_group_id="postgres:1-AA-1",
-        changes=(),
+        changes=(SimpleNamespace(start=date(2018, 8, 1), end=DAY),) if old_partition else (),
         predecessor_cutoff=date(2026, 8, 31),
+        audit_causal_history=not old_partition,
     )
     assert {gate.gate for gate in gates} == set(SOURCE_GATES)
     assert all(gate.payload()["status"] == "PASS" for gate in gates) is not missing
     daily_gate = next(gate for gate in gates if gate.gate == "daily_price")
     assert daily_gate.expected_count == 1
     assert daily_gate.unexplained_missing_count == int(missing)
-    assert len(artifacts) == 22
+    assert len(artifacts) == (21 if old_partition else 22)
     readback = json.loads((tmp_path / daily_gate.readback_ref).read_text())
     assert readback["unexplained_missing_count"] == int(missing)
     assert readback["database_write_performed"] is False

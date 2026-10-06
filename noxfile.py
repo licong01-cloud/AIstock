@@ -705,6 +705,15 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_shared_sector_context.py",
         "backend/tests/dataset_release/test_monthly_repair_journal.py",
         "backend/tests/dataset_release/test_monthly_snapshot.py",
+        "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+        "backend/tests/dataset_release/test_monthly_construction_facts.py",
+        "backend/tests/dataset_release/test_monthly_delta_regressions.py",
+        "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+        "backend/tests/dataset_release/test_monthly_legacy_factor.py",
+        "backend/tests/dataset_release/test_monthly_legacy_index.py",
+        "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+        "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+        "backend/tests/dataset_release/test_monthly_repair_inputs.py",
         "backend/tests/dataset_release/test_seed_dataset_refresh_audit.py",
         "backend/tests/dataset_release/test_monthly_build_bridge.py",
         "backend/tests/dataset_release/test_monthly_build_executor.py",
@@ -939,6 +948,35 @@ def advisory_phase0b_backend(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def advisory_modeling_backend(session: nox.Session) -> None:
     """Run isolated Advisory short-rebound modeling contract regressions."""
+    full_targets = ("backend/tests/advisory_modeling", "backend/tests/advisory_model_first")
+    # Shared role/label/decision contracts have many consumers: keep the full
+    # regression for those changes, even when a same-stem test exists.
+    shared_contracts = {
+        "backend/services/advisory_model_first/contracts.py",
+        "backend/services/advisory_model_first/action_value_contracts.py",
+        "backend/services/advisory_model_first/research_control_contracts.py",
+    }
+    full_regression = bool(shared_contracts.intersection(_ci_classifier_changed_files() or ()))
+    pr_targets = None if full_regression else _direct_neighbor_pr_targets(
+        fallback_tests=full_targets,
+        smoke_tests=(
+            "backend/tests/advisory_modeling/test_contracts_and_features.py",
+            "backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py",
+            "backend/tests/advisory_model_first/test_evidence_level_boundaries.py",
+        ),
+        source_test_roots=(
+            ("backend/services/advisory_modeling/", "backend/tests/advisory_modeling/"),
+            ("backend/services/advisory_model_first/", "backend/tests/advisory_model_first/"),
+        ),
+        test_globs=("backend/tests/advisory_modeling/test_*.py", "backend/tests/advisory_model_first/test_*.py"),
+        overrides={
+            "backend/services/advisory_modeling/bundle_store.py": "backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py",
+            "backend/services/advisory_modeling/feature_snapshot.py": "backend/tests/advisory_modeling/test_contracts_and_features.py",
+        },
+    )
+    if pr_targets:
+        _run_pytest(session, *pr_targets, "-q", "-p", "no:cacheprovider")
+        return
     _run_pytest(
         session,
         "backend/tests/advisory_modeling",
@@ -1088,6 +1126,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
+        "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
         "backend/tests/scripts/test_prepare_canonical_pit_monthly.py",
         "backend/tests/test_stock_universe_pit_service.py",
         "backend/tests/test_stock_universe_pit_spans.py",

@@ -20,6 +20,9 @@ from backend.services.dataset_release.monthly_shared_components import (
     _build_sector_membership,
     _index_pool_intervals,
     _pit_intervals,
+    _append_sector_month_sidecars,
+    _native_sector_summary,
+    _build_suspend,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
 from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
@@ -50,6 +53,192 @@ def _snapshot():  # type: ignore[no-untyped-def]
         source_fingerprint_sha256="a" * 64,
         parameter_hash="b" * 64,
     )
+
+
+def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
+    import json
+
+    old_root = tmp_path / "august"
+    old_root.mkdir()
+    old = pd.DataFrame([{"trade_date": pd.Timestamp("2026-08-31"), "ts_code": "000005.SZ",
+                         "suspend_type": "S", "suspend_timing": None}])
+    old.to_parquet(old_root / "suspend.parquet", index=False)
+    (old_root / "meta.json").write_text(json.dumps({"end": "2026-08-31", "row_count": 1,
+        "daily_row_counts": {"2026-08-31": 1}}), encoding="utf-8")
+    def pin(name):
+        path = old_root / name
+        return {"path": name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+    prefix = SimpleNamespace(root=old_root, cutoff=date(2026, 8, 31), manifest_sha256="a" * 64,
+        manifest={"components": {"suspend_data": pin("suspend.parquet"), "suspend_meta": pin("meta.json")}})
+    new_root = tmp_path / "september"
+    new_root.mkdir()
+    day = date(2026, 9, 1)
+    parquet, meta, keys, count = _build_suspend(root=new_root, rows=[{
+        "trade_date": day, "ts_code": "000001.SZ", "suspend_type": "S", "suspend_timing": None,
+    }], pit_rows=[("000001.SZ", day, day)], calendar=(date(2026, 8, 31), day),
+        profile=SimpleNamespace(start_date=date(2018, 8, 1), universe_key="pit"), cutoff=day, prefix=prefix)
+    actual = pd.read_parquet(parquet)
+    pd.testing.assert_frame_equal(actual.iloc[:1].reset_index(drop=True), old)
+    assert keys == {("000001.SZ", day)}
+    assert count == 1
+    readback = json.loads(meta.read_text(encoding="utf-8"))
+    assert readback["validation_scope"] == "month_delta"
+    assert readback["historical_values_validated"] == 0
+    assert readback["row_count"] == 2
+    assert readback["daily_row_counts"] == {"2026-08-31": 1, "2026-09-01": 1}
+    assert hashlib.sha256((old_root / "suspend.parquet").read_bytes()).hexdigest() == prefix.manifest["components"]["suspend_data"]["sha256"]
+
+
+def test_sector_month_reads_only_physical_tail(tmp_path, monkeypatch):
+    from backend.services.dataset_release.monthly_preparation_shared import summarize_sector_context
+
+    index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2024-08-30"), "000001.SZ"), (pd.Timestamp("2024-09-02"), "000001.SZ")],
+        names=["datetime", "instrument"],
+    )
+    path = tmp_path / "sector.h5"
+    pd.DataFrame({"l2_code_id": [-1, 0], "sw2_pct_change": [float("inf"), 1.0],
+                  "sw2_vol": [float("inf"), 2.0], "sw2_amount": [float("inf"), 3.0]}, index=index).to_hdf(
+        path, "data", format="table", data_columns=["datetime", "instrument"])
+    selected = []
+    original = pd.HDFStore.select
+
+    def bounded(store, key, **kwargs):
+        selected.append(kwargs)
+        assert kwargs.get("start") == 1 and kwargs.get("stop") == 2
+        return original(store, key, **kwargs)
+
+    monkeypatch.setattr(pd.HDFStore, "select", bounded)
+    day = date(2024, 9, 2)
+    member, market, counts = summarize_sector_context(
+        sector_h5=path, profile=SimpleNamespace(start_date=date(2018, 8, 1)),
+        enricher=SimpleNamespace(), code_map=SimpleNamespace(id_to_code={0: "801011.SI"}),
+        quote=SimpleNamespace(entries={"801011.SI": ((day, day),)}),
+        calendar=(date(2024, 8, 30), day), pit_rows=(("000001.SZ", day, day),),
+        start=day, cutoff=day, bound=1, checkpoint=lambda: None,
+        market_start=day, source_start_row=1, source_month_rows=1,
+    )
+    assert selected and market.sw_daily_total_vol.tolist() == [2.0]
+    assert len(member) == 1 and counts["frozen_stock_trading_day_count"] == 1
+
+
+def test_sector_month_inherits_prefix_and_keeps_boundary_transition():
+    old = pd.DataFrame([
+        ["000001.SZ", date(2024, 7, 1), date(2024, 8, 30), 0],
+        ["000002.SZ", date(2024, 7, 1), date(2024, 8, 30), 0],
+    ], columns=["instrument", "start_date", "end_date", "l2_code_id"])
+    new = pd.DataFrame([
+        ["000001.SZ", date(2024, 9, 2), date(2024, 9, 3), 0],
+        ["000002.SZ", date(2024, 9, 2), date(2024, 9, 3), 1],
+    ], columns=old.columns)
+    prior = pd.DataFrame({"trade_date": [date(2024, 8, 30)], "sw_daily_total_vol": [5.0]})
+    delta = pd.DataFrame({"trade_date": [date(2024, 9, 2), date(2024, 9, 3)], "sw_daily_total_vol": [6.0, 7.0]})
+    merged, market = _append_sector_month_sidecars(
+        old_membership=old, old_market=prior, new_membership=new, new_market=delta,
+        calendar=tuple(prior.trade_date) + tuple(delta.trade_date), predecessor_cutoff=date(2024, 8, 31),
+        cutoff=date(2024, 9, 3),
+    )
+    assert merged[merged.instrument == "000001.SZ"].end_date.tolist() == [date(2024, 9, 3)]
+    assert merged[merged.instrument == "000002.SZ"].l2_code_id.tolist() == [0, 1]
+    assert market.sw_daily_total_vol.tolist() == [5.0, 6.0, 7.0]
+    assert old.end_date.tolist() == [date(2024, 8, 30)] * 2
+    with pytest.raises(MonthlySharedComponentsError, match="month calendar"):
+        _append_sector_month_sidecars(
+            old_membership=old, old_market=prior, new_membership=new, new_market=delta.iloc[:1],
+            calendar=tuple(prior.trade_date) + tuple(delta.trade_date), predecessor_cutoff=date(2024, 8, 31),
+            cutoff=date(2024, 9, 3),
+        )
+
+
+def test_native_sector_summary_uses_pinned_metadata_and_real_month_rows(tmp_path, monkeypatch):
+    from backend.services.dataset_release.shared_sector_context import (
+        build_release_sw_l2_code_map_payload, validate_release_sw_l2_code_map,
+    )
+    from backend.services.dataset_release.monthly_legacy_prefix import _signature
+    from backend.services.dataset_release.canonical import canonical_json_bytes
+
+    predecessor = tmp_path / "old"
+    predecessor.mkdir()
+    payload = build_release_sw_l2_code_map_payload(
+        code_to_id={f"801{number:03d}.SI": number for number in range(131)},
+        member_backed_codes=tuple(f"801{number:03d}.SI" for number in range(131)),
+        authority_id="fixture", authority_sha256="a" * 64,
+    )
+    calendar = (date(2024, 8, 30), date(2024, 9, 2))
+    old_member = pd.DataFrame([["000001.SZ", calendar[0], calendar[0], 0]],
+                             columns=["instrument", "start_date", "end_date", "l2_code_id"])
+    old_market = pd.DataFrame({"trade_date": [calendar[0]], "sw_daily_total_vol": [4.0]})
+    old_member.to_parquet(predecessor / "member.parquet", index=False)
+    old_market.to_parquet(predecessor / "market.parquet", index=False)
+    (predecessor / "map.json").write_bytes(canonical_json_bytes(payload) + b"\n")
+    pins = {}
+    for name, filename in (("sector_membership_spans", "member.parquet"), ("market_context", "market.parquet"),
+                           ("sector_code_map", "map.json")):
+        path = predecessor / filename
+        pins[name] = {"path": filename, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+    pins["sector_data"] = {"row_count": 1}
+    prefix = SimpleNamespace(root=predecessor, manifest={"components": pins}, cutoff=date(2024, 8, 31),
+                             manifest_sha256="b" * 64)
+    data = tmp_path / "sector.h5"
+    index = pd.MultiIndex.from_tuples([(pd.Timestamp(day), "000001.SZ") for day in calendar],
+                                     names=["datetime", "instrument"])
+    pd.DataFrame({"l2_code_id": [0, 0], "sw2_pct_change": [float("inf"), 0.1],
+                  "sw2_vol": [float("inf"), 5.0], "sw2_amount": [float("inf"), 9.0]}, index=index).to_hdf(
+        data, "data", format="table", data_columns=["datetime", "instrument"])
+    authority = {"verified_output_files": {"factor_bundle/sector_data.h5": {
+        "signature": list(_signature(data)), "size": data.stat().st_size,
+        "sha256": hashlib.sha256(data.read_bytes()).hexdigest()}},
+        "physical_month_ranges": {"sector_data": {"start_row": 1, "row_count": 1}}}
+    arguments = dict(prefix=prefix, sector_h5=data, physical_authority=authority,
+        profile=SimpleNamespace(start_date=calendar[0], resource_policy=SimpleNamespace(validation_read_chunk_rows=1)),
+        enricher=SimpleNamespace(), code_map=validate_release_sw_l2_code_map(payload),
+        quote=SimpleNamespace(entries={"801000.SI": ((calendar[0], calendar[-1]),)}), calendar=calendar,
+        pit_rows=(("000001.SZ", calendar[0], calendar[-1]),), cutoff=calendar[-1])
+    member, market, counts = _native_sector_summary(**arguments)
+    assert member.end_date.tolist() == [calendar[-1]]
+    assert market.sw_daily_total_vol.tolist() == [4.0, 5.0]
+    assert counts["historical_sector_values_read"] == 0 and counts["validation_scope"] == "month_delta"
+    codes = {f"801{number:03d}.SI": number for number in range(131)}
+    codes["801000.SI"], codes["801001.SI"] = 1, 0
+    drifted = build_release_sw_l2_code_map_payload(
+        code_to_id=codes, member_backed_codes=tuple(sorted(codes)), authority_id="new", authority_sha256="c" * 64)
+    # An independently valid reordered mapping must still be rejected before
+    # reading sector history; changing code IDs is not a monthly append.
+    with pytest.raises(MonthlySharedComponentsError, match="mapping differs"):
+        _native_sector_summary(**{**arguments, "code_map": validate_release_sw_l2_code_map(drifted)})
+    pins["sector_data"]["row_count"] = 2
+    with pytest.raises(MonthlySharedComponentsError, match="inherited row count"):
+        _native_sector_summary(**arguments)
+
+
+@pytest.mark.parametrize("unexpected_quote", [False, True])
+def test_sector_month_keeps_stopped_quote_na_without_losing_membership(tmp_path, unexpected_quote):
+    from backend.services.dataset_release.monthly_preparation_shared import summarize_sector_context
+    from backend.services.dataset_release.monthly_component_preparation import ComponentPreparationError
+    day = date(2024, 9, 2)
+    index = pd.MultiIndex.from_tuples([(pd.Timestamp(day), symbol) for symbol in ("000001.SZ", "000002.SZ")],
+                                     names=["datetime", "instrument"])
+    value = 0.0 if unexpected_quote else float("nan")
+    source = pd.DataFrame({"l2_code_id": [0, 1], "sw2_pct_change": [value, 1.0],
+                           "sw2_vol": [value, 2.0], "sw2_amount": [value, 3.0],
+                           "sw2_mf_net_amt": [100.0, 200.0]}, index=index)
+    path = tmp_path / "sector.h5"
+    source.to_hdf(path, "data", format="table", data_columns=["datetime", "instrument"])
+    before = path.read_bytes()
+    arguments = dict(sector_h5=path, profile=SimpleNamespace(start_date=day), enricher=SimpleNamespace(),
+        code_map=SimpleNamespace(id_to_code={0: "801019.SI", 1: "801011.SI"}),
+        quote=SimpleNamespace(entries={"801019.SI": (), "801011.SI": ((day, day),)}),
+        calendar=(day,), pit_rows=tuple((symbol, day, day) for symbol in ("000001.SZ", "000002.SZ")),
+        start=day, cutoff=day, bound=1, checkpoint=lambda: None, market_start=day,
+        source_start_row=0, source_month_rows=2)
+    if unexpected_quote:
+        with pytest.raises(ComponentPreparationError, match="stopped sector"):
+            summarize_sector_context(**arguments)
+    else:
+        member, market, counts = summarize_sector_context(**arguments)
+        assert member.instrument.tolist() == ["000001.SZ", "000002.SZ"]
+        assert market.sw_daily_total_vol.tolist() == [2.0] and counts["quote_gap_count"] == 0
+    assert path.read_bytes() == before
 
 
 def test_index_pool_sidecars_intersect_membership_with_frozen_pit() -> None:

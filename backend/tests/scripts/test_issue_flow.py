@@ -44,6 +44,32 @@ def _write_json(path: Path, payload: dict[str, object]) -> Path:
     return path
 
 
+@pytest.mark.parametrize("operation,expected_reads", [(flow.match_changed_files, 2), (flow.select_validation, 3)])
+def test_catalog_read_cost_is_constant_per_operation(operation, expected_reads, monkeypatch) -> None:
+    original = flow._load_yaml
+    reads = []
+
+    def counted(path):
+        reads.append(path.name)
+        return original(path)
+
+    monkeypatch.setattr(flow, "_load_yaml", counted)
+    paths = ["backend/services/factor_research/comparison.py", "backend/services/factor_research/repository.py"]
+    operation(paths)
+    assert len(reads) == len(set(reads)) == expected_reads
+
+
+@pytest.mark.parametrize("paths", [
+    [], ["docs/analysis/notes.md"],
+    ["backend/services/factor_research/repository.py", "backend/services/factor_research/comparison.py", "unmapped.py"],
+])
+def test_catalog_snapshot_preserves_selection_without_mutating_inputs(paths) -> None:
+    catalog = flow.validation_catalog_snapshot()
+    before = json.dumps(vars(catalog), sort_keys=True)
+    assert flow.select_validation(paths, _catalog=catalog) == flow.select_validation(paths)
+    assert json.dumps(vars(catalog), sort_keys=True) == before
+
+
 def test_write_json_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
 

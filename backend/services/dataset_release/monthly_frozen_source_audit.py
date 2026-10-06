@@ -364,12 +364,18 @@ def audit_margin_publication(
     receipt: Mapping[str, Any],
     gate: GateCounter,
     minimum_rows: int = 0,
+    deferred_authority_sha256: str | None = None,
 ) -> None:
     """Independently declared provider denominator, not all-equity eligibility.
 
     Historical dates without a declared positive denominator remain blocked.
     A success label or a non-empty partial publication cannot manufacture PASS.
     """
+    if not rows and deferred_authority_sha256 is not None:
+        gate.check(("margin_detail", day), [], valid=lambda _: False, dataset="margin_detail",
+            exception=TypedGap(dataset="margin_detail", symbol="margin_detail", start=day.isoformat(), end=day.isoformat(),
+                field="*", reason_code="USER_DEFERRED_COLLECTION", authority_sha256=deferred_authority_sha256))
+        return
     declarations = [
         source
         for entry in receipt.get("rows", ())
@@ -407,6 +413,9 @@ def audit_frozen_source(
     snapshot_group_id: str,
     changes: Any,
     predecessor_cutoff: date,
+    checkpoint: Callable[[], None] = lambda: None,
+    audit_causal_history: bool = True,
+    deferred_margin_authority_sha256: str | None = None,
 ) -> tuple[tuple[SourceGateEvidence, ...], tuple[SourceArtifact, ...]]:
     # The shared builders depend on the build bridge, which imports the SOURCE
     # bundle schema. Load them only after adapter module initialization.
@@ -426,11 +435,19 @@ def audit_frozen_source(
             bounds = _BOUNDS.search(str(descriptor["partition_key"]))
             if left is not None and bounds is not None and (_day(bounds[2]) < left or _day(bounds[1]) > right):
                 continue
+            checkpoint()
             with reader.iter_rows(dataset, str(descriptor["partition_key"])) as values:
-                yield from values
+                for index, value in enumerate(values, 1):
+                    yield value
+                    if index % 100_000 == 0:
+                        checkpoint()
+            checkpoint()
 
     calendar = tuple(_day(row["cal_date"]) for row in stream("trading_calendar"))
-    validate_trading_calendar(sessions=calendar, cutoff=frozen.official_cutoff)
+    audit_start = frozen.official_cutoff.replace(day=1)
+    validate_trading_calendar(
+        sessions=tuple(day for day in calendar if day >= audit_start), cutoff=frozen.official_cutoff,
+    )
     pit = _pit_intervals(frozen.pit_snapshot, calendar)
     spans = {
         "stock_universe": pit,
@@ -478,10 +495,9 @@ def audit_frozen_source(
     _write(quote_path, quote)
     issues_path = input_root / "source-issues.ndjson"
     counters = {name: GateCounter(name) for name in SOURCE_GATES}
-    affected = [(predecessor_cutoff + date.resolution, frozen.official_cutoff)] + [
-        (change.start, change.end) for change in changes
-    ]
-    sessions = tuple(day for day in calendar if any(start <= day <= end for start, end in affected))
+    # Historical repairs are separate operations. They must not expand an
+    # ordinary monthly SOURCE audit back over the sealed predecessor.
+    sessions = tuple(day for day in calendar if audit_start <= day <= frozen.official_cutoff)
     audited_months: list[str] = []
     with issues_path.open("xb") as issues:
 
@@ -493,7 +509,7 @@ def audit_frozen_source(
         # Check causal weights for this operation's affected sessions. Source
         # facts remain outside executable spans and are streamed once; no
         # database fallback, historical DataFrame or synthesized fact is used.
-        if sessions:
+        if sessions and audit_causal_history:
             full_day_suspensions = frozenset(
                 (str(row["ts_code"]), _day(row["trade_date"]))
                 for row in stream("suspend_d")
@@ -520,6 +536,7 @@ def audit_frozen_source(
             _write(causal_path, causal)
         months = sorted({day.strftime("%Y-%m") for day in sessions})
         for month in months:
+            checkpoint()
             dates = tuple(day for day in sessions if day.strftime("%Y-%m") == month)
             audited_months.append(month)
             pools = {
@@ -552,6 +569,7 @@ def audit_frozen_source(
                 aliases=aliases,
             )
             for day in dates:
+                checkpoint()
                 counters["calendar_lifecycle"].check(
                     ("stock_universe", day),
                     [{}] if pools["stock_universe"][day] else [],
@@ -645,13 +663,14 @@ def audit_frozen_source(
                     receipt=refresh,
                     gate=counters["financial_moneyflow"],
                     minimum_rows=MARGIN_DETAIL.min_expected_rows if day > predecessor_cutoff else 0,
+                    deferred_authority_sha256=deferred_margin_authority_sha256 if day == frozen.official_cutoff else None,
                 )
     result: list[SourceGateEvidence] = []
     artifacts = [
         SourceArtifact(path.relative_to(artifact_root).as_posix(), path)
         for path in (alias_path, quote_path, issues_path)
     ]
-    if sessions:
+    if sessions and audit_causal_history:
         artifacts.append(SourceArtifact(causal_path.relative_to(artifact_root).as_posix(), causal_path))
     for name, counter in counters.items():
         expectation = input_root / "gates" / f"{name}-expectation.json"

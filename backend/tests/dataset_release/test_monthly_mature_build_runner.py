@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
+import csv
+import hashlib
 from pathlib import Path
+import struct
 from types import SimpleNamespace
 
 import pytest
 
 import backend.services.dataset_release.monthly_mature_build_runner as runner_module
 from backend.services.dataset_release.cas_store import CASStore
-from backend.services.dataset_release.canonical import digest_named_fields
+from backend.services.dataset_release.canonical import canonical_json_bytes, digest_named_fields
 from backend.services.dataset_release.control_store import ControlStore
-from backend.services.dataset_release.monthly_build_bridge import CompiledMonthlyBuild
+from backend.services.dataset_release.monthly_build_bridge import CompiledMonthlyBuild, MonthlyBuildBridgeError
 from backend.services.dataset_release.monthly_build_executor import PhysicalBuildResult
 from backend.services.dataset_release.monthly_mature_build_runner import (
     MatureMonthlyPhysicalBuildRunner,
@@ -65,6 +69,150 @@ def _compiled() -> CompiledMonthlyBuild:
 def _cas(tmp_path: Path) -> CASStore:
     store = ControlStore.initialize(tmp_path / "control")
     return CASStore(store.root)
+
+
+def _native_month_fixture(tmp_path: Path):
+    """Actual immutable parent, native bins and sealed September inputs."""
+    from backend.services.dataset_release.stock_schema import QLIB_STOCK_FIELDS
+
+    parent = tmp_path / "august"
+    provider = parent / "components/day"
+    (provider / "features/000001.sz").mkdir(parents=True)
+    (provider / "calendars").mkdir()
+    (provider / "instruments").mkdir()
+    (provider / "meta_export.json").write_bytes(b"{}\n")
+    (provider / "calendars/day.txt").write_text("2026-08-31\n", encoding="utf-8")
+    (provider / "instruments/all.txt").write_text("000001.SZ\t2026-08-31\t2026-08-31\n", encoding="utf-8")
+    for field in QLIB_STOCK_FIELDS:
+        (provider / f"features/000001.sz/{field}.day.bin").write_bytes(struct.pack("<ff", 0, 10))
+    manifest = {
+        "release_id": "qe_hmm_full_v2_20260831", "cutoff_trade_date": "2026-08-31",
+        "components": {"day_meta_export": {
+            "path": "components/day/meta_export.json", "size": 3,
+            "sha256": hashlib.sha256(b"{}\n").hexdigest(),
+        }},
+    }
+    manifest["dataset_manifest_sha256"] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    raw = canonical_json_bytes(manifest) + b"\n"
+    (parent / "qe_dataset_manifest.json").write_bytes(raw)
+    context = replace(_context(), plan={**_context().plan, "target_cutoff": "2026-09-01", "predecessor": {
+        "candidate_root": str(parent), "cutoff": "2026-08-31",
+        "release_id": manifest["release_id"], "dataset_manifest_sha256": manifest["dataset_manifest_sha256"],
+    }, "predecessor_manifest_ref": {
+        "id": "qe_dataset_manifest.json", "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw),
+        "dataset_manifest_sha256": manifest["dataset_manifest_sha256"],
+    }})
+    staging = tmp_path / ".staging/september.building"
+    inputs = staging / ".month-inputs/daily"
+    inputs.mkdir(parents=True)
+    csv_path = inputs / "000001.SZ.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=("date", "symbol", *QLIB_STOCK_FIELDS))
+        writer.writeheader()
+        writer.writerow({"date": "2026-09-01", "symbol": "000001.SZ", **dict.fromkeys(QLIB_STOCK_FIELDS, 12)})
+    calendar = inputs.parent / "calendar.txt"
+    calendar.write_text("2026-08-31\n2026-09-01\n", encoding="utf-8")
+    population = inputs.parent / "all.txt"
+    population.write_text("000001.SZ\t2026-08-31\t2026-09-01\n", encoding="utf-8")
+    def file_ref(path):
+        return {"id": path.relative_to(staging).as_posix(), "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    prepared = {
+        "schema_version": "aistock_monthly_legacy_qlib_operation_v1", "dataset": "daily_bin",
+        "cutoff": "2026-09-01", "predecessor_manifest_sha256": manifest["dataset_manifest_sha256"],
+        "source_bundle_sha256": "a" * 64, "csv_relative_path": ".month-inputs/daily",
+        "calendar_ref": file_ref(calendar), "instruments_ref": file_ref(population),
+        "csv_refs": [file_ref(csv_path)], "qfq_basis_changes": {},
+    }
+    cas = _cas(tmp_path)
+    operation = {"operation_id": "daily", "dataset": "daily_bin", "mode": "inherited_month",
+                 "preparation_ref": cas.put_json(prepared).as_dict()}
+    compiled = _compiled()
+    physical = dict(compiled.physical_plan)
+    physical["release_digest"] = digest_named_fields("aistock_monthly_physical_release_v1", {
+        "release_id": context.plan["release_id"], "target_cutoff": "2026-09-01",
+        "source_bundle_sha256": compiled.source_bundle_sha256, "action_plan_digest": physical["action_plan_digest"],
+    })
+    runner = MatureMonthlyPhysicalBuildRunner(
+        profile=SimpleNamespace(candidate_root=tmp_path, stage_timeouts_seconds={"full_build": 3600}),
+        cas=cas, project_root=tmp_path, finalizer=_Finalizer(), qlib_writer=_Writer(), consumer_smoke=_Smoke(),
+    )
+    return runner, context, staging, replace(compiled, physical_plan=physical), operation, prepared, provider
+
+
+def test_formal_build_runner_dispatches_to_real_native_month_append(tmp_path, monkeypatch):
+    runner, context, staging, compiled, operation, _, provider = _native_month_fixture(tmp_path)
+    received = []
+    def run(invocation):
+        value = {"schema_version": "dataset_release_build_stage_result_v1", "stage": invocation.stage, "status": "PASS"}
+        if invocation.stage == "prepare":
+            value["qlib_dump_operations"] = [operation]
+        if invocation.stage == "finalize-bins":
+            received.append(runner.cas.get_json(invocation.prerequisites["qlib_dump_daily"]))
+        return value
+    monkeypatch.setattr(runner_module, "run_build_stage", run)
+    runner.execute(context=context, staging_root=staging, compiled=compiled)
+    assert runner.qlib_writer.operations == []
+    assert struct.unpack("<fff", (staging / "daily_bin/qlib/features/000001.sz/close.day.bin").read_bytes()) == (0, 10, 12)
+    assert struct.unpack("<ff", (provider / "features/000001.sz/close.day.bin").read_bytes()) == (0, 10)
+    assert received[0]["receipt"]["feature_file_count"] == 12
+    assert received[0]["publication_allowed"] is False
+    assert received[0]["historical_source_rows_read"] == 0
+    assert "runtime" not in received[0]  # Never forge a WSL child receipt.
+
+
+@pytest.mark.parametrize("fault", ["parent", "source", "cutoff", "csv_drift", "extra_csv", "escape", "duplicate", "operation", "catalog", "reference", "ads"])
+def test_native_month_dispatch_rejects_unbound_inputs_before_writing(tmp_path, fault):
+    runner, context, staging, compiled, operation, prepared, _ = _native_month_fixture(tmp_path)
+    if fault == "parent":
+        prepared["predecessor_manifest_sha256"] = "c" * 64
+    elif fault == "source":
+        prepared["source_bundle_sha256"] = "c" * 64
+    elif fault == "cutoff":
+        prepared["cutoff"] = "2026-09-02"
+    elif fault == "csv_drift":
+        (staging / prepared["csv_refs"][0]["id"]).write_text("changed", encoding="utf-8")
+    elif fault == "extra_csv":
+        (staging / prepared["csv_relative_path"] / "000002.SZ.csv").write_text("unexpected", encoding="utf-8")
+    elif fault == "escape":
+        prepared["csv_refs"][0]["id"] = "../escape.csv"
+    elif fault == "duplicate":
+        prepared["csv_refs"].append(dict(prepared["csv_refs"][0]))
+    elif fault == "catalog":
+        context = replace(context, plan={**context.plan, "predecessor": {**context.plan["predecessor"], "candidate_root": str(tmp_path.parent / "other")}})
+    elif fault == "reference":
+        context = replace(context, plan={**context.plan, "predecessor_manifest_ref": {**context.plan["predecessor_manifest_ref"], "dataset_manifest_sha256": "c" * 64}})
+    elif fault == "ads":
+        prepared["csv_refs"][0]["id"] += ":alternate"
+    else:
+        operation["unexpected"] = True
+    operation["preparation_ref"] = runner.cas.put_json(prepared).as_dict()
+    with pytest.raises((MonthlyMatureBuildError, MonthlyBuildBridgeError, ValueError)):
+        runner._append_inherited_month(context=context, staging_root=staging, compiled=compiled, operation=operation)
+    assert not (staging / "daily_bin").exists()
+
+
+def test_native_month_dispatch_reports_actual_write_progress(tmp_path):
+    runner, context, staging, compiled, operation, _, _ = _native_month_fixture(tmp_path)
+    events = []
+    context = replace(context, progress=events.append)
+    runner._append_inherited_month(context=context, staging_root=staging, compiled=compiled, operation=operation)
+    actual = [event for event in events if "completed_feature_files" in event]
+    assert actual[-1]["completed_instruments"] == actual[-1]["total_instruments"] == 1
+    assert actual[-1]["completed_feature_files"] == 12
+    assert actual[-1]["instruments_per_second"] > 0
+
+
+def test_native_month_dispatch_does_not_seal_success_when_input_changes(tmp_path, monkeypatch):
+    runner, context, staging, compiled, operation, prepared, _ = _native_month_fixture(tmp_path)
+    append = runner_module.append_legacy_qlib_month
+    def racing_append(*args, **kwargs):
+        receipt = append(*args, **kwargs)
+        (staging / prepared["csv_refs"][0]["id"]).write_text("changed after write", encoding="utf-8")
+        return receipt
+    monkeypatch.setattr(runner_module, "append_legacy_qlib_month", racing_append)
+    with pytest.raises(MonthlyMatureBuildError, match="changed during append"):
+        runner._append_inherited_month(context=context, staging_root=staging, compiled=compiled, operation=operation)
 
 
 class _Writer:

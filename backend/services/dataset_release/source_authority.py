@@ -253,8 +253,12 @@ class SourceQuerySpec:
             raise ValueError("non-null source values must be projected value fields")
         if not set(self.audit_non_null_value_columns).issubset(self.value_columns):
             raise ValueError("audit non-null values must be physical projected fields")
-        if self.start_policy not in {"daily", "minute", "timeless", "window_overlap"}:
+        if self.start_policy not in {"daily", "minute", "timeless", "window_overlap", "construction_facts"}:
             raise ValueError("source query start policy is invalid")
+        if self.start_policy == "construction_facts" and (
+            self.query_id != "adj_factor_construction" or self.date_expression is not None or self.audit_dataset is not None
+        ):
+            raise ValueError("construction facts require the code-owned bounded adj-factor query")
         if self.start_policy == "timeless" and self.date_expression is not None:
             raise ValueError("timeless query cannot carry a date expression")
         if self.date_range_policy not in {"inclusive_date", "timestamp_day_half_open"}:
@@ -347,6 +351,27 @@ class SourceQuerySpec:
         alias = "source_row"
         projected = tuple(dict.fromkeys((*self.key_columns, *self.value_columns)))
         payload = "jsonb_build_object(" + ",".join(f"'{column}',{alias}.{column}" for column in projected) + ")"
+        if self.query_id == "adj_factor_construction":
+            # This returns genuine facts, not manufactured factors. The
+            # lateral query computes the actual maximum through the cutoff;
+            # exact anchors come from the immutable files being appended.
+            # UNION prevents counting a maximum/anchor twice. All data reads
+            # still execute inside the caller's imported read-only snapshot.
+            return (
+                "WITH requested_anchors AS (SELECT ts_code,trade_date FROM "
+                "jsonb_to_recordset(%(anchors_json)s::jsonb) AS a(ts_code text,trade_date date)), "
+                "selected_keys AS (SELECT codes.ts_code,maximum.trade_date "
+                "FROM unnest(%(codes)s::text[]) AS codes(ts_code) CROSS JOIN LATERAL "
+                "(SELECT fact.trade_date FROM market.adj_factor AS fact "
+                "WHERE fact.ts_code=codes.ts_code AND fact.trade_date >= %(source_start)s "
+                "AND fact.trade_date <= %(cutoff)s "
+                "ORDER BY fact.adj_factor DESC NULLS LAST, fact.trade_date DESC LIMIT 1) AS maximum "
+                "UNION SELECT ts_code,trade_date FROM requested_anchors "
+                "WHERE trade_date <= %(cutoff)s AND ts_code=ANY(%(codes)s)) "
+                "SELECT jsonb_build_array(source_row.ts_code,source_row.trade_date)::text AS row_key, ("
+                + payload + ")::text AS row_payload FROM market.adj_factor AS source_row "
+                "JOIN selected_keys USING(ts_code,trade_date) ORDER BY row_key,row_payload"
+            )
         if self.query_id == "bak_basic":
             return (
                 "SELECT jsonb_build_array(source_row.ts_code,source_row.trade_date)::text "
@@ -640,6 +665,11 @@ _QUERY_SPECS = (
         date_expression="source_row.trade_date",
         audit_dataset="adj_factor",
         audit_eligible_sources=("physical_audit_seed", "tushare"),
+    ),
+    _query(
+        "adj_factor_construction", "adj_factor", _ALL_NON_INDEX,
+        ("ts_code", "trade_date"), values=("adj_factor",), non_null_values=("adj_factor",),
+        start_policy="construction_facts",
     ),
     _query(
         "stk_limit",
@@ -1837,6 +1867,7 @@ class MonthlySourceAuthority:
                 value
                 for value in PRODUCTION_QUERY_SPECS.values()
                 if value.query_id not in {"sw_index_classify", "sw_index_member"}
+                and (value.query_id != "adj_factor_construction" or value.query_id in before.schemas)
             ),
         )
         for query in query_order:
@@ -2585,7 +2616,11 @@ class MonthlySourceAuthority:
             value
             for value in PRODUCTION_QUERY_SPECS.values()
             if not (self.uses_p3a_sector_source and value.query_id == "sector_data")
+            and value.query_id != "adj_factor_construction"
         )
+
+    def _refresh_audit_start(self, cutoff: date) -> date:
+        return min(self.profile.start_date, self.profile.minute_start_date)
 
     def _freeze_refresh_audit(
         self,
@@ -2596,7 +2631,7 @@ class MonthlySourceAuthority:
         read_chunk_rows: int | None = None,
     ) -> SourceRefreshAuditLedger:
         fetch_rows = read_chunk_rows or self.profile.resource_policy.validation_read_chunk_rows
-        start = min(self.profile.start_date, self.profile.minute_start_date)
+        start = self._refresh_audit_start(cutoff)
         trading_date_values: list[date] = []
         for row_number, row in enumerate(
             session.stream(
@@ -2854,7 +2889,10 @@ class MonthlySourceAuthority:
         *,
         pit_snapshot: FrozenPitSnapshot,
         selected_stock_codes: tuple[str, ...] = (),
+        start_override: date | None = None,
     ) -> Iterable[tuple[str, dict[str, Any]]]:
+        if query.start_policy == "construction_facts":
+            raise SourceProviderContractError("construction facts require an explicitly configured monthly authority")
         codes: list[str] | None = None
         if query.code_policy == "profile_index_codes":
             codes = list(self.profile.index_codes)
@@ -2883,6 +2921,10 @@ class MonthlySourceAuthority:
             )
             return
         start = self.profile.minute_start_date if query.start_policy == "minute" else self.profile.start_date
+        if start_override is not None:
+            if type(start_override) is not date or not self.profile.start_date <= start_override <= cutoff:
+                raise SourceProviderContractError("source month start is outside the release range")
+            start = max(start, start_override)
         for chunk in build_date_chunks(
             start,
             cutoff,
@@ -2948,6 +2990,17 @@ class MonthlySourceAuthority:
     ) -> SealedSourcePartition:
         spec = _query_partition_spec(query, partition_key, table_schema)
         fetch_rows = read_chunk_rows or self.profile.resource_policy.validation_read_chunk_rows
+        row_fields = _QueryRowFields.from_query(query)
+        row_month: str | None = None
+
+        def observe_payload(payload: Mapping[str, Any]) -> None:
+            nonlocal row_month
+            # Keep month metadata outside the canonical row envelope. Reading
+            # the already validated payload avoids parsing its JSON again.
+            row_month = _canonical_row_month(payload) if query.date_expression is not None else None
+            if payload_observer is not None:
+                payload_observer(payload)
+
         return self._seal_rows(
             spec=spec,
             rows=self._iter_execution_rows(
@@ -2984,8 +3037,10 @@ class MonthlySourceAuthority:
                 query,
                 spec,
                 payload_enricher=payload_enricher,
-                payload_observer=payload_observer,
+                payload_observer=observe_payload,
+                row_fields=row_fields,
             ),
+            row_month_resolver=lambda _row: row_month,
             checkpoint=checkpoint,
             budget=budget,
             max_rows=query.max_partition_rows,
@@ -3073,7 +3128,11 @@ class MonthlySourceAuthority:
         if pressure_rung < 0:
             raise SourceProviderContractError("source pressure rung is invalid")
         date_params: list[dict[str, Any]] = [dict(semantic_params)]
-        if "start" in semantic_params and "end" in semantic_params:
+        # Overlap predicates are not point-date predicates: a long-lived
+        # member would be selected by every month it intersects. Keep this
+        # small interval authority as one semantic query; stream(fetch_rows)
+        # still bounds cursor memory. Never hide real duplicates downstream.
+        if query.start_policy != "window_overlap" and "start" in semantic_params and "end" in semantic_params:
             ladder = self.profile.pressure_ladder["date_chunk_months"]
             months = ladder[min(pressure_rung, len(ladder) - 1)]
             date_params = [
@@ -3116,6 +3175,7 @@ class MonthlySourceAuthority:
         source_partition_params_digest: str | None = None,
         source_code_membership_digest: str | None = None,
         row_transform: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        row_month_resolver: Callable[[Mapping[str, Any]], str | None] | None = None,
         checkpoint: Callable[[], None] | None = None,
         budget: SourceCASBudgetTracker | None = None,
         max_rows: int = 1_000_000,
@@ -3137,6 +3197,19 @@ class MonthlySourceAuthority:
             snapshot_tokens=(),
         )
         monthly_hashers: dict[str, CanonicalPartitionHasher] = {}
+
+        def month_hasher_for(month: str | None) -> CanonicalPartitionHasher | None:
+            if month is None:
+                return None
+            month_hasher = monthly_hashers.get(month)
+            if month_hasher is None:
+                month_hasher = CanonicalPartitionHasher(
+                    replace(spec, partition_key=month),
+                    ingestion_audit_identity=ingestion_identity,
+                    snapshot_tokens=(),
+                )
+                monthly_hashers[month] = month_hasher
+            return month_hasher
 
         def encoded() -> Iterator[bytes]:
             yield (
@@ -3165,16 +3238,13 @@ class MonthlySourceAuthority:
                     )
                 selected = row_transform(raw) if row_transform is not None else _select_row(raw, spec)
                 normalized = hasher.update(selected)
-                month = _canonical_row_month(normalized)
-                if month is not None:
-                    month_hasher = monthly_hashers.get(month)
-                    if month_hasher is None:
-                        month_hasher = CanonicalPartitionHasher(
-                            replace(spec, partition_key=month),
-                            ingestion_audit_identity=ingestion_identity,
-                            snapshot_tokens=(),
-                        )
-                        monthly_hashers[month] = month_hasher
+                month = (
+                    row_month_resolver(normalized)
+                    if row_month_resolver is not None
+                    else _canonical_row_month(normalized)
+                )
+                month_hasher = month_hasher_for(month)
+                if month_hasher is not None:
                     month_hasher.update(normalized)
                 if observer is not None:
                     observer(normalized)
@@ -4652,6 +4722,18 @@ _TEXT_PAYLOAD_COLUMNS = frozenset(
 _BOOLEAN_PAYLOAD_COLUMNS = frozenset({"is_trading"})
 
 
+@dataclass(frozen=True, slots=True)
+class _QueryRowFields:
+    physical: frozenset[str]
+    final: frozenset[str]
+    non_null: frozenset[str]
+
+    @classmethod
+    def from_query(cls, query: SourceQuerySpec) -> "_QueryRowFields":
+        physical = frozenset((*query.key_columns, *query.value_columns))
+        return cls(physical, physical.union(query.derived_value_columns), frozenset(query.non_null_value_columns))
+
+
 def _validate_query_row(
     row: Mapping[str, Any],
     query: SourceQuerySpec,
@@ -4659,6 +4741,7 @@ def _validate_query_row(
     *,
     payload_enricher: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     payload_observer: Callable[[Mapping[str, Any]], None] | None = None,
+    row_fields: _QueryRowFields | None = None,
 ) -> Mapping[str, Any]:
     """Validate the SQL JSON envelope before it enters semantic hashing/CAS."""
 
@@ -4667,8 +4750,8 @@ def _validate_query_row(
     payload = _load_json_value(selected["row_payload"], field="row_payload", partition=spec.identity)
     if not isinstance(row_key, list) or len(row_key) != len(query.key_columns) or not isinstance(payload, dict):
         raise SourceManifestError(f"source query JSON envelope shape differs: {spec.identity}")
-    physical_projected = tuple(dict.fromkeys((*query.key_columns, *query.value_columns)))
-    if set(payload) != set(physical_projected):
+    fields = row_fields or _QueryRowFields.from_query(query)
+    if payload.keys() != fields.physical:
         raise SourceManifestError(f"source query payload fields differ: {spec.identity}")
     for index, column in enumerate(query.key_columns):
         key_value = row_key[index]
@@ -4677,9 +4760,17 @@ def _validate_query_row(
             raise SourceManifestError(f"source query key is NULL: {spec.identity}:{column}")
         _validate_payload_type(column, key_value, partition=spec.identity)
         _validate_payload_type(column, payload_value, partition=spec.identity)
-        if canonical_json_bytes(key_value) != canonical_json_bytes(payload_value):
+        # The type checks above make direct text equality exactly equivalent
+        # to canonical JSON equality. Retain canonical comparison for numeric
+        # keys, where 1 and 1.0 have distinct serialized identities.
+        keys_match = (
+            key_value == payload_value
+            if isinstance(key_value, str) and isinstance(payload_value, str)
+            else canonical_json_bytes(key_value) == canonical_json_bytes(payload_value)
+        )
+        if not keys_match:
             raise SourceManifestError(f"source query key/payload identity differs: {spec.identity}:{column}")
-    non_null = set(query.non_null_value_columns)
+    non_null = fields.non_null
     for column in query.value_columns:
         value = _normalize_postgres_non_finite_source_value(query, column, payload[column])
         payload[column] = value
@@ -4694,16 +4785,7 @@ def _validate_query_row(
         if not isinstance(enriched, Mapping):
             raise SourceManifestError(f"source query derived payload is invalid: {spec.identity}")
         payload = dict(enriched)
-    final_projected = tuple(
-        dict.fromkeys(
-            (
-                *query.key_columns,
-                *query.value_columns,
-                *query.derived_value_columns,
-            )
-        )
-    )
-    if set(payload) != set(final_projected):
+    if payload.keys() != fields.final:
         raise SourceManifestError(f"source query derived payload fields differ: {spec.identity}")
     for column in query.derived_value_columns:
         value = payload[column]

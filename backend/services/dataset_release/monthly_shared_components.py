@@ -11,6 +11,8 @@ from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import hashlib
+import io
+import json
 import os
 from pathlib import Path
 import re
@@ -282,10 +284,13 @@ def _build_suspend(
     calendar: Sequence[date],
     profile: DatasetProfile,
     cutoff: date,
+    prefix=None,
 ) -> tuple[Path, Path, set[tuple[str, date]], int]:
     import pandas as pd
 
-    calendar_set = set(calendar)
+    month_start = cutoff.replace(day=1)
+    effective_calendar = tuple(day for day in calendar if month_start <= day <= cutoff) if prefix is not None else tuple(calendar)
+    calendar_set = set(effective_calendar)
     pit_by_symbol: dict[str, list[tuple[date, date]]] = {}
     for symbol, start, end in pit_rows:
         pit_by_symbol.setdefault(symbol, []).append((start, end))
@@ -296,6 +301,8 @@ def _build_suspend(
             continue
         symbol = str(raw.get("ts_code", "")).strip().upper()
         day = _as_date(raw.get("trade_date"), field="suspend trade_date")
+        if prefix is not None and not month_start <= day <= cutoff:
+            continue
         if day not in calendar_set or not any(
             start <= day <= end for start, end in pit_by_symbol.get(symbol, ())
         ):
@@ -317,14 +324,30 @@ def _build_suspend(
         normalized,
         columns=["trade_date", "ts_code", "suspend_type", "suspend_timing"],
     )
+    counts = frame.groupby("trade_date").size().to_dict() if not frame.empty else {}
+    daily_counts = {day.isoformat(): int(counts.get(pd.Timestamp(day), 0)) for day in effective_calendar}
+    lineage = {}
+    if prefix is not None:
+        if prefix.cutoff != month_start - date.resolution or not effective_calendar:
+            raise MonthlySharedComponentsError("suspend prefix is not the preceding month")
+        old = pd.read_parquet(io.BytesIO(_read_prefix_sidecar(prefix, "suspend_data")))
+        old_meta = json.loads(_read_prefix_sidecar(prefix, "suspend_meta"))
+        old_counts = old_meta.get("daily_row_counts")
+        if (tuple(old.columns) != tuple(frame.columns) or old_meta.get("end") != prefix.cutoff.isoformat()
+            or old_meta.get("row_count") != len(old) or not isinstance(old_counts, Mapping)
+            or set(old_counts).intersection(daily_counts)):
+            raise MonthlySharedComponentsError("inherited suspend metadata differs")
+        frame = pd.concat([old, frame], ignore_index=True)
+        daily_counts = {**old_counts, **daily_counts}
+        lineage = {
+            "validation_scope": "month_delta", "historical_values_validated": 0,
+            "predecessor_manifest_sha256": prefix.manifest_sha256,
+            "inherited_suspend_sha256": prefix.manifest["components"]["suspend_data"]["sha256"],
+        }
     component = root / "components" / "suspend_d_daily_candidate_v2"
     component.mkdir(parents=True, exist_ok=False)
     parquet = component / "suspend_d.parquet"
     frame.to_parquet(parquet, index=False)
-    counts = frame.groupby("trade_date").size().to_dict() if not frame.empty else {}
-    daily_counts = {
-        day.isoformat(): int(counts.get(pd.Timestamp(day), 0)) for day in calendar
-    }
     meta = _write_json(
         component / "meta.json",
         {
@@ -342,6 +365,7 @@ def _build_suspend(
             "daily_row_counts": daily_counts,
             "source_freeze": True,
             "full_history_content_hash": True,
+            **lineage,
         },
     )
     return parquet, meta, keys, len(rows)
@@ -583,12 +607,23 @@ def _base_manifest(
     frozen: FrozenSourceAuthoritySnapshot,
     cutoff: date,
     files: Sequence[Path],
+    verified_output_files: Mapping[str, Any] | None = None,
 ) -> tuple[Path, str]:
+    def pin(path: Path) -> Mapping[str, Any]:
+        relative = path.relative_to(root).as_posix()
+        previous = (verified_output_files or {}).get(relative)
+        if previous is not None:
+            from .monthly_legacy_prefix import _plain_chain, _signature
+            _plain_chain(path)
+            state = _signature(path)
+            if (list(state) != previous.get("signature") or state[2] != previous.get("size")
+                or re.fullmatch(r"[0-9a-f]{64}", str(previous.get("sha256"))) is None):
+                raise MonthlySharedComponentsError("shared output changed after physical validation")
+            return {"sha256": previous["sha256"], "size": previous["size"]}
+        return {"sha256": _sha256(path), "size": path.stat().st_size}
+
     entries = {
-        path.relative_to(root).as_posix(): {
-            "sha256": _sha256(path),
-            "size": path.stat().st_size,
-        }
+        path.relative_to(root).as_posix(): pin(path)
         for path in sorted(set(files), key=lambda item: item.relative_to(root).as_posix())
     }
     body = {
@@ -605,6 +640,120 @@ def _base_manifest(
         {**body, "base_dataset_manifest_sha256": identity},
     )
     return path, identity
+
+
+def _append_sector_month_sidecars(
+    *, old_membership, old_market, new_membership, new_market,
+    calendar: Sequence[date], predecessor_cutoff: date, cutoff: date,
+):
+    """Inherit frozen metadata; merge only causal, trading-adjacent tail spans.
+
+    No old sector quote values are read or re-evaluated. Historical sidecars
+    must be authenticated by their caller before entering this constructor.
+    """
+    import pandas as pd
+
+    start = cutoff.replace(day=1)
+    if predecessor_cutoff != start - timedelta(days=1):
+        raise MonthlySharedComponentsError("sector predecessor is not the preceding month")
+    required = tuple(day for day in calendar if start <= day <= cutoff)
+    if not required or tuple(new_market["trade_date"]) != required:
+        raise MonthlySharedComponentsError("sector market context differs from month calendar")
+    if not old_market.empty and max(old_market["trade_date"]) > predecessor_cutoff:
+        raise MonthlySharedComponentsError("inherited market context crosses month boundary")
+    if (not old_membership.empty and max(old_membership["end_date"]) > predecessor_cutoff
+        or not new_membership.empty and (
+            min(new_membership["start_date"]) < start or max(new_membership["end_date"]) > cutoff
+        )):
+        raise MonthlySharedComponentsError("sector membership crosses month boundary")
+    records = old_membership.to_dict("records")
+    last = {row["instrument"]: ordinal for ordinal, row in enumerate(records)}
+    day_order = {day: ordinal for ordinal, day in enumerate(calendar)}
+    for row in new_membership.to_dict("records"):
+        ordinal = last.get(row["instrument"])
+        previous = records[ordinal] if ordinal is not None else None
+        if previous is not None and row["start_date"] <= previous["end_date"]:
+            raise MonthlySharedComponentsError("sector membership tail overlaps inherited assignment")
+        if (previous is not None and previous["l2_code_id"] == row["l2_code_id"]
+            and previous["end_date"] in day_order and row["start_date"] in day_order
+            and day_order[row["start_date"]] == day_order[previous["end_date"]] + 1):
+            previous["end_date"] = row["end_date"]
+        else:
+            last[row["instrument"]] = len(records)
+            records.append(row)
+    membership = pd.DataFrame(records, columns=old_membership.columns)
+    membership = membership.sort_values(["instrument", "start_date", "end_date", "l2_code_id"]).reset_index(drop=True)
+    membership["l2_code_id"] = membership["l2_code_id"].astype("int32")
+    return membership, pd.concat([old_market, new_market], ignore_index=True)
+
+
+def _read_prefix_sidecar(prefix, key: str) -> bytes:
+    """Read a small declared metadata file, not an inherited data component."""
+    from .monthly_legacy_prefix import _plain_chain, _relative, _signature
+    pin = prefix.manifest["components"].get(key)
+    if (not isinstance(pin, Mapping) or type(pin.get("size")) is not int
+        or not 0 < pin["size"] <= 16 * 1024 * 1024):
+        raise MonthlySharedComponentsError("inherited shared sidecar pin is missing or invalid")
+    path = prefix.root / _relative(pin.get("path"))
+    _plain_chain(path)
+    before = _signature(path)
+    if before[2] != pin["size"]:
+        raise MonthlySharedComponentsError("inherited shared sidecar size differs")
+    raw = path.read_bytes()
+    if _signature(path) != before or hashlib.sha256(raw).hexdigest() != pin.get("sha256"):
+        raise MonthlySharedComponentsError("inherited shared sidecar bytes differ")
+    return raw
+
+
+def _native_sector_summary(
+    *, prefix, sector_h5: Path, physical_authority: Mapping[str, Any], profile,
+    enricher, code_map, quote, calendar, pit_rows, cutoff: date, checkpoint=lambda: None,
+):
+    """Use the same formal sector validator, restricted to the actual new tail."""
+    import pandas as pd
+    from .monthly_preparation_shared import summarize_sector_context
+    from .monthly_legacy_prefix import _plain_chain, _signature
+
+    old_code_map = validate_release_sw_l2_code_map(json.loads(_read_prefix_sidecar(prefix, "sector_code_map")))
+    if old_code_map.id_to_code != code_map.id_to_code:
+        raise MonthlySharedComponentsError("sector month code mapping differs from inherited identity")
+    old_member = pd.read_parquet(io.BytesIO(_read_prefix_sidecar(prefix, "sector_membership_spans")))
+    old_market = pd.read_parquet(io.BytesIO(_read_prefix_sidecar(prefix, "market_context")))
+    for name in ("start_date", "end_date"):
+        old_member[name] = pd.to_datetime(old_member[name], errors="raise").dt.date
+    old_market["trade_date"] = pd.to_datetime(old_market["trade_date"], errors="raise").dt.date
+    pin = (physical_authority.get("verified_output_files") or {}).get("factor_bundle/sector_data.h5")
+    rows = (physical_authority.get("physical_month_ranges") or {}).get("sector_data")
+    _plain_chain(sector_h5)
+    before = _signature(sector_h5)
+    if (not isinstance(pin, Mapping) or not isinstance(rows, Mapping)
+        or pin.get("signature") != list(before) or pin.get("size") != before[2]):
+        raise MonthlySharedComponentsError("sector month physical writer authority is incomplete or stale")
+    inherited_count = (prefix.manifest["components"].get("sector_data") or {}).get("row_count")
+    if inherited_count is not None and (
+        type(inherited_count) is not int or inherited_count != rows.get("start_row")
+    ):
+        raise MonthlySharedComponentsError("sector physical tail differs from inherited row count")
+    month_start = cutoff.replace(day=1)
+    month_days = tuple(day for day in calendar if month_start <= day <= cutoff)
+    if not month_days:
+        raise MonthlySharedComponentsError("sector month calendar is empty")
+    member, market, counts = summarize_sector_context(
+        sector_h5=sector_h5, profile=profile, enricher=enricher, code_map=code_map,
+        quote=quote, calendar=calendar, pit_rows=pit_rows, start=month_days[0], cutoff=cutoff,
+        bound=profile.resource_policy.validation_read_chunk_rows, checkpoint=checkpoint,
+        market_start=month_start, source_start_row=rows.get("start_row"), source_month_rows=rows.get("row_count"),
+    )
+    if _signature(sector_h5) != before:
+        raise MonthlySharedComponentsError("sector month data changed during validation")
+    member, market = _append_sector_month_sidecars(
+        old_membership=old_member, old_market=old_market, new_membership=member, new_market=market,
+        calendar=calendar, predecessor_cutoff=prefix.cutoff, cutoff=cutoff,
+    )
+    return member, market, {**counts, "validation_scope": "month_delta",
+        "historical_sector_values_read": 0, "predecessor_manifest_sha256": prefix.manifest_sha256,
+        "inherited_membership_sha256": prefix.manifest["components"]["sector_membership_spans"]["sha256"],
+        "inherited_market_context_sha256": prefix.manifest["components"]["market_context"]["sha256"]}
 
 
 @dataclass(frozen=True, slots=True)
@@ -654,7 +803,27 @@ class FrozenMonthlySharedComponentBuilder:
         from .monthly_preparation_shared import recover_prepared_shared_components
         from .monthly_preparation_executor import adopt_pinned_shared_file
 
-        prepared = recover_prepared_shared_components(
+        native = validation_result.get("validation_scope") == "month_delta"
+        prefix = None
+        physical_authority = {}
+        if native:
+            from .monthly_build_bridge import load_monthly_predecessor_prefix
+            prefix_plan = compiled.physical_plan.get("build_inputs", {}).get("monthly_legacy_predecessor")
+            if not isinstance(prefix_plan, Mapping):
+                raise MonthlySharedComponentsError("native shared builder lacks exact predecessor binding")
+            prefix = load_monthly_predecessor_prefix(context_plan=prefix_plan, profile=self.profile)
+            physical_authority = self.cas.get_json_bounded(component_manifest_ref, max_bytes=16 * 1024 * 1024)
+            if (physical_authority.get("schema_version") != "aistock_monthly_native_component_authority_v1"
+                or physical_authority.get("validation_scope") != "month_delta"
+                or physical_authority.get("cutoff") != cutoff.isoformat()
+                or physical_authority.get("release_id") != context.plan.get("release_id")
+                or physical_authority.get("source_bundle_sha256") != compiled.source_bundle_sha256
+                or physical_authority.get("predecessor_manifest_sha256") != prefix.manifest_sha256
+                or physical_authority.get("verified_output_files") != validation_result.get("verified_output_files")):
+                raise MonthlySharedComponentsError("native shared physical authority identity differs")
+        # A full-history prepared sector frame is not month-delta QA. Native
+        # BUILD derives the tail from the real append writer's physical offset.
+        prepared = {} if native else recover_prepared_shared_components(
             context=context, snapshot=frozen, profile=self.profile,
             sector_membership_start=self.sector_membership_start, staging_root=root,
         )
@@ -725,6 +894,7 @@ class FrozenMonthlySharedComponentBuilder:
                 calendar=calendar,
                 profile=self.profile,
                 cutoff=cutoff,
+                prefix=prefix,
             )
         pool_coverage = {
             pool_id: {
@@ -785,13 +955,20 @@ class FrozenMonthlySharedComponentBuilder:
         from .monthly_preparation_shared import summarize_sector_context
         from .monthly_component_preparation import ComponentPreparationError
         try:
-            sector_membership, market, counts = summarize_sector_context(
-                sector_h5=sector_h5, profile=self.profile, enricher=enricher,
-                code_map=code_map, quote=quote, calendar=calendar, pit_rows=pit_rows,
-                start=self.sector_membership_start, cutoff=cutoff,
-                bound=self.profile.resource_policy.validation_read_chunk_rows,
-                checkpoint=lambda: None,
-            )
+            if native:
+                sector_membership, market, counts = _native_sector_summary(
+                    prefix=prefix, sector_h5=sector_h5, physical_authority=physical_authority,
+                    profile=self.profile, enricher=enricher, code_map=code_map, quote=quote,
+                    calendar=calendar, pit_rows=pit_rows, cutoff=cutoff,
+                )
+            else:
+                sector_membership, market, counts = summarize_sector_context(
+                    sector_h5=sector_h5, profile=self.profile, enricher=enricher,
+                    code_map=code_map, quote=quote, calendar=calendar, pit_rows=pit_rows,
+                    start=self.sector_membership_start, cutoff=cutoff,
+                    bound=self.profile.resource_policy.validation_read_chunk_rows,
+                    checkpoint=lambda: None,
+                )
         except ComponentPreparationError as exc:
             raise MonthlySharedComponentsError(str(exc)) from exc
         frozen_days = counts["frozen_stock_trading_day_count"]
@@ -806,19 +983,24 @@ class FrozenMonthlySharedComponentBuilder:
                 or not market.equals(pd.read_parquet(prior_root / "market_context.parquet"))
             ):
                 raise MonthlySharedComponentsError("prepared sector sidecars differ from complete frozen source")
-        membership_start, membership_end, membership_count, symbol_count = (
-            validate_membership_frame(
+        if native:
+            # Historical sidecars are pinned metadata, not historical quote
+            # observations to audit again. The formal validator checked delta.
+            membership_start = min(sector_membership["start_date"])
+            membership_end = max(sector_membership["end_date"])
+            membership_count = len(sector_membership)
+            symbol_count = int(sector_membership["instrument"].nunique())
+            market_start, market_end, market_count = min(market["trade_date"]), max(market["trade_date"]), len(market)
+        else:
+            membership_start, membership_end, membership_count, symbol_count = validate_membership_frame(
                 sector_membership,
                 id_to_code=code_map.id_to_code,
                 required_start=self.sector_membership_start,
                 required_end=cutoff,
             )
-        )
-        market_start, market_end, market_count = validate_market_context_frame(
-            market,
-            required_start=self.sector_membership_start,
-            required_end=cutoff,
-        )
+            market_start, market_end, market_count = validate_market_context_frame(
+                market, required_start=self.sector_membership_start, required_end=cutoff,
+            )
         quote_coverage = {
             "required_sector_date_count": counts["quote_required_sector_date_count"],
             "missing_sector_date_count": counts["quote_gap_count"],
@@ -838,7 +1020,10 @@ class FrozenMonthlySharedComponentBuilder:
                 suspend_meta,
                 coverage_path,
             ),
+            verified_output_files=physical_authority.get("verified_output_files") if native else None,
         )
+        base_manifest = json.loads(base_manifest_path.read_bytes())
+        sector_sha = base_manifest["files"][sector_h5.relative_to(root).as_posix()]["sha256"]
         sector_root = root / "components" / "sector_context_candidate_v1"
         sector_root.mkdir(parents=True, exist_ok=False)
         code_map_path = _write_json(sector_root / "sector_code_map.json", code_map_payload)
@@ -858,9 +1043,10 @@ class FrozenMonthlySharedComponentBuilder:
             "source_dataset_manifest_sha256": base_manifest_sha,
             "sector_data": {
                 "path": sector_h5.relative_to(root).as_posix(),
-                "sha256": _sha256(sector_h5),
+                "sha256": sector_sha,
                 "byte_size": sector_h5.stat().st_size,
                 "used_l2_code_id_count": counts["used_l2_code_id_count"],
+                "used_l2_code_id_count_scope": "month_delta" if native else "release",
             },
             "sector_code_map": {
                 "schema_version": RELEASE_SW_L2_CODE_MAP_SCHEMA,
@@ -917,6 +1103,8 @@ class FrozenMonthlySharedComponentBuilder:
             "database_read": False,
             "database_write": False,
             "runtime_action": False,
+            **({"validation_scope": "month_delta", "month_validation": counts,
+                "historical_business_audit_performed": False} if native else {}),
         }
         receipt_path = _write_json(sector_root / "component_receipt.json", receipt)
 
@@ -945,6 +1133,7 @@ class FrozenMonthlySharedComponentBuilder:
                 "validation_ref": dict(validation_ref),
                 "component_artifact_manifest_ref": dict(component_manifest_ref),
             },
+            verified_output_files=physical_authority.get("verified_output_files") if native else None,
         )
         required = (
             *tuple(pool_paths.values()),
@@ -989,6 +1178,7 @@ class FrozenMonthlySharedComponentBuilder:
                 + len(sector_membership)
                 + len(market)
             ),
+            verified_output_files=consumer_layout.verified_output_files,
         )
 
 

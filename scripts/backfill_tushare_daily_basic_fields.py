@@ -140,6 +140,8 @@ def fetch_tushare_snapshot(trade_date: dt.date, *, pro: Any | None = None) -> pd
     frame = pro.daily_basic(trade_date=trade_date.strftime("%Y%m%d"), fields=fields)
     if frame is None:
         return pd.DataFrame(columns=ALL_COLUMNS)
+    missing_columns = sorted(set(ALL_COLUMNS) - set(frame.columns))
+    _require(not missing_columns, f"provider snapshot is missing declared columns: {missing_columns}")
     return frame.reindex(columns=ALL_COLUMNS).copy()
 
 
@@ -152,7 +154,7 @@ def validate_snapshot(
     min_non_null_ratio: float,
 ) -> SnapshotStats:
     _require(min_rows > 0, "min_rows must be positive")
-    _require(0.0 < min_non_null_ratio <= 1.0, "min_non_null_ratio must be in (0, 1]")
+    _require(0.0 <= min_non_null_ratio <= 1.0, "min_non_null_ratio must be in [0, 1]")
     _require(not frame.empty, f"Tushare daily_basic returned no rows for {trade_date}")
     _require(set(ALL_COLUMNS).issubset(frame.columns), "Tushare snapshot is missing declared columns")
 
@@ -276,6 +278,14 @@ def verify_after(
     missing_codes = sorted(source_codes - preview.existing_codes)
     _require(not missing_codes, f"database is missing {len(missing_codes)} provider rows after upsert")
     for field in fields:
+        changed_existing = [
+            code for code, value in before.values_by_field[field].items()
+            if not _numeric_equal(preview.values_by_field[field].get(code), value)
+        ]
+        _require(
+            not changed_existing,
+            f"database field {field} changed {len(changed_existing)} existing finite values",
+        )
         expected_codes = _source_non_null_codes(frame, field)
         missing_count = len(expected_codes - preview.non_null_codes_by_field[field])
         _require(
@@ -331,6 +341,9 @@ def _report(
         "db_writes": applied,
         "ddl": False,
         "source": asdict(source),
+        "provider_unavailable_by_field": {
+            field: source.row_count - source.non_null[field] for field in fields
+        },
         "before": {
             "row_count": before.stats.row_count,
             "non_null": before.stats.non_null,
@@ -423,7 +436,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trade-date", required=True, type=parse_trade_date)
     parser.add_argument("--fields", default=",".join(DEFAULT_FIELDS))
     parser.add_argument("--min-rows", type=int, default=5000)
-    parser.add_argument("--min-non-null-ratio", type=float, default=0.95)
+    parser.add_argument(
+        "--min-non-null-ratio", type=float, default=0.95,
+        help="Finite source ratio; use 0 explicitly for nullable-field parity (no fabricated values).",
+    )
     parser.add_argument("--apply", action="store_true", help="Apply the atomic upsert; omitted means dry-run.")
     parser.add_argument("--confirm-apply", default="", help="Exact confirmation token required with --apply.")
     parser.add_argument("--output", help="Optional JSON report path.")

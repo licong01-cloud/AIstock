@@ -10,7 +10,6 @@ import {
   type RotationL2Row,
 } from "@/lib/hmm-risk/api";
 import styles from "./rotation-l1.module.css";
-import RiskL1Panel from "./RiskL1Panel";
 
 const CONFIGURED_RUN_ID = process.env.NEXT_PUBLIC_HMM_ROTATION_L2_RUN_ID?.trim() || "";
 const FROZEN_HMM_VERSION = "hmm_risk_l2_postcalibration_effect_v1";
@@ -30,6 +29,9 @@ export default function RotationL2Dashboard() {
   const [overview, setOverview] = useState<RotationL2Overview | null>(null);
   const [rows, setRows] = useState<RotationL2Row[]>([]);
   const [runId, setRunId] = useState(CONFIGURED_RUN_ID);
+  const [requestedDate, setRequestedDate] = useState("");
+  const [detailDate, setDetailDate] = useState("");
+  const [detailAsOf, setDetailAsOf] = useState("");
   const [topCount, setTopCount] = useState(10);
   const [bottomCount, setBottomCount] = useState(10);
   const [countError, setCountError] = useState("");
@@ -47,32 +49,67 @@ export default function RotationL2Dashboard() {
     async function load() {
       setLoading(true);
       setError(null);
+      setRows([]);
       try {
         const nextOverview = await getRotationL2Overview(runId);
-        const detail = await getRotationL2(nextOverview.trade_date, runId);
+        if ([nextOverview.model_hash, nextOverview.input_hash, nextOverview.mapping_hash,
+          nextOverview.quote_authority_hash].some((value) => typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))) {
+          throw new HMMRiskApiError("L2 run 缺少正式身份，不接受空值间相等。", "hmm_risk_rotation_l2_ui_identity_invalid", 500);
+        }
+        const dates = nextOverview.available_trade_dates;
+        if (nextOverview.run_id !== runId || !Array.isArray(dates) || dates.length === 0
+          || dates.some((value) => typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))
+          || new Set(dates).size !== dates.length || dates.join() !== [...dates].sort().join()
+          || dates[dates.length - 1] !== nextOverview.trade_date) {
+          throw new HMMRiskApiError("L2 历史日期目录与明确 run 不一致。", "hmm_risk_rotation_l2_ui_date_catalog_invalid", 500);
+        }
+        const tradeDate = requestedDate || nextOverview.trade_date;
+        if (!dates.includes(tradeDate)) {
+          throw new HMMRiskApiError("请求日期不属于该 run 的历史目录，不回退邻日。", "hmm_risk_rotation_l2_ui_date_catalog_invalid", 500);
+        }
+        const detail = await getRotationL2(tradeDate, runId);
         if (!active) return;
-        if (detail.rows.length !== 131 || new Set(detail.rows.map((row) => row.sector_code)).size !== 131) {
+        if (!Array.isArray(detail.rows) || detail.rows.length !== 131
+          || detail.rows.some((row) => !row || typeof row.sector_code !== "string")
+          || new Set(detail.rows.map((row) => row.sector_code)).size !== 131) {
           throw new HMMRiskApiError(
             "L2 行业目录不是完整的 131 项，拒绝展示不完整排名。",
             "hmm_risk_rotation_l2_ui_denominator_invalid",
             500,
           );
         }
+        const asOf = detail.rows[0].as_of_date;
+        if (detail.run_id !== runId || detail.trade_date !== tradeDate || !asOf || asOf >= tradeDate
+          || (tradeDate === nextOverview.trade_date && asOf !== nextOverview.as_of_date)
+          || detail.rows.some((row) => row.run_id !== runId || row.trade_date !== tradeDate
+            || row.as_of_date !== asOf || row.model_hash !== nextOverview.model_hash
+            || row.input_hash !== nextOverview.input_hash || row.mapping_hash !== nextOverview.mapping_hash
+            || row.quote_authority_hash !== nextOverview.quote_authority_hash)) {
+          throw new HMMRiskApiError("L2 日期明细与 run/模型/输入身份不一致。", "hmm_risk_rotation_l2_ui_identity_invalid", 500);
+        }
         const hmm = nextOverview.model_version === FROZEN_HMM_VERSION;
         const states = new Set(["trending", "neutral", "fading"]);
         if ((nextOverview.model_version !== undefined && !hmm)
           || (hmm && (nextOverview.validation_basis !== "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT"
-            || nextOverview.run_id !== runId || detail.run_id !== runId || detail.trade_date !== nextOverview.trade_date))
+            || nextOverview.run_id !== runId))
           || detail.rows.some((row) => hmm
             ? row.model_version !== FROZEN_HMM_VERSION || row.run_id !== runId
-              || row.trade_date !== nextOverview.trade_date || row.as_of_date !== nextOverview.as_of_date || (row.availability === "available"
+              || row.trade_date !== tradeDate || row.as_of_date !== asOf || (row.availability === "available"
               && (row.semantic_state !== row.forecast_state || !states.has(row.semantic_state || "")
                 || !states.has(row.daily_rank_group || "") || row.rotation_score === null || !Number.isFinite(row.rotation_score)
                 || row.rotation_score < -0.5 || row.rotation_score > 0.5))
             : row.model_version !== undefined || nextOverview.validation_basis !== "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT")) {
           throw new HMMRiskApiError("L2 模型版本与状态/排名投影不一致，拒绝混用。", "hmm_risk_rotation_l2_ui_version_invalid", 500);
         }
+        if (detail.rows.some((row) => row.availability === "available"
+          ? row.rotation_score === null || !Number.isFinite(row.rotation_score) || row.rotation_score < -0.5
+            || row.rotation_score > 0.5 || !states.has(row.forecast_state || "")
+          : row.availability !== "unavailable" || row.rotation_score !== null || row.forecast_state !== null || !row.reason_code)) {
+          throw new HMMRiskApiError("L2 分数或不可用状态不合法，不生成默认排名。", "hmm_risk_rotation_l2_ui_prediction_invalid", 500);
+        }
         setOverview(nextOverview);
+        setDetailDate(tradeDate);
+        setDetailAsOf(asOf);
         setRows(detail.rows);
       } catch (caught) {
         if (!active) return;
@@ -89,7 +126,7 @@ export default function RotationL2Dashboard() {
     return () => {
       active = false;
     };
-  }, [runId]);
+  }, [runId, requestedDate]);
 
   const selection = useMemo(() => {
     const available = rows
@@ -159,12 +196,26 @@ export default function RotationL2Dashboard() {
         </section>
       )}
       {loading && <section className={styles.notice}>正在读取真实 L2 prediction repository…</section>}
+      {overview && (
+        <section className={styles.notice} aria-label="L2 历史日期选择">
+          <label>历史预测日 <select aria-label="历史预测日" value={requestedDate || overview.trade_date}
+            onChange={(event) => {
+              setRows([]);
+              setLoading(true);
+              setError(null);
+              setRequestedDate(event.target.value);
+            }}>
+            {overview.available_trade_dates.map((value) => <option key={value} value={value}>{value}</option>)}
+          </select></label>
+          <span> 同一 run 的 {overview.available_trade_dates.length} 个存储日期；不重算模型、不回退日期。</span>
+        </section>
+      )}
       {error && (
         <section className={styles.error} role="alert">
           <strong>预测暂不可用</strong><span>{error.message}</span><code>{error.reason}</code>
         </section>
       )}
-      {overview && !error && (
+      {overview && !error && !loading && (
         <>
           <section className={styles.statusGrid} aria-label="L2 轮动能力状态">
             <article><span>研究表面</span><strong>{overview.research_surface_status}</strong></article>
@@ -173,8 +224,8 @@ export default function RotationL2Dashboard() {
             <article><span>Advisory</span><strong>{overview.advisory_status}</strong></article>
           </section>
           <section className={styles.evidence}>
-            <div><span>预测日 / as-of</span><strong>{overview.trade_date} / {overview.as_of_date}</strong></div>
-            <div><span>真实覆盖</span><strong>{overview.available_count} / {overview.sector_count}</strong></div>
+            <div><span>预测日 / as-of</span><strong>{detailDate} / {detailAsOf}</strong></div>
+            <div><span>真实覆盖</span><strong>{selection.availableCount} / {rows.length}</strong></div>
             <div><span>Development Rank IC</span><strong>{formatNumber(overview.metrics.overall.mean_daily_rank_ic)}</strong></div>
             <div><span>95% HAC 区间</span><strong>[{formatNumber(overview.metrics.hac.lower)}, {formatNumber(overview.metrics.hac.upper)}]</strong></div>
           </section>
@@ -219,7 +270,6 @@ export default function RotationL2Dashboard() {
       )}
       <section aria-label="L1 历史风险独立能力">
         <p className={styles.subtitle}>以下为既有 L1 风险能力，不属于 L2 轮动分数，也不构成 L2 风险占位。</p>
-        <RiskL1Panel />
       </section>
     </main>
   );

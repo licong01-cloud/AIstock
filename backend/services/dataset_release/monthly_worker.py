@@ -90,6 +90,9 @@ class ProducerContext:
     request: Mapping[str, Any]
     plan: Mapping[str, Any]
     prior_receipts: Mapping[str, Mapping[str, Any]]
+    # Observational/control hooks only; neither is a release identity or receipt.
+    checkpoint: Callable[[], None] = lambda: None
+    progress: Callable[[Mapping[str, Any]], None] = lambda _value: None
 
 
 class StageProducer(Protocol):
@@ -898,6 +901,16 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
                     return False
         return True
 
+    def run_stage_with_control(
+        self,
+        *,
+        checkpoint: Callable[[], None],
+        progress: Callable[[Mapping[str, Any]], None],
+        **stage_arguments: Any,
+    ) -> Mapping[str, Any]:
+        """Code-owned service controls; API callers cannot inject callbacks."""
+        return self.run_stage(**stage_arguments, checkpoint=checkpoint, progress=progress)
+
     def run_stage(
         self,
         *,
@@ -907,9 +920,12 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
         request: Mapping[str, Any],
         plan: Mapping[str, Any],
         prior_receipts: Mapping[str, Mapping[str, Any]],
+        checkpoint: Callable[[], None] = lambda: None,
+        progress: Callable[[Mapping[str, Any]], None] = lambda _value: None,
     ) -> Mapping[str, Any]:
         producer = self.producers[stage]
         started = datetime.now(UTC).isoformat()
+        checkpoint()
         evidence = dict(
             producer.produce(
                 ProducerContext(
@@ -919,9 +935,12 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
                     request=request,
                     plan=plan,
                     prior_receipts=prior_receipts,
+                    checkpoint=checkpoint,
+                    progress=progress,
                 )
             )
         )
+        checkpoint()
         if evidence.get("schema_version") != PRODUCER_EVIDENCE_SCHEMA or set(evidence) != {
             "schema_version",
             "scope",

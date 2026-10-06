@@ -23,6 +23,17 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return calls
 
 
+def test_bind_repairs_uses_authenticated_single_api_and_does_not_resume_or_activate(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    path = tmp_path / "inputs.json"
+    path.write_text(json.dumps({"schema_version": "aistock_monthly_repair_inputs_v1"}))
+    assert cli.main(["bind-repairs", "--operation-id", OPERATION_ID, "--inputs", str(path.absolute())]) == 0
+    assert calls[0]["suffix"] == f"/{OPERATION_ID}/repair-inputs"
+    assert calls[0]["body"]["inputs"] == json.loads(path.read_text())
+    assert calls[0]["idempotency"] is None
+    assert len(calls) == 1
+
+
 def test_plan_calls_the_single_backend_api_without_activation(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

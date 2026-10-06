@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -64,6 +64,11 @@ class UnifiedMonthlyActionRequest(DatasetReleaseApiModel):
     authorization_ref: str = Field(pattern=r"^dsauth_[0-9a-f]{32}$")
 
 
+class UnifiedMonthlyRepairInputsRequest(DatasetReleaseApiModel):
+    schema_version: Literal["aistock_monthly_repair_inputs_request_v1"] = "aistock_monthly_repair_inputs_request_v1"
+    inputs: dict[str, Any]
+
+
 class ExistingSuccessorEvidenceRef(DatasetReleaseApiModel):
     relative_path: str = Field(min_length=1, max_length=512)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -118,4 +123,5 @@ __all__ = (
     "UnifiedMonthlyAdoptRequest",
     "UnifiedMonthlyAuthorizationIssueRequest",
     "UnifiedMonthlyReleaseRequest",
+    "UnifiedMonthlyRepairInputsRequest",
 )

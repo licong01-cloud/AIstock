@@ -7,6 +7,114 @@ from pathlib import Path
 import scripts.code_intelligence_adapter as adapter
 
 
+def _mock_clean_git_abc(monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
+    )
+
+
+def _mock_available_codegraph(monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+        },
+    )
+
+
+def _write_ancestor_graph(graph_path) -> None:
+    graph_path.write_text(
+        json.dumps(
+            {
+                "project": {"gitCommitHash": "base123", "analyzedAt": "2026-06-06T00:00:00Z"},
+                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _mock_clean_git_new(monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
+    )
+
+
+def _mock_current_codegraph(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "codegraph_status",
+        lambda root, skip_external=False: {
+            "available": True,
+            "index_exists": True,
+            "command": "codegraph",
+            "version": "0.9.4",
+            "git_commit": "abc123",
+            "working_tree_dirty": False,
+            "graph_root": str(tmp_path),
+            "graph_root_source": "current_worktree",
+            "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+        },
+    )
+
+
+def _write_old_freshness(artifact_dir) -> None:
+    (artifact_dir / "fresh.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "provider": "codegraph",
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "git_commit": "old123",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/fresh.json",
+                "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _mock_empty_command(monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {"ok": True, "stdout": "", "stderr": ""},
+    )
+
+
+def _mock_up_to_date_command(monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_run_command",
+        lambda args, cwd=None, timeout=30: {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
+            "stderr": "",
+        },
+    )
+
+
+def _mock_clean_git_feature(monkeypatch) -> None:
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "feature456", "dirty": False, "dirty_count": 0},
+    )
+
+
+
 def _write_valid_ua_state(root: Path, *, commit: str, inventory: list[str] | None = None) -> None:
     graph_dir = root / ".understand-anything"
     intermediate = graph_dir / "intermediate"
@@ -842,11 +950,7 @@ def test_code_intelligence_doctor_falls_back_without_codegraph(
 ) -> None:
     monkeypatch.setattr(adapter, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_doctor_report(tmp_path, skip_external=True)
 
@@ -862,11 +966,7 @@ def test_context_and_affected_artifacts_use_fallback_when_index_missing(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     context = adapter.build_context_artifacts(
         item_id="BUG-199",
@@ -900,11 +1000,7 @@ def test_codegraph_status_reuses_canonical_index_for_worktree(tmp_path: Path, mo
     worktree.mkdir()
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
     monkeypatch.setattr(adapter, "_canonical_repo_root", lambda root: canonical if root == worktree else root)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     calls: list[list[str]] = []
 
@@ -974,11 +1070,7 @@ def test_context_uses_repo_index_when_detail_context_fails(tmp_path: Path, monke
 
 def test_build_summary_links_context_and_affected_refs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_summary(
         item_id="BUG-199",
@@ -1007,11 +1099,7 @@ def test_build_summary_includes_ua_module_ref_without_inlining_graph(tmp_path: P
         encoding="utf-8",
     )
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_summary(
         item_id="BUG-273",
@@ -1055,21 +1143,8 @@ def test_affected_tests_supplements_codegraph_with_repo_import_scan(
     test_file.parent.mkdir(parents=True)
     script.write_text("def build_summary():\n    return {}\n", encoding="utf-8")
     test_file.write_text("import scripts.code_intelligence_adapter as adapter\n", encoding="utf-8")
-    monkeypatch.setattr(
-        adapter,
-        "codegraph_status",
-        lambda root, skip_external=False: {
-            "available": True,
-            "index_exists": True,
-            "command": "codegraph",
-            "version": "0.9.4",
-        },
-    )
-    monkeypatch.setattr(
-        adapter,
-        "_run_command",
-        lambda args, cwd=None, timeout=30: {"ok": True, "stdout": "", "stderr": ""},
-    )
+    _mock_available_codegraph(monkeypatch)
+    _mock_empty_command(monkeypatch)
 
     payload = adapter.build_affected_tests_artifact(
         item_id="BUG-199",
@@ -1097,21 +1172,8 @@ def test_affected_tests_maps_scripts_to_matching_backend_script_tests(
     test_file.parent.mkdir(parents=True)
     script.write_text("def build_report():\n    return {}\n", encoding="utf-8")
     test_file.write_text("def test_scheduler():\n    assert True\n", encoding="utf-8")
-    monkeypatch.setattr(
-        adapter,
-        "codegraph_status",
-        lambda root, skip_external=False: {
-            "available": True,
-            "index_exists": True,
-            "command": "codegraph",
-            "version": "0.9.4",
-        },
-    )
-    monkeypatch.setattr(
-        adapter,
-        "_run_command",
-        lambda args, cwd=None, timeout=30: {"ok": True, "stdout": "", "stderr": ""},
-    )
+    _mock_available_codegraph(monkeypatch)
+    _mock_empty_command(monkeypatch)
 
     payload = adapter.build_affected_tests_artifact(
         item_id="BUG-313",
@@ -1138,21 +1200,8 @@ def test_affected_tests_filter_applies_to_repo_import_scan(tmp_path: Path, monke
     script.write_text("def build_run_plan():\n    return {}\n", encoding="utf-8")
     backend_test.write_text("import scripts.aistock_issue_workflow as workflow\n", encoding="utf-8")
     other_test.write_text("import scripts.aistock_issue_workflow as workflow\n", encoding="utf-8")
-    monkeypatch.setattr(
-        adapter,
-        "codegraph_status",
-        lambda root, skip_external=False: {
-            "available": True,
-            "index_exists": True,
-            "command": "codegraph",
-            "version": "0.9.4",
-        },
-    )
-    monkeypatch.setattr(
-        adapter,
-        "_run_command",
-        lambda args, cwd=None, timeout=30: {"ok": True, "stdout": "", "stderr": ""},
-    )
+    _mock_available_codegraph(monkeypatch)
+    _mock_empty_command(monkeypatch)
 
     payload = adapter.build_affected_tests_artifact(
         item_id="BUG-199",
@@ -1172,11 +1221,7 @@ def test_doctor_reads_code_intelligence_catalog(tmp_path: Path, monkeypatch) -> 
     catalog.parent.mkdir(parents=True)
     catalog.write_text('schema_version: aistock_code_intelligence_catalog_v1\ncodegraph:\n  version: "0.9.4"\n', encoding="utf-8")
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_doctor_report(tmp_path, skip_external=True)
 
@@ -1188,11 +1233,7 @@ def test_codegraph_status_sanitizes_successful_external_output(tmp_path: Path, m
     (tmp_path / ".codegraph").mkdir()
     (tmp_path / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     def fake_run(args, cwd=None, timeout=30):
         if args == ["codegraph", "--version"]:
@@ -1231,11 +1272,7 @@ def test_codegraph_status_sanitizes_successful_external_output(tmp_path: Path, m
 
 def test_codegraph_status_preserves_compact_failure_output(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     def fake_run(args, cwd=None, timeout=30):
         if args == ["codegraph", "--version"]:
@@ -1256,11 +1293,7 @@ def test_codegraph_freshness_ready_for_up_to_date_index(tmp_path: Path, monkeypa
     (tmp_path / ".codegraph").mkdir()
     (tmp_path / ".codegraph" / "codegraph.db").write_text("db", encoding="utf-8")
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     def fake_run(args, cwd=None, timeout=30):
         if args == ["codegraph", "--version"]:
@@ -1301,11 +1334,7 @@ def test_codegraph_freshness_uses_configured_graph_source_root(tmp_path: Path, m
     monkeypatch.setenv(adapter.GRAPH_SOURCE_ROOT_ENV, str(source))
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
     monkeypatch.setattr(adapter, "_same_repo_remote", lambda left, right: True)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     def fake_run(args, cwd=None, timeout=30):
         if args == ["codegraph", "--version"]:
@@ -1362,11 +1391,7 @@ def test_configured_graph_source_accepts_git_worktree_with_local_clone_remote(tm
         return {"ok": False, "stdout": "", "stderr": "unexpected git"}
 
     monkeypatch.setattr(adapter, "_git", fake_git)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     def fake_run(args, cwd=None, timeout=30):
         if args == ["codegraph", "--version"]:
@@ -1416,16 +1441,7 @@ def test_codegraph_freshness_warns_when_configured_graph_source_is_not_related(t
         },
     )
     monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: False)
-    monkeypatch.setattr(
-        adapter,
-        "_run_command",
-        lambda args, cwd=None, timeout=30: {
-            "ok": True,
-            "returncode": 0,
-            "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
-            "stderr": "",
-        },
-    )
+    _mock_up_to_date_command(monkeypatch)
 
     payload = adapter.build_codegraph_freshness_artifact(root=workspace)
 
@@ -1443,11 +1459,7 @@ def test_codegraph_freshness_warns_when_critical_file_missing_from_index(tmp_pat
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# critical\n", encoding="utf-8")
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     def fake_run(args, cwd=None, timeout=30):
         if args == ["codegraph", "--version"]:
@@ -1478,11 +1490,7 @@ def test_codegraph_freshness_warns_when_critical_file_missing_from_index(tmp_pat
 
 def test_codegraph_freshness_warns_for_missing_index(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, skip_external=True)
 
@@ -1501,11 +1509,7 @@ def test_codegraph_freshness_warns_for_stale_index_when_status_unchecked(tmp_pat
 
     os.utime(index, (old_time, old_time))
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
     monkeypatch.setattr(
         adapter,
         "_run_command",
@@ -1529,21 +1533,8 @@ def test_codegraph_freshness_rejects_old_mtime_even_when_status_is_up_to_date(tm
 
     os.utime(index, (old_time, old_time))
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: "codegraph")
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
-    monkeypatch.setattr(
-        adapter,
-        "_run_command",
-        lambda args, cwd=None, timeout=30: {
-            "ok": True,
-            "returncode": 0,
-            "stdout": "Files: 10\nNodes: 20\nEdges: 30\nIndex is up to date",
-            "stderr": "",
-        },
-    )
+    _mock_clean_git_abc(monkeypatch)
+    _mock_up_to_date_command(monkeypatch)
 
     payload = adapter.build_codegraph_freshness_artifact(root=tmp_path, max_age_hours=1)
 
@@ -1649,11 +1640,7 @@ def test_latest_codegraph_freshness_marks_live_incomplete_index(tmp_path: Path, 
         "status_check": {"ok": True},
         "index_summary": {"up_to_date": True},
     }
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_new(monkeypatch)
     monkeypatch.setattr(
         adapter,
         "_run_command",
@@ -1730,11 +1717,7 @@ def test_latest_codegraph_freshness_persists_live_current_head_when_artifact_met
         "graph_root": str(tmp_path),
         "graph_root_source": "current_worktree",
     }
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_new(monkeypatch)
     monkeypatch.setattr(
         adapter,
         "_codegraph_critical_files",
@@ -2266,11 +2249,7 @@ def test_code_intelligence_run_manifest_warns_without_freshness_json(tmp_path: P
 
 def test_summary_markdown_contains_warning_only_artifact_refs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_summary(
         item_id="PR-226",
@@ -2305,11 +2284,7 @@ def test_understand_anything_summary_reads_graph_without_blocking(tmp_path: Path
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_understand_anything_summary(module="paper_v2", root=tmp_path)
 
@@ -2337,11 +2312,7 @@ def test_ua_summary_command_defaults_to_compact_stdout(tmp_path: Path, monkeypat
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     result = adapter.main(["ua-summary", "--module", "validation", "--root", str(tmp_path)])
     stdout = capsys.readouterr().out
@@ -2362,11 +2333,7 @@ def test_ua_summary_command_full_json_is_explicit(tmp_path: Path, monkeypatch, c
         json.dumps({"nodes": [{"id": "validation.workflow", "label": "validation workflow"}], "edges": []}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     result = adapter.main(["ua-summary", "--module", "validation", "--root", str(tmp_path), "--output-format", "full-json"])
     payload = json.loads(capsys.readouterr().out)
@@ -2377,11 +2344,7 @@ def test_ua_summary_command_full_json_is_explicit(tmp_path: Path, monkeypatch, c
 
 
 def test_ua_summary_all_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
     monkeypatch.setattr(
         adapter,
         "build_understand_anything_summary",
@@ -2407,21 +2370,8 @@ def test_ua_summary_all_command_defaults_to_compact_stdout(tmp_path: Path, monke
 def test_understand_anything_summary_marks_ancestor_graph_as_stale(tmp_path: Path, monkeypatch) -> None:
     graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
     graph_path.parent.mkdir(parents=True)
-    graph_path.write_text(
-        json.dumps(
-            {
-                "project": {"gitCommitHash": "base123", "analyzedAt": "2026-06-06T00:00:00Z"},
-                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
-                "edges": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "feature456", "dirty": False, "dirty_count": 0},
-    )
+    _write_ancestor_graph(graph_path)
+    _mock_clean_git_feature(monkeypatch)
     monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: True)
 
     payload = adapter.build_understand_anything_summary(module="validation", root=tmp_path)
@@ -2453,11 +2403,7 @@ def test_configure_understand_anything_writes_config_and_ignore(
 
 
 def test_understand_anything_summary_manifest_uses_standard_modules(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_understand_anything_summary_manifest(
         modules=["issue_workflow", "paper_v2"],
@@ -2476,11 +2422,7 @@ def test_pr_quality_runner_reports_artifact_fallback_not_local_misconfiguration(
 ) -> None:
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setattr(adapter, "_codegraph_command", lambda: None)
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.build_summary(
         item_id="PR-887",
@@ -2527,11 +2469,7 @@ def test_pr_quality_runner_can_reference_ua_summary_manifest(
         encoding="utf-8",
     )
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "abc123", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_abc(monkeypatch)
 
     payload = adapter.understand_anything_status(tmp_path, skip_external=True, runner_artifact_mode=True)
 
@@ -2546,16 +2484,7 @@ def test_understand_anything_status_falls_back_to_graph_freshness_for_legacy_sum
 ) -> None:
     graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
     graph_path.parent.mkdir(parents=True)
-    graph_path.write_text(
-        json.dumps(
-            {
-                "project": {"gitCommitHash": "base123", "analyzedAt": "2026-06-06T00:00:00Z"},
-                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
-                "edges": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_ancestor_graph(graph_path)
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "latest"
     artifact_dir.mkdir(parents=True)
     (artifact_dir / "ua-summary-manifest.json").write_text(
@@ -2569,11 +2498,7 @@ def test_understand_anything_status_falls_back_to_graph_freshness_for_legacy_sum
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "feature456", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_feature(monkeypatch)
     monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: True)
 
     payload = adapter.understand_anything_status(tmp_path, skip_external=True)
@@ -2583,21 +2508,7 @@ def test_understand_anything_status_falls_back_to_graph_freshness_for_legacy_sum
 
 
 def test_context_quality_flags_noisy_context_without_requiring_broad_scan(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        adapter,
-        "codegraph_status",
-        lambda root, skip_external=False: {
-            "available": True,
-            "index_exists": True,
-            "command": "codegraph",
-            "version": "0.9.4",
-            "git_commit": "abc123",
-            "working_tree_dirty": False,
-            "graph_root": str(tmp_path),
-            "graph_root_source": "current_worktree",
-            "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
-        },
-    )
+    _mock_current_codegraph(monkeypatch, tmp_path)
     monkeypatch.setattr(
         adapter,
         "_run_command",
@@ -2640,21 +2551,7 @@ def test_context_inserts_scoped_changed_file_context_before_noisy_graph_hits(
         "    return {}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        adapter,
-        "codegraph_status",
-        lambda root, skip_external=False: {
-            "available": True,
-            "index_exists": True,
-            "command": "codegraph",
-            "version": "0.9.4",
-            "git_commit": "abc123",
-            "working_tree_dirty": False,
-            "graph_root": str(tmp_path),
-            "graph_root_source": "current_worktree",
-            "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
-        },
-    )
+    _mock_current_codegraph(monkeypatch, tmp_path)
     monkeypatch.setattr(
         adapter,
         "_run_command",
@@ -2692,26 +2589,8 @@ def test_context_inserts_scoped_changed_file_context_before_noisy_graph_hits(
 def test_latest_freshness_marks_stale_metadata_warning_without_blocking(tmp_path: Path, monkeypatch) -> None:
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
     artifact_dir.mkdir(parents=True)
-    (artifact_dir / "fresh.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "aistock_codegraph_freshness_v1",
-                "generated_at": "2026-06-04T00:00:00Z",
-                "provider": "codegraph",
-                "workflow_gate": "ready",
-                "freshness": "fresh",
-                "git_commit": "old123",
-                "artifact_path": "tmp/validation/code-intelligence/nightly-1/fresh.json",
-                "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
-    )
+    _write_old_freshness(artifact_dir)
+    _mock_clean_git_new(monkeypatch)
 
     payload = adapter.latest_codegraph_freshness(tmp_path)
 
@@ -2725,26 +2604,8 @@ def test_latest_freshness_marks_stale_metadata_warning_without_blocking(tmp_path
 def test_latest_freshness_can_persist_effective_fresh_artifact(tmp_path: Path, monkeypatch) -> None:
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
     artifact_dir.mkdir(parents=True)
-    (artifact_dir / "fresh.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "aistock_codegraph_freshness_v1",
-                "generated_at": "2026-06-04T00:00:00Z",
-                "provider": "codegraph",
-                "workflow_gate": "ready",
-                "freshness": "fresh",
-                "git_commit": "old123",
-                "artifact_path": "tmp/validation/code-intelligence/nightly-1/fresh.json",
-                "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
-    )
+    _write_old_freshness(artifact_dir)
+    _mock_clean_git_new(monkeypatch)
     live_status = {
         "available": True,
         "index_exists": True,
@@ -2795,16 +2656,7 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
     monkeypatch.setenv("USERPROFILE", str(home))
     graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
     graph_path.parent.mkdir(parents=True)
-    graph_path.write_text(
-        json.dumps(
-            {
-                "project": {"gitCommitHash": "base123", "analyzedAt": "2026-06-06T00:00:00Z"},
-                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
-                "edges": [],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_ancestor_graph(graph_path)
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
     artifact_dir.mkdir(parents=True)
     (artifact_dir / "fresh.json").write_text(
@@ -2820,11 +2672,7 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        adapter,
-        "_git_snapshot",
-        lambda root: {"ok": True, "head": "feature456", "dirty": False, "dirty_count": 0},
-    )
+    _mock_clean_git_feature(monkeypatch)
     monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: True)
     monkeypatch.setattr(
         adapter,
