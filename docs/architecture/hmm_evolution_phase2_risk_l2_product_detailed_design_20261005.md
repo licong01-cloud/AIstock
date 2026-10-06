@@ -96,9 +96,9 @@ CLI `import_risk_l2_predictions.py --request <explicit> --mode validate|write --
 
 本版本固定`forward_power_status=UNAVAILABLE`、`forward_confirmation=NOT_STARTED`、`advisory_status=NOT_AVAILABLE`。没做功效核算不能写PENDING_INSUFFICIENT_POWER；没有forward结果不能写PASSED。不改变原acceptance的NOT_AVAILABLE surface字段。
 
-沿现有产品receipt模式，仅一份紧凑`hmm_risk_risk_l2_product_validation_v1`，绑定run、完整stored row hash及实际验证的日row hash、model/acceptance/input identity、部署源码commit、target、writer_readback/api_readback/browser_no_mock结果。reader计算matched surface，不回写55,544预测行以循环证明验证成功。receipt缺失显示surface NOT_AVAILABLE；存在却损坏/身份不匹配时报typed readback错误，不静默当不存在或借用L1 receipt。
+沿现有产品receipt模式，仅一份紧凑`hmm_risk_risk_l2_product_validation_v1`，绑定run、完整stored row hash及实际验证的日row hash、model/acceptance/input identity、schema、target及writer_readback/api_readback/browser_no_mock结果。验证当时部署源码commit保留为真实上下文，不作为结果寻址或跨部署失效键。reader计算matched surface，不回写55,544预测行以循环证明验证成功。receipt缺失显示surface NOT_AVAILABLE；存在却损坏/业务身份不匹配时报typed readback错误，不静默当不存在或借用L1 receipt。实际产品合同变化须更新schema/相应验证，不能沿用旧记录；无关仓库提交不改变上述业务合同。
 
-BUG-1753修正记录存取机制，不修改上述验收含义：禁止用环境变量绑定具体实验记录。使用HMM-owned文件存储`~/.aistock/hmm/product_validation`（后端服务账户），按`risk_l2/run_id/完整row_hash/deployment_commit`隔离记录。现有真实验收结果由`register_product_validation.py --receipt <path>`原子登记，登记本身不生成任何验收PASS。reader每次请求动态查找；不存在返回表面NOT_AVAILABLE，已有损坏记录或错误身份仍typed fail-closed。新记录登记不要求改配置或重启；部署commit校验、首日/零报警/末日读回及真实无mock结果要求保持原样。该表面标记不成为训练、回放或价值研究的前置门禁，不赋予forward/advisory能力；旧部署/授权/重启历史保持原事实。
+BUG-1753修正记录存取机制，BUG-1762按用户2026-10-06授权进一步分离记录身份与部署上下文：禁止用环境变量绑定具体实验记录。使用HMM-owned文件存储`~/.aistock/hmm/product_validation`（后端服务账户），按`risk_l2/run_id/完整row_hash`隔离记录。现有真实验收结果由`register_product_validation.py --receipt <path>`原子登记，登记本身不生成任何验收PASS，也不自动迁移旧commit子目录或扫描latest。reader每次请求动态查找；不存在返回表面NOT_AVAILABLE，已有损坏记录或错误业务身份仍typed fail-closed。同一进程普通记录登记不要求改配置或重启；首日/零报警/末日读回及真实无mock要求保持。该表面标记不成为训练、回放或价值研究的前置门禁，不赋予forward/advisory能力；真实运行源码加载仍单独由用户决定，旧部署/授权/重启历史保持原事实。
 
 日详情的全部预测（包括未成熟/无标签）只依据原封闭概率，outcome明确标为事后评价并与预测区隔。摘要的precision/recall只在合法M算，不混用55,544目录分母；同时显示catalog、P/S、M及缺失/成熟计数。读端核对存储内容、状态与固定摘要一致，不能信任自报成功。
 

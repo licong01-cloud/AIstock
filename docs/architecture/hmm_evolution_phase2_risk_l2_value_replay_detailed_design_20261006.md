@@ -148,7 +148,7 @@ gross参考收益gA,t=Σ_i wA(i,t)×r(i,t)（现金0）。已实现收益不能�
 
 最重要风险是reference ≠ execution：股票聚合收益和每日行业预算漂移不是真实股票头寸；内部成员权重变化/成交困难/费用未建模。其次是已消费development、误报错过上涨、同敞口非同beta和缺路径区间。诚实呈现，不靠更复杂模拟器或参数搜索掩盖局限；参考正结果只能支持后续场景验证的优先级。
 
-本次DDL/DML/dependency/runtime_activation/process_control/dataset_write/active_profile_write/training/tail/QE均noop/false，后端重启权限=false。实际四源码/测试文件经canonical runtime classifier分类为backend、target_ids=[backend-main]，catalog_error=null：新服务文件未在精确offline登记，不能自行降为none或修改catalog。该保守源码分类与实际薄CLI无运行API消费者分开报告；fresh-process从本任务加载新module/原reader并在poison下完成身份预检，生产backend生效仍不声称已验证。runbook=`docs/operations/backend_main_runtime_restart_runbook.md`，identity=`http://127.0.0.1:8001/api/v1/runtime-identity`；backend-main既有已登记HMM业务探针使用`/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505`，仅证明现有HMM API保持，不代替新CLI的独立执行readback。本次没有新增风险价值API或运行消费者，不用未登记risk-l2探针绕过catalog。精确D1～D6已批准；产物只写显式任务目录，生产仍不授权。
+本次DDL/DML/dependency/runtime_activation/process_control/dataset_write/active_profile_write/training/tail/QE均noop/false，后端重启权限=false。原实施时四源码/测试文件曾被保守分类为backend、target_ids=[backend-main]，该历史分类不代表薄CLI存在运行API消费者。用户2026-10-06授权BUG-1766修正`backend/services/hmm_risk/risk_l2_value_*.py`这一窄离线文件族，修正后本CLI及对应测试应为runtime_impact=none、runtime_files=[]、target_ids=[]；以实际classifier结果核验，不手写降级。普通HMM产品reader/router/worker仍按实际运行目标处理。纯离线回放不要求后端重启、部署或产品验证receipt；fresh-process文件输入/因果/身份和原双process合同保持，不重复本次已完成回放。精确D1～D6已批准；产物只写显式任务目录，生产仍不授权。
 
 ## 13. DESIGN-COMPLIANCE-001与文档审修记录
 

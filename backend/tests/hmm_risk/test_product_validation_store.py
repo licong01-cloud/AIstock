@@ -26,6 +26,7 @@ def _record(product, *, identity="a" * 64, row_hash="b" * 64):
         body.update(run_id=identity, model_hash="c" * 64, writer_readback=True, api_readback=True, browser_no_mock=True)
         body["canonical_row_sha256" if product == "rotation_l2" else "row_hash"] = row_hash
         if product == "risk_l2":
+            body.update(acceptance_hash="f" * 64, input_hash="a" * 64)
             body.update(deployment_commit="d" * 40, target="backend-main", day_row_hashes={"2026-03-31": "e" * 64})
     return {**body, "receipt_sha256": canonical_sha256(body)}
 
@@ -176,7 +177,7 @@ def test_l1_same_repository_reads_new_result_without_environment_rebinding(produ
     assert repo.overview(model_hash=rows[0]["model_hash"])[key] == "AVAILABLE_EXPERIMENTAL"
 
 
-def test_risk_l2_same_repository_reads_new_result_and_preserves_deployment_binding(tmp_path):
+def test_risk_l2_same_result_remains_valid_across_unrelated_deployments(tmp_path):
     from backend.services.hmm_risk.risk_l2_prediction import RiskL2PredictionRepository
 
     record = _record("risk_l2")
@@ -199,7 +200,15 @@ def test_risk_l2_same_repository_reads_new_result_and_preserves_deployment_bindi
     store.register_receipt(record, root=tmp_path)
     assert repo._surface(run) == "AVAILABLE_EXPERIMENTAL"
     repo.deployment_commit = "e" * 40
-    assert repo._surface(run) == "NOT_AVAILABLE"
+    assert repo._surface(run) == "AVAILABLE_EXPERIMENTAL"
+    repo.deployment_commit = None
+    assert repo._surface(run) == "AVAILABLE_EXPERIMENTAL"
+    for key in ("model_hash", "acceptance_hash", "input_hash"):
+        altered = {**run, key: "0" * 64}
+        from backend.services.hmm_risk.risk_l2_prediction import RiskL2PredictionError
+
+        with pytest.raises(RiskL2PredictionError, match="receipt is invalid"):
+            repo._surface(altered)
 
 
 @pytest.mark.parametrize("raw", ['{"x":NaN}', '{"x":1,"x":2}'])

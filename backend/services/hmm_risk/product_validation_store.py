@@ -73,8 +73,8 @@ def receipt_path(
             raise ProductValidationStoreError("L1 validation date is invalid") from exc
         path /= day
     path /= _sha(row_hash)
-    if product == "risk_l2":
-        path /= _sha(deployment_commit, 40)
+    if deployment_commit is not None:
+        _sha(deployment_commit, 40)  # Optional audit context, never a lookup key.
     path /= "validation.json"
     _safe_path(path)
     return path
@@ -150,7 +150,9 @@ def register_receipt(value: Mapping[str, Any], *, root: Path | None = None) -> d
         if "model_hash" in record:
             _sha(record["model_hash"])
         if product == "risk_l2":
-            binding["deployment_commit"] = record.get("deployment_commit")
+            _sha(record.get("deployment_commit"), 40)
+            for key in ("model_hash", "acceptance_hash", "input_hash"):
+                _sha(record.get(key))
             if record.get("target") != "backend-main" or not isinstance(record.get("day_row_hashes"), dict):
                 raise ProductValidationStoreError("L2 risk deployment/date validation is incomplete")
     if any(record.get(key) is not True for key in flags):

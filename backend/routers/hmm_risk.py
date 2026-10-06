@@ -36,11 +36,7 @@ router = APIRouter(prefix="/hmm-risk", tags=["hmm-risk"])
 
 
 def get_risk_l2_repository() -> RiskL2PredictionRepository:
-    from backend.routers.health import _PROCESS_RUNTIME_IDENTITY
-
-    return RiskL2PredictionRepository(
-        deployment_commit=_PROCESS_RUNTIME_IDENTITY.get("merge_commit"),
-    )
+    return RiskL2PredictionRepository()
 
 
 @router.get("/risk-l2/overview")

@@ -538,12 +538,11 @@ class RiskL2PredictionRepository:
     def _surface(self, run: Mapping[str, Any]) -> str:
         try:
             path = self.surface_validation_receipt_path
-            if path is None and self.deployment_commit is not None:
+            if path is None:
                 path = find_receipt(
                     "risk_l2",
                     identity=run["run_id"],
                     row_hash=run["compact_summary"]["row_hash"],
-                    deployment_commit=self.deployment_commit,
                     root=self.surface_validation_store_root,
                 )
             if path is None:
@@ -558,7 +557,6 @@ class RiskL2PredictionRepository:
             expected.update(
                 row_hash=run["compact_summary"]["row_hash"],
                 schema_version=SURFACE_SCHEMA,
-                deployment_commit=self.deployment_commit,
                 target=self.runtime_target,
             )
             zero_dates = [d["trade_date"] for d in run["compact_summary"]["daily"] if d["warning_count"] == 0]
@@ -566,7 +564,8 @@ class RiskL2PredictionRepository:
             if zero_dates:
                 required_dates.add(zero_dates[0])
             _require(
-                self.deployment_commit is not None
+                isinstance(receipt.get("deployment_commit"), str)
+                and re.fullmatch(r"[0-9a-f]{40}", receipt["deployment_commit"]) is not None
                 and all(receipt.get(k) == v for k, v in expected.items())
                 and all(receipt.get(k) is True for k in ("writer_readback", "api_readback", "browser_no_mock"))
                 and isinstance(receipt.get("day_row_hashes"), dict)
