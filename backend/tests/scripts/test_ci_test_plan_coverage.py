@@ -11,6 +11,7 @@ from scripts import ci_plan_coverage as coverage
 
 def test_execution_metrics_record_real_runs_without_changing_coverage(monkeypatch, tmp_path):
     monkeypatch.setattr(coverage, "_metrics", {})
+    monkeypatch.delenv(coverage.METRICS_ENV, raising=False)
     receipt = tmp_path / "collected.txt"
     monkeypatch.setenv(coverage.RECEIPT_ENV, str(receipt))
     monkeypatch.setenv("AISTOCK_TEST_SOURCE_HEAD", "a" * 40)
@@ -32,16 +33,6 @@ def test_execution_metrics_record_real_runs_without_changing_coverage(monkeypatc
     assert coverage._digest(["-k", "smoke"], ordered=True) != coverage._digest(["smoke", "-k"], ordered=True)
     monkeypatch.setattr(coverage, "_write_metrics", lambda *args: (_ for _ in ()).throw(OSError("disk unavailable")))
     coverage.pytest_sessionfinish(session, 0)  # telemetry must never replace a real test verdict
-
-
-def test_metrics_missing_file_never_changes_actual_coverage_exit(tmp_path):
-    receipt = tmp_path / "collected.txt"
-    receipt.write_text("", encoding="utf-8")
-    output = tmp_path / "output.json"
-    assert coverage.main(["--receipt", str(receipt), "--metrics-receipt", str(tmp_path / "missing.jsonl"),
-                          "--output-json", str(output)]) == 0
-    payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["workflow_gate"] == "passed" and payload["execution_metrics"]["status"] == "not_recorded"
 
 
 def _write_test(root: Path, relative_path: str) -> Path:
@@ -90,21 +81,22 @@ def test_pytest_collection_hook_appends_repo_relative_receipt(monkeypatch, tmp_p
     ]
 
 
-def test_main_fails_closed_and_writes_diagnostic_json(tmp_path: Path) -> None:
-    test_path = "backend/tests/example/test_missing.py"
-    _write_test(tmp_path, test_path)
+@pytest.mark.parametrize("test_path,expected", [("", 0), ("backend/tests/example/test_missing.py", 2)])
+def test_main_keeps_actual_coverage_verdict_when_metrics_missing(tmp_path, test_path, expected):
+    if test_path:
+        _write_test(tmp_path, test_path)
     changed = tmp_path / "changed.txt"
     changed.write_text(test_path + "\n", encoding="utf-8")
     receipt = tmp_path / "collected.txt"
     receipt.write_text("", encoding="utf-8")
     output = tmp_path / "result.json"
-
     result = coverage.main(["--changed-files-file", str(changed), "--receipt", str(receipt),
-                            "--repo-root", str(tmp_path), "--output-json", str(output)])
-
-    assert result == 2
+                            "--repo-root", str(tmp_path), "--output-json", str(output),
+                            "--metrics-receipt", str(tmp_path / "missing.jsonl")])
+    assert result == expected
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["missing_changed_test_files"] == [test_path]
+    assert payload["missing_changed_test_files"] == ([test_path] if test_path else [])
+    assert payload["execution_metrics"]["status"] == "not_recorded"
 
 
 def test_ci_backend_step_verifies_actual_changed_test_collection() -> None:
