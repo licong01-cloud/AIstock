@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1756",
-  "closed_at": null,
+  "closed_at": "2026-10-06T12:11:53Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -26,13 +26,13 @@
   "expected": "等价去重字段断言，所有原场景与安全合同保留；真实统计行数，不伪报30%达标或运行时加速。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json",
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json",
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -78,8 +78,8 @@
   },
   "first_seen_at": "2026-10-06T12:03:24.355482Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d8ff5ba51ebd9b4c341de703fcbe504d06944e8b",
+  "fixed_at": "2026-10-06T12:11:53Z",
   "github_issue_number": 5570,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5570",
   "last_seen_at": "2026-10-06T12:03:24.355482Z",
@@ -87,6 +87,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5572",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -104,6 +105,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -113,7 +115,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P3",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1756",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "182709df73a4dc3f",
+    "recorded_at": "2026-10-06T12:12:51.461416Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d99e02f3113a612077268f8894e2ecbeff22a608",
+    "source_merge_commit": "d8ff5ba51ebd9b4c341de703fcbe504d06944e8b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5572",
+    "validation_evidence": [
+      "rtk pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1756-final -> 100 passed",
+      "python -m nox -s guardrail_changed_files -> passed, files=1 findings=0 blocking=0 ownership=1/1"
+    ],
+    "validation_evidence_digest": "886f44154a588d5ed16edb526c71838182fcc8325b0c211ba5424a24adc17483"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -122,6 +146,10 @@
     "fingerprint": "8e96a5057db09eca6386641a",
     "source_event_id": "FE-20261006-8e96a5057db0"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/scripts/test_ci_change_classifier.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1756-final -> 100 passed",
+    "python -m nox -s guardrail_changed_files -> passed, files=1 findings=0 blocking=0 ownership=1/1"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
