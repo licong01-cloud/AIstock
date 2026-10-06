@@ -28,13 +28,20 @@
   "evidence_uris": [],
   "expected": "worker在性能记录故障时仍完成真实评估并保留真实失败；性能故障独立可见。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_evolution/worker.py",
+      "backend/tests/hmm_evolution/test_repository_integration.py",
+      "docs/operations/hmm_evolution_worker_runtime_runbook.md",
+      "tests/aistock_validation/bugs/20261006_BUG-1761-hmm-worker-performance-receipts-can-block-or-override-durable-evaluation.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_evolution/worker.py",
-      "backend/tests/hmm_evolution/test_worker.py",
-      "backend/tests/hmm_evolution/test_repository_integration.py"
+      "backend/tests/hmm_evolution/test_repository_integration.py",
+      "docs/operations/hmm_evolution_worker_runtime_runbook.md",
+      "tests/aistock_validation/bugs/20261006_BUG-1761-hmm-worker-performance-receipts-can-block-or-override-durable-evaluation.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_evolution/worker.py",
@@ -122,18 +129,23 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/hmm_evolution_worker_runtime_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-evolution/workers?owner_id=service-aistock-hmm-v3-20260722&limit=500",
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-evolution/workers?owner_id=service-aistock-hmm-v3-20260722&limit=500",
     "fresh_process_evidence": [
-      "fresh-process import worker, worker_service and backend.routers.health -> PASS, all module paths contained in BUG-1761 task worktree; controller identity alone does not prove worker reload"
+      "fresh-process import worker, worker_service and backend.routers.health -> PASS, all module paths contained in BUG-1761 task worktree; controller identity alone does not prove worker reload",
+      "fresh-process imports backend.services.hmm_evolution.worker, backend.services.hmm_evolution.worker_service, backend.routers.health -> PASS, all module paths contained in BUG-1761 task worktree"
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/hmm_evolution_worker_runtime_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
