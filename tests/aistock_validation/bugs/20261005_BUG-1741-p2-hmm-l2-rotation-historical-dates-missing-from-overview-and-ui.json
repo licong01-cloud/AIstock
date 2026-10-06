@@ -177,7 +177,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1741/post-restart-verify.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -257,7 +257,8 @@
   "validation_evidence": [
     "validation-receipt: id=3071a2a56b29272d commit=2f25685e321a2f668bddd665eed0a492629db88a kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
     "validation-receipt: id=b357cab0bf146248 commit=2f25685e321a2f668bddd665eed0a492629db88a kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_rotation_l2_prediction.py::test_overview_exposes_run_scoped_historical_dates_without_recomputing backend/tests/hmm_risk/test_rotation_l2_prediction.py::test_overview_rejects_empty_or_corrupt_date_catalog` result=`passed; 4 passed`",
-    "validation-receipt: id=49bbdaafe7b1ee6c commit=2f25685e321a2f668bddd665eed0a492629db88a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=49bbdaafe7b1ee6c commit=2f25685e321a2f668bddd665eed0a492629db88a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "node tmp/handoff/hmm1741-live-verify-20261006.cjs -> passed; 3 live dates no mock; 368 dates 131 rows; 20/30 display; receipt fb8f67b4e46508604391091e78d8f86c30485d8f848006b775bc3647f2c6cf9a; no DB write/training/tail/activation/process"
   ],
   "verification_budget": {
     "budget": "standard",
