@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json",
       "backend/tests/dr/conftest.py",
       "backend/tests/dr/test_dump_file_validity.py",
       "backend/tests/dr/test_dump_schema_diff.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json",
+      "backend/tests/dr/conftest.py",
+      "backend/tests/dr/test_dump_file_validity.py",
+      "backend/tests/dr/test_dump_schema_diff.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/dr/conftest.py",
@@ -123,10 +130,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
