@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.62
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.63
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-07
 
-> 本轮必要工程辅线：[固定5TD通用价格集合消费者F1设计](advisory_generic_price_set_consumer_v1_f1_design_20261007.md)。只完成四种显式既存权重和原D输入的标准价集投影，原candidate数学/政策不变、0fit/DB/UI/激活；不同包、stock_universe/单指数/并集仅元数据，UNKNOWN不删原股。当前仅设计，不冒称四类模型已经接入实盘API；每日DB适配后续独立切片，不以缺旧M1配置或UI阻断主线。联合分布一次研究已prepare，源码#5635 CI通过后合入；训练仍等fresh QE三0，自己的半小时只读等待已经启动，累计111研究fit+1历史index不变。自身活动producer树保留，其他已完成树官方清理均已完成。以下原历史时点结果和限制不改判。
+> 本轮必要工程辅线：[固定5TD通用价格集合消费者F1设计](advisory_generic_price_set_consumer_v1_f1_design_20261007.md)。只完成四种显式既存权重和原D输入的标准价集投影，原candidate数学/政策不变、0fit/DB/UI/激活；不同包、stock_universe/单指数/并集仅元数据，UNKNOWN不删原股。设计#5637 CI37504903491 SUCCESS、合入a10b571a8/自身官方cleanup_done19.391秒；独立四文件源码实现，多轮自审/修复、10直接测试/Ruff通过，三个真实trained权重只读装载成功、没有读收益或新增fit。源码当前CI另报，不冒称四类模型已经接入实盘API；每日DB适配后续独立切片，不以缺旧M1配置或UI阻断主线。联合分布一次研究已prepare，源码#5635 CI通过后合入；训练仍等fresh QE三0，自己的半小时只读等待已经启动，累计111研究fit+1历史index不变。自身活动producer树保留，其他已完成树官方清理均已完成。以下原历史时点结果和限制不改判。
 
 > 现行消费原则（用户2026-10-04明确指令）：QE负责其全部实验及进入策略包组合的无未来数据泄露，Advisory直接使用策略包，不再重复设置父/processor/组合时钟、资产评分、原native收据、收益确认或MDE功效等准入/研发门禁。缺旧conf或data_split不安排补证/重训；价格模型效果诚实展示，不承诺收益。真正输入矛盾、损坏、缺推理依赖及Advisory自己的D/T未来读取仍按正常计算错误处理，正常缺失保留UNKNOWN/原候选。历史试验及旧合同原值不改判，其中曾用于晋级/准入的要求只解释当时结果，不是现行包消费或项目停止条件。实现范围与当前执行顺序见[直接消费F2](advisory_qe_package_direct_consumer_v1_f2_design_20261004.md)及§16。
 > 本版方向：业务目标、六层架构及Advisory/QE所有权不变；QE负责上游Alpha，Advisory负责日级收益型买价模型及消费侧交付，不研发分钟执行。R1与R2各原方案已如实记录；R2 M1～M25均已执行一次，实际累计99研究fit+1旧index，不清零、不复跑旧负候选。M1在100共同NAV日candidate/baseline/matched净收益29.7444%/21.3220%/23.1821%，点增量过原导航条件但两个区间跨零，经济确认/启用仍0。M20原raw信息有正点增量但未达原5bps分类条件，仍只停止自身候选，不关闭研发或插入QE策略包消费门；M21横截面尺度信息一次完整研究负向，只停止自身；M22 sector+raw虽高于base但低于新sector matched，没有增量，只stop自身；M23原raw五TD变化低于base及新matched、仅stop自身；M24历史norm五TD变化同样低于base与新matched，仅stop自身；M25板块ret1/drawdown20同样没有相对新matched的增量、风险更差，仅停止自身；各真实结果和来源限制详§16.6。

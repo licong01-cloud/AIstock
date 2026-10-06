@@ -1,6 +1,6 @@
 # Advisory 固定五交易日通用价格集合消费者 F1详细设计
 
-2026-10-07，DESIGN_ACCEPTED_SOURCE_PENDING。本切片是必要模型输出适配，不新增模型、平台或UI。
+2026-10-07，SOURCE_VERIFIED。本切片是必要模型输出适配，不新增模型、平台或UI；源码提交/当前CI状态另报。
 
 ## Background / Goal
 
@@ -72,16 +72,16 @@ source_context只含package_id/run_id/list_version_id/universe_identity/source_e
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-761 | planned generic_price_set_consumer_v1.py / loader | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §1/Review；planned backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | DESIGN_VERIFIED | none |
-| F-762 | planned generic_price_set_consumer_v1.py / projection | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §2/Review；planned backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | DESIGN_VERIFIED | none |
-| F-763 | planned generic_price_set_consumer_v1.py / D clock | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §2/Review；planned backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | DESIGN_VERIFIED | none |
-| F-764 | planned generic_price_set_consumer_v1.py / family dispatch | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §3/Review；planned backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | DESIGN_VERIFIED | none |
-| F-765 | planned generic_price_set_consumer_v1.py / output | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §3/Review；planned backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | DESIGN_VERIFIED | none |
-| F-766 | 本scope及副作用约定 | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §Scope/Review；git diff --check | DESIGN_VERIFIED | none |
+| F-761 | generic_price_set_consumer_v1.py / loader | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §1/Review；backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | SOURCE_VERIFIED | none |
+| F-762 | generic_price_set_consumer_v1.py / projection | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §2/Review；backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | SOURCE_VERIFIED | none |
+| F-763 | generic_price_set_consumer_v1.py / D clock | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §2/Review；backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | SOURCE_VERIFIED | none |
+| F-764 | generic_price_set_consumer_v1.py / family dispatch | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §3/Review；backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | SOURCE_VERIFIED | none |
+| F-765 | generic_price_set_consumer_v1.py / output | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §3/Review；backend/tests/advisory_model_first/test_generic_price_set_consumer_v1.py | SOURCE_VERIFIED | none |
+| F-766 | 本scope及副作用约定 | artifact: docs/architecture/advisory_generic_price_set_consumer_v1_f1_design_20261007.md §Scope/Review；git diff --check | SOURCE_VERIFIED | none |
 
 最小测试复用一套可手算JSON小树，不重新跑19/8旧研究矩阵：四family装载和原函数精确价集parity、缺训练与篡改描述符、未来时钟/重复/截断人口保持、未知上下文/空集合/未知洞/空名单、变包/单池/并集时数学相同、不可变及deadline不返回半批。模型fixtures不是真实盈利或新研究trial；对潜在真实artifact只读装载不读evaluated结果。
 
-矩阵当前只验收设计合同，planned节点是后续实现验收计划，不是已运行测试。源码阶段所有六项均须以实际实现与直接测试重验，不以本文自审替代。
+矩阵当前验收完整四文件纯模型输出切片；不以本切片冒充后续DB/API接入或经济确认。现有三个真实trained权重已只读装载，第四joint仅合成fixture验证接口、真实研究仍prepared-only等QE，不能声称已读joint真实权重。
 
 ## Risks / Rollout / Rollback / Production Gates
 
@@ -92,3 +92,7 @@ source_context只含package_id/run_id/list_version_id/universe_identity/source_e
 ## Review / 多轮自审
 
 第一轮业务：限定为模型输出适配，避免新增UI、旧失败验证、动态仓位或API平台；现有五review接口不变，price-only不研发执行。第二轮PIT：完整候选和逐字段UNKNOWN、真实D锚和可见时钟、不按当前股票池删冻结候选；旧模型加载不用producer源码CRLF差异设置门，stage数据完整性仍校验。第三轮工程：四文件/最多50、预算和只读明确，缺joint训练不fit、不阻其它family；单个显式candidate，不回选旧matched/不读收益选模型，零研究计数。以上仅本窗口不同视角自审，不冒称独立外审或实现完成。
+
+源码第一轮：四family同一手工小树，无训练；JSON支持区间读回list与原immutable tuple合同不兼容，修在本消费者的读回转换，不动旧模型/公共合同；7失败节点定向复测通过，联合fixture此前已通过。第二轮：成本/全tick/UNKNOWN洞与已知空集合、保留原候选/元数据、cross-family parity及deadline不发布半批；新增洞节点通过。第三轮：发现公共canonical JSON hash保留legacy非有限语义，不能依赖其拒绝NaN；本消费者显式finite JSON/重复key校验，未改共享hash，定向节点通过。最终一套10直接测试/Ruff通过，四文件L0/F1/current CI按源码交付流程核对。
+
+真实只读消费者装载仅三个trained JSON：DAILY_5TD、MINUTE_5TD、VOLUME_PATH_5TD各原model SHA与manifest不变。没有读evaluated收益、重fit、注册新研究或生成旧失败确认；这只证明权重消费兼容。新joint根尚无trained时保持MODEL_NOT_TRAINED，不伪造权重；合入#5635不等于研究完成。模型/API/运行/经济状态独立，UI后置。
