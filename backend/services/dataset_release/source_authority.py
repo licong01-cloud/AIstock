@@ -800,7 +800,7 @@ _QUERY_SPECS = (
         "sw_index_classify",
         (Component.FACTOR_H5_STATIC,),
         ("index_code",),
-        values=("level",),
+        values=("level", "src", "is_pub"),
         non_null_values=("level",),
         start_policy="timeless",
     ),
@@ -1771,6 +1771,7 @@ class MonthlySourceAuthority:
         session_factory: SourceSessionFactory = production_source_session_factory,
         mvcc_reuse_capability: bool = MVCC_PARTITION_REUSE_PRODUCTION_VALIDATED,
         sector_source_policy: str = P3A_SECTOR_SOURCE_POLICY,
+        monthly_sector_mapping: Mapping[str, Any] | None = None,
     ) -> None:
         if sector_source_policy not in {P3A_SECTOR_SOURCE_POLICY, MONTHLY_SECTOR_SOURCE_POLICY}:
             raise ValueError("unsupported sector source policy")
@@ -1779,6 +1780,7 @@ class MonthlySourceAuthority:
         self._session_factory = session_factory
         self._mvcc_reuse_capability = bool(mvcc_reuse_capability)
         self._sector_source_policy = sector_source_policy
+        self._monthly_sector_mapping = monthly_sector_mapping
 
     @property
     def uses_p3a_sector_source(self) -> bool:
@@ -1872,9 +1874,9 @@ class MonthlySourceAuthority:
         )
         for query in query_order:
             if query.query_id == "sector_data" and sector_enricher is None:
-                sector_enricher = FrozenSectorEnricher.build(
-                    classify_rows,
-                    member_rows,
+                from .monthly_sector_mapping import build_bound_sector_enricher
+                sector_enricher = build_bound_sector_enricher(
+                    classify_rows, member_rows, binding=self._monthly_sector_mapping,
                 )
             effective_query = (
                 replace(query, query_version=sector_candidate.query_version)
@@ -2282,6 +2284,15 @@ class MonthlySourceAuthority:
                     "profile": self.profile.profile,
                     "cutoff": cutoff.isoformat(),
                 }
+                if self._monthly_sector_mapping is not None:
+                    from .monthly_sector_mapping import sector_mapping_catalog_receipt
+                    sector_receipt_payload = {
+                        **sector_receipt_payload,
+                        "mapping_policy": "immutable_predecessor_shared_ids_v1",
+                        "monthly_catalog_lineage": sector_mapping_catalog_receipt(
+                            classify_rows, member_rows, binding=self._monthly_sector_mapping,
+                        ),
+                    }
         sector_receipt_ref = self.cas.put_json(sector_receipt_payload)
         self.cas.verify(sector_receipt_ref)
         core_index_membership_receipt_ref = self.cas.put_json(
@@ -2313,6 +2324,8 @@ class MonthlySourceAuthority:
             "source_content_root": manifest.source_content_root,
             "partitions": [item.as_build_input() for item in sorted(sealed, key=lambda value: value.spec.identity)],
             "safety": _zero_safety(),
+            **({"monthly_sector_mapping": dict(self._monthly_sector_mapping)}
+               if self._monthly_sector_mapping is not None else {}),
         }
         manifest_ref = self.cas.put_json(manifest_payload)
         self.cas.verify(manifest_ref)
@@ -3801,6 +3814,7 @@ def load_source_stage_receipt(
             expected_cutoff=expected_cutoff,
             classify_partitions=expected_classify,
             member_partitions=expected_member,
+            mapping_binding=manifest_payload.get("monthly_sector_mapping"),
         )
         sector_partitions = [item for item in partitions if item.spec.dataset == "sector_data"]
         if (
@@ -4075,6 +4089,7 @@ def _validate_monthly_sector_publication_receipt(
     expected_cutoff: date,
     classify_partitions: Sequence[Mapping[str, Any]],
     member_partitions: Sequence[Mapping[str, Any]],
+    mapping_binding: Mapping[str, Any] | None = None,
 ) -> None:
     """Bind published quotes to frozen classification, not index research coverage."""
     expected = {
@@ -4090,6 +4105,37 @@ def _validate_monthly_sector_publication_receipt(
         "member_partitions": list(member_partitions),
         "safety": _zero_safety(),
     }
+    if mapping_binding is not None:
+        from .monthly_sector_mapping import _validate_binding
+        from .canonical import digest_named_fields
+        _validate_binding(mapping_binding)
+        expected["mapping_policy"] = "immutable_predecessor_shared_ids_v1"
+        lineage = value.get("monthly_catalog_lineage") if isinstance(value, Mapping) else None
+        if (
+            not isinstance(lineage, Mapping)
+            or set(lineage) != {"binding", "raw_catalog_count", "canonical_catalog_count",
+                                "raw_catalog_sha256", "unassigned_unpublished_codes",
+                                "addition_classification", "historical_business_audit_performed"}
+            or lineage["binding"] != mapping_binding
+            or lineage["canonical_catalog_count"] != 131
+            or lineage["historical_business_audit_performed"] is not False
+            or lineage["addition_classification"] != "UNASSIGNED_UNPUBLISHED_CATALOG_METADATA"
+        ):
+            raise SourceAuditIncomplete("source-stage sector catalog lineage differs")
+        extras = lineage["unassigned_unpublished_codes"]
+        codes = [row["canonical_l2_code"] for row in mapping_binding["code_map"]["entries"]]
+        if (
+            not isinstance(extras, list) or any(not isinstance(code, str) for code in extras)
+            or extras != sorted(set(extras)) or set(extras) & set(codes)
+            or type(lineage["raw_catalog_count"]) is not int
+            or lineage["raw_catalog_count"] != 131 + len(extras)
+            or value.get("code_map_digest") != digest_named_fields(
+                "dataset_release_sw_l2_code_map_v1", {"ordered_codes": codes},
+            )
+        ):
+            raise SourceAuditIncomplete("source-stage sector catalog identity differs")
+        ensure_sha256_text(lineage["raw_catalog_sha256"], field="raw_catalog_sha256")
+        expected["monthly_catalog_lineage"] = lineage
     if (
         not isinstance(value, Mapping)
         or set(value) != set(expected) | {"code_count", "code_map_digest", "membership_digest"}
@@ -4708,6 +4754,8 @@ _TEXT_PAYLOAD_COLUMNS = frozenset(
         "market",
         "index_code",
         "level",
+        "src",
+        "is_pub",
         "in_date",
         "l2_code",
         "out_date",
