@@ -977,6 +977,10 @@ def test_required_check_unknown_bucket_fails_closed() -> None:
             ["worker-scheduler"],
         ),
         ("backend/services/hmm_risk/rotation_l1_gbdt.py", "none", []),
+        ("backend/services/hmm_risk/risk_l2_value_replay.py", "none", []),
+        ("backend/services/hmm_risk/risk_l2_prediction.py", "backend", ["backend-main"]),
+        ("backend/routers/hmm_risk.py", "backend", ["backend-main"]),
+        ("backend/services/hmm_risk/unknown_consumer.py", "backend", ["backend-main"]),
         ("scripts/aistock_runner_health.py", "none", []),
     ],
 )
@@ -989,6 +993,22 @@ def test_repository_runtime_catalog_preserves_representative_roles(
 
     assert payload["runtime_impact"] == expected_impact
     assert payload["target_ids"] == expected_targets
+
+
+def test_hmm_offline_value_family_does_not_downgrade_mixed_online_scope() -> None:
+    files = [
+        "backend/services/hmm_risk/risk_l2_value_replay.py",
+        "scripts/hmm_risk/replay_risk_l2_value.py",
+        "backend/tests/hmm_risk/test_risk_l2_value_replay.py",
+    ]
+    offline = workflow._classify_runtime_impact(files)
+    assert offline["runtime_impact"] == "none"
+    assert offline["runtime_files"] == offline["target_ids"] == []
+    assert offline["catalog_error"] is None
+    mixed = workflow._classify_runtime_impact([*files, "backend/routers/hmm_risk.py"])
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["runtime_files"] == ["backend/routers/hmm_risk.py"]
+    assert mixed["target_ids"] == ["backend-main"]
 
 
 @pytest.mark.parametrize("monthly", [True, False, "construction", "overlap_source"])

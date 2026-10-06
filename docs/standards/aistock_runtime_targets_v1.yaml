@@ -52,6 +52,8 @@ source_role_rules:
     source_globs:
       - backend/services/advisory_model_first/p0g_anchored_liability_local_reranker_*.py
       - backend/services/hmm_risk/market_relative_*.py
+      # CLI-only value replay; do not include product readers/routers/workers.
+      - backend/services/hmm_risk/risk_l2_value_*.py
 targets:
   backend-main:
     runtime_kind: backend
