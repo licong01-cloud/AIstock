@@ -708,8 +708,9 @@ def _plan_routing(plan_key: str, plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
-    plans = flow._plans_by_key()
-    selection = flow.select_validation(paths)
+    catalog = flow.validation_catalog_snapshot()
+    plans = catalog.plans
+    selection = flow.select_validation(paths, _catalog=catalog)
     selected_plan_keys: list[str] = []
     dev_db_plan_keys: list[str] = []
     frontend_test_targets: list[str] = []
@@ -717,7 +718,7 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
     unmapped_files: list[str] = []
     file_backend_sessions: dict[str, list[str]] = {}
     for path in paths:
-        path_selection = flow.select_validation([path])
+        path_selection = flow.select_validation([path], _catalog=catalog)
         required_plans = [str(item) for item in path_selection.get("required_plans") or []]
         if _is_frontend_path(path):
             required_plans.extend(

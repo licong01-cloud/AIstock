@@ -568,13 +568,19 @@ def test_source_progress_is_throttled_attempt_bound_and_not_readiness(tmp_path, 
     assert first["rows_validated"] == 100
     assert first["total_rows"] is None
     assert first["total_partitions"] is None
+    assert first["elapsed_seconds"] == 0
+    assert first["rows_validated_per_second"] is None
     for value in range(101, 110):
         clock[0] += 1
         progress({"rows_validated": value})
     assert service.status(operation)["stage_progress"] == first
     clock[0] = 16
     checkpoint()
-    assert service.status(operation)["stage_progress"]["rows_validated"] == 109
+    observed = service.status(operation)["stage_progress"]
+    assert observed["rows_validated"] == 109
+    assert observed["elapsed_seconds"] == 16
+    assert observed["rows_validated_per_second"] == 109 / 16
+    assert observed["rows_sealed_per_second"] is None
     assert not any(service.status(operation)["checkpoints"].values())
     service.store.update_state(operation, attempt=2)
     with pytest.raises(MonthlyReleaseConflict, match="stage control identity"):

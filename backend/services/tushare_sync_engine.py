@@ -30,7 +30,7 @@ from .data_sync_targets import (
     DataSyncTargetRepository,
 )
 from .tushare_rate_limiter import get_limiter
-from .tushare_dataset_specs import DatasetSpec, QueryMode
+from .tushare_dataset_specs import DAILY_BASIC, DatasetSpec, QueryMode
 
 PIT_SOURCE_DATASETS = {"stock_basic", "stock_st", "stock_st_events"}
 FINANCIAL_EVENT_RAW_DATASETS = {
@@ -101,6 +101,21 @@ def _daily_basic_required_field_coverage_receipt(
         "row_count": row_count,
         "ratio": ratio,
         "required_ratio": DAILY_BASIC_REQUIRED_RATIO,
+        # Batch-local observations, not new completeness thresholds. Nullable
+        # valuations may legitimately be NULL; preserve and expose that fact
+        # instead of hiding all columns behind a row-count success receipt.
+        "source_field_observation": {
+            "schema_version": "daily_basic_source_field_observation_v1",
+            "scope": "fetched_batch_only",
+            "threshold_enforced": False,
+            "fields": {
+                column: {
+                    "finite_count": sum(_is_finite_number(row.get(column)) for row in rows),
+                    "non_finite_count": sum(not _is_finite_number(row.get(column)) for row in rows),
+                }
+                for column, kind in DAILY_BASIC.columns.items() if kind == "numeric"
+            },
+        },
     }
 
 
@@ -271,6 +286,21 @@ def _query_tushare_dataapi(
     data = result.get("data") or {}
     columns = list(data.get("fields") or [])
     items = data.get("items") or []
+    if api_name == "daily_basic" and items:
+        # An omitted column is not an explicitly returned provider NULL.
+        # Validate before zip/row.get can fabricate NULLs that the ordinary
+        # upsert would write over existing facts. Other API contracts stay
+        # unchanged; nullable valuations and genuine empty responses remain
+        # valid and use the existing retry/coverage handling.
+        requested = {field.strip() for field in fields.split(",") if field.strip()}
+        if (
+            any(not isinstance(column, str) or not column for column in columns)
+            or len(set(columns)) != len(columns)
+            or not requested.issubset(columns)
+            or not isinstance(items, list)
+            or any(not isinstance(item, (list, tuple)) or len(item) != len(columns) for item in items)
+        ):
+            raise TushareHttpError("daily_basic response schema differs from requested fields or row width")
     return [dict(zip(columns, item)) for item in items]
 
 

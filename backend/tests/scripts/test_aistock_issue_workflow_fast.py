@@ -831,6 +831,10 @@ def test_required_check_unknown_bucket_fails_closed() -> None:
     ("changed_file", "expected_impact", "expected_targets"),
     [
         ("backend/main.py", "backend", ["backend-main"]),
+        ("backend/routers/monthly_dataset_releases.py", "worker_scheduler", ["worker-scheduler"]),
+        ("backend/services/dataset_release/monthly_repair_inputs.py", "worker_scheduler", ["worker-scheduler"]),
+        ("backend/services/dataset_release/monthly_postgres_source.py", "worker_scheduler", ["worker-scheduler"]),
+        ("backend/routers/quantevolver.py", "backend", ["backend-main"]),
         (
             "backend/services/dataset_release/index_contract.py",
             "worker_scheduler",

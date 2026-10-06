@@ -146,6 +146,8 @@ def freeze_preparation_source(
         ),
     )
     for query in ordered:
+        if query.query_id not in before.schemas:
+            continue
         if query.query_id in omitted and query.query_id not in deferred_cutoff_datasets:
             continue
         if query.query_id == "sector_data":
