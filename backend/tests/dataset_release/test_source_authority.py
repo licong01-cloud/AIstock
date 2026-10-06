@@ -341,6 +341,74 @@ def test_core_index_membership_source_query_is_exact_five_pool_overlap_authority
     assert all(pool_id in query.sql for pool_id in ("csi300", "csi500", "csi1000", "star50", "star100"))
 
 
+@pytest.mark.parametrize("pressure_rung", [0, 2])
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_overlap_source_seals_long_interval_once_and_rejects_real_duplicate(tmp_path, pressure_rung, duplicate):
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.source_authority import MonthlySourceAuthority, SourceTableSchema
+
+    ControlStore.initialize(tmp_path)
+    query = PRODUCTION_QUERY_SPECS["index_membership_pit"]
+    payload = {
+        "pool_id": "csi1000", "index_code": "000852.SH", "ts_code": "000006.SZ",
+        "effective_from": "2020-06-15", "effective_to_exclusive": "2024-06-17",
+        "source_provider": "CSI", "source_reference": "CSI:announcement:11429",
+        "updated_at": "2026-09-05T05:22:35.798704+08:00",
+    }
+    params = {"start": date(2018, 8, 1), "end": date(2026, 9, 30)}
+    calls = []
+
+    class Session:
+        def stream(self, query_id, values, *, fetch_rows):
+            calls.append((query_id, values, fetch_rows))
+            if date.fromisoformat(payload["effective_from"]) <= values["end"] and (
+                date.fromisoformat(payload["effective_to_exclusive"]) > values["start"]
+            ):
+                row = {"row_key": json.dumps([payload[key] for key in query.key_columns]),
+                       "row_payload": json.dumps(payload)}
+                yield row
+                if duplicate:
+                    yield row
+
+    profile = SimpleNamespace(
+        resource_policy=ResourcePolicy(),
+        pressure_ladder={"date_chunk_months": (3, 2, 1), "minute_batch": (20, 10, 5)},
+    )
+    authority = MonthlySourceAuthority(profile, CASStore(tmp_path), sector_source_policy="classification_published_snapshot_v1")
+
+    def seal():
+        return authority._seal_query_partition(
+            Session(), query=query, partition_key="2018-08-01_2026-09-30", params=params,
+            tokens=(), table_schema=SourceTableSchema(query.table_identity, query.required_columns),
+            pressure_rung=pressure_rung, read_chunk_rows=7,
+        )
+
+    if duplicate:
+        with pytest.raises(SourceManifestError, match="duplicate partition primary key"):
+            seal()
+    else:
+        partition = seal()
+        assert partition.summary.row_count == 1
+        assert partition.summary.duplicate_count == 0
+        assert calls == [(query.query_id, params, 7)]
+
+
+def test_point_date_source_still_splits_date_and_code_batches_under_pressure():
+    from backend.services.dataset_release.source_authority import MonthlySourceAuthority
+
+    authority = object.__new__(MonthlySourceAuthority)
+    authority.profile = SimpleNamespace(pressure_ladder={"date_chunk_months": (3, 1), "minute_batch": (20, 2)})
+    params = {"start": date(2026, 7, 1), "end": date(2026, 9, 30), "codes": ["000001.SZ", "000002.SZ", "000003.SZ"]}
+    chunks = authority._execution_query_params(PRODUCTION_QUERY_SPECS["kline_minute_raw"], params, pressure_rung=1)
+    assert [(item["start"], item["end"]) for item in chunks] == [
+        (date(2026, 7, 1), date(2026, 7, 31)), (date(2026, 7, 1), date(2026, 7, 31)),
+        (date(2026, 8, 1), date(2026, 8, 31)), (date(2026, 8, 1), date(2026, 8, 31)),
+        (date(2026, 9, 1), date(2026, 9, 30)), (date(2026, 9, 1), date(2026, 9, 30)),
+    ]
+    assert [item["codes"] for item in chunks] == [params["codes"][:2], params["codes"][2:]] * 3
+
+
 def test_core_index_membership_authority_closes_exact_pool_catalog_and_intervals() -> None:
     receipt = _validate_core_index_membership_authority(
         _core_index_rows(),

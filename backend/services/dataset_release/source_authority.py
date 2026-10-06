@@ -3128,7 +3128,11 @@ class MonthlySourceAuthority:
         if pressure_rung < 0:
             raise SourceProviderContractError("source pressure rung is invalid")
         date_params: list[dict[str, Any]] = [dict(semantic_params)]
-        if "start" in semantic_params and "end" in semantic_params:
+        # Overlap predicates are not point-date predicates: a long-lived
+        # member would be selected by every month it intersects. Keep this
+        # small interval authority as one semantic query; stream(fetch_rows)
+        # still bounds cursor memory. Never hide real duplicates downstream.
+        if query.start_policy != "window_overlap" and "start" in semantic_params and "end" in semantic_params:
             ladder = self.profile.pressure_ladder["date_chunk_months"]
             months = ladder[min(pressure_rung, len(ladder) - 1)]
             date_params = [

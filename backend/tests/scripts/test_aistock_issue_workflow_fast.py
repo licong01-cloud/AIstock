@@ -855,7 +855,7 @@ def test_repository_runtime_catalog_preserves_representative_roles(
     assert payload["target_ids"] == expected_targets
 
 
-@pytest.mark.parametrize("monthly", [True, False, "construction"])
+@pytest.mark.parametrize("monthly", [True, False, "construction", "overlap_source"])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
@@ -871,6 +871,8 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
     ]
     if monthly == "construction":
         monthly_sources = ["backend/services/dataset_release/monthly_construction_facts.py"]
+    if monthly == "overlap_source":
+        monthly_sources = ["backend/services/dataset_release/source_authority.py"]
 
     selected, error = workflow._select_runtime_probe_route(
         target, runtime_files=monthly_sources if monthly else ["backend/services/dataset_release/build_stage.py"],
