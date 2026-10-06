@@ -26,8 +26,7 @@ def test_execution_metrics_record_real_runs_without_changing_coverage(monkeypatc
     metrics = json.loads(receipt.with_suffix(".metrics.jsonl").read_text(encoding="utf-8"))
     assert metrics["executed_items"] == 1 and metrics["test_phase_seconds"] == .2
     assert metrics["source_head"] == "a" * 40 and metrics["exitstatus"] == 0
-    report = coverage.summarize_execution_metrics([metrics, dict(metrics, stage="local", execution_id="other")])
-    assert report["repeated_successful_runs"] == 1
+    assert coverage.summarize_execution_metrics([metrics, dict(metrics, stage="local", execution_id="other")])["repeated_successful_runs"] == 1
     assert coverage.summarize_execution_metrics([metrics, metrics])["observed_runs"] == 1
     assert coverage.summarize_execution_metrics([metrics, dict(metrics, environment_fingerprint=None, execution_id="other")])["repeated_successful_runs"] == 0
     assert coverage._digest(["-k", "smoke"], ordered=True) != coverage._digest(["smoke", "-k"], ordered=True)
@@ -44,8 +43,7 @@ def _write_test(root: Path, relative_path: str) -> Path:
 
 @pytest.mark.parametrize("deleted", [False, True])
 def test_verify_changed_test_coverage_requires_live_collection(tmp_path: Path, deleted: bool) -> None:
-    first = "backend/tests/example/test_first.py"
-    second = "tests/aistock_validation/test_second.py"
+    first, second = "backend/tests/example/test_first.py", "tests/aistock_validation/test_second.py"
     if not deleted:
         _write_test(tmp_path, first)
         _write_test(tmp_path, second)
