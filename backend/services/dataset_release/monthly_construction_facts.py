@@ -46,7 +46,8 @@ def collect_qfq_construction_anchors(
                           and row[0].upper() in instruments}))
     result = set()
     for dataset in ("daily_bin", "minute_bin"):
-        progress({"phase": "SOURCE_CONSTRUCTION_BOUNDARIES", "dataset": dataset})
+        progress({"phase": "SOURCE_CONSTRUCTION_BOUNDARIES",
+                  "query_id": "adj_factor_construction", "partition_key": dataset})
         for code, row in read_legacy_qfq_anchors(prefix, dataset=dataset, instruments=codes, checkpoint=checkpoint).items():
             result.add((code, date.fromisoformat(row["trade_date"])))
     factor_path = prefix.root / Path(prefix.manifest["components"]["factor_meta"]["path"]).parent / "daily_pv.h5"
@@ -65,8 +66,15 @@ def collect_qfq_construction_anchors(
             if item.get("path") == factor_path.relative_to(prefix.root).as_posix()]
     if len(pins) != 1 or factor_path.stat().st_size != pins[0]["size"]:
         raise LegacyMonthlyPrefixError("construction factor boundary physical pin differs")
+    def rolling_progress(_value: Mapping) -> None:
+        # The rolling reader emits local physical-read/index counters. Those
+        # are not validated/sealed SOURCE facts and must neither reset the
+        # durable monotonic counters nor expand the strict progress schema.
+        progress({"phase": "SOURCE_CONSTRUCTION_ROLLING_SEED",
+                  "query_id": "adj_factor_construction", "partition_key": factor_path.stem})
+
     tail = read_legacy_factor_tail(factor_path, instruments=codes, rows_per_instrument=1,
-                                  before=month_start, checkpoint=checkpoint, progress=progress)
+                                  before=month_start, checkpoint=checkpoint, progress=rolling_progress)
     result.update((str(code), pd.Timestamp(stamp).date()) for stamp, code in tail.index)
     if any(day >= month_start for _, day in result):
         raise LegacyMonthlyPrefixError("construction boundary is not prior to target month")

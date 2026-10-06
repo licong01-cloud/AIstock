@@ -8,6 +8,66 @@ from backend.services.dataset_release.source_authority import MonthlySourceAutho
 from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
 
 
+@pytest.mark.parametrize("cancel_at_tail", [False, True])
+def test_construction_progress_uses_real_durable_source_contract(tmp_path, monkeypatch, cancel_at_tail):
+    import hashlib
+    import json
+    import pandas as pd
+    from backend.services.dataset_release import monthly_construction_facts as subject
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseCancelled
+    from backend.tests.dataset_release.test_monthly_unified_v2 import _service, _request, Pipeline
+
+    root = tmp_path / "prefix"
+    catalog = root / "day/instruments/all.txt"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text("000001.SZ\t2018-08-01\t2026-08-31\n", encoding="utf-8")
+    factor_path = root / "factor/daily_pv.h5"
+    factor_path.parent.mkdir()
+    frame = pd.DataFrame({"close": [1.0]}, index=pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2026-08-31"), "000001.SZ")], names=["datetime", "instrument"],
+    ))
+    frame.to_hdf(factor_path, key="data", format="table", data_columns=True)
+    inventory = root / "inventory.json"
+    inventory.write_text(json.dumps({"files": [{"path": "factor/daily_pv.h5", "size": factor_path.stat().st_size}]}), encoding="utf-8")
+    prefix = SimpleNamespace(root=root, cutoff=date(2026, 8, 31), manifest={"components": {
+        "day_meta_export": {"path": "day/meta.json"}, "factor_meta": {"path": "factor/meta.json"},
+        "factor_content_manifest": {"path": "inventory.json", "size": inventory.stat().st_size,
+                                    "sha256": hashlib.sha256(inventory.read_bytes()).hexdigest()},
+    }})
+    monkeypatch.setattr(subject, "read_legacy_qfq_anchors", lambda *args, **kwargs: {
+        "000001.SZ": {"trade_date": "2026-08-28"},
+    })
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="SOURCE", status="CHECKING_SOURCE")
+    checkpoint, durable_progress = service._stage_control(operation, attempt=1, stage="SOURCE")
+    durable_progress({"phase": "SOURCE_ROWS", "rows_validated": 105498, "rows_sealed": 5498, "partitions_sealed": 3})
+    pulses = []
+
+    def progress(value):
+        pulses.append(value)
+        durable_progress(value)
+        if cancel_at_tail and value.get("partition_key") == "daily_pv":
+            service.cancel(operation)
+
+    if cancel_at_tail:
+        with pytest.raises(MonthlyReleaseCancelled):
+            subject.collect_qfq_construction_anchors(prefix, month_start=date(2026, 9, 1),
+                instruments=("000001.SZ",), checkpoint=checkpoint, progress=progress)
+    else:
+        anchors = subject.collect_qfq_construction_anchors(prefix, month_start=date(2026, 9, 1),
+            instruments=("000001.SZ",), checkpoint=checkpoint, progress=progress)
+        assert anchors == (("000001.SZ", date(2026, 8, 28)), ("000001.SZ", date(2026, 8, 31)))
+    assert {pulse["partition_key"] for pulse in pulses} == {"daily_bin", "minute_bin", "daily_pv"}
+    assert all(set(pulse) == {"phase", "query_id", "partition_key"} for pulse in pulses)
+    assert all(pulse["query_id"] == "adj_factor_construction" for pulse in pulses)
+    state = service.status(operation)
+    assert state["stage_progress"]["rows_validated"] == 105498
+    assert state["stage_progress"]["rows_sealed"] == 5498
+    assert state["stage_progress"]["partitions_sealed"] == 3
+    assert not any(state["checkpoints"].values())
+
+
 def _authority(*, monthly, month_start=date(2026, 9, 1)):
     profile = SimpleNamespace(
         profile="fixture", start_date=date(2018, 8, 1), minute_start_date=date(2024, 7, 1),
