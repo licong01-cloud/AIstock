@@ -1,6 +1,6 @@
 # Advisory GP5-MINUTE-1：D日分钟信息的固定5交易日条件买价 F2详细设计
 
-2026-10-06；DESIGN_VERIFIED_ONLY，尚未实现或拟合。接续[GP5固定5TD设计](advisory_generic_price_5td_v1_f2_design_20261006.md)，不研发分钟买卖点、执行器或订单。日频冻结与查询不变，仅新增D日已发生的分钟路径信息；10/20日不纳入首版。
+2026-10-06；离线SOURCE_VERIFIED，设计#5607已合入8949a25518de193909af5ac6cdf01cb59e2f3b3d并自身官方清理。精确十文件实现三轮本窗口自审修复、17项最小矩阵/Ruff/L0通过；随后真实profile-pin消费修订的2项定向回归通过，一次prepare及4fit/四臂研究完成。源码待PR/当前CI交付，经济未确认、未接入或激活。接续[GP5固定5TD设计](advisory_generic_price_5td_v1_f2_design_20261006.md)，不研发分钟买卖点、执行器或订单。日频冻结与查询不变，仅新增D日已发生的分钟路径信息；10/20日不纳入首版。
 
 ## Background / Goal
 
@@ -8,7 +8,7 @@ GP5设计#5576与离线源码#5590已合入/自身清理，一次4fit后的真�
 
 唯一新假设：相同D日终价、日高低和日量可能对应不同开/尾盘压力、路径波动、量的日内分配与限价状态；这些D内信息能否改善固定5TD买入条件净价值及风险判断？只检验分钟信息的增量，不换label/loss/seed/成本/价格阈值。不是预测T开盘，不声称任意限价成交的因果价值，不重做QE上游Alpha。
 
-当前只读可产性样本：活动profile `20260928-v15-unified-moneyflow1`，本地minute component三只原train股D=2024-07-04各241/241 OHLC、八字段存在；meta/calendar/instruments hash匹配profile。只是三股来源样本，未证明7720键覆盖或盈利。旧N3的硬编码provider、snapshot、父rank、CPCV/Ridge合同不复用为新研究；本文只采用已公开的分钟经济量定义。
+设计前只读可产性样本：活动profile `20260928-v15-unified-moneyflow1`，本地minute component三只原train股D=2024-07-04各241/241 OHLC、八字段存在；meta/calendar/instruments hash匹配profile。当时只是三股来源样本，不证明全7720键覆盖或盈利；后续全原人口prepare结果见实际进度。旧N3的硬编码provider、snapshot、父rank、CPCV/Ridge合同不复用为新研究；本文只采用已公开的分钟经济量定义。
 
 ## Scope / Non-goals
 
@@ -96,18 +96,18 @@ profile仅用于来源身份，不能据其未来发布时点声称D原生captur
 
 ## Design Acceptance Matrix
 
-本表只验收详细设计，所有源码/真实研究/效果均尚未完成，不能用DESIGN_VERIFIED冒充产品实现。
+本表验收本离线源码切片，研究、经济、日频API/UI/运行态另验收，不把源码通过或合成测试当作真实盈利。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-989 | §1/Scope | artifact: 既存GP5标签政策与原数据身份 | DESIGN_VERIFIED | none |
-| F-990 | §2 | artifact: 活动profile三股可产性、来源与读取合同 | DESIGN_VERIFIED | none |
-| F-991 | §3 | artifact: 八量/分母/正常UNKNOWN定义与定向手算方案 | DESIGN_VERIFIED | none |
-| F-992 | §1/3/4 | artifact: 19维matched/35维candidate及train-only合同 | DESIGN_VERIFIED | none |
-| F-993 | §4 | artifact: 固定4fit/支持/JSON/partial合同 | DESIGN_VERIFIED | none |
-| F-994 | §4 | artifact: 纯D条件价格集合与非执行边界 | DESIGN_VERIFIED | none |
-| F-995 | §5 | artifact: 完整cohort/UNKNOWN/单位/经济边界 | DESIGN_VERIFIED | none |
-| F-996 | Scope/Implementation/Rollout | artifact: 精确范围/审核/串行/授权与实施计划 | DESIGN_VERIFIED | none |
+| F-989 | generic_minute_price_5td_contracts_v1.py / pipeline._load | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_pipeline_v1.py::test_immutable_prepare_preserves_label_rows_and_no_later_profile_dependency | SOURCE_VERIFIED | none |
+| F-990 | generic_minute_price_5td_source_v1.py | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_source_v1.py::test_reader_only_D_bytes_keeps_missing_stocks_and_pin_errors；同文件truncated/header/source-change测试 | SOURCE_VERIFIED | none |
+| F-991 | source.aggregate_d_minute_features_v1 | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_source_v1.py::test_hand_minute_values_lunch_and_activity_coordinate；同文件original-denominator/missing/halt测试 | SOURCE_VERIFIED | none |
+| F-992 | generic_minute_price_5td_models_v1.py | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_models_v1.py::test_four_shared_fits_dimensions_missing_and_package_invariance；同文件future-poison测试 | SOURCE_VERIFIED | none |
+| F-993 | models / pipeline.train_minute_price_5td_study_v1 | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_pipeline_v1.py::test_partial_physical_fit_is_durable_and_cannot_implicitly_restart；模型fixture四真实单元fit/逐头JSON parity | SOURCE_VERIFIED | none |
+| F-994 | generic_minute_price_5td_inference_v1.py | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_models_v1.py::test_cost_once_full_ticks_holes_and_not_an_open_forecast；同文件bundle/known-contradiction测试 | SOURCE_VERIFIED | none |
+| F-995 | pipeline.evaluate_minute_price_5td_cohorts_v1 | test: backend/tests/advisory_model_first/test_generic_minute_price_5td_pipeline_v1.py::test_all_dates_unknown_settlement_and_no_top6_pseudo_NAV；真实干预与仅UNKNOWN动作差异分报 | SOURCE_VERIFIED | none |
+| F-996 | pipeline/Scope/Implementation/Rollout | artifact: 精确scope、三轮修订、17最终矩阵/Ruff及explicit changed-file L0 0blocking | SOURCE_VERIFIED | none |
 
 最小测试：float32截断/坏头/未来slot/路径越界/源变化、原名单重复与正常缺文件；手工分钟OHLC/午休/amount-volume同集合/零量/80%分母/停牌；validation/test毒化不改median/support/权重、19/35维同train与四fit JSON parity/旧schema拒绝；完整tick未知洞/元数据解耦；原日期/零候选/未结算null/不补Top6/原stage及partial。复用同叶fixture，避免快照/重复测试债务；不展开QE或其它模块套件。
 
@@ -117,7 +117,30 @@ profile仅用于来源身份，不能据其未来发布时点声称D原生captur
 
 完整离线源码交付后无人调度/无需后端重启，backend_restart_required=false；database/DDL/DML/dependency/profile/runtime/model activation/process control均NOOP。停止新离线调用即可回滚，旧模型/正式产物不变。日频挂载另设计，重启用户执行。
 
-DESIGN-COMPLIANCE-001：设计/源码/研究/经济/自然运行各自验收；未知/真实矛盾不伪成功；同5TD目标、成本及原候选不结果后改变；不新增QE资格、收益或日期审批。源码实现未发生，矩阵只是设计验收。
+DESIGN-COMPLIANCE-001：设计/源码/研究/经济/自然运行各自验收；未知/真实矛盾不伪成功；同5TD目标、成本及原候选不结果后改变；不新增QE资格、收益或日期审批。完整离线源码与真实一次研究已完成，矩阵只验收该源码切片，不冒充价格API/UI、经济或运行激活。
+
+## 实际一次研究与当前进度
+
+clean producer `474281325`、implementation SHA `6a69317212c6d6501a9c90e595f9cb8b843a86474d9f263a19f646166f67d31a`；run `advgp5minute_6de21272644fb3d3bbc86ede`、plan SHA `6de21272644fb3d3bbc86edec5e93272a3ecb370715f52c9440dd4989716f5f0`。新正式root `F:/Dev/AIstock_model_artifacts/advisory_generic_minute_price_5td_v1_20261006`，四stage均已原子发布；prepared/trained/evaluated SHA分别`1e4ae3e6687394499be84e7dbb7d2c4fc58ef12091df62b48ed785004ae7c568` / `411fe39fe407a57ba0eabc64307b2feebfeaac294e383e43fac6d4ecf45b5e4e` / `2f7448e936b25d7dd78c567a266a11bf8392d0f6edb0f586acde9498a1402f03`。GP5 parent prepared SHA `b58ff2fad39e5479e94e04677a8e526ebb089796f86db4b0be6adfc5d5850fbc`不变，没有重跑或覆盖旧输入。
+
+首次记录`advgp5minute_8e456dd2cec12163d63f2bb3`只完成预登记：消费者误认为profile pins只能有三个hash，实际还含rule/snapshot/universe合法语义，prepare在分钟解码及fit前失败。只修Advisory消费者，将三个hash严格校验与完整语义一致分别绑定；保留旧预登记、不伪造PASS或重写旧plan。成功新lineage显式引用该零fit记录，未增加模型搜索或改变业务/成本；活动profile及数据未改。
+
+prepare保留386D/7720原KEY，7660行完整OHLC、4901行八分钟量全已知。其余2759行完整OHLC与60行partial仅VWAP活动坐标未证明；其它可观察分钟量保留，未删除股票/日期或补数。train4380行八量全已知；validation有1202行、test有1617行VWAP未知（test仅3行八量全已知）。训练同成熟3684行/193D、validation1586行仅诊断，分钟缺失不筛监督；这个train/test缺失分布差异限制分钟增量的解释，不等于全分钟数据缺失或需要数据窗口阻塞。来源等级仍`CURRENT_RELEASE_NON_VINTAGE_D_PRICE_VALUES`，未来分钟解码0、DB写入/Selection重建0。prepare总耗时未取得可靠读回，记unknown而非复跑或估造。
+
+2026-10-06 14:43:44UTC fresh QE experiment/custom_evo/multi-alpha均running0；一次4fit至TRAINED7.203秒、完整四臂EVALUATED7.625秒，14:44:32UTC三路径仍0。逐头fit journal恰4项，实际累计从103到107研究fit+1旧index；单元测试fixture拟合不计作研究试验。所有test81D/1620候选保留，80完整可配对5TD cohort与1未结算组null，不删洞作区间或资金NAV。
+
+| arm | 平均5TD cohort净收益bps（80完整组） | 已结算真实TAKE | TAKE胜率 | known avoid / UNKNOWN / 不可执行 / 未结算 |
+|---|---:|---:|---:|---|
+| 原Top5 baseline | 129.0145 | 403 | 58.3127% | 0 / 0 / 1 / 1 |
+| 固定±300bps rule | 131.5724 | 397 | 58.4383% | 6 / 0 / 1 / 1 |
+| 19维price-conditioned matched | 73.6306 | 249 | 56.2249% | 142 / 12 / 1 / 1 |
+| 35维D-minute candidate | 82.1054 | 257 | 55.6420% | 134 / 12 / 1 / 1 |
+
+candidate−base/matched平均5TD cohort净增量`−46.9091/+8.4748bps`。相对base为134项已知动作干预/55D，另3D仅UNKNOWN导致动作不同；相对matched54项已知干预/42D，UNKNOWN-only差异0。不能将12项UNKNOWN当作模型拒绝，也不能用更高平均盈利幅度（candidate476.3370bps）替代整体收益。置信区间null、overlapping cohort不能累计成可投资NAV/MDD；结论仍`EXPLORATORY_NOT_CONFIRMED/NAVIGATION_ONLY`，不支持confirmation/自然激活、不回选matched/rule或调参数救候选。小幅分钟点增量是导航信号，不证明独立OOS、跨包盈利或分钟全局无价值；仅结束本candidate。
+
+本轮六项的其他交付已完成；BUG-1726 #5597、M1新的生产HTTP仍待用户重启backend-main后只读运行验收，保留开放close-sync，不冒充本离线源码需要重启。下一步当前源码CI/合入及自身清理，不安排旧负研究补证、归档或重训；新研究须另有真正不同信息/目标的事前设计。
+
+结果后终审按来源/计算、训练时钟、业务归因及授权逐项核对：四stage/hash/四journal一致，test毒化回归及shared train/price-conditioned matched未变；正式结果与输出如实绑定，不把VWAP缺失误写为整行缺数据。最终17项最小矩阵、8源码Ruff、十文件L0（0blocking）及F2 8/8/0warnings通过；这些测试未调用研究runner或产生额外研究fit。当前本地源码干净producer实现hash不变，待当前HEAD CI通过才合入。
 
 ## Review / 多轮自审
 
@@ -128,3 +151,5 @@ DESIGN-COMPLIANCE-001：设计/源码/研究/经济/自然运行各自验收；�
 第二轮修订复核补充：开/尾return绑定原calendar端点，不利用缺bar缩短窗口；directional efficiency分子/分母都排午休跳变，避免原首末/相邻定义不一致；VWAP的价格/活动坐标不明仅该量UNKNOWN，保留其它已知分钟信息并报告原因。
 
 第三轮业务/交付：固定5TD不改旧review钟、价格集合不是开盘或分钟执行；完整原日期/未知组null/重叠非NAV、四fit记账、模块/X/F/服务边界写清。以上是本窗口不同视角自审，不冒称独立外审；设计校验通过不代表收益或源码完成。
+
+源码三轮接续：第一轮来源/数学核对D-only seek、原calendar分母、手算量和非法已知输入；第二轮训练/政策修订为先筛train/validation时钟再解析数值，test的Inf毒化也不影响训练，原GP5源码未改；补评估原候选唯一/完整rank/群体/全日期检查。第三轮测量/授权补齐不可执行单独计数、已知模型干预与仅UNKNOWN动作差异分开，不能将缺输入当模型拒绝；30min/2GiB预算在来源/逐fit前后执行，模型不读取活动profile。对应2项及1项定向修订通过后17项最小矩阵/Ruff PASS，explicit changed-file L0 0blocking；随后2项真实profile-pin回归通过，冻结clean producer后实际一次prepare/研究完成。全部测试临时在X，纯离线无服务/DB/QE任务操作，原M1/GP5模型和结果不动。这些是本窗口不同视角自审，非独立外审；最新完整结果如上，当前107研究fit+1旧index。结果/授权及源码身份终审不再重拟合；经济未确认与源码可交付分开。
