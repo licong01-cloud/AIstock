@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1760-merge-graphql-read-retries-duplicate-failed-transport-before-verified-re.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "tests/aistock_validation/bugs/20261006_BUG-1760-merge-graphql-read-retries-duplicate-failed-transport-before-verified-re.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -107,10 +113,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
