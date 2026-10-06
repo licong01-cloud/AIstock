@@ -1,5 +1,5 @@
 {
-  "actual": "SOURCE BLOCKED before BUILD with four grouped failure categories.",
+  "actual": "attempt246 SOURCE FAILED after 26790239 September rows / 1034 partitions / 3300.5s. Exact minute readback: 1430 failures = 1292 parity mismatches + 138 session/bar failures; 1288 keys only differ by <=100 shares. All 138 session keys have 240 rows but only 239 valid labels; independently checked 002274.SZ/2026-09-01 contains zero-volume 13:00 and lacks 11:30. Other gates: 19676 null pre_close keys on Sep1-4; 336 absent sector rows (16 stocks x21 sessions in 7 formally unquoted/stopped sectors); 20 margin_detail provider-denominator declarations missing expected_rows; 1 missing bak_basic key 301139.SZ/2026-09-30. Moneyflow itself has no blocking gap. Original active profile unchanged; no BUILD/candidate READY.",
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_frozen_source_audit.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
@@ -17,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-06T14:27:28.263928Z",
-  "description": "SOURCE BLOCKED before BUILD with four grouped failure categories.",
+  "description": "9月月更 SOURCE 原始事实审计与既有候选准备语义未闭合，错误汇总也混淆字段差异与物理缺口。必须区分真实缺失、来源精度、合法停发和程序先后顺序：复用正式涨跌停推导的实际完成证据，不豁免 null pre_close；停发行业保留真实 membership/资金流，不能伪造行情；融资融券分母必须有独立 provider 证据，不能由数据库行数反推；分钟价格/金额差异和13:00/11:30异常须独立来源核验，不统一放宽阈值或改时间标签。仅处理9月及必要构造锚点，不修改生产库、active profile、HMM/QE合同或服务。当前只完成定点诊断，未实施源码/数据修复，BUG保持open。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -27,7 +27,8 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_dataset_release_control/monthly/dmr_63a313d97fd046a38d5a876265565014/source-inputs/attempt-246/source-issues.ndjson"
+    "X:/AIstock_dataset_release_control/monthly/dmr_63a313d97fd046a38d5a876265565014/source-inputs/attempt-246/source-issues.ndjson",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1770-20261006/minute-failed-keys-readback.json#sha256=fb6629c9b8cdac1248d6a144443bfe93c766cdba8a985917b46010d0a209df9f"
   ],
   "expected": "Validate actual prepared facts and preserve exact evidence for genuine data gaps, no speculative exemptions.",
   "file_scope_contract": {
