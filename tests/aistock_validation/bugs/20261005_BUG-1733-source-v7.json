@@ -61,7 +61,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1733",
-  "closed_at": null,
+  "closed_at": "2026-10-06T01:58:53.343241Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -75,6 +75,12 @@
     "database_read": true,
     "database_read_scope": "read-only genuine QFQ construction facts for two symbols, three returned rows, and September margin_detail per-date counts (20 observed dates, cutoff absent); no full-history business audit",
     "database_write": false,
+    "design_compliance_review": {
+      "actual_delivery_vs_source_separated": true,
+      "approved_scope_preserved": true,
+      "no_unapproved_simplification": true,
+      "remaining_runtime_data_acceptance_explicit": true
+    },
     "direct_test_command": "rtk pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/dataset_release/test_monthly_legacy_factor.py backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py -q",
     "direct_test_result": "550 passed, 3 skipped in final changed-task compiler/SOURCE/native-writer/consumer/finalizer/API/runtime-catalog matrix; follow-up synthetic credential and runtime route 5 passed; L0, guardrail_changed_files, validation_catalog_integrity PASS (22 catalog tests); changed-file Ruff/diff-check PASS. Not a production monthly run or ten-hour measurement.",
     "fresh_process_metadata_readback": {
@@ -123,7 +129,6 @@
     "review_round_41": "正式factor构建定向验证2 PASS：融资原始H5可真实止于09-29且不生成09-30行；其他组件仍至cutoff。物理修复前缀身份与SOURCE绑定不一致时拒绝，logical前驱仍为active v15。fresh-process正式worker配置preflight PASS/SOURCE7，同一BUILD监督scope；未claim operation、未打开数据库、未启动worker。",
     "review_round_42": "修正运行态目录中月更控制面与其子worker被分成两个部署目标的过时登记：backend.main lifespan负责MonthlyReleaseWorkerSupervisor.start，既有monthly-process probe同时检查backend identity与child supervision，统一归属现有worker-scheduler target；仍必须由用户重启父后端并完成两进程读回，不标记non-runtime、不控制进程。普通后端及其他worker分类保持不变，10项定向分类/route测试PASS。新增9个定向测试文件加入现有qlib_data_backend执行列表，不改变模块ownership。",
     "review_round_43": "最终changed-task矩阵550 PASS/3 SKIP；后续仅修正注释与测试中的合成凭据表示，凭据脱敏和runtime route定向5 PASS。L0、staged guardrail/ownership、catalog integrity PASS；catalog integrity22测试PASS。正式finish closure_ready=true/ready_for_pr，但该状态仅表示源PR就绪，数据月更和十小时目标仍未验收。两个本轮X盘私有验证H5在进程正常结束、独占打开成功后按精确文件删除，均可从immutable来源重建，未删除任何candidate文件。",
-    "design_compliance_review": {"approved_scope_preserved": true, "no_unapproved_simplification": true, "actual_delivery_vs_source_separated": true, "remaining_runtime_data_acceptance_explicit": true},
     "runtime_action": false,
     "state": "IN_PROGRESS_NOT_READY",
     "ten_hour_requirement_measured": false
@@ -142,7 +147,6 @@
   "expected": "仅新增月份数据检查与增量构建，复用已验前驱，启动合同闭合，可查看进度及底层报错；实际月更<=10h",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1733-source-v7.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/api_models.py",
       "backend/services/dataset_release/artifact_ready_build_source.py",
@@ -197,7 +201,8 @@
       "backend/tests/scripts/test_monthly_unified_dataset_release.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
-      "scripts/monthly_unified_dataset_release.py"
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1733-source-v7.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_error_diagnostics.py",
@@ -205,7 +210,6 @@
       "backend/tests/dataset_release/test_monthly_delta_regressions.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261005_BUG-1733-source-v7.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/api_models.py",
       "backend/services/dataset_release/artifact_ready_build_source.py",
@@ -260,7 +264,8 @@
       "backend/tests/scripts/test_monthly_unified_dataset_release.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
-      "scripts/monthly_unified_dataset_release.py"
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1733-source-v7.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -395,8 +400,8 @@
   },
   "first_seen_at": "2026-10-05T16:26:24.544709Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6272c856c034fdf1d5f44e484de2ba622db2c759",
+  "fixed_at": "2026-10-05T22:21:36Z",
   "github_issue_number": 5502,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5502",
   "implementation_state": "PARTIALLY_IMPLEMENTED_NOT_READY_FOR_COMPLETION",
@@ -408,6 +413,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5556",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -463,10 +469,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1733/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1733",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "f8f66ca7414d47c99d9948234ed37cdc9e50e5ab914aa7eb0558002c9d9fdd9e",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "6272c856c034fdf1d5f44e484de2ba622db2c759",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-06T01:58:25.886824Z",
+      "mode": "read_only",
+      "observed_identity": "6272c856c034fdf1d5f44e484de2ba622db2c759",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c835cfc23e34e2a7572caf9a978e5e00a3820db7b1e4a2e93dc0c41f201da3eb",
+      "receipt_sha256": "e80db07a764bc1bb5614adbcd1ddbd8c3f3d9c58da61bcce35e344d2bfb3b3c5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b0060f477629dcdbe88283381998c11e8f1dc74f7a27f48926a6dadbbb25ee13",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -481,7 +509,29 @@
     "原失败的底层driver异常未持久保存，不能事后编造错误原因。新增诊断仅对后续实际失败有效。"
   ],
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1733",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "772ae34984fdd7e4",
+    "recorded_at": "2026-10-05T22:22:10.947670Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e544d41f98e5abcb64b1d5b0fe7b91f345cadba2",
+    "source_merge_commit": "6272c856c034fdf1d5f44e484de2ba622db2c759",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5556",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_repair_inputs.py backend/tests/dataset_release/test_monthly_legacy_factor.py backend/tests/dataset_release/test_monthly_postgres_source.py -q -> passed within final 550 passed, 3 skipped changed-task matrix; follow-up credential/route 5 passed",
+      "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed"
+    ],
+    "validation_evidence_digest": "c055245f9f4476e50c5a7f7536b77bca49356cdc9e3b342e6d64a26a6b053d07"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -490,6 +540,11 @@
     "fingerprint": "9934efdd5f25e0d2fd49a69d",
     "source_event_id": "FE-20261005-9934efdd5f25"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dataset_release/test_monthly_repair_inputs.py backend/tests/dataset_release/test_monthly_legacy_factor.py backend/tests/dataset_release/test_monthly_postgres_source.py -q -> passed within final 550 passed, 3 skipped changed-task matrix; follow-up credential/route 5 passed",
+    "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed",
+    "CI run 37381580519 success; targeted matrix 550 passed 3 skipped; formal restart receipt passed at 2026-10-06T01:58:26Z"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
