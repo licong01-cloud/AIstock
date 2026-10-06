@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1758",
-  "closed_at": null,
+  "closed_at": "2026-10-06T12:35:04Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,17 +28,17 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1758-target-owned-acceptance-registry-omits-advisory-sector-entry-readback-an.json",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
-      "scripts/aistock_issue_workflow.py"
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1758-target-owned-acceptance-registry-omits-advisory-sector-entry-readback-an.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1758-target-owned-acceptance-registry-omits-advisory-sector-entry-readback-an.json",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
-      "scripts/aistock_issue_workflow.py"
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1758-target-owned-acceptance-registry-omits-advisory-sector-entry-readback-an.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -109,8 +109,8 @@
   },
   "first_seen_at": "2026-10-06T12:25:03.624176Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "812767a02d8f5f750a3fcd525b6ac0a00a7949b9",
+  "fixed_at": "2026-10-06T12:35:04Z",
   "github_issue_number": 5577,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5577",
   "last_seen_at": "2026-10-06T12:25:03.624176Z",
@@ -118,6 +118,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5578",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -136,6 +137,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -145,7 +147,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1758",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d9df2fdb643e01b9",
+    "recorded_at": "2026-10-06T12:35:45.956119Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "20d775fcb35f97c68dc8ae1e3e350b6f13d9a062",
+    "source_merge_commit": "812767a02d8f5f750a3fcd525b6ac0a00a7949b9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5578",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -> passed",
+      "rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/BUG1758-final -> passed, 254 tests"
+    ],
+    "validation_evidence_digest": "ad5a76af14bb7ee9f47a2106a8ca94ebd389807de0ea142416fb13ecb48b6023"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -154,6 +178,10 @@
     "fingerprint": "03370351823a799f5f78f0b9",
     "source_event_id": "FE-20261006-03370351823a"
   },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -> passed",
+    "rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/BUG1758-final -> passed, 254 tests"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
