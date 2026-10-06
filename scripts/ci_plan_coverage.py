@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
+import sys
+import time
+import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -12,6 +18,105 @@ from typing import Any, Iterable
 RECEIPT_ENV = "AISTOCK_CI_TEST_COLLECTION_RECEIPT"
 REPO_ROOT_ENV = "AISTOCK_CI_REPO_ROOT"
 CLASSIFIER_SUMMARY_ENV = "AISTOCK_CI_CLASSIFIER_SUMMARY"
+METRICS_ENV = "AISTOCK_TEST_METRICS_RECEIPT"
+_metrics: dict[str, Any] = {}
+
+
+def _digest(values: Iterable[str], *, ordered: bool = False) -> str:
+    return hashlib.sha256(json.dumps(list(values) if ordered else sorted(values), ensure_ascii=True).encode()).hexdigest()
+
+
+def pytest_sessionstart(session: Any) -> None:
+    _metrics.clear()
+    if os.environ.get(METRICS_ENV) or os.environ.get(RECEIPT_ENV):
+        _metrics.update(started=time.monotonic(), executed=Counter(), phase_seconds=0.0, execution_id=uuid.uuid4().hex)
+
+
+def pytest_runtest_logreport(report: Any) -> None:
+    if not _metrics:
+        return
+    _metrics["phase_seconds"] += float(report.duration)
+    if report.when == "call":
+        _metrics["executed"][report.nodeid] += 1
+
+
+def _write_metrics(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
+    if not _metrics:
+        return
+    # Observational only: failures never replace pytest or collection verdicts.
+    try:
+        elapsed = round(time.monotonic() - _metrics["started"], 6)
+        executed = _metrics["executed"]
+        payload = {
+            "schema_version": "aistock_test_execution_metrics_v1",
+            "execution_id": _metrics["execution_id"],
+            "source_head": os.environ.get("AISTOCK_TEST_SOURCE_HEAD") or None,
+            "checkout_head": os.environ.get("AISTOCK_TEST_CHECKOUT_HEAD") or None,
+            "environment_fingerprint": os.environ.get("AISTOCK_CI_ENV_FINGERPRINT") or None,
+            "plan": os.environ.get("AISTOCK_TEST_PLAN") or None,
+            "stage": os.environ.get("AISTOCK_TEST_STAGE") or "not_recorded",
+            "run_id": os.environ.get("GITHUB_RUN_ID") or None,
+            "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT") or None,
+            "arguments_digest": _digest([*(str(arg) for arg in session.config.invocation_params.args),
+                                          os.environ.get("PYTEST_ADDOPTS", "")], ordered=True),
+            "collection_digest": _digest(str(item.nodeid) for item in session.items),
+            "execution_digest": _digest(executed.elements()),
+            "executed_items": sum(executed.values()),
+            "unique_executed_items": len(executed),
+            "repeated_items": sum(executed.values()) - len(executed),
+            "pytest_wall_seconds": elapsed,
+            "test_phase_seconds": round(_metrics["phase_seconds"], 6),
+            "exitstatus": int(exitstatus),
+        }
+        explicit = os.environ.get(METRICS_ENV)
+        path = Path(explicit) if explicit else Path(os.environ[RECEIPT_ENV]).with_suffix(".metrics.jsonl")
+        _write_metrics(path, payload)
+        print("aistock_test_metrics " + json.dumps(payload, sort_keys=True))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        print(f"aistock_test_metrics status=not_recorded reason={type(exc).__name__}", file=sys.stderr)
+
+
+def summarize_execution_metrics(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    groups: Counter[tuple[str, ...]] = Counter()
+    elapsed = 0.0
+    count = 0
+    unknown = 0
+    seen: set[str] = set()
+    identity = ("source_head", "checkout_head", "environment_fingerprint", "plan", "arguments_digest", "collection_digest", "execution_digest")
+    for record in records:
+        execution_id = record.get("execution_id")
+        if execution_id in seen:
+            continue
+        if execution_id:
+            seen.add(execution_id)
+        count += 1
+        duration = float(record["pytest_wall_seconds"])
+        if not math.isfinite(duration) or duration < 0:
+            raise ValueError("invalid observed pytest duration")
+        elapsed += duration
+        key = tuple(str(record.get(field) or "") for field in identity)
+        if execution_id and all(key) and "not_recorded" not in key and record.get("exitstatus") == 0 and record.get("executed_items", 0) > 0:
+            groups[key] += 1
+        else:
+            unknown += 1
+    return {"observed_runs": count, "pytest_wall_seconds": round(elapsed, 6),
+            "repeated_successful_runs": sum(max(0, value - 1) for value in groups.values()),
+            "ineligible_runs": unknown, "scope": "provided receipts only; candidates, not automatic reuse"}
+
+
+def _metrics_summary(paths: Iterable[str]) -> dict[str, Any]:
+    try:
+        records = [json.loads(line) for path in dict.fromkeys(paths)
+                   for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+        return summarize_execution_metrics(records)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return {"status": "not_recorded", "reason": type(exc).__name__}
 
 
 def _normalize_path(value: str) -> str:
@@ -148,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--receipt", required=True)
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--output-json")
+    parser.add_argument("--metrics-receipt", action="append", default=[])
     args = parser.parse_args(argv)
 
     changed_files = list(args.changed_file)
@@ -160,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
         collected_tests=_read_lines(Path(args.receipt)),
         repo_root=Path(args.repo_root),
     )
+    if args.metrics_receipt:
+        payload["execution_metrics"] = _metrics_summary(args.metrics_receipt)
     if args.output_json:
         _write_json(Path(args.output_json), payload)
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))

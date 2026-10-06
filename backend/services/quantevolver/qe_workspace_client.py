@@ -15,6 +15,22 @@ from backend.services.qe_archive.models import normalize_json
 
 logger = logging.getLogger(__name__)
 
+
+class QEWorkspaceResultReadUnavailable(RuntimeError):
+    """A bounded GET exhausted transient failures; execution is not failed."""
+
+    reason_code = "qe_completed_result_read_unavailable"
+
+    def __init__(self, *, task_id: str, loop_id: str, endpoint: str, error: Exception):
+        self.task_id = task_id
+        self.loop_id = loop_id
+        self.endpoint = endpoint
+        self.error_type = type(error).__name__
+        super().__init__(
+            f"{self.reason_code}: task={task_id} loop={loop_id} "
+            f"endpoint={endpoint} error_type={self.error_type} attempts=3"
+        )
+
 _QE_SUBMISSION_RECEIPT_SCHEMA = "qe_submission_receipt_v1"
 _QE_SUBMISSION_RECEIPT_STATUSES = frozenset(
     {"not_reserved", "reserved", "started", "running", "completed", "failed", "cancelled"}
@@ -1523,13 +1539,14 @@ class QEWorkspaceClient:
             raise
         
     async def get_loop_metrics(self, task_id: str, loop_id: str) -> Dict[str, Any]:
-        """
-        获取某个 LOOP 跑完后的各项指标（双参数：task_id + loop_id）。
-        404 时重试一次（等待 5s，可能 read_exp_res.py 还未完成），最终仍失败则抛异常。
-        """
-        url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/metrics"
-        import asyncio
-        for attempt in range(2):
+        """Read completed metrics with bounded, GET-only transient retries."""
+        return await self._read_completed_result(task_id, loop_id, "metrics")
+
+    async def _read_completed_result(
+        self, task_id: str, loop_id: str, endpoint: str,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/tasks/{task_id}/loops/{self._to_rdagent_loop_id(task_id, loop_id)}/{endpoint}"
+        for attempt in range(3):
             try:
                 response = await self.client.get(url)
                 response.raise_for_status()
@@ -1541,12 +1558,24 @@ class QEWorkspaceClient:
                 return payload
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404 and attempt == 0:
-                    logger.warning(f"Metrics not ready yet for {task_id}/{loop_id}, retrying in 5s...")
+                    logger.warning("Result not ready: task=%s loop=%s endpoint=%s; retrying in 5s", task_id, loop_id, endpoint)
                     await asyncio.sleep(5)
                     continue
-                raise RuntimeError(f"Failed to get metrics for task {task_id} loop {loop_id}: {e}") from e
-            except httpx.HTTPError as e:
-                raise RuntimeError(f"Failed to get metrics for task {task_id} loop {loop_id}: {e}") from e
+                if e.response.status_code not in {429, 502, 503, 504}:
+                    raise RuntimeError(f"Failed to get {endpoint} for task {task_id} loop {loop_id}: {e}") from e
+                transient_error = e
+            except httpx.TransportError as e:
+                transient_error = e
+            if attempt == 2:
+                raise QEWorkspaceResultReadUnavailable(
+                    task_id=task_id, loop_id=loop_id, endpoint=endpoint, error=transient_error,
+                ) from transient_error
+            logger.warning(
+                "Completed result GET transient failure: task=%s loop=%s endpoint=%s "
+                "error_type=%s attempt=%s/3; retrying in 5s",
+                task_id, loop_id, endpoint, type(transient_error).__name__, attempt + 1,
+            )
+            await asyncio.sleep(5)
 
     async def kill_loop(self, task_id: str, loop_id: str) -> Dict[str, Any]:
         """终止 RDAgent 侧正在运行的 Loop 进程。"""
@@ -1695,31 +1724,8 @@ class QEWorkspaceClient:
         )
 
     async def get_enhanced_metrics(self, task_id: str, loop_id: str) -> Dict[str, Any]:
-        """
-        获取增强诊断指标（训练曲线、IC 时间序列、收益曲线等）。
-        Loop 已完成时调用，数据必须存在。404 时重试一次（read_exp_res.py 可能尚未写完）。
-        """
-        rdagent_loop_id = self._to_rdagent_loop_id(task_id, loop_id)
-        url = f"{self.base_url}/tasks/{task_id}/loops/{rdagent_loop_id}/enhanced-metrics"
-        import asyncio
-        for attempt in range(2):
-            try:
-                response = await self.client.get(url)
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, dict) or not payload:
-                    raise RuntimeError(
-                        f"增强指标响应为空或格式错误: task={task_id} loop={loop_id} payload={payload}"
-                    )
-                return payload
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404 and attempt == 0:
-                    logger.warning(f"Enhanced metrics not ready yet for {task_id}/{loop_id}, retrying in 5s...")
-                    await asyncio.sleep(5)
-                    continue
-                raise RuntimeError(f"Failed to get enhanced metrics for task {task_id} loop {loop_id}: {e}") from e
-            except httpx.HTTPError as e:
-                raise RuntimeError(f"Failed to get enhanced metrics for task {task_id} loop {loop_id}: {e}") from e
+        """Read existing diagnostics; missing/malformed data never becomes success."""
+        return await self._read_completed_result(task_id, loop_id, "enhanced-metrics")
 
     @staticmethod
     def _log_event_is_terminal(data: str, event_type: str | None) -> bool:

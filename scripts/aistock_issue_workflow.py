@@ -987,6 +987,9 @@ def _compact_phase_summary(value: Any) -> dict[str, Any] | None:
         "event_count",
         "known_duration_seconds",
         "inferred_elapsed_seconds",
+        "measurement_scope",
+        "measurement_status",
+        "queue_measurement_scope",
         "code_repair_seconds",
         "total_estimated_tokens",
         "context_estimated_tokens",
@@ -4100,6 +4103,119 @@ def _validate_hmm_rotation_l2_overview(
     return "passed", None, facts
 
 
+def _validate_hmm_workers(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read one explicitly identified worker; never infer a reload from controller health."""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    owners = query.get("owner_id") or []
+    if len(owners) != 1 or not owners[0].strip():
+        return "failed", "worker probe requires exactly one non-empty owner_id", {}
+    if not isinstance(payload, dict) or payload.get("status") != "ok" or payload.get("errors") or payload.get("ok") is False:
+        return "failed", "HMM worker readback must report status=ok", {}
+    data = payload.get("data")
+    rows = data.get("workers") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        return "failed", "HMM worker readback is missing worker records", {}
+    matches = [row for row in rows if row.get("owner_id") == owners[0]]
+    if len(matches) != 1:
+        return "failed", "worker owner_id must match exactly one durable record", {}
+    row = matches[0]
+    facts = {"owner_id": owners[0], "pid": row.get("pid"), "started_at": row.get("started_at")}
+    if (row.get("runtime_status") != "running" or row.get("health") != "healthy"
+            or type(row.get("pid")) is not int or row["pid"] < 1
+            or not isinstance(row.get("host"), str) or not row["host"].strip()
+            or row.get("shutdown_at") is not None or row.get("exit_code") is not None):
+        return "failed", "requested worker is not an active healthy process", facts
+    try:
+        started = datetime.fromisoformat(str(row.get("started_at", "")).replace("Z", "+00:00"))
+        poll = datetime.fromisoformat(str(row.get("last_poll_at", "")).replace("Z", "+00:00"))
+        if started.tzinfo is None or poll.tzinfo is None:
+            raise ValueError("timezone missing")
+        age = (datetime.now(timezone.utc) - poll).total_seconds()
+        if poll < started or not 0 <= age <= 120 or row.get("healthy_max_poll_age_seconds") != 120:
+            raise ValueError("stale/inconsistent heartbeat")
+    except (ValueError, TypeError):
+        return "failed", "requested worker heartbeat is stale or inconsistent", facts
+    return "passed", None, {**facts, "last_poll_at": row["last_poll_at"], "scope": "worker liveness, not code reload or evaluation completion"}
+
+
+def _validate_hmm_risk_l2_overview(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read a complete identity-bound Risk L2 run with its formal surface receipt."""
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    runs = query.get("run_id") or []
+    if len(runs) != 1 or re.fullmatch(r"[0-9a-f]{64}", runs[0]) is None:
+        return "failed", "Risk L2 probe requires exactly one lowercase SHA-256 run_id", {}
+    if not isinstance(payload, dict) or payload.get("status") != "ok" or payload.get("errors") or payload.get("ok") is False:
+        return "failed", "Risk L2 overview must report status=ok", {}
+    data = payload.get("data")
+    if not isinstance(data, dict) or data.get("run_id") != runs[0]:
+        return "failed", "Risk L2 overview does not match requested run_id", {}
+    facts = {"run_id": runs[0]}
+    for field in ("model_hash", "input_hash", "acceptance_hash"):
+        value = data.get(field)
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            return "failed", f"Risk L2 overview is missing {field} identity", facts
+        facts[field] = value
+    compact, summary = data.get("compact_summary"), data.get("day_summary")
+    if not isinstance(compact, dict) or not isinstance(summary, dict):
+        return "failed", "Risk L2 overview is missing persisted row/day evidence", facts
+    row_hash = compact.get("row_hash")
+    if not isinstance(row_hash, str) or re.fullmatch(r"[0-9a-f]{64}", row_hash) is None:
+        return "failed", "Risk L2 overview has invalid canonical row identity", facts
+    fields = ("sector_count", "available_count", "unavailable_count", "warning_count", "unknown_warning_count")
+    if (any(type(summary.get(key)) is not int or not 0 <= summary[key] <= 131 for key in fields)
+            or summary["sector_count"] != 131 or summary["available_count"] + summary["unavailable_count"] != 131
+            or summary["warning_count"] + summary["unknown_warning_count"] > 131):
+        return "failed", "Risk L2 overview must contain balanced 131-sector counts", facts
+    try:
+        trade = datetime.strptime(data["trade_date"], "%Y-%m-%d").date()
+        as_of = datetime.strptime(data["as_of_date"], "%Y-%m-%d").date()
+        dates = data["dates"]
+        if (trade.isoformat() != data["trade_date"] or as_of.isoformat() != data["as_of_date"]
+                or as_of >= trade or not isinstance(dates, list) or not dates or dates[-1] != trade.isoformat()):
+            raise ValueError("date mismatch")
+    except (KeyError, ValueError, TypeError):
+        return "failed", "Risk L2 overview latest-date/PIT evidence is inconsistent", facts
+    if data.get("tail_accessed") is not False or data.get("research_surface_status") != "AVAILABLE_EXPERIMENTAL":
+        return "failed", "Risk L2 requires formal surface validation and no tail access", facts
+    return "passed", None, {**facts, "row_hash": row_hash, "trade_date": trade.isoformat(),
+                            "research_surface_status": data["research_surface_status"], **summary}
+
+
+def _validate_research_pipeline_health(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """A static readiness route cannot prove HMM recording behavior."""
+    ready = (isinstance(payload, dict) and payload.get("status") == "success"
+             and payload.get("data") == {"service": "research-pipeline", "status": "ok"})
+    return "failed", "research health is readiness only; use identity-bound experiments/{id}/backtest-records", {"route_ready": ready}
+
+
+def _validate_hmm_research_records(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    parsed = urllib.parse.urlsplit(url)
+    experiment = parsed.path.split("/")[-2]
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    tasks = query.get("source_task_id") or []
+    if len(tasks) != 1 or not tasks[0].strip() or query.get("research_domain") != ["hmm"]:
+        return "failed", "HMM research probe requires explicit source_task_id and research_domain=hmm", {}
+    if not isinstance(payload, dict) or payload.get("status") != "success" or payload.get("errors") or payload.get("ok") is False:
+        return "failed", "HMM research records must report status=success", {}
+    rows = payload.get("data")
+    if not isinstance(rows, list) or not rows:
+        return "failed", "HMM research readback must contain persisted records, not an empty list", {}
+    keys = []
+    for row in rows:
+        if (not isinstance(row, dict) or row.get("experiment_id") != experiment or row.get("source_task_id") != tasks[0]
+                or row.get("research_domain") != "hmm" or row.get("pipeline_type") != "hmm_research"
+                or row.get("record_version") != "hmm_backtest_record_v1"):
+            return "failed", "HMM research record does not match requested experiment/source identity", {}
+        for field in ("record_key_sha256", "hmm_config_sig", "non_hmm_config_sig"):
+            if not isinstance(row.get(field), str) or re.fullmatch(r"[0-9a-f]{64}", row[field]) is None:
+                return "failed", f"HMM research record is missing {field}", {}
+        keys.append(row["record_key_sha256"])
+    if len(set(keys)) != len(keys):
+        return "failed", "HMM research readback contains duplicate canonical records", {}
+    return "passed", None, {"experiment_id": experiment, "source_task_id": tasks[0], "record_count": len(rows),
+                            "scope": "existing record readback, not authorization or proof of a new write"}
+
+
 def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """QE dataset-profile must identify one usable active profile."""
     if not isinstance(payload, dict) or payload.get("ok") is not True:
@@ -4602,6 +4718,10 @@ def _validate_monthly_release_ready(payload: Any, *, url: str) -> tuple[str, str
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/hmm-evolution/workers$"), "hmm_worker_liveness", _validate_hmm_workers),
+    (re.compile(r"^/api/v1/hmm-risk/risk-l2/overview$"), "hmm_risk_l2_overview", _validate_hmm_risk_l2_overview),
+    (re.compile(r"^/api/v1/research-pipeline/health$"), "research_pipeline_readiness_only", _validate_research_pipeline_health),
+    (re.compile(r"^/api/v1/research-pipeline/experiments/[^/]+/backtest-records$"), "hmm_research_records", _validate_hmm_research_records),
     (re.compile(r"^/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}$"), "monthly_release_ready", _validate_monthly_release_ready),
     (re.compile(r"^/api/v1/local-data/(?:overview|data-stats)$"), "local_data_freshness", _validate_local_data_freshness),
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
@@ -4760,6 +4880,9 @@ def _evaluate_business_smoke_semantics(
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
     elif contract_id in {
+        "hmm_worker_liveness",
+        "hmm_risk_l2_overview",
+        "hmm_research_records",
         "scheduler_verification_status",
         "factor_lifecycle_detail",
         "factor_metrics_results",
@@ -5626,6 +5749,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
             {
                 "event_count": 0,
                 "known_duration_seconds": 0.0,
+                "recorded_duration_event_count": 0,
                 "inferred_since_previous_seconds": 0.0,
                 "inferred_until_next_seconds": 0.0,
                 "first_at": event.get("timestamp"),
@@ -5635,8 +5759,9 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         bucket["event_count"] += 1
         bucket["last_at"] = event.get("timestamp")
         duration = event.get("duration_seconds")
-        if isinstance(duration, (int, float)):
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool) and math.isfinite(duration) and duration >= 0:
             bucket["known_duration_seconds"] = round(float(bucket["known_duration_seconds"]) + float(duration), 3)
+            bucket["recorded_duration_event_count"] += 1
             known_duration += float(duration)
         if ts and previous_ts and previous_phase:
             delta = max(0.0, (ts - previous_ts).total_seconds())
@@ -5662,12 +5787,16 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         1 for event in events if (event.get("tooling") or {}).get("rtk_used") == "not_recorded"
     )
 
-    queue_seconds = _phase_seconds(phases, "discovered")
-    context_seconds = _phase_seconds(phases, "context_ready")
-    active_fix_seconds = _phase_seconds(phases, "fix_in_progress") + _phase_seconds(phases, "fix_applied") + context_seconds
-    local_validation_seconds = _phase_seconds(phases, "validation_planned") + _phase_seconds(phases, "validation_running") + _phase_seconds(phases, "validation_passed")
-    pr_ci_seconds = _phase_seconds(phases, "pr_opened") + _phase_seconds(phases, "ci_running") + _phase_seconds(phases, "ci_green") + _phase_seconds(phases, "gh_pr_create")
-    merge_aftercare_seconds = sum(_phase_seconds(phases, phase) for phase in ("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted"))
+    def known_seconds(*names: str) -> float | None:
+        values = [_phase_seconds(phases, name) for name in names]
+        observed = [value for value in values if value is not None]
+        return round(sum(observed), 3) if observed else None
+
+    queue_seconds = known_seconds("discovered")
+    active_fix_seconds = known_seconds("fix_in_progress", "fix_applied")
+    local_validation_seconds = known_seconds("validation_planned", "validation_running", "validation_passed")
+    pr_ci_seconds = known_seconds("pr_opened", "ci_running", "ci_green", "gh_pr_create")
+    merge_aftercare_seconds = known_seconds("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted")
 
     return {
         "schema_version": "aistock_issue_workflow_timing_summary_v1",
@@ -5678,12 +5807,16 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "known_duration_seconds": round(known_duration, 3),
         "inferred_elapsed_seconds": round(inferred_duration, 3),
         "phases": phases,
-        "queue_seconds": round(queue_seconds, 3) if queue_seconds else None,
-        "active_fix_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
-        "local_validation_seconds": round(local_validation_seconds, 3) if local_validation_seconds else None,
-        "pr_ci_seconds": round(pr_ci_seconds, 3) if pr_ci_seconds else None,
-        "merge_aftercare_seconds": round(merge_aftercare_seconds, 3) if merge_aftercare_seconds else None,
-        "code_repair_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
+        "queue_seconds": queue_seconds,
+        "active_fix_seconds": active_fix_seconds,
+        "local_validation_seconds": local_validation_seconds,
+        "pr_ci_seconds": pr_ci_seconds,
+        "merge_aftercare_seconds": merge_aftercare_seconds,
+        "code_repair_seconds": active_fix_seconds,
+        "measurement_scope": "recorded_commands_only; null means not_recorded",
+        "measurement_status": {name: ("recorded_command_time" if value is not None else "not_recorded")
+                               for name, value in (("active_fix", active_fix_seconds), ("local_validation", local_validation_seconds),
+                                                   ("pr_ci", pr_ci_seconds), ("merge_aftercare", merge_aftercare_seconds))},
         "rtk_telemetry": {
             "used_event_count": rtk_used_count,
             "fallback_event_count": rtk_fallback_count,
@@ -5693,7 +5826,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "notes": [
             "known_duration_seconds comes from command-level telemetry when available",
             "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
-            "code_repair_seconds is an upper bound between automatic repair-start and finish-plan boundaries and may include local validation run before finish",
+            "phase execution fields sum observed command durations only; inferred event gaps never count as development or testing",
         ],
     }
 
@@ -5715,6 +5848,7 @@ def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, A
         queue_seconds = round((started_at - created_at).total_seconds(), 3)
         existing = float(timing.get("queue_seconds") or 0)
         timing["queue_seconds"] = max(existing, queue_seconds)
+        timing["queue_measurement_scope"] = "BUG creation to first workflow event; wall elapsed, not command time"
         timing["issue_created_at"] = record.get("created_at") or record.get("first_seen_at")
         timing["active_work_started_at"] = timing.get("started_at")
         timing.setdefault("notes", []).append(
@@ -5723,14 +5857,13 @@ def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, A
     return timing
 
 
-def _phase_seconds(phases: dict[str, Any], phase: str) -> float:
+def _phase_seconds(phases: dict[str, Any], phase: str) -> float | None:
     item = phases.get(phase)
     if not isinstance(item, dict):
-        return 0.0
-    return max(
-        float(item.get("known_duration_seconds") or 0),
-        float(item.get("inferred_until_next_seconds") or item.get("inferred_since_previous_seconds") or 0),
-    )
+        return None
+    if not item.get("recorded_duration_event_count"):
+        return None
+    return float(item.get("known_duration_seconds") or 0)
 
 
 def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
