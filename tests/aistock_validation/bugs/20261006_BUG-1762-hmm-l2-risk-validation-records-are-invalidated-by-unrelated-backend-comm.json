@@ -32,18 +32,30 @@
   "evidence_uris": [],
   "expected": "同一模型输入结果身份跨无关部署提交继续读取正式验证记录；真实身份漂移或损坏拒绝。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/hmm_risk/risk_l2_prediction.py",
+    "actual_changed_files": [
+      "backend/routers/hmm_risk.py",
       "backend/services/hmm_risk/product_validation_store.py",
+      "backend/services/hmm_risk/risk_l2_prediction.py",
       "backend/tests/hmm_risk/test_product_validation_store.py",
       "backend/tests/hmm_risk/test_risk_l2_prediction.py",
-      "backend/routers/hmm_risk.py",
       "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md",
       "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
-      "docs/architecture/hmm_evolution_phase2_risk_l2_value_replay_detailed_design_20261006.md"
+      "docs/architecture/hmm_evolution_phase2_risk_l2_value_replay_detailed_design_20261006.md",
+      "tests/aistock_validation/bugs/20261006_BUG-1762-hmm-l2-risk-validation-records-are-invalidated-by-unrelated-backend-comm.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/hmm_risk.py",
+      "backend/services/hmm_risk/product_validation_store.py",
+      "backend/services/hmm_risk/risk_l2_prediction.py",
+      "backend/tests/hmm_risk/test_product_validation_store.py",
+      "backend/tests/hmm_risk/test_risk_l2_prediction.py",
+      "docs/architecture/hmm_evolution_and_risk_management_system_design_20260716.md",
+      "docs/architecture/hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md",
+      "docs/architecture/hmm_evolution_phase2_risk_l2_value_replay_detailed_design_20261006.md",
+      "tests/aistock_validation/bugs/20261006_BUG-1762-hmm-l2-risk-validation-records-are-invalidated-by-unrelated-backend-comm.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/risk_l2_prediction.py",
@@ -185,16 +197,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "fresh-process import backend.routers.hmm_risk, backend.routers.health, risk_l2_prediction and product_validation_store -> PASS, all module paths contained in BUG-1762 task worktree"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26",
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "fresh-process import backend.routers.hmm_risk, backend.routers.health, risk_l2_prediction and product_validation_store -> PASS, all module paths contained in BUG-1762 task worktree",
+      "fresh-process imports backend.routers.hmm_risk, backend.routers.health, backend.services.hmm_risk.risk_l2_prediction, backend.services.hmm_risk.product_validation_store -> PASS, all module paths contained in BUG-1762 task worktree"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
