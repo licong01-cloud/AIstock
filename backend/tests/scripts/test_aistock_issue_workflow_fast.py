@@ -856,6 +856,52 @@ def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
     assert "no target-owned business-smoke semantic contract" in semantic["reason"]
 
 
+@pytest.mark.parametrize("kind,case,expected", [
+    ("worker", "valid", "passed"), ("worker", "empty", "failed"), ("worker", "no_query", "failed"),
+    ("worker", "stale", "failed"), ("worker", "future", "failed"), ("worker", "wrong_owner", "failed"),
+    ("worker", "duplicate", "failed"), ("worker", "pid_bool", "failed"),
+    ("risk", "valid", "passed"), ("risk", "no_query", "failed"), ("risk", "wrong_run", "failed"),
+    ("risk", "unvalidated", "failed"), ("risk", "tail", "failed"), ("risk", "counts", "failed"),
+    ("records", "valid", "passed"), ("records", "empty", "failed"), ("records", "wrong_task", "failed"),
+    ("records", "duplicate", "failed"), ("health", "valid", "failed"),
+])
+def test_hmm_readonly_semantics_bind_real_evidence(kind, case, expected):
+    now = workflow.datetime.now(workflow.timezone.utc)
+    worker = dict(owner_id="worker-a", pid=123, host="node", runtime_status="running", health="healthy",
+                  started_at="2026-01-01T00:00:00+00:00", last_poll_at=now.isoformat(), healthy_max_poll_age_seconds=120)
+    risk = dict(run_id="a" * 64, model_hash="b" * 64, input_hash="c" * 64, acceptance_hash="d" * 64,
+                compact_summary={"row_hash": "e" * 64}, day_summary=dict(sector_count=131, available_count=120,
+                unavailable_count=11, warning_count=10, unknown_warning_count=0), dates=["2026-10-06"],
+                trade_date="2026-10-06", as_of_date="2026-10-05", tail_accessed=False, research_surface_status="AVAILABLE_EXPERIMENTAL")
+    record = dict(experiment_id="exp-a", source_task_id="task-a", pipeline_type="hmm_research", research_domain="hmm",
+                  record_version="hmm_backtest_record_v1", record_key_sha256="a" * 64, hmm_config_sig="b" * 64, non_hmm_config_sig="c" * 64)
+    path = {"worker": "hmm-evolution/workers?owner_id=worker-a", "risk": "hmm-risk/risk-l2/overview?run_id=" + "a" * 64,
+            "records": "research-pipeline/experiments/exp-a/backtest-records?research_domain=hmm&source_task_id=task-a",
+            "health": "research-pipeline/health"}[kind]
+    data = {"worker": {"workers": [worker]}, "risk": risk, "records": [record],
+            "health": {"service": "research-pipeline", "status": "ok"}}[kind]
+    mutations = {"stale": (worker, "last_poll_at", "2026-01-01T00:00:00+00:00"),
+                 "future": (worker, "last_poll_at", "2099-01-01T00:00:00+00:00"),
+                 "wrong_owner": (worker, "owner_id", "other"), "pid_bool": (worker, "pid", True),
+                 "wrong_run": (risk, "run_id", "f" * 64), "unvalidated": (risk, "research_surface_status", "NOT_AVAILABLE"),
+                 "tail": (risk, "tail_accessed", True), "counts": (risk["day_summary"], "available_count", True),
+                 "wrong_task": (record, "source_task_id", "other")}
+    if case in mutations:
+        target, key, value = mutations[case]
+        target[key] = value
+    if case == "empty":
+        data = {"workers": []} if kind == "worker" else []
+    if case == "no_query":
+        path = path.split("?")[0]
+    if case == "duplicate":
+        (data["workers"] if kind == "worker" else data).append(worker if kind == "worker" else record)
+    semantic = _business_semantic("http://127.0.0.1:8001/api/v1/" + path,
+                                 {"status": "ok" if kind in {"worker", "risk"} else "success", "data": data}, "f" * 64)
+    assert semantic["verdict"] == expected and semantic["contract_id"] is not None
+    if kind == "health":
+        assert semantic["facts"]["route_ready"] is True and "readiness only" in semantic["reason"]
+
+
 def test_ci_issue_classification_ignores_successful_runner_and_no_network_metadata() -> None:
     summary = {
         "diagnostic_status": "complete",
