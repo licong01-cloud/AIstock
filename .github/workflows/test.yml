@@ -372,9 +372,13 @@ jobs:
           AISTOCK_CI_CLASSIFIER_SUMMARY: tmp/validation/ci_change_classifier/summary.json
           AISTOCK_CI_REPO_ROOT: ${{ github.workspace }}
           AISTOCK_CI_TEST_COLLECTION_RECEIPT: tmp/validation/ci_change_classifier/collected_tests.txt
+          AISTOCK_TEST_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          AISTOCK_TEST_CHECKOUT_HEAD: ${{ github.sha }}
+          AISTOCK_TEST_STAGE: pr_ci
           PYTEST_ADDOPTS: -p scripts.ci_plan_coverage
         run: |
           rm -f "${AISTOCK_CI_TEST_COLLECTION_RECEIPT}"
+          rm -f tmp/validation/ci_change_classifier/collected_tests.metrics.jsonl
           mapfile -t backend_sessions < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["BACKEND_SESSIONS"])))' | tr -d '\r')
           backend_failures=()
           for session in "${backend_sessions[@]}"; do
@@ -385,6 +389,7 @@ jobs:
           if ! python scripts/ci_plan_coverage.py \
             --classifier-summary "${AISTOCK_CI_CLASSIFIER_SUMMARY}" \
             --receipt "${AISTOCK_CI_TEST_COLLECTION_RECEIPT}" \
+            --metrics-receipt tmp/validation/ci_change_classifier/collected_tests.metrics.jsonl \
             --output-json tmp/validation/ci_change_classifier/test-plan-coverage.json; then
             backend_failures+=("changed_test_plan_coverage")
           fi
