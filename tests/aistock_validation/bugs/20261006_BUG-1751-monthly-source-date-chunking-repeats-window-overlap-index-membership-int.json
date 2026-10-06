@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1751",
-  "closed_at": null,
+  "closed_at": "2026-10-06T11:48:20.941149Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -150,10 +150,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1751/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1751",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "e20539809c5470f57849a494bf04533eb6d9c23e1de2a298ee38f62edcf9290d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "8072a840179b737ed87f9a4c7772df1b71e93dfa",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-06T11:47:59.810959Z",
+      "mode": "read_only",
+      "observed_identity": "8072a840179b737ed87f9a4c7772df1b71e93dfa",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ccd98187bf33b742c72cb1216ceeb74c92ac3cb45865e8126508af77d2a9b880",
+      "receipt_sha256": "90e5dc2d3cd314253b09300b6c53695e9687d45858083c8afe4d4507aece8954",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6099c5868d1ecfadde4a30dbcf067788c3957be9ef949952b3c344143b913f8e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -189,7 +211,7 @@
     ],
     "validation_evidence_digest": "bca7672900c8ca251c46e8ad11467312030b5a8a667527d1f2ff51e638b683a6"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -204,7 +226,8 @@
     "validation-receipt: id=0b0378be6d310a74 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 guardrail_changed_files validation_catalog_integrity` result=`passed`",
     "validation-receipt: id=9e088d27aa3c4e5c commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s l0 guardrail_changed_files validation_catalog_integrity` result=`passed`",
     "validation-receipt: id=5853b82ab9be7b7f commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_source_authority.py backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`",
-    "validation-receipt: id=06d2c7cf002ce5f1 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=06d2c7cf002ce5f1 commit=15e9a47a15f9d6e54b2fcf0c1a16952a0cd83207 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --target worker-scheduler --expected-identity 8072a840179b737ed87f9a4c7772df1b71e93dfa -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
