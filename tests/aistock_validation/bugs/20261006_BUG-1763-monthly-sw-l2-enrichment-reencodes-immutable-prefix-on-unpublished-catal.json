@@ -39,44 +39,47 @@
   "evidence_uris": [
     "https://github.com/licong01-cloud/AIstock/issues/5585"
   ],
-  "fix_summary": {
-    "mapping_policy": "immutable_predecessor_shared_ids_v1",
-    "raw_catalog_count": 134,
-    "canonical_catalog_count": 131,
-    "unassigned_unpublished_codes": ["801217.SI", "801768.SI", "801786.SI"],
-    "source_code_map_file_sha256": "d854c78fa93a425f02949989cd4687d0dabc31a4a7dfe6ec9a0bed3d0987dbe1",
-    "metadata_member_row_count": 5914,
-    "database_write": false,
-    "historical_business_audit_performed": false,
-    "active_profile_write": false,
-    "review_rounds": [
-      "Round1: exact raw134 minus immutable131 code delta, unpublished and zero-member independent source evidence; retain131 stable IDs without changing quote policy.",
-      "Round2: SOURCE/preparation/audit/shared BUILD/readback identity closure; found and repaired SOURCE8 runtime preflight allowlist; source8 derives accepted current producer version without accepting arbitrary versions.",
-      "Round3: real private row sealer preserves134 raw records and canonical IDs, source receipt cross-map rejection, fresh-process real metadata readback, final163 targeted tests passed/1 platform symlink skipped, lint/L0/catalog passed."
-    ],
-    "design_compliance": {
-      "no_partial_success": "SOURCE bug fixed; monthly candidate still pending BUILD and is not reported ready.",
-      "no_silent_errors": "Published/unknown/new member catalog entries and pin/hash drift fail explicitly; no default IDs or synthesized data.",
-      "business_semantics_unchanged": "131 shared IDs and official quote policy preserved; HMM/QE/model/contracts untouched.",
-      "no_extra_gates": "Reuse existing code-map and quote policy checks, no historical data re-audit or new approval gate."
-    }
-  },
   "expected": "Stable predecessor sector IDs, approved131 quote policy and explicit raw catalog lineage through SOURCE/BUILD",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_sector_mapping.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_worker_runtime.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1763-monthly-sw-l2-enrichment-reencodes-immutable-prefix-on-unpublished-catal.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_sector_mapping.py",
       "backend/tests/dataset_release/test_monthly_sector_mapping.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/sector_enrichment.py",
-      "backend/services/dataset_release/source_authority.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/services/dataset_release/monthly_preparation_source.py",
       "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_sector_mapping.py",
       "backend/services/dataset_release/monthly_shared_components.py",
-      "backend/services/dataset_release/monthly_frozen_source_audit.py"
+      "backend/services/dataset_release/monthly_worker_runtime.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1763-monthly-sw-l2-enrichment-reencodes-immutable-prefix-on-unpublished-catal.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/sector_enrichment.py",
@@ -239,6 +242,32 @@
   "first_seen_at": "2026-10-06T12:36:58.398113Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": {
+    "active_profile_write": false,
+    "canonical_catalog_count": 131,
+    "database_write": false,
+    "design_compliance": {
+      "business_semantics_unchanged": "131 shared IDs and official quote policy preserved; HMM/QE/model/contracts untouched.",
+      "no_extra_gates": "Reuse existing code-map and quote policy checks, no historical data re-audit or new approval gate.",
+      "no_partial_success": "SOURCE bug fixed; monthly candidate still pending BUILD and is not reported ready.",
+      "no_silent_errors": "Published/unknown/new member catalog entries and pin/hash drift fail explicitly; no default IDs or synthesized data."
+    },
+    "historical_business_audit_performed": false,
+    "mapping_policy": "immutable_predecessor_shared_ids_v1",
+    "metadata_member_row_count": 5914,
+    "raw_catalog_count": 134,
+    "review_rounds": [
+      "Round1: exact raw134 minus immutable131 code delta, unpublished and zero-member independent source evidence; retain131 stable IDs without changing quote policy.",
+      "Round2: SOURCE/preparation/audit/shared BUILD/readback identity closure; found and repaired SOURCE8 runtime preflight allowlist; source8 derives accepted current producer version without accepting arbitrary versions.",
+      "Round3: real private row sealer preserves134 raw records and canonical IDs, source receipt cross-map rejection, fresh-process real metadata readback, final163 targeted tests passed/1 platform symlink skipped, lint/L0/catalog passed."
+    ],
+    "source_code_map_file_sha256": "d854c78fa93a425f02949989cd4687d0dabc31a4a7dfe6ec9a0bed3d0987dbe1",
+    "unassigned_unpublished_codes": [
+      "801217.SI",
+      "801768.SI",
+      "801786.SI"
+    ]
+  },
   "fixed_at": null,
   "github_issue_number": 5585,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5585",
@@ -263,16 +292,20 @@
       "rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> fresh process mapping/pin/fail-closed verification passed; no service started or database written",
       "python fresh-process read-only SW metadata verification -> raw134/canonical131/member5914, original code-map SHA d854c78fa93a425f02949989cd4687d0dabc31a4a7dfe6ec9a0bed3d0987dbe1, mapping_ids_unchanged=true, quote policy PASS, database_write=false, historical_business_audit=false"
     ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },
