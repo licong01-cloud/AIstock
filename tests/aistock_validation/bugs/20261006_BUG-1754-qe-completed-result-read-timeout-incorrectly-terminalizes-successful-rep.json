@@ -179,7 +179,8 @@
       "New independent pytest process loaded persistent QEWorkspaceResultReadUnavailable and AutoEvolutionScheduler; targeted result-only contract tests passed; no service process control",
       "isolated pytest process loaded persistent source -> 70 passed, no process control",
       "rtk pytest backend/tests/unified_engine/test_qe_completed_result_read_retry.py -q -> passed in independent fresh process loading persistent backend source, no process control",
-      "rtk pytest backend/tests/unified_engine/test_qe_completed_result_read_retry.py -q -> passed in isolated fresh process loading persistent source without services or process control"
+      "rtk pytest backend/tests/unified_engine/test_qe_completed_result_read_retry.py -q -> passed in isolated fresh process loading persistent source without services or process control",
+      "rtk pytest -q backend/tests/unified_engine/test_qe_completed_result_read_retry.py --basetemp X:/aistock_tmp/BUG-1754-merge-pytest -> 23 passed in fresh process; persistent source loaded; no service process control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
