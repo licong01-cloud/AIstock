@@ -25,11 +25,16 @@
   "evidence_uris": [],
   "expected": "等价去重字段断言，所有原场景与安全合同保留；真实统计行数，不伪报30%达标或运行时加速。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json",
       "backend/tests/scripts/test_ci_change_classifier.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261006_BUG-1756-guardrail-classifier-tests-duplicate-field-assertion-boilerplate.json",
+      "backend/tests/scripts/test_ci_change_classifier.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/scripts/test_ci_change_classifier.py"
@@ -95,10 +100,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
