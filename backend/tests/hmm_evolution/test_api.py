@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import asyncio
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -112,10 +114,10 @@ class _AssetReader:
         )
 
 
-def _client(service: Any) -> TestClient:
+def _client(service: Any, *, repository: Any = None) -> TestClient:
     app = FastAPI()
     app.include_router(hmm_evolution.router, prefix="/api/v1")
-    runtime = SimpleNamespace(service=service, repository=_ReceiptRepository())
+    runtime = SimpleNamespace(service=service, repository=repository or _ReceiptRepository())
     app.dependency_overrides[hmm_evolution.get_runtime] = lambda: runtime
     return TestClient(app)
 
@@ -160,6 +162,83 @@ def test_hmm_error_is_not_hidden_or_nested_under_detail() -> None:
     assert payload["reason_code"] == "hmm_evolution_schema_unavailable"
     assert "detail" not in payload
     assert payload["trace_id"]
+
+
+@pytest.mark.parametrize("failure_stage", ["create", "merge"])
+def test_performance_record_failure_does_not_reject_created_batch(failure_stage, caplog) -> None:
+    class FailingReceiptRepository(_ReceiptRepository):
+        def create_performance_receipt(self, **kwargs):
+            if failure_stage == "create":
+                raise RuntimeError("telemetry store unavailable")
+            return super().create_performance_receipt(**kwargs)
+
+        def merge_performance_receipt_progress(self, **kwargs):
+            raise RuntimeError("telemetry store unavailable")
+
+    service = _Service()
+    response = _client(service, repository=FailingReceiptRepository()).post(
+        "/api/v1/hmm-evolution/batch",
+        json={"candidate_ids": ["hmmc_a"], "evaluation_spec": VALID_SPEC},
+    )
+    assert response.status_code == 202
+    assert response.json()["data"]["batch"]["status"] == "preparation_queued"
+    assert response.json()["data"]["performance_record_status"] == "scheduled"
+    assert "hmm_evolution_performance_record_failed" in caplog.text
+
+
+@pytest.mark.parametrize("resource", ["batches", "evaluations"])
+def test_performance_read_failure_preserves_durable_business_readback(resource, caplog) -> None:
+    class Service(_Service):
+        def get_batch(self, batch_id):
+            return {"batch_id": batch_id, "status": "completed"}
+
+        def get_evaluation(self, eval_id):
+            return {"eval_id": eval_id, "status": "completed"}
+
+    class Repository(_ReceiptRepository):
+        def get_performance_receipt(self, **kwargs):
+            raise RuntimeError("credential-bearing telemetry error must not escape")
+
+    response = _client(Service(), repository=Repository()).get(f"/api/v1/hmm-evolution/{resource}/test")
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["status"] == "completed"
+    assert payload["performance_receipt"] is None
+    assert payload["receipt_unavailable"] is True
+    assert payload["performance_record_reason"] == "hmm_evolution_performance_record_failed"
+    assert "hmm_evolution_performance_record_failed" in caplog.text
+    assert "credential-bearing" not in caplog.text
+
+
+def test_business_submission_failure_is_not_hidden_as_telemetry_failure() -> None:
+    class BrokenService(_Service):
+        def submit_batch(self, **kwargs):
+            raise SchemaUnavailableError("business schema unavailable")
+
+    response = _client(BrokenService()).post(
+        "/api/v1/hmm-evolution/batch",
+        json={"candidate_ids": ["hmmc_a"], "evaluation_spec": VALID_SPEC},
+    )
+    assert response.status_code == 503
+    assert response.json()["reason_code"] == "hmm_evolution_schema_unavailable"
+
+
+def test_api_acceptance_precedes_any_performance_record_io() -> None:
+    repository = _ReceiptRepository()
+    runtime = SimpleNamespace(service=_Service(), repository=repository)
+    result = asyncio.run(
+        hmm_evolution._create_batch(
+            runtime=runtime,
+            candidate_ids=["hmmc_a"],
+            request=hmm_evolution.BatchCreateRequest(candidate_ids=["hmmc_a"], evaluation_spec=VALID_SPEC),
+            idempotency_key=None,
+        )
+    )
+    assert result.status_code == 202
+    assert repository.created == repository.merged == []
+    assert result.background is not None
+    asyncio.run(result.background())
+    assert len(repository.created) == len(repository.merged) == 1
 
 
 def test_unexpected_value_error_is_not_misclassified_as_user_input() -> None:
