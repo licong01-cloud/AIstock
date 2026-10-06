@@ -90,7 +90,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/factor_research/test_comparison.py -q -k daily_ranks",
   "required_verification": [
     "l0",
     "factor_research_backend"
@@ -98,7 +98,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Task-worktree fresh Python process imported backend.services.factor_research.comparison with module.__file__ containment assertion PASS.",
+      "RED: common-pair regression failed for NaN, +Inf, -Inf; GREEN: all 3 passed. factor_research_backend: 56 passed, 8 DEV skips and 2 fresh-process tests passed; l0 blocking=0. No database or service operations."
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_gap": "No registered target-owned HTTP semantic probe for the offline comparison helper has been identified. Do not substitute health or unrelated official-factor results. Requires workflow-owner resolution before PR readiness; runtime classification is unchanged.",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
