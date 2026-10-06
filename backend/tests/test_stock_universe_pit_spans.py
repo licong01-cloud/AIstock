@@ -137,6 +137,112 @@ def test_validate_rejects_overlapping_spans() -> None:
     assert result["overlap_error_count"] == 1
 
 
+@pytest.mark.parametrize("restored", [False, True])
+def test_monthly_st_exclusion_requires_positive_restore_evidence(restored) -> None:
+    days = [dt.date(2026, 9, 29), dt.date(2026, 9, 30)]
+    queries = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            queries.append((sql, params))
+            assert sql.lstrip().startswith("SELECT")
+
+        def fetchall(self):
+            return [(days[0], "301139.SZ")]
+
+    span = SpanRow("u", "301139.SZ", days[1], days[1], "ipo", "generation_end", days[0], days[0])
+    events = [EventRow("301139.SZ", "st_restore", days[1], "market.stock_st_events")] if restored else []
+    conn = SimpleNamespace(cursor=lambda: Cursor())
+    if restored:
+        receipt = pit_builder._audit_st_span_exclusion(
+            conn, spans=[span], events=events, calendar=TradingCalendar(days),
+            start_date=days[0], end_date=days[1],
+        )
+        assert receipt["conflict_key_count"] == 0
+    else:
+        with pytest.raises(pit_builder.CanonicalPitEvidenceError) as failure:
+            pit_builder._audit_st_span_exclusion(
+                conn, spans=[span], events=events, calendar=TradingCalendar(days),
+                start_date=days[0], end_date=days[1],
+            )
+        assert failure.value.context["conflicts"] == [{"ts_code": "301139.SZ", "trade_date": "2026-09-30"}]
+    assert len(queries) == 1
+
+
+def test_st_exclusion_audits_only_target_month_and_preserves_pre_risk_history() -> None:
+    days = [dt.date(2026, 8, 31), dt.date(2026, 9, 1), dt.date(2026, 9, 2)]
+    queries = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            queries.append((sql, params))
+
+        def fetchall(self):
+            return [(days[2], "301139.SZ"), (days[2], "301139.SZ")]
+
+    span = SpanRow("u", "301139.SZ", days[0], days[1], "ipo", "st_negative", days[0], days[0])
+    receipt = pit_builder._audit_st_span_exclusion(
+        SimpleNamespace(cursor=lambda: Cursor()), spans=[span], events=[],
+        calendar=TradingCalendar(days), start_date=dt.date(2018, 8, 1), end_date=days[2],
+    )
+    assert receipt["audit_start"] == "2026-09-01"
+    assert receipt["trading_day_count"] == 2
+    assert receipt["conflict_key_count"] == 0
+    assert queries[0][1][0] == days[0]  # One causal boundary anchor, not a history scan.
+    assert queries[0][1][1] == days[2]
+
+
+def test_builder_checks_st_exclusion_before_any_span_write() -> None:
+    source = inspect.getsource(pit_builder.build)
+    assert source.index("_audit_st_span_exclusion(") < source.index("_write_incremental_extension(")
+    assert source.index("_audit_st_span_exclusion(") < source.index("_write_results(")
+
+
+@pytest.mark.parametrize("case", ["same_day_st", "future_restore", "terminal_restore"])
+def test_st_exclusion_does_not_accept_stale_or_noncausal_restoration(case) -> None:
+    day = dt.date(2026, 9, 30)
+    events = [EventRow("301139.SZ", "st_restore", day, "market.stock_st_events")]
+    snapshots = [(day, "301139.SZ")]
+    if case == "future_restore":
+        events = [EventRow("301139.SZ", "st_restore", dt.date(2026, 10, 1), "market.stock_st_events")]
+    elif case == "terminal_restore":
+        events.insert(0, EventRow("301139.SZ", "delist_event", day, "market.stock_st_events", terminal=True))
+        snapshots = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            pass
+
+        def fetchall(self):
+            return snapshots
+
+    span = SpanRow("u", "301139.SZ", day, day, "ipo", "generation_end", day, day)
+    with pytest.raises(pit_builder.CanonicalPitEvidenceError) as failure:
+        pit_builder._audit_st_span_exclusion(
+            SimpleNamespace(cursor=lambda: Cursor()), spans=[span], events=events,
+            calendar=TradingCalendar([day]), start_date=day, end_date=day,
+        )
+    assert failure.value.context["conflict_key_count"] == 1
+
+
 def test_252_completed_exchange_sessions_define_ipo_entry_not_first_data_date() -> None:
     days = [dt.date(2020, 1, 1) + dt.timedelta(days=offset) for offset in range(300)]
     calendar = TradingCalendar(days)
