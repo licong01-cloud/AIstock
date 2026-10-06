@@ -7,6 +7,7 @@ import pytest
 
 from backend.services.dataset_release.monthly_runtime import MonthlyRuntimeConfigurationError
 from backend.services.dataset_release.monthly_worker_runtime import MonthlyWorkerRuntime
+from backend.services.dataset_release.monthly_postgres_source import POSTGRES_SOURCE_ADAPTER_VERSION
 
 
 def _never_run(*_args, **_kwargs):
@@ -44,7 +45,7 @@ def _runtime(version="6", *, installed=True, shared_scope=True):
     )
 
 
-@pytest.mark.parametrize("version", ["6", "7"])
+@pytest.mark.parametrize("version", ["6", "7", POSTGRES_SOURCE_ADAPTER_VERSION])
 def test_preflight_proves_current_shared_execution_scope_without_running(version):
     receipt = _runtime(version).preflight_receipt()
     assert receipt["status"] == "PASS"
@@ -66,7 +67,8 @@ def test_source5_remains_explicit_full_source_only():
 
 @pytest.mark.parametrize("version,installed,shared", [
     ("6", False, True), ("6", True, False), ("5", True, True),
-    ("7", False, True), ("7", True, False), ("8", True, True), (None, False, True), (6, True, True),
+    ("7", False, True), ("7", True, False), ("99", True, True), (None, False, True), (6, True, True),
+    (POSTGRES_SOURCE_ADAPTER_VERSION, False, True), (POSTGRES_SOURCE_ADAPTER_VERSION, True, False),
 ])
 def test_incomplete_or_unrecognized_source_contract_fails_closed(version, installed, shared):
     with pytest.raises(MonthlyRuntimeConfigurationError):
