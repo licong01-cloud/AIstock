@@ -40,6 +40,7 @@ from .monthly_shared_components import (
     _write_sidecar,
 )
 from .sector_enrichment import FrozenSectorEnricher, UNKNOWN_L2_CODE_ID
+from .monthly_sector_mapping import build_bound_sector_enricher, frozen_sector_mapping_binding
 from .shared_sector_context import (
     build_release_sw_l2_code_map_payload,
     validate_release_sw_l2_code_map,
@@ -114,6 +115,7 @@ def shared_preparation_identity(
         "monthly_shared_components.py",
         "shared_sector_context.py",
         "sector_enrichment.py",
+        "monthly_sector_mapping.py",
         "sw_l2_quote_policy.py",
         "streaming_artifacts.py",
         "factor_materializer.py",
@@ -381,7 +383,9 @@ def _sector_context_files(
     )
     classify = _source_rows(cas, snapshot, "sw_index_classify")
     members = _source_rows(cas, snapshot, "sw_index_member")
-    enricher = FrozenSectorEnricher.build(classify, members)
+    enricher = build_bound_sector_enricher(
+        classify, members, binding=frozen_sector_mapping_binding(cas, snapshot),
+    )
     authority = digest_named_fields(
         "aistock_monthly_sw_l2_mapping_authority_v1",
         {

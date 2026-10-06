@@ -52,7 +52,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "7"
+POSTGRES_SOURCE_ADAPTER_VERSION = "8"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -327,6 +327,7 @@ class PostgresMonthlySourceAdapter:
                 "source_audit_contract": AUDIT_SCHEMA,
                 "business_validation_scope": "target_calendar_month_only_v1",
                 "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
+                "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
             },
         )
 
@@ -376,6 +377,13 @@ class PostgresMonthlySourceAdapter:
             return collect_qfq_construction_anchors(prefix, month_start=start, instruments=codes,
                                                     checkpoint=checkpoint, progress=progress)
 
+        sector_mapping = None
+        if self.profile.profile == CANONICAL_PROFILE_ID:
+            from .monthly_build_bridge import load_monthly_predecessor_prefix
+            from .monthly_sector_mapping import load_predecessor_sector_mapping
+            sector_mapping = load_predecessor_sector_mapping(
+                load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile),
+            )
         authority = MonthlyObservedSourceAuthority(
             self.profile,
             self.cas,
@@ -385,6 +393,7 @@ class PostgresMonthlySourceAdapter:
             sector_source_policy=MONTHLY_SECTOR_SOURCE_POLICY,
             month_start=target_cutoff.replace(day=1), construction_anchors=construction_anchors,
             deferred_margin_cutoff=target_cutoff if deferred_margin_sha is not None else None,
+            monthly_sector_mapping=sector_mapping,
         )
         try:
             _preflight_refresh_readiness(
