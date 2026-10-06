@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1748",
-  "closed_at": null,
+  "closed_at": "2026-10-06T02:08:06Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,17 +28,17 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json",
       "backend/tests/dr/conftest.py",
       "backend/tests/dr/test_dump_file_validity.py",
-      "backend/tests/dr/test_dump_schema_diff.py"
+      "backend/tests/dr/test_dump_schema_diff.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json",
       "backend/tests/dr/conftest.py",
       "backend/tests/dr/test_dump_file_validity.py",
-      "backend/tests/dr/test_dump_schema_diff.py"
+      "backend/tests/dr/test_dump_schema_diff.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1748-dr-validation-rereads-complete-custom-dumps-and-duplicates-dev-schema-su.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -108,8 +108,8 @@
   },
   "first_seen_at": "2026-10-06T01:55:54.213708Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "46919c344a5546360e2bbe966b50452dda9c464f",
+  "fixed_at": "2026-10-06T02:08:06Z",
   "github_issue_number": 5558,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5558",
   "last_seen_at": "2026-10-06T01:55:54.213708Z",
@@ -117,6 +117,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5560",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,6 +135,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -143,7 +145,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1748",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f5066bae681fff38",
+    "recorded_at": "2026-10-06T02:08:52.826873Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ecf39dbf0ce3d65b7847a2502f9c760f80c6c262",
+    "source_merge_commit": "46919c344a5546360e2bbe966b50452dda9c464f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5560",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dr/test_dump_file_validity.py backend/tests/dr/test_dump_schema_diff.py -k 'contract or regex' -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1748-final -> 7 passed",
+      "python -m nox -s l0 -- backend/tests/dr/conftest.py backend/tests/dr/test_dump_file_validity.py backend/tests/dr/test_dump_schema_diff.py -> passed, files=3 findings=0 blocking=0"
+    ],
+    "validation_evidence_digest": "fb59575e7634d14f55d2ee7c5932cdba460d2b714dac76ade76f9472d6ed8649"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -152,6 +176,10 @@
     "fingerprint": "10a649ae915fbbafdd09ab28",
     "source_event_id": "FE-20261006-10a649ae915f"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dr/test_dump_file_validity.py backend/tests/dr/test_dump_schema_diff.py -k 'contract or regex' -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1748-final -> 7 passed",
+    "python -m nox -s l0 -- backend/tests/dr/conftest.py backend/tests/dr/test_dump_file_validity.py backend/tests/dr/test_dump_schema_diff.py -> passed, files=3 findings=0 blocking=0"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
