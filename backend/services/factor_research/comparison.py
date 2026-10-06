@@ -308,13 +308,15 @@ def _partial_rank_daily(candidate: pd.DataFrame, returns: pd.DataFrame,
 def _daily_rank_ic(signal: pd.DataFrame, returns: pd.DataFrame, eligible: pd.DataFrame) -> list[dict]:
     result = []
     for day in signal.index:
-        mask = eligible.loc[day].astype(bool)
-        x = _rank_series(signal.loc[day].where(mask)).to_numpy()
-        y = _rank_series(returns.loc[day].where(mask)).to_numpy()
+        left, right = signal.loc[day], returns.loc[day]
+        # Both ranks must describe the same eligible finite cross-section.
+        mask = eligible.loc[day].astype(bool) & np.isfinite(left) & np.isfinite(right)
+        x = _rank_series(left.where(mask)).to_numpy()
+        y = _rank_series(right.where(mask)).to_numpy()
         value = _corr(x, y)
         if value is not None:
             result.append({"date": day.date().isoformat(), "value": value,
-                           "n": int((mask.to_numpy() & np.isfinite(x) & np.isfinite(y)).sum())})
+                           "n": int(mask.sum())})
     return result
 
 
