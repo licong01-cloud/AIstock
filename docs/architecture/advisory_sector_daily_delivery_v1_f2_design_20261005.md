@@ -1,6 +1,6 @@
 # Advisory M1日频名单、价格API与价格卡片 F2详细设计
 
-2026-10-05；SOURCE_IMPLEMENTED_FIX_DELIVERY_AND_UI_PENDING。承接[上位M1日频设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)第三业务切片；设计已由PR #5443合入876316279cfb3118664192ea0abc9333b4980c68，源码草稿PR #5445及实施状态见§8.1。本轮18小时计划优先完成真实日频消费，不重做QE研究或为旧失败结果补证据。进入QE策略包的组合直接使用；本文只处理真实输入、数学和展示，不增加资格、native、父训练时钟或收益确认门。
+2026-10-06；SOURCE_MERGED_UI_VERIFIED_RUNTIME_PENDING_USER_RESTART。承接[上位M1日频设计](advisory_sector_price_daily_consumer_v1_f2_design_20261004.md)第三业务切片；设计由PR #5443合入876316279cfb3118664192ea0abc9333b4980c68，源码PR #5445已合入06bd5e0dd5a75374d0f89e8a5ffc42c4252ed7eb并完成自身官方清理，实施状态见§8.1。旧18小时计划是历史检查点；当前按用户无时限接续授权完成业务，不重做QE研究或为旧失败结果补证据。进入QE策略包的组合直接使用；本文只处理真实输入、数学和展示，不增加资格、native、父训练时钟或收益确认门。
 
 ## 1. Background / 事实与目标
 
@@ -76,7 +76,7 @@ M1卡片与旧v3类型隔离。自动按当前program和visible list target/list
 
 ## 8. Design Acceptance Matrix
 
-本表先验收详细设计，IMPLEMENTATION_PENDING不能冒充整项功能完成；源码完成后逐条绑定真实位置/证据，禁止mock-only交付。
+下表保留最初详细设计验收；当前实施位置、真实业务及UI证据见§8.1实施表。设计验收、源码合入、UI展示、用户重启后的运行态与经济效果分别报告，禁止mock-only交付。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -89,7 +89,9 @@ M1卡片与旧v3类型隔离。自动按当前program和visible list target/list
 | F-797 | §6/7 | artifact: 真实业务与效果分层验证计划 | DESIGN_VERIFIED | none |
 | F-798 | §6/9/10 | artifact: 多轮自审及CI/生产分层 | DESIGN_VERIFIED | none |
 
-### 8.1 实施验收与剩余边界（2026-10-05）
+### 8.1 实施验收与剩余边界（2026-10-06）
+
+当前交付：PR #5445最终源码HEAD45d9dfba54622208aaccfc2746692976f38dcdb2同步最新main后43项定向测试/Ruff及F2八条八行通过，必需CI37471172571 SUCCESS，已合入06bd5e0dd5a75374d0f89e8a5ffc42c4252ed7eb。源码工作树和本地/远端分支经官方cleanup-after-merge清理（27.735秒，blocking/warnings均0），不影响正式模型或其它窗口。以下早期真实读回保留其原日期和配置，不冒充新后端已加载。
 
 原published list/service/GET/新family卡片源码已实现；原v3接口和完整名单不变。名单23项、组合服务14项及隔离ASGI 6项定向测试共43项通过，覆盖配置坏JSON/未知字段/错误family、原指数零准入及单日/历史模式实际canonical价格命名空间。LIVE_DB回归先复现传None选择旧ST默认路径，再仅在本适配器显式传公共canonical key；不修改共享helper，不加资格门。前端实际原生TypeScript编译通过；RTK包装的第一次npx调用没有运行正确TypeScript，未当作通过收据。
 
@@ -103,17 +105,17 @@ M1卡片与旧v3类型隔离。自动按当前program和visible list target/list
 
 | 实施项 | 实际状态 | 尚缺验收 |
 |---|---|---|
-| F-791～794 | 原非空名单/真实20日批量及LIVE_DB canonical只读链通过；BUG-1726三层修复后真实冻结权重+合成空名单完整family返回NO_CANDIDATES，71相关测试/Ruff/L0通过 | BUG源码交付待公共端点smoke合同；不是原published空名单或生产完成，分类来源覆盖限制如实保留 |
+| F-791～794 | economic_sector_list_source_v1.py及economic_sector_daily_service_v1.py实现§3/4，同叶测试与原非空名单/真实20日批量及LIVE_DB canonical只读链通过；BUG-1726修复后真实冻结权重+合成空名单完整family返回NO_CANDIDATES，71相关测试/Ruff/L0通过，源码#5594已合入 | 合成空输入不冒充原published空名单或生产完成；分类来源覆盖限制如实保留，运行态待用户重启 |
 | F-795 | 6项隔离ASGI测试及真实冻结M1/DB→完整ASGI响应通过，28370字节有限JSON、HTTP200、20候选/27未估值，无用户后端启动 | 合入后用户重启的真实HTTP语义验证 |
-| F-796 | 5状态及晚返回竞态共6个精准UI场景已编写，实际类型编译通过 | 六场景浏览器收据尚未生成，不借用旧6场景收据 |
-| F-797 | 单日/三日同值、20日真实批量及9月来源分解、查询及资源读回通过 | UI展示验证；不等于收益/成交证明，也不把UNKNOWN算模型拒绝 |
-| F-798 | 本窗口分视角自审，历史HEAD e14e3f39c CI37221697583 SUCCESS；新增LIVE_DB修复后43定向测试通过；独立BUG-1726 71tests/Ruff/L0通过 | 本次新HEAD必需检查和六UI另核；BUG源码交付、合入与官方清理尚未完成 |
+| F-796 | SectorEntryPriceCard及Advisory page接入；5状态及晚返回竞态六个精准浏览器场景全部PASS，0失败/跳过/重试，收据绑定45d9dfba；类型编译通过且最终frontend Git tree未变 | 只证明展示与竞态，不是自然发布、成交或收益确认 |
+| F-797 | 单日/三日同值、20日真实批量、9月来源分解及query/resource读回通过；当前HEAD六UI收据通过 | 不等于收益/成交证明，也不把UNKNOWN算模型拒绝；运行态HTTP待用户重启 |
+| F-798 | 本窗口多轮分视角审核；43定向/Ruff/F2及当前HEAD CI37471172571 SUCCESS、六UI通过，#5445合入/自身官方清理完成；BUG-1726 #5594合入/源码清理完成 | source、UI已交付；运行配置/用户重启/运行态与效果未由此完成；#5597 close-sync保持OPEN |
 
-当前Validation Center未找到可执行的Advisory UI专用计划；广UI由流水线/CI执行精确范围，只用runner-owned隔离端口/进程，临时产物全X，不启动用户后端或安装依赖，不修改公共计划或CI。未有收据不宣称UI通过或本切片已满足合入条件。更晚的T实价读回/自然捕获不属于此只读GET，不把历史重算伪装D原生发布。
+六UI交接已由本窗口自行定位`F:/Dev/AIstock/tmp/handoff/pipeline-priority-20261006/advisory-m1-six-ui-plan.md`；它是精确范围交接模板，不是实时目录中的plan_key。按模板绑定最终HEAD，用专用确定性runner及已存在的只读X盘依赖执行，不要求用户提供路径、不修改公共计划或CI。当前独立收据为`X:/AIstock-CI/tmp/advisory-m1-six/45d9dfba54622208aaccfc2746692976f38dcdb2/20261006-2130/receipt.json`：6 PASS、0失败/跳过/重试，总32.703秒（Playwright测试25.298秒），364个Git blob字节核验，前后HEAD一致且源码clean。五状态为ACCEPTABLE_PRICE_SET / NO_ACCEPTABLE_PRICE / UNKNOWN_INPUT_OR_SUPPORT / NOT_CONFIGURED / IDENTITY_CONFLICT，另验前一list晚返回不能覆盖当前list。隔离frontend/proxy的runner-owned端口34173/34174已关闭；临时产物全部X，未导出`.env.local`、未安装依赖或操作用户后端/数据库。Windows归档换行与跨盘依赖解析的准备失败保留为准备记录，未改业务测试或以旧UI收据替代；上述0重试指最终六场景浏览器执行。更晚T实价读回/自然捕获不属于此只读GET，不把历史重算伪装D原生发布。
 
-完整空链追加验证先因临时runner错误调用predict_day(packet=...)失败，修正为实际kwargs/SCOPE_KEYS后发现真实BUG-1726（Issue #5446）。独立BUG树修改前精确登记3个Advisory叶源码、3个对应测试及BUG JSON；分别修复空object数值map后的isfinite错误、sector空分类键merge dtype错误、family空键dtype误判。71项相关测试保留非空数学、空输入schema/hash/count、外来分类及未来quote拒绝；真实冻结模型+合成空名单完整family返回NO_CANDIDATES。源码67d65b4b8，同步main后本地HEAD e121e4942b2f99622ea631eaa13a51ac228e9c47，4收据绑定、scope/Ruff/L0通过，尚未创建BUG PR/合入。唯一官方交付阻断是canonical workflow缺该新GET的target-owned业务smoke语义，交公共流程owner登记，不改公共脚本或换泛health验证绕过。这个空链BUG不是行情缺口/QE缺陷；分类覆盖是另一已明确的数据消费限制，不混作同一问题。完整空链属于组合未合入源码、合成空输入验证，不冒称原published空名单或生产HTTP验收。
+完整空链追加验证先因临时runner错误调用predict_day(packet=...)失败，修正为实际kwargs/SCOPE_KEYS后发现真实BUG-1726（Issue #5446）。独立BUG树修改前精确登记3个Advisory叶源码、3个对应测试及BUG JSON；分别修复空object数值map后的isfinite错误、sector空分类键merge dtype错误、family空键dtype误判。71项相关测试保留非空数学、空输入schema/hash/count、外来分类及未来quote拒绝；真实冻结模型+合成空名单完整family返回NO_CANDIDATES。流水线已修复公共target-owned smoke合同；本窗口只同步消费，未改公共源码或用泛health绕过。最终HEAD1f9780cbeb1689bcd2adb8b7f0bfeae9c225e768四收据绑定、scope/Ruff/L0通过，当前CI37468474849第二attempt SUCCESS后#5594合入7f6371cba7a64b652ba745e477fb33d8bebf5134，源码官方清理22.828秒、0blocking/warnings。首attempt是公共runner shallow.lock准备失败、未执行业务测试，没有删除锁或控制其它进程。#5597 close-sync/其registry工作树仍OPEN/保留，Issue #5446不假关闭，待用户重启backend-main后精确semantic smoke复验。此BUG不是行情缺口/QE缺陷；分类覆盖是另一个已明确的限制。合成空输入不冒充原published空名单或生产HTTP验收。
 
-最新main接续复核（2026-10-05 06:30）：同步4f7793a0f，M6～M9源码/结果作为既有main继承，未重复实现或拟合；业务文件自动合并，仅蓝图三段冲突精确协调。相对该main仍仅原13个登记文件。合并工作区的43个本叶测试、本文及上位F2各8项校验通过；前端六场景spec SHA仍为9481e9919743a5050266a58a25400a215dbb07ec67bced35f7eadb1500df2623，未借用旧UI收据或旧HEAD CI。四项设计符合性复核：未把待UI/BUG交付的切片称完整、不吞真实错误/伪造空结果、原名单及模型语义不变、不新增QE策略包资格门。M1仍是显式recipe/Program/两腿作用域内模型；扩展为通用价格模型需另立独立输入和价值标签设计，不能取消真实数学兼容检查。新HEAD CI和六UI、公共端点smoke均分别记录，未完成者仍PENDING。
+历史main接续复核（2026-10-05 06:30）：当时同步4f7793a0f，43个本叶测试、本文及上位F2通过，六UI与公共smoke仍未交付；这是旧检查点，已由上列2026-10-06状态替代，不重跑旧研究。最终六UI spec的Git/LF字节SHA为3f3633b2bd7de9198d3f15923f94762addf177dfe75085092fc676bd3585f6f0；旧Windows工作副本SHA9481e991...仅是CRLF字节身份，不混成新收据。M1仍是显式recipe/Program/两腿作用域内模型，五次有效复评不等于五交易日。独立[通用固定5交易日F2](advisory_generic_price_5td_v1_f2_design_20261006.md)设计#5576与离线源码#5590已交付，其负研究不改本M1权重/标签，不证明所有包均可盈利；该通用模型还未接入此M1 API/UI。
 
 ## 9. Risks / 审核与设计符合性
 
@@ -128,6 +130,8 @@ DESIGN-COMPLIANCE-001：四项逐条检查完整业务/无mock-only，真实矛�
 实施多轮自审：接口/数据轮以真实47项修复WATCH正常动作与无rank旧持仓；时钟/事务轮区分旧停牌报价与声明D、原review/shadow/value政策，并在批量CPU前结束读阶段预算；边界/UI轮修复原指数合法零准入、增强实际状态/节点字段一致性和晚返回取消，未增加利润/原生/QE资格门。异常只重跑对应修复节点，稳定后一次同叶矩阵；不称独立外审。
 
 恢复后三轮自审：来源/时钟轮用失败节点确认LIVE_DB旧ST默认错误，修复为本适配器显式canonical属性读取；数据/数学轮核对九月分类当D可见、冻结结构不变及正常UNKNOWN保留，不以新candidate目录冒充活动profile；交付/边界轮核对20日原名单计数、空链组合源码与71测试状态、六UI未验收及源码/配置/运行态/经济效果分账。最终43项相关矩阵通过，未重复旧模型实验或扩大测试债务。
+
+2026-10-06交付后三视角自审：事实轮逐项核对45d9当前43项/F2/CI、六UI精确标题/独立收据及两个合入SHA；一致性轮将旧未交付表述标历史，页首、实施矩阵和蓝图当前队列一致；授权/价值轮确认后端重启仍user-owned、#5597保持OPEN，UI通过不等于盈利，GP5五交易日不偷换M1五有效复评。四项DESIGN-COMPLIANCE-001分别通过：完整源码/真实只读业务和UI展示已按设计交付但运行态明确待办；无静默成功或假空；原名单/价格数学/成本及模型角色不改；没有新增QE包资格/日期/收益审批。以上是本窗口不同视角审核，不冒称独立外审。
 
 ## 10. Rollout / Rollback / Production Gates
 
