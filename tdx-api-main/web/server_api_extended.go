@@ -147,7 +147,7 @@ func handleGetKlineHistory(w http.ResponseWriter, r *http.Request) {
 			// 限制返回数量
 			if len(resp.List) > int(limit) {
 				resp.List = resp.List[len(resp.List)-int(limit):]
-				resp.Count = limit
+				resp.Count = int(limit)
 			}
 		}
 	case "month":
@@ -158,7 +158,7 @@ func handleGetKlineHistory(w http.ResponseWriter, r *http.Request) {
 			// 限制返回数量
 			if len(resp.List) > int(limit) {
 				resp.List = resp.List[len(resp.List)-int(limit):]
-				resp.Count = limit
+				resp.Count = int(limit)
 			}
 		}
 	case "day":
@@ -169,7 +169,7 @@ func handleGetKlineHistory(w http.ResponseWriter, r *http.Request) {
 		if err == nil && len(resp.List) > int(limit) {
 			// 只返回最近limit条
 			resp.List = resp.List[len(resp.List)-int(limit):]
-			resp.Count = limit
+			resp.Count = int(limit)
 		}
 	}
 
@@ -222,13 +222,13 @@ func handleGetIndex(w http.ResponseWriter, r *http.Request) {
 		resp, err = client.GetIndexWeekAll(code)
 		if resp != nil && len(resp.List) > int(limit) {
 			resp.List = resp.List[:limit]
-			resp.Count = limit
+			resp.Count = int(limit)
 		}
 	case "month":
 		resp, err = client.GetIndexMonthAll(code)
 		if resp != nil && len(resp.List) > int(limit) {
 			resp.List = resp.List[:limit]
-			resp.Count = limit
+			resp.Count = int(limit)
 		}
 	case "day":
 		fallthrough
@@ -886,8 +886,9 @@ func handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "healthy",
-		"time":   fmt.Sprintf("%d", 1730617200),
+		"status":          "healthy",
+		"time":            time.Now().UTC().Format(time.RFC3339),
+		"source_revision": buildRevision,
 	})
 }
 

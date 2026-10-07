@@ -441,8 +441,10 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           go test -mod=readonly ./protocol -count=1
+          go test -mod=readonly . -run '^TestPagination' -count=1
           go build -mod=readonly ./...
           cd web
+          go test -mod=readonly . -count=1
           go build -mod=readonly -o "${RUNNER_TEMP}/aistock-tdx-web.exe" .
 
       - name: Run selected prompt evaluation
