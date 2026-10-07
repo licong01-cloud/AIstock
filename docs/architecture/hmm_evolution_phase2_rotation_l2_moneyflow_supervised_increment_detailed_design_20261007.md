@@ -1,7 +1,7 @@
 # HMM Evolution Phase 2：L2资金流监督增量完整详细设计
 
 > 版本：v1.0；日期：2026-10-07；owner：HMM；tier：F2。
-> 状态：APPROVED_BY_USER_IMPLEMENTATION_IN_PROGRESS。用户明确批准D1～D6、源码实施、审修通过后的提交合入，以及合入后双fresh-process共2fit。tail、数据库写入、runtime activation、依赖、进程控制和cleanup未授权。
+> 状态：APPROVED_BY_USER_IMPLEMENTATION_IN_PROGRESS。用户明确批准D1～D6、源码实施、审修通过后的提交合入，以及合入后双fresh-process共2fit；另明确批准仅在既有`aistock_dev`进行事务回滚式迁移及写入/回读验证，已完成并全部回滚。本轮补充授权源码审修、全绿后合入及本任务worktree/local branch/remote branch精确清理；本轮只交付源码，不启动正式训练。tail、持久化数据库写入、production DDL/DML、runtime activation、依赖及进程控制未授权。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md`当前L2主线；直接基线：`hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md` v1.6。本文只展开“已有L2资金流成果的单一模型增量”，不替代C-010/A5二十维正式HMM合同。
 > review base：`81d43fe8202f9e09e43f62f7cf5adad157ca7622`。P1产品状态文档PR #5653仍OPEN；本提案不将它标为已合入，不改其两个文件。
 
@@ -25,7 +25,7 @@
 - 不修改QE、Selection、Advisory、Paper、行业黑名单、数据生产、active profile或共享数据。QE实验后置，由QE窗口执行。
 - 不读取`2026-04-01`及之后的tail outcome，不把已消费的development重新命名为untouched holdout。
 - 不复活退役B3/P6链，不重做旧资金流、R1、risk或persistence实验；不新建registry、feature store、调度器或证据平台。
-- 不安装依赖，不修改Conda AIstock；不执行DDL/DML、runtime activation、进程控制或cleanup。源码合入、实际fit和生产动作分别报告。
+- 不安装依赖，不修改Conda AIstock；数据库仅限用户单独批准的既有`aistock_dev`事务回滚式迁移及测试行写入/回读，不持久化。其余DDL/DML、runtime activation或进程控制不执行。cleanup仅限本任务工作树和分支，须走正式清理流程。源码合入、实际fit和生产动作分别报告。
 
 ## 2. Architecture、Contracts与现有实现复用
 
@@ -143,6 +143,8 @@ spread仍为展示state下真实`y`的trending均值减fading均值；不是组�
 
 沿现有same-key幂等/不同payload冲突、131完整日期原子revision、writer/readback和无mock API/UI合同。新run的产品验证记录写现有文件store并绑定当前run/model/input/row身份，不绑环境变量、后端当前commit或服务重启。生产写入/运行时选择仍需独立具体授权；不因一条研究记录控制服务。
 
+源码复审发现现存L2表的availability、validation和run_summary CHECK只接受原零fit分支。新增`backend/db/migrations/extend_hmm_risk_rotation_l2_supervised_20261007.sql`迁移源码，保留数据库已安装的旧谓词和约束注释，只对本精确supervised version增加两fit/参数身份/解释字段分支；不新建表、不影响其他模块、不给未知version开放入口。新run真实写入前必须先在既有DEV事务回滚验证，再另行获得目标DDL/DML授权。2026-10-07用户明确批准的既有`aistock_dev`回滚验证已通过：临时执行迁移、旧版131行及新版131行writer/readback、幂等写入和非法合同拒绝，随后全部回滚。验证结束后原约束定义/注释与48,208行均恢复，测试run残留为0；不能因此声称DEV或production已持久化安装此迁移、导入正式新run或完成真实API/UI验收。
+
 ## 8. D6：预算、终止与实施方案（已批准）
 
 一个功能包只包含三类实际工作，不设计微阶段：
@@ -166,6 +168,7 @@ spread仍为展示state下真实`y`的trending均值减fading均值；不是组�
 - 同日同人口配对评价、成熟/停发label、HAC真实日期间隔、不能使用旧358日指标；块效果不新增AND门。
 - 双process参数/payload一致性、child共同篡改不得过parent、输出碰撞/parent finalization typed失败、总fit实际计数2。
 - 新version产品validator精确允许，未知version拒绝；旧资金流0fit/HMM/state身份原样回归；完整日期原子写入、冲突拒绝和readback。
+- 单独授权后，在既有`aistock_dev`实跑迁移与writer/readback，旧版及新版各131行、新版含合法unavailable行，非法预算/模型/参数身份由数据库拒绝；无fit，全部回滚并核对原约束定义/注释、行数及测试run零残留。此测试默认skip，不作为CI自动访问数据库的入口。
 - 新run真实API/UI及前10/后10、总数30/31、不可用/tie/IC区间显示；文件研究记录无需环境修改或重启。
 
 源码阶段运行精确pytest、Ruff、py_compile、diff及按ownership生成的最小HMM slice、registry/L0；广回归优先CI。源码是否runtime impact=backend必须实际重算，不预先宣称none；如果影响后端导入链，补fresh-process router/health/HMM依赖证据，不自行进程控制。
@@ -183,16 +186,16 @@ spread仍为展示state下真实`y`的trending均值减fading均值；不是组�
 
 F-001=D1正式文件输入及人口；F-002=D2特征/标签；F-003=D3固定训练与模型；F-004=D4同口径价值；F-005=D5真实产品与状态；F-006=D6预算/停止/边界。
 
-下表只核查设计是否明确和可执行。`verified_design_only`不是源码、数据、实验或产品验收，也不代表源码或实验已通过；所列测试文件是后续实施位置。
+下表是源码及单独授权DEV合同验证矩阵，不以设计结构PASS冒充正式模型、持久化数据库迁移或真实产品完成。F-005的既有DEV回滚验证阻断已解决；前端新增测试仍须本PR CI通过，正式模型及真实API/UI验收仍按§8的授权边界单独报告。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §3；现有rotation_l2_input.py；拟增显式有界入口 | backend/tests/hmm_risk/test_rotation_l2_input.py；本文列明实测日历SHA与范围 | verified_design_only | 无 |
-| F-002 | §4；拟增rotation_l2_moneyflow_supervised.py | backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py；手算与未来源poison计划 | verified_design_only | 无 |
-| F-003 | §5；拟增run_rotation_l2_moneyflow_supervised.py | backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py；126/10/232/222日历metadata读回 | verified_design_only | 无 |
-| F-004 | §6；同窗口baseline及候选评价 | backend/tests/hmm_risk/test_rotation_l2.py；配对/HAC/完整人口计划 | verified_design_only | 无 |
-| F-005 | §7；现有rotation_l2_prediction.py精确新增分支 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；真实新run API/UI计划 | verified_design_only | 无 |
-| F-006 | §8～9；CLI/parent/实际ownership | backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py；2fit计数与failure计划 | verified_design_only | 无 |
+| F-001 | §3；rotation_l2_input.py有界读取 | backend/tests/hmm_risk/test_rotation_l2_input.py及test_rotation_l2_moneyflow_supervised.py；固定HDF非目标日期numeric-read poison通过 | verified_source | 无 |
+| F-002 | §4；rotation_l2_moneyflow_supervised.py | backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py；rank/权重/未来标签拒绝通过 | verified_source | 无 |
+| F-003 | §5；run_rotation_l2_moneyflow_supervised.py | backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py；真实双fresh child、正常方程零fit复核通过 | verified_source | 无 |
+| F-004 | §6；共用显式窗口evaluator | backend/tests/hmm_risk/test_rotation_l2.py及test_rotation_l2_moneyflow_supervised.py；同人口配对与222成熟日通过 | verified_source | 无 |
+| F-005 | §7；精确repository/UI分支及HMM自有表CHECK迁移源码 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；test_rotation_l2_moneyflow_supervised.py::test_existing_dev_migration_writer_and_rollback实跑通过且全部回滚；frontend/tests/hmm-risk/hmm-risk.spec.ts已添加、执行待CI | verified_source_and_dev | 无 |
+| F-006 | §8～9；CLI/parent/实际ownership | backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py；unsafe output零写入、finalization失败记录、fit预算拒绝通过 | verified_source | 无 |
 
 ## 11. Risks、发布/回滚与Production gates
 
@@ -200,17 +203,40 @@ F-001=D1正式文件输入及人口；F-002=D2特征/标签；F-003=D3固定训�
 
 发布不替换现存baseline/risk。只有新run实际完成产品闭合才可选它；若效果不足则保留真实研究结果、旧run继续使用，不覆写旧数据。回滚是显式选择旧已验证run，不是产生预测失败时悄悄fallback。新source影响runtime时用户控制backend-main重启；仅记录研究结果不能成为重启理由。
 
-本设计任务：production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；runtime_activation=noop；process_control=false；dataset_write=false；active_profile_write=false；fits=0；tail_accessed=false。预计复用原表无新DDL；将来DEV/production写入、activation、重启权限均不由此文本产生。
+本设计任务：production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；runtime_activation=noop；process_control=false；dataset_write=false；active_profile_write=false；正式fits=0；tail_accessed=false。`dev_rollback_validation=passed`、`dev_persistent_change=false`：仅既有`aistock_dev`的临时迁移/262行测试写入已执行并全部回滚。将来持久化DEV/production迁移及正式数据写入、activation、重启权限均不由此验证产生。
 
 ## 12. 本次设计审核、批准与实施状态
 
 用户明确批准一次整包D1～D6：同源L2人口和受限输入、level+delta rank特征/rank训练标签、126日训练/10日隔离/SVD Ridge alpha=0.01/双process2fit、同窗口基线及0.02效果口径、独立新version产品身份、禁止搜索/tail/生产动作的停止条件。批准依据是用户本轮明确批准合同及源码/合入后训练授权，不是此前的“开始下一步”。
 
-2026-10-07完成两轮作者设计审修：第一轮核算共享membership与训练可行范围，弃用不受现有PIT支持的早期252日假设，明确126/10/232/222账本及同窗口比较；修正profile SHA抄录及F2表格/section格式。第二轮核对sample-weight/alpha尺度、训练label截止、预测不接收评价label、原始贡献与rank非线性投影、效果达标与配对改善的不同语义、旧产品零fit约束和新模型2fit分支。当前未发现文档阻断finding；这不是独立外部审核或源码审核结论。
+设计提交`4f9767282`阶段（2026-10-07）完成两轮作者设计审修：第一轮核算共享membership与训练可行范围，弃用不受现有PIT支持的早期252日假设，明确126/10/232/222账本及同窗口比较；修正profile SHA抄录及F2表格/section格式。第二轮核对sample-weight/alpha尺度、训练label截止、预测不接收评价label、原始贡献与rank非线性投影、效果达标与配对改善的不同语义、旧产品零fit约束和新模型2fit分支。该阶段未发现文档阻断finding；这不是独立外部审核或源码审核结论，后续源码复审发现的数据库实际阻断见§12.1。
 
-F2检查实际PASS：6项索引/6行矩阵、warnings=0。严格UTF-8解码通过、replacement character为false；新文件用`git diff --no-index --check -- NUL <本文件>`检查无空白错误，普通`git diff --check`也通过。Git提示LF将按仓库配置转换CRLF是格式提示，不当作业务结果。只有本文件新增，模型/数据/tail/DB/process零操作。
+设计提交`4f9767282`阶段F2检查实际PASS：6项索引/6行矩阵、warnings=0。严格UTF-8解码通过、replacement character为false；新文件用`git diff --no-index --check -- NUL <本文件>`检查无空白错误，普通`git diff --check`也通过。Git提示LF将按仓库配置转换CRLF是格式提示，不当作业务结果。该阶段只有本文件新增，模型/数据/tail/DB/process零操作；此历史PASS不能替代当前源码验收。
 
 F2 validator只核文档结构和验收索引，不等同用户批准、源码审核或正式模型验收。D1～D6状态为APPROVED_BY_USER；源码实施中，未创建PR、未合入、正式fit=0。实施方案和验收矩阵是唯一任务进度入口，不另建历史证据档案。
+
+### 12.1 源码实施与当前审核状态（2026-10-07）
+
+第一轮修正固定HDF block顺序假设、有界benchmark数值读取、输出位置保护、父流程failure receipt和逐行summary重复大payload；第二轮修正参数/fit计数类型、单线程环境完整性、共同篡改参数拒绝、effect/capability与指标一致性、新旧version隔离及保留旧错误文案。最后发现L2数据库CHECK不能接受新两fit合同，补齐精确迁移源码并如实等待DEV授权。用户补充仅既有`aistock_dev`事务回滚授权后，补齐真实数据库合同测试及约束注释保留，完成下述回滚验证。
+
+最终第三轮作者审核修正三项阻断finding：新版available行必须同时满足structural/feature资格，unavailable行不得声称feature资格；run/child在数据集输出路径被拒绝后不得再写失败收据；产品reader和acceptance不得仅靠重算hash接受错误长度系数或布尔截距。对应7项新增用例修复前全部RED、修复后7 passed。共用参数校验避免复制数值合同；输出位置未获完整授权时只报告typed stderr，不向受保护目录写任何文件。再次核对D1～D6、旧baseline数值/hash、模型2fit及零fit旧分支、合法NA、无tail、无生产写入、无额外门禁，未发现剩余源码阻断；PR CI仍需通过才合入。这是作者多轮审修，不冒称独立外部审核或真实新模型验收。
+
+实际验证：新模型定向17 passed；最终`python -m nox -s hmm_risk_pr_slice -- <新模型、rotation_l2、input、prediction、API、isolation、schema、security_identity八个直接测试文件>`为91 passed（两条既存Pydantic warning）；registry为8 passed；L0 blocking=0；Ruff、py_compile、diff检查及fresh-process router/health/HMM import通过。变更的三份HMM TS/TSX strict type check通过，无emit/依赖安装；ESLint退出0，但有独立worktree依赖解析警告。Playwright本地未运行：不安装依赖或控制用户服务，交由本PR CI执行，不能写成已经通过。Nox采用原生命令取得精确门禁输出；pytest/git/ruff使用RTK。
+
+所有实际变更归HMM-owned路径及本文，ownership无未映射文件，所需plan为l0、validation_catalog_integrity、hmm_risk_pr_slice、hmm_risk_ui。runtime impact=backend，target_ids=[backend-main]，catalog_error=null；新模型的runtime生效仍等待用户重启后核验，不影响独立离线训练。当前main安全同步已完成一次；分支仍保留实施修改，提交前再按流程安全同步。除单独授权的DEV回滚验证外，没有正式数据preflight、正式fit、持久化数据库变更、tail、activation、服务控制或cleanup。
+
+DEV验证前F2曾为FAIL：F-005待授权，未覆盖或伪造此历史结果。2026-10-07用户明确补充仅既有`aistock_dev`事务回滚式迁移及写入/回读验证授权后，实际命令为（只在本次测试进程设置授权开关，不绑定业务runtime或实验记录）：
+
+```powershell
+$env:AISTOCK_HMM_DEV_ROLLBACK_AUTHORIZED='1'
+python -m pytest backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py::test_existing_dev_migration_writer_and_rollback -q -s -p no:cacheprovider
+```
+
+该测试1 passed；连接前校验显式DEV配置，连接后核对`current_database()=aistock_dev`。旧CHECK拒绝新版行的RED成立，临时迁移后旧版/新版各131行writer/readback及新版幂等写入通过，新版保留1行合法unavailable；非法planned_fits、completed_fits、model_contract_hash、参数hash及旧版非零fit共5类均被DB拒绝。`Ridge.fit`设为poison，fit=0。最终事务`ROLLED_BACK`，行数`48,208→48,208`，全部约束定义/注释恢复，测试run残留=0。受验迁移文件SHA256=`8956e2d1ba986858beaf810f9c66bf58d3a35721de00c138eec2b2b1358547c4`。首次执行存在局部未注册pytest marker warning，已移除该标记并保留默认skip的明确授权开关，复验1 passed、无warning；未修改全局pytest/CI配置。
+
+回滚验证后的定向默认测试为17 passed、1 skipped（DEV测试未获本次进程开关时跳过）；F2实际PASS、6项索引/6行矩阵、warnings=0；Ruff check/format、py_compile、git diff --check通过；L0 blocking=0。L0的4条MEDIUM均为前端测试fixture内JSON匹配的RAW_JSON_UI提示，不是产品页面原始JSON展示；未将非阻断扫描提示写成不存在。上述结果不替代尚未运行的前端CI或真实新run产品验收。
+
+源码实施仍在当前独立worktree，尚未提交实施commit、创建实现PR、合入或开始正式训练。DEV回滚验证不等同正式模型数据、真实API/UI、持久化DDL/DML或生产完成；提交前仍须最终源码审修、安全同步main、源码门禁及CI。
 
 ## 13. 技术依据
 

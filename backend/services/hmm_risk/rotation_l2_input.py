@@ -399,9 +399,9 @@ def _sector_returns(
     quote_entries: Mapping[str, tuple[tuple[date, date], ...]],
     catalog: list[str],
     calendar: list[date],
+    start: date = DEVELOPMENT_START,
+    end: date = DEVELOPMENT_END,
 ) -> list[dict[str, Any]]:
-    start = DEVELOPMENT_START
-    end = DEVELOPMENT_END
     frame = _hdf_slice(path, start=start, end=end, columns=["l2_code_id", "sw2_pct_change"])
     ids = pd.to_numeric(frame["l2_code_id"], errors="coerce")
     if ids.isna().any() or (ids % 1 != 0).any():
@@ -469,6 +469,84 @@ def _benchmark_close(path: Path) -> list[dict[str, Any]]:
     ]
 
 
+def bounded_benchmark_close(path: Path, *, start: date, end: date) -> list[dict[str, Any]]:
+    """Read identity metadata and only in-window CSI300 numeric cells, never tail prices."""
+    try:
+        with pd.HDFStore(path, mode="r") as store:
+            if store.keys() != ["/data"]:
+                raise ValueError("index HDF must contain only /data")
+            storer = store.get_storer("/data")
+            if storer.is_table:
+                frame = store.select(
+                    "/data",
+                    where=f"(trade_date>='{start}') & (trade_date<='{end}')",
+                    columns=["trade_date", "ts_code", "close"],
+                ).reset_index(drop=True)
+            else:
+                group = storer.group
+
+                def decode(values: Any) -> list[str]:
+                    return [v.decode("utf-8") if isinstance(v, bytes) else str(v) for v in values]
+
+                blocks = {
+                    name[:-6]: decode(node.read())
+                    for name, node in group._v_children.items()
+                    if name.endswith("_items")
+                }
+                numeric = [(name, items) for name, items in blocks.items() if "close" in items]
+                metadata = [(name, items) for name, items in blocks.items() if set(items) == {"trade_date", "ts_code"}]
+                if len(numeric) != 1 or len(metadata) != 1 or numeric[0][1].count("close") != 1:
+                    raise ValueError("unsupported fixed index metadata layout")
+                numeric_name, numeric_items = numeric[0]
+                metadata_name, identity_items = metadata[0]
+                values = group._f_get_child(numeric_name + "_values")
+                identities = np.asarray(group._f_get_child(metadata_name + "_values")[0])
+                if identities.shape != (values.shape[0], 2):
+                    raise ValueError("fixed index row metadata shape differs")
+                days = pd.to_datetime(identities[:, identity_items.index("trade_date")], errors="coerce").date
+                if any(pd.isna(day) for day in days):
+                    raise ValueError("fixed index dates are invalid")
+                selected = [
+                    i
+                    for i, (day, code) in enumerate(
+                        zip(days, identities[:, identity_items.index("ts_code")], strict=True)
+                    )
+                    if start <= day <= end and str(code).upper() == BENCHMARK_CODE
+                ]
+                # Each read slice contains exactly one selected row; outside-window numeric
+                # blocks are never decoded even when the fixed HDF is not date-sorted.
+                frame = pd.DataFrame(
+                    [
+                        {
+                            "trade_date": days[i],
+                            "ts_code": BENCHMARK_CODE,
+                            "close": float(values[i : i + 1, numeric_items.index("close")][0]),
+                        }
+                        for i in selected
+                    ]
+                )
+    except (OSError, ValueError, KeyError, AttributeError, TypeError, IndexError) as exc:
+        raise _fail("source_invalid", "bounded CSI300 HDF cannot be read", path=str(path)) from exc
+    if frame.empty or not {"trade_date", "ts_code", "close"} <= set(frame):
+        raise _fail("source_invalid", "bounded CSI300 rows are absent")
+    frame = frame[frame["ts_code"].astype(str).str.upper() == BENCHMARK_CODE].copy()
+    frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce").dt.date
+    frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+    if (
+        frame.empty
+        or frame["trade_date"].isna().any()
+        or frame.duplicated("trade_date").any()
+        or any(not start <= day <= end for day in frame["trade_date"])
+        or not np.isfinite(frame["close"].to_numpy(dtype=np.float64)).all()
+        or (frame["close"] <= 0).any()
+    ):
+        raise _fail("source_invalid", "bounded CSI300 date/close contract differs")
+    return [
+        {"trade_date": row.trade_date.isoformat(), "close": float(row.close)}
+        for row in frame.sort_values("trade_date").itertuples(index=False)
+    ]
+
+
 def build_rotation_l2_input_bundle(
     *,
     active_profile_path: Path,
@@ -478,9 +556,13 @@ def build_rotation_l2_input_bundle(
     security_identity_sha256: str,
     provider_absence_manifest_path: Path,
     provider_absence_sha256: str,
+    outcome_end: date = DEVELOPMENT_END,
+    bounded_benchmark: bool = False,
 ) -> dict[str, Any]:
     """Build and validate one canonical input bundle from explicit frozen assets."""
 
+    if not DEVELOPMENT_START <= outcome_end <= DEVELOPMENT_END:
+        raise _fail("input_identity_invalid", "outcome range exceeds the development contract")
     active_profile_path = Path(active_profile_path)
     dataset_root = Path(dataset_root)
     security_identity_manifest_path = Path(security_identity_manifest_path)
@@ -660,9 +742,25 @@ def build_rotation_l2_input_bundle(
             quote_entries=quote.entries,
             catalog=catalog,
             calendar=calendar,
+            end=outcome_end,
         ),
-        "benchmark_close": _benchmark_close(index_path),
+        "benchmark_close": (
+            bounded_benchmark_close(index_path, start=DEVELOPMENT_START, end=outcome_end)
+            if bounded_benchmark
+            else _benchmark_close(index_path)
+        ),
     }
+    if outcome_end != DEVELOPMENT_END:
+        body["outcome_bounds"] = {"start": DEVELOPMENT_START.isoformat(), "end": outcome_end.isoformat()}
+        body["evaluation_source_binding"] = {
+            "root": str(dataset_root),
+            "sector": dict(sector_component),
+            "index": dict(index_component),
+            "id_to_code": {str(key): value for key, value in code_map.id_to_code.items()},
+            "quote_entries": {
+                code: [[a.isoformat(), b.isoformat()] for a, b in spans] for code, spans in quote.entries.items()
+            },
+        }
     body["input_hash"] = canonical_sha256(body)
     validate_input_bundle(body)
     return body

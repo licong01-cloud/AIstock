@@ -25,6 +25,9 @@ from backend.services.hmm_risk.formal_state_effect import (
 )
 
 
+from backend.services.hmm_risk import rotation_l2_moneyflow_supervised as supervised
+
+
 REASON_NOT_FOUND = "hmm_risk_rotation_l2_not_found"
 REASON_CONFLICT = "hmm_risk_rotation_l2_conflict"
 REASON_WRITER = "hmm_risk_rotation_l2_writer_failed"
@@ -155,9 +158,15 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(summary, Mapping):
         raise RotationL2PredictionError(REASON_WRITER, "run summary is absent")
     version = summary.get("contract_version")
-    if "contract_version" in summary and version != EFFECT_VERSION:
+    if "contract_version" in summary and version not in {EFFECT_VERSION, supervised.VERSION}:
         raise RotationL2PredictionError(REASON_WRITER, "unknown explicit prediction contract version")
     hmm_effect = version == EFFECT_VERSION
+    trained = version == supervised.VERSION
+    if trained:
+        try:
+            supervised.validate_product_explanation(row)
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise RotationL2PredictionError(REASON_WRITER, "supervised product contract differs") from exc
     if hmm_effect and (
         row["evaluation_contract_hash"] != canonical_sha256(EFFECT_CONTRACT)
         or not _is_sha256(summary.get("semantic_mapping_sha256"))
@@ -195,7 +204,7 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
                 or not _is_sha256(contribution["model_parameter_sha256"])
             ):
                 raise RotationL2PredictionError(REASON_WRITER, "HMM state/utility/rank explanation differs")
-        elif (
+        elif not trained and (
             not row["structural_eligible"]
             or not isinstance(contribution, Mapping)
             or set(contribution) != {"moneyflow_intensity_delta_5d_rank"}
@@ -246,7 +255,7 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
     if row["forward_power_status"] != "UNAVAILABLE" or row["forward_confirmation"] != "NOT_STARTED":
         raise RotationL2PredictionError(REASON_WRITER, "forward state differs")
     if row["advisory_status"] != "NOT_AVAILABLE" or row["validation_basis"] != (
-        EFFECT_BASIS if hmm_effect else "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT"
+        EFFECT_BASIS if hmm_effect else supervised.BASIS if trained else "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT"
     ):
         raise RotationL2PredictionError(REASON_WRITER, "advisory/validation state differs")
     if type(row["revision"]) is not int or row["revision"] < 1:
@@ -265,17 +274,28 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
         raise RotationL2PredictionError(REASON_WRITER, "run summary is absent")
     if (
         row["run_summary"].get("tail_accessed") is not False
-        or row["run_summary"].get("planned_fits") != 0
-        or row["run_summary"].get("completed_fits") != 0
+        or row["run_summary"].get("planned_fits") != (2 if trained else 0)
+        or row["run_summary"].get("completed_fits") != (2 if trained else 0)
         or not _is_sha256(row["run_summary"].get("acceptance_sha256"))
         or not isinstance(row["run_summary"].get("metrics"), Mapping)
     ):
-        raise RotationL2PredictionError(REASON_WRITER, "run summary violates the zero-fit no-tail contract")
+        raise RotationL2PredictionError(
+            REASON_WRITER,
+            "run summary violates the version-specific fit/no-tail contract"
+            if trained
+            else "run summary violates the zero-fit no-tail contract",
+        )
     return row
 
 
 def rows_from_acceptance(acceptance: Mapping[str, Any]) -> list[dict[str, Any]]:
     hmm_effect = acceptance.get("schema_version") == EFFECT_ACCEPTANCE_SCHEMA
+    trained = acceptance.get("schema_version") == supervised.ACCEPTANCE_SCHEMA
+    if trained:
+        try:
+            supervised.validate_acceptance(acceptance)
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            raise RotationL2PredictionError(REASON_WRITER, "supervised acceptance is invalid") from exc
     if hmm_effect:
         try:
             validate_effect_acceptance(acceptance)
@@ -283,7 +303,7 @@ def rows_from_acceptance(acceptance: Mapping[str, Any]) -> list[dict[str, Any]]:
             raise RotationL2PredictionError(REASON_WRITER, "HMM effect acceptance is invalid") from exc
     body = {key: value for key, value in acceptance.items() if key != "acceptance_sha256"}
     if acceptance.get("schema_version") != (
-        EFFECT_ACCEPTANCE_SCHEMA if hmm_effect else ACCEPTANCE_SCHEMA
+        EFFECT_ACCEPTANCE_SCHEMA if hmm_effect else supervised.ACCEPTANCE_SCHEMA if trained else ACCEPTANCE_SCHEMA
     ) or acceptance.get("acceptance_sha256") != canonical_sha256(body):
         raise RotationL2PredictionError(REASON_WRITER, "acceptance receipt is invalid")
     metrics = acceptance.get("metrics")
@@ -315,6 +335,15 @@ def rows_from_acceptance(acceptance: Mapping[str, Any]) -> list[dict[str, Any]]:
     if hmm_effect:
         summary["contract_version"] = EFFECT_VERSION
         summary["semantic_mapping_sha256"] = acceptance["evaluation_input_identity"]["semantic_mapping_sha256"]
+    if trained:
+        summary.update(
+            contract_version=supervised.VERSION,
+            parameters=acceptance["parameters"],
+            model_contract_hash=supervised.MODEL_CONTRACT_HASH,
+            training_summary=acceptance["training_summary"],
+            paired_increment={k: v for k, v in acceptance["paired_increment"].items() if k != "daily_ic_difference"},
+            baseline_metrics={k: v for k, v in acceptance["baseline_metrics"].items() if k in compact_metrics},
+        )
     rows: list[dict[str, Any]] = []
     for prediction in acceptance["predictions"]:
         row = {
@@ -384,6 +413,21 @@ def _validate_batch(rows: Sequence[Mapping[str, Any]]) -> None:
             "run_summary",
         )
         head = daily[0]
+        if head["run_summary"].get("contract_version") == supervised.VERSION:
+            raw = {
+                row["sector_code"]: row["feature_contributions"]["raw_prediction"]
+                for row in daily
+                if row["availability"] == "available"
+            }
+            from backend.services.hmm_risk.rotation_l2 import _score_and_states
+
+            scores, states = _score_and_states(raw) if len(raw) >= 2 else ({}, {})
+            if any(
+                row["rotation_score"] != scores.get(row["sector_code"])
+                or row["forecast_state"] != states.get(row["sector_code"])
+                for row in daily
+            ):
+                raise RotationL2PredictionError(REASON_WRITER, "supervised daily rank projection differs")
         if any(row["revision"] != head["revision"] for row in daily[1:]):
             raise RotationL2PredictionError(REASON_WRITER, "prediction date mixes revisions")
         if any(row[field] != head[field] for row in daily[1:] for field in invariants):
@@ -549,6 +593,8 @@ class RotationL2PredictionRepository:
                             else None,
                         }
                         if row["run_summary"].get("contract_version") == EFFECT_VERSION
+                        else {"model_version": supervised.VERSION}
+                        if row["run_summary"].get("contract_version") == supervised.VERSION
                         else {}
                     ),
                 }
@@ -611,6 +657,13 @@ class RotationL2PredictionRepository:
             **(
                 {"model_version": EFFECT_VERSION}
                 if head["run_summary"].get("contract_version") == EFFECT_VERSION
+                else {
+                    "model_version": supervised.VERSION,
+                    "training_end": supervised.TRAIN_END.isoformat(),
+                    "training_outcome_end": supervised.TRAIN_OUTCOME_END.isoformat(),
+                    "selection_basis": "RETROSPECTIVE_DEVELOPMENT_SELECTED",
+                }
+                if head["run_summary"].get("contract_version") == supervised.VERSION
                 else {}
             ),
         }
