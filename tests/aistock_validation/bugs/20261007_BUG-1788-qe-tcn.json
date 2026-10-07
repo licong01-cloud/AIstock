@@ -32,15 +32,26 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/strategy_package/frozen_runtime_self_check.py",
+    "actual_changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/strategy_package/live_inference.py",
       "backend/services/strategy_package/package_asset_freeze.py",
       "backend/services/strategy_package/package_asset_store.py",
-      "backend/services/strategy_package/live_inference.py",
-      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py"
+      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+      "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1788-qe-tcn.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/package_asset_store.py",
+      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+      "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1788-qe-tcn.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/frozen_runtime_self_check.py",
@@ -163,16 +174,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "WSL rdagent-gpu isolated Python, CUDA_VISIBLE_DEVICES empty, loaded actual TCN_10D_d02 frozen params: model_expected_features=44, fitted_feature_order=44, fitted_preprocessor_count=2; no training or service control"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu isolated Python, CUDA_VISIBLE_DEVICES empty, loaded actual TCN_10D_d02 frozen params: model_expected_features=44, fitted_feature_order=44, fitted_preprocessor_count=2; no training or service control",
+      "WSL fresh process loaded actual trained TCN_10D_d02 params: input_features=44, fitted_preprocessor_count=2, CPU only no training or DB writes"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
