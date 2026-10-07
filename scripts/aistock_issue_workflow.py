@@ -3878,6 +3878,39 @@ def _validate_collection_payload(payload: Any) -> tuple[str, str | None, dict[st
     return "failed", "collection payload is missing an items array or an explicit ok/success marker", {}
 
 
+def _validate_tdx_raw_kline(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """TDX facts, not HTTP success or an empty source, prove the read smoke."""
+    if not isinstance(payload, dict) or type(payload.get('code')) is not int or payload['code'] != 0:
+        return 'failed', 'TDX response reports failure or lacks wrapper', {}
+    data = payload.get('data')
+    if not isinstance(data, dict) or not isinstance(data.get('list'), list) or not data['list']:
+        return 'failed', 'TDX source fact list is empty or malformed', {}
+    rows = data['list']
+    if type(data.get('count')) is not int or data['count'] != len(rows):
+        return 'failed', 'TDX count differs from fact list', {}
+    prior = None
+    for row in rows:
+        if not isinstance(row, dict):
+            return 'failed', 'TDX fact is not an object', {}
+        try:
+            stamp = datetime.fromisoformat(row['Time'])
+        except (KeyError, ValueError, TypeError):
+            return 'failed', 'TDX fact timestamp is invalid', {}
+        if stamp.tzinfo is None or (prior is not None and stamp <= prior):
+            return 'failed', 'TDX timestamps lack offset or are duplicate/unordered', {}
+        prior = stamp
+        fields = ('Open', 'High', 'Low', 'Close', 'Volume', 'Amount')
+        if any(type(row.get(k)) not in (int, float) or not math.isfinite(row[k]) for k in fields):
+            return 'failed', 'TDX fact lacks finite OHLCV/amount', {}
+        if (row['Low'] <= 0 or row['High'] < row['Low'] or not row['Low'] <= row['Open'] <= row['High']
+                or not row['Low'] <= row['Close'] <= row['High'] or row['Volume'] < 0 or row['Amount'] < 0):
+            return 'failed', 'TDX fact OHLCV/amount violates units or bounds', {}
+        if 'VolumeShares' in row and (type(row['VolumeShares']) is not int or row['VolumeShares'] < 0
+                                     or row['VolumeShares'] // 100 != row['Volume']):
+            return 'failed', 'TDX share precision differs from whole hands', {}
+    return 'passed', None, {'row_count': len(rows), 'first_time': rows[0]['Time'], 'last_time': rows[-1]['Time']}
+
+
 def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Object endpoints must return a non-error object or array payload."""
     if isinstance(payload, list):
@@ -4720,6 +4753,7 @@ def _validate_monthly_release_ready(payload: Any, *, url: str) -> tuple[str, str
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/kline-all/tdx$"), "tdx_raw_kline_facts", _validate_tdx_raw_kline),
     (re.compile(r"^/api/v1/hmm-evolution/workers$"), "hmm_worker_liveness", _validate_hmm_workers),
     (re.compile(r"^/api/v1/hmm-risk/risk-l2/overview$"), "hmm_risk_l2_overview", _validate_hmm_risk_l2_overview),
     (re.compile(r"^/api/v1/research-pipeline/health$"), "research_pipeline_readiness_only", _validate_research_pipeline_health),
