@@ -143,6 +143,34 @@ def test_model_weight_freeze_and_runtime_share_one_physical_blob(tmp_path: Path,
         store.materialize_file(blob.uri, second, sha256=digest, size_bytes=second.stat().st_size)
 
 
+@pytest.mark.parametrize("attribute,width,shape", [
+    ("in_channels", 44, (64, 44, 3)),
+    ("input_size", 46, (256, 46)),
+    ("in_features", 44, (64, 44)),
+])
+def test_pytorch_input_width_uses_input_layer_not_kernel(attribute, width, shape):
+    from types import SimpleNamespace
+
+    from backend.inference_engine import _pytorch_input_feature_count
+
+    layer = SimpleNamespace(**{attribute: width})
+    network = SimpleNamespace(
+        named_modules=lambda: iter([("", layer)]),
+        parameters=lambda: iter([SimpleNamespace(shape=shape)]),
+    )
+    assert _pytorch_input_feature_count(network) == width
+
+
+def test_pytorch_unknown_kernel_tensor_is_not_a_feature_width():
+    from types import SimpleNamespace
+
+    from backend.inference_engine import _pytorch_input_feature_count
+
+    network = SimpleNamespace(parameters=lambda: iter([SimpleNamespace(shape=(64, 44, 3))]))
+    with pytest.raises(ValueError, match="input feature"):
+        _pytorch_input_feature_count(network)
+
+
 def test_empty_asset_defaults_do_not_change_legacy_manifest_hash() -> None:
     legacy = freeze_manifest(make_manifest())
     round_tripped = freeze_manifest(legacy.model_copy(update={"manifest_sha256": None}))
