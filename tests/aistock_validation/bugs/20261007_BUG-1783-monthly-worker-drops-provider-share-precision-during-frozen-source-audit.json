@@ -1,0 +1,258 @@
+{
+  "actual": "Only quantized BIGINT whole-hand volume reaches freeze and transform.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/factor_materializer.py",
+    "noxfile.py",
+    "backend/services/dataset_release/source_authority.py",
+    "backend/services/dataset_release/monthly_frozen_source_audit.py",
+    "backend/services/dataset_release/canonical_stock_transformer.py",
+    "backend/tests/dataset_release/test_raw_volume_precision.py",
+    "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1783",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-07T05:46:48.151355Z",
+  "deployment_prerequisite": "Authorized add_raw_volume_precision_v1.sql schema must be applied after merge and before the user-owned worker/backend restart. Existing active releases remain immutable.",
+  "description": "Only quantized BIGINT whole-hand volume reaches freeze and transform.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261007-701c08dc9073",
+      "timestamp": "2026-10-07T05:46:48.151355Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-dev-precision-readback.json"
+  ],
+  "expected": "Genuine precision survives frozen source/audit/bin; legacy semantics remain unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/source_authority.py",
+      "noxfile.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py"
+    ],
+    "added_files": [
+      "backend/tests/dataset_release/test_raw_volume_precision.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/source_authority.py",
+      "noxfile.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py"
+    ],
+    "changed_files_source": "git_finish",
+    "planned_files": [
+      "backend/services/dataset_release/factor_materializer.py",
+      "noxfile.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/factor_materializer.py",
+      "noxfile.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json"
+    ]
+  },
+  "first_seen_at": "2026-10-07T05:46:48.151355Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5659,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5659",
+  "last_seen_at": "2026-10-07T05:46:48.151355Z",
+  "linked_schema_bug": "BUG-1781",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "monthly_worker_process.supervision",
+    "fresh_process_evidence": [
+      "AIstock Python fresh process from BUG-1783 worktree imported worker source/audit/transform; actual DEV monthly SQL read 001255.SZ/2026-09-01: exact volume 925050 shares, unchanged legacy 9250 hands, database_write=false. Source and test process both loaded persistent task files.",
+      "AIstock Python fresh process from BUG-1783 worktree reading DEV with formal PRODUCTION_QUERY_SPECS SQL -> PASS shares 925050 vs legacy hands 9250; audit and transform preserve precision; database_write=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "review_readback": {
+    "round_1": "Source pins, exact DEV target and NULL-only repair / precision propagation reviewed; no raw OHLC, amount, unit or tolerance overwrite.",
+    "round_2": "Actual updated main diff and precision consumer paths reviewed; legacy semantics and immutable release/profile boundary preserved.",
+    "design_compliance": "All four DESIGN-COMPLIANCE-001 checks satisfied for source phase; full monthly data delivery remains separately blocked.",
+    "ci_retry_reason": "Previous synchronize event captured obsolete draft PR body before formal validation receipt body update; actual current body has formal receipts."
+  },
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Monthly worker drops provider share precision during frozen source audit and Qlib transform",
+  "trigger_condition": {
+    "fingerprint": "701c08dc907365ea1a1df132",
+    "source_event_id": "FE-20261007-701c08dc9073"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "premerge_baseline_failure": {
+    "nodeid": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
+    "observed_test_to_production_ratio": 0.30013739307716175,
+    "required_max_ratio": 0.30,
+    "reproduced_on_clean_canonical_main": true,
+    "catalog_integrity_script": "PASS findings=0",
+    "validation_catalog_integrity_nox": "FAIL: 21 passed, 1 baseline failure",
+    "merge_ready": true,
+    "resolution": "BUG-1784 PR #5665 merged e34fc481047f4b744ea00d3f06f1d941d87459be; updated validation_catalog_integrity PASS 22 tests and zero findings",
+    "runtime_action": false
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
