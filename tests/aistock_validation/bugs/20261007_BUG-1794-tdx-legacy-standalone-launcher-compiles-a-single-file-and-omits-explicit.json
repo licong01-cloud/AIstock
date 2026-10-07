@@ -1,6 +1,10 @@
 {
   "actual": "The separate vendor web/start.bat still invokes go run server.go, which excludes other package files and omits configured DB credentials. Route it through BUG-1793 shared launcher and register exact TDX runtime ownership; this is separate from canonical one-click launcher so restart contracts remain single-target. No production process control.",
   "allowed_write_scope": [
+    "tdx-api-main/web/start.bat",
+    "tdx-api-main/protocol/model_kline.go",
+    "backend/tests/scripts/test_start_tdx_go_backend.py",
+    "docs/operations/tdx_go_runtime_runbook.md",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/bugs/20261007_BUG-1794-tdx-legacy-standalone-launcher-compiles-a-single-file-and-omits-explicit.json"
@@ -108,12 +112,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": ["Shared BUG-1793 launcher configuration-only fresh process binds explicit existing DEV or production target; this BUG makes the separate legacy entrypoint call that same package launcher. No process control or database writes occur in preparation/tests."],
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-09-01&end_date=2026-09-30",
     "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
+    "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "not_required",
     "provisional": true,
-    "runtime_impact": "none",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []

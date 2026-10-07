@@ -8,6 +8,7 @@ rules:
       - tdx-api-main/go.sum
       - tdx-api-main/web/go.mod
       - tdx-api-main/web/go.sum
+      - tdx-api-main/web/start.bat
     primary_module: local_data
     impact_modules: []
     layer: data_pipeline
