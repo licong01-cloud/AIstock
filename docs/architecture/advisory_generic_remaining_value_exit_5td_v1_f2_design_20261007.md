@@ -1,6 +1,6 @@
 # Advisory 固定5交易日剩余净价值卖价建议 F2详细设计
 
-2026-10-08，独立源码范围登记：feature/advisory-exit5-remaining-value-audit-source-20261008；仅下述三个服务、两个直接测试、本文和蓝图。不修改其它模块，当前仍0新Exit fit/模型/经济确认。
+2026-10-08，独立源码范围登记：feature/advisory-exit5-remaining-value-audit-source-20261008；仅下述三个服务、两个直接测试、本文和蓝图。当前切片标签/审计实现及一次4固定fit开发研究完成，不修改其它模块；没有可激活卖价family/尾风险head、经济确认或生产激活。
 
 ## Background / Goal
 
@@ -89,6 +89,14 @@ Ridge目标为10000*(V_continue/reference−1)，动作增量预测为10000*(V_s
 矩阵只证明本切片源码合同实现，不冒称盈利卖价模型、实际研究或自然运行验收。最小测试手算同股一晚/四晚、T日禁止卖/S后U、quantity等价拆股/费率异同/沉没入场、终点停牌UNKNOWN、future字段毒值/test projection sentinel、episode块不串/purge、同股多日不独立交易、干预支持不足时只是exploratory；四fit预算、QE busy零启动、完成fold复用和崩溃不得自动重拟合采用微型模拟，不计研究fit。既存旧Exit模型/实验不重跑。
 
 ## Risks / Rollout / Rollback / Production Gates
+
+实际一次开发期研究：run advexit5_6134993163be362f7e0bebc7，完整原305D/6100候选；1525原Top5 shadow episode，1500日期成熟/25边界未结算，6000成熟决策及100边界决策不删。prepare9.178秒，5968 AVAILABLE/16 NOT_HELD/16 UNKNOWN/100 UNSETTLED；四折真实PHYSICAL_FIT完成1.918秒，fit前后逐折公开QE三入口全0，evaluate0.805秒，项目研究累计117→121（旧INDEX_BUILD 1次另列）。开发日期止于原validation_end=2025-09-30，原test/新sealed金融值没有解码，当前DB与冻结来源非vintage限制不升级。
+
+240原评价entry cohort中238完整/2 UNKNOWN；baseline/candidate/clairvoyant oracle五槽均值114.2579/70.5342/350.1849bps，实际候选增量−43.7236bps，原时间轴5日block CI95 [−89.9113,4.0278]、MDE80=66.2288bps；理论oracle增量+235.9270bps。完整配对703实际干预episode、222 cohort、93.2773%干预覆盖，最低次数支持满足，regime未知。完整配对episode归因总和：避免亏损49146.4669、额外亏损20170.3080、增加盈利44007.7713、错失盈利125015.0568bps；净−52031.1266除以5槽及238完整cohort，精确还原−43.7236均值。这些是重叠shadow cohort描述，不是资金NAV、复利年化、独立确认或卖出收益承诺。
+
+结论：本假设没有成本后经济确认，NAVIGATION_ONLY/EXPLORATORY/未激活；理论空间高而当前九字段+固定Ridge弱，下一研究优先加入S已知的原持仓路径状态（原入场以来盈亏/峰值回撤等），必须新详细设计/新身份；不改本次阈值或窗口，不重跑旧holding或本负结果，不把审计失败当整个Exit方向不可学。当前实际消费的BUG-1778本地纯函数SHA为e6ca000d9ebe09821161ab05c2b556e330eb4e770ea259ae239fc667dc83eee4，记录于study实现身份；只属于task-owned短进程，不是源码公开合入或后端激活。正式F研究产物保持原样，不投入旧实验归档/补证。
+
+复杂度复审：两个P2 ALGO-COMPLEXITY-001提示已逐项核查。one-to-one episode/S join为有界6100行（合同最大15000），每链至多4决策、一次排序，Ridge仅19输入/固定4fit；特征按S复用bar字典，不对每episode全市场重扫。不是高维模型搜索或平方级候选组合；L0 0blocking，不需修改公共扫描器或增加平台。
 
 价格支持域、真实可执行性、当前DB非vintage与持有episode相关性都可能限制可学空间；标签正确本身不是经济信号。动态资金仓位没有授权，本设计只是shadow episode价值与独立建议，无账户写入。回滚停止新研究/consumer调用，正式artifact保持只读；无依赖安装、数据库迁移或生产激活。source/标签/研究/未来模型/API及用户重启独立报告，负结果不让旧门槛成为项目停工条件。
 
