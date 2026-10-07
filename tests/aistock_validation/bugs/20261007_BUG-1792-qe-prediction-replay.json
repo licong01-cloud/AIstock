@@ -19,6 +19,11 @@
   "description": "Replay has prediction artifacts but no model_params by design; original trained weights exist.",
   "events": [
     {
+      "action": "design_compliance_review_two_rounds",
+      "actor": "codex",
+      "note": "完整实现原训练模型/代码/预处理器追溯；保留回放业绩与测试窗口；已知模型/因子顺序/seed/训练窗不匹配显式报错；无重训、无额外审批/环境锁；31项真实资产装配及同一物理权重验证通过。"
+    },
+    {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261007-e4c2a5b65bcb",
@@ -28,14 +33,22 @@
   "evidence_uris": [],
   "expected": "Replay package resolves original trained model assets while preserving replay performance and exact seed/factor identity.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/qe_source_resolver.py",
+      "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py",
+      "backend/tests/strategy_package/test_qe_source_resolver.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1792-qe-prediction-replay.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/strategy_package/qe_source_resolver.py",
       "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/qe_source_resolver.py",
+      "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py",
       "backend/tests/strategy_package/test_qe_source_resolver.py",
-      "backend/tests/strategy_package/test_package_asset_backfill_dualsource_batch3.py"
+      "tests/aistock_validation/bugs/20261007_BUG-1792-qe-prediction-replay.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/qe_source_resolver.py",
@@ -143,16 +156,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261007_141342_0221?detail=summary",
     "fresh_process_evidence": [
+      "Final combined source with BUG-1788: read-only real LSTM replay full dry-freeze assembled 31 assets; central CAS to package assets to runtime params os.path.samefile=true; WSL CPU fresh-process model probe passed, input_features=46, fitted_preprocessor_count=2; temporary verification files only, no package registration, training or DB writes",
       "Isolated Python loaded real replay qe_20261007_141342_0221_L4 metadata and original fit qe_20261006_013449_0c29_L1 seed42; central weight sha=d8a9928ff1ddf84d7a1b8362763eef5d4741e91635ea17e1a204b2befc165022 bytes=698716; original fitted dataset bytes=46115, model.py bytes=932 from WSL Loop1; no training, service control or database writes"
     ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261007_141342_0221?detail=summary",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
