@@ -24,7 +24,7 @@ from backend.data_service.security_source_identity import (
 )
 
 from .canonical import canonical_json_bytes
-from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME, suspended_zero_turnover_placeholder
+from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME, raw_volume_shares, suspended_zero_turnover_placeholder
 from .monthly_source_audit import (
     MonthlySourceAuditError,
     SourceGateEvidence,
@@ -78,6 +78,10 @@ def _ohlcv(row: Mapping[str, Any]) -> dict[str, float]:
             strict=True,
         )
     }
+    try:
+        values['vol'] = raw_volume_shares(row)
+    except ValueError as exc:
+        raise MonthlySourceAuditError(str(exc)) from exc
     if (
         min(values[key] for key in ("open", "high", "low", "close")) <= 0
         or values["high"] < max(values["open"], values["low"], values["close"])

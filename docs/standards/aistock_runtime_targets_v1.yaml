@@ -86,6 +86,7 @@ targets:
     runtime_kind: backend
     source_globs:
       - tdx-api-main/**/*.go
+      - tdx-api-main/web/start.bat
     production_port: 19080
     isolated_validation_ports: [19081, 19082]
     probe_origins: [http://127.0.0.1:19080, http://localhost:19080]

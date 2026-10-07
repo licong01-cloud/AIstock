@@ -1,7 +1,7 @@
 # HMM Evolution Phase 2：L2风险低换手消费详细设计
 
-> 版本：v1.0；日期：2026-10-07；tier：F2；owner：HMM。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.74；F-011/F-012/F-013。
+> 版本：v1.1；日期：2026-10-07；tier：F2；owner：HMM。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.75；F-011/F-012/F-013。
 > 精确合同：**APPROVED**。2026-10-07用户明确批准L2-RISK-CONSUME-PERSISTENCE-D1～D6，并授权源码实施、多轮审修、满足合入条件后提交合入及同步。下列精确公式未改变；批准不代表源码或消费效果已经通过。本次先完成设计与源码交付，正式新消费回放另行确认。
 > 一个完整业务包，版本建议为`hmm_risk_l2_warning_persistence_value_v1`；不是新模型，不是QE实验，不新增产品、数据库表或记录平台。
 
@@ -23,7 +23,7 @@ Non-goals：fit/predict/HMM过滤、概率校准、阈值/确认天数/持有期
 
 只新增消费逻辑，不改变模型warning字段。原R称即时消费，原X称X_R；它们及B从旧结果读取，不重新运行旧公式。新C与X_C只算一次，每个fresh process均使用相同五份普通不可变文件。旧结果不能作为独立确认，也不能复制成新的“通过”结果。
 
-allowed_write_scope为本文、父蓝图、`backend/services/hmm_risk/risk_l2_value_persistence.py`、现有`scripts/hmm_risk/replay_risk_l2_value.py`的显式版本dispatch及对应`backend/tests/hmm_risk/`直接测试。复用已有reader、NA/漂移/成本纯函数；如需抽取公共函数，应先登记精确范围并证明原版本行为不变，不能复制第二套实现或恢复退役链。不修改全局CI、nox、test plan或其他业务模块。
+allowed_write_scope为本文、父蓝图、`backend/services/hmm_risk/risk_l2_value_persistence.py`、现有`scripts/hmm_risk/replay_risk_l2_value.py`的显式版本dispatch及对应`backend/tests/hmm_risk/test_risk_l2_value_persistence.py`、`test_replay_risk_l2_value.py`直接测试。公共复用范围另登记为`backend/services/hmm_risk/risk_l2_value_replay.py`：只为原loader提供显式请求版本及独立pin参数，抽取原逐臂预算漂移/成本纯函数；保持原默认参数与原回放行为不变，由旧直接矩阵验证。不能复制第二套实现或恢复退役链。不修改全局CI、nox、test plan或其他业务模块。
 
 ## 3. Contracts D1：冻结五份输入，保持模型与事实
 
@@ -115,7 +115,7 @@ fresh process比较参数、源pins、完整population、全部动作和业务ca
 
 ## 9. Verification Plan、可合入标准与Review
 
-设计验收仅检查定义完整、旧合同/当前状态一致、授权分离和F2结构；不是源码或效果PASS。精确批准后源码最小矩阵：
+设计定义与源码直接合同均已完成作者复核；正式消费效果尚未运行。源码最小矩阵：
 
 | 合同 | 直接验证 |
 |---|---|
@@ -134,19 +134,21 @@ fresh process比较参数、源pins、完整population、全部动作和业务ca
 - F-012：显式五源、完整L2人口、原合法NA、严格因果和零重建。
 - F-013：完整薄执行/比较和真实终态，不耦合记录与后端，不推导产品升级。
 
-下表只验收设计定义及引用是否完整；verified仅表示作者已核对§3～§9定义，不表示新代码/测试或消费效果已通过。现有代码/测试只作复用依据，不声称支持新候选。精确批准已完成；源码、测试、双process及价值结论仍待执行，不是被豁免的设计缺口。
+下表verified表示§3～§9定义与新源码直接合同已核对、实际执行的直接测试通过，不代表正式双process消费效果通过。最终HEAD CI/合入按PR实时状态独立核对；正式新比较仍未执行，不是被豁免的设计缺口。
 
 | 实际执行维度 | 当前状态 |
 |---|---|
 | 精确D1～D6批准 | APPROVED：2026-10-07用户明确授权 |
-| 新源码/新直接测试/新CI | NOT_IMPLEMENTED / NOT_RUN |
+| 新源码/直接测试 | IMPLEMENTED；新旧直接小矩阵51 passed，Ruff/py_compile通过 |
+| 最终CI/源码合入 | 以实现PR最终HEAD的CI与merge状态为准，不由本地测试推导 |
+| 五源只读预检 | PASS：131行业/424decision/423收益日/55,544标签；五源pins闭合，未执行compare |
 | 新双process消费比较/经济结论 | NOT_RUN / UNASSESSED |
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | §4～§7；backend/services/hmm_risk/risk_l2_value_replay.py（原算法复用依据） | test: backend/tests/hmm_risk/test_risk_l2_value_replay.py（旧版）；§9新状态/代价反例待实施 | verified | 无 |
-| F-012 | §3～§5；backend/services/hmm_risk/risk_l2_prediction.py（原asset reader） | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json；§9新身份/因果测试待实施 | verified | 无 |
-| F-013 | §7～§9；scripts/hmm_risk/replay_risk_l2_value.py（现有CLI，尚无新dispatch） | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261006/value-run/acceptance.json（旧终态）；新执行未运行 | verified | 无 |
+| F-011 | §4～§7；backend/services/hmm_risk/risk_l2_value_persistence.py：actions/compare；risk_l2_value_replay.py：arm_day | test: backend/tests/hmm_risk/test_risk_l2_value_persistence.py；原回放直接回归 | verified | 无 |
+| F-012 | §3～§5；backend/services/hmm_risk/risk_l2_value_persistence.py：load_inputs/validate_baseline；risk_l2_prediction.py原reader | test: backend/tests/hmm_risk/test_risk_l2_value_persistence.py；真实五源file-only预检PASS | verified | 无 |
+| F-013 | §7～§9；scripts/hmm_risk/replay_risk_l2_value.py：显式contract-version dispatch；risk_l2_value_persistence.py：validate_child | test: backend/tests/hmm_risk/test_replay_risk_l2_value.py；两child权威/重复比较/typed失败/readback测试；正式新消费未运行 | verified | 无 |
 
 ## 11. Rollout / Rollback、Risks及Production Gates
 
@@ -170,3 +172,7 @@ fresh process比较参数、源pins、完整population、全部动作和业务ca
 第二轮作者复审已完成：将动作状态优先级、全报警冷启动/全解除首日与旧R的差异写成精确合同；补齐四臂共同已知换手的敞口调整诊断，不增加效果AND门。核对动作不使用未来warning/label、状态不因收益NA重置、五臂同日期比较与原合法NA、原模型/产品/数据/完整历史保持。两份文档F2结构检查和diff通过；这不代表新消费批准、源码或新回放已完成。当前没有已识别的阻断设计finding，精确合同仍待用户决定。
 
 2026-10-07批准状态复核：以上两轮为批准前历史记录，保留不改；用户随后明确批准D1～D6及实现/合入/同步。逐项核对本次仅更新授权状态与allowed_write_scope，没有改变§3～§7任何数值/公式，没有将批准写成实现或经济验收通过。
+
+源码三轮作者审修（非独立第三方）：第一轮核对冷启动、双日确认、NA记忆、t-1消费、全预算/共同估值及漂移复用，新测试先RED（模块不存在），再GREEN。第二轮补齐父进程独立五源/人口/旧三臂读回核对，修复Python等值类型不能代替canonical合同hash的问题，并覆盖self-rehash漂移/未知字段/最终落盘失败；测试fixture缺Path导入已修正并定向重验。第三轮逐项复核D1～D6及DESIGN-COMPLIANCE-001，最终直接小矩阵51 passed、Ruff及py_compile通过，未发现剩余阻断finding；真实file-only预检通过，正式新消费比较未运行。
+
+实现调用维持既有CLI，用`--contract-version hmm_risk_l2_warning_persistence_value_v1`显式选择新版本，旧默认版本不变。request在原四源字段上增加`value_path/value_hash`及`contract/contract_sha256`，全部固定pins按§3，合同来自源码CONTRACT。父进程不再消费/过滤/fit，只验证独立输入权威及两个完整业务payload。runtime实际分类为none、target_ids=[]、backend_restart_required=false、pre_pr_ready=true、blocking=[]；changed-files路由只选择l0/hmm_risk_pr_slice，没有DEV数据库、前端或其他模块计划。
