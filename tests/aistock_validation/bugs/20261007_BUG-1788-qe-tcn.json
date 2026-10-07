@@ -1,6 +1,9 @@
 {
   "actual": "已完成TCN24 Top25实验qe_20261006_013449_0c29_L4入包时报expected_features=3而冻结特征44。核实张量维度推断与模型实际特征schema，禁止将kernel宽度当输入特征。模型权重应复用中央不可变CAS且仅一份物理权重，保留程序内哈希/来源/特征顺序一致性，不新增人工门禁或环境锁。",
   "allowed_write_scope": [
+    "backend/inference_engine.py",
+    "backend/tests/test_inference_strict_scoring_alignment.py",
+    "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
     "backend/services/strategy_package/frozen_runtime_self_check.py",
     "backend/services/strategy_package/package_asset_freeze.py",
     "backend/services/strategy_package/package_asset_store.py",
@@ -160,7 +163,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu isolated Python, CUDA_VISIBLE_DEVICES empty, loaded actual TCN_10D_d02 frozen params: model_expected_features=44, fitted_feature_order=44, fitted_preprocessor_count=2; no training or service control"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages?view=summary&limit=1",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

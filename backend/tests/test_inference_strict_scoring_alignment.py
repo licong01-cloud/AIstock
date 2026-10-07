@@ -92,6 +92,30 @@ def test_pytorch_model_without_parameter_dimension_fails_visibly(tmp_path):
         inference_engine.load_model_from_pkl(model_path)
 
 
+@pytest.mark.parametrize("attribute,width,shape", [
+    ("in_channels", 44, (64, 44, 3)),
+    ("input_size", 46, (256, 46)),
+    ("in_features", 44, (64, 44)),
+])
+def test_pytorch_input_width_uses_input_layer_not_kernel(attribute, width, shape):
+    from types import SimpleNamespace
+
+    layer = SimpleNamespace(**{attribute: width})
+    network = SimpleNamespace(
+        named_modules=lambda: iter([("", layer)]),
+        parameters=lambda: iter([SimpleNamespace(shape=shape)]),
+    )
+    assert inference_engine._pytorch_input_feature_count(network) == width
+
+
+def test_pytorch_unknown_kernel_tensor_is_not_a_feature_width():
+    from types import SimpleNamespace
+
+    network = SimpleNamespace(parameters=lambda: iter([SimpleNamespace(shape=(64, 44, 3))]))
+    with pytest.raises(ValueError, match="input feature"):
+        inference_engine._pytorch_input_feature_count(network)
+
+
 def test_score_frame_rejects_length_mismatch_after_filtering(monkeypatch):
     monkeypatch.setenv("AISTOCK_STRICT_INFERENCE", "1")
     scored = inference_engine._drop_invalid_feature_rows_for_strict(_feature_frame())

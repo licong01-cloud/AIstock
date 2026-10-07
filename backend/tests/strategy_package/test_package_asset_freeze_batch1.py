@@ -119,6 +119,30 @@ def test_object_package_asset_store_is_explicitly_not_implemented() -> None:
         store.exists("aistock-package-asset://blobs/" + "0" * 64)
 
 
+@pytest.mark.parametrize("previous_copy", [False, True])
+def test_model_weight_freeze_and_runtime_share_one_physical_blob(tmp_path: Path, previous_copy: bool) -> None:
+    import os
+
+    source = tmp_path / "central_model_blob"
+    source.write_bytes(b"immutable-trained-model")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    store = LocalPackageAssetStore(tmp_path / "package_assets")
+    if previous_copy:
+        store.put(source.read_bytes(), kind="model_weight")
+    blob = store.put_file(source, kind="model_weight", sha256=digest)
+    first = tmp_path / "runtime_one" / "params.pkl"
+    second = tmp_path / "runtime_two" / "params.pkl"
+    store.materialize_file(blob.uri, first, sha256=digest, size_bytes=source.stat().st_size)
+    store.materialize_file(blob.uri, second, sha256=digest, size_bytes=source.stat().st_size)
+    assert os.path.samefile(source, first)
+    assert os.path.samefile(first, second)
+    source.unlink()
+    first.unlink()
+    assert store.get(blob.uri) == second.read_bytes() == b"immutable-trained-model"
+    with pytest.raises(FileExistsError):
+        store.materialize_file(blob.uri, second, sha256=digest, size_bytes=second.stat().st_size)
+
+
 def test_empty_asset_defaults_do_not_change_legacy_manifest_hash() -> None:
     legacy = freeze_manifest(make_manifest())
     round_tripped = freeze_manifest(legacy.model_copy(update={"manifest_sha256": None}))
