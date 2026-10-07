@@ -51,6 +51,8 @@ def test_tdx_ci_is_offline_and_builds_web_module() -> None:
     assert str(step["env"]["GOSUMDB"]).lower() in {"off", "false"}
     assert step["env"]["GOTOOLCHAIN"] == "local"
     assert "go test -mod=readonly ./protocol -count=1" in step["run"]
+    assert "go test -mod=readonly . -run '^TestPagination' -count=1" in step["run"]
+    assert "go test -mod=readonly . -count=1" in step["run"]
     assert "go build -mod=readonly ./..." in step["run"]
     assert "cd web" in step["run"]
     assert 'go build -mod=readonly -o "${RUNNER_TEMP}/aistock-tdx-web.exe" .' in step["run"]

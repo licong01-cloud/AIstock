@@ -11,7 +11,6 @@ import (
 	"github.com/injoyai/ios/module/common"
 	"github.com/injoyai/logs"
 	"github.com/injoyai/tdx/protocol"
-	"runtime/debug"
 	"sync/atomic"
 	"time"
 )
@@ -119,17 +118,28 @@ type Client struct {
 
 // handlerDealMessage 处理服务器响应的数据
 func (this *Client) handlerDealMessage(c *client.Client, msg ios.Acker) {
+	payload := msg.Payload()
+	key := ""
+	if len(payload) >= 9 {
+		key = conv.String(protocol.Uint32(payload[5:9]))
+	}
+	fail := func(err error) {
+		if key != "" {
+			this.m.GetAndDel(key)
+			this.Wait.Done(key, err)
+		}
+		logs.Err(err)
+	}
 
 	defer func() {
 		if e := recover(); e != nil {
-			logs.Err(e)
-			debug.PrintStack()
+			fail(fmt.Errorf("TDX response decode failed: %v", e))
 		}
 	}()
 
-	f, err := protocol.Decode(msg.Payload())
+	f, err := protocol.Decode(payload)
 	if err != nil {
-		logs.Err(err)
+		fail(err)
 		return
 	}
 
@@ -173,7 +183,7 @@ func (this *Client) handlerDealMessage(c *client.Client, msg ios.Acker) {
 	}
 
 	if err != nil {
-		logs.Err(err)
+		fail(err)
 		return
 	}
 
@@ -189,13 +199,22 @@ func (this *Client) SetTimeout(t time.Duration) {
 // SendFrame 发送数据,并等待响应
 func (this *Client) SendFrame(f *protocol.Frame, cache ...any) (any, error) {
 	f.MsgID = atomic.AddUint32(&this.msgID, 1)
+	key := conv.String(f.MsgID)
+	defer this.m.GetAndDel(key)
 	if len(cache) > 0 {
 		this.m.Set(conv.String(f.MsgID), cache[0])
 	}
 	if _, err := this.Client.Write(f.Bytes()); err != nil {
 		return nil, err
 	}
-	return this.Wait.Wait(conv.String(f.MsgID))
+	result, err := this.Wait.Wait(key)
+	if err != nil {
+		return nil, err
+	}
+	if decodeErr, ok := result.(error); ok {
+		return nil, decodeErr
+	}
+	return result, nil
 }
 
 // GetCount 获取市场内的股票数量
@@ -246,10 +265,16 @@ func (this *Client) GetCodeAll(exchange protocol.Exchange) (*protocol.CodeResp, 
 	}
 
 	size := uint16(1000)
-	for start := uint16(0); ; start += size {
-		r, err := this.GetCode(exchange, start)
+	for start := 0; ; start += int(size) {
+		if start > 65535 {
+			return nil, errors.New("TDX code offset limit exceeded")
+		}
+		r, err := this.GetCode(exchange, uint16(start))
 		if err != nil {
 			return nil, err
+		}
+		if uint32(resp.Count)+uint32(r.Count) > 65535 {
+			return nil, errors.New("TDX code count limit exceeded")
 		}
 		resp.Count += r.Count
 		resp.List = append(resp.List, r.List...)
@@ -406,10 +431,16 @@ func (this *Client) GetTradeAll(code string) (*protocol.TradeResp, error) {
 func (this *Client) GetMinuteTradeAll(code string) (*protocol.TradeResp, error) {
 	resp := &protocol.TradeResp{}
 	size := uint16(1800)
-	for start := uint16(0); ; start += size {
-		r, err := this.GetMinuteTrade(code, start, size)
+	for start := 0; ; start += int(size) {
+		if start > 65535 {
+			return nil, errors.New("TDX trade offset limit exceeded")
+		}
+		r, err := this.GetMinuteTrade(code, uint16(start), size)
 		if err != nil {
 			return nil, err
+		}
+		if uint32(resp.Count)+uint32(r.Count) > 65535 {
+			return nil, errors.New("TDX trade count limit exceeded")
 		}
 		resp.Count += r.Count
 		resp.List = append(r.List, resp.List...)
@@ -487,10 +518,16 @@ func (this *Client) GetHistoryTradeDay(date, code string) (*protocol.TradeResp, 
 func (this *Client) GetHistoryMinuteTradeDay(date, code string) (*protocol.TradeResp, error) {
 	resp := &protocol.TradeResp{}
 	size := uint16(2000)
-	for start := uint16(0); ; start += size {
-		r, err := this.GetHistoryMinuteTrade(date, code, start, size)
+	for start := 0; ; start += int(size) {
+		if start > 65535 {
+			return nil, errors.New("TDX history trade offset limit exceeded")
+		}
+		r, err := this.GetHistoryMinuteTrade(date, code, uint16(start), size)
 		if err != nil {
 			return nil, err
+		}
+		if uint32(resp.Count)+uint32(r.Count) > 65535 {
+			return nil, errors.New("TDX history trade count limit exceeded")
 		}
 		resp.Count += r.Count
 		resp.List = append(r.List, resp.List...)
@@ -523,34 +560,7 @@ func (this *Client) GetIndex(Type uint8, code string, start, count uint16) (*pro
 
 // GetIndexUntil 获取指数k线数据，通过多次请求来拼接,直到满足func返回true
 func (this *Client) GetIndexUntil(Type uint8, code string, f func(k *protocol.Kline) bool) (*protocol.KlineResp, error) {
-	resp := &protocol.KlineResp{}
-	size := uint16(800)
-	var last *protocol.Kline
-	for start := uint16(0); ; start += size {
-		r, err := this.GetIndex(Type, code, start, size)
-		if err != nil {
-			return nil, err
-		}
-		if last != nil && len(r.List) > 0 {
-			last.Last = r.List[len(r.List)-1].Close
-		}
-		if len(r.List) > 0 {
-			last = r.List[0]
-		}
-		for i := len(r.List) - 1; i >= 0; i-- {
-			if f(r.List[i]) {
-				resp.Count += r.Count - uint16(i)
-				resp.List = append(r.List[i:], resp.List...)
-				return resp, nil
-			}
-		}
-		resp.Count += r.Count
-		resp.List = append(r.List, resp.List...)
-		if r.Count < size {
-			break
-		}
-	}
-	return resp, nil
+	return collectKlines(func(start, count uint16) (*protocol.KlineResp, error) { return this.GetIndex(Type, code, start, count) }, f)
 }
 
 // GetIndexAll 获取全部k线数据
@@ -607,34 +617,7 @@ func (this *Client) GetKline(Type uint8, code string, start, count uint16) (*pro
 
 // GetKlineUntil 获取k线数据，通过多次请求来拼接,直到满足func返回true
 func (this *Client) GetKlineUntil(Type uint8, code string, f func(k *protocol.Kline) bool) (*protocol.KlineResp, error) {
-	resp := &protocol.KlineResp{}
-	size := uint16(800)
-	var last *protocol.Kline
-	for start := uint16(0); ; start += size {
-		r, err := this.GetKline(Type, code, start, size)
-		if err != nil {
-			return nil, err
-		}
-		if last != nil && len(r.List) > 0 {
-			last.Last = r.List[len(r.List)-1].Close
-		}
-		if len(r.List) > 0 {
-			last = r.List[0]
-		}
-		for i := len(r.List) - 1; i >= 0; i-- {
-			if f(r.List[i]) {
-				resp.Count += r.Count - uint16(i)
-				resp.List = append(r.List[i:], resp.List...)
-				return resp, nil
-			}
-		}
-		resp.Count += r.Count
-		resp.List = append(r.List, resp.List...)
-		if r.Count < size {
-			break
-		}
-	}
-	return resp, nil
+	return collectKlines(func(start, count uint16) (*protocol.KlineResp, error) { return this.GetKline(Type, code, start, count) }, f)
 }
 
 // GetKlineAll 获取全部k线数据
