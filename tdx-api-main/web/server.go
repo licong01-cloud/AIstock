@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/injoyai/tdx"
@@ -17,9 +18,10 @@ import (
 )
 
 var (
-	client      *tdx.Client
-	manager     *tdx.Manage
-	taskManager = NewTaskManager()
+	client        *tdx.Client
+	manager       *tdx.Manage
+	taskManager   = NewTaskManager()
+	metadataReady atomic.Bool
 )
 
 func bootstrapMarket() {
@@ -38,30 +40,17 @@ func bootstrapMarket() {
 	if err = os.MkdirAll(tdx.DefaultDatabaseDir, 0755); err != nil {
 		log.Printf("鍒涘缓鏁版嵁鐩綍澶辫触: %v", err)
 	}
-	if codes, err := tdx.NewCodesSqlite(client); err != nil {
-		log.Printf("鍒濆鍖栦唬鐮佸簱澶辫触: %v", err)
-	} else {
-		tdx.DefaultCodes = codes
-		if err := tdx.DefaultCodes.Update(); err != nil {
-			log.Printf("鏇存柊浠ｇ爜搴撳け璐? %v", err)
-		} else {
-			log.Printf("已加载股票代码，共%d条", len(tdx.DefaultCodes.Map))
+	go func() {
+		m, err := tdx.NewManage(&tdx.ManageConfig{Number: 4})
+		if err != nil {
+			log.Printf("TDX metadata initialization failed: %v", err)
+			return
 		}
-	}
-
-	manager, err = tdx.NewManage(&tdx.ManageConfig{
-		Number: 4,
-	})
-	if err != nil {
-		log.Fatalf("鍒濆鍖栨暟鎹鐞嗗櫒澶辫触: %v", err)
-	}
-	if err := manager.Codes.Update(); err != nil {
-		log.Printf("鏇存柊绠＄悊鍣ㄤ唬鐮佸簱澶辫触: %v", err)
-	}
-	if err := manager.Workday.Update(); err != nil {
-		log.Printf("鏇存柊浜ゆ槗鏃ユ暟鎹け璐? %v", err)
-	}
-	manager.Cron.Start()
+		manager = m
+		tdx.DefaultCodes = m.Codes
+		metadataReady.Store(true)
+		m.Cron.Start()
+	}()
 }
 
 // Response 缁熶竴鍝嶅簲缁撴瀯
@@ -725,5 +714,17 @@ func main() {
 	http.HandleFunc("/api/tasks/", handleTaskOperations)
 
 	log.Printf("TDX HTTP listening on %s revision=%s", addr, buildRevision)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Fatal(http.ListenAndServe(addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") && !metadataReady.Load() {
+			switch r.URL.Path {
+			case "/api/health", "/api/runtime-identity", "/api/kline-all/tdx", "/api/kline-all", "/api/kline", "/api/quote", "/api/batch-quote", "/api/tasks/ingest-minute-raw-init", "/api/tasks/ingest-daily-raw-init", "/api/tasks", "/api/minute", "/api/trade", "/api/kline-history", "/api/index", "/api/index/all":
+			default:
+				if !strings.HasPrefix(r.URL.Path, "/api/tasks/") {
+					errorResponse(w, "TDX metadata not ready")
+					return
+				}
+			}
+		}
+		http.DefaultServeMux.ServeHTTP(w, r)
+	})))
 }
