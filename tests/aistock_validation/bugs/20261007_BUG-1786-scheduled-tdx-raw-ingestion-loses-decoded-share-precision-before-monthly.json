@@ -131,6 +131,8 @@
   },
   "severity": "P1",
   "status": "open",
+  "source_pr_ready": false,
+  "remaining_delivery_blocker": "TDX target needs a real docs/operations runbook and target-owned HTTP runtime identity/business-smoke/readback contract; current descriptive references are not executable authority. No runtime contract downgrade, fake endpoint or source-ready declaration. Source implementation is committed but not merged or deployed.",
   "suspected_modules": [
     "local_data"
   ],
