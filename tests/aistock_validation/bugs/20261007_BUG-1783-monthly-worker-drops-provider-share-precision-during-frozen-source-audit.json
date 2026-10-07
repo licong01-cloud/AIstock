@@ -184,7 +184,8 @@
     "reproduced_on_clean_canonical_main": true,
     "catalog_integrity_script": "PASS findings=0",
     "validation_catalog_integrity_nox": "FAIL: 21 passed, 1 baseline failure",
-    "merge_ready": false,
+    "merge_ready": true,
+    "resolution": "BUG-1784 PR #5665 merged e34fc481047f4b744ea00d3f06f1d941d87459be; updated validation_catalog_integrity PASS 22 tests and zero findings",
     "runtime_action": false
   },
   "verification_run_id": null,
