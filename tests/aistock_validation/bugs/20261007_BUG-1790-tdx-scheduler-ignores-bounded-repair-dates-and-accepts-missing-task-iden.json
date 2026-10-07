@@ -1,6 +1,7 @@
 {
   "actual": "Shared TDX scheduler uses global MAX instead of explicit requested date window, skips partially collected latest day, accepts response without task_id, and can convert protocol failure into success using unrelated DB status. Quote adapter maps K.Last to current close. Fix shared integration and September-bounded tests; production DB/process untouched.",
   "allowed_write_scope": [
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "noxfile.py",
     "backend/ingestion/tdx_scheduler.py",
     "backend/data_service/tdx_adapter.py",
@@ -28,14 +29,24 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/data_service/tdx_adapter.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_go_integrity.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1790-tdx-scheduler-ignores-bounded-repair-dates-and-accepts-missing-task-iden.json"
+    ],
     "added_files": [
       "backend/tests/ingestion/test_tdx_go_integrity.py"
     ],
     "changed_files": [
+      "backend/data_service/tdx_adapter.py",
       "backend/ingestion/tdx_scheduler.py",
-      "backend/data_service/tdx_adapter.py"
+      "backend/tests/ingestion/test_tdx_go_integrity.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1790-tdx-scheduler-ignores-bounded-repair-dates-and-accepts-missing-task-iden.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -128,15 +139,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["Fresh AIstock Python process loaded the task adapter and read September 10/17 from isolated TDX DEV 19082: 240 rows per date, close 12.8/14.53 CNY, amount 13/15 CNY, whole-day sums 11651904/5095510 CNY; mocked scheduler regression proves bounded repair and missing-task fail-closed without database writes."],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python process loaded the task adapter and read September 10/17 from isolated TDX DEV 19082: 240 rows per date, close 12.8/14.53 CNY, amount 13/15 CNY, whole-day sums 11651904/5095510 CNY; mocked scheduler regression proves bounded repair and missing-task fail-closed without database writes."
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
