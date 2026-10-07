@@ -130,7 +130,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:/Dev/AIstock_worktrees/BUG-1783-close-sync-20261007/tmp/post_restart_bug1783_canonical_20261008.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -175,7 +175,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=6b09313ada525ef9 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 22 tests, zero findings`",
-    "validation-receipt: id=13c6394f6f693d74 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_raw_volume_precision.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_materializer.py -q` result=`passed 62 tests`"
+    "validation-receipt: id=13c6394f6f693d74 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_raw_volume_precision.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_materializer.py -q` result=`passed 62 tests`",
+    "canonical post-restart-verify worker-scheduler 2026-10-08 -> PASS identity=1dc3ad9d81bac4bb7edcf3023331e4b1addb89ec backend=124808 supervised_worker=116648; no process control"
   ],
   "verification_budget": {
     "budget": "standard",
