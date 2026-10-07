@@ -13,6 +13,7 @@ import styles from "./rotation-l1.module.css";
 
 const CONFIGURED_RUN_ID = process.env.NEXT_PUBLIC_HMM_ROTATION_L2_RUN_ID?.trim() || "";
 const FROZEN_HMM_VERSION = "hmm_risk_l2_postcalibration_effect_v1";
+const SUPERVISED_VERSION = "hmm_risk_rotation_l2_moneyflow_supervised_v1";
 
 function formatNumber(value: number | null, digits = 4): string {
   return value === null ? "—" : value.toFixed(digits);
@@ -88,8 +89,12 @@ export default function RotationL2Dashboard() {
           throw new HMMRiskApiError("L2 日期明细与 run/模型/输入身份不一致。", "hmm_risk_rotation_l2_ui_identity_invalid", 500);
         }
         const hmm = nextOverview.model_version === FROZEN_HMM_VERSION;
+        const supervised = nextOverview.model_version === SUPERVISED_VERSION;
         const states = new Set(["trending", "neutral", "fading"]);
-        if ((nextOverview.model_version !== undefined && !hmm)
+        if ((nextOverview.model_version !== undefined && !hmm && !supervised)
+          || (supervised && (nextOverview.validation_basis !== "HISTORICAL_CAUSAL_FIXED_TRAIN_DEVELOPMENT"
+            || nextOverview.training_end !== "2025-03-31" || nextOverview.training_outcome_end !== "2025-04-15"
+            || nextOverview.selection_basis !== "RETROSPECTIVE_DEVELOPMENT_SELECTED"))
           || (hmm && (nextOverview.validation_basis !== "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT"
             || nextOverview.run_id !== runId))
           || detail.rows.some((row) => hmm
@@ -98,6 +103,7 @@ export default function RotationL2Dashboard() {
               && (row.semantic_state !== row.forecast_state || !states.has(row.semantic_state || "")
                 || !states.has(row.daily_rank_group || "") || row.rotation_score === null || !Number.isFinite(row.rotation_score)
                 || row.rotation_score < -0.5 || row.rotation_score > 0.5))
+            : supervised ? row.model_version !== SUPERVISED_VERSION
             : row.model_version !== undefined || nextOverview.validation_basis !== "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT")) {
           throw new HMMRiskApiError("L2 模型版本与状态/排名投影不一致，拒绝混用。", "hmm_risk_rotation_l2_ui_version_invalid", 500);
         }
@@ -265,6 +271,7 @@ export default function RotationL2Dashboard() {
             <span>run {overview.run_id}</span><span>model {overview.model_hash}</span>
             <span>input {overview.input_hash}</span><span>mapping {overview.mapping_hash}</span>
             <span>quote {overview.quote_authority_hash}</span><span>validation {overview.validation_basis}</span>
+            {overview.model_version === SUPERVISED_VERSION && <span>训练 decision 截止 {overview.training_end}；训练标签截止 {overview.training_outcome_end}。固定模型历史样本外回放；研发已查看历史，不是 untouched / 前瞻确认。</span>}
           </footer>
         </>
       )}

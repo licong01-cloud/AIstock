@@ -280,7 +280,26 @@ def predictions_for_calendar(
     daily_rows: Sequence[Mapping[str, Any]],
     decision_days: Sequence[date],
 ) -> list[dict[str, Any]]:
-    """The unchanged 25/20/5 baseline formula, for an explicitly authenticated calendar.
+    """Unchanged baseline projection of the shared moneyflow feature calculation."""
+    features = moneyflow_features_for_calendar(
+        calendar=calendar,
+        catalog=catalog,
+        names=names,
+        daily_rows=daily_rows,
+        decision_days=decision_days,
+    )
+    return [{key: value for key, value in row.items() if key != "moneyflow_values"} for row in features]
+
+
+def moneyflow_features_for_calendar(
+    *,
+    calendar: Sequence[date],
+    catalog: Sequence[str],
+    names: Mapping[str, str],
+    daily_rows: Sequence[Mapping[str, Any]],
+    decision_days: Sequence[date],
+) -> list[dict[str, Any]]:
+    """Shared 25/20/5 features and unchanged baseline projection.
 
     New callers authenticate their own source contract; this does not weaken
     the original input-bundle validator or change its development window.
@@ -299,6 +318,7 @@ def predictions_for_calendar(
         as_of_date = calendar[offset - 1]
         source_days = calendar[offset - FEATURE_DAYS : offset]
         deltas: dict[str, float] = {}
+        levels: dict[str, float] = {}
         reasons: dict[str, str] = {}
         diagnostics: dict[str, dict[str, Any]] = {}
         for code in catalog:
@@ -329,7 +349,8 @@ def predictions_for_calendar(
             if recent_amount <= 0 or lagged_amount <= 0:
                 reasons[code] = "hmm_risk_rotation_l2_source_invalid"
                 continue
-            deltas[code] = math.fsum(net[5:25]) / recent_amount - math.fsum(net[0:20]) / lagged_amount
+            levels[code] = math.fsum(net[5:25]) / recent_amount
+            deltas[code] = levels[code] - math.fsum(net[0:20]) / lagged_amount
             diagnostics[code] = {
                 "minimum_expected_contributors": min(int(value["expected_contributors"]) for value in source_rows),
                 "minimum_valid_contributors": min(int(value["valid_contributors"]) for value in source_rows),
@@ -364,6 +385,7 @@ def predictions_for_calendar(
                     "feature_eligible": available,
                     "outcome_status": "PENDING_EVALUATION",
                     "feature_diagnostics": diagnostics.get(code),
+                    "moneyflow_values": ({"level": levels[code], "delta": deltas[code]} if available else None),
                 }
             )
     return rows
@@ -415,15 +437,38 @@ def _newey_west(calendar: Sequence[date], values: Mapping[date, float], *, lag: 
 
 def evaluate_predictions(bundle: Mapping[str, Any], predictions: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     validated = validate_input_bundle(bundle)
-    calendar = validated["calendar"]
+    return evaluate_predictions_for_calendar(
+        calendar=validated["calendar"],
+        sector_returns=bundle["sector_returns"],
+        benchmark_close=bundle["benchmark_close"],
+        predictions=predictions,
+        decision_start=DEVELOPMENT_START,
+        decision_end=DEVELOPMENT_END,
+        outcome_end=DEVELOPMENT_END,
+        report_blocks=REPORT_BLOCKS,
+    )
+
+
+def evaluate_predictions_for_calendar(
+    *,
+    calendar: Sequence[date],
+    sector_returns: Sequence[Mapping[str, Any]],
+    benchmark_close: Sequence[Mapping[str, Any]],
+    predictions: Sequence[Mapping[str, Any]],
+    decision_start: date,
+    decision_end: date,
+    outcome_end: date,
+    report_blocks: Sequence[tuple[str, date, date]],
+) -> dict[str, Any]:
+    """Unchanged official-return evaluator for an authenticated explicit window."""
     returns: dict[tuple[date, str], dict[str, Any]] = {}
-    for raw in bundle["sector_returns"]:
+    for raw in sector_returns:
         key = (_parse_day(raw.get("trade_date"), "sector_returns.trade_date"), str(raw.get("sector_code") or ""))
         if not key[1] or key in returns:
             raise _fail("source_invalid", "sector return identity is blank or duplicated", identity=str(key))
         returns[key] = dict(raw)
     benchmark: dict[date, float] = {}
-    for raw in bundle["benchmark_close"]:
+    for raw in benchmark_close:
         day = _parse_day(raw.get("trade_date"), "benchmark_close.trade_date")
         if day in benchmark:
             raise _fail("source_invalid", "benchmark date is duplicated", trade_date=day.isoformat())
@@ -446,7 +491,7 @@ def evaluate_predictions(bundle: Mapping[str, Any], predictions: Sequence[Mappin
         source_rows = by_day[trade_date]
         eligible = [row for row in source_rows if row["availability"] == "available"]
         scores = {row["sector_code"]: float(row["rotation_score"]) for row in eligible}
-        if offset + HORIZON >= len(calendar) or calendar[offset + HORIZON] > DEVELOPMENT_END:
+        if offset + HORIZON >= len(calendar) or calendar[offset + HORIZON] > outcome_end:
             for row in source_rows:
                 row["outcome_status"] = "outcome_not_mature"
                 evaluated_rows.append(row)
@@ -536,8 +581,8 @@ def evaluate_predictions(bundle: Mapping[str, Any], predictions: Sequence[Mappin
             "mean_daily_spread": math.fsum(spread_values) / len(spread_values) if spread_values else None,
         }
 
-    blocks = [block_summary(name, start, end) for name, start, end in REPORT_BLOCKS]
-    overall = block_summary("overall", DEVELOPMENT_START, DEVELOPMENT_END)
+    blocks = [block_summary(name, start, end) for name, start, end in report_blocks]
+    overall = block_summary("overall", decision_start, decision_end)
     metric_share = len(daily_ic) / mature_days if mature_days else None
     coverage_sufficient = bool(
         overall["coverage_pass_day_share"] is not None
@@ -566,7 +611,7 @@ def evaluate_predictions(bundle: Mapping[str, Any], predictions: Sequence[Mappin
             "metric_eligible_day_count": metric_days,
             "valid_ic_day_count": len(daily_ic),
             "valid_ic_day_share": metric_share,
-            "hac": _newey_west([day for day in calendar if DEVELOPMENT_START <= day <= DEVELOPMENT_END], daily_ic),
+            "hac": _newey_west([day for day in calendar if decision_start <= day <= decision_end], daily_ic),
             "daily_rank_ic": {day.isoformat(): daily_ic[day] for day in sorted(daily_ic)},
             "daily_spread": {day.isoformat(): daily_spread[day] for day in sorted(daily_spread)},
             "outcome_status_counts": dict(sorted(outcome_counts.items())),
