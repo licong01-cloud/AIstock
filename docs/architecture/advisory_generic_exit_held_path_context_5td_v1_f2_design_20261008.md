@@ -1,0 +1,95 @@
+# Advisory 固定5TD卖价持仓路径信息 F2详细设计
+
+2026-10-08。假设 EXIT5-HELD-PATH-CONTEXT-1；本PR仅详细设计及必要进度同步。源码、实际研究和盈利卖价功能尚未实现，不以设计验收冒称模型交付。
+
+## Background / Goal
+
+EXIT5-REMAINING-VALUE-AUDIT-1已完成新开发期四个固定Ridge fit：240原评价cohort保留、238完整配对，模型增量−43.7236bps，CI95 [−89.9113,4.0278]，四折分别−26.9616/−28.4983/−77.1188/−42.6187bps，cross-fitted Spearman −0.00413。合法U真实open的clairvoyant退出上限增量+235.9270bps，但这不是可以预测或部署的信号。
+
+当前模型只知道S日九个stock-only字段及原剩余期限，不知道这笔原shadow持仓的入场锚点、入场以来路径和当前峰值回撤。不能把“holding时长可预测”当退出价值，也不能继续在同信息集换label/loss/seed。本假设只补充三项S时刻可知的原持仓状态，检查它们是否减少错卖后续上涨，并保留原标签、费用、动作空间、模型族、四个时间折和统计协议。
+
+本研究仍为RISK_MANAGED_ADVISORY / LEARNABILITY_AUDIT / EXPLORATORY / NAVIGATION_ONLY。收益负或不充分只能停止本候选；不关闭整个Exit方向，不自动触发新模型搜索。首版盈利卖价family、风险head、价格集/API需要后续独立设计，不在本切片中冒称实现。
+
+## Scope / Non-goals
+
+文档允许范围仅本文、advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md与主蓝图。未来源码先独立登记：backend/services/advisory_model_first/generic_exit_held_path_5td_contracts_v1.py、generic_exit_held_path_5td_features_v1.py、generic_exit_held_path_5td_pipeline_v1.py；backend/tests/advisory_model_first/test_generic_exit_held_path_5td_features_v1.py、test_generic_exit_held_path_5td_pipeline_v1.py；本文和主蓝图，七文件。不修改已完成原audit源码来重新拟合或改判原结果。
+
+不修改QE、Selection、HMM、StrategyPackage、公共profile/dataset/CI/workflow、数据库、Execution或Paper。直接消费已有策略包，不能增加父包alpha/native receipt/PBO/覆盖率资格门。不上游训练、不新选股、不重建数据、不覆盖原输入/实验，不读原test/新sealed，不研发分钟成交、不形成资金仓位、不开停服务、不安装依赖、不配置/激活模型。临时X盘、正式新study F盘。
+
+## Architecture / Contracts
+
+### 1. 原episode、标签及动作完全不变
+
+直接复用已完成study advexit5_6134993163be362f7e0bebc7的prepared rows、folds、原calendar及输入身份。1525原Top5 shadow episode、1500日期成熟/25边界未结算、6000成熟决策/100边界决策全部保留。模型比较采用同240评价entry cohort，238完整只是当前来源状态，不能硬编码、删除另外两组或筛选“新字段齐全”样本。
+
+T开盘入场、原E=T+4收盘、S收盘后下一U、T+1<=U<=E及remaining=1..4全部复用。标签y_hold=10000*(V_continue/reference−1)，prediction advantage=10000*(V_sell/reference−1)−predicted_y_hold；未来U价格只作为U已观察的场景查询，不进入S特征。原股票、rank、入场时钟和终点不会因新特征变化。数量等价及S/U/E一次退出费用完全不变；正常停牌、缺行情、不可执行出口及未结算仍UNKNOWN/NOT_HELD/UNSETTLED分开，不延期E。
+
+### 2. 唯一变量：三项已知持仓路径状态
+
+对原持仓stock，在T至S的原交易session序列上计算。令f_j为历史j日已有adj_factor，使用比值构造S锚价格q_j=raw_price_j*f_j/f_S，入场锚a=raw_open_T*f_T/f_S。所有原始价格与f只取j<=S，绝不取U/E factor、未来高低或标签里的未来数量变换。未来公示、未知事件或事后配置不能回填本信息。既存来源非vintage只按已有证据声明，不能升级为原捕获身份。
+
+| 新字段 | 计算与单位 | 缺失要求 |
+|---|---|---|
+| held_mark_return_bps | 10000*(q_close_S*(1−原sell_bps/10000)/(a*(1+原buy_bps/10000))−1)；S假设净标记，不是S日实际卖单 | T open/f_T、S close/f_S或合法费用未知时UNKNOWN |
+| held_peak_drawdown_fraction | q_close_S / max(q_high_j, T<=j<=S) −1；分数而非bps | 原T..S任一必要high/factor缺失时UNKNOWN，不跳过停牌session挑剩余峰值 |
+| held_range_fraction | max(q_high_j)/min(q_low_j) −1，T<=j<=S | 任一必要high/low/factor缺失或分母不可知时UNKNOWN |
+
+这些字段不是“剩余实际holding”或未来峰值。S=T时也可以产生已知标记，但首次交易动作仍在T+1或之后。age_sessions不新增：它与remaining是代数重复，不能装成新信息。parent score/rank/package id不进入模型；池/包身份只保持上下文，不用于人为alpha再准入。
+
+九既有S字段+三新字段+已知remaining合计13连续字段，另外12个UNKNOWN标记，模型输入25维。UNKNOWN在每fold past training median/imputation flags处理，只是冻结模型表示；原输出必须保留字段未知原因，不填成观测值。全列UNKNOWN训练median=0/flag=1，不算已知市场宽度，也不删除episode。
+
+### 3. 冻结对照与禁止重复拟合
+
+只有一条candidate、Ridge(alpha=1)、原5个cohort时间块/首warmup/后4个past-only expanding折、成熟E至评价最早S至少一完整session embargo。共最多4次新PHYSICAL_FIT；不调参数、特征子集、阈值、seed、窗口或损失。连续字段标准化只fit过去train，missing flags独立；预测mean不等于校准盈利概率或尾风险。
+
+对照为原固定5TD baseline与原九字段Exit candidate的已生成同KEY cross-fitted predictions。原模型、旧oracle、旧Ridge与旧输入准备不重跑；原oracle数值可以引用，但不是新候选证据。若原已生成预测/源hash不一致，必须显式报输入矛盾，不用当前配置或重训补出“等价旧结果”。新特征金融parquet先允许列/开发日期filter再decode，开发截止不能超过原validation_end，不能把test重命名开发窗。
+
+拟合前按新输入、旧标签policy/新feature identity、代码、窗口和唯一变量预登记新study。每次fit前fresh QE公开single/custom_evo/multi-alpha三0，完成后读回；忙时只等自己的下一fit，每30分钟检查一次，不停QE或提交QE实验。完成fold原样复用，未完成STARTED禁止自动重拟合；按实际完成计数，四次全部执行才由121增至125，旧INDEX_BUILD 1次单列，不提前记为成功。
+
+### 4. 原槽评价与结论边界
+
+逐episode使用原“首次正预测advantage且U可执行则卖，否则到原E”的一条动作链。五槽cohort同人口配对同时报告candidate−原baseline、candidate−已生成九字段Exit，及每折结果、剩余期限分布、已知干预/UNKNOWN/边界。完整配对归因分开避免亏损、额外亏损、增加盈利、错失盈利；净和必须还原五槽均值。来源未知与原现金不能归为模型收益。
+
+最低干预支持仍20不同episode、20完整cohort、10%可评价entry日；regime若原源没有固定分区则UNKNOWN_REGIME_SUPPORT，不临时建HMM/行业平台。原时间轴5cohort block/bootstrap2000rep/seed20261008和MDE80固定，不压缩UNKNOWN日期或当独立日。区间、功效及收益仅用于导航，不为了通过换人口/选点。没有资金账本不报NAV、Sharpe或年化，不把观察性shadow回放叫因果OPE/DR证据。
+
+相对九字段与原baseline均为正但区间/支持不足，只是后续确认候选；负/零/未知停止本candidate，不凭oracle高启动复杂模型。下一真正不同的信息假设或持有状态风险头必须独立设计。不得因为新的工程测试通过就自动配置负向或未经确认模型。
+
+## Implementation Plan
+
+设计多轮复审/F2及文档合入 → 独立登记七文件源码范围 → 原S持仓路径纯特征、fixed candidate及同核复用 → 多轮业务/PIT/交易费用/身份/资源审核修复 → 定向测试、Ruff/L0/F2 → 新开发期一次prepare/4fold/评价 → 按真实证据分流与独立源码PR。BUG-1778与原Exit源码只作为具体工程依赖独立交付，不捆绑旧提交、不修改公共合同，不阻本文或自身本地研发；公开链路未满足依赖不能宣称已在main可用。
+
+## Verification Plan / Design Acceptance Index
+
+| ID | 必须验收 |
+|---|---|
+| F-811 | 旧episode/KEY/标签/E/原股票池和policy不变、不重新选择或丢行 |
+| F-812 | 新三字段只T..S价格/factor；手算含拆股、S=T与未来poison invariance |
+| F-813 | 停牌/缺价/缺factor/all-UNKNOWN保留；median/flags只在train fit |
+| F-814 | 原折与一session embargo；唯一信息变量/25输入/四fit上限；原对照不重拟合 |
+| F-815 | 一episode动作链、原五槽/两对照/完整与UNKNOWN；四项归因准确 |
+| F-816 | 20/20/10%支持/未知regime、block interval/MDE、仅导航非激活 |
+| F-817 | Advisory七文件、X临时、无test/DB/QE提交/服务控制，完整设计与实现状态分离 |
+
+## Design Acceptance Matrix
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-811 | planned generic_exit_held_path_5td_contracts_v1.py | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §1 | DESIGN_VERIFIED | none |
+| F-812 | planned generic_exit_held_path_5td_features_v1.py | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §2 | DESIGN_VERIFIED | none |
+| F-813 | planned features/pipeline source | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §2/3 | DESIGN_VERIFIED | none |
+| F-814 | planned generic_exit_held_path_5td_pipeline_v1.py | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §3 | DESIGN_VERIFIED | none |
+| F-815 | planned original cohort evaluator reuse | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §4 | DESIGN_VERIFIED | none |
+| F-816 | planned fixed diagnostic/registry | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §4 | DESIGN_VERIFIED | none |
+| F-817 | future exact seven-file source scope; no cross-module write | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md Scope/Implementation | DESIGN_VERIFIED | none |
+
+此矩阵只验收设计，不证明源码、模型、利润或自然运行。最小合同测试必须包括同股四S不串episode、stock_only字段不变、future factor/price毒值、峰值缺一原session不偷偷缩窗、split因子数量等价、旧预测不重训与同KEY对照、test parquet投影过滤、4fit/QE busy及exact resume、固定五槽归因。禁用重复fixture/实现快照或宽回归堆测试。
+
+## Risks / Rollout / Rollback / Production Gates
+
+新增持仓状态未必提供alpha，可能只是价格动量/反转的已知效应；必须看原baseline及同KEY对照，不能把相对更差旧overlay的小改善当盈利。原来源非vintage、只有一个原候选流及有限开发年份，不代表跨策略包/市场泛化；feature缺失本身也不能当alpha。动态仓位、资金动作和分钟时机均不在合同中。
+
+本设计无服务、数据库或依赖变化。研究负向停止当前candidate，原artifact不重写；未来价格family/API需新设计和消费者合同，不配置新model、更不触发后端重启。源码合入、study完成、收益确认、产品输出和运行激活始终分别报告。
+
+## Review / 多轮自审
+
+第一轮目标审查：从原入场锚与持仓路径补S信息，不把holding变成退出价值，不更改固定5TD或产生新选股。第二轮时钟/单位审查：T..S完整session、S anchor factor比值、bps/fraction分离，原U仅评价query；补充未来poison、missing整段未知、age与remaining重复不新增。第三轮方法/边界审查：只拟合新candidate、复用旧预测、保留UNKNOWN时间轴与原五槽，oracle只作理论引用，实际fit计数、源码/研究/激活分开。设计审核通过，源码/研究仍pending；不得以设计记录计入新fit或宣称满足真实盈利目标。
