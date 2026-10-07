@@ -1,10 +1,10 @@
 {
   "actual": "Only quantized BIGINT whole-hand volume reaches freeze and transform.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/services/dataset_release/source_authority.py",
     "backend/services/dataset_release/monthly_frozen_source_audit.py",
     "backend/services/dataset_release/canonical_stock_transformer.py",
-    "backend/services/dataset_release/raw_volume_precision.py",
     "backend/tests/dataset_release/test_raw_volume_precision.py",
     "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json"
   ],
@@ -17,6 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-07T05:46:48.151355Z",
+  "deployment_prerequisite": "Authorized add_raw_volume_precision_v1.sql schema must be applied after merge and before the user-owned worker/backend restart. Existing active releases remain immutable.",
   "description": "Only quantized BIGINT whole-hand volume reaches freeze and transform.",
   "events": [
     {
@@ -31,113 +32,42 @@
   ],
   "expected": "Genuine precision survives frozen source/audit/bin; legacy semantics remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/source_authority.py",
+      "noxfile.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py"
+    ],
     "added_files": [
-      "backend/services/dataset_release/raw_volume_precision.py",
       "backend/tests/dataset_release/test_raw_volume_precision.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/source_authority.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/services/dataset_release/canonical_stock_transformer.py"
+      "backend/services/dataset_release/source_authority.py",
+      "noxfile.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py"
     ],
-    "changed_files_source": "planned_intake",
-    "ownership": {
-      "changed_files": [
-        "backend/services/dataset_release/source_authority.py",
-        "backend/services/dataset_release/monthly_frozen_source_audit.py",
-        "backend/services/dataset_release/canonical_stock_transformer.py",
-        "backend/services/dataset_release/raw_volume_precision.py",
-        "backend/tests/dataset_release/test_raw_volume_precision.py"
-      ],
-      "impacted_modules": [
-        "qlib_data",
-        "qe.core",
-        "local_data",
-        "platform.api"
-      ],
-      "matched_rules": [
-        {
-          "file": "backend/services/dataset_release/source_authority.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/monthly_frozen_source_audit.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/canonical_stock_transformer.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/raw_volume_precision.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_raw_volume_precision.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        }
-      ],
-      "risk_levels": [
-        "critical"
-      ],
-      "suggested_scope": [
-        "backend/services/dataset_release/source_authority.py",
-        "backend/services/dataset_release/monthly_frozen_source_audit.py",
-        "backend/services/dataset_release/canonical_stock_transformer.py",
-        "backend/services/dataset_release/raw_volume_precision.py",
-        "backend/tests/dataset_release/test_raw_volume_precision.py"
-      ],
-      "unmatched_files": []
-    },
+    "changed_files_source": "git_finish",
     "planned_files": [
+      "noxfile.py",
       "backend/services/dataset_release/source_authority.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
-      "backend/services/dataset_release/raw_volume_precision.py",
-      "backend/tests/dataset_release/test_raw_volume_precision.py"
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "noxfile.py",
       "backend/services/dataset_release/source_authority.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
-      "backend/services/dataset_release/raw_volume_precision.py",
-      "backend/tests/dataset_release/test_raw_volume_precision.py"
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json"
     ]
   },
   "first_seen_at": "2026-10-07T05:46:48.151355Z",
@@ -147,6 +77,7 @@
   "github_issue_number": 5659,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5659",
   "last_seen_at": "2026-10-07T05:46:48.151355Z",
+  "linked_schema_bug": "BUG-1781",
   "module": "local_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -163,22 +94,31 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "monthly_worker_process.supervision",
+    "fresh_process_evidence": [
+      "AIstock Python fresh process from BUG-1783 worktree imported worker source/audit/transform; actual DEV monthly SQL read 001255.SZ/2026-09-01: exact volume 925050 shares, unchanged legacy 9250 hands, database_write=false. Source and test process both loaded persistent task files.",
+      "AIstock Python fresh process from BUG-1783 worktree reading DEV with formal PRODUCTION_QUERY_SPECS SQL -> PASS shares 925050 vs legacy hands 9250; audit and transform preserve precision; database_write=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "local_data"
   ],
@@ -233,6 +173,16 @@
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
+  },
+  "premerge_baseline_failure": {
+    "nodeid": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
+    "observed_test_to_production_ratio": 0.30013739307716175,
+    "required_max_ratio": 0.30,
+    "reproduced_on_clean_canonical_main": true,
+    "catalog_integrity_script": "PASS findings=0",
+    "validation_catalog_integrity_nox": "FAIL: 21 passed, 1 baseline failure",
+    "merge_ready": false,
+    "runtime_action": false
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
