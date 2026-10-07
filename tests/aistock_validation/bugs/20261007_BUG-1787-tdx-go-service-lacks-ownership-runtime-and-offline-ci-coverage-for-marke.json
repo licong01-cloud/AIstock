@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1787",
-  "closed_at": null,
+  "closed_at": "2026-10-07T18:34:34Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,16 +29,18 @@
   "expected": "TDX has explicit local_data ownership and existing Go CI runs offline protocol assertions plus root and web builds without external servers or dependency downloads.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json",
       ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json",
       ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
@@ -81,8 +83,8 @@
   },
   "first_seen_at": "2026-10-07T18:20:27.396340Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f22c9818d80944bd0fb9c6317c7fc108be10ff54",
+  "fixed_at": "2026-10-07T18:34:34Z",
   "github_issue_number": 5675,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5675",
   "last_seen_at": "2026-10-07T18:20:27.396340Z",
@@ -90,6 +92,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5676",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -107,6 +110,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -116,7 +120,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1787",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "031d0786134dbb64",
+    "recorded_at": "2026-10-07T18:35:21.686685Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f7c9e0b44081c2f5f89b0c2e675ff3a453137637",
+    "source_merge_commit": "f22c9818d80944bd0fb9c6317c7fc108be10ff54",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5676",
+    "validation_evidence": [
+      "validation-receipt: id=27c9df39b4552b4e commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=c11c6081b0b439a1 commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
+      "validation-receipt: id=decb0df2bdb47f31 commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q` result=`42 passed`"
+    ],
+    "validation_evidence_digest": "bfdd38ee7db2d3bd14e62e24da725f8c5cc579cdf3452e068c9762565c1a6b3e"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -125,6 +152,11 @@
     "fingerprint": "4483b34497cd7eea14725ec4",
     "source_event_id": "FE-20261007-4483b34497cd"
   },
+  "validation_evidence": [
+    "validation-receipt: id=27c9df39b4552b4e commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=c11c6081b0b439a1 commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
+    "validation-receipt: id=decb0df2bdb47f31 commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q` result=`42 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
