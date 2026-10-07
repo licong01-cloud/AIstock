@@ -122,6 +122,6 @@ Ridge 拟合采用全部原成熟已知监督样本，support 限制的是输出
 
 设计阶段最终复核：本文、蓝图当前队列与历史事实分离；设计合入时新源码/预登记/fit均0，累计125+1未预增。没有未解决设计阻断，实施逐项另行源码验收，不把文档审核计作经济确认或批准激活。
 
-源码三轮复审：原label/policy/KEY/四折复用、S净单位与既有GP5角色、严格S白名单/先曲线后U查询、训练金融列按past episode过滤才decode、未知default行为与同cohort配对完整；修复日期表示在原helper合并前的正规化、None query的正常UNKNOWN、全空数值列的pandas兼容性、支持桶以groupby避免平方循环及非finite编码的显式错误。首轮12 PASS/1异常类型fixture修复；失败nodeid及全空警告nodeid先复验PASS，随后13直接合同/Ruff clean。fit单元测试使用微型FakeRidge，不计真实研究fit；新研究仍0。
+源码三轮复审：原label/policy/KEY/四折复用、S净单位与既有GP5角色、严格S白名单/先曲线后U查询、训练金融列按past episode过滤才decode、未知default行为与同cohort配对完整；修复日期表示在原helper合并前的正规化、None query的正常UNKNOWN、全空数值列的pandas兼容性、支持桶以groupby避免平方循环及非finite编码的显式错误。首轮12 PASS/1异常类型fixture修复；失败nodeid及全空警告nodeid先复验PASS，随后13直接合同/Ruff clean。fit单元测试使用微型FakeRidge，不计真实研究fit；源码验收当时新研究为0，之后实际四fit完成，当前结果见§Risks。
 
 L0与F2 7/7通过、0blocking；两项P2复杂度提示已逐项审核：curve/query outer merge以原episode/S one-to-one、最多15000行，不产生row explosion；原cohort双对照约240行、20输入、四fold、bootstrap2000×原cohort有界；support按groupby分桶，不进行每桶扫全表的平方循环。未修改公共scanner/ownership，未添加平台或重复宽回归。当前代码已满足本地源切片合约，实际四fit完成、效果负向；公开交付仍要区分依赖/CI/merge，不把研究完成当经济确认。
