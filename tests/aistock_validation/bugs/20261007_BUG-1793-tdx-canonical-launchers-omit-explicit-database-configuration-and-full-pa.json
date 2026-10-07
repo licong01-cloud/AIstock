@@ -149,7 +149,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": ["Fresh AIstock Python launcher --check read existing DEV and production configuration without starting a service; DEV database=aistock_dev, isolated port=19081, full source revision=164cfa2a3fda13f2f82e0751e1d8733d93fdc1ac. RED missing launcher -> GREEN six target/credential/dirty-source regression cases."],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

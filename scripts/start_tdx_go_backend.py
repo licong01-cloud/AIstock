@@ -42,8 +42,8 @@ def prepare_launch(env_file: Path, target: str) -> tuple[list[str], dict[str, st
         if not data_dir.is_absolute() or data_dir.drive.upper() != 'X:':
             raise LaunchConfigurationError('DEV requires an explicit X-drive data directory')
         env['TDX_HTTP_HOST'] = '127.0.0.1'
-    elif env['TDX_DB_NAME'] == 'aistock_dev':
-        raise LaunchConfigurationError('production target cannot bind DEV database')
+    elif env['TDX_DB_NAME'] == 'aistock_dev' or env['TDX_HTTP_PORT'] != '19080':
+        raise LaunchConfigurationError('production target requires its own database and port 19080')
     revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
                               check=True, capture_output=True, text=True).stdout.strip()
     dirty = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=no', '--',
