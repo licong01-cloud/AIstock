@@ -1,6 +1,6 @@
 # Advisory GP5-ORDERED-PATH-1：D分钟时序新增信息 F2详细设计
 
-2026-10-07，DESIGN_ONLY_NOT_FITTED。唯一新研究，不是对已负GP5-JOINT候选的参数/阈值补救。现有112研究fit＋1历史index，不重置计数。
+2026-10-07，SOURCE_REVIEWED_NOT_FITTED。设计#5655已合入81d43fe8202f9e09e43f62f7cf5adad157ca7622/自身官方清理完成；新九文件源码多轮自审与定向节点已通过，最终小矩阵/质量检查另列。唯一新研究，不是对已负GP5-JOINT候选的参数/阈值补救；真实112研究fit＋1历史index尚不变。
 
 ## Background / Goal
 
@@ -85,18 +85,18 @@ price query/完整legal tick仍成本各一次、expected_net/risk同原合同�
 
 ## Design Acceptance Matrix
 
-本PR是完整事前设计，不是模型源码完成；以下DESIGN_VERIFIED只证明已审核的合同。源码/真实研究/运行各独立验收，不将未实现说成已实现。
+设计PR已合入；当前源码切片只验收完整离线模型/来源/编排。真实prepare/研究fit与收益另报告，不把unit fixture计入研究；API/UI/经济确认/模型启用不冒称已验收。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-761 | planned generic_ordered_path_price_5td_source_v1.py | artifact: X:/AIstock_temp/advisory/full-delivery-20261006/spike_d_ordered_path.py；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_source_v1.py | DESIGN_VERIFIED | none |
-| F-762 | planned generic_ordered_path_price_5td_source_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §1/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_source_v1.py | DESIGN_VERIFIED | none |
-| F-763 | planned generic_ordered_path_price_5td_model_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §2/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | DESIGN_VERIFIED | none |
-| F-764 | planned generic_ordered_path_price_5td_model_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §2～3/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | DESIGN_VERIFIED | none |
-| F-765 | planned generic_ordered_path_price_5td_model_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §3/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | DESIGN_VERIFIED | none |
-| F-766 | planned generic_ordered_path_price_5td_pipeline_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §4/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | DESIGN_VERIFIED | none |
-| F-767 | planned generic_ordered_path_price_5td_pipeline_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §4/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | DESIGN_VERIFIED | none |
-| F-768 | scope/Implementation Plan | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md Scope/Review；git diff --check | DESIGN_VERIFIED | none |
+| F-761 | backend/services/advisory_model_first/generic_ordered_path_price_5td_source_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-762 | backend/services/advisory_model_first/generic_ordered_path_price_5td_source_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-763 | backend/services/advisory_model_first/generic_ordered_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-764 | backend/services/advisory_model_first/generic_ordered_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-765 | backend/services/advisory_model_first/generic_ordered_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-766 | backend/services/advisory_model_first/generic_ordered_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-767 | backend/services/advisory_model_first/generic_ordered_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-768 | backend/services/advisory_model_first/generic_ordered_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
 
 最小直接测试：一份固定241clock fixture共享，时段手算/午休/正常缺bar/0volume、known矛盾、无D文件保KEY；一份成熟监督fixture一次forest fit，test毒化、role/编码/hash/leaf手算、zero质量/成本/价洞、frozencontrol不重fit；一份stage fixture验证原人口、partial、四臂归因/未知/未结算。无重复参数快照、实现明细锁定、整QE/UI或泛化邻接套件。
 
@@ -109,3 +109,5 @@ backend_restart_required=false；0DB写/依赖/profile/模型/角色激活/后�
 ## Review / 多轮自审
 
 第一轮业务/新颖性：原D-only控制已存在，不重复删gap或换模型；保留joint39D为固定控制，只有D时序信息外扩，原Top5与known拒买净贡献两条收益验收不变。第二轮PIT/统计：固定交易所clock而非观察bar分箱；端点不邻填、volume完整分母、结构池medians/test毒化、两role SHA相同、1fit/已消费窗/非NAV。第三轮边界/预算：不改旧任何源/权重或共享数据，没有QE Alpha/父包门/amount数据修复/平台/UI任务；只有9自身文件、X临时/F正式、QE互斥和user重启保留。以上是本窗口自审，不冒称独立外审。
+
+源码第一轮：新32列/103维、原19编码/诚实role哈希不变、固定clock手算/午休/缺失不压缩、JSON apply parity、成本和完整tick洞，5项最小直接节点通过。第二轮：新增自身stage/原人口/只读父控制/partial不可第二fit/四臂未知及未结算；一个fixture误取EvidenceReferenceV1.path，按既有_verify_reference修正，失败节点单独复测通过，未修改公共合同。第三轮：补齐新source/contracts/pipeline的implementation hash，避免只hash模型却漏新reader；known high/low矛盾即使其它价格UNKNOWN仍失败，新增同节点定向复测通过。没有因正常缺失删股票或改变成熟训练人口；不存在新研究fit、数据库写/服务操作。最终稳定小矩阵/Ruff/L0/F2及真实一次研究另报告。
