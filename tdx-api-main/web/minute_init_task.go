@@ -7,50 +7,51 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/injoyai/tdx/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/injoyai/tdx/protocol"
 )
 
 var pgPool *pgxpool.Pool
 
 type MinuteInitOptions struct {
+	EndTime         string `json:"end_time,omitempty"`
 	TruncateBefore  bool   `json:"truncate_before"`
 	MaxRowsPerChunk int    `json:"max_rows_per_chunk"`
 	Source          string `json:"source"`
 }
 
 type MinuteInitRequest struct {
-	JobID     string           `json:"job_id"`
-	Codes     []string         `json:"codes"`
-	StartTime string           `json:"start_time"`
-	Workers   int              `json:"workers"`
+	JobID     string            `json:"job_id"`
+	Codes     []string          `json:"codes"`
+	StartTime string            `json:"start_time"`
+	EndTime   string            `json:"end_time,omitempty"`
+	Workers   int               `json:"workers"`
 	Options   MinuteInitOptions `json:"options"`
 }
 
 // DailyRawInitRequest 复用与分钟初始化一致的选项结构，仅目标表与K线类型不同。
 type DailyRawInitRequest struct {
-	JobID     string           `json:"job_id"`
-	Codes     []string         `json:"codes"`
-	StartTime string           `json:"start_time"`
-	Workers   int              `json:"workers"`
+	JobID     string            `json:"job_id"`
+	Codes     []string          `json:"codes"`
+	StartTime string            `json:"start_time"`
+	EndTime   string            `json:"end_time,omitempty"`
+	Workers   int               `json:"workers"`
 	Options   MinuteInitOptions `json:"options"`
 }
 
 // DailyQfqInitRequest: 前复权日线初始化（Go 直连版）。
 // 与 DailyRawInitRequest 非常相似，但不再需要前端指定时间范围，由 Go 端拉取所有可用 QFQ 日线。
 type DailyQfqInitRequest struct {
-	JobID   string           `json:"job_id"`
-	Codes   []string         `json:"codes"`
-	Workers int              `json:"workers"`
+	JobID   string            `json:"job_id"`
+	Codes   []string          `json:"codes"`
+	Workers int               `json:"workers"`
 	Options MinuteInitOptions `json:"options"`
 }
 
@@ -61,44 +62,23 @@ type symbolResult struct {
 	Error        string `json:"error,omitempty"`
 }
 
-func init() {
-	dsn := os.Getenv("TDX_DB_DSN")
-	if dsn == "" {
-		host := os.Getenv("TDX_DB_HOST")
-		if host == "" {
-			host = "localhost"
-		}
-		port := os.Getenv("TDX_DB_PORT")
-		if port == "" {
-			port = "5432"
-		}
-		name := os.Getenv("TDX_DB_NAME")
-		if name == "" {
-			name = "aistock"
-		}
-		user := os.Getenv("TDX_DB_USER")
-		if user == "" {
-			user = "postgres"
-		}
-		pass := os.Getenv("TDX_DB_PASSWORD")
-		if pass == "" {
-			pass = "lc78080808"
-		}
-		u := url.QueryEscape(user)
-		p := url.QueryEscape(pass)
-		dsn = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", u, p, host, port, name)
+func configureDatabase() error {
+	dsn, err := explicitDatabaseDSN()
+	if err != nil {
+		return err
 	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		log.Printf("init pg pool parse config failed: %v", err)
-		return
+		return errors.New("invalid explicit TDX database configuration")
 	}
+	cfg.MaxConns = 10
+	cfg.MaxConnIdleTime = 5 * time.Minute
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
-		log.Printf("init pg pool failed: %v", err)
-		return
+		return errors.New("TDX database pool initialization failed")
 	}
 	pgPool = pool
+	return nil
 }
 
 func handleCreateMinuteRawInitTask(w http.ResponseWriter, r *http.Request) {
@@ -127,6 +107,13 @@ func handleCreateMinuteRawInitTask(w http.ResponseWriter, r *http.Request) {
 	start, err := parseTimeOrDate(req.StartTime)
 	if err != nil {
 		errorResponse(w, "start_time 格式错误，应为 RFC3339 或 YYYY-MM-DD")
+		return
+	}
+	if req.EndTime != "" {
+		req.Options.EndTime = req.EndTime
+	}
+	if _, err := boundedEnd(req.Options.EndTime, start); err != nil {
+		errorResponse(w, "end_time invalid or before start_time")
 		return
 	}
 	workers := req.Workers
@@ -221,7 +208,7 @@ func parseTimeOrDate(value string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, v); err == nil {
 		return t, nil
 	}
-	if t, err := time.ParseInLocation("2006-01-02", v, time.Local); err == nil {
+	if t, err := time.ParseInLocation("2006-01-02", v, protocol.ExchangeLocation); err == nil {
 		return t, nil
 	}
 	return time.Time{}, fmt.Errorf("invalid time format: %s", v)
@@ -255,6 +242,13 @@ func handleCreateDailyRawInitTask(w http.ResponseWriter, r *http.Request) {
 	start, err := parseTimeOrDate(req.StartTime)
 	if err != nil {
 		errorResponse(w, "start_time 格式错误，应为 RFC3339 或 YYYY-MM-DD")
+		return
+	}
+	if req.EndTime != "" {
+		req.Options.EndTime = req.EndTime
+	}
+	if _, err := boundedEnd(req.Options.EndTime, start); err != nil {
+		errorResponse(w, "end_time invalid or before start_time")
 		return
 	}
 	workers := req.Workers
@@ -384,6 +378,8 @@ func runMinuteInitTask(ctx context.Context, jobID uuid.UUID, codes []string, sta
 						Status:       "success",
 						InsertedRows: localInserted,
 					})
+				} else {
+					results = append(results, symbolResult{TsCode: code, Status: "no_new_rows"})
 				}
 				if localInserted > 0 {
 					insertedRows += int64(localInserted)
@@ -934,16 +930,21 @@ func collectAllStockTSCodes() ([]string, error) {
 }
 
 func ingestSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt MinuteInitOptions) (int, error) {
-	base := tsCode
-	if idx := strings.Index(tsCode, "."); idx > 0 {
-		base = tsCode[:idx]
+	code, err := sourceCode(tsCode)
+	if err != nil {
+		return 0, err
 	}
-	resp, err := client.GetKlineMinuteAll(base)
+	end, err := boundedEnd(opt.EndTime, start)
+	if err != nil {
+		return 0, err
+	}
+	stop := func(k *protocol.Kline) bool { return !opt.TruncateBefore && k.Time.Before(start) }
+	resp, err := client.GetKlineMinuteUntil(code, stop)
 	if err != nil {
 		return 0, fmt.Errorf("获取分钟K线失败: %w", err)
 	}
 	if resp == nil || len(resp.List) == 0 {
-		return 0, nil
+		return 0, errors.New("TDX source returned no facts; provider absence is not established")
 	}
 
 	source := opt.Source
@@ -954,29 +955,13 @@ func ingestSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt
 		source = source[:16]
 	}
 
-	rows := make([][]any, 0, len(resp.List))
-	for _, k := range resp.List {
-		if k == nil {
-			continue
-		}
-		// 当 TruncateBefore=false 时，start 作为增量阈值：仅保留 >= start 的分钟线；
-		// 当 TruncateBefore=true 时，仍保留全量行为，不按 start 过滤。
-		if !opt.TruncateBefore && !k.Time.IsZero() && k.Time.Before(start) {
-			continue
-		}
-		rows = append(rows, []any{
-			k.Time,
-			tsCode,
-			"1m",
-			int64(k.Open),
-			int64(k.High),
-			int64(k.Low),
-			int64(k.Close),
-			k.Volume,
-			int64(k.Amount),
-			"none",
-			source,
-		})
+	rowStart := start
+	if opt.TruncateBefore {
+		rowStart = time.Time{}
+	}
+	rows, err := rawRows(resp.List, tsCode, rowStart, end, true, source)
+	if err != nil {
+		return 0, err
 	}
 	if len(rows) == 0 {
 		return 0, nil
@@ -998,25 +983,16 @@ func ingestSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt
 	defer tx.Rollback(ctx)
 
 	table := pgx.Identifier{"market", "kline_minute_raw"}
-	columns := []string{"trade_time", "ts_code", "freq", "open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li", "adjust_type", "source"}
+	columns := []string{"trade_time", "ts_code", "freq", "open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li", "adjust_type", "source", "volume_shares", "volume_shares_source", "volume_shares_sha256"}
 
 	maxRows := opt.MaxRowsPerChunk
 	if maxRows <= 0 {
 		maxRows = 500000
 	}
 
-	inserted := 0
-	for offset := 0; offset < len(rows); offset += maxRows {
-		endIdx := offset + maxRows
-		if endIdx > len(rows) {
-			endIdx = len(rows)
-		}
-		chunk := rows[offset:endIdx]
-		n, err := tx.CopyFrom(ctx, table, columns, pgx.CopyFromRows(chunk))
-		if err != nil {
-			return 0, err
-		}
-		inserted += int(n)
+	inserted, err := copyRawRows(ctx, tx, table, columns, rows, maxRows)
+	if err != nil {
+		return 0, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -1115,16 +1091,21 @@ func ingestDailyQfqSingleSymbol(ctx context.Context, tsCode string, opt MinuteIn
 
 // ingestDailyRawSingleSymbol 使用 TDX 日线未复权数据填充 kline_daily_raw。
 func ingestDailyRawSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt MinuteInitOptions) (int, error) {
-	base := tsCode
-	if idx := strings.Index(tsCode, "."); idx > 0 {
-		base = tsCode[:idx]
+	code, err := sourceCode(tsCode)
+	if err != nil {
+		return 0, err
 	}
-	resp, err := client.GetKlineDayAll(base)
+	end, err := boundedEnd(opt.EndTime, start)
+	if err != nil {
+		return 0, err
+	}
+	stop := func(k *protocol.Kline) bool { return !opt.TruncateBefore && k.Time.Before(start) }
+	resp, err := client.GetKlineDayUntil(code, stop)
 	if err != nil {
 		return 0, fmt.Errorf("获取日线K线失败: %w", err)
 	}
 	if resp == nil || len(resp.List) == 0 {
-		return 0, nil
+		return 0, errors.New("TDX source returned no facts; provider absence is not established")
 	}
 
 	source := opt.Source
@@ -1135,28 +1116,13 @@ func ingestDailyRawSingleSymbol(ctx context.Context, tsCode string, start time.T
 		source = source[:16]
 	}
 
-	rows := make([][]any, 0, len(resp.List))
-	for _, k := range resp.List {
-		if k == nil {
-			continue
-		}
-		// 当 TruncateBefore=false 时，start 作为增量阈值：仅保留 >= start 的日线；
-		// 当 TruncateBefore=true 时，仍保留全量行为，不按 start 过滤。
-		if !opt.TruncateBefore && !k.Time.IsZero() && k.Time.Before(start) {
-			continue
-		}
-		rows = append(rows, []any{
-			k.Time,
-			tsCode,
-			int64(k.Open),
-			int64(k.High),
-			int64(k.Low),
-			int64(k.Close),
-			k.Volume,
-			int64(k.Amount),
-			"none",
-			source,
-		})
+	rowStart := start
+	if opt.TruncateBefore {
+		rowStart = time.Time{}
+	}
+	rows, err := rawRows(resp.List, tsCode, rowStart, end, false, source)
+	if err != nil {
+		return 0, err
 	}
 	if len(rows) == 0 {
 		return 0, nil
@@ -1178,25 +1144,16 @@ func ingestDailyRawSingleSymbol(ctx context.Context, tsCode string, start time.T
 	defer tx.Rollback(ctx)
 
 	table := pgx.Identifier{"market", "kline_daily_raw"}
-	columns := []string{"trade_date", "ts_code", "open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li", "adjust_type", "source"}
+	columns := []string{"trade_date", "ts_code", "open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li", "adjust_type", "source", "volume_shares", "volume_shares_source", "volume_shares_sha256"}
 
 	maxRows := opt.MaxRowsPerChunk
 	if maxRows <= 0 {
 		maxRows = 500000
 	}
 
-	inserted := 0
-	for offset := 0; offset < len(rows); offset += maxRows {
-		endIdx := offset + maxRows
-		if endIdx > len(rows) {
-			endIdx = len(rows)
-		}
-		chunk := rows[offset:endIdx]
-		n, err := tx.CopyFrom(ctx, table, columns, pgx.CopyFromRows(chunk))
-		if err != nil {
-			return 0, err
-		}
-		inserted += int(n)
+	inserted, err := copyRawRows(ctx, tx, table, columns, rows, maxRows)
+	if err != nil {
+		return 0, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
