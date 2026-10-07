@@ -1,14 +1,14 @@
 # Advisory 固定5交易日剩余净价值卖价建议 F2详细设计
 
-2026-10-07，DESIGN_VERIFIED，仅设计；无新Exit fit、模型、策略或经济正结果。
+2026-10-08，独立源码范围登记：feature/advisory-exit5-remaining-value-audit-source-20261008；仅下述三个服务、两个直接测试、本文和蓝图。不修改其它模块，当前仍0新Exit fit/模型/经济确认。
 
 ## Background / Goal
 
-用户目标是建议可能获利/规避后续下跌的买入卖出价格，不是预测实际开盘或最佳分钟成交。买价固定5TD已形成独立模型体系，但当前115研究fit＋1旧index均未证明通用5TD overlay成本后增量。旧N2 Exit oracle有上限而固定learnability负/欠功效，liability/holding可预测不能代表退出价值可预测。本设计新增固定原持有终点的卖价目标，不重跑旧oracle、不为旧负模型补证。
+用户目标是建议可能获利/规避后续下跌的买入卖出价格，不是预测实际开盘或最佳分钟成交。买价固定5TD已形成独立模型体系，但截至本切片执行前117研究fit＋1旧index均未证明通用5TD overlay成本后增量。selection-context两个fit已完成负向，不再重复。旧N2 Exit oracle有上限而固定learnability负/欠功效，liability/holding可预测不能代表退出价值可预测。本设计新增固定原持有终点的卖价目标，不重跑旧oracle、不为旧负模型补证。
 
 ## Scope / Non-goals
 
-本轮精确设计本文、通用5TD日频API设计与蓝图；下一实现必须独立register新假设/允许范围。预期源码：generic_remaining_value_exit_5td_contracts_v1.py、generic_remaining_value_exit_5td_labels_v1.py、generic_remaining_value_exit_5td_audit_v1.py及两个直接测试，均位于backend/services/advisory_model_first和backend/tests/advisory_model_first。标签/审计是本切片全部范围；未来预测模型/价格集合/API为独立角色任务，当前状态分别为尚未设计实现，不作为本审计的已有交付。
+源码精确允许范围：backend/services/advisory_model_first/generic_remaining_value_exit_5td_contracts_v1.py、generic_remaining_value_exit_5td_labels_v1.py、generic_remaining_value_exit_5td_audit_v1.py；backend/tests/advisory_model_first/test_generic_remaining_value_exit_5td_labels_v1.py、test_generic_remaining_value_exit_5td_audit_v1.py；本文与蓝图，共七文件。标签/审计是本切片全部范围；未来预测模型/价格集合/API为独立角色任务，当前状态分别为尚未设计实现，不作为本审计的已有交付。
 
 不修改QE、Selection、HMM、公共行情/股票池、Paper/Execution、数据库和资金仓位；不研发分钟执行、不下单、不自动止损/重选股，不读sealed holdout，不重复旧价格实验。无需运行QT/QE上游Alpha；实际拟合仍fresh QE三0、忙时半小时检查。X临时、F新独立artifact，0生产配置或模型激活/进程控制。
 
@@ -19,6 +19,8 @@
 输入是原候选独立价格研究所模拟的持有episode，不读取/修改真实账户仓位。entry为T开盘，原终点E=T+4交易日收盘，首次持有5个交易日不因停牌延长。每个卖价决策在S日收盘后，只用<=S信息，建议下一session U的合法假设出售价p；U是S后立即下一交易日，T+1<=U<=E，以守A股T+1。不做“看完S收盘又在S收盘卖”的时钟作弊；entry日T不能卖。同一episode有1～4个合法sell decision，剩余sessions从4到1，不重置为另5日。
 
 原entry KEY、完整calendar、T/E、S/U、原固定policy hash、候选rank及源包/池身份须一致。没有完整episode、卖出合法日历或价格坐标→UNKNOWN，保留episode；正常停牌/涨跌停不能合成可执行卖出。未建仓的原候选不伪装持有，状态NOT_HELD不进入卖价评价。是否持有是外部冻结shadow policy动作，不按未来盈利筛建仓人口。
+
+本次shadow持有按原Top5与T已知可买入状态确定；E/未来价格缺失不反向删除已入场episode。既存geometry的300日期成熟cohort均分五个60日块，另5边界未结算cohort/25episode完整保留，不把其未来S行情解码为开发数据。必要的新标签转换复用原KEY/calendar，不重做历史geometry覆盖审计。数量采用原冻结provider policy的quantity-equivalent单位stake账本（entry一次buy成本），S/U/E同映射；这是同policy的影子计价，不是实际股数/现金分红成交账本或NAV。
 
 ### 2. 两臂增量价值与标签
 
@@ -38,13 +40,17 @@ oracle可用真实未来决定最有利合法sell日，必须标CLAIRVOYANT/ORAC
 
 Ridge目标为10000*(V_continue/reference−1)，动作增量预测为10000*(V_sell/reference−1)减该目标预测；实际U open只作为U时刻已观察的价格场景用于既有S预测查询，绝不进入S features/fit。每fold train median后连续特征按train mean/std标准化（零std取1），missing flags独立保留，remaining已知；test不校准或选点。这里审计只有一个均值head，尾风险head属于后续模型详细设计，不把未拟合风险写成已有输出。
 
+准备器显式绑定既存原GP5 preregistered plan，开发范围不得超过其train+validation或触及其test_start；金融parquet先按日期与允许列进行projection/filter，再解码开发值，不能先读取test再过滤。原20候选仅投影原Top5 shadow episode；S特征计算的临时查询排名只用于复用九字段纯函数，声明HELD_STOCK_S_QUERY_NOT_SELECTION，不改变原episode/rank。S复权只以S及之前因子形成；U/E价格、policy数量等价坐标与可执行性只用于标签/评价。正常S行情缺失不掩盖已经可知的原E基线。所有原episode和边界行保留。
+
+每fold fit前实时读取公开QE三路径并核查一分钟内三0，fit完成后再次读取；已完成fold以本study身份和artifact hash原样复用，无新的physical fit。出现尚未完成的STARTED标记须明确恢复，不自动重复拟合；这限制本study的重复训练，不新增父策略包门禁。仅已有四个固定fold，没有超参搜索或自动新假设。
+
 不搜索alpha/窗口/label/seed。learnability缺正增量只说明“当前九信息+简单模型”的该目标不证实；不能证明Exit全局不可学。oracle高/learnability低先扩真正S信息再换模型族，oracle低仅降低本次合法动作空间优先级，NAVIGATION_ONLY不能支持关闭整体方向或激活。审计之后决定是否详细实现卖价模型，不让六层栈变六个并行项目。
 
 ### 4. 原槽经济评价与推断
 
 主结果按原entry cohort五槽等权、完整E、现金和UNKNOWN分报，使用第一次合法原U真实open的sell判断，后续政策由冻结多决策模拟器统一，不能将1～4行当独立交易复利。learnability每个episode用一条冻结“首个正advantage且可执行则卖，否则原E继续”的动作链；对每个entry cohort与无新Exit的同输入baseline配对报告成本后lift、避免亏损、错卖后续上涨、实际干预天/次数、剩余期限分布与原策略回撤（只有有效NAV账本才报告NAV，不把cohort均值标年化）。
 
-事前minimum intervention记录为20个不同episode且至少20个entry cohort、干预覆盖>=10%可评价entry日；regime若开发源已有固定分区则至少两个分区各>=5个干预episode，若没有则UNKNOWN_REGIME_SUPPORT不得支持方向关闭/激活。该数值是本次诊断证据说明而非QE或研发准入。以entry cohort block bootstrap（固定seed、5 cohort连续block、2000rep）给区间，最小样本/时序不满足则仅exploratory，不挑显著样本。MDE与intervention数量前置报告；INCONCLUSIVE不改门槛/选点挽救。
+事前minimum intervention记录为20个不同episode且至少20个entry cohort、干预覆盖>=10%完整可评价entry日；regime若开发源已有固定分区则至少两个分区各>=5个干预episode，若没有则UNKNOWN_REGIME_SUPPORT不得支持方向关闭/激活。该数值是本次诊断证据说明而非QE或研发准入。完整配对cohort归因分开避免亏损、额外亏损、增加盈利与错失盈利，四项净和与原五槽增量一致，不能把所有正增量都叫“避免亏损”；partial/UNKNOWN另报。以entry cohort block bootstrap（固定seed、5 cohort连续block、2000rep）给区间，保留原时间轴上的UNKNOWN天不压缩重连，最小样本/时序不满足则仅exploratory，不挑显著样本。MDE与intervention数量前置报告；INCONCLUSIVE不改门槛/选点挽救。
 
 ### 5. 未来模型与价集，不混入买价模块
 
@@ -72,15 +78,15 @@ Ridge目标为10000*(V_continue/reference−1)，动作增量预测为10000*(V_s
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-801 | planned generic_remaining_value_exit_5td_contracts_v1.py | artifact: docs/architecture/advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md §1/Review | DESIGN_VERIFIED | none |
-| F-802 | planned generic_remaining_value_exit_5td_labels_v1.py | artifact: docs/architecture/advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md §2/Review | DESIGN_VERIFIED | none |
-| F-803 | planned new labels maturity/keys | artifact: docs/architecture/advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md §3/Review | DESIGN_VERIFIED | none |
-| F-804 | planned generic_remaining_value_exit_5td_audit_v1.py | artifact: docs/architecture/advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md §3/Review | DESIGN_VERIFIED | none |
-| F-805 | planned frozen episode action chain | artifact: docs/architecture/advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md §4/Review | DESIGN_VERIFIED | none |
-| F-806 | planned typed diagnostics/intervals | artifact: docs/architecture/advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md §4/Review | DESIGN_VERIFIED | none |
-| F-807 | new labels/audit scope only; later model design | artifact: docs/architecture/advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md §Implementation/Review | DESIGN_VERIFIED | none |
+| F-801 | generic_remaining_value_exit_5td_labels_v1.py exit_geometry_v1 | test: backend/tests/advisory_model_first/test_generic_remaining_value_exit_5td_labels_v1.py::test_fixed_endpoint_t_plus_one_and_remaining_four_to_one | SOURCE_VERIFIED | none |
+| F-802 | generic_remaining_value_exit_5td_labels_v1.py build_exit_remaining_value_labels_v1 | test: backend/tests/advisory_model_first/test_generic_remaining_value_exit_5td_labels_v1.py::test_common_reference_sunk_buy_once_and_date_specific_sell_fees | SOURCE_VERIFIED | none |
+| F-803 | generic_remaining_value_exit_5td_labels_v1.py; audit_v1.py _read_development/_feature_rows/_load | test: backend/tests/advisory_model_first/test_generic_remaining_value_exit_5td_audit_v1.py::test_s_features_do_not_change_when_later_price_and_factor_are_poisoned | SOURCE_VERIFIED | none |
+| F-804 | generic_remaining_value_exit_5td_audit_v1.py exit_fold_schedule_v1/fit_exit_fold_v1 | test: backend/tests/advisory_model_first/test_generic_remaining_value_exit_5td_audit_v1.py::test_date_maturity_embargo_and_whole_episode_cohort_blocks | SOURCE_VERIFIED | none |
+| F-805 | generic_remaining_value_exit_5td_audit_v1.py evaluate_exit_chains_v1/summarize_exit_v1 | test: backend/tests/advisory_model_first/test_generic_remaining_value_exit_5td_audit_v1.py::test_first_executable_intervention_one_chain_and_fixed_five_slots | SOURCE_VERIFIED | none |
+| F-806 | generic_remaining_value_exit_5td_audit_v1.py summarize_exit_v1/preregister_exit5_v1/train_exit5_v1 | test: backend/tests/advisory_model_first/test_generic_remaining_value_exit_5td_audit_v1.py::test_unknown_cash_not_zero_and_sparse_interventions_not_activation | SOURCE_VERIFIED | none |
+| F-807 | registered seven-file labels/audit scope only; later model design | artifact: docs/architecture/advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md Scope/Implementation/Review | SOURCE_VERIFIED | none |
 
-矩阵只证明设计完整，不冒称模型、研究或自然运行验收。最小测试手算同股一晚/四晚、T日禁止卖/S后U、现金分红拆股/费率异同/沉没入场、终点停牌UNKNOWN、future字段毒值/holdout sentinel、episode块不串/purge、同股多日不独立交易、干预支持不足时只是exploratory。既存旧Exit模型/实验不重跑。
+矩阵只证明本切片源码合同实现，不冒称盈利卖价模型、实际研究或自然运行验收。最小测试手算同股一晚/四晚、T日禁止卖/S后U、quantity等价拆股/费率异同/沉没入场、终点停牌UNKNOWN、future字段毒值/test projection sentinel、episode块不串/purge、同股多日不独立交易、干预支持不足时只是exploratory；四fit预算、QE busy零启动、完成fold复用和崩溃不得自动重拟合采用微型模拟，不计研究fit。既存旧Exit模型/实验不重跑。
 
 ## Risks / Rollout / Rollback / Production Gates
 
@@ -88,4 +94,4 @@ Ridge目标为10000*(V_continue/reference−1)，动作增量预测为10000*(V_s
 
 ## Review / 多轮自审
 
-目标轮：剩余净价值不是holding时长，也不是entry累计盈利；先新标签与固定learnability，非六线工程。时钟轮：S收盘后的U、T+1、固定E及未来label净价/qty同核，期末缺失不延长。推断轮：一个episode动作链/entry cohort聚类，20/20/10%支持事前固定；观察支持不足不能声称因果uplift或DR，期望值正不等于已校准胜率。追加资源/统计轮修订：明确五个entry块中的一warmup四fit，embargo为完整session而非自然日，实际fit计数。三轮设计审查通过，0Exit fit/模型/策略激活。
+目标轮：剩余净价值不是holding时长，也不是entry累计盈利；先新标签与固定learnability，非六线工程。时钟轮：S收盘后的U、T+1、固定E及未来label净价/qty同核，期末缺失不延长。推断轮：一个episode动作链/entry cohort聚类，20/20/10%支持事前固定；观察支持不足不能声称因果uplift或DR，期望值正不等于已校准胜率。追加资源/统计轮修订：明确五个entry块中的一warmup四fit，embargo为完整session而非自然日，实际fit计数。源码多轮复审修复None可执行判断、S缺价不得改变E基线、完整配对归因四项与不压缩UNKNOWN时间轴；22直接合同通过，Ruff clean。实际研究尚未执行时0Exit研究fit，微型测试并非研究证据；策略激活仍0。离线九字段计算依赖BUG-1778公共交付待修复，短进程显式固定的本地已审核依赖必须写入实际代码身份；不覆盖后端源码，不将本地研究读回当公开源码合入。
