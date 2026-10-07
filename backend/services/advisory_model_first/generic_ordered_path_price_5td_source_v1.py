@@ -38,23 +38,31 @@ def aggregate_ordered_path_v1(*, slots, arrays):
         raise ValueError("ordered known high/low contradicts itself even with other UNKNOWN prices")
     result = {name: np.nan for name in ORDERED_FEATURES}
     if not len(slots):
-        return {**result, "ordered_reason": "NO_D_BARS", "ordered_known_fields": 0, "ordered_calendar_slots": 0}
+        return {**result, "ordered_reason": "NO_D_BARS", "ordered_known_fields": 0, "ordered_calendar_slots": 0,
+                "ordered_0930_present": False, "ordered_1300_present": False}
     expected = expected_clock_v1(slots[0])
-    if not slots.isin(expected).all():
+    afternoon_anchor = pd.DatetimeIndex([expected[0].normalize()+pd.Timedelta(hours=13)])
+    if not slots.isin(expected.union(afternoon_anchor)).all():
         raise ValueError("ordered path clock is outside exchange session")
     full = pd.DataFrame(a, index=slots).reindex(expected)
     valid = full.loc[:, FIELDS[:4]].notna().all(axis=1).to_numpy()
-    volume = full.volume.to_numpy()
-    total = float(volume.sum()) if np.isfinite(volume).all() else np.nan
+    # Optional phase-boundary anchors are not replacements for fixed return endpoints.
+    # Volume denominator includes every declared D slot; every core trading minute must be present.
+    volume = a["volume"]
+    total = float(volume.sum()) if expected[1:].isin(slots).all() and np.isfinite(volume).all() else np.nan
+    minutes = np.asarray(slots.hour*60+slots.minute)
+    ordinals = np.where(minutes <= 690, np.clip((minutes-571)//15, 0, 7),
+                        8+np.clip((minutes-781)//15, 0, 7))
     boundaries = [(0, 16)] + [(16+15*i, 31+15*i) for i in range(7)] + [(121+15*i, 136+15*i) for i in range(8)]
     for i, (start, stop) in enumerate(boundaries):
         if valid[start] and valid[stop-1]:
             result[ORDERED_FEATURES[2*i]] = float(10000*(full.close.iloc[stop-1]/full.open.iloc[start]-1))
         if np.isfinite(total) and total > 0:
-            result[ORDERED_FEATURES[2*i+1]] = float(volume[start:stop].sum()/total)
+            result[ORDERED_FEATURES[2*i+1]] = float(volume[ordinals == i].sum()/total)
     known = sum(np.isfinite(value) for value in result.values())
     return {**result, "ordered_reason": "OBSERVED_D_FIXED_CLOCKS" if known == 32 else "PARTIAL_D_FIXED_CLOCKS",
-            "ordered_known_fields": int(known), "ordered_calendar_slots": len(slots)}
+            "ordered_known_fields": int(known), "ordered_calendar_slots": len(slots),
+            "ordered_0930_present": bool(expected[0] in slots), "ordered_1300_present": bool(afternoon_anchor[0] in slots)}
 
 
 def read_d_ordered_path_features_v1(*, roster, identity, active_profile_path):
@@ -163,7 +171,8 @@ def read_d_ordered_path_features_v1(*, roster, identity, active_profile_path):
                           for row in keys.itertuples(index=False, name=None)])
     if frame.empty:
         frame = keys.copy()
-        for name in (*ORDERED_FEATURES, "ordered_reason", "ordered_known_fields", "ordered_calendar_slots"):
+        for name in (*ORDERED_FEATURES, "ordered_reason", "ordered_known_fields", "ordered_calendar_slots",
+                     "ordered_0930_present", "ordered_1300_present"):
             frame[name] = pd.Series(dtype=object)
     return frame, dict(identity=identity.model_dump(), read_scope="D_PRICE_SLICES_ONLY",
         decoded_bytes=bytes_read, future_price_bars_decoded=0, original_keys=len(keys),

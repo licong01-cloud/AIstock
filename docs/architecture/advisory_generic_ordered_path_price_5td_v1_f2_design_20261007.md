@@ -37,12 +37,12 @@ GP5-JOINT-DISTRIBUTION-1一次研究相对原Top5−42.5412、相对冻结39D GB
 
 只解码每KEY的D open/high/low/close/volume，T及之后解码0；按instrument复用stream、386D/7720原KEY批量，不能每天重建工作区。使用既有OHLC验证，known非正价格、负volume、矛盾区间/非法key/未来时点显式失败；缺文件/NaN/停牌正常UNKNOWN。源/元数据若读取时变化不能混代。来源校验只是计算一致性，不是策略包资格门。
 
-固定交易所clock16bin：第一bin09:30～09:45（含09:30），其余上午09:46～11:30每15min，共8；下午13:01～15:00每15min，共8。不按观察bar序号等分，不跨午休，不把缺失或停牌bar挤成邻接。每个bin输出：
+固定交易所clock16bin：第一收益bin09:30～09:45（含09:30），其余上午09:46～11:30每15min，共8；下午收益13:01～15:00每15min，共8。不按观察bar序号等分，不跨午休，不把缺失或停牌bar挤成邻接。09:30和13:00是允许存在的边界anchor，13:00只在原calendar存在时计入下午第一个volume bin，绝不替代13:01收益端点或缺失09:30。每个bin输出：
 
 1. return_bps=10000*(固定bin末close/固定bin首open−1)，只需这两端及其known OHLC成立；端点缺则此量UNKNOWN，不找最近可用端点。
-2. volume_share=该bin volume和/全D原241clock volume和；只有全部clock volume已知且全天总volume>0才测量。已知零成交bin份额为0，全天0或缺任一bar则所有份额UNKNOWN，不以部分和当完整分母。
+2. volume_share=该bin volume和/全D原声明calendar volume和，边界anchor也计入对应bin；只有240核心交易分钟（09:31～11:30、13:01～15:00）全部存在、原D所有声明clock的volume已知且全天总volume>0才测量。已知零成交bin份额为0，全天0、缺核心分钟或声明bar volume未知则所有份额UNKNOWN，不以部分和当完整分母。未声明的可选anchor不伪造volume为0，也不认定停牌。
 
-32列按bin0..15的return/share交错排列。正常未知的mask显式保存，不全行淘汰；元数据另报原calendar_slots、各bin端点/volume已知及缺失原因。D价格量和无量纲份额不需要amount/VWAP、跨raw/adjusted绝对价格映射或未来复权锚。缺少09:30不是隐式240bar替换，只影响依赖的量。
+32列按bin0..15的return/share交错排列。正常未知的mask显式保存，不全行淘汰；元数据另报原calendar_slots、两anchor是否存在、各bin端点/volume已知及缺失原因。D价格量和无量纲份额不需要amount/VWAP、跨raw/adjusted绝对价格映射或未来复权锚。缺少09:30不是用13:00隐式替换，只使第一bin收益UNKNOWN；无新stock或包准入条件。
 
 ### 2. 同信息外扩、同成熟人口与编码
 
@@ -98,7 +98,7 @@ price query/完整legal tick仍成本各一次、expected_net/risk同原合同�
 | F-767 | backend/services/advisory_model_first/generic_ordered_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
 | F-768 | backend/services/advisory_model_first/generic_ordered_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
 
-最小直接测试：一份固定241clock fixture共享，时段手算/午休/正常缺bar/0volume、known矛盾、无D文件保KEY；一份成熟监督fixture一次forest fit，test毒化、role/编码/hash/leaf手算、zero质量/成本/价洞、frozencontrol不重fit；一份stage fixture验证原人口、partial、四臂归因/未知/未结算。无重复参数快照、实现明细锁定、整QE/UI或泛化邻接套件。
+最小直接测试：一份固定clock fixture共享，时段手算/午休/正常缺bar/0volume、两anchor变体、known矛盾、无D文件保KEY；一份成熟监督fixture一次forest fit，test毒化、role/编码/hash/leaf手算、zero质量/成本/价洞、frozencontrol不重fit；一份stage fixture验证原人口、partial、四臂归因/未知/未结算。无重复参数快照、实现明细锁定、整QE/UI或泛化邻接套件。
 
 ## Risks / Rollout / Rollback / Production Gates
 
@@ -111,3 +111,5 @@ backend_restart_required=false；0DB写/依赖/profile/模型/角色激活/后�
 第一轮业务/新颖性：原D-only控制已存在，不重复删gap或换模型；保留joint39D为固定控制，只有D时序信息外扩，原Top5与known拒买净贡献两条收益验收不变。第二轮PIT/统计：固定交易所clock而非观察bar分箱；端点不邻填、volume完整分母、结构池medians/test毒化、两role SHA相同、1fit/已消费窗/非NAV。第三轮边界/预算：不改旧任何源/权重或共享数据，没有QE Alpha/父包门/amount数据修复/平台/UI任务；只有9自身文件、X临时/F正式、QE互斥和user重启保留。以上是本窗口自审，不冒称独立外审。
 
 源码第一轮：新32列/103维、原19编码/诚实role哈希不变、固定clock手算/午休/缺失不压缩、JSON apply parity、成本和完整tick洞，5项最小直接节点通过。第二轮：新增自身stage/原人口/只读父控制/partial不可第二fit/四臂未知及未结算；一个fixture误取EvidenceReferenceV1.path，按既有_verify_reference修正，失败节点单独复测通过，未修改公共合同。第三轮：补齐新source/contracts/pipeline的implementation hash，避免只hash模型却漏新reader；known high/low矛盾即使其它价格UNKNOWN仍失败，新增同节点定向复测通过。没有因正常缺失删股票或改变成熟训练人口；不存在新研究fit、数据库写/服务操作。最终稳定小矩阵/Ruff/L0/F2及真实一次研究另报告。
+
+完整prepare前第四轮：3个原D（2025-11-27、12-08、12-12）calendar有13:00、没有09:30；初版硬模板把合法边界anchor误报非法。只读metadata定位，没有读收益或fit；修订合同后，原D/股票不删、固定收益端点不邻填，volume保全部声明clock并要求核心240分钟完备。新增同一手算节点的变体验证通过，不修改基础数据或资格门。首个preregistered advgp5ordered_f858f556c1d8ef5390cf142a仅准备失败、0fit且0trained/evaluated，保留不覆盖；修复producer以新implementation/独立run登记，不将准备错误计作负研究或第二次研究fit。

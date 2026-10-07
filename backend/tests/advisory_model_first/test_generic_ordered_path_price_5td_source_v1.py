@@ -32,6 +32,14 @@ def test_fixed_clock_hand_values_lunch_scale_missing_and_zero_volume():
     mask = np.arange(len(slots)) != 0
     missing_endpoint = aggregate_ordered_path_v1(slots=slots[mask], arrays={k: a[mask] for k, a in arrays.items()})
     assert np.isnan(missing_endpoint[ORDERED_FEATURES[0]])
+    assert sum(missing_endpoint[k] for k in ORDERED_FEATURES[1::2]) == pytest.approx(1.)
+    alternate = pd.DataFrame(arrays, index=slots).iloc[1:].copy()
+    alternate.loc[pd.Timestamp("2024-01-02 13:00")] = [close[121], close[121]+.01, close[121]-.01, close[121], 1.]
+    alternate = alternate.sort_index()
+    measured = aggregate_ordered_path_v1(slots=alternate.index, arrays={k: alternate[k].to_numpy() for k in FIELDS})
+    assert np.isnan(measured[ORDERED_FEATURES[0]]) and measured[ORDERED_FEATURES[16]] == original[ORDERED_FEATURES[16]]
+    assert sum(measured[k] for k in ORDERED_FEATURES[1::2]) == pytest.approx(1.)
+    assert not measured["ordered_0930_present"] and measured["ordered_1300_present"]
     arrays["volume"][:] = 0.
     zero = aggregate_ordered_path_v1(slots=slots, arrays=arrays)
     assert all(np.isnan(zero[k]) for k in ORDERED_FEATURES[1::2])
