@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1783",
-  "closed_at": null,
+  "closed_at": "2026-10-07T16:34:36.487304Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -129,10 +129,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": "F:/Dev/AIstock_worktrees/BUG-1783-close-sync-20261007/tmp/post_restart_bug1783_canonical_20261008.json",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock_worktrees/BUG-1783-close-sync-20261007/tmp/post_restart_bug1783_source_20261008.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1783",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7d4784618636227f3519e11c84e7b0fca095491afa3c77fecdaa14e91dea4e51",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "729ca8a0f629f83e9d6c4bf43c563c47c9e3525f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-07T16:33:46.594660Z",
+      "mode": "read_only",
+      "observed_identity": "1dc3ad9d81bac4bb7edcf3023331e4b1addb89ec",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e9848fed5da37087cb50cdad00da82c49c8678b05d4a1486c10e06c431404a81",
+      "receipt_sha256": "7dd3728e4302ad53cc5223d653589e71ae535de701486c11f249bf46ec3a873e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "3a4388c647fde4d4d634f70c2d652d93835c1e6c7c4a5b60a4ffe223e5788d3e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -164,7 +186,7 @@
     ],
     "validation_evidence_digest": "1632c84c5a82111cec104aca17906e29ee28efc012f19529186193f604169b9b"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -176,7 +198,8 @@
   "validation_evidence": [
     "validation-receipt: id=6b09313ada525ef9 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 22 tests, zero findings`",
     "validation-receipt: id=13c6394f6f693d74 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_raw_volume_precision.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_materializer.py -q` result=`passed 62 tests`",
-    "canonical post-restart-verify worker-scheduler 2026-10-08 -> PASS identity=1dc3ad9d81bac4bb7edcf3023331e4b1addb89ec backend=124808 supervised_worker=116648; no process control"
+    "canonical post-restart-verify worker-scheduler 2026-10-08 -> PASS identity=1dc3ad9d81bac4bb7edcf3023331e4b1addb89ec backend=124808 supervised_worker=116648; no process control",
+    "canonical post-restart-verify -> PASS source 729ca8a0 ancestor of live 1dc3ad9d; backend 124808 child 116648 health supervision passed; process_control=false"
   ],
   "verification_budget": {
     "budget": "standard",
