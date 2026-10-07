@@ -1,8 +1,8 @@
 # Advisory 固定5TD卖价持仓路径信息 F2详细设计
 
-2026-10-08。假设 EXIT5-HELD-PATH-CONTEXT-1；设计PR #5700已合入05540b84并自身清理，当前接续独立源码阶段。本地实现与多轮定向合同审核通过，实际研究尚未运行；没有可激活或已确认盈利的卖价功能，不以设计/源码验收冒称模型收益交付。
+2026-10-08。假设 EXIT5-HELD-PATH-CONTEXT-1；设计PR #5700已合入05540b84并自身清理，独立源码及一次开发研究已完成。本地13直接合同/多轮复审通过，4实际fit完成；源码尚未公开合入，没有可激活或已确认盈利的卖价功能，不以设计/源码验收冒称模型收益交付。
 
-源码阶段范围登记：feature/advisory-exit5-held-path-context-source-20261008。仅下述三服务、两直接测试、本文和主蓝图七文件；原Exit helper为已经审核的本任务显式依赖，source PR以#5697分支为base，不捆绑旧源码或修改原study。当前新研究fit0。
+源码阶段范围登记：feature/advisory-exit5-held-path-context-source-20261008。仅下述三服务、两直接测试、本文和主蓝图七文件；原Exit helper为已经审核的本任务显式依赖，source PR以#5697分支为base，不捆绑旧源码或修改原study。当前4新研究fit，旧control refit与新oracle study均0。
 
 ## Background / Goal
 
@@ -87,6 +87,12 @@ T开盘入场、原E=T+4收盘、S收盘后下一U、T+1<=U<=E及remaining=1..4�
 此矩阵证明本地源码合同，不证明实际模型、利润或自然运行。最小合同测试包括同股四S不串episode、future factor/price毒值、峰值缺一原session不偷偷缩窗、split因子数量等价、train-only median/flags和固定25输入。原Exit helper的22直接合同已验证test投影过滤、原折purge/一链/五槽/归因，当前原样复用不堆重复fixture/快照。新研究prepare/busy probe与同KEY原账本读回需单独报告；完成工程不等于确认收益。
 
 ## Risks / Rollout / Rollback / Production Gates
+
+实际run advexitpath_16544dfaa2289406e21f539a：一次prepare1.505秒，原6100决策/1525episode不删，三新字段各6050已知/50边界S不可知；原九字段及标签/折原样保留。模拟QE busy probe0标记/0fit，真实四fold前后公开QE三入口全0；唯一四candidate fit1.959秒、评价0.788秒，旧Ridge/控制/旧study没有重拟合或重跑。累计121→125研究fit，旧INDEX_BUILD1次另列。
+
+240原评价cohort/238完整/2 UNKNOWN；候选−原baseline −47.4315bps，CI95 [−92.7764,1.4040]、MDE80 68.2195；候选−已生成九字段Exit −3.7078bps，CI95 [−12.2552,4.2729]。700完整配对干预episode、222入场组、93.2773%覆盖；UNKNOWN regime不升级。原五槽共同baseline不变，四项归因净和−56443.4664bps除以5及238还原−47.4315；原oracle +235.9270仅原空间参照。结果EXPLORATORY/NAVIGATION_ONLY/未确认、未激活；只停止本candidate，不加字段/参数/seed挽救。
+
+下一研究要先检查价格条件化的继续持有价值：当前mean head是E[V_continue|S]，实际U出售价p仅在外部比较。若p包含新的价格信息，不随p更新继续价值可能造成高价过早退出；这是有限S-only审计的结构假设，不是证明市场反转或现代码Bug。应先独立设计E[V_continue|S, hypothetical p]与S状态/价格query的时钟边界，并证明S发表时无需实际U价也能生成整条价格函数。历史成熟U价可作训练query样本，未来评价U只能查询预先固定函数；不得伪装成S观测字段、读取未成熟训练标签或直接把oracle当模型。新hypothesis尚未登记/拟合，不能用本研究失败自动开始复杂模型或认为该方向已有收益。
 
 新增持仓状态未必提供alpha，可能只是价格动量/反转的已知效应；必须看原baseline及同KEY对照，不能把相对更差旧overlay的小改善当盈利。原来源非vintage、只有一个原候选流及有限开发年份，不代表跨策略包/市场泛化；feature缺失本身也不能当alpha。动态仓位、资金动作和分钟时机均不在合同中。
 
