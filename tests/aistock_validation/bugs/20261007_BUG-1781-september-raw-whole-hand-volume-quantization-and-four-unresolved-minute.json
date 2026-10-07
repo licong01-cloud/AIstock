@@ -17,6 +17,28 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-07T02:51:43.325449Z",
+  "current_delivery": {
+    "active_profile_sha256": "56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f",
+    "daily_precision_restores_volume_comparison": 1243,
+    "dev_actual_monthly_sql_precision_rows_verified": 1288,
+    "dev_daily_precision_applied": 1288,
+    "dev_raw_protected_columns_unchanged": true,
+    "followup": [
+      "Schema/controlled-repair and shared-worker changes are split into BUG-1781 and BUG-1783 with exact CI mappings. Source PRs must not claim monthly data acceptance.",
+      "Production add_raw_volume_precision_v1.sql is user-authorized with exact SHA256 and DEV PASS; execute only after reviewed source merge, preserving legacy columns.",
+      "Implement/review genuine precision capture in scheduled raw producers; nullable columns alone do not prevent recurrence.",
+      "Resolve remaining minute precision and four price/amount keys using actual independent source facts, respecting the 1/hour provider cap. No invented bars or tolerance changes.",
+      "Only resume the same monthly operation after actual September source parity is closed."
+    ],
+    "historical_minute_provider_rejection": "40203 frequency cap: 1 call/hour; not established permission or provider absence",
+    "month": "2026-09",
+    "monthly_ready": false,
+    "production_data_apply": false,
+    "production_schema_apply": false,
+    "remaining_non_volume_comparison_keys": 4,
+    "remaining_volume_comparison_keys": 45,
+    "targeted_tests": "RED missing module -> GREEN 58 passed; 2 script malformed-volume RED failures -> exact failed nodeids GREEN; changed Python Ruff PASS; git diff --check PASS"
+  },
   "description": "Monthly source remains blocked on exact parity while physical minute bar coverage is complete; current whole-hand storage loses source precision and cannot prove the four price/amount intervals.",
   "events": [
     {
@@ -37,7 +59,28 @@
   ],
   "expected": "Retain authoritative share precision without breaking existing hand-unit consumers; independently resolve four historical quote discrepancies using genuine facts. DEV-validate exact producer/storage/export changes before requesting specifically scoped production DDL. Resume the same September monthly operation only when genuine blocking source keys are closed.",
   "file_scope_contract": {
-    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "actual_changed_files": [
+      "backend/db/migrations/add_raw_volume_precision_v1.sql",
+      "backend/tests/scripts/test_backfill_raw_volume_precision.py",
+      "noxfile.py",
+      "scripts/backfill_raw_volume_precision.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1781-september-raw-whole-hand-volume-quantization-and-four-unresolved-minute.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "backend/db/migrations/add_raw_volume_precision_v1.sql",
+      "scripts/backfill_raw_volume_precision.py",
+      "backend/tests/scripts/test_backfill_raw_volume_precision.py"
+    ],
+    "changed_files": [
+      "backend/db/migrations/add_raw_volume_precision_v1.sql",
+      "backend/tests/scripts/test_backfill_raw_volume_precision.py",
+      "noxfile.py",
+      "scripts/backfill_raw_volume_precision.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1781-september-raw-whole-hand-volume-quantization-and-four-unresolved-minute.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "planned_files": [
       "backend/db/migrations/add_raw_volume_precision_v1.sql",
       "scripts/backfill_raw_volume_precision.py",
@@ -46,6 +89,7 @@
       "noxfile.py",
       "tests/aistock_validation/bugs/20261007_BUG-1781-september-raw-whole-hand-volume-quantization-and-four-unresolved-minute.json"
     ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/db/migrations/add_raw_volume_precision_v1.sql",
       "scripts/backfill_raw_volume_precision.py",
@@ -53,13 +97,6 @@
       "tests/aistock_validation/catalog/file_ownership.yaml",
       "noxfile.py",
       "tests/aistock_validation/bugs/20261007_BUG-1781-september-raw-whole-hand-volume-quantization-and-four-unresolved-minute.json"
-    ],
-    "changed_files_source": "planned_intake",
-    "changed_files": [],
-    "added_files": [
-      "backend/db/migrations/add_raw_volume_precision_v1.sql",
-      "scripts/backfill_raw_volume_precision.py",
-      "backend/tests/scripts/test_backfill_raw_volume_precision.py"
     ]
   },
   "first_seen_at": "2026-10-07T02:51:43.325449Z",
@@ -68,11 +105,38 @@
   "fixed_at": null,
   "github_issue_number": 5656,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5656",
+  "implementation_phase": "Backend-main migration and controlled CLI repair only. Worker freeze/audit/bin preservation is independently tracked in BUG-1783; historical minute quote discrepancies are still unresolved and must not be declared repaired.",
   "last_seen_at": "2026-10-07T02:51:43.325449Z",
+  "linked_worker_bug": "BUG-1783",
   "module": "local_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "premerge_baseline_failure": {
+    "catalog_integrity_script": "PASS findings=0",
+    "merge_ready": true,
+    "nodeid": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
+    "observed_test_to_production_ratio": 0.30013739307716175,
+    "production_apply": false,
+    "reproduced_on_clean_canonical_main": true,
+    "required_max_ratio": 0.3,
+    "resolution": "Keep review/CI pending; do not relax threshold, move ownership or report a passed nox plan.",
+    "scope": "validation.workflow_automation; no changed production or test files from that module in this patch",
+    "validation_catalog_integrity_nox": "FAIL: 21 passed, 1 baseline failure",
+    "validation_module_registry_l0": "PASS"
+  },
+  "production_authorization": {
+    "action": "production_ddl_and_dev_validated_data_repair",
+    "authorized_by": "user",
+    "authorized_date": "2026-10-07",
+    "migration": "backend/db/migrations/add_raw_volume_precision_v1.sql",
+    "migration_sha256": "368b05723018e36e4bcc6d85e889742d427def6f6c2559cd62a1f180be23d7a3",
+    "scope": "Add exactly six nullable share-precision fields; do not change legacy fields. Apply only after DEV PASS and source merge.",
+    "tables": [
+      "market.kline_daily_raw",
+      "market.kline_minute_raw"
+    ]
+  },
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "required",
   "production_frontend_dependency_gate": "noop",
@@ -84,24 +148,23 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "database",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ],
+    "backend_restart_owner": "user",
+    "database_readback_ref": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-dev-schema-apply.json",
+    "fresh_process_evidence": [],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "not_required",
     "planned_target_ids": [
       "backend-main"
     ],
-    "backend_restart_owner": "user",
-    "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "not_required",
-    "inference_basis": "planned_scope",
-    "provisional": true,
-    "fresh_process_evidence": [],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "database_readback_ref": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-dev-schema-apply.json"
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "database",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -222,54 +285,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "implementation_scope_registered",
-  "implementation_phase": "Backend-main migration and controlled CLI repair only. Worker freeze/audit/bin preservation is independently tracked in BUG-1783; historical minute quote discrepancies are still unresolved and must not be declared repaired.",
-  "current_delivery": {
-    "month": "2026-09",
-    "dev_daily_precision_applied": 1288,
-    "dev_raw_protected_columns_unchanged": true,
-    "dev_actual_monthly_sql_precision_rows_verified": 1288,
-    "daily_precision_restores_volume_comparison": 1243,
-    "remaining_volume_comparison_keys": 45,
-    "remaining_non_volume_comparison_keys": 4,
-    "historical_minute_provider_rejection": "40203 frequency cap: 1 call/hour; not established permission or provider absence",
-    "targeted_tests": "RED missing module -> GREEN 58 passed; 2 script malformed-volume RED failures -> exact failed nodeids GREEN; changed Python Ruff PASS; git diff --check PASS",
-    "production_schema_apply": false,
-    "production_data_apply": false,
-    "active_profile_sha256": "56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f",
-    "monthly_ready": false,
-    "followup": [
-      "Schema/controlled-repair and shared-worker changes are split into BUG-1781 and BUG-1783 with exact CI mappings. Source PRs must not claim monthly data acceptance.",
-      "Production add_raw_volume_precision_v1.sql is user-authorized with exact SHA256 and DEV PASS; execute only after reviewed source merge, preserving legacy columns.",
-      "Implement/review genuine precision capture in scheduled raw producers; nullable columns alone do not prevent recurrence.",
-      "Resolve remaining minute precision and four price/amount keys using actual independent source facts, respecting the 1/hour provider cap. No invented bars or tolerance changes.",
-      "Only resume the same monthly operation after actual September source parity is closed."
-    ]
-  },
-  "production_authorization": {
-    "action": "production_ddl_and_dev_validated_data_repair",
-    "authorized_by": "user",
-    "authorized_date": "2026-10-07",
-    "migration": "backend/db/migrations/add_raw_volume_precision_v1.sql",
-    "migration_sha256": "368b05723018e36e4bcc6d85e889742d427def6f6c2559cd62a1f180be23d7a3",
-    "tables": [
-      "market.kline_daily_raw",
-      "market.kline_minute_raw"
-    ],
-    "scope": "Add exactly six nullable share-precision fields; do not change legacy fields. Apply only after DEV PASS and source merge."
-  },
-  "linked_worker_bug": "BUG-1783",
-  "premerge_baseline_failure": {
-    "nodeid": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
-    "observed_test_to_production_ratio": 0.30013739307716175,
-    "required_max_ratio": 0.30,
-    "reproduced_on_clean_canonical_main": true,
-    "scope": "validation.workflow_automation; no changed production or test files from that module in this patch",
-    "catalog_integrity_script": "PASS findings=0",
-    "validation_module_registry_l0": "PASS",
-    "validation_catalog_integrity_nox": "FAIL: 21 passed, 1 baseline failure",
-    "merge_ready": false,
-    "production_apply": false,
-    "resolution": "Keep review/CI pending; do not relax threshold, move ownership or report a passed nox plan."
-  }
+  "workflow_gate": "implementation_scope_registered"
 }
