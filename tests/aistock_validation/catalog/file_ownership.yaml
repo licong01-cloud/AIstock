@@ -1,5 +1,14 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: local_data_tdx_go
+    priority: 120
+    include:
+      - tdx-api-main/**
+    primary_module: local_data
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: TDX protocol, Go service and its direct tests produce shared raw market facts; business consumers remain separately owned.
   - rule_id: factor_research_p1
     priority: 132
     include:

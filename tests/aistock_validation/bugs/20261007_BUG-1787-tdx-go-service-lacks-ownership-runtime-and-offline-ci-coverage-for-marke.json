@@ -1,6 +1,8 @@
 {
-  "actual": "TDX numeric decoding defects were not caught: Go sources and tests under tdx-api-main have no file ownership rule and no offline Go CI path. Establish explicit local_data ownership and offline protocol/build validation, and a real TDX runtime identity target/runbook before associated fixes; no production process control.",
+  "actual": "TDX ownership is missing; existing Go CI runs network-dependent extend tests and does not build the separate web module.",
   "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json"
   ],
@@ -13,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-07T18:20:27.396340Z",
-  "description": "TDX numeric decoding defects were not caught: Go sources and tests under tdx-api-main have no file ownership rule and no offline Go CI path. Establish explicit local_data ownership and offline protocol/build validation, and a real TDX runtime identity target/runbook before associated fixes; no production process control.",
+  "description": "TDX files lack ownership. Existing Go CI executes network-dependent extend tests and omits the nested web Go module build. Repair ownership and retain the existing Go CI lane with offline protocol tests, root build and nested web build; existing tdx-go-backend runtime catalog remains authoritative. No production process control.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,13 +25,22 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "TDX has explicit local_data ownership and existing Go CI runs offline protocol assertions plus root and web builds without external servers or dependency downloads.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/file_ownership.yaml"
@@ -91,10 +102,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -106,7 +119,7 @@
   "suspected_modules": [
     "validation"
   ],
-  "title": "TDX Go service lacks ownership runtime and offline CI coverage for market data integrity",
+  "title": "TDX ownership and offline CI omit nested web build",
   "trigger_condition": {
     "fingerprint": "4483b34497cd7eea14725ec4",
     "source_event_id": "FE-20261007-4483b34497cd"
