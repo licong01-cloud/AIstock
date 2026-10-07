@@ -100,8 +100,8 @@ T开盘入场、原E=T+4收盘、S收盘后下一U、T+1<=U<=E及remaining=1..4�
 
 ## Review / 多轮自审
 
-第一轮目标审查：从原入场锚与持仓路径补S信息，不把holding变成退出价值，不更改固定5TD或产生新选股。第二轮时钟/单位审查：T..S完整session、S anchor factor比值、bps/fraction分离，原U仅评价query；补充未来poison、missing整段未知、age与remaining重复不新增。第三轮方法/边界审查：只拟合新candidate、复用旧预测、保留UNKNOWN时间轴与原五槽，oracle只作理论引用，实际fit计数、源码/研究/激活分开。设计审核通过，源码/研究仍pending；不得以设计记录计入新fit或宣称满足真实盈利目标。
+设计阶段三轮审查：从原入场锚与持仓路径补S信息，不把holding变成退出价值，不更改固定5TD或产生新选股；T..S完整session、S anchor factor比值、bps/fraction分离，原U仅评价query，补充未来poison、missing整段未知、age与remaining重复不新增；只拟合新candidate、复用旧预测、保留UNKNOWN时间轴与原五槽，oracle只作理论引用，实际fit计数、源码/研究/激活分开。设计合入时源码/研究尚未开始，此为历史检查点；当前源码及四fit完成状态见本文§Risks，不得以设计记录冒充模型收益。
 
-源码阶段三视角复审：原T..S字段/费用/原episode、严格源hash/原折/开发边界、原预测及cohort账本原样复用/零旧拟合；补充OHLC矛盾检查、非finite数据显式错误、双对照固定block区间与UNKNOWN时间轴。13直接合同及Ruff clean。Source本地实现、尚未PR/合入；原helper依赖来自已审核#5697精确源码，不重执行旧prepare/fit/oracle研究入口。旧control直接复用已生成的同人口cohort账本及其预测身份，公共helper只重用动作链/账本函数作当前candidate计算，未重跑旧study；原oracle是固定标签空间参照而非新候选效果。当前新研究fit0，待本次独立预登记与实际读回。
+源码阶段三视角复审：原T..S字段/费用/原episode、严格源hash/原折/开发边界、原预测及cohort账本原样复用/零旧拟合；补充OHLC矛盾检查、非finite数据显式错误、双对照固定block区间与UNKNOWN时间轴。13直接合同及Ruff clean。Source本地实现、公开合入仍待依赖；原helper依赖来自已审核#5697精确源码，不重执行旧prepare/fit/oracle研究入口。旧control直接复用已生成的同人口cohort账本及其预测身份，公共helper只重用动作链/账本函数作当前candidate计算，未重跑旧study；原oracle是固定标签空间参照而非新候选效果。实际独立预登记、四fit及双对照评价已完成，结果负向，未配置或激活。
 
 L0和F2 7/7通过、0blocking。两项P2复杂度提示已核查：新特征最多四原session/每KEY、one-to-one merge固定6100（上限15000）行；原cohort双对照240行、固定25输入/4fold，bootstrap2000×240有界，无全市场平方级循环。不是新增平台或模型搜索；不修改公共扫描器/ownership来降低测试比例。
