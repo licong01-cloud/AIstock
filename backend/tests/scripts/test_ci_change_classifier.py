@@ -1688,7 +1688,9 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "node_modules/.bin" not in frontend_runs
     assert "npm run" not in frontend_runs
     go_runs = str(next(step for step in verdict["steps"] if step.get("id") == "go_validation")["run"])
-    assert "go test ./..." in go_runs
+    assert "go test -mod=readonly ./protocol -count=1" in go_runs
+    assert "go build -mod=readonly ./..." in go_runs
+    assert "cd web" in go_runs
     prompt_eval_run_steps = str(next(step for step in verdict["steps"] if step.get("id") == "prompt_validation")["run"])
     assert "scripts/llm_provider_adapter.py --json prompt-evaluation" in prompt_eval_run_steps
     assert "failure-bug-register" not in jobs
