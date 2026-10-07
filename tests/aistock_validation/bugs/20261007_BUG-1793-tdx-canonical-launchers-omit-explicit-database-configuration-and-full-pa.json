@@ -32,14 +32,26 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_start_tdx_go_backend.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "noxfile.py",
+      "scripts/start_tdx_go_backend.py",
+      "start_all_ai_stock.bat",
+      "tests/aistock_validation/bugs/20261007_BUG-1793-tdx-canonical-launchers-omit-explicit-database-configuration-and-full-pa.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
     "changed_files": [
-      "start_all_ai_stock.bat",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_start_tdx_go_backend.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
       "noxfile.py",
-      "docs/operations/tdx_go_runtime_runbook.md"
+      "scripts/start_tdx_go_backend.py",
+      "start_all_ai_stock.bat",
+      "tests/aistock_validation/bugs/20261007_BUG-1793-tdx-canonical-launchers-omit-explicit-database-configuration-and-full-pa.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "start_all_ai_stock.bat",
@@ -150,15 +162,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["Fresh AIstock Python launcher --check read existing DEV and production configuration without starting a service; DEV database=aistock_dev, isolated port=19081, full source revision=164cfa2a3fda13f2f82e0751e1d8733d93fdc1ac. RED missing launcher -> GREEN six target/credential/dirty-source regression cases."],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python launcher --check read existing DEV and production configuration without starting a service; DEV database=aistock_dev, isolated port=19081, full source revision=164cfa2a3fda13f2f82e0751e1d8733d93fdc1ac. RED missing launcher -> GREEN six target/credential/dirty-source regression cases."
+    ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
