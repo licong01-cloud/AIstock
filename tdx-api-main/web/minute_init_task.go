@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/injoyai/tdx/protocol"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/injoyai/tdx/protocol"
 )
 
 var pgPool *pgxpool.Pool
@@ -29,28 +29,28 @@ type MinuteInitOptions struct {
 }
 
 type MinuteInitRequest struct {
-	JobID     string           `json:"job_id"`
-	Codes     []string         `json:"codes"`
-	StartTime string           `json:"start_time"`
-	Workers   int              `json:"workers"`
+	JobID     string            `json:"job_id"`
+	Codes     []string          `json:"codes"`
+	StartTime string            `json:"start_time"`
+	Workers   int               `json:"workers"`
 	Options   MinuteInitOptions `json:"options"`
 }
 
 // DailyRawInitRequest 复用与分钟初始化一致的选项结构，仅目标表与K线类型不同。
 type DailyRawInitRequest struct {
-	JobID     string           `json:"job_id"`
-	Codes     []string         `json:"codes"`
-	StartTime string           `json:"start_time"`
-	Workers   int              `json:"workers"`
+	JobID     string            `json:"job_id"`
+	Codes     []string          `json:"codes"`
+	StartTime string            `json:"start_time"`
+	Workers   int               `json:"workers"`
 	Options   MinuteInitOptions `json:"options"`
 }
 
 // DailyQfqInitRequest: 前复权日线初始化（Go 直连版）。
 // 与 DailyRawInitRequest 非常相似，但不再需要前端指定时间范围，由 Go 端拉取所有可用 QFQ 日线。
 type DailyQfqInitRequest struct {
-	JobID   string           `json:"job_id"`
-	Codes   []string         `json:"codes"`
-	Workers int              `json:"workers"`
+	JobID   string            `json:"job_id"`
+	Codes   []string          `json:"codes"`
+	Workers int               `json:"workers"`
 	Options MinuteInitOptions `json:"options"`
 }
 
@@ -964,6 +964,10 @@ func ingestSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt
 		if !opt.TruncateBefore && !k.Time.IsZero() && k.Time.Before(start) {
 			continue
 		}
+		precision, err := k.RawSharePrecisionColumns()
+		if err != nil {
+			return 0, err
+		}
 		rows = append(rows, []any{
 			k.Time,
 			tsCode,
@@ -976,6 +980,7 @@ func ingestSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt
 			int64(k.Amount),
 			"none",
 			source,
+			precision[0], precision[1], precision[2],
 		})
 	}
 	if len(rows) == 0 {
@@ -998,7 +1003,7 @@ func ingestSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt
 	defer tx.Rollback(ctx)
 
 	table := pgx.Identifier{"market", "kline_minute_raw"}
-	columns := []string{"trade_time", "ts_code", "freq", "open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li", "adjust_type", "source"}
+	columns := []string{"trade_time", "ts_code", "freq", "open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li", "adjust_type", "source", "volume_shares", "volume_shares_source", "volume_shares_sha256"}
 
 	maxRows := opt.MaxRowsPerChunk
 	if maxRows <= 0 {
@@ -1145,6 +1150,10 @@ func ingestDailyRawSingleSymbol(ctx context.Context, tsCode string, start time.T
 		if !opt.TruncateBefore && !k.Time.IsZero() && k.Time.Before(start) {
 			continue
 		}
+		precision, err := k.RawSharePrecisionColumns()
+		if err != nil {
+			return 0, err
+		}
 		rows = append(rows, []any{
 			k.Time,
 			tsCode,
@@ -1156,6 +1165,7 @@ func ingestDailyRawSingleSymbol(ctx context.Context, tsCode string, start time.T
 			int64(k.Amount),
 			"none",
 			source,
+			precision[0], precision[1], precision[2],
 		})
 	}
 	if len(rows) == 0 {
@@ -1178,7 +1188,7 @@ func ingestDailyRawSingleSymbol(ctx context.Context, tsCode string, start time.T
 	defer tx.Rollback(ctx)
 
 	table := pgx.Identifier{"market", "kline_daily_raw"}
-	columns := []string{"trade_date", "ts_code", "open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li", "adjust_type", "source"}
+	columns := []string{"trade_date", "ts_code", "open_li", "high_li", "low_li", "close_li", "volume_hand", "amount_li", "adjust_type", "source", "volume_shares", "volume_shares_source", "volume_shares_sha256"}
 
 	maxRows := opt.MaxRowsPerChunk
 	if maxRows <= 0 {

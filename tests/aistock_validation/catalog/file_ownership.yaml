@@ -1,5 +1,17 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: local_data_tdx_raw_share_precision_producer
+    priority: 96
+    include:
+      - tdx-api-main/protocol/model_kline.go
+      - tdx-api-main/protocol/model_kline_test.go
+      - tdx-api-main/web/minute_init_task.go
+      - tdx-api-main/web/raw_volume_precision_test.go
+    primary_module: local_data
+    impact_modules: [qlib_data]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Previously unmapped shared raw TDX decode and raw DB producer; no existing ownership moved.
   - rule_id: factor_research_p1
     priority: 132
     include:

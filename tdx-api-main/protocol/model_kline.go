@@ -1,11 +1,15 @@
 package protocol
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/injoyai/base/types"
 	"github.com/injoyai/conv"
+	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -39,16 +43,18 @@ type KlineResp struct {
 }
 
 type Kline struct {
-	Last      Price     //昨日收盘价,这个是列表的上一条数据的收盘价，如果没有上条数据，那么这个值为0
-	Open      Price     //开盘价
-	High      Price     //最高价
-	Low       Price     //最低价
-	Close     Price     //收盘价,如果是当天,则是最新价/实时价
-	Volume    int64     //成交量
-	Amount    Price     //成交额
-	Time      time.Time //时间
-	UpCount   int       //上涨数量,指数有效
-	DownCount int       //下跌数量,指数有效
+	Last               Price     //昨日收盘价,这个是列表的上一条数据的收盘价，如果没有上条数据，那么这个值为0
+	Open               Price     //开盘价
+	High               Price     //最高价
+	Low                Price     //最低价
+	Close              Price     //收盘价,如果是当天,则是最新价/实时价
+	Volume             int64     //成交量
+	VolumeShares       *float64  `json:",omitempty"` // Raw decoded share precision; legacy Volume remains unchanged.
+	VolumeSharesSHA256 string    `json:",omitempty"` // Original encoded bar and Kline type, never reconstructed rounded data.
+	Amount             Price     //成交额
+	Time               time.Time //时间
+	UpCount            int       //上涨数量,指数有效
+	DownCount          int       //下跌数量,指数有效
 }
 
 func (this *Kline) String() string {
@@ -59,6 +65,23 @@ func (this *Kline) String() string {
 		Int64UnitString(this.Volume), FloatUnitString(this.Amount.Float64()),
 		this.UpCount, this.DownCount,
 	)
+}
+
+// RawSharePrecisionColumns returns additive raw-storage fields, never legacy
+// hands reconstructed as shares. Used only by the shared raw ingestion writers.
+func (k *Kline) RawSharePrecisionColumns() ([3]any, error) {
+	if k.VolumeShares == nil {
+		if k.VolumeSharesSHA256 != "" {
+			return [3]any{}, errors.New("orphan raw volume precision provenance")
+		}
+		return [3]any{}, nil
+	}
+	v := *k.VolumeShares
+	pin, err := hex.DecodeString(k.VolumeSharesSHA256)
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || err != nil || len(pin) != 32 || strings.ToLower(k.VolumeSharesSHA256) != k.VolumeSharesSHA256 {
+		return [3]any{}, errors.New("invalid raw volume share precision or encoded source hash")
+	}
+	return [3]any{v, "tdx_decoded", k.VolumeSharesSHA256}, nil
 }
 
 // MaxDifference 最大差值，最高-最低
@@ -144,6 +167,7 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 
 	var last Price //上条数据(昨天)的收盘价
 	for i := uint16(0); i < resp.Count; i++ {
+		encodedBar := bs
 		k := &Kline{
 			Time: GetTime([4]byte(bs[:4]), c.Type),
 		}
@@ -178,11 +202,20 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 			年: 不需要操作
 
 		*/
-		k.Volume = int64(getVolume(Uint32(bs[:4])))
+		volumeBits := Uint32(bs[:4])
+		decodedVolume := getVolume(volumeBits)
+		// The source's zero word represents no trade; the generic decoder's
+		// exponent formula otherwise produces a positive subnormal number.
+		if volumeBits == 0 {
+			decodedVolume = 0
+		}
+		k.Volume = int64(decodedVolume)
+		shares := decodedVolume * 100
 		bs = bs[4:]
 		switch c.Type {
 		case TypeKlineMinute, TypeKline5Minute, TypeKlineMinute2, TypeKline15Minute, TypeKline30Minute, TypeKline60Minute, TypeKlineDay2:
 			k.Volume /= 100
+			shares = decodedVolume
 		}
 		k.Amount = Price(getVolume(Uint32(bs[:4])) * 1000) //从元转为厘,并去除多余的小数
 		bs = bs[4:]
@@ -194,6 +227,12 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 			k.UpCount = conv.Int([]byte{bs[1], bs[0]})
 			k.DownCount = conv.Int([]byte{bs[3], bs[2]})
 			bs = bs[4:]
+		}
+		if c.Kind != KindIndex {
+			k.VolumeShares = &shares
+			// Pin original bytes, not normalized or quantized values.
+			pin := sha256.Sum256(append([]byte{c.Type}, encodedBar[:len(encodedBar)-len(bs)]...))
+			k.VolumeSharesSHA256 = fmt.Sprintf("%x", pin)
 		}
 
 		resp.List = append(resp.List, k)
