@@ -1,6 +1,7 @@
 {
   "actual": "Shared TDX scheduler uses global MAX instead of explicit requested date window, skips partially collected latest day, accepts response without task_id, and can convert protocol failure into success using unrelated DB status. Quote adapter maps K.Last to current close. Fix shared integration and September-bounded tests; production DB/process untouched.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/ingestion/tdx_scheduler.py",
     "backend/data_service/tdx_adapter.py",
     "backend/tests/ingestion/test_tdx_go_integrity.py",
