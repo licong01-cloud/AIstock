@@ -1,6 +1,7 @@
 {
   "actual": "已完成TCN24 Top25实验qe_20261006_013449_0c29_L4入包时报expected_features=3而冻结特征44。核实张量维度推断与模型实际特征schema，禁止将kernel宽度当输入特征。模型权重应复用中央不可变CAS且仅一份物理权重，保留程序内哈希/来源/特征顺序一致性，不新增人工门禁或环境锁。",
   "allowed_write_scope": [
+    "backend/tests/strategy_package/test_freeze_completeness_build_gate.py",
     "backend/inference_engine.py",
     "backend/tests/test_inference_strict_scoring_alignment.py",
     "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
