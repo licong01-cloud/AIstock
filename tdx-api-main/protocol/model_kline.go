@@ -46,7 +46,7 @@ type Kline struct {
 	Low          Price     //最低价
 	Close        Price     //收盘价,如果是当天,则是最新价/实时价
 	Volume       int64     //成交量
-	VolumeShares *int64    `json:"VolumeShares,omitempty"` // Exact stock shares; legacy Volume remains whole hands.
+	VolumeShares *int64    `json:"VolumeShares,omitempty"` // Wire-reported stock shares; not proof of unquantized exchange precision. Legacy Volume remains whole hands.
 	VolumeWire   uint32    `json:"VolumeWire"`
 	AmountWire   uint32    `json:"AmountWire"`
 	Amount       Price     //成交额
