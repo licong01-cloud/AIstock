@@ -104,8 +104,8 @@
   },
   "first_seen_at": "2026-10-07T20:04:22.097972Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "303ffededd25a5832f4cb5297d125fa5368f1fdc",
+  "fixed_at": "2026-10-07T20:25:16Z",
   "github_issue_number": 5696,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5696",
   "last_seen_at": "2026-10-07T20:04:22.097972Z",
@@ -113,6 +113,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5701",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -140,6 +141,7 @@
       "tdx-go-backend"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -151,7 +153,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1794",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "03c87e3debf5e0e1",
+    "recorded_at": "2026-10-07T20:25:52.905926Z",
+    "runtime_contract_digest": "bb10d9e10b41e22c2b7902733402f23150fd83af15367f0fc89787a88f71de78",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c2de2f7a987e303a5a903adddb9583378104a1e9",
+    "source_merge_commit": "303ffededd25a5832f4cb5297d125fa5368f1fdc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5701",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 -> passed",
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+      "python -m pytest backend/tests/scripts/test_start_tdx_go_backend.py -q -> 7 passed"
+    ],
+    "validation_evidence_digest": "484eb7ce48aefb191ddb5148cbc63f2cdd3d0ba888c76a1345184d6ec1c05c12"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -160,6 +185,11 @@
     "fingerprint": "c463f0c37b161c7dee936d4d",
     "source_event_id": "FE-20261007-c463f0c37b16"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "python -m pytest backend/tests/scripts/test_start_tdx_go_backend.py -q -> 7 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
