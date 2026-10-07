@@ -8,6 +8,8 @@ rules:
       - tdx-api-main/go.sum
       - tdx-api-main/web/go.mod
       - tdx-api-main/web/go.sum
+      - scripts/start_tdx_go_backend.py
+      - backend/tests/scripts/test_start_tdx_go_backend.py
     primary_module: local_data
     impact_modules: []
     layer: data_pipeline
