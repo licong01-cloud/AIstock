@@ -1993,7 +1993,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 | 顺序 | 任务及实际状态 | 边界 |
 |---|---|---|
-| P22 / 当前唯一模型主线 | [价格条件化继续价值F2](advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md)多视角设计完成；S观测和hypothetical净价格query分离、曲线先发表后U查询，固定20输入/原Ridge/四折/双对照 | 新源码/预登记/fit仍0；不读取实际U发表S曲线、不以未来factor映射S raw价，不继续P21字段/旧阈值；GP5买价已有条件化，本假设仅Exit，不作盈利承诺 |
+| P22 / 当前唯一模型主线 | [价格条件化继续价值F2](advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md)设计#5705已合入fa5a6a686/自身清理；独立七文件源码13直接合同/Ruff/L0/F2及多轮复审通过；S-only净价格曲线先发表后U查询，固定20输入/原Ridge/四折/双对照 | 新研究预登记/fit仍0，125+1不预增；不读取实际U发表S曲线、不以未来factor映射S raw价，不继续P21字段/旧阈值；GP5买价已有条件化，本假设仅Exit，不作盈利承诺 |
 | P21 / 一次研究已结束 | [持仓路径S信息F2](advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md)源码13直接合同/Ruff/L0/F2及四新fit完成；独立Draft #5704以#5697为base，仅七文件；相对base/九字段 −47.4315/−3.7078bps，均区间跨0 | 原标签/控制/折/episode不变，0旧refit/新oracle；累计125研究fit+1旧index，0激活，不派生更多技术字段；source/CI/依赖/合入分别报告 |
 | P18 / 必要工程依赖 | BUG-1778及四文件DB输入本地已验证；Issue #5645公共交付角色/合同仍OPEN，依赖分别交付 | 不修改公共workflow或其它模块、不捆绑旧分支、不重复旧验收；工程依赖不是父包准入或研究停止条件 |
 | P19 / 本地业务链路通过 | [固定5TD日频API F2](advisory_generic_daily_price_api_5td_v1_f2_design_20261007.md)九文件/40直接合同、多轮/Ruff/L0/F2通过；真实两日80排名+16等待完整保留，22只读SELECT | 公开源码合入等待P18，配置/实际HTTP尚未激活；原raw tick/PIT/一snapshot/budget、UNKNOWN宽度不填、UI不前置 |
