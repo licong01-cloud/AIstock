@@ -3900,7 +3900,7 @@ def _validate_tdx_raw_kline(payload: Any) -> tuple[str, str | None, dict[str, An
             return 'failed', 'TDX timestamps lack offset or are duplicate/unordered', {}
         prior = stamp
         fields = ('Open', 'High', 'Low', 'Close', 'Volume', 'Amount')
-        if any(type(row.get(k)) not in (int, float) or not math.isfinite(row[k]) for k in fields):
+        if any(type(row.get(k)) not in (int, float) or abs(row[k]) > 2**63 - 1 or not math.isfinite(row[k]) for k in fields):
             return 'failed', 'TDX fact lacks finite OHLCV/amount', {}
         if (row['Low'] <= 0 or row['High'] < row['Low'] or not row['Low'] <= row['Open'] <= row['High']
                 or not row['Low'] <= row['Close'] <= row['High'] or row['Volume'] < 0 or row['Amount'] < 0):

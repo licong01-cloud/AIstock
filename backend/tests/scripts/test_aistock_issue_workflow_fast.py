@@ -15,7 +15,7 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
-@pytest.mark.parametrize('fault', ['wrapper', 'empty', 'count', 'missing', 'price', 'duplicate', 'shares'])
+@pytest.mark.parametrize('fault', ['wrapper', 'empty', 'count', 'missing', 'price', 'duplicate', 'shares', 'overflow'])
 def test_tdx_raw_smoke_rejects_corrupt_facts(fault):
     import copy
     row = {'Time': '2026-09-10T11:21:00+08:00', 'Open': 12800, 'High': 12800,
@@ -23,13 +23,23 @@ def test_tdx_raw_smoke_rejects_corrupt_facts(fault):
     payload = {'code': 0, 'data': {'count': 1, 'list': [row]}}
     validator = workflow._business_smoke_semantic_contract('/api/kline-all/tdx')[1]
     assert validator(copy.deepcopy(payload))[0] == 'passed'
-    if fault == 'wrapper': payload['code'] = -1
-    elif fault == 'empty': payload['data']['list'] = []
-    elif fault == 'count': payload['data']['count'] = 2
-    elif fault == 'missing': del row['Open']
-    elif fault == 'price': row['Close'] = 20000
-    elif fault == 'duplicate': payload['data']['list'].append(dict(row)); payload['data']['count'] = 2
-    else: row['VolumeShares'] = 101
+    if fault == 'wrapper':
+        payload['code'] = -1
+    elif fault == 'empty':
+        payload['data']['list'] = []
+    elif fault == 'count':
+        payload['data']['count'] = 2
+    elif fault == 'missing':
+        del row['Open']
+    elif fault == 'price':
+        row['Close'] = 20000
+    elif fault == 'duplicate':
+        payload['data']['list'].append(dict(row))
+        payload['data']['count'] = 2
+    elif fault == 'overflow':
+        row['Amount'] = 10**400
+    else:
+        row['VolumeShares'] = 101
     assert validator(payload)[0] == 'failed'
 
 
