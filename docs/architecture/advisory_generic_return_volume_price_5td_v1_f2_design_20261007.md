@@ -1,6 +1,6 @@
 # Advisory 跨日量价滞后信息买入价格 GP5 v1 F2详细设计
 
-2026-10-07；设计#5658已合入b3a0a612a并自身官方清理22.594秒。研究假设 `GP5-RETURN-VOLUME-LAG-1`，精确九文件源码已本地实现及多轮审核/定向验证，尚无真实新prepare、研究fit或收益结果。当前累计113研究fit＋1旧index；测试fixture拟合不计入研究训练。
+2026-10-07；设计#5658已合入b3a0a612a并自身官方清理22.594秒。研究假设 `GP5-RETURN-VOLUME-LAG-1`的精确九文件源码/多轮审核/9定向/Ruff/L0/F2通过，一次真实prepare、2head fit及四臂评估已结束，当前candidate负、仅停止自身/不激活。累计115研究fit＋1旧index；测试fixture拟合不计入研究训练。SOURCE的PR/合入和自身清理独立处理。
 
 ## Background / Goal
 
@@ -138,3 +138,15 @@ DESIGN-COMPLIANCE-001逐项：①设计完整、SOURCE/模型/上线未完成明
 源码三轮本窗口自审：第一轮核对19/18数学与旧M9可识别性、原KEY/支持/成熟pool及D投影；第二轮数值与纯JSON：先修复diagnostics变更可能导致临时fitted hash失效的顺序，显式无滞后量只UNKNOWN第一项，验证正常缺失/精度下溢/极端量与成本一次/多段洞；第三轮stage和归因：父控制不fit、partial第二次失败、原D/Top6不补、known与UNKNOWN分账及非法action state显式失败。首轮三个pipeline节点因复用fixture漏注册其fitted_packet依赖而未运行，修复后只重跑这三个PASS；三处Ruff问题已修复。后续三个新增边界节点（validation不改权重、价格支持洞、非法state）定向PASS。都是本窗口自审，不冒称外审；实际研究仍0，完整稳定小矩阵/L0另执行。
 
 最终稳定小矩阵9项PASS、Ruff无问题、F2八条/八行/0warnings、diff检查通过；官方nox l0 quality0finding、guardrails0blocking（2非阻断项），不运行整QE/UI/邻接套件。源码与研究尚未合并状态；正式研究只在clean producer与fresh QE三0后启动，旧113研究计数不因测试改变。
+
+## 当前一次研究结果（上述113/未启动均为拟合前快照）
+
+clean producer `8e263673858f2edd38b72429e0aad926fd5591bf`、implementation SHA `42a707dc903ac8c0a9c9e1c6a3e1e0588ac62e351c1b985fee8401327a7dd580`。run `advgp5rvlag_c1869cf9c60177309f17330f`，plan SHA `c1869cf9c60177309f17330ffebe4fe499e734c953331e6710f7d6dcd0910b62`，首次prepare6.469秒：386原D/7720原KEY全保留，7330新三量完整、380暖启/10正常缺源UNKNOWN，0数量编码下溢/未来feature数值解析/SQL/父重fit。没有读新的sealed/holdout或重新选择输入。
+
+2026-10-07T05:38:53.431771及05:38:57.606259 UTC，拟合前/后QE三个公开入口全0；唯一两head fit阶段3.953秒、train至完整评估4.828秒，累计115研究fit＋1旧index。原共同成熟train3684/193D、KEY SHA `ce2e884033d344253561b6f4ebc95ff08f6a3ad15067ab40d270f03d0ee65e20` 与父完全相同；其中3674具新三量、10正常缺失仍保留、未按新信息过滤。validation1586只诊断，mean MSE0.00380347/path pinball0.00607625/lower-tail0.140605，没有用于选点或校准。
+
+80共同完整5TD cohort（原81D另1未结算null）内base/rule/frozen daily/candidate均值129.0145/131.5724/73.6306/57.7266bps；candidate−base/−matched为−71.2879/−15.9040。215已结算TAKE胜率56.2791%，base403/58.3127%、frozen249/56.2249%；known拒买176次/67D，避免亏损44.9896−错过上涨118.3219=known−73.3323bps。UNKNOWN空槽＋2.0444另列，不归模型；总差−71.2879，对账通过。matched known干预98次/53D，非恒等模型。12UNKNOWN、1不可执行、1未结算分别保留；区间/NAV null，不称可投资曲线或收益确认。
+
+model SHA `e2796cd9f3a080c8d6ff759a0b1edd4467f8d3d92417db4da224b04f79c98fe8`，非执行JSON601091bytes；prepared/trained/evaluated stage SHA分别 `920db898311e1aae3916846aa966d7feaeb9e09d47a51b64a4910d2b3335c1c8` / `5bf0df9e3da922ff1dd5c3e183dfcacb6872265948b9695b5761c3ae019fe30d` / `941843e65937b082b9d22ed34466e8b390541a503868e285628b65572dfbefb0`。必要的一次新结果读回核对四stage、两journal、四registry记录、原KEY/known-UNKNOWN归因PASS，没有重fit或重复评估。
+
+新增跨日量价信息在此固定模型/开发窗口未提供价值，只停止此candidate；不把缺失当根因、包alpha不足或全局不可学，不救阈值/seed/window、不回选rule/旧父模型、不给旧负候选补证。没有将此负模型加入production consumer/binding/UI。下一假设必须重新确认不同经济信息或可识别业务目标，不默认在本三量上继续消融搜索。0QE提交/其它模块修改/DB写/激活/服务或他人进程控制；backend无需因这次离线交付重启。
