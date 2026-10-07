@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     ".github/workflows/test.yml",
     "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json"
   ],
