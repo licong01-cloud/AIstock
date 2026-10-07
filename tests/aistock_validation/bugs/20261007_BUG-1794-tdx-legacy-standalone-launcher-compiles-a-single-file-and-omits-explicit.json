@@ -30,12 +30,26 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_start_tdx_go_backend.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tdx-api-main/protocol/model_kline.go",
+      "tdx-api-main/web/start.bat",
+      "tests/aistock_validation/bugs/20261007_BUG-1794-tdx-legacy-standalone-launcher-compiles-a-single-file-and-omits-explicit.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "backend/tests/scripts/test_start_tdx_go_backend.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tdx-api-main/protocol/model_kline.go",
+      "tdx-api-main/web/start.bat",
+      "tests/aistock_validation/bugs/20261007_BUG-1794-tdx-legacy-standalone-launcher-compiles-a-single-file-and-omits-explicit.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/file_ownership.yaml",
@@ -112,19 +126,28 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["Shared BUG-1793 launcher configuration-only fresh process binds explicit existing DEV or production target; this BUG makes the separate legacy entrypoint call that same package launcher. No process control or database writes occur in preparation/tests."],
-    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-09-01&end_date=2026-09-30",
+    "fresh_process_evidence": [
+      "Shared BUG-1793 launcher configuration-only fresh process binds explicit existing DEV or production target; this BUG makes the separate legacy entrypoint call that same package launcher. No process control or database writes occur in preparation/tests.",
+      "Fresh process launcher --check loaded explicit existing DEV configuration on port 19081; no service or database writes performed."
+    ],
     "health_ref": "http://127.0.0.1:19080/api/health",
     "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-09-01&end_date=2026-09-30",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "tdx-go-backend"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "tdx-go-backend",
-    "target_ids": ["tdx-go-backend"]
+    "target_ids": [
+      "tdx-go-backend"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
