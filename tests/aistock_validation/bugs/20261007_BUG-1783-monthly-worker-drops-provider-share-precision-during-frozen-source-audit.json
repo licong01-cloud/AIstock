@@ -1,6 +1,7 @@
 {
   "actual": "Only quantized BIGINT whole-hand volume reaches freeze and transform.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/factor_materializer.py",
     "noxfile.py",
     "backend/services/dataset_release/source_authority.py",
     "backend/services/dataset_release/monthly_frozen_source_audit.py",
@@ -53,6 +54,7 @@
     ],
     "changed_files_source": "git_finish",
     "planned_files": [
+      "backend/services/dataset_release/factor_materializer.py",
       "noxfile.py",
       "backend/services/dataset_release/source_authority.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
@@ -62,6 +64,7 @@
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/dataset_release/factor_materializer.py",
       "noxfile.py",
       "backend/services/dataset_release/source_authority.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",

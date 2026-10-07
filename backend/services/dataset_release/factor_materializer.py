@@ -1323,7 +1323,10 @@ def _build_qfq_daily(
         raise FactorMaterializationError(
             f"daily_raw source schema is incomplete: {sorted(required.difference(daily.columns))}"
         )
-    daily = daily.loc[:, sorted(required)].copy()
+    from .canonical_stock_transformer import PRECISION_FIELDS, raw_volume_shares
+
+    optional = set(PRECISION_FIELDS).intersection(daily.columns)
+    daily = daily.loc[:, sorted(required | optional)].copy()
     daily["ts_code"] = daily["ts_code"].astype(str).str.upper()
     daily["trade_date"] = pd.to_datetime(daily["trade_date"], errors="raise").dt.date
     if daily.duplicated(["ts_code", "trade_date"]).any():
@@ -1411,9 +1414,18 @@ def _build_qfq_daily(
             values[target][positions] = (
                 pd.to_numeric(group[source], errors="raise").to_numpy(dtype=float) / 1000.0 * qfq
             )
-        values["volume"][positions] = (
-            pd.to_numeric(group["volume_hand"], errors="raise").to_numpy(dtype=float) * 100.0 / qfq
-        )
+        share_values = pd.to_numeric(group["volume_hand"], errors="raise").to_numpy(dtype=float) * 100.0
+        # Keep the legacy vectorized path; inspect only supplied precision.
+        # DataFrame NULL cells in mixed precision/legacy rows are not facts.
+        if optional:
+            supplied = group[list(optional)].notna().any(axis=1).to_numpy()
+            for local in np.flatnonzero(supplied):
+                fact = group.iloc[local].to_dict()
+                try:
+                    share_values[local] = raw_volume_shares(fact)
+                except ValueError as exc:
+                    raise FactorMaterializationError(f"daily_raw share precision is invalid: {code}") from exc
+        values["volume"][positions] = share_values / qfq
         values["amount"][positions] = pd.to_numeric(group["amount_li"], errors="raise").to_numpy(dtype=float) / 1000.0
         values["factor"][positions] = qfq
     while current_adj is not None:

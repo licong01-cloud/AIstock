@@ -66,3 +66,24 @@ def test_precise_fields_are_frozen_with_a_new_query_identity(query_id):
         assert field not in spec.non_null_value_columns
         assert f'source_row.{field}' in spec.sql
     assert 'share_precision_v1' in spec.query_version
+
+
+@pytest.mark.parametrize('orphan', [False, True])
+def test_factor_h5_keeps_exact_volume_and_mixed_nullable_legacy_rows(orphan):
+    import pandas as pd
+    from backend.services.dataset_release.factor_materializer import _build_qfq_daily, FactorMaterializationError
+    legacy = {**row(), 'ts_code': '000001.SZ', 'trade_date': '2026-09-01'}
+    exact = {**row(**precision()), 'trade_date': '2026-09-01'}
+    if orphan:
+        exact['volume_shares'] = None
+    raw = pd.DataFrame([legacy, exact])
+    adj = pd.DataFrame([dict(ts_code=c, trade_date='2026-09-01', adj_factor=.5)
+                        for c in ('000001.SZ', '001255.SZ')])
+    args = dict(base_factors={'000001.SZ': 1., '001255.SZ': 1.}, previous_adj_tail=pd.DataFrame())
+    if orphan:
+        with pytest.raises(FactorMaterializationError):
+            _build_qfq_daily(raw, adj, **args)
+    else:
+        actual, _ = _build_qfq_daily(raw, adj, **args)
+        assert actual.loc[(pd.Timestamp('2026-09-01'), '001255.SZ'), 'volume'] == 1850100
+        assert actual.loc[(pd.Timestamp('2026-09-01'), '000001.SZ'), 'volume'] == 1850000
