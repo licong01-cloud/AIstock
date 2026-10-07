@@ -1,15 +1,15 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.73
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.74
 
 > 初始日期：2026-07-10
-> 修订日期：2026-10-07
+> 修订日期：2026-10-08
 
-> 最新长任务主线：[GP5-SELECTION-CONTEXT-1 F2](advisory_generic_selection_context_price_5td_v1_f2_design_20261007.md)设计#5667已合入934d8de0/自身清理；独立七文件producer0d457843、三轮复审/7定向/Ruff/L0/F2通过。run advgp5selctx_6f39d9766917370927c5c778已prepare0.281秒，386D/7720原KEY全保留；07:30:36UTC公开QE为0/1/0，WAITING_QE_NO_FIT，尚无fit_attempt/trained/evaluated，累计115真实fit＋1旧index不变；自己的30min helper只等该冻结唯一2head计划，完成后才117+1。唯一新rank坐标不是绝对Alpha/根因证明，不重排/不读父score或包ID/腿，旧stock-only不改。训练等待只限制自身fit，不阻设计/工程，0公共模块/写库/服务控制/配置或激活。
+> 最新研究结果：[GP5-SELECTION-CONTEXT-1 F2](advisory_generic_selection_context_price_5td_v1_f2_design_20261007.md)设计#5667已合入934d8de0/自身清理；独立七文件producer0d457843、三轮复审/7定向/Ruff/L0/F2通过，源码尚未PR/合入。run advgp5selctx_6f39d9766917370927c5c778已于2026-10-07 13:00:46UTC一次完成，自己的等待helper自然退出；fit前后公开QE三路径均0，唯一2head拟合4.547秒/拟合评估5.375秒，累计117真实研究fit＋1旧index。386D/7720原KEY不删，80完整固定5TD配对cohort中base/frozen GP5/candidate/rule均值129.0145/73.6306/69.4097/131.5724bps，candidate−base/matched为−59.6049/−4.2209bps。已知拒买避免亏损43.2151、错过上涨104.8644、净−61.6492bps；UNKNOWN空槽+2.0444另列不归模型，1组未结算保留null。仅描述重叠cohort，不是NAV、独立确认或QE无Alpha证明；economic_confirmation/deployable=false，仅停止当前候选，不调参重跑或自动激活。后续主线为日频买价API及独立剩余净价值Exit标签审计，旧stock-only与模块边界不改。
 
-> 本轮必要后续设计：[通用固定5TD日频买价API F2](advisory_generic_daily_price_api_5td_v1_f2_design_20261007.md)与[固定5TD剩余净价值卖价F2](advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md)独立角色已完成多视角详细设计。前者只读原发布名单/九字段/原raw tick映射、同核单日与批量，不继承旧M1腿/五review，不自动模型绑定；源实施等BUG/DB依赖分别交付，UI不前置。后者先新标签与固定past-only审计，S收盘后下一合法U卖价vs原E=T+4继续，T+1/沉没成本/episode聚类明确；当前0新Exit fit或模型，非最佳分钟点。设计通过不等于源码/运行/经济完成。
+> 本轮必要业务主线：[通用固定5TD日频买价API F2](advisory_generic_daily_price_api_5td_v1_f2_design_20261007.md)与[固定5TD剩余净价值卖价F2](advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md)独立角色设计#5674已合入1dc3ad9d/自身清理。买价精确九文件源码已本地实现，多轮复核/40定向/Ruff/F2通过；原发布名单→D九字段→D可见raw法律坐标→显式模型→价集，单日/批量同核，不继承M1腿/五review。8月27/28日真实只读两日80已排名候选及16未排名WAITING完整保留，60可接受价集/20支持不足、80法律坐标可用；市场宽度UNKNOWN不补填，22 SELECT=原名单身份16+九字段3+法律坐标3，0训练/收益读取/DB写/模型激活。此为task-owned短进程显式本地未合入BUG/DB依赖的服务层验证，API尚未合入/生产HTTP未验证，不捆绑依赖，UI不前置。Exit随后做新标签与固定past-only审计：S收盘后下一合法U卖价vs原E=T+4继续，T+1/沉没成本/episode聚类明确；已完成目标自由几何（1500日期成熟shadow episode/6000合法决策KEY，25边界未结算保留），当前0新Exit fit或模型，非最佳分钟点。源码/服务层可用与经济确认/运行激活分别报告。
 
 > 前轮已结束研究：[GP5-RETURN-VOLUME-LAG-1 F2](advisory_generic_return_volume_price_5td_v1_f2_design_20261007.md)设计#5658已合入b3a0a612a并自身清理。独立九文件源码三轮修复/9定向/Ruff/L0/F2通过，run advgp5rvlag_c1869cf9c60177309f17330f已首次prepare6.469秒/386D7720全保留、QE三入口拟合前后全0、唯一两head fit3.953秒/至完整四臂4.828秒。80共同完整5TD cohort candidate−base/−frozen daily为−71.2879/−15.9040bps；known拒买避免亏损44.9896、错过上涨118.3219、净−73.3323，UNKNOWN空槽＋2.0444另列。仅停止此candidate，不调阈值/seed/window、回选control或重跑，当前真实累计115研究fit＋1旧index；源码PR #5660/currentCI37578132818 SUCCESS已合入a599381703，自身官方cleanup23.031秒/0blocking/warnings，正式F产物保留。joint/ordered旧负结果不改判、不补证；下一主线必须先定义不同经济信息或可识别业务目标，不继续本块同族消融。0QE提交/DB写/其它模块修改/服务控制/激活，UI与BUG-1778公共分类不阻冻结来源研究。
 
-> 当前工程辅线：[九字段DB输入F1](advisory_generic_daily_db_input_v1_f1_design_20261007.md)设计#5644已合入51542a1dc/自身清理。独立DB源码已本地实现并通过8项定向/Ruff/L0/F1、实际只读单日20候选及20D400候选批量；批三SELECT7.141秒、0收益读取/fit/写库/激活。依赖BUG-1778整列None比较异常的独立修复28项通过，但公共交付分类仍待处理，Issue #5645 OPEN，源码未PR/合入；DB也未PR/合入，不将本地依赖打包为大PR，不改公共workflow/QE。该交付辅线不阻新离线研究。当前研究累计115fit+1旧index，新selection-context研究正在等QE，不把该等待与BUG/DB交付依赖混同，不将工程配置/公共分类问题当模型收益失败根因。
+> 当前工程辅线：[九字段DB输入F1](advisory_generic_daily_db_input_v1_f1_design_20261007.md)设计#5644已合入51542a1dc/自身清理。独立DB源码已本地实现并通过8项定向/Ruff/L0/F1、实际只读单日20候选及20D400候选批量；批三SELECT7.141秒、0收益读取/fit/写库/激活。依赖BUG-1778整列None比较异常的独立修复28项通过，但2026-10-08接续时公共交付合同仍待处理，Issue #5645 OPEN，源码未PR/合入；DB也未PR/合入，不将本地依赖打包为大PR，不改公共workflow/QE。该交付依赖只暂停相关公开合入，不阻本地API开发或新Exit审计；当前117fit+1旧index，无在运行的本窗口研究，不把公共依赖当模型收益失败根因。
 
 > 已交付工程：[固定5TD纯价集消费者F1](advisory_generic_price_set_consumer_v1_f1_design_20261007.md)设计#5637与源码#5641已合入a10b571a8/a3a260e5，各自官方清理完成；四family显式模型标准投影，原候选/缺失不删、不重训、不读父alpha，原数学/政策不改。四family的真实权重已各一次只读装载通过（新增joint纯装载0fit/收益读取），源码功能与收益、DB/API接入分别报告，不冒称已接入生产或有盈利。UI不作为主线前置。
 

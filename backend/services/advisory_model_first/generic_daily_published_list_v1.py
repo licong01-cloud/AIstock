@@ -28,13 +28,13 @@ def _population(version, items, run):
                 or rank is not None and (type(rank) is not int or rank < 1)):
             _fail("generic original list has foreign items, duplicate symbols or invalid actions/ranks")
         symbols.add(symbol)
-        if rank is None and action not in {"HOLD", "EXIT"}:
+        if rank is None and action == "ENTER":
             _fail("generic published entry item lost its original rank")
         declared_run = (item.get("evidence_json") or {}).get("source_run_id")
         if declared_run is not None and declared_run != run.run_id:
             _fail("generic original item refers to a different source run")
         if action == "EXIT" or rank is None:
-            other.append(dict(item))
+            other.append({**item, "unmodeled_reason": "ORIGINAL_EXIT" if action == "EXIT" else "NO_PUBLISHED_ENTRY_RANK"})
             continue
         original = by_symbol.get(symbol)
         if original is None or item.get("score") != original.score:

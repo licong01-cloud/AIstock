@@ -34,6 +34,16 @@ def test_original_empty_and_exit_items_remain_explicit(original, monkeypatch):
     assert len(output["candidate_receipt"]["unmodeled_items"]) == 30
 
 
+def test_normal_unranked_waiting_is_preserved_without_rank_fabrication(original, monkeypatch):
+    waiting = {**deepcopy(original.items[-1]), "symbol": "600999.SH", "rank": None, "action": "WAITING"}
+    original.items.append(waiting)
+    output = load(original, monkeypatch)
+    assert len(output["packet"]["candidates"]) == 30
+    assert output["candidate_receipt"]["original_items"][-1] == waiting
+    assert output["candidate_receipt"]["unmodeled_items"][0]["rank"] is None
+    assert output["candidate_receipt"]["unmodeled_items"][0]["unmodeled_reason"] == "NO_PUBLISHED_ENTRY_RANK"
+
+
 @pytest.mark.parametrize("change", ["duplicate", "gap", "missing_rank", "foreign_run", "pool_conflict"])
 def test_foreign_or_incomplete_original_data_fails(original, monkeypatch, change):
     if change == "duplicate":
