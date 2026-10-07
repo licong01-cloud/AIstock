@@ -81,16 +81,34 @@ def read_rows(conn, keys):
         cur.execute("SET LOCAL statement_timeout='45s'")
         for offset in range(0, len(keys), 200):
             batch = keys[offset:offset+200]
-            cur.execute("""SELECT d.* FROM market.kline_daily_raw d
+            start = min(k[1] for k in batch).isoformat()
+            end = max(k[1] for k in batch).isoformat()
+            # Validated date objects rendered as constants allow Timescale
+            # partition pruning; the exact symbol/date join remains mandatory.
+            cur.execute(f"""SELECT d.* FROM market.kline_daily_raw d
                         JOIN unnest(%s::text[],%s::date[]) k(code,day)
                           ON d.ts_code=k.code AND d.trade_date=k.day
-                        WHERE d.adjust_type='none'""", ([k[0] for k in batch], [k[1] for k in batch]))
+                        WHERE d.adjust_type='none'
+                          AND d.trade_date BETWEEN DATE '{start}' AND DATE '{end}'""", ([k[0] for k in batch], [k[1] for k in batch]))
             for row in cur.fetchall():
                 key = (row['ts_code'], row['trade_date'])
                 if key in result:
                     raise ValueError('duplicate raw daily row')
                 result[key] = dict(row)
     return result
+
+
+def apply_precision_patches(cur, patches):
+    start = min(p[0] for p in patches).isoformat()
+    end = max(p[0] for p in patches).isoformat()
+    return execute_values(cur, f"""UPDATE market.kline_daily_raw t
+        SET volume_shares=v.shares,volume_shares_source='tushare_daily',volume_shares_sha256=v.pin
+        FROM (VALUES %s) v(day,code,shares,pin,hands)
+        WHERE t.trade_date=v.day AND t.ts_code=v.code AND t.adjust_type='none'
+          AND t.trade_date BETWEEN DATE '{start}' AND DATE '{end}'
+          AND t.volume_hand=v.hands AND t.volume_shares IS NULL
+          AND t.volume_shares_source IS NULL AND t.volume_shares_sha256 IS NULL
+        RETURNING t.ts_code,t.trade_date""", patches, page_size=200, fetch=True)
 
 
 def run(args):
@@ -150,13 +168,7 @@ def run(args):
             patches.append((key[1], key[0], shares, pin, row['volume_hand']))
         if args.apply and patches:
             with conn.cursor() as cur:
-                changed = execute_values(cur, """UPDATE market.kline_daily_raw t
-                    SET volume_shares=v.shares,volume_shares_source='tushare_daily',volume_shares_sha256=v.pin
-                    FROM (VALUES %s) v(day,code,shares,pin,hands)
-                    WHERE t.trade_date=v.day AND t.ts_code=v.code AND t.adjust_type='none'
-                      AND t.volume_hand=v.hands AND t.volume_shares IS NULL
-                      AND t.volume_shares_source IS NULL AND t.volume_shares_sha256 IS NULL
-                    RETURNING t.ts_code,t.trade_date""", patches, page_size=200, fetch=True)
+                changed = apply_precision_patches(cur, patches)
                 if len(changed) != len(patches):
                     raise ValueError('NULL-only precision CAS affected-row mismatch')
         after = read_rows(conn, keys)

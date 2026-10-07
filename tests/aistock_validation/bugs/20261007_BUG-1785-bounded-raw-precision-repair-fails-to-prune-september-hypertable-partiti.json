@@ -23,7 +23,14 @@
       "timestamp": "2026-10-07T07:23:04.625208Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": ["X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1785-dev-precision-update-validation.json"],
+  "review_readback": {
+    "red": "Two regression tests fail on missing readback constant range and missing bounded UPDATE helper.",
+    "green": "Eight targeted tests PASS, Ruff PASS, diff check PASS.",
+    "round_1": "Partition date constants are rendered only from validated Python date objects; exact key joins and NULL-only CAS preserved; no higher timeout or wider target.",
+    "round_2": "DEV exercised actual 1288-row UPDATE and exact old/precision readback, transaction rolled back; fresh connection unchanged. Completed in 2.063 seconds with existing 45-second timeout.",
+    "design_compliance": "Four DESIGN-COMPLIANCE-001 checks PASS; no data readiness inferred from source fix."
+  },
   "expected": "One-month exact-key repair prunes unrelated chunks and applies within statement timeout",
   "file_scope_contract": {
     "added_files": [],
