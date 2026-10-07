@@ -5,6 +5,34 @@ import json
 import pytest
 
 from scripts.backfill_raw_volume_precision import load_facts, SCHEMA
+from scripts import backfill_raw_volume_precision as repair
+
+
+def test_raw_readback_has_explicit_partition_bounds():
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cur = conn.cursor.return_value.__enter__.return_value
+    cur.fetchall.return_value = []
+    repair.read_rows(conn, [('001255.SZ',date(2026,9,1)),('688582.SH',date(2026,9,3))])
+    query, args = cur.execute.call_args.args
+    assert "d.trade_date BETWEEN DATE '2026-09-01' AND DATE '2026-09-03'" in query
+    assert args[1] == [date(2026,9,1),date(2026,9,3)]
+
+
+def test_precision_cas_keeps_exact_keys_with_month_partition_bounds(monkeypatch):
+    captured = []
+    patches = [(date(2026,9,1),'001255.SZ',925050,'a'*64,9250)]
+    def execute(cur,sql,values,**kwargs):
+        captured.append((sql,values,kwargs))
+        return [('001255.SZ',date(2026,9,1))]
+    monkeypatch.setattr(repair,'execute_values',execute)
+    assert repair.apply_precision_patches(object(),patches) == [('001255.SZ',date(2026,9,1))]
+    sql, values, kwargs = captured[0]
+    assert "t.trade_date BETWEEN DATE '2026-09-01' AND DATE '2026-09-01'" in sql
+    assert 't.trade_date=v.day AND t.ts_code=v.code' in sql
+    assert 't.volume_hand=v.hands AND t.volume_shares IS NULL' in sql
+    assert 't.volume_shares_source IS NULL AND t.volume_shares_sha256 IS NULL' in sql
+    assert values == patches and kwargs['fetch']
 
 
 def manifest(tmp_path, *, vol=9250.5):
