@@ -23,22 +23,23 @@
       "timestamp": "2026-10-07T07:23:04.625208Z"
     }
   ],
-  "evidence_uris": ["X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1785-dev-precision-update-validation.json"],
-  "review_readback": {
-    "red": "Two regression tests fail on missing readback constant range and missing bounded UPDATE helper.",
-    "green": "Eight targeted tests PASS, Ruff PASS, diff check PASS.",
-    "round_1": "Partition date constants are rendered only from validated Python date objects; exact key joins and NULL-only CAS preserved; no higher timeout or wider target.",
-    "round_2": "DEV exercised actual 1288-row UPDATE and exact old/precision readback, transaction rolled back; fresh connection unchanged. Completed in 2.063 seconds with existing 45-second timeout.",
-    "design_compliance": "Four DESIGN-COMPLIANCE-001 checks PASS; no data readiness inferred from source fix."
-  },
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1785-dev-precision-update-validation.json"
+  ],
   "expected": "One-month exact-key repair prunes unrelated chunks and applies within statement timeout",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_backfill_raw_volume_precision.py",
+      "scripts/backfill_raw_volume_precision.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1785-bounded-raw-precision-repair-fails-to-prune-september-hypertable-partiti.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_backfill_raw_volume_precision.py",
       "scripts/backfill_raw_volume_precision.py",
-      "backend/tests/scripts/test_backfill_raw_volume_precision.py"
+      "tests/aistock_validation/bugs/20261007_BUG-1785-bounded-raw-precision-repair-fails-to-prune-september-hypertable-partiti.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/backfill_raw_volume_precision.py",
@@ -107,14 +108,23 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_readback": {
+    "design_compliance": "Four DESIGN-COMPLIANCE-001 checks PASS; no data readiness inferred from source fix.",
+    "green": "Eight targeted tests PASS, Ruff PASS, diff check PASS.",
+    "red": "Two regression tests fail on missing readback constant range and missing bounded UPDATE helper.",
+    "round_1": "Partition date constants are rendered only from validated Python date objects; exact key joins and NULL-only CAS preserved; no higher timeout or wider target.",
+    "round_2": "DEV exercised actual 1288-row UPDATE and exact old/precision readback, transaction rolled back; fresh connection unchanged. Completed in 2.063 seconds with existing 45-second timeout."
+  },
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
