@@ -33,6 +33,7 @@
       "backend/data_service/tdx_adapter.py",
       "backend/ingestion/tdx_scheduler.py",
       "backend/tests/ingestion/test_tdx_go_integrity.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "noxfile.py",
       "tests/aistock_validation/bugs/20261007_BUG-1790-tdx-scheduler-ignores-bounded-repair-dates-and-accepts-missing-task-iden.json"
     ],
@@ -43,6 +44,7 @@
       "backend/data_service/tdx_adapter.py",
       "backend/ingestion/tdx_scheduler.py",
       "backend/tests/ingestion/test_tdx_go_integrity.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "noxfile.py",
       "tests/aistock_validation/bugs/20261007_BUG-1790-tdx-scheduler-ignores-bounded-repair-dates-and-accepts-missing-task-iden.json"
     ],
@@ -118,8 +120,8 @@
   },
   "first_seen_at": "2026-10-07T18:44:00.867917Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "afe7c5464bd677124c230e4a96b3c5262795abcb",
+  "fixed_at": "2026-10-07T19:42:27Z",
   "github_issue_number": 5680,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5680",
   "last_seen_at": "2026-10-07T18:44:00.867917Z",
@@ -127,6 +129,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5689",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -152,6 +155,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -163,7 +167,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1790",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "22f04e76bbb9daad",
+    "recorded_at": "2026-10-07T19:43:00.022413Z",
+    "runtime_contract_digest": "a9003e5a49ae97be67ad969ba79dee4cec86a5ab9e891e87188ce67737c97f8c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c83300a317f847ea6bc0705f76250ac9e793b09c",
+    "source_merge_commit": "afe7c5464bd677124c230e4a96b3c5262795abcb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5689",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/data_service/tdx_adapter.py backend/tests/ingestion/test_tdx_go_integrity.py noxfile.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+      "python -m nox -s validation_catalog_integrity -> passed",
+      "python -m pytest backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/simulation_data/test_tdx_causal_minute.py -q -> 10 passed",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k tdx_raw -q -> 8 passed"
+    ],
+    "validation_evidence_digest": "bddb0f30a086b188f29e1ac3db0a97d7da937260d2c56d8741512bd37a5a6f34"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -172,6 +200,12 @@
     "fingerprint": "fbca7dfc0de34d921434093b",
     "source_event_id": "FE-20261007-fbca7dfc0de3"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/data_service/tdx_adapter.py backend/tests/ingestion/test_tdx_go_integrity.py noxfile.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed",
+    "python -m pytest backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/simulation_data/test_tdx_causal_minute.py -q -> 10 passed",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k tdx_raw -q -> 8 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
