@@ -145,6 +145,35 @@ def _etf_share_size_publication_quality(
         "quality_status": "low_coverage",
         "failure_category": "required_source_field_unpublished",
     }
+
+
+def _stk_limit_publication_quality(
+    rows: List[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Observe this fetched batch, without inventing a stock coverage threshold.
+
+    Individual suspended/unlimited securities may have provider NULLs. A
+    nonempty market batch with no positive pre_close, however, cannot prove
+    publication of the field required by the existing monthly source contract.
+    """
+    positive_count = sum(
+        _is_finite_number(row.get("pre_close")) and float(row["pre_close"]) > 0
+        for row in rows
+    )
+    receipt = {
+        "schema_version": "stk_limit_publication_quality_v1",
+        "scope": "fetched_batch_only",
+        "row_count": len(rows),
+        "pre_close_positive_count": positive_count,
+    }
+    if positive_count:
+        return receipt, {"quality_status": "ok"}
+    return receipt, {
+        "quality_status": "low_coverage",
+        "failure_category": "required_source_field_unpublished",
+    }
+
+
 _logger = logging.getLogger(__name__)
 
 _DIVIDEND_ECONOMIC_COLUMNS = (
@@ -286,7 +315,7 @@ def _query_tushare_dataapi(
     data = result.get("data") or {}
     columns = list(data.get("fields") or [])
     items = data.get("items") or []
-    if api_name == "daily_basic" and items:
+    if api_name in {"daily_basic", "stk_limit"} and items:
         # An omitted column is not an explicitly returned provider NULL.
         # Validate before zip/row.get can fabricate NULLs that the ordinary
         # upsert would write over existing facts. Other API contracts stay
@@ -300,7 +329,7 @@ def _query_tushare_dataapi(
             or not isinstance(items, list)
             or any(not isinstance(item, (list, tuple)) or len(item) != len(columns) for item in items)
         ):
-            raise TushareHttpError("daily_basic response schema differs from requested fields or row width")
+            raise TushareHttpError(f"{api_name} response schema differs from requested fields or row width")
     return [dict(zip(columns, item)) for item in items]
 
 
@@ -1246,6 +1275,13 @@ class TushareSyncEngine:
                 if spec.name == "etf_share_size":
                     publication_quality, audit_quality = _etf_share_size_publication_quality(rows)
                     audit_metadata["publication_quality"] = publication_quality
+                if spec.name == "stk_limit":
+                    publication_quality, field_quality = _stk_limit_publication_quality(rows)
+                    audit_metadata["publication_quality"] = publication_quality
+                    # Do not downgrade an existing partial-row coverage failure
+                    # to ok merely because one pre_close is published.
+                    if field_quality["quality_status"] != "ok":
+                        audit_quality.update(field_quality)
                 if spec.name == "daily_basic":
                     # BUG-1425: persist the required-field coverage receipt so
                     # the freshness gate can prove turnover_rate_f coverage
