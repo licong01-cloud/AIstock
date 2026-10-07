@@ -177,7 +177,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
     "fresh_process_evidence": [
       "WSL rdagent-gpu isolated Python, CUDA_VISIBLE_DEVICES empty, loaded actual TCN_10D_d02 frozen params: model_expected_features=44, fitted_feature_order=44, fitted_preprocessor_count=2; no training or service control",
-      "WSL fresh process loaded actual trained TCN_10D_d02 params: input_features=44, fitted_preprocessor_count=2, CPU only no training or DB writes"
+      "WSL fresh process loaded actual trained TCN_10D_d02 params: input_features=44, fitted_preprocessor_count=2, CPU only no training or DB writes",
+      "WSL isolated CPU fresh-process probe loaded actual TCN weights with 44 input features and 2 fitted preprocessors; no training or database writes"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
