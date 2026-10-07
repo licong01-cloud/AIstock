@@ -154,6 +154,9 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 		k := &Kline{
 			Time: GetTime([4]byte(bs[:4]), c.Type),
 		}
+		if !validWireTime(bs[:4], c.Type, k.Time) {
+			return nil, fmt.Errorf("kline %d: invalid exchange timestamp", i)
+		}
 
 		bs = bs[4:]
 		values := [4]Price{}
@@ -201,7 +204,7 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 		bs = bs[4:]
 		switch c.Type {
 		case TypeKlineMinute, TypeKline5Minute, TypeKlineMinute2, TypeKline15Minute, TypeKline30Minute, TypeKline60Minute, TypeKlineDay2:
-			if c.Kind == KindStock {
+			if c.Kind == KindStock && !(volume == 0 && amount > 0) {
 				shares := int64(volume)
 				k.VolumeShares = &shares
 			}
@@ -231,6 +234,17 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 }
 
 func isFinite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+func validWireTime(bs []byte, typ uint8, t time.Time) bool {
+	switch typ {
+	case TypeKlineMinute, TypeKlineMinute2, TypeKline5Minute, TypeKline15Minute, TypeKline30Minute, TypeKline60Minute:
+		d, m := Uint16(bs[:2]), Uint16(bs[2:4])
+		return m < 1440 && t.Year() == int(d>>11)+2004 && int(t.Month()) == int(d%2048/100) && t.Day() == int(d%2048%100)
+	default:
+		d := Uint32(bs)
+		return t.Year() == int(d/10000) && int(t.Month()) == int(d%10000/100) && t.Day() == int(d%100)
+	}
+}
 
 var ExchangeLocation = time.FixedZone("Asia/Shanghai", 8*3600)
 

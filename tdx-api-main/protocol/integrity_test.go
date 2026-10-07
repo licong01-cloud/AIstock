@@ -60,6 +60,32 @@ func TestMinuteWirePreservesOddSharesAndAmounts(t *testing.T) {
 	}
 }
 
+func TestProviderZeroVolumeWithPositiveAmountIsNotExactZeroShares(t *testing.T) {
+	r, err := MKline.Decode(minuteFixture(0, 13), KlineCache{Type: TypeKlineMinute, Kind: KindStock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.List[0].VolumeShares != nil {
+		t.Fatal("upstream lost odd-lot volume was certified as exact zero shares")
+	}
+}
+
+func TestInvalidWireDateCannotRollIntoAnotherDay(t *testing.T) {
+	for _, minute := range []bool{true, false} {
+		b := minuteFixture(1, 13)
+		typ := TypeKlineMinute
+		if minute {
+			binary.LittleEndian.PutUint16(b[2:4], uint16((2026-2004)*2048+931))
+		} else {
+			typ = TypeKlineDay
+			binary.LittleEndian.PutUint32(b[2:6], 20260931)
+		}
+		if _, err := MKline.Decode(b, KlineCache{Type: typ, Kind: KindStock}); err == nil {
+			t.Fatal("invalid September 31 normalized into October")
+		}
+	}
+}
+
 func TestIntradayHeaderAndCumulativePrice(t *testing.T) {
 	b := []byte{2, 0, 0, 0, 0xa4, 0x13, 0, 1, 1, 0, 2} // 1252 cents, then +1 cent.
 	r, err := MMinute.Decode(b)

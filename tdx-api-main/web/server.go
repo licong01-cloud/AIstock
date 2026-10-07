@@ -49,7 +49,10 @@ func bootstrapMarket() {
 		manager = m
 		tdx.DefaultCodes = m.Codes
 		metadataReady.Store(true)
-		m.Cron.Start()
+		// Isolated validation must not schedule unrelated collection dates.
+		if os.Getenv("TDX_RUNTIME_ENV") != "dev" {
+			m.Cron.Start()
+		}
 	}()
 }
 
