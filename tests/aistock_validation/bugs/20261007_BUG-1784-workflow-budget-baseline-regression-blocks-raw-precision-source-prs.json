@@ -2,6 +2,7 @@
   "actual": "0.30013739307716175 exceeds 0.30 on clean main and PRs 5662/5663.",
   "allowed_write_scope": [
     "backend/tests/scripts/test_aistock_validation_budget.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
     "tests/aistock_validation/bugs/20261007_BUG-1784-workflow-budget-baseline-regression-blocks-raw-precision-source-prs.json"
   ],
   "assigned_agent": null,
@@ -60,11 +61,13 @@
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/tests/scripts/test_aistock_validation_budget.py"
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/tests/scripts/test_aistock_validation_budget.py"
+      "backend/tests/scripts/test_aistock_validation_budget.py",
+      "backend/tests/scripts/test_code_intelligence_adapter.py"
     ]
   },
   "first_seen_at": "2026-10-07T06:49:37.899412Z",
