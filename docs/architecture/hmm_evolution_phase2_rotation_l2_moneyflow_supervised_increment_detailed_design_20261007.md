@@ -3,7 +3,7 @@
 > 版本：v1.0；日期：2026-10-07；owner：HMM；tier：F2。
 > 状态：APPROVED_BY_USER_IMPLEMENTATION_IN_PROGRESS。用户明确批准D1～D6、源码实施、审修通过后的提交合入，以及合入后双fresh-process共2fit；另明确批准仅在既有`aistock_dev`进行事务回滚式迁移及写入/回读验证，已完成并全部回滚。本轮补充授权源码审修、全绿后合入及本任务worktree/local branch/remote branch精确清理；本轮只交付源码，不启动正式训练。tail、持久化数据库写入、production DDL/DML、runtime activation、依赖及进程控制未授权。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md`当前L2主线；直接基线：`hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md` v1.6。本文只展开“已有L2资金流成果的单一模型增量”，不替代C-010/A5二十维正式HMM合同。
-> review base：`81d43fe8202f9e09e43f62f7cf5adad157ca7622`。P1产品状态文档PR #5653仍OPEN；本提案不将它标为已合入，不改其两个文件。
+> 初始review base：`81d43fe8202f9e09e43f62f7cf5adad157ca7622`。该时点P1产品状态文档PR #5653为OPEN；本提案不将该快照外推为实时PR状态，不改其两个文件。
 
 ## 1. Background、目标与范围
 
@@ -213,7 +213,7 @@ F-001=D1正式文件输入及人口；F-002=D2特征/标签；F-003=D3固定训�
 
 设计提交`4f9767282`阶段F2检查实际PASS：6项索引/6行矩阵、warnings=0。严格UTF-8解码通过、replacement character为false；新文件用`git diff --no-index --check -- NUL <本文件>`检查无空白错误，普通`git diff --check`也通过。Git提示LF将按仓库配置转换CRLF是格式提示，不当作业务结果。该阶段只有本文件新增，模型/数据/tail/DB/process零操作；此历史PASS不能替代当前源码验收。
 
-F2 validator只核文档结构和验收索引，不等同用户批准、源码审核或正式模型验收。D1～D6状态为APPROVED_BY_USER；源码实施中，未创建PR、未合入、正式fit=0。实施方案和验收矩阵是唯一任务进度入口，不另建历史证据档案。
+F2 validator只核文档结构和验收索引，不等同用户批准、源码审核或正式模型验收。D1～D6状态为APPROVED_BY_USER；源码已实现，正式fit=0，真实新run产品验收未执行。提交、PR、CI、合入及清理的实时状态以本功能PR/Git为准，下面保存源码提交阶段的验证结论；不在正文预报尚未完成的合入。实施方案和验收矩阵是唯一任务进度入口，不另建历史证据档案。
 
 ### 12.1 源码实施与当前审核状态（2026-10-07）
 
@@ -221,9 +221,9 @@ F2 validator只核文档结构和验收索引，不等同用户批准、源码�
 
 最终第三轮作者审核修正三项阻断finding：新版available行必须同时满足structural/feature资格，unavailable行不得声称feature资格；run/child在数据集输出路径被拒绝后不得再写失败收据；产品reader和acceptance不得仅靠重算hash接受错误长度系数或布尔截距。对应7项新增用例修复前全部RED、修复后7 passed。共用参数校验避免复制数值合同；输出位置未获完整授权时只报告typed stderr，不向受保护目录写任何文件。再次核对D1～D6、旧baseline数值/hash、模型2fit及零fit旧分支、合法NA、无tail、无生产写入、无额外门禁，未发现剩余源码阻断；PR CI仍需通过才合入。这是作者多轮审修，不冒称独立外部审核或真实新模型验收。
 
-实际验证：新模型定向17 passed；最终`python -m nox -s hmm_risk_pr_slice -- <新模型、rotation_l2、input、prediction、API、isolation、schema、security_identity八个直接测试文件>`为91 passed（两条既存Pydantic warning）；registry为8 passed；L0 blocking=0；Ruff、py_compile、diff检查及fresh-process router/health/HMM import通过。变更的三份HMM TS/TSX strict type check通过，无emit/依赖安装；ESLint退出0，但有独立worktree依赖解析警告。Playwright本地未运行：不安装依赖或控制用户服务，交由本PR CI执行，不能写成已经通过。Nox采用原生命令取得精确门禁输出；pytest/git/ruff使用RTK。
+前两轮实际验证：新模型定向17 passed；HMM八个直接测试文件91 passed（两条既存Pydantic warning）；registry为8 passed；L0 blocking=0；Ruff、py_compile、diff检查及fresh-process router/health/HMM import通过。变更的三份HMM TS/TSX strict type check通过，无emit/依赖安装；ESLint退出0，但有独立worktree依赖解析警告。最终源码提交`18a3376d5`保存全部11文件，干净状态同步main后HEAD为`5a9451216c34cbe5f3c0d172fd36059548e3e010`；重新运行同一八文件HMM slice为98 passed、1 skipped（DEV专项默认跳过）、两条既存Pydantic warning，registry 8 passed、L0 blocking=0，fresh-process router/health/HMM完整导入通过。首次slice命令误写不存在的test_api.py，未运行测试；校正为test_rotation_l2_api.py后的上述结果才是有效证据。DEV专项再次1 passed且全部回滚。Playwright本地未运行：不安装依赖或控制用户服务，交由本PR CI执行，不能写成已经通过。Nox无RTK专用wrapper，采用原生命令；pytest/git/ruff使用RTK。
 
-所有实际变更归HMM-owned路径及本文，ownership无未映射文件，所需plan为l0、validation_catalog_integrity、hmm_risk_pr_slice、hmm_risk_ui。runtime impact=backend，target_ids=[backend-main]，catalog_error=null；新模型的runtime生效仍等待用户重启后核验，不影响独立离线训练。当前main安全同步已完成一次；分支仍保留实施修改，提交前再按流程安全同步。除单独授权的DEV回滚验证外，没有正式数据preflight、正式fit、持久化数据库变更、tail、activation、服务控制或cleanup。
+业务变更仅限HMM及本文；ownership无未映射文件，所需plan为l0、validation_catalog_integrity、hmm_risk_pr_slice、hmm_risk_ui。迁移路径由通用platform.db规则匹配，SQL实际仅扩展HMM自有表的三个CHECK，不操作其他模块表或数据；不能把目录匹配称为HMM专用ownership规则。runtime impact=backend，target_ids=[backend-main]，catalog_error=null；新模型的runtime生效仍等待用户重启后核验，不影响独立离线训练。main已在干净提交后安全同步，origin/main...HEAD仍只有上述11个文件。除单独授权的DEV回滚验证外，没有正式数据preflight、正式fit、持久化数据库变更、tail、activation或服务控制；源码清理只按本轮精确授权在实际合入后执行。
 
 DEV验证前F2曾为FAIL：F-005待授权，未覆盖或伪造此历史结果。2026-10-07用户明确补充仅既有`aistock_dev`事务回滚式迁移及写入/回读验证授权后，实际命令为（只在本次测试进程设置授权开关，不绑定业务runtime或实验记录）：
 
@@ -236,7 +236,7 @@ python -m pytest backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py
 
 回滚验证后的定向默认测试为17 passed、1 skipped（DEV测试未获本次进程开关时跳过）；F2实际PASS、6项索引/6行矩阵、warnings=0；Ruff check/format、py_compile、git diff --check通过；L0 blocking=0。L0的4条MEDIUM均为前端测试fixture内JSON匹配的RAW_JSON_UI提示，不是产品页面原始JSON展示；未将非阻断扫描提示写成不存在。上述结果不替代尚未运行的前端CI或真实新run产品验收。
 
-源码实施仍在当前独立worktree，尚未提交实施commit、创建实现PR、合入或开始正式训练。DEV回滚验证不等同正式模型数据、真实API/UI、持久化DDL/DML或生产完成；提交前仍须最终源码审修、安全同步main、源码门禁及CI。
+源码实施已提交并安全同步main，多轮作者审修及本地源码门禁通过，下一步创建功能PR并等待CI。DEV回滚验证不等同正式模型数据、真实API/UI、持久化DDL/DML或生产完成；源码合入以全绿CI和实时PR状态为准。本轮不启动正式训练。
 
 ## 13. 技术依据
 
