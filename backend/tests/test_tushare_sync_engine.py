@@ -1186,6 +1186,57 @@ def test_daily_basic_schema_failure_retries_and_never_returns_fabricated_null(mo
     assert len(calls) == 3
 
 
+def test_stk_limit_rejects_omitted_pre_close_before_normalization(monkeypatch):
+    monkeypatch.setattr(sync_engine, "_http_post", lambda *_: _FakeHttpResponse(
+        200, {"code": 0, "data": {"fields": ["ts_code", "trade_date", "up_limit", "down_limit"],
+                                  "items": [["000001.SZ", "20260901", 11, 9]]}},
+    ))
+    with pytest.raises(sync_engine.TushareHttpError, match="stk_limit response schema"):
+        sync_engine._query_tushare_dataapi("stk_limit", {}, "ts_code,trade_date,pre_close,up_limit,down_limit", token="t")
+
+
+@pytest.mark.parametrize("value", [None, "NaN", float("inf"), 0, -1, True])
+def test_stk_limit_entire_pre_close_unpublished_is_retryable(value):
+    receipt, quality = sync_engine._stk_limit_publication_quality([
+        {"pre_close": value, "up_limit": 11, "down_limit": 9},
+    ])
+    assert quality == {"quality_status": "low_coverage", "failure_category": "required_source_field_unpublished"}
+    assert receipt["pre_close_positive_count"] == 0
+    assert receipt["scope"] == "fetched_batch_only"
+
+
+def test_stk_limit_keeps_individual_provider_nulls_without_percent_gate():
+    rows = [{"pre_close": None, "up_limit": None, "down_limit": None}] * 99
+    rows += [{"pre_close": "10.01", "up_limit": 11, "down_limit": 9}]
+    receipt, quality = sync_engine._stk_limit_publication_quality(rows)
+    assert receipt["row_count"] == 100
+    assert receipt["pre_close_positive_count"] == 1
+    assert quality == {"quality_status": "ok"}
+    assert rows[0]["pre_close"] is None
+
+
+@pytest.mark.parametrize("pre_close,min_expected,expected_failure", [
+    (None, None, "required_source_field_unpublished"),
+    (10, 2, "low_coverage"),
+])
+def test_stk_limit_sync_records_unpublished_field_as_low_coverage(monkeypatch, pre_close, min_expected, expected_failure):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = engine._refresh_audit = _CapturingAudit()
+    rows = [{"ts_code": "000001.SZ", "trade_date": "20260901", "pre_close": pre_close, "up_limit": 11, "down_limit": 9}]
+    day = dt.date(2026, 9, 1)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda *_: 1)
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda *_: [day])
+    monkeypatch.setattr(engine, "_update_progress", lambda *args: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _: None)
+    engine._sync_by_date(_FakeConn(), replace(STK_LIMIT, min_expected_rows=min_expected), day, day, uuid.uuid4())
+    call = audit.success_calls[0]
+    assert call["quality_status"] == "low_coverage"
+    assert call["failure_category"] == expected_failure
+    assert call["metadata"]["publication_quality"]["schema_version"] == "stk_limit_publication_quality_v1"
+
+
 def test_fetch_from_tushare_retries_after_http_error_then_succeeds(monkeypatch):
     engine = TushareSyncEngine()
     monkeypatch.setenv("TUSHARE_TOKEN", "test-token")
