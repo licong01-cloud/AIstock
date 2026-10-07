@@ -1,6 +1,8 @@
 # Advisory 固定5TD卖价持仓路径信息 F2详细设计
 
-2026-10-08。假设 EXIT5-HELD-PATH-CONTEXT-1；本PR仅详细设计及必要进度同步。源码、实际研究和盈利卖价功能尚未实现，不以设计验收冒称模型交付。
+2026-10-08。假设 EXIT5-HELD-PATH-CONTEXT-1；设计PR #5700已合入05540b84并自身清理，独立源码及一次开发研究已完成。本地13直接合同/多轮复审通过，4实际fit完成；源码尚未公开合入，没有可激活或已确认盈利的卖价功能，不以设计/源码验收冒称模型收益交付。
+
+源码阶段范围登记：feature/advisory-exit5-held-path-context-source-20261008。仅下述三服务、两直接测试、本文和主蓝图七文件；原Exit helper为已经审核的本任务显式依赖，source PR以#5697分支为base，不捆绑旧源码或修改原study。当前4新研究fit，旧control refit与新oracle study均0。
 
 ## Background / Goal
 
@@ -74,17 +76,23 @@ T开盘入场、原E=T+4收盘、S收盘后下一U、T+1<=U<=E及remaining=1..4�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-811 | planned generic_exit_held_path_5td_contracts_v1.py | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §1 | DESIGN_VERIFIED | none |
-| F-812 | planned generic_exit_held_path_5td_features_v1.py | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §2 | DESIGN_VERIFIED | none |
-| F-813 | planned features/pipeline source | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §2/3 | DESIGN_VERIFIED | none |
-| F-814 | planned generic_exit_held_path_5td_pipeline_v1.py | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §3 | DESIGN_VERIFIED | none |
-| F-815 | planned original cohort evaluator reuse | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §4 | DESIGN_VERIFIED | none |
-| F-816 | planned fixed diagnostic/registry | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §4 | DESIGN_VERIFIED | none |
-| F-817 | future exact seven-file source scope; no cross-module write | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md Scope/Implementation | DESIGN_VERIFIED | none |
+| F-811 | generic_exit_held_path_5td_pipeline_v1.py _load/prepare_exit_held_path_v1 | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §1/Review | SOURCE_VERIFIED | none |
+| F-812 | generic_exit_held_path_5td_features_v1.py build_exit_held_path_features_v1 | test: backend/tests/advisory_model_first/test_generic_exit_held_path_5td_features_v1.py::test_split_normalization_and_later_poison_do_not_change_s_features | SOURCE_VERIFIED | none |
+| F-813 | generic_exit_held_path_5td_features_v1.py; pipeline_v1.py _matrix | test: backend/tests/advisory_model_first/test_generic_exit_held_path_5td_pipeline_v1.py::test_fixed_25_inputs_train_only_medians_and_missing_flags | SOURCE_VERIFIED | none |
+| F-814 | generic_exit_held_path_5td_pipeline_v1.py fit_held_path_fold_v1/train_exit_held_path_v1 | test: backend/tests/advisory_model_first/test_generic_exit_held_path_5td_pipeline_v1.py::test_new_candidate_fit_calls_exact_recipe_only_after_callback | SOURCE_VERIFIED | none |
+| F-815 | original Exit helper action/cohort reuse; evaluate_exit_held_path_v1 | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md §4/Review | SOURCE_VERIFIED | none |
+| F-816 | original summarize_exit_v1; pipeline_v1.py _paired_block_stats/_record | test: backend/tests/advisory_model_first/test_generic_exit_held_path_5td_pipeline_v1.py::test_two_control_pairing_uncertainty_is_fixed_and_unknown_not_zero | SOURCE_VERIFIED | none |
+| F-817 | registered exact seven-file scope; source/calibration/model states separate | artifact: docs/architecture/advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md Scope/Implementation/Review | SOURCE_VERIFIED | none |
 
-此矩阵只验收设计，不证明源码、模型、利润或自然运行。最小合同测试必须包括同股四S不串episode、stock_only字段不变、future factor/price毒值、峰值缺一原session不偷偷缩窗、split因子数量等价、旧预测不重训与同KEY对照、test parquet投影过滤、4fit/QE busy及exact resume、固定五槽归因。禁用重复fixture/实现快照或宽回归堆测试。
+此矩阵证明本地源码合同，不证明实际模型、利润或自然运行。最小合同测试包括同股四S不串episode、future factor/price毒值、峰值缺一原session不偷偷缩窗、split因子数量等价、train-only median/flags和固定25输入。原Exit helper的22直接合同已验证test投影过滤、原折purge/一链/五槽/归因，当前原样复用不堆重复fixture/快照。新研究prepare/busy probe与同KEY原账本读回需单独报告；完成工程不等于确认收益。
 
 ## Risks / Rollout / Rollback / Production Gates
+
+实际run advexitpath_16544dfaa2289406e21f539a：一次prepare1.505秒，原6100决策/1525episode不删，三新字段各6050已知/50边界S不可知；原九字段及标签/折原样保留。模拟QE busy probe0标记/0fit，真实四fold前后公开QE三入口全0；唯一四candidate fit1.959秒、评价0.788秒，旧Ridge/控制/旧study没有重拟合或重跑。累计121→125研究fit，旧INDEX_BUILD1次另列。
+
+240原评价cohort/238完整/2 UNKNOWN；候选−原baseline −47.4315bps，CI95 [−92.7764,1.4040]、MDE80 68.2195；候选−已生成九字段Exit −3.7078bps，CI95 [−12.2552,4.2729]。700完整配对干预episode、222入场组、93.2773%覆盖；UNKNOWN regime不升级。原五槽共同baseline不变，四项归因净和−56443.4664bps除以5及238还原−47.4315；原oracle +235.9270仅原空间参照。结果EXPLORATORY/NAVIGATION_ONLY/未确认、未激活；只停止本candidate，不加字段/参数/seed挽救。
+
+下一研究要先检查价格条件化的继续持有价值：当前mean head是E[V_continue|S]，实际U出售价p仅在外部比较。若p包含新的价格信息，不随p更新继续价值可能造成高价过早退出；这是有限S-only审计的结构假设，不是证明市场反转或现代码Bug。应先独立设计E[V_continue|S, hypothetical p]与S状态/价格query的时钟边界，并证明S发表时无需实际U价也能生成整条价格函数。历史成熟U价可作训练query样本，未来评价U只能查询预先固定函数；不得伪装成S观测字段、读取未成熟训练标签或直接把oracle当模型。新hypothesis尚未登记/拟合，不能用本研究失败自动开始复杂模型或认为该方向已有收益。
 
 新增持仓状态未必提供alpha，可能只是价格动量/反转的已知效应；必须看原baseline及同KEY对照，不能把相对更差旧overlay的小改善当盈利。原来源非vintage、只有一个原候选流及有限开发年份，不代表跨策略包/市场泛化；feature缺失本身也不能当alpha。动态仓位、资金动作和分钟时机均不在合同中。
 
@@ -92,4 +100,8 @@ T开盘入场、原E=T+4收盘、S收盘后下一U、T+1<=U<=E及remaining=1..4�
 
 ## Review / 多轮自审
 
-第一轮目标审查：从原入场锚与持仓路径补S信息，不把holding变成退出价值，不更改固定5TD或产生新选股。第二轮时钟/单位审查：T..S完整session、S anchor factor比值、bps/fraction分离，原U仅评价query；补充未来poison、missing整段未知、age与remaining重复不新增。第三轮方法/边界审查：只拟合新candidate、复用旧预测、保留UNKNOWN时间轴与原五槽，oracle只作理论引用，实际fit计数、源码/研究/激活分开。设计审核通过，源码/研究仍pending；不得以设计记录计入新fit或宣称满足真实盈利目标。
+设计阶段三轮审查：从原入场锚与持仓路径补S信息，不把holding变成退出价值，不更改固定5TD或产生新选股；T..S完整session、S anchor factor比值、bps/fraction分离，原U仅评价query，补充未来poison、missing整段未知、age与remaining重复不新增；只拟合新candidate、复用旧预测、保留UNKNOWN时间轴与原五槽，oracle只作理论引用，实际fit计数、源码/研究/激活分开。设计合入时源码/研究尚未开始，此为历史检查点；当前源码及四fit完成状态见本文§Risks，不得以设计记录冒充模型收益。
+
+源码阶段三视角复审：原T..S字段/费用/原episode、严格源hash/原折/开发边界、原预测及cohort账本原样复用/零旧拟合；补充OHLC矛盾检查、非finite数据显式错误、双对照固定block区间与UNKNOWN时间轴。13直接合同及Ruff clean。Source本地实现、公开合入仍待依赖；原helper依赖来自已审核#5697精确源码，不重执行旧prepare/fit/oracle研究入口。旧control直接复用已生成的同人口cohort账本及其预测身份，公共helper只重用动作链/账本函数作当前candidate计算，未重跑旧study；原oracle是固定标签空间参照而非新候选效果。实际独立预登记、四fit及双对照评价已完成，结果负向，未配置或激活。
+
+L0和F2 7/7通过、0blocking。两项P2复杂度提示已核查：新特征最多四原session/每KEY、one-to-one merge固定6100（上限15000）行；原cohort双对照240行、固定25输入/4fold，bootstrap2000×240有界，无全市场平方级循环。不是新增平台或模型搜索；不修改公共扫描器/ownership来降低测试比例。
