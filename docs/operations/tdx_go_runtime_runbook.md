@@ -4,6 +4,13 @@
 
 ## 配置与构建
 
+现有一键启动与 `tdx-api-main/web/start.bat` 使用 `scripts/start_tdx_go_backend.py`，
+显式传递 `--database-target production --env-file <repo>/.env`；只读取数据库配置，
+不打印凭据，不继承其他目标的 DSN，按完整 Git SHA 编译整个 Go web package。
+手工 `go run .` 仍要求操作者先提供完整环境变量，不再依赖源码内生产默认密码。
+`--check` 只核验配置与源码身份，不启动服务。DEV 使用同一入口与依赖，
+改为 `--database-target dev`、`TDX_HTTP_PORT=19081/19082` 及独立 X 盘 `TDX_DATA_DIR`。
+
 必须显式提供 `TDX_DB_DSN`，或完整的 `TDX_DB_HOST/PORT/NAME/USER/PASSWORD`。
 不使用默认生产库、硬编码密码或从当前目录隐式加载 dotenv。凭据只从受控配置位置加载，不写入日志和回执。
 
