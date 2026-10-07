@@ -1,6 +1,6 @@
 # Advisory 跨日量价滞后信息买入价格 GP5 v1 F2详细设计
 
-2026-10-07；DESIGN_ONLY。研究假设 `GP5-RETURN-VOLUME-LAG-1`，尚无新模型、prepare、fit或收益结果。当前累计113研究fit＋1旧index；本设计不是第114次训练收据。
+2026-10-07；设计#5658已合入b3a0a612a并自身官方清理22.594秒。研究假设 `GP5-RETURN-VOLUME-LAG-1`的精确九文件源码/多轮审核/9定向/Ruff/L0/F2通过，一次真实prepare、2head fit及四臂评估已结束，当前candidate负、仅停止自身/不激活。累计115研究fit＋1旧index；测试fixture拟合不计入研究训练。SOURCE的PR/合入和自身清理独立处理。
 
 ## Background / Goal
 
@@ -57,7 +57,7 @@ NULL/quiet NaN正常UNKNOWN；bool/string/Inf/signaling NaN/已知非正价格�
 2. `volume_innovation_return_cov18 = sum((q_i−q_(i−1))*(r_i−r_bar))/sum(q_i+q_(i−1))`。
 3. `downside_pressure_next_return18 = sum(q_(i−1)*max(−r_(i−1),0)*r_i)/sum(q_(i−1)*max(−r_(i−1),0))`。
 
-三量均是日log-return fraction，非年化/预测利润/开盘涨幅或真实资金流。先max|r|缩放进行乘积、求和和恢复，恢复后检查有限。20价格/19量任一正常未知则块UNKNOWN_SOURCE；全部量0则三量UNKNOWN_ZERO_VOLUME_MASS。只有第三项分母0时仅第三项UNKNOWN_NO_OBSERVED_DOWNSIDE_PRESSURE，不假造“下跌压力后的回报为0”；前两项在恒价且有量时为已知0。窗口中的zero量合法，非零量归一化后因极值下溢要在receipt记encoding精度限制，不能伪称原交易量为零。
+三量均是日log-return fraction，非年化/预测利润/开盘涨幅或真实资金流。先max|r|缩放进行乘积、求和和恢复，恢复后检查有限。20价格/19量任一正常未知则块UNKNOWN_SOURCE；全部量0则三量UNKNOWN_ZERO_VOLUME_MASS。只有第三项分母0时仅第三项UNKNOWN_NO_OBSERVED_DOWNSIDE_PRESSURE，不假造“下跌压力后的回报为0”；前两项在恒价且有滞后量时为已知0。若只有最后一个收益日有量，第一项滞后量分母0，仅其UNKNOWN_NO_LAG_VOLUME_MASS、第二项仍可计算。窗口中的zero量合法，非零量归一化后因极值下溢要在receipt记encoding精度限制，不能伪称原交易量为零。
 
 可识别性必须有合成对照：价格路径完全相同，把第1和第3收益日的交易量互换，这两日调整close相同且都上涨、均在最早15日内；因此M9的weighted close/signed balance/concentration及原volume5/20不变，D分钟路径、M18及所有价格特征也不变，而两日后续收益方向不同，lag交互改变。该对照只证明不是旧汇总的重复变换，不是实证收益证据。
 
@@ -106,18 +106,18 @@ prepare首次读取新数值但不消费收益选输入；labels只取原prepare
 
 ## Design Acceptance Matrix
 
-此矩阵只证明设计条款已定义/交付，不证明源码、真实prepare/fit或模型效果已完成。后续源码PR须逐项改为实现/真实测试引用，不用DESIGN_VERIFIED冒充SOURCE_VERIFIED。
+本矩阵已由设计条款升级为源码/定向测试引用，只证明完整离线源码合同，不证明真实prepare/fit、盈利、API/UI或生产启用；未执行研究不能由SOURCE_VERIFIED冒充STUDY_COMPLETED。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-771 | §Background/3 | artifact: 本文§3合成可识别性方案 | DESIGN_VERIFIED | none |
-| F-772 | §1/2 | artifact: D历史键geometry及先投影合同 | DESIGN_VERIFIED | none |
-| F-773 | §2/3 | artifact: 三数学量/分母/非有限/UNKNOWN合同 | DESIGN_VERIFIED | none |
-| F-774 | §4 | artifact: 2head/父recipe/同KEY/毒化与partial测试方案 | DESIGN_VERIFIED | none |
-| F-775 | §5 | artifact: frozen政策/价集/元数据不变测试方案 | DESIGN_VERIFIED | none |
-| F-776 | §5/6 | artifact: fixed四臂/原D与非NAV方案 | DESIGN_VERIFIED | none |
-| F-777 | §5 | artifact: 两paired/known/UNKNOWN对账方案 | DESIGN_VERIFIED | none |
-| F-778 | §Scope/6/Implementation | artifact: scope/budget/串行/生产NOOP方案 | DESIGN_VERIFIED | none |
+| F-771 | backend/services/advisory_model_first/generic_return_volume_price_5td_source_v1.py | backend/tests/advisory_model_first/test_generic_return_volume_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-772 | backend/services/advisory_model_first/generic_return_volume_price_5td_source_v1.py；generic_return_volume_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_return_volume_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-773 | backend/services/advisory_model_first/generic_return_volume_price_5td_source_v1.py | backend/tests/advisory_model_first/test_generic_return_volume_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-774 | backend/services/advisory_model_first/generic_return_volume_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_return_volume_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-775 | backend/services/advisory_model_first/generic_return_volume_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_return_volume_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-776 | backend/services/advisory_model_first/generic_return_volume_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_return_volume_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-777 | backend/services/advisory_model_first/generic_return_volume_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_return_volume_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-778 | backend/services/advisory_model_first/generic_return_volume_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_return_volume_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
 
 最小源码测试仅三文件共享fixture：源手算与旧汇总相同新lag不同、缺失/极值/请求外未来毒化；一次合成两head模型、父median/support/KEY、JSON与价洞；stage hash/原人口、partial不二fit、四臂known与UNKNOWN分账。没有实现快照、重复参数fixture、UI/整QE/邻接套件。
 
@@ -134,3 +134,19 @@ Rollout只有完整离线研究SOURCE；rollback停止新候选消费，不改�
 第四轮实际设计验证：X端合成脚本 `spike_return_volume_identifiability.py` 确认旧四量严格相同（weighted close100.9166667、signed balance0.2173913、concentration0.0763889、volume5/20=0.8333333），新lag交互由−0.00180915变为＋0.00179133；price/最后5D量/D分钟未改，历史数值/收益/fit=0。F2八条/八行/零warnings通过、两docs范围及diff检查通过。这里仍只交付完整设计，不把合成验证称作模型收益或源码实现。
 
 DESIGN-COMPLIANCE-001逐项：①设计完整、SOURCE/模型/上线未完成明确；②正常UNKNOWN/无压力/partial不假成功；③不改五TD/成本/风险/父候选/旧策略与结果；④不加QE包资格、MDE/原native或人工审批门，只有已有输入矛盾和本研究身份核对。源码/真实研究的逐项证据另由后续完整交付更新。
+
+源码三轮本窗口自审：第一轮核对19/18数学与旧M9可识别性、原KEY/支持/成熟pool及D投影；第二轮数值与纯JSON：先修复diagnostics变更可能导致临时fitted hash失效的顺序，显式无滞后量只UNKNOWN第一项，验证正常缺失/精度下溢/极端量与成本一次/多段洞；第三轮stage和归因：父控制不fit、partial第二次失败、原D/Top6不补、known与UNKNOWN分账及非法action state显式失败。首轮三个pipeline节点因复用fixture漏注册其fitted_packet依赖而未运行，修复后只重跑这三个PASS；三处Ruff问题已修复。后续三个新增边界节点（validation不改权重、价格支持洞、非法state）定向PASS。都是本窗口自审，不冒称外审；实际研究仍0，完整稳定小矩阵/L0另执行。
+
+最终稳定小矩阵9项PASS、Ruff无问题、F2八条/八行/0warnings、diff检查通过；官方nox l0 quality0finding、guardrails0blocking（2非阻断项），不运行整QE/UI/邻接套件。源码与研究尚未合并状态；正式研究只在clean producer与fresh QE三0后启动，旧113研究计数不因测试改变。
+
+## 当前一次研究结果（上述113/未启动均为拟合前快照）
+
+clean producer `8e263673858f2edd38b72429e0aad926fd5591bf`、implementation SHA `42a707dc903ac8c0a9c9e1c6a3e1e0588ac62e351c1b985fee8401327a7dd580`。run `advgp5rvlag_c1869cf9c60177309f17330f`，plan SHA `c1869cf9c60177309f17330ffebe4fe499e734c953331e6710f7d6dcd0910b62`，首次prepare6.469秒：386原D/7720原KEY全保留，7330新三量完整、380暖启/10正常缺源UNKNOWN，0数量编码下溢/未来feature数值解析/SQL/父重fit。没有读新的sealed/holdout或重新选择输入。
+
+2026-10-07T05:38:53.431771及05:38:57.606259 UTC，拟合前/后QE三个公开入口全0；唯一两head fit阶段3.953秒、train至完整评估4.828秒，累计115研究fit＋1旧index。原共同成熟train3684/193D、KEY SHA `ce2e884033d344253561b6f4ebc95ff08f6a3ad15067ab40d270f03d0ee65e20` 与父完全相同；其中3674具新三量、10正常缺失仍保留、未按新信息过滤。validation1586只诊断，mean MSE0.00380347/path pinball0.00607625/lower-tail0.140605，没有用于选点或校准。
+
+80共同完整5TD cohort（原81D另1未结算null）内base/rule/frozen daily/candidate均值129.0145/131.5724/73.6306/57.7266bps；candidate−base/−matched为−71.2879/−15.9040。215已结算TAKE胜率56.2791%，base403/58.3127%、frozen249/56.2249%；known拒买176次/67D，避免亏损44.9896−错过上涨118.3219=known−73.3323bps。UNKNOWN空槽＋2.0444另列，不归模型；总差−71.2879，对账通过。matched known干预98次/53D，非恒等模型。12UNKNOWN、1不可执行、1未结算分别保留；区间/NAV null，不称可投资曲线或收益确认。
+
+model SHA `e2796cd9f3a080c8d6ff759a0b1edd4467f8d3d92417db4da224b04f79c98fe8`，非执行JSON601091bytes；prepared/trained/evaluated stage SHA分别 `920db898311e1aae3916846aa966d7feaeb9e09d47a51b64a4910d2b3335c1c8` / `5bf0df9e3da922ff1dd5c3e183dfcacb6872265948b9695b5761c3ae019fe30d` / `941843e65937b082b9d22ed34466e8b390541a503868e285628b65572dfbefb0`。必要的一次新结果读回核对四stage、两journal、四registry记录、原KEY/known-UNKNOWN归因PASS，没有重fit或重复评估。
+
+新增跨日量价信息在此固定模型/开发窗口未提供价值，只停止此candidate；不把缺失当根因、包alpha不足或全局不可学，不救阈值/seed/window、不回选rule/旧父模型、不给旧负候选补证。没有将此负模型加入production consumer/binding/UI。下一假设必须重新确认不同经济信息或可识别业务目标，不默认在本三量上继续消融搜索。0QE提交/其它模块修改/DB写/激活/服务或他人进程控制；backend无需因这次离线交付重启。
