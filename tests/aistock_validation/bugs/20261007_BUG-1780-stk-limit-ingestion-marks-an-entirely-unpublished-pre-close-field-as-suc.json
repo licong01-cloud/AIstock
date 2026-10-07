@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-07T02:42:00.636545Z",
-  "description": "Record count success/ok hid an entirely empty required pre_close field until monthly SOURCE audit.",
+  "description": "September 2026-09-01..04 stk_limit pre_close was entirely NULL despite refresh success/ok. Current official responses permit 19626 canonical PIT NULL-only repairs; DEV and independent production readback passed. Eighteen provider-null keys have independent full-day suspension evidence and remain NULL. Collector now rejects omitted response columns before normalization and observes current batch pre_close publication without historical scans or percentage gates. Original missing response schema versus delayed provider publication is not provable from historical receipts; do not assert upstream delay as established root cause.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,12 +28,18 @@
   ],
   "expected": "A batch with valid limit bounds but no published positive pre_close must remain retryable low_coverage, with field observation in audit; partially valid batches retain legitimate NULLs.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261007_BUG-1780-stk-limit-ingestion-marks-an-entirely-unpublished-pre-close-field-as-suc.json",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_tushare_sync_engine.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261007_BUG-1780-stk-limit-ingestion-marks-an-entirely-unpublished-pre-close-field-as-suc.json",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
@@ -114,11 +120,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": [
+      "AIstock python fresh process imported task-worktree tushare_sync_engine; frozen official stk_limit responses for September 1..4 returned ok with 5546/5547/5549/5548 positive pre_close values; database_write=false. RED 9 failed then GREEN 9 passed; additional partial-row audit preservation check 2 passed.",
+      "AIstock python task-worktree import + four pinned official September stk_limit response readbacks PASS; no database/service writes",
+      "AIstock python fresh-process import + actual pinned official September 1..4 stk_limit responses -> PASS; no database/service writes"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
