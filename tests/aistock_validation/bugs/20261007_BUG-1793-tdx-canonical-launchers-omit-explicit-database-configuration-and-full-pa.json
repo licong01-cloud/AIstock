@@ -1,0 +1,300 @@
+{
+  "actual": "After BUG-1789 removes hardcoded database defaults, canonical start_all_ai_stock.bat only passes port and nested launcher runs server.go instead of package. Add explicit existing-env-file launcher with database-target guard and full git build identity; preserve user startup workflow, no automatic production process control or dependency installation.",
+  "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "scripts/start_tdx_go_backend.py",
+    "backend/tests/scripts/test_start_tdx_go_backend.py",
+    "tdx-api-main/web/start.bat",
+    "start_all_ai_stock.bat",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
+    "docs/operations/tdx_go_runtime_runbook.md",
+    "tests/aistock_validation/bugs/20261007_BUG-1793-tdx-canonical-launchers-omit-explicit-database-configuration-and-full-pa.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1793",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-07T19:46:26.873260Z",
+  "description": "After BUG-1789 removes hardcoded database defaults, canonical start_all_ai_stock.bat only passes port and nested launcher runs server.go instead of package. Add explicit existing-env-file launcher with database-target guard and full git build identity; preserve user startup workflow, no automatic production process control or dependency installation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261007-4feab76f5ab9",
+      "timestamp": "2026-10-07T19:46:26.873260Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_start_tdx_go_backend.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "noxfile.py",
+      "scripts/start_tdx_go_backend.py",
+      "start_all_ai_stock.bat",
+      "tests/aistock_validation/bugs/20261007_BUG-1793-tdx-canonical-launchers-omit-explicit-database-configuration-and-full-pa.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_start_tdx_go_backend.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "noxfile.py",
+      "scripts/start_tdx_go_backend.py",
+      "start_all_ai_stock.bat",
+      "tests/aistock_validation/bugs/20261007_BUG-1793-tdx-canonical-launchers-omit-explicit-database-configuration-and-full-pa.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "start_all_ai_stock.bat",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "noxfile.py",
+        "docs/operations/tdx_go_runtime_runbook.md"
+      ],
+      "impacted_modules": [
+        "platform.config",
+        "platform.api",
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "validation.runner",
+        "validation.center",
+        "tests.backend",
+        "tests.frontend",
+        "docs.operations"
+      ],
+      "matched_rules": [
+        {
+          "file": "start_all_ai_stock.bat",
+          "impact_modules": [
+            "platform.api"
+          ],
+          "primary_module": "platform.config",
+          "risk_level": "high",
+          "rule_id": "aistock_windows_backend_launcher"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "docs/operations/tdx_go_runtime_runbook.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "start_all_ai_stock.bat",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "noxfile.py",
+        "docs/operations/tdx_go_runtime_runbook.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "start_all_ai_stock.bat",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py",
+      "docs/operations/tdx_go_runtime_runbook.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "start_all_ai_stock.bat",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py",
+      "docs/operations/tdx_go_runtime_runbook.md"
+    ]
+  },
+  "first_seen_at": "2026-10-07T19:46:26.873260Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5693,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5693",
+  "last_seen_at": "2026-10-07T19:46:26.873260Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python launcher --check read existing DEV and production configuration without starting a service; DEV database=aistock_dev, isolated port=19081, full source revision=164cfa2a3fda13f2f82e0751e1d8733d93fdc1ac. RED missing launcher -> GREEN six target/credential/dirty-source regression cases."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "TDX canonical launchers omit explicit database configuration and full package build identity",
+  "trigger_condition": {
+    "fingerprint": "4feab76f5ab9039661bf03ae",
+    "source_event_id": "FE-20261007-4feab76f5ab9"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
