@@ -133,6 +133,7 @@ class StrategyPackageAssetSource:
                     return PackageAssetBytes(
                         data=_read_non_empty(path, reason_code="strategy_package_model_params_missing"),
                         source_uri=f"{store_uri}/model_params",
+                        local_path=path,
                     )
                 attempts.append(
                     {
@@ -159,6 +160,7 @@ class StrategyPackageAssetSource:
                 return PackageAssetBytes(
                     data=_read_non_empty(path, reason_code="strategy_package_model_params_missing"),
                     source_uri=f"aistock-prediction-store://runs/{quote(run_id, safe='')}/model_params",
+                    local_path=path,
                 )
             except Exception as exc:
                 attempts.append(
@@ -1145,7 +1147,15 @@ class PackageAssetFreezeService:
             if self._model_params_reader is not None
             else self.source.model_params_bytes(manifest)
         )
-        blob = self.asset_store.put(source.data, kind=StrategyPackageAssetType.MODEL_WEIGHT.value)
+        digest = hashlib.sha256(source.data).hexdigest()
+        blob = (
+            self.asset_store.put_file(
+                source.local_path, kind=StrategyPackageAssetType.MODEL_WEIGHT.value,
+                sha256=digest, size_bytes=len(source.data),
+            )
+            if source.local_path is not None
+            else self.asset_store.put(source.data, kind=StrategyPackageAssetType.MODEL_WEIGHT.value)
+        )
         asset_ref = _logical_asset_ref(blob.uri, asset_type=StrategyPackageAssetType.MODEL_WEIGHT, logical_name=logical_name)
         frozen = model.model_copy(
             update={

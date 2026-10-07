@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+from uuid import uuid4
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -48,6 +49,9 @@ class PackageAssetStore:
         raise NotImplementedError
 
     def verify(self, uri: str, *, sha256: str, size_bytes: int) -> PackageAssetBlob:
+        raise NotImplementedError
+
+    def materialize_file(self, uri: str, target: Path, *, sha256: str, size_bytes: int) -> None:
         raise NotImplementedError
 
 
@@ -163,13 +167,37 @@ class LocalPackageAssetStore(PackageAssetStore):
         self._ensure_ready()
         target = self._blob_path(expected_sha)
         if target.exists():
-            return self.verify(
+            verified = self.verify(
                 _blob_uri(expected_sha),
                 sha256=expected_sha,
                 size_bytes=actual_size,
             )
+            if safe_kind == "model_weight" and not os.path.samefile(source, target):
+                # Upgrade an earlier byte-identical copy to a shared inode;
+                # readers keep the same immutable URI and bytes throughout.
+                staged_link = target.with_name(f".{target.name}.{uuid4().hex}.link")
+                try:
+                    os.link(source, staged_link)
+                    linked_sha, linked_size = _hash_file(staged_link)
+                    if (linked_sha, linked_size) != (expected_sha, actual_size):
+                        raise PackageAssetInvalidError(
+                            "strategy package linked model identity mismatch",
+                            context={"reason_code": "strategy_package_asset_source_identity_mismatch"},
+                        )
+                    os.replace(staged_link, target)
+                finally:
+                    staged_link.unlink(missing_ok=True)
+            return verified
 
         target.parent.mkdir(parents=True, exist_ok=True)
+        if safe_kind == "model_weight":
+            # Protected ledger references share immutable bytes with the
+            # central store. Removing a run path does not remove this inode.
+            try:
+                os.link(source, target)
+            except FileExistsError:
+                pass
+            return self.verify(_blob_uri(expected_sha), sha256=expected_sha, size_bytes=actual_size)
         tmp_dir = self.root / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix="package_asset_", suffix=".staging", dir=tmp_dir)
@@ -240,6 +268,20 @@ class LocalPackageAssetStore(PackageAssetStore):
     def _ensure_ready(self) -> None:
         for child in ("blobs", "tmp"):
             (self.root / child).mkdir(parents=True, exist_ok=True)
+
+    def materialize_file(self, uri: str, target: Path, *, sha256: str, size_bytes: int) -> None:
+        sha256 = _normalize_sha256(sha256, field_name="sha256")
+        self.verify(uri, sha256=sha256, size_bytes=size_bytes)
+        source = self._path_from_uri(uri)
+        _assert_publishable_source(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.link(source, target)
+        actual_sha, actual_size = _hash_file(target)
+        if actual_sha != sha256 or actual_size != size_bytes:
+            raise PackageAssetInvalidError(
+                "strategy package materialized weight identity mismatch",
+                context={"reason_code": "strategy_package_asset_readback_mismatch", "asset_ref": uri},
+            )
 
     def _blob_path(self, digest: str) -> Path:
         normalized = _normalize_sha256(digest, field_name="sha256")
