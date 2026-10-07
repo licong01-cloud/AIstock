@@ -88,6 +88,47 @@ def experiment_with_loop_conn(
     yield _Conn()
 
 
+@pytest.mark.parametrize("mismatch", [None, "model", "factors", "seed", "train_window"])
+def test_prediction_replay_keeps_results_and_resolves_original_fit(monkeypatch, mismatch):
+    import copy
+
+    from backend.services.trading_core.errors import StrategyPackageValidationError
+
+    replay = make_record()
+    trained = copy.deepcopy(replay)
+    trained.update(experiment_id="qe_training_L1", qe_task_id="qe_training", qe_loop_id="Loop1")
+    trained["result_metrics"]["IC"] = 0.01
+    replay_cfg = {
+        "prediction_replay": True, "prediction_source_task_id": "qe_training",
+        "prediction_source_loop_index": 1, "prediction_source_sha256": "a" * 64,
+        "runtime_flags": {"random_seed": 42},
+    }
+    trained_cfg = {"runtime_flags": {"random_seed": 42}}
+    if mismatch == "model":
+        trained["model_id"] = "different_model"
+    elif mismatch == "factors":
+        trained["factor_names"] = list(reversed(trained["factor_names"]))
+    elif mismatch == "seed":
+        trained_cfg["runtime_flags"]["random_seed"] = 43
+    elif mismatch == "train_window":
+        replay["data_split"]["train_end"] = "2022-12-30"
+        trained["data_split"]["train_end"] = "2023-12-29"
+    resolver = QEExperimentSourceResolver(conn_factory=lambda: dict_record_conn(replay))
+    monkeypatch.setattr(resolver, "_load_loop_runtime_config", lambda row: trained_cfg if row["experiment_id"] == "qe_training_L1" else replay_cfg)
+    monkeypatch.setattr(resolver, "_load_evolution_loop", lambda **kwargs: trained)
+    if mismatch:
+        with pytest.raises(StrategyPackageValidationError) as excinfo:
+            resolver.build_from_experiment(replay["experiment_id"])
+        assert excinfo.value.context["reason_code"] == "strategy_package_replay_model_source_mismatch"
+        return
+    manifest = resolver.build_from_experiment(replay["experiment_id"])
+    assert manifest.source_evidence["experiment_id"] == replay["experiment_id"]
+    assert manifest.source_evidence["trained_model_source"]["experiment_id"] == "qe_training_L1"
+    assert manifest.source_evidence["trained_model_source"]["random_seed"] == 42
+    assert manifest.backtest_summary.raw_metrics == replay["result_metrics"]
+    assert manifest.source_evidence["data_split"] == replay["data_split"]
+
+
 def test_qe_single_experiment_builds_package() -> None:
     record = make_record()
     resolver = QEExperimentSourceResolver(conn_factory=lambda: dict_record_conn(record))

@@ -143,7 +143,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Isolated Python loaded real replay qe_20261007_141342_0221_L4 metadata and original fit qe_20261006_013449_0c29_L1 seed42; central weight sha=d8a9928ff1ddf84d7a1b8362763eef5d4741e91635ea17e1a204b2befc165022 bytes=698716; original fitted dataset bytes=46115, model.py bytes=932 from WSL Loop1; no training, service control or database writes"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261007_141342_0221?detail=summary",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
