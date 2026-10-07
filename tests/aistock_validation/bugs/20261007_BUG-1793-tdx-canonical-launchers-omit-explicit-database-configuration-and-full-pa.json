@@ -1,6 +1,7 @@
 {
   "actual": "After BUG-1789 removes hardcoded database defaults, canonical start_all_ai_stock.bat only passes port and nested launcher runs server.go instead of package. Add explicit existing-env-file launcher with database-target guard and full git build identity; preserve user startup workflow, no automatic production process control or dependency installation.",
   "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "scripts/start_tdx_go_backend.py",
     "backend/tests/scripts/test_start_tdx_go_backend.py",
     "tdx-api-main/web/start.bat",
