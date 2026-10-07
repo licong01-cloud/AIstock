@@ -1,6 +1,8 @@
 # Advisory 固定5TD价格条件化继续价值 F2详细设计
 
-2026-10-08。假设 EXIT5-PRICE-CONDITIONED-CONTINUATION-1。当前仅设计；新候选源码、预登记和物理 fit 均未开始。本文与主蓝图为文档交付范围，设计审核不冒称已实现卖价产品或确认盈利。
+2026-10-08。假设 EXIT5-PRICE-CONDITIONED-CONTINUATION-1。设计PR #5705已合入fa5a6a686、自身官方清理完成；独立七文件源码77824c1经多轮复审/13直接合同/Ruff/L0/F2通过，一次新研究及四fit已完成。源码尚未公开合入，没有可激活或已确认盈利的raw卖价功能。
+
+源码范围登记：feature/advisory-exit5-price-conditioned-value-source-20261008，精确下述七文件；显式原audit helper依赖#5697，不导入失败P21源码、不修改旧study或其他模块。
 
 ## Background / Goal
 
@@ -86,17 +88,23 @@ Ridge 拟合采用全部原成熟已知监督样本，support 限制的是输出
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-821 | design contract §1/4/5; planned contracts/pipeline_v1.py | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md §1/4/5/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-822 | design contract §1/2; planned models_v1.py | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md §1/2/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-823 | design contract §1/2; planned contracts/models_v1.py | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md §1/2/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-824 | design contract §3; planned models_v1.py | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md §3/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-825 | design contract §2/5; planned pipeline_v1.py | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md §2/5/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-826 | design contract §5; planned pipeline_v1.py | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md §5/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-827 | design contract Scope/4; planned pipeline_v1.py | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md Scope/4/Review | DESIGN_REVIEW_VERIFIED | none |
+| F-821 | pipeline_v1.py _load/prepare_exit_conditioned_v1 | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md §1/4/Review | SOURCE_VERIFIED | none |
+| F-822 | models_v1.py _s_frame/seal_s_curves_v1/query_sealed_curves_v1 | test: backend/tests/advisory_model_first/test_generic_exit_price_conditioned_5td_models_v1.py::test_future_label_poison_cannot_change_sealed_curve_and_is_rejected_as_s_input | SOURCE_VERIFIED | none |
+| F-823 | models_v1.py fixed net-query/unit advantage | test: backend/tests/advisory_model_first/test_generic_exit_price_conditioned_5td_models_v1.py::test_s_curve_query_changes_value_but_never_double_charges_fees | SOURCE_VERIFIED | none |
+| F-824 | models_v1.py _matrix/_support/fit_price_conditioned_fold_v1 | test: backend/tests/advisory_model_first/test_generic_exit_price_conditioned_5td_models_v1.py::test_support_preserves_holes_and_remainings_are_not_pooled | SOURCE_VERIFIED | none |
+| F-825 | pipeline_v1.py trained/evaluate stage; original action/cohort helper reuse | artifact: docs/architecture/advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md §2/5/Review | SOURCE_VERIFIED | none |
+| F-826 | original summarize_exit_v1; pipeline_v1.py _paired_stats/evaluate | test: backend/tests/advisory_model_first/test_generic_exit_price_conditioned_5td_pipeline_v1.py::test_unknown_timeline_not_zero_and_constant_paired_block_statistics | SOURCE_VERIFIED | none |
+| F-827 | pipeline_v1.py _record/_train_fold/exact scope | test: backend/tests/advisory_model_first/test_generic_exit_price_conditioned_5td_pipeline_v1.py::test_busy_zero_fit_and_completed_fold_resume_never_queries_or_refits | SOURCE_VERIFIED | none |
 
-此矩阵验收对象仅为完整详细设计，不是尚未实现的源码；DESIGN_REVIEW_VERIFIED 不计入 SOURCE_VERIFIED。全部七项源码、第三模型与经济结果仍未完成，不以文档合入冒称实现交付。最小直接测试为：同一S不同query预测/净单位手算、future labels poison与白名单拒收、过去训练标准化/support漏洞/remaining分层、support外UNKNOWN默认原动作、已卖不再出售/原五槽与双对照、源码身份/未提交fit恢复/fresh QE busy零fit。复用原22直接合同不堆重复fixture/快照；真实运行前后分别报告。
+当前矩阵验收独立源码合同，不等于新模型已拟合、经济确认或生产产品。设计阶段DESIGN_REVIEW_VERIFIED和源码阶段SOURCE_VERIFIED分别记录，不能以设计合入冒称实现交付。最小直接测试为：同一S不同query预测/净单位手算、future labels poison与白名单拒收、过去训练标准化/support漏洞/remaining分层、support外UNKNOWN默认原动作、已卖不再出售/原五槽与双对照、源码身份/未提交fit恢复/fresh QE busy零fit。复用原22直接合同不堆重复fixture/快照；真实运行前后分别报告。
 
 ## Risks / Rollout / Rollback / Production Gates
+
+实际run advexitquery_fed4d4edcba7bcb89ddaff94：prepare0.158秒，6100原决策/1525episode全保留；原监督标签和四折直接复用、S-only表不含query/label。四fit与curve发表2.311秒，evaluate0.894秒，逐fold前后公开QE三入口全0；旧control refit/新oracle study均0。累计125→129真实研究fit、旧INDEX_BUILD1另列，无正在运行的本窗口实验。
+
+同240原评价cohort/238完整/2 UNKNOWN，候选相对原baseline −35.3964bps、CI95 [−72.7043,1.5447]、MDE80 53.4254；相对九字段 Exit +8.3272bps、CI95 [−11.4530,27.2837]、MDE80 28.0449。594完整干预episode/211cohort/88.6555%，4368支持内query、404支持外UNKNOWN、28原query值UNKNOWN，全部4800原评价决策保留；未知只默认原继续动作，不当模型预测成功/现金收益。四项归因净和−42121.7068除以五及238，精确还原−35.3964。
+
+相对旧负向overlay的小改善不能掩盖仍劣于原baseline。结果EXPLORATORY/NAVIGATION_ONLY、regime UNKNOWN，未确认/未激活；停止本candidate，不扩模型族/救阈值、重复fit或为它补证。原oracle+235.9270只作动作空间参照，不是新模型效果。当前原baseline正均值与candidate正均值只是重叠shadow cohort，不是资金NAV或真实盈利承诺。
 
 风险1：把后见U query误写为S观测；以两个物理入口、S曲线先发表及strict白名单阻止。风险2：把S等价净价格误称raw未来价格；现阶段不做raw报价产品，不读取未来factor实现S映射。风险3：价格conditioned拟合可能仅复刻已知价格持续/反转，支持外不推断；须看原baseline与绝对cohort收益，不能因相对差overlay改善就称Alpha。
 
@@ -112,4 +120,8 @@ Ridge 拟合采用全部原成熟已知监督样本，support 限制的是输出
 
 第三轮方法/边界复核：分位/100bps桶明确逐 remaining 仅 past train，hole/UNKNOWN/default 原动作和固定评价人口不变；冻结20输入/四fit/原模型/两对照，不重新跑旧control/oracle；原时间轴block/MDE/干预/四归因不改。F-824～827 完整，无跨模块、DB或服务操作。初次 F2 校验指出矩阵 DESIGNED 不是公共枚举；修订为 DESIGN_REVIEW_VERIFIED，明确验收的只是设计，不伪造未完成源码。
 
-最终一致性复核：本文、蓝图当前队列与历史事实分离；新假设源码/预登记/fit仍0，累计125+1不预增。没有未解决设计阻断，实施需逐项另行源码验收，不能把本文审核计作经济确认或批准激活。
+设计阶段最终复核：本文、蓝图当前队列与历史事实分离；设计合入时新源码/预登记/fit均0，累计125+1未预增。没有未解决设计阻断，实施逐项另行源码验收，不把文档审核计作经济确认或批准激活。
+
+源码三轮复审：原label/policy/KEY/四折复用、S净单位与既有GP5角色、严格S白名单/先曲线后U查询、训练金融列按past episode过滤才decode、未知default行为与同cohort配对完整；修复日期表示在原helper合并前的正规化、None query的正常UNKNOWN、全空数值列的pandas兼容性、支持桶以groupby避免平方循环及非finite编码的显式错误。首轮12 PASS/1异常类型fixture修复；失败nodeid及全空警告nodeid先复验PASS，随后13直接合同/Ruff clean。fit单元测试使用微型FakeRidge，不计真实研究fit；源码验收当时新研究为0，之后实际四fit完成，当前结果见§Risks。
+
+L0与F2 7/7通过、0blocking；两项P2复杂度提示已逐项审核：curve/query outer merge以原episode/S one-to-one、最多15000行，不产生row explosion；原cohort双对照约240行、20输入、四fold、bootstrap2000×原cohort有界；support按groupby分桶，不进行每桶扫全表的平方循环。未修改公共scanner/ownership，未添加平台或重复宽回归。当前代码已满足本地源切片合约，实际四fit完成、效果负向；公开交付仍要区分依赖/CI/merge，不把研究完成当经济确认。
