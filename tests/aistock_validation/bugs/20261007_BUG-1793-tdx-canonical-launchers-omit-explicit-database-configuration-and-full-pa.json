@@ -140,8 +140,8 @@
   },
   "first_seen_at": "2026-10-07T19:46:26.873260Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7a890d648e0754cee70e17b99ed0cbbf6e2f6872",
+  "fixed_at": "2026-10-07T20:07:30Z",
   "github_issue_number": 5693,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5693",
   "last_seen_at": "2026-10-07T19:46:26.873260Z",
@@ -149,6 +149,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5695",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -175,6 +176,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -186,7 +188,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1793",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f0d55cbff31b1871",
+    "recorded_at": "2026-10-07T20:08:10.885309Z",
+    "runtime_contract_digest": "a9003e5a49ae97be67ad969ba79dee4cec86a5ab9e891e87188ce67737c97f8c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5cf175f5886b6ab633ea0be82a709ef3c8f2e23a",
+    "source_merge_commit": "7a890d648e0754cee70e17b99ed0cbbf6e2f6872",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5695",
+    "validation_evidence": [
+      "python -m nox -s l0 -- scripts/start_tdx_go_backend.py backend/tests/scripts/test_start_tdx_go_backend.py start_all_ai_stock.bat noxfile.py tests/aistock_validation/catalog/file_ownership.yaml -> passed",
+      "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed",
+      "python -m pytest backend/tests/scripts/test_start_tdx_go_backend.py -q -> 6 passed"
+    ],
+    "validation_evidence_digest": "a73d05b7e7a08fd7b632dcd1b2b862cd121f286764dde3c503fde45fc7f4565c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -195,6 +220,11 @@
     "fingerprint": "4feab76f5ab9039661bf03ae",
     "source_event_id": "FE-20261007-4feab76f5ab9"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- scripts/start_tdx_go_backend.py backend/tests/scripts/test_start_tdx_go_backend.py start_all_ai_stock.bat noxfile.py tests/aistock_validation/catalog/file_ownership.yaml -> passed",
+    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed",
+    "python -m pytest backend/tests/scripts/test_start_tdx_go_backend.py -q -> 6 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
