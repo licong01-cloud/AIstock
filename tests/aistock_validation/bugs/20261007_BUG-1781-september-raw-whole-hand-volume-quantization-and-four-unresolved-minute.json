@@ -167,6 +167,12 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
+  "review_readback": {
+    "round_1": "Source pins, exact DEV target and NULL-only repair / precision propagation reviewed; no raw OHLC, amount, unit or tolerance overwrite.",
+    "round_2": "Actual updated main diff and precision consumer paths reviewed; legacy semantics and immutable release/profile boundary preserved.",
+    "design_compliance": "All four DESIGN-COMPLIANCE-001 checks satisfied for source phase; full monthly data delivery remains separately blocked.",
+    "ci_retry_reason": "Previous synchronize event captured obsolete draft PR body before formal validation receipt body update; actual current body has formal receipts."
+  },
   "severity": "P1",
   "status": "in_progress",
   "suspected_modules": [
