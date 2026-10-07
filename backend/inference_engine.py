@@ -283,6 +283,22 @@ def _safe_get_datetime_level(df_or_index) -> pd.Index:
 # 可复用的模块级函数（从 _run_inference_impl 中提取）
 # ============================================================
 
+def _pytorch_input_feature_count(network: Any) -> int:
+    """Read the input-layer contract, not a convolution's kernel width."""
+    modules = network.named_modules() if callable(getattr(network, "named_modules", None)) else ()
+    for _name, layer in modules:
+        for attribute in ("input_size", "in_channels", "in_features"):
+            value = getattr(layer, attribute, None)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+    parameter = next(network.parameters(), None)
+    if parameter is None:
+        raise ValueError("PyTorch StrategyPackage model has no parameter dimension")
+    if len(parameter.shape) == 2:
+        return int(parameter.shape[1])
+    raise ValueError("PyTorch model input feature count cannot be inferred from an unknown tensor layout")
+
+
 def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
     """加载模型 pkl 文件，检测类型，返回 (model, model_kind, inner_model, num_features).
 
@@ -345,13 +361,7 @@ def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
     elif hasattr(model, "dnn_model") and model.dnn_model is not None:
         inner_model = model.dnn_model
         model_kind = "pytorch"
-        first_layer = next(model.dnn_model.parameters(), None)
-        if first_layer is None or len(first_layer.shape) < 1:
-            raise ValueError(
-                "PyTorch StrategyPackage model has no parameter dimension from which "
-                "the required feature count can be established"
-            )
-        num_features_expected = int(first_layer.shape[-1])
+        num_features_expected = _pytorch_input_feature_count(inner_model)
         logger.info(f"检测到PyTorch模型 (inner: {type(inner_model).__name__}), 特征数={num_features_expected}")
     elif hasattr(model, "predict") and callable(model.predict):
         model_kind = "qlib_generic"

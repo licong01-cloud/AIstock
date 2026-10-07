@@ -874,19 +874,19 @@ class QEExperimentRuntimeAssetResolver:
                 package_id=package_key,
             )
 
-        model_payload = self._read_package_asset_bytes(
-            asset_ref=model_asset.asset_ref,
-            expected_sha256=model_asset.sha256,
-            package_id=package_key,
-            asset_kind="model_weight",
-            logical_name=str(model_asset.model_id),
-        )
-        _write_inside_runtime_source(
-            model_dir / "params.pkl",
-            model_payload,
-            source_dir=source_dir,
-            package_id=package_key,
-        )
+        try:
+            self.asset_store.materialize_file(
+                model_asset.asset_ref, model_dir / "params.pkl",
+                sha256=model_asset.sha256, size_bytes=model_asset.size_bytes,
+            )
+        except PackageAssetInvalidError as exc:
+            raise PackageAssetInvalidError(
+                exc.message,
+                context={
+                    **(exc.context or {}), "package_id": package_key,
+                    "asset_kind": "model_weight", "logical_name": str(model_asset.model_id),
+                },
+            ) from exc
         if model_asset.preprocessor_asset is not None:
             processor = model_asset.preprocessor_asset
             processor_payload = self._read_package_asset_bytes(
@@ -1905,7 +1905,10 @@ class QEExperimentRuntimeAssetResolver:
         (workspace_path / "model").mkdir(parents=True, exist_ok=True)
 
         model_dest = workspace_path / "model" / "params.pkl"
-        shutil.copy2(model_source_path, model_dest)
+        if source.model_params_origin == "package_asset":
+            os.link(model_source_path, model_dest)
+        else:
+            shutil.copy2(model_source_path, model_dest)
         model_code_source = source.asset_workspace_path / "model.py"
         if model_code_source.exists() and model_code_source.is_file():
             shutil.copy2(model_code_source, workspace_path / "model" / "model.py")
