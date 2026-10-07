@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/injoyai/base/types"
 	"github.com/injoyai/conv"
+	"math"
 	"sort"
 	"time"
 )
@@ -34,21 +35,24 @@ func (this *KlineReq) Bytes(Type uint8) (types.Bytes, error) {
 }
 
 type KlineResp struct {
-	Count uint16
+	Count int
 	List  []*Kline
 }
 
 type Kline struct {
-	Last      Price     //昨日收盘价,这个是列表的上一条数据的收盘价，如果没有上条数据，那么这个值为0
-	Open      Price     //开盘价
-	High      Price     //最高价
-	Low       Price     //最低价
-	Close     Price     //收盘价,如果是当天,则是最新价/实时价
-	Volume    int64     //成交量
-	Amount    Price     //成交额
-	Time      time.Time //时间
-	UpCount   int       //上涨数量,指数有效
-	DownCount int       //下跌数量,指数有效
+	Last         Price     //昨日收盘价,这个是列表的上一条数据的收盘价，如果没有上条数据，那么这个值为0
+	Open         Price     //开盘价
+	High         Price     //最高价
+	Low          Price     //最低价
+	Close        Price     //收盘价,如果是当天,则是最新价/实时价
+	Volume       int64     //成交量
+	VolumeShares *int64    `json:"VolumeShares,omitempty"` // Exact stock shares; legacy Volume remains whole hands.
+	VolumeWire   uint32    `json:"VolumeWire"`
+	AmountWire   uint32    `json:"AmountWire"`
+	Amount       Price     //成交额
+	Time         time.Time //时间
+	UpCount      int       //上涨数量,指数有效
+	DownCount    int       //下跌数量,指数有效
 }
 
 func (this *Kline) String() string {
@@ -138,24 +142,32 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 		return nil, errors.New("数据长度不足")
 	}
 	resp := &KlineResp{
-		Count: Uint16(bs[:2]),
+		Count: int(Uint16(bs[:2])),
 	}
 	bs = bs[2:]
 
 	var last Price //上条数据(昨天)的收盘价
-	for i := uint16(0); i < resp.Count; i++ {
+	for i := 0; i < resp.Count; i++ {
+		if len(bs) < 4 {
+			return nil, fmt.Errorf("kline %d: truncated timestamp", i)
+		}
 		k := &Kline{
 			Time: GetTime([4]byte(bs[:4]), c.Type),
 		}
+		if !validWireTime(bs[:4], c.Type, k.Time) {
+			return nil, fmt.Errorf("kline %d: invalid exchange timestamp", i)
+		}
 
-		var open Price
-		bs, open = GetPrice(bs[4:])
-		var _close Price
-		bs, _close = GetPrice(bs)
-		var high Price
-		bs, high = GetPrice(bs)
-		var low Price
-		bs, low = GetPrice(bs)
+		bs = bs[4:]
+		values := [4]Price{}
+		for j := range values {
+			var err error
+			bs, values[j], err = GetPriceChecked(bs)
+			if err != nil {
+				return nil, fmt.Errorf("kline %d price %d: %w", i, j, err)
+			}
+		}
+		open, _close, high, low := values[0], values[1], values[2], values[3]
 
 		k.Last = last
 		k.Open = open + last
@@ -178,17 +190,34 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 			年: 不需要操作
 
 		*/
-		k.Volume = int64(getVolume(Uint32(bs[:4])))
+		if len(bs) < 8 {
+			return nil, fmt.Errorf("kline %d: truncated volume/amount", i)
+		}
+		k.VolumeWire = Uint32(bs[:4])
+		k.AmountWire = Uint32(bs[4:8])
+		volume := getVolume(k.VolumeWire)
+		amount := getVolume(k.AmountWire)
+		if k.VolumeWire&0x80000000 != 0 || k.AmountWire&0x80000000 != 0 || !isFinite(volume) || !isFinite(amount) || volume >= math.MaxInt64 || amount >= float64(math.MaxInt64)/1000 {
+			return nil, fmt.Errorf("kline %d: invalid packed quantity/amount", i)
+		}
+		k.Volume = int64(volume)
 		bs = bs[4:]
 		switch c.Type {
 		case TypeKlineMinute, TypeKline5Minute, TypeKlineMinute2, TypeKline15Minute, TypeKline30Minute, TypeKline60Minute, TypeKlineDay2:
+			if c.Kind == KindStock && !(volume == 0 && amount > 0) {
+				shares := int64(volume)
+				k.VolumeShares = &shares
+			}
 			k.Volume /= 100
 		}
-		k.Amount = Price(getVolume(Uint32(bs[:4])) * 1000) //从元转为厘,并去除多余的小数
+		k.Amount = Price(amount * 1000) // Wire amount is CNY, stored Price is li.
 		bs = bs[4:]
 
 		switch c.Kind {
 		case KindIndex:
+			if len(bs) < 4 {
+				return nil, fmt.Errorf("kline %d: truncated index counts", i)
+			}
 			//指数和股票的差别,指数多解析4字节,并处理成交量*100
 			k.Volume *= 100
 			k.UpCount = conv.Int([]byte{bs[1], bs[0]})
@@ -198,9 +227,26 @@ func (kline) Decode(bs []byte, c KlineCache) (*KlineResp, error) {
 
 		resp.List = append(resp.List, k)
 	}
-	resp.List = FixKlineTime(resp.List)
+	if len(bs) != 0 {
+		return nil, errors.New("unexpected trailing kline bytes")
+	}
 	return resp, nil
 }
+
+func isFinite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+func validWireTime(bs []byte, typ uint8, t time.Time) bool {
+	switch typ {
+	case TypeKlineMinute, TypeKlineMinute2, TypeKline5Minute, TypeKline15Minute, TypeKline30Minute, TypeKline60Minute:
+		d, m := Uint16(bs[:2]), Uint16(bs[2:4])
+		return m < 1440 && t.Year() == int(d>>11)+2004 && int(t.Month()) == int(d%2048/100) && t.Day() == int(d%2048%100)
+	default:
+		d := Uint32(bs)
+		return t.Year() == int(d/10000) && int(t.Month()) == int(d%10000/100) && t.Day() == int(d%100)
+	}
+}
+
+var ExchangeLocation = time.FixedZone("Asia/Shanghai", 8*3600)
 
 type KlineCache struct {
 	Type uint8  //1分钟,5分钟,日线等
@@ -208,28 +254,9 @@ type KlineCache struct {
 }
 
 // FixKlineTime 修复盘内下午(13~15点)拉取数据的时候,11.30的时间变成13.00
-func FixKlineTime(ks []*Kline) []*Kline {
-	if len(ks) == 0 {
-		return ks
-	}
-	now := time.Now()
-	//只有当天下午13~15点之间才会出现的时间问题
-	node1 := time.Date(now.Year(), now.Month(), now.Day(), 13, 0, 0, 0, now.Location())
-	node2 := time.Date(now.Year(), now.Month(), now.Day(), 15, 0, 0, 0, now.Location())
-	if ks[len(ks)-1].Time.Unix() < node1.Unix() || ks[len(ks)-1].Time.Unix() > node2.Unix() {
-		return ks
-	}
-	ls := ks
-	if len(ls) >= 120 {
-		ls = ls[len(ls)-120:]
-	}
-	for i, v := range ls {
-		if v.Time.Unix() == node1.Unix() {
-			ls[i].Time = time.Date(now.Year(), now.Month(), now.Day(), 11, 30, 0, 0, now.Location())
-		}
-	}
-	return ks
-}
+// Deprecated: exchange wire timestamps are retained. A 13:00 anomaly must
+// be resolved from source evidence, never from the process wall clock.
+func FixKlineTime(ks []*Kline) []*Kline { return ks }
 
 type Klines []*Kline
 
