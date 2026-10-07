@@ -34,23 +34,25 @@
   "expected": "Genuine precision survives frozen source/audit/bin; legacy semantics remain unchanged.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json",
       "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/factor_materializer.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
       "noxfile.py",
-      "backend/tests/dataset_release/test_raw_volume_precision.py"
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json"
     ],
     "added_files": [
       "backend/tests/dataset_release/test_raw_volume_precision.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json",
       "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/factor_materializer.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
       "noxfile.py",
-      "backend/tests/dataset_release/test_raw_volume_precision.py"
+      "tests/aistock_validation/bugs/20261007_BUG-1783-monthly-worker-drops-provider-share-precision-during-frozen-source-audit.json"
     ],
     "changed_files_source": "git_finish",
     "planned_files": [
@@ -75,8 +77,8 @@
   },
   "first_seen_at": "2026-10-07T05:46:48.151355Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "729ca8a0f629f83e9d6c4bf43c563c47c9e3525f",
+  "fixed_at": "2026-10-07T07:21:31Z",
   "github_issue_number": 5659,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5659",
   "last_seen_at": "2026-10-07T05:46:48.151355Z",
@@ -85,6 +87,18 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5663",
+  "premerge_baseline_failure": {
+    "catalog_integrity_script": "PASS findings=0",
+    "merge_ready": true,
+    "nodeid": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
+    "observed_test_to_production_ratio": 0.30013739307716175,
+    "reproduced_on_clean_canonical_main": true,
+    "required_max_ratio": 0.3,
+    "resolution": "BUG-1784 PR #5665 merged e34fc481047f4b744ea00d3f06f1d941d87459be; updated validation_catalog_integrity PASS 22 tests and zero findings",
+    "runtime_action": false,
+    "validation_catalog_integrity_nox": "FAIL: 21 passed, 1 baseline failure"
+  },
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -94,6 +108,12 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_readback": {
+    "ci_retry_reason": "Previous synchronize event captured obsolete draft PR body before formal validation receipt body update; actual current body has formal receipts.",
+    "design_compliance": "All four DESIGN-COMPLIANCE-001 checks satisfied for source phase; full monthly data delivery remains separately blocked.",
+    "round_1": "Source pins, exact DEV target and NULL-only repair / precision propagation reviewed; no raw OHLC, amount, unit or tolerance overwrite.",
+    "round_2": "Actual updated main diff and precision consumer paths reviewed; legacy semantics and immutable release/profile boundary preserved."
+  },
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
@@ -110,6 +130,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -120,14 +141,30 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
-  "review_readback": {
-    "round_1": "Source pins, exact DEV target and NULL-only repair / precision propagation reviewed; no raw OHLC, amount, unit or tolerance overwrite.",
-    "round_2": "Actual updated main diff and precision consumer paths reviewed; legacy semantics and immutable release/profile boundary preserved.",
-    "design_compliance": "All four DESIGN-COMPLIANCE-001 checks satisfied for source phase; full monthly data delivery remains separately blocked.",
-    "ci_retry_reason": "Previous synchronize event captured obsolete draft PR body before formal validation receipt body update; actual current body has formal receipts."
-  },
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1783",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ee5f6fb31b87a675",
+    "recorded_at": "2026-10-07T07:22:29.574374Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "81f3f0c3dca7f409481ca35742781692ba9f4ddf",
+    "source_merge_commit": "729ca8a0f629f83e9d6c4bf43c563c47c9e3525f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5663",
+    "validation_evidence": [
+      "validation-receipt: id=6b09313ada525ef9 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 22 tests, zero findings`",
+      "validation-receipt: id=13c6394f6f693d74 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_raw_volume_precision.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_materializer.py -q` result=`passed 62 tests`"
+    ],
+    "validation_evidence_digest": "1632c84c5a82111cec104aca17906e29ee28efc012f19529186193f604169b9b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -136,6 +173,10 @@
     "fingerprint": "701c08dc907365ea1a1df132",
     "source_event_id": "FE-20261007-701c08dc9073"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6b09313ada525ef9 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 22 tests, zero findings`",
+    "validation-receipt: id=13c6394f6f693d74 commit=d186f1bd24e7114db1d19101677054dc916add9a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_raw_volume_precision.py backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_materializer.py -q` result=`passed 62 tests`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -182,17 +223,6 @@
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
-  },
-  "premerge_baseline_failure": {
-    "nodeid": "backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator",
-    "observed_test_to_production_ratio": 0.30013739307716175,
-    "required_max_ratio": 0.30,
-    "reproduced_on_clean_canonical_main": true,
-    "catalog_integrity_script": "PASS findings=0",
-    "validation_catalog_integrity_nox": "FAIL: 21 passed, 1 baseline failure",
-    "merge_ready": true,
-    "resolution": "BUG-1784 PR #5665 merged e34fc481047f4b744ea00d3f06f1d941d87459be; updated validation_catalog_integrity PASS 22 tests and zero findings",
-    "runtime_action": false
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
