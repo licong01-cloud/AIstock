@@ -1,6 +1,6 @@
 # Advisory GP5-ORDERED-PATH-1：D分钟时序新增信息 F2详细设计
 
-2026-10-07，DESIGN_ONLY_NOT_FITTED。唯一新研究，不是对已负GP5-JOINT候选的参数/阈值补救。现有112研究fit＋1历史index，不重置计数。
+2026-10-07，SOURCE_VERIFIED_RESEARCH_EVALUATED_NOT_CONFIRMED。设计#5655已合入81d43fe8202f9e09e43f62f7cf5adad157ca7622/自身官方清理完成21.672秒；新九文件源码多轮本窗口自审与修复、最终7定向/Ruff/L0/F2八项通过。一次研究相对原Top5/冻结joint为−52.0708/−9.5296bps每5TD cohort，仅停止本candidate、不调阈值/seed补救。累计113研究fit＋1历史index；源码PR、合入与清理另报告，未激活。
 
 ## Background / Goal
 
@@ -37,12 +37,12 @@ GP5-JOINT-DISTRIBUTION-1一次研究相对原Top5−42.5412、相对冻结39D GB
 
 只解码每KEY的D open/high/low/close/volume，T及之后解码0；按instrument复用stream、386D/7720原KEY批量，不能每天重建工作区。使用既有OHLC验证，known非正价格、负volume、矛盾区间/非法key/未来时点显式失败；缺文件/NaN/停牌正常UNKNOWN。源/元数据若读取时变化不能混代。来源校验只是计算一致性，不是策略包资格门。
 
-固定交易所clock16bin：第一bin09:30～09:45（含09:30），其余上午09:46～11:30每15min，共8；下午13:01～15:00每15min，共8。不按观察bar序号等分，不跨午休，不把缺失或停牌bar挤成邻接。每个bin输出：
+固定交易所clock16bin：第一收益bin09:30～09:45（含09:30），其余上午09:46～11:30每15min，共8；下午收益13:01～15:00每15min，共8。不按观察bar序号等分，不跨午休，不把缺失或停牌bar挤成邻接。09:30和13:00是允许存在的边界anchor，13:00只在原calendar存在时计入下午第一个volume bin，绝不替代13:01收益端点或缺失09:30。每个bin输出：
 
 1. return_bps=10000*(固定bin末close/固定bin首open−1)，只需这两端及其known OHLC成立；端点缺则此量UNKNOWN，不找最近可用端点。
-2. volume_share=该bin volume和/全D原241clock volume和；只有全部clock volume已知且全天总volume>0才测量。已知零成交bin份额为0，全天0或缺任一bar则所有份额UNKNOWN，不以部分和当完整分母。
+2. volume_share=该bin volume和/全D原声明calendar volume和，边界anchor也计入对应bin；只有240核心交易分钟（09:31～11:30、13:01～15:00）全部存在、原D所有声明clock的volume已知且全天总volume>0才测量。已知零成交bin份额为0，全天0、缺核心分钟或声明bar volume未知则所有份额UNKNOWN，不以部分和当完整分母。未声明的可选anchor不伪造volume为0，也不认定停牌。
 
-32列按bin0..15的return/share交错排列。正常未知的mask显式保存，不全行淘汰；元数据另报原calendar_slots、各bin端点/volume已知及缺失原因。D价格量和无量纲份额不需要amount/VWAP、跨raw/adjusted绝对价格映射或未来复权锚。缺少09:30不是隐式240bar替换，只影响依赖的量。
+32列按bin0..15的return/share交错排列。正常未知的mask显式保存，不全行淘汰；元数据另报原calendar_slots、两anchor是否存在、各bin端点/volume已知及缺失原因。D价格量和无量纲份额不需要amount/VWAP、跨raw/adjusted绝对价格映射或未来复权锚。缺少09:30不是用13:00隐式替换，只使第一bin收益UNKNOWN；无新stock或包准入条件。
 
 ### 2. 同信息外扩、同成熟人口与编码
 
@@ -85,20 +85,20 @@ price query/完整legal tick仍成本各一次、expected_net/risk同原合同�
 
 ## Design Acceptance Matrix
 
-本PR是完整事前设计，不是模型源码完成；以下DESIGN_VERIFIED只证明已审核的合同。源码/真实研究/运行各独立验收，不将未实现说成已实现。
+设计PR已合入；当前源码切片只验收完整离线模型/来源/编排。真实prepare/研究fit与收益另报告，不把unit fixture计入研究；API/UI/经济确认/模型启用不冒称已验收。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-761 | planned generic_ordered_path_price_5td_source_v1.py | artifact: X:/AIstock_temp/advisory/full-delivery-20261006/spike_d_ordered_path.py；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_source_v1.py | DESIGN_VERIFIED | none |
-| F-762 | planned generic_ordered_path_price_5td_source_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §1/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_source_v1.py | DESIGN_VERIFIED | none |
-| F-763 | planned generic_ordered_path_price_5td_model_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §2/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | DESIGN_VERIFIED | none |
-| F-764 | planned generic_ordered_path_price_5td_model_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §2～3/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | DESIGN_VERIFIED | none |
-| F-765 | planned generic_ordered_path_price_5td_model_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §3/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | DESIGN_VERIFIED | none |
-| F-766 | planned generic_ordered_path_price_5td_pipeline_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §4/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | DESIGN_VERIFIED | none |
-| F-767 | planned generic_ordered_path_price_5td_pipeline_v1.py | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md §4/Review；planned backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | DESIGN_VERIFIED | none |
-| F-768 | scope/Implementation Plan | artifact: docs/architecture/advisory_generic_ordered_path_price_5td_v1_f2_design_20261007.md Scope/Review；git diff --check | DESIGN_VERIFIED | none |
+| F-761 | backend/services/advisory_model_first/generic_ordered_path_price_5td_source_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-762 | backend/services/advisory_model_first/generic_ordered_path_price_5td_source_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-763 | backend/services/advisory_model_first/generic_ordered_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-764 | backend/services/advisory_model_first/generic_ordered_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-765 | backend/services/advisory_model_first/generic_ordered_path_price_5td_model_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_model_v1.py | SOURCE_VERIFIED | none |
+| F-766 | backend/services/advisory_model_first/generic_ordered_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-767 | backend/services/advisory_model_first/generic_ordered_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
+| F-768 | backend/services/advisory_model_first/generic_ordered_path_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_ordered_path_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
 
-最小直接测试：一份固定241clock fixture共享，时段手算/午休/正常缺bar/0volume、known矛盾、无D文件保KEY；一份成熟监督fixture一次forest fit，test毒化、role/编码/hash/leaf手算、zero质量/成本/价洞、frozencontrol不重fit；一份stage fixture验证原人口、partial、四臂归因/未知/未结算。无重复参数快照、实现明细锁定、整QE/UI或泛化邻接套件。
+最小直接测试：一份固定clock fixture共享，时段手算/午休/正常缺bar/0volume、两anchor变体、known矛盾、无D文件保KEY；一份成熟监督fixture一次forest fit，test毒化、role/编码/hash/leaf手算、zero质量/成本/价洞、frozencontrol不重fit；一份stage fixture验证原人口、partial、四臂归因/未知/未结算。无重复参数快照、实现明细锁定、整QE/UI或泛化邻接套件。
 
 ## Risks / Rollout / Rollback / Production Gates
 
@@ -109,3 +109,19 @@ backend_restart_required=false；0DB写/依赖/profile/模型/角色激活/后�
 ## Review / 多轮自审
 
 第一轮业务/新颖性：原D-only控制已存在，不重复删gap或换模型；保留joint39D为固定控制，只有D时序信息外扩，原Top5与known拒买净贡献两条收益验收不变。第二轮PIT/统计：固定交易所clock而非观察bar分箱；端点不邻填、volume完整分母、结构池medians/test毒化、两role SHA相同、1fit/已消费窗/非NAV。第三轮边界/预算：不改旧任何源/权重或共享数据，没有QE Alpha/父包门/amount数据修复/平台/UI任务；只有9自身文件、X临时/F正式、QE互斥和user重启保留。以上是本窗口自审，不冒称独立外审。
+
+源码第一轮：新32列/103维、原19编码/诚实role哈希不变、固定clock手算/午休/缺失不压缩、JSON apply parity、成本和完整tick洞，5项最小直接节点通过。第二轮：新增自身stage/原人口/只读父控制/partial不可第二fit/四臂未知及未结算；一个fixture误取EvidenceReferenceV1.path，按既有_verify_reference修正，失败节点单独复测通过，未修改公共合同。第三轮：补齐新source/contracts/pipeline的implementation hash，避免只hash模型却漏新reader；known high/low矛盾即使其它价格UNKNOWN仍失败，新增同节点定向复测通过。没有因正常缺失删股票或改变成熟训练人口；不存在新研究fit、数据库写/服务操作。最终稳定小矩阵/Ruff/L0/F2及真实一次研究另报告。
+
+上述三轮是首次实际prepare/fit之前的审核快照。第四轮clock修复后最终稳定7项通过，Ruff无问题、官方L0 quality0finding/guardrails0blocking（1既存非阻断项）、F2八项0warnings；并执行一次真实研究和必要四stage/数学读回，未重复评价或扩大旧负实验审计。
+
+完整prepare前第四轮：3个原D（2025-11-27、12-08、12-12）calendar有13:00、没有09:30；初版硬模板把合法边界anchor误报非法。只读metadata定位，没有读收益或fit；修订合同后，原D/股票不删、固定收益端点不邻填，volume保全部声明clock并要求核心240分钟完备。新增同一手算节点的变体验证通过，不修改基础数据或资格门。首个preregistered advgp5ordered_f858f556c1d8ef5390cf142a仅准备失败、0fit且0trained/evaluated，保留不覆盖；修复producer以新implementation/独立run登记，不将准备错误计作负研究或第二次研究fit。
+
+## 当前实际一次研究结果
+
+clean producer f2887c579667e8ae41f978634ed07ade3fb10ebf，implementation SHA f9976d76f62c6d8bea5e69c3b070ec4858cc214c7f8f1d0ea70a2a97e1b49e3f。run advgp5ordered_316536901e41a77dfcf39517，plan SHA 316536901e41a77dfcf39517aab6c81321a969dd93f54f6951773be2d7482d99。首次成功prepare46.172秒，386原D/7720原KEY全保留，只D解码37,154,800bytes，0未来；4880行新32量全部已知，其余逐字段UNKNOWN/mask不删股、不另过滤训练人口。来源CURRENT_RELEASE_NON_VINTAGE_D_PRICE_VALUES不提升为原生。
+
+2026-10-07T03:27:24.669133+00:00及03:27:29.816319+00:00、公共QE三入口都0；唯一1候选fit/128内部树，train阶段2.438秒、train至完整四臂5.141秒。原结构1738/估计1848与两role KEY SHA和冻结joint相同，结构最新H2024-12-23<估计首D2024-12-24，test/validation未参与训练/编码。model SHA 01e3250a0836db22fa2c5b4fecc977421960e4fb70fb5775b3e59fa1edab5dda；trained/evaluated stage SHA 416521064b7cc21950f59f8fc03bfc94367498c55ce56f26648659c02bbe60da/7d7735c89af7e988c438f8046965e4a2c4caeac4b492a9e465a57f3c43a74282。0旧控制重fit/数据库写/QE提交/服务或进程控制。
+
+81原testD，80四臂共同完整组＋1未结算null。baseline/rule/matched/candidate平均129.0145/131.5724/86.4733/76.9437bps每5TD cohort；candidate−baseline−52.0708、−matched−9.5296。280已结算TAKE胜率57.50%，base403/58.3127%、matched293/58.0205%，不能用胜率冒充期望。已知拒买111次/54D，避免亏损33.6043−错过上涨87.7194=−54.1152bps，UNKNOWN空槽＋2.0444另列，合计−52.0708；相对matched21次已知干预/17D，非恒等候选。1不可执行、12UNKNOWN、1未结算分别保留，区间/NAV/MDD null、经济确认和deployable=false。
+
+一次新时序信息在本固定模型/窗口下没有收益增量，仅停止这个candidate；不调bin数/参数/seed/loss/阈值、回选rule控制或重跑旧研究。不把正常缺失/3个anchor变体解释为基础数据故障或跨包不合格，也不证明全局不可学。下一研究必须先提出不同业务目标/信息的事前设计，当前必要日频DB输入交付保留为独立辅线、UI后置。源码完整可交付与盈利/生产启用是不同状态。
