@@ -1,6 +1,6 @@
 # Advisory GP5-ORDERED-PATH-1：D分钟时序新增信息 F2详细设计
 
-2026-10-07，SOURCE_REVIEWED_NOT_FITTED。设计#5655已合入81d43fe8202f9e09e43f62f7cf5adad157ca7622/自身官方清理完成；新九文件源码多轮自审与定向节点已通过，最终小矩阵/质量检查另列。唯一新研究，不是对已负GP5-JOINT候选的参数/阈值补救；真实112研究fit＋1历史index尚不变。
+2026-10-07，SOURCE_VERIFIED_RESEARCH_EVALUATED_NOT_CONFIRMED。设计#5655已合入81d43fe8202f9e09e43f62f7cf5adad157ca7622/自身官方清理完成21.672秒；新九文件源码多轮本窗口自审与修复、最终7定向/Ruff/L0/F2八项通过。一次研究相对原Top5/冻结joint为−52.0708/−9.5296bps每5TD cohort，仅停止本candidate、不调阈值/seed补救。累计113研究fit＋1历史index；源码PR、合入与清理另报告，未激活。
 
 ## Background / Goal
 
@@ -112,4 +112,16 @@ backend_restart_required=false；0DB写/依赖/profile/模型/角色激活/后�
 
 源码第一轮：新32列/103维、原19编码/诚实role哈希不变、固定clock手算/午休/缺失不压缩、JSON apply parity、成本和完整tick洞，5项最小直接节点通过。第二轮：新增自身stage/原人口/只读父控制/partial不可第二fit/四臂未知及未结算；一个fixture误取EvidenceReferenceV1.path，按既有_verify_reference修正，失败节点单独复测通过，未修改公共合同。第三轮：补齐新source/contracts/pipeline的implementation hash，避免只hash模型却漏新reader；known high/low矛盾即使其它价格UNKNOWN仍失败，新增同节点定向复测通过。没有因正常缺失删股票或改变成熟训练人口；不存在新研究fit、数据库写/服务操作。最终稳定小矩阵/Ruff/L0/F2及真实一次研究另报告。
 
+上述三轮是首次实际prepare/fit之前的审核快照。第四轮clock修复后最终稳定7项通过，Ruff无问题、官方L0 quality0finding/guardrails0blocking（1既存非阻断项）、F2八项0warnings；并执行一次真实研究和必要四stage/数学读回，未重复评价或扩大旧负实验审计。
+
 完整prepare前第四轮：3个原D（2025-11-27、12-08、12-12）calendar有13:00、没有09:30；初版硬模板把合法边界anchor误报非法。只读metadata定位，没有读收益或fit；修订合同后，原D/股票不删、固定收益端点不邻填，volume保全部声明clock并要求核心240分钟完备。新增同一手算节点的变体验证通过，不修改基础数据或资格门。首个preregistered advgp5ordered_f858f556c1d8ef5390cf142a仅准备失败、0fit且0trained/evaluated，保留不覆盖；修复producer以新implementation/独立run登记，不将准备错误计作负研究或第二次研究fit。
+
+## 当前实际一次研究结果
+
+clean producer f2887c579667e8ae41f978634ed07ade3fb10ebf，implementation SHA f9976d76f62c6d8bea5e69c3b070ec4858cc214c7f8f1d0ea70a2a97e1b49e3f。run advgp5ordered_316536901e41a77dfcf39517，plan SHA 316536901e41a77dfcf39517aab6c81321a969dd93f54f6951773be2d7482d99。首次成功prepare46.172秒，386原D/7720原KEY全保留，只D解码37,154,800bytes，0未来；4880行新32量全部已知，其余逐字段UNKNOWN/mask不删股、不另过滤训练人口。来源CURRENT_RELEASE_NON_VINTAGE_D_PRICE_VALUES不提升为原生。
+
+2026-10-07T03:27:24.669133+00:00及03:27:29.816319+00:00、公共QE三入口都0；唯一1候选fit/128内部树，train阶段2.438秒、train至完整四臂5.141秒。原结构1738/估计1848与两role KEY SHA和冻结joint相同，结构最新H2024-12-23<估计首D2024-12-24，test/validation未参与训练/编码。model SHA 01e3250a0836db22fa2c5b4fecc977421960e4fb70fb5775b3e59fa1edab5dda；trained/evaluated stage SHA 416521064b7cc21950f59f8fc03bfc94367498c55ce56f26648659c02bbe60da/7d7735c89af7e988c438f8046965e4a2c4caeac4b492a9e465a57f3c43a74282。0旧控制重fit/数据库写/QE提交/服务或进程控制。
+
+81原testD，80四臂共同完整组＋1未结算null。baseline/rule/matched/candidate平均129.0145/131.5724/86.4733/76.9437bps每5TD cohort；candidate−baseline−52.0708、−matched−9.5296。280已结算TAKE胜率57.50%，base403/58.3127%、matched293/58.0205%，不能用胜率冒充期望。已知拒买111次/54D，避免亏损33.6043−错过上涨87.7194=−54.1152bps，UNKNOWN空槽＋2.0444另列，合计−52.0708；相对matched21次已知干预/17D，非恒等候选。1不可执行、12UNKNOWN、1未结算分别保留，区间/NAV/MDD null、经济确认和deployable=false。
+
+一次新时序信息在本固定模型/窗口下没有收益增量，仅停止这个candidate；不调bin数/参数/seed/loss/阈值、回选rule控制或重跑旧研究。不把正常缺失/3个anchor变体解释为基础数据故障或跨包不合格，也不证明全局不可学。下一研究必须先提出不同业务目标/信息的事前设计，当前必要日频DB输入交付保留为独立辅线、UI后置。源码完整可交付与盈利/生产启用是不同状态。
