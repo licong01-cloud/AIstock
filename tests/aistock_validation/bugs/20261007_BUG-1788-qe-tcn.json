@@ -38,6 +38,7 @@
       "backend/services/strategy_package/live_inference.py",
       "backend/services/strategy_package/package_asset_freeze.py",
       "backend/services/strategy_package/package_asset_store.py",
+      "backend/tests/strategy_package/test_freeze_completeness_build_gate.py",
       "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
       "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
       "tests/aistock_validation/bugs/20261007_BUG-1788-qe-tcn.json"
@@ -48,6 +49,7 @@
       "backend/services/strategy_package/live_inference.py",
       "backend/services/strategy_package/package_asset_freeze.py",
       "backend/services/strategy_package/package_asset_store.py",
+      "backend/tests/strategy_package/test_freeze_completeness_build_gate.py",
       "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
       "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
       "tests/aistock_validation/bugs/20261007_BUG-1788-qe-tcn.json"
@@ -154,8 +156,8 @@
   },
   "first_seen_at": "2026-10-07T18:28:15.490019Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "965c17664a5e12ddadb7bdbf60cc6f9598d88216",
+  "fixed_at": "2026-10-07T19:54:30Z",
   "github_issue_number": 5677,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5677",
   "last_seen_at": "2026-10-07T18:28:15.490019Z",
@@ -163,6 +165,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5687",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -189,6 +192,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -200,7 +204,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1788",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9c1e8c597e65d6f0",
+    "recorded_at": "2026-10-07T19:55:05.094108Z",
+    "runtime_contract_digest": "82dd60cf55c154c1e959c2e8c61fb216fca08c5e2aafeeda072970a7b6e4e1c0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8f16de8e40451563d1f992a2c370e0bda5e85d7f",
+    "source_merge_commit": "965c17664a5e12ddadb7bdbf60cc6f9598d88216",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5687",
+    "validation_evidence": [
+      "validation-receipt: id=87f3c664415f1a0a commit=8f16de8e40451563d1f992a2c370e0bda5e85d7f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+      "validation-receipt: id=a1a2e76049d07ffd commit=8f16de8e40451563d1f992a2c370e0bda5e85d7f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_freeze_completeness_build_gate.py::test_alpha158_schema_missing_and_sha_mismatch_fail_closed` result=`passed; SHA assertions unchanged; related 67 regressions and 7 direct contracts passed`"
+    ],
+    "validation_evidence_digest": "78e5cbd704e74754dbb88dffdb4445728e85e68cadc6cdc995fe83594851b3cc"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -209,6 +235,10 @@
     "fingerprint": "6bc7ad2e636f0ed2835d3750",
     "source_event_id": "FE-20261007-6bc7ad2e636f"
   },
+  "validation_evidence": [
+    "validation-receipt: id=87f3c664415f1a0a commit=8f16de8e40451563d1f992a2c370e0bda5e85d7f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+    "validation-receipt: id=a1a2e76049d07ffd commit=8f16de8e40451563d1f992a2c370e0bda5e85d7f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_freeze_completeness_build_gate.py::test_alpha158_schema_missing_and_sha_mismatch_fail_closed` result=`passed; SHA assertions unchanged; related 67 regressions and 7 direct contracts passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
