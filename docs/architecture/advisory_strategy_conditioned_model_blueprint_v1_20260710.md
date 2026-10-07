@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.78
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.79
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-08
@@ -1989,18 +1989,19 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 ## 16. 当前下一步
 
-### 16.0 当前唯一长任务队列（2026-10-08 P18～P22）
+### 16.0 当前唯一长任务队列（2026-10-08 P18～P23）
 
 | 顺序 | 任务及实际状态 | 边界 |
 |---|---|---|
-| P22 / 当前唯一模型主线 | [价格条件化继续价值F2](advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md)设计#5705已合入fa5a6a686/自身清理；独立七文件源码13直接合同/Ruff/L0/F2及多轮复审通过；S-only净价格曲线先发表后U查询，固定20输入/原Ridge/四折/双对照 | 新研究预登记/fit仍0，125+1不预增；不读取实际U发表S曲线、不以未来factor映射S raw价，不继续P21字段/旧阈值；GP5买价已有条件化，本假设仅Exit，不作盈利承诺 |
+| P23 / 后续实施顺序 | 首先交付P18独立依赖与P19真实买价API；模型主线下一立项须有不同经济信息或尚未实现角色的独立假设，不重复三种已结束Exit或救参数 | 暂无第四新模型/fit，不因同窗口多试得到好看点估计就称盈利；QE仅消费其交付包，不重复上游实验，UI/自然20日/旧负向补证不前置 |
+| P22 / 一次新研究已结束 | [价格条件化继续价值F2](advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md)设计#5705已合入fa5a6a686/自身清理；源码77824c1、13直接合同/Ruff/L0/F2及四fit完成，S-only曲线先发表后U查询 | 同240cohort/238完整：相对base −35.3964bps、CI95 [−72.7043,1.5447]；相对旧Exit +8.3272bps、CI95 [−11.4530,27.2837]；累计129+1，无经济确认/激活，不救旧阈值/family |
 | P21 / 一次研究已结束 | [持仓路径S信息F2](advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md)源码13直接合同/Ruff/L0/F2及四新fit完成；独立Draft #5704以#5697为base，仅七文件；相对base/九字段 −47.4315/−3.7078bps，均区间跨0 | 原标签/控制/折/episode不变，0旧refit/新oracle；累计125研究fit+1旧index，0激活，不派生更多技术字段；source/CI/依赖/合入分别报告 |
 | P18 / 必要工程依赖 | BUG-1778及四文件DB输入本地已验证；Issue #5645公共交付角色/合同仍OPEN，依赖分别交付 | 不修改公共workflow或其它模块、不捆绑旧分支、不重复旧验收；工程依赖不是父包准入或研究停止条件 |
 | P19 / 本地业务链路通过 | [固定5TD日频API F2](advisory_generic_daily_price_api_5td_v1_f2_design_20261007.md)九文件/40直接合同、多轮/Ruff/L0/F2通过；真实两日80排名+16等待完整保留，22只读SELECT | 公开源码合入等待P18，配置/实际HTTP尚未激活；原raw tick/PIT/一snapshot/budget、UNKNOWN宽度不填、UI不前置 |
 | P20 / 一次审计已结束 | [固定5TD剩余净价值F2](advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md)源码22直接合同/Ruff/L0/F2及4fit已完成；Draft PR #5697 CI绿、仍待独立依赖 | 238完整/240原评价cohort；模型−43.7236bps、oracle+235.9270bps，区间跨零；不激活/救结果，源码/经济/卖价产品分报 |
-| P16/P17 / 历史完成，不再待办 | selection-context设计#5667已合入/清理；producer0d457843，一次2fit负向；相对base/GP5 −59.6049/−4.2209bps，117fit检查点 | 不猜父Alpha/绝对score、不重排、不为负向候选补证或派生排名变体；当前全任务125研究fit+1旧index，非仍在等QE |
+| P16/P17 / 历史完成，不再待办 | selection-context设计#5667已合入/清理；producer0d457843，一次2fit负向；相对base/GP5 −59.6049/−4.2209bps，117fit检查点 | 不猜父Alpha/绝对score、不重排、不为负向候选补证或派生排名变体；当前全任务129研究fit+1旧index，非仍在等QE |
 
-下方E0～E6、2026-10-06的P1～P6与已完成M序列为历史进展，不重新成为待办。前轮量价/joint/ordered/selection-context、九字段Exit与P21持仓路径均已一次结束，不补证归档或重跑。P22先独立设计S状态与hypothetical价格query，不能把未来实际U价当S输入，也不继续P21字段/阈值搜索。运行配置/激活及用户重启单独处理，不能把source/功能读回当盈利。
+下方E0～E6、2026-10-06的P1～P6与已完成M序列为历史进展，不重新成为待办。前轮量价/joint/ordered/selection-context及本轮三种Exit均已一次结束，不补证归档或重跑。新price query正确参与条件化仍未转化为增量，不是恢复使用未来观测、同族family搜索或将Ridge换更大网络的理由。后续先完成日频业务源码交付；新的研究假设须独立定义不同经济信息/角色，而不是填满长任务时间。运行配置/激活及用户重启单独处理，不能把source/功能读回当盈利。
 
 本页是当前执行路线；§1.3和§9保存完整演进结果，正式registry/route保留历史身份，不为补账或归档新增工时。业务目标始终为可验证的成本后超额收益与风险管理收益，分别按双合同评价。QE统一执行上游Alpha的历史复验、多seed、因子/模型组合和新候选搜索；Advisory不建立第二条Alpha实验线，但负责自身日级价格区间模型、正式binding、API/UI和消费侧业务验证。Advisory不研发分钟择时或执行策略。
 

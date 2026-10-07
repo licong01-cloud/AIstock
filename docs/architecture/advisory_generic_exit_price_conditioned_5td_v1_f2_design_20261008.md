@@ -1,6 +1,6 @@
 # Advisory 固定5TD价格条件化继续价值 F2详细设计
 
-2026-10-08。假设 EXIT5-PRICE-CONDITIONED-CONTINUATION-1。设计PR #5705已合入fa5a6a686、自身官方清理完成；独立七文件源码本地实现并进入定向验收。尚未预登记或物理fit，没有可激活或已确认盈利的raw卖价功能。
+2026-10-08。假设 EXIT5-PRICE-CONDITIONED-CONTINUATION-1。设计PR #5705已合入fa5a6a686、自身官方清理完成；独立七文件源码77824c1经多轮复审/13直接合同/Ruff/L0/F2通过，一次新研究及四fit已完成。源码尚未公开合入，没有可激活或已确认盈利的raw卖价功能。
 
 源码范围登记：feature/advisory-exit5-price-conditioned-value-source-20261008，精确下述七文件；显式原audit helper依赖#5697，不导入失败P21源码、不修改旧study或其他模块。
 
@@ -100,6 +100,12 @@ Ridge 拟合采用全部原成熟已知监督样本，support 限制的是输出
 
 ## Risks / Rollout / Rollback / Production Gates
 
+实际run advexitquery_fed4d4edcba7bcb89ddaff94：prepare0.158秒，6100原决策/1525episode全保留；原监督标签和四折直接复用、S-only表不含query/label。四fit与curve发表2.311秒，evaluate0.894秒，逐fold前后公开QE三入口全0；旧control refit/新oracle study均0。累计125→129真实研究fit、旧INDEX_BUILD1另列，无正在运行的本窗口实验。
+
+同240原评价cohort/238完整/2 UNKNOWN，候选相对原baseline −35.3964bps、CI95 [−72.7043,1.5447]、MDE80 53.4254；相对九字段 Exit +8.3272bps、CI95 [−11.4530,27.2837]、MDE80 28.0449。594完整干预episode/211cohort/88.6555%，4368支持内query、404支持外UNKNOWN、28原query值UNKNOWN，全部4800原评价决策保留；未知只默认原继续动作，不当模型预测成功/现金收益。四项归因净和−42121.7068除以五及238，精确还原−35.3964。
+
+相对旧负向overlay的小改善不能掩盖仍劣于原baseline。结果EXPLORATORY/NAVIGATION_ONLY、regime UNKNOWN，未确认/未激活；停止本candidate，不扩模型族/救阈值、重复fit或为它补证。原oracle+235.9270只作动作空间参照，不是新模型效果。当前原baseline正均值与candidate正均值只是重叠shadow cohort，不是资金NAV或真实盈利承诺。
+
 风险1：把后见U query误写为S观测；以两个物理入口、S曲线先发表及strict白名单阻止。风险2：把S等价净价格误称raw未来价格；现阶段不做raw报价产品，不读取未来factor实现S映射。风险3：价格conditioned拟合可能仅复刻已知价格持续/反转，支持外不推断；须看原baseline与绝对cohort收益，不能因相对差overlay改善就称Alpha。
 
 风险4：重复消费开发窗带来的研究者偏差。新 hypothesis 与新增4fit计数明确、旧结果不改判，探索性只有导航价值，不使用新的 sealed；成功后也需另行独立确认，不能对当前窗口再选参数。风险5：mean头本身不识别风险，不能据正均值自动上线或承诺最佳卖点。
@@ -118,4 +124,4 @@ Ridge 拟合采用全部原成熟已知监督样本，support 限制的是输出
 
 源码三轮复审：原label/policy/KEY/四折复用、S净单位与既有GP5角色、严格S白名单/先曲线后U查询、训练金融列按past episode过滤才decode、未知default行为与同cohort配对完整；修复日期表示在原helper合并前的正规化、None query的正常UNKNOWN、全空数值列的pandas兼容性、支持桶以groupby避免平方循环及非finite编码的显式错误。首轮12 PASS/1异常类型fixture修复；失败nodeid及全空警告nodeid先复验PASS，随后13直接合同/Ruff clean。fit单元测试使用微型FakeRidge，不计真实研究fit；新研究仍0。
 
-L0与F2 7/7通过、0blocking；两项P2复杂度提示已逐项审核：curve/query outer merge以原episode/S one-to-one、最多15000行，不产生row explosion；原cohort双对照约240行、20输入、四fold、bootstrap2000×原cohort有界；support按groupby分桶，不进行每桶扫全表的平方循环。未修改公共scanner/ownership，未添加平台或重复宽回归。当前代码已满足本地源切片合约，公开交付仍要区分依赖/CI/merge，真实研究/收益状态尚未完成。
+L0与F2 7/7通过、0blocking；两项P2复杂度提示已逐项审核：curve/query outer merge以原episode/S one-to-one、最多15000行，不产生row explosion；原cohort双对照约240行、20输入、四fold、bootstrap2000×原cohort有界；support按groupby分桶，不进行每桶扫全表的平方循环。未修改公共scanner/ownership，未添加平台或重复宽回归。当前代码已满足本地源切片合约，实际四fit完成、效果负向；公开交付仍要区分依赖/CI/merge，不把研究完成当经济确认。
