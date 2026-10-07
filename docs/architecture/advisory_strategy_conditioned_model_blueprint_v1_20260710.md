@@ -1,7 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.70
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.71
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-07
+
+> 最新长任务主线：[GP5-SELECTION-CONTEXT-1 F2](advisory_generic_selection_context_price_5td_v1_f2_design_20261007.md)设计先行，唯一新增原D候选池相对排名(rank−1)/(N−1)，N=1为0；原GP5九字段/19维不含rank、训练Top20与业务Top5的条件化差异是待检验假设，不是已证实根因。新family显式selection-conditioned，旧stock-only不改；不读父score或包ID/腿、不重排、不重复QE。固定5TD/成本/800风险/相同原成熟KEY及旧median/support、冻结原GP5控制，只计划唯一2新fit（完整后115→117，旧index另报），当前fit=0；价点诊断与已知拒买经济价值分报，原候选/日期/UNKNOWN全保留、0sealed。随后必要BUG/DB依赖ready才精确交付、独立只读5TD日频API与剩余净价值卖价设计，UI/旧闭环不阻主线。多轮审核/当前CI后按授权合入、自身清理，只有用户可重启后端，0公共模块/DB/服务/配置或模型激活。
+
+> 前轮交付已结束：GP5-RETURN-VOLUME-LAG-1源码与真实负结果PR #5660 currentCI37578132818 SUCCESS已合入a599381703，自身官方cleanup23.031秒/0blocking/warnings；正式F evaluated产物保留，不重跑、调阈值或补证。以下“源码PR继续”属于该研究合入前快照，以本行当前完成状态为准。
 
 > 当前源码与研究：[GP5-RETURN-VOLUME-LAG-1 F2](advisory_generic_return_volume_price_5td_v1_f2_design_20261007.md)设计#5658已合入b3a0a612a并自身清理。独立九文件源码三轮修复/9定向/Ruff/L0/F2通过，run advgp5rvlag_c1869cf9c60177309f17330f已首次prepare6.469秒/386D7720全保留、QE三入口拟合前后全0、唯一两head fit3.953秒/至完整四臂4.828秒。80共同完整5TD cohort candidate−base/−frozen daily为−71.2879/−15.9040bps；known拒买避免亏损44.9896、错过上涨118.3219、净−73.3323，UNKNOWN空槽＋2.0444另列。仅停止此candidate，不调阈值/seed/window、回选control或重跑，当前真实累计115研究fit＋1旧index；源码PR/合入/自身清理继续。joint/ordered旧负结果不改判、不补证；下一主线必须先定义不同经济信息或可识别业务目标，不继续本块同族消融。0QE提交/DB写/其它模块修改/服务控制/激活，UI与BUG-1778公共分类不阻冻结来源研究。
 
@@ -1980,6 +1984,18 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | 无推荐被误作故障或被静默补位 | 发布`NO_ELIGIBLE_RECOMMENDATION`与阈值/reason，保留0至5固定槽位，不复用旧结果、不补第6名、不生成资金权重 |
 
 ## 16. 当前下一步
+
+### 16.0 当前唯一长任务队列（2026-10-07 P16～P20）
+
+| 顺序 | 任务及实际状态 | 边界 |
+|---|---|---|
+| P16 / 当前 | GP5-SELECTION-CONTEXT-1 F2：原D相对排名上下文唯一变量，两docs设计多轮审核；新fit0 | 原19维控制、原成熟KEY/5TD/成本/风险不改；不猜父Alpha/绝对score可比性、不重排 |
+| P17 / 设计交付后 | 独立七文件、一次2head与四臂；价点误差、已知拒买净贡献、UNKNOWN空槽分报 | 当前115fit+1，完整后117+1；QE fresh三0；负只停本candidate，不盲派生/救参数 |
+| P18 / 必要辅线 | BUG-1778及四文件DB输入本地已验证；公共交付分类ready才分别交付 | 不修改公共workflow或其它模块，不重复旧验收/大PR、不阻研究 |
+| P19 / 随后 | 独立固定5TD只读日频DB→model→价集API设计/源码及历史业务验证 | 包/单指数/指数并集；不是旧M1五review，UI不前置，不自动绑定未确认模型 |
+| P20 / 随后 | 下一合法卖出vs继续持有的剩余净价值卖价F2详细设计 | 只设计，不把holding信号当Exit价值，不研发分钟执行 |
+
+下方E0～E6、2026-10-06的P1～P6与已完成M序列为历史进展，不重新成为待办。前轮量价/joint/ordered已一次负，不补证归档或重跑；本候选只新增明确经济上下文、不更换旧控制/阈值。若P17负则转本队列必要接入与P20新目标设计，而非自动串行增加排名编码变体。运行配置/激活及用户重启单独处理，不能把source/功能读回当盈利。
 
 本页是当前执行路线；§1.3和§9保存完整演进结果，正式registry/route保留历史身份，不为补账或归档新增工时。业务目标始终为可验证的成本后超额收益与风险管理收益，分别按双合同评价。QE统一执行上游Alpha的历史复验、多seed、因子/模型组合和新候选搜索；Advisory不建立第二条Alpha实验线，但负责自身日级价格区间模型、正式binding、API/UI和消费侧业务验证。Advisory不研发分钟择时或执行策略。
 
