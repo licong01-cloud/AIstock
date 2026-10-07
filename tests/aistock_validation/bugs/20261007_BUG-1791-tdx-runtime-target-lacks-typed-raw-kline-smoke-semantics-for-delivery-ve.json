@@ -1,98 +1,106 @@
 {
-  "actual": "TDX ownership is missing; existing Go CI runs network-dependent extend tests and does not build the separate web module.",
+  "actual": "Existing tdx-go-backend runtime catalog cannot validate its raw kline endpoint because the canonical issue workflow has no endpoint-owned semantic validator. Add strict wrapper/count/timestamp/OHLCV and optional precision checks, never HTTP-only success; no service control.",
   "allowed_write_scope": [
-    ".github/workflows/test.yml",
-    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-    "backend/tests/scripts/test_ci_change_classifier.py",
-    "tests/aistock_validation/catalog/file_ownership.yaml",
-    "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json"
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20261007_BUG-1791-tdx-runtime-target-lacks-typed-raw-kline-smoke-semantics-for-delivery-ve.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1787",
-  "closed_at": "2026-10-07T18:34:34Z",
+  "bug_id": "BUG-1791",
+  "closed_at": "2026-10-07T19:21:02Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-10-07T18:20:27.396340Z",
-  "description": "TDX files lack ownership. Existing Go CI executes network-dependent extend tests and omits the nested web Go module build. Repair ownership and retain the existing Go CI lane with offline protocol tests, root build and nested web build; existing tdx-go-backend runtime catalog remains authoritative. No production process control.",
+  "created_at": "2026-10-07T18:50:55.170756Z",
+  "description": "Existing tdx-go-backend runtime catalog cannot validate its raw kline endpoint because the canonical issue workflow has no endpoint-owned semantic validator. Add strict wrapper/count/timestamp/OHLCV and optional precision checks, never HTTP-only success; no service control.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20261007-4483b34497cd",
-      "timestamp": "2026-10-07T18:20:27.396321Z"
+      "note": "Promoted from IC-20261007-c6332e496d6f",
+      "timestamp": "2026-10-07T18:50:55.170756Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "TDX has explicit local_data ownership and existing Go CI runs offline protocol assertions plus root and web builds without external servers or dependency downloads.",
+  "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      ".github/workflows/test.yml",
-      "backend/tests/scripts/test_ci_change_classifier.py",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json",
-      "tests/aistock_validation/catalog/file_ownership.yaml"
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1791-tdx-runtime-target-lacks-typed-raw-kline-smoke-semantics-for-delivery-ve.json"
     ],
     "added_files": [],
     "changed_files": [
-      ".github/workflows/test.yml",
-      "backend/tests/scripts/test_ci_change_classifier.py",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
-      "tests/aistock_validation/bugs/20261007_BUG-1787-tdx-go-service-lacks-ownership-runtime-and-offline-ci-coverage-for-marke.json",
-      "tests/aistock_validation/catalog/file_ownership.yaml"
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1791-tdx-runtime-target-lacks-typed-raw-kline-smoke-semantics-for-delivery-ve.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "tests/aistock_validation/catalog/file_ownership.yaml"
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
       ],
       "impacted_modules": [
-        "validation.module_quality",
-        "validation.guardrails",
-        "tests.validation_history"
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails"
       ],
       "matched_rules": [
         {
-          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "file": "scripts/aistock_issue_workflow.py",
           "impact_modules": [
-            "validation.guardrails",
-            "tests.validation_history"
+            "validation.runner",
+            "validation.guardrails"
           ],
-          "primary_module": "validation.module_quality",
+          "primary_module": "validation.workflow_automation",
           "risk_level": "high",
-          "rule_id": "validation_catalog_module_quality"
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
         }
       ],
       "risk_levels": [
         "high"
       ],
       "suggested_scope": [
-        "tests/aistock_validation/catalog/file_ownership.yaml"
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml"
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml"
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
     ]
   },
-  "first_seen_at": "2026-10-07T18:20:27.396340Z",
+  "first_seen_at": "2026-10-07T18:50:55.170756Z",
   "fix_branch": null,
-  "fix_commit": "f22c9818d80944bd0fb9c6317c7fc108be10ff54",
-  "fixed_at": "2026-10-07T18:34:34Z",
-  "github_issue_number": 5675,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5675",
-  "last_seen_at": "2026-10-07T18:20:27.396340Z",
+  "fix_commit": "c34fee2419fa249bf264c4e77071d61830b5c158",
+  "fixed_at": "2026-10-07T19:21:02Z",
+  "github_issue_number": 5682,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5682",
+  "last_seen_at": "2026-10-07T18:50:55.170756Z",
   "module": "validation",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5676",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5684",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -100,7 +108,7 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "validation_module_registry_l0"
+    "validation_workflow_automation"
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -121,49 +129,54 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1787",
+    "bug_id": "BUG-1791",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "031d0786134dbb64",
-    "recorded_at": "2026-10-07T18:35:21.686685Z",
+    "receipt_id": "afceaca0c215012b",
+    "recorded_at": "2026-10-07T19:21:39.935199Z",
     "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
     "runtime_identity_match": "not_required",
     "runtime_verification": "not_required",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "f7c9e0b44081c2f5f89b0c2e675ff3a453137637",
-    "source_merge_commit": "f22c9818d80944bd0fb9c6317c7fc108be10ff54",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5676",
+    "source_head_oid": "ad702414dd5191d1d4d8d0c3166049c3831bbcd3",
+    "source_merge_commit": "c34fee2419fa249bf264c4e77071d61830b5c158",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5684",
     "validation_evidence": [
-      "validation-receipt: id=27c9df39b4552b4e commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
-      "validation-receipt: id=c11c6081b0b439a1 commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
-      "validation-receipt: id=decb0df2bdb47f31 commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q` result=`42 passed`"
+      "python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -> 327 passed",
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k tdx_raw -q -> 8 passed"
     ],
-    "validation_evidence_digest": "bfdd38ee7db2d3bd14e62e24da725f8c5cc579cdf3452e068c9762565c1a6b3e"
+    "validation_evidence_digest": "7aa396cf5796b25a545e1059166e9cbd699be1293deabdacd18e9705367bbacf"
   },
   "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
-  "title": "TDX ownership and offline CI omit nested web build",
+  "title": "TDX runtime target lacks typed raw-kline smoke semantics for delivery verification",
   "trigger_condition": {
-    "fingerprint": "4483b34497cd7eea14725ec4",
-    "source_event_id": "FE-20261007-4483b34497cd"
+    "fingerprint": "c6332e496d6ff5446ffc7af1",
+    "source_event_id": "FE-20261007-c6332e496d6f"
   },
   "validation_evidence": [
-    "validation-receipt: id=27c9df39b4552b4e commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
-    "validation-receipt: id=c11c6081b0b439a1 commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
-    "validation-receipt: id=decb0df2bdb47f31 commit=2d8f05364d846710d12d6c8728cbb89c15e6720b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q` result=`42 passed`"
+    "python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -> 327 passed",
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k tdx_raw -q -> 8 passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
     "deferred_nightly_verification": {
-      "modules": [],
-      "plans": [],
-      "required": false,
+      "modules": [
+        "validation",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
       "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
     },
     "delegated_validation": {
@@ -194,8 +207,7 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0",
-      "validation_module_registry_l0"
+      "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
@@ -218,9 +230,14 @@
       "budget": "standard",
       "ci_premerge_plans": [],
       "deferred_nightly_verification": {
-        "modules": [],
-        "plans": [],
-        "required": false,
+        "modules": [
+          "validation",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
         "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
       },
       "delegated_validation": {
@@ -251,8 +268,7 @@
         "production gates"
       ],
       "premerge_required_plans": [
-        "l0",
-        "validation_module_registry_l0"
+        "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
