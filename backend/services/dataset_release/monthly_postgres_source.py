@@ -53,7 +53,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "8"
+POSTGRES_SOURCE_ADAPTER_VERSION = "9"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -357,6 +357,7 @@ class PostgresMonthlySourceAdapter:
                 "business_validation_scope": "target_calendar_month_only_v1",
                 "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
                 "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
+                "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
             },
         )
 
@@ -375,6 +376,8 @@ class PostgresMonthlySourceAdapter:
         if target_cutoff <= predecessor_cutoff:
             raise MonthlyPostgresSourceError("monthly source cutoff did not advance")
         repair_inputs = context.plan.get("monthly_repair_inputs")
+        from .monthly_source_quality import load_bound_source_quality
+        quality_acceptance = load_bound_source_quality(context.plan, operation_id=context.operation_id)
         from .monthly_repair_inputs import deferred_margin_authority
         deferred_margin_sha = deferred_margin_authority(repair_inputs, target_cutoff=target_cutoff)
         if repair_inputs is not None:
@@ -491,6 +494,7 @@ class PostgresMonthlySourceAdapter:
                 predecessor_cutoff=predecessor_cutoff,
                 audit_causal_history=False,
                 deferred_margin_authority_sha256=deferred_margin_sha,
+                quality_acceptance=quality_acceptance,
                 checkpoint=checkpoint,
             )
             checkpoint()
@@ -597,6 +601,7 @@ class PostgresMonthlySourceAdapter:
             predecessor_cutoff=predecessor_cutoff,
             audit_causal_history=False,
             deferred_margin_authority_sha256=deferred_margin_sha,
+            quality_acceptance=quality_acceptance,
             checkpoint=checkpoint,
         )
         # Persist real blocked gate readbacks before any provider materialization
@@ -641,6 +646,8 @@ class PostgresMonthlySourceAdapter:
             source_stage_ref=source_stage_ref,
         )
         bundle["monthly_repair_inputs"] = repair_inputs
+        if quality_acceptance is not None:
+            bundle["source_quality_report"] = json.loads((input_root / "source-quality-report.json").read_bytes())
         _write_canonical_exclusive(bundle_path, bundle)
 
         artifacts: list[SourceArtifact] = [

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -33,6 +34,71 @@ from .monthly_worker import ProducerContext
 
 MONTHLY_BUILD_EVIDENCE_SCHEMA = "aistock_monthly_candidate_build_evidence_v1"
 _REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+
+
+def _seal_source_quality(root: Path, context: ProducerContext, compiled: CompiledMonthlyBuild) -> dict[str, Any] | None:
+    """Copy small pinned SOURCE warnings, not historical market data, to release."""
+    from .monthly_source_quality import (
+        accepted_parity_warning, acceptance_file_sha256, read_quality_evidence,
+        source_quality_report, validate_source_quality_acceptance,
+    )
+    path = compiled.source_bundle_path
+    before = path.stat()
+    if before.st_size > 64 * 1024 * 1024:
+        raise MonthlyCandidateFinalizerError("source quality bundle is unbounded")
+    raw = path.read_bytes()
+    after = path.stat()
+    if (before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns
+            or hashlib.sha256(raw).hexdigest() != compiled.source_bundle_sha256):
+        raise MonthlyCandidateFinalizerError("source quality bundle bytes differ")
+    bundle = json.loads(raw)
+    report = bundle.get("source_quality_report")
+    bound = context.plan.get("monthly_source_quality_inputs")
+    if report is None and bound is None:
+        return None
+    if not isinstance(report, Mapping) or report.get("acceptance") != bound:
+        raise MonthlyCandidateFinalizerError("source quality report differs from bound observations")
+    try:
+        acceptance = validate_source_quality_acceptance(bound, operation_id=context.operation_id,
+            predecessor_manifest_sha256=context.plan["predecessor"]["dataset_manifest_sha256"],
+            target_cutoff=date.fromisoformat(context.plan["target_cutoff"]), verify_evidence=False)
+        warnings = report["warnings"]
+        if not isinstance(warnings, list):
+            raise ValueError("quality warnings are invalid")
+        seen = set()
+        for warning in warnings:
+            key = warning["symbol"], warning["trade_date"]
+            if key in seen or accepted_parity_warning(acceptance, symbol=key[0],
+                    trade_date=date.fromisoformat(key[1]), mismatches=warning["mismatches"]) != warning:
+                raise ValueError("quality warning does not match accepted observations")
+            seen.add(key)
+        references = report["frozen_evidence_refs"]
+        if report != {**source_quality_report(acceptance, warnings), "frozen_evidence_refs": references}:
+            raise ValueError("quality report counts or semantics differ")
+        if not isinstance(references, list) or len(references) != len(acceptance["evidence_refs"]):
+            raise ValueError("quality evidence inventory differs")
+        release_refs = []
+        for index, (reference, original) in enumerate(zip(references, acceptance["evidence_refs"], strict=True)):
+            expected_name = f"source-quality-evidence-{index}.json"
+            if reference != {"path": expected_name, "sha256": original["sha256"], "size": original["size"]}:
+                raise ValueError("quality frozen evidence pin differs")
+            proof = read_quality_evidence({**reference, "path": str(path.parent / expected_name)})
+            relative = f"reports/source_quality/{expected_name}"
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("xb") as handle:
+                handle.write(proof)
+            release_refs.append({**reference, "path": relative})
+        authority = _write_exclusive(root / "reports/source_quality/source-quality-acceptance.json", acceptance)
+        if _sha256(authority) != acceptance_file_sha256(acceptance):
+            raise ValueError("quality acceptance seal differs")
+        sealed = _write_exclusive(root / "reports/monthly_source_quality.json", {
+            **report, "frozen_evidence_refs": release_refs})
+        return {"path": sealed.relative_to(root).as_posix(), "sha256": _sha256(sealed),
+                "size": sealed.stat().st_size, "quality_status": report["quality_status"],
+                "quality_warning_count": len(warnings)}
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise MonthlyCandidateFinalizerError(f"source quality closure failed: {exc}") from exc
 
 
 class MonthlyCandidateFinalizerError(RuntimeError):
@@ -352,6 +418,7 @@ class UnifiedMonthlyCandidateFinalizer:
             raise MonthlyCandidateFinalizerError(
                 "monthly source contract must fail closed against fabrication"
             )
+        quality_ref = _seal_source_quality(root, context, compiled)
         baseline_authority = None if native_month else build_monthly_incremental_baseline(
             release_id=str(context.plan.get("release_id") or ""),
             release_digest=str(compiled.physical_plan.get("release_digest") or ""),
@@ -400,6 +467,7 @@ class UnifiedMonthlyCandidateFinalizer:
                 "database_read_performed": False,
                 "database_write_performed": False,
                 "runtime_action_performed": False,
+                **({"source_quality": quality_ref} if quality_ref is not None else {}),
             },
         )
 
@@ -506,6 +574,7 @@ class UnifiedMonthlyCandidateFinalizer:
             "st_pit_manifest": st_pit,
             "source_contract": source_contract,
             "components": component_rows,
+            **({"source_quality": quality_ref} if quality_ref is not None else {}),
         }
         manifest["dataset_manifest_sha256"] = _manifest_identity(manifest)
         _write_exclusive(manifest_path, manifest)

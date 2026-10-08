@@ -138,6 +138,9 @@ def _require_source_provenance(
         for exception in gate.exception_refs:
             if exception.authority_sha256 not in content_hashes:
                 raise MonthlySourceProducerError(f"source exception authority is not pinned: {gate.gate}")
+        for warning in gate.quality_warning_refs:
+            if warning["authority_sha256"] not in content_hashes:
+                raise MonthlySourceProducerError(f"source quality acceptance is not pinned: {gate.gate}")
     for change in read_set.changes:
         if change.source_receipt_sha256 not in content_hashes:
             raise MonthlySourceProducerError(f"source change receipt is not pinned: {change.dataset}")
