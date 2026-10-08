@@ -1,18 +1,18 @@
 # Advisory 固定5交易日资金流条件买价 GP5-MONEYFLOW-INFO-1 F2详细设计
 
-2026-10-08，DESIGN_REVIEW_VERIFIED；本交付仅详细设计与当前路线更新。0新源码、0研究fit、0经济确认或模型激活。不是把旧M6/M19负向结果升级为正结果。
+2026-10-08，SOURCE_VERIFIED；已实施本设计批准的九文件离线切片，17项定向合同及Ruff通过。正式来源prepare、唯一两次新研究fit与开发评价已完成，结果负向；一次同权重计算修正仅将归因对齐配对日，不重fit/改政策/消费新窗口。不是把旧M6/M19负向结果升级为正结果。
 
 ## Background / Goal
 
 必要日频DB输入#5722、固定5TD买价API#5732已分别合入并清理。用户重启后健康和进程身份通过，真实进程为#5732合入SHA `fb3911a6e0b5977c468fb2a6b0f1e56b6c1015d7`；单日与批量接口200/NOT_CONFIGURED，证明路由加载而非真实生产估价。两个既存Program的本地ASGI→只读DB功能链路可计算，不能当跨包经济泛化。BUG-1726的M1配置验收未通过、close-sync#5597保留；不阻本假设设计，不擅自配置旧模型。
 
-当前已完成129研究fit＋1旧INDEX_BUILD。GP5买价、分钟、量价、联合分布、路径与Selection上下文尝试，以及三种Exit均未证明成本后增量；不重拟合旧candidate、救阈值、补旧证据或继续Exit技术字段。新问题是：在相同固定5交易日标签、D股票/市场状态和假设买价下，D已知的大单资金方向是否补充原九字段无法区分的买价价值信息？
+实施前已完成129研究fit＋1旧INDEX_BUILD，本次实际新增2研究fit，累计131＋1旧INDEX_BUILD。GP5买价、分钟、量价、联合分布、路径与Selection上下文尝试，以及三种Exit均未证明成本后增量；不重拟合旧candidate、救阈值、补旧证据或继续Exit技术字段。新问题是：在相同固定5交易日标签、D股票/市场状态和假设买价下，D已知的大单资金方向是否补充原九字段无法区分的买价价值信息？
 
 资金流不是全项目的新发现：M6及M19已经用于旧VALUE_REVIEW_5_V1目标且失败。本假设只是在不同的固定T..T+4目标、当前GP5九字段信息集内检验这个额外信息块；承认同窗口串行自适应开发偏差，绝不称独立证据或继续旧M6。上游QE负责选股Alpha，本研究只估计原候选的价格条件价值，不训练选股、重新排序或设置策略包资格。
 
 ## Scope / Non-goals
 
-本次文档允许范围仅本文与主蓝图 `advisory_strategy_conditioned_model_blueprint_v1_20260710.md`，独立docs worktree。源码实施必须另从最新main创建工作树，预登记以下九文件，不扩修改旧helper：
+原设计交付仅本文与主蓝图 `advisory_strategy_conditioned_model_blueprint_v1_20260710.md`，#5741已合入并清理。本次源码从最新main创建独立工作树，仅实施以下批准的九文件，不扩修改旧helper：
 
 - backend/services/advisory_model_first/generic_moneyflow_price_5td_contracts_v1.py
 - backend/services/advisory_model_first/generic_moneyflow_price_5td_source_v1.py
@@ -106,20 +106,20 @@ KEY=(decision_as_of_trade_date,target_trade_date,instrument)。在开发窗口�
 
 ## Design Acceptance Matrix
 
-本表仅验收设计完整性；implementation_refs是批准后的计划位置，不是已存在的新源码。尚未实现/拟合状态不能以本文F2结构通过替代。
+本表验收离线SOURCE交付；引用均指本叶源码及定向节点，不以源码/结构PASS替代研究或经济验收。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-831 | planned contracts_v1.py/pipeline_v1.py；本文§1 | artifact: 本文§1/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-832 | planned source_v1.py；本文§2 | artifact: 本文§2 target-free 6100 KEY/status spike与source pins | DESIGN_REVIEW_VERIFIED | none |
-| F-833 | planned source_v1.py/models_v1.py；本文§3 | artifact: 本文§3/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-834 | planned models_v1.py/pipeline_v1.py；本文§4 | artifact: 本文§4 frozen19/25/two-fit合同 | DESIGN_REVIEW_VERIFIED | none |
-| F-835 | planned models_v1.py price adapter；本文§5 | artifact: 本文§5/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-836 | planned pipeline_v1.py；本文§6 | artifact: 本文§6四臂与开发窗口 | DESIGN_REVIEW_VERIFIED | none |
-| F-837 | planned contracts_v1.py/pipeline_v1.py；本文§7/Scope | artifact: 本文§7/Scope/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-838 | 本文/蓝图及独立九文件计划 | artifact: 本文Implementation/Review | DESIGN_REVIEW_VERIFIED | none |
+| F-831 | backend/services/advisory_model_first/generic_moneyflow_price_5td_contracts_v1.py / generic_moneyflow_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_pipeline_v1.py::test_stage_chain_read_only_parent_and_exact_completed_resume | SOURCE_VERIFIED | none |
+| F-832 | backend/services/advisory_model_first/generic_moneyflow_price_5td_source_v1.py::read_moneyflow_development_v1 | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_source_v1.py::test_projection_excludes_test_legacy_and_immature_numbers | SOURCE_VERIFIED | none |
+| F-833 | backend/services/advisory_model_first/generic_moneyflow_price_5td_source_v1.py::join_moneyflow_features_v1 / moneyflow_values | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-834 | backend/services/advisory_model_first/generic_moneyflow_price_5td_models_v1.py::matrix_v1 / train_moneyflow_price_5td_v1 | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_models_v1.py::test_only_two_heads_same_keys_and_json_parity | SOURCE_VERIFIED | none |
+| F-835 | backend/services/advisory_model_first/generic_moneyflow_price_5td_models_v1.py::moneyflow_price_set_5td_v1 | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_models_v1.py::test_legal_grid_support_holes_unknown_and_foreign_family | SOURCE_VERIFIED | none |
+| F-836 | backend/services/advisory_model_first/generic_moneyflow_price_5td_pipeline_v1.py::evaluate_moneyflow_price_5td_cohorts_v1 | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_pipeline_v1.py::test_four_arms_cash_attribution_boundaries_and_no_replacement | SOURCE_VERIFIED | none |
+| F-837 | backend/services/advisory_model_first/generic_moneyflow_price_5td_pipeline_v1.py::train_moneyflow_price_5td_study_v1 / _record | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_pipeline_v1.py::test_busy_zero_fit_and_incomplete_attempt_never_refits | SOURCE_VERIFIED | none |
+| F-838 | 本文/蓝图及独立九文件交付 | artifact: 本文Implementation/Review；X:/AIstock_temp/advisory/gp5-moneyflow-source-20261008/pytest-final.xml | SOURCE_VERIFIED | none |
 
-none仅指本次设计交付无未处理的设计例外，不指源码或经济完成；新source/数值来源验证/实际fit与开发评价均pending，日频资金API/config/runtime未实施。状态在§Scope/Implementation/Rollout明确，实施后按真实证据逐项改为SOURCE_VERIFIED，不提前通过。
+none仅指本次离线源码切片无未处理的合同例外；正式数值来源验证、两次研究fit及负向开发评价见下方实施结果，不等于经济通过。日频资金API/config/runtime不在本切片且未实施，源码可查询价集不代表已部署、跨包盈利或真实限价执行。
 
 最小源码测试仅覆盖新增合同：projection/未来毒值/visible clock、唯一键与19行未知保留、同监督与原19列精确parity/新六编码/旧bundle拒混、两fit及JSONparity/资金missing不筛训练、query价格改变与支持洞/包元数据不影响预测、边界null/五槽不补股/部分恢复和QE busy零fit。不重复GP5标签/监管坐标大套件或增加实现快照/重复fixture债务。
 
@@ -138,3 +138,25 @@ none仅指本次设计交付无未处理的设计例外，不指源码或经济�
 第三轮测量/授权复核：冻结控制/同训练KEY、原价格数学及完整四臂；边界null不删洞、overlapping cohort非NAV，正点不改判或激活。source未来独立九文件、0生产操作/外模块，API NOT_CONFIGURED及旧BUG状态不阻研发。以上本窗口多视角自审，不冒称独立外审；最终F2结构与当前CI通过仍不等于源码/研究交付。
 
 第四轮修订复核：补齐数值目标按E成熟条件过滤后才解码，边界只留元数据，不以D合法为由提前读取未来目标；连续推断段只按事前calendar成熟定义，禁止收益后选段。初次F2将source pending误作本设计的未授权例外而FAIL；矩阵现明确只审设计无例外、所有源码/研究pending独立列明，不改公共校验器、不伪报实装。
+
+第五轮SOURCE复核（2026-10-08）：原manifest链只读引用，资金Parquet限定三比率/KEY/status/截止；GP5的D特征与成熟监督分开Arrow过滤，测试以未来Inf及旧目标毒值证明不解码。正常资金未知保留，不同包元数据不改变数学。仅新增25维mean/path两JSON树，精确19列parity及手算单次成本、m=1全合法网格、多段支持洞通过。
+
+第六轮SOURCE修订复核：补齐价集输入hash/逐字段未知及空网格非法值检查；模型拒绝非25维树/错长度median。边界监督非空在首fit前报错，评价仅接受冻结validation范围，原成熟连续panel不删洞重连。fit前后均fresh QE三路径、两个STARTED/COMPLETED事件与fsync，首次忙不建attempt；未完成STARTED不自动重拟合、完整原子stage可无fit恢复。总产物/RSS/时间预算有界，17项测试和Ruff通过；本窗口多视角自审，不冒称独立外审。
+
+第七轮交付复核：F-831～F-838矩阵路径与17项真实测试逐项匹配，F2结构8/8 PASS/0警告；九文件ownership全部映射、0歧义，L0无P0/P1阻断。两项ALGO-COMPLEXITY-001 P2提示均为来源merge：双侧最大7720唯一KEY、one_to_one、集合完全相等，不会行膨胀；Arrow只投影开发窗口，合并内存O(N)、无逐日重建/数据库访问。使用L0同款脚本并显式输出到X，不用固定F临时目录或扩改nox/workflow。
+
+第八轮真实结果复核：初次评价的逐股票归因包含部分未结算cohort中的其余股票，而配对均值排除整日；这是报表集合不一致，不是模型变化。SOURCE修复为同一成熟完整配对日归因，并新增归因和=paired mean×paired days断言/partial-day测试；增加共同四臂完整日均值，保留全部原null日及逐股票状态。旧evaluation/模型/plan不覆盖，仅允许一个NO_FIT_MEASUREMENT_CORRECTION原子附加收据，绑定旧stage及修正code SHA；registry保留同一experiment/trial，0新fit/新窗口/新阈值，不以修正挽救负结论。
+
+## Implementation / 本次真实研究结果
+
+clean producer `9b4171e64558b8d573a33fc9fbecf65312c98e7c`、implementation SHA `11a0a105cba9ff48a28417765c2d5b8b0d7339ad52e71113fed94f63ac5a5c08`；唯一run `advgp5moneyflow_e2ba3dbb6cad73b5b726acdd`。首次preregister0.094秒、prepare0.578秒，原开发305D/6100 KEY全部保留，6081资金AVAILABLE/19原零分母UNKNOWN，三字段各6081已知；正常未知不删候选。原test明确EXCLUDED_NOT_CONSUMED、未成熟目标无数值解码。
+
+2026-10-08 05:09:32～05:09:37 UTC，拟合前与每头前后公开QE single/custom_evo/multi-alpha全0；两head连同检查/发表耗时4.953秒、开发四臂0.453秒。训练3684原成熟KEY/193D精确等于冻结GP5，三资金字段训练已知各3672，12资金未知仍参与监督；validation1586支持内行仅诊断，MSE0.0037870/path pinball0.0062461/lower coverage14.3758%，没有校准盈利概率或重新选点。
+
+全部原86 validation D/1720候选及五槽430原episode保留。Top5原base404已结算TAKE/胜率52.7228%，资金candidate234/47.4359%，冻结GP5261/48.6590%；base26未结算TAKE保留null，其中25是最后5D的endpoint边界，1是内生缺失。资金candidate与GP5各32 UNKNOWN cash，资金164已知拒买，不把正常资金UNKNOWN19行当19拒买。
+
+资金对base80完整配对5TD cohort均值增量−90.4159bps，对GP581个成熟配对增量−14.0295bps、原5D block CI95 [−43.7728,7.4473]、MDE80 36.9422bps。base成熟panel有1个内生未结算洞，CI/MDE=null，绝不删洞重连；单纯负点估计不宣称显著性。已知干预对base164episode/57D/70.3704%、对GP559episode/36D/44.4444%，达到预登记数量要求，regime仍UNKNOWN。
+
+模型身份 `885a6487973263136d22138be13a219d47f64d3a0a95949b8d11148b7189e1cb` 原样保持；计量修正producer `2f4d535ab60c64cb123d0bdb6e2278a4918c85cb`、implementation `0807158a6764f13b92ee79aeb4513771d0e2be8a0ca77191066b00b697a753f7`，原子附加收据在本run的 `measurement_correction_v1/evaluated/receipt.json`，文件SHA `0af347c668314f641ca8e9d05c3267b5527e304a7e4a6f5cd4e7c974bda9b1ba`；正式新产物共3,212,177 bytes。同80完整日base/rule/frozen GP5/candidate均值135.3458/132.8314/59.1348/44.9299bps。对base配对归因：避免亏损3549.1988、错失盈利10844.0874、已知动作净−7294.8886bps（五槽加权总和，非每日均值），UNKNOWN空槽差+61.6172另列、不归模型；净−7233.2714=80×−90.4159。对GP5已知净−1136.3933=81×−14.0295，UNKNOWN差0。不同arm完整日均值不直接相减，统一四臂面板80D与GP5对照81D分报；补救的是汇总错误，不是负模型。
+
+结论NEGATIVE_STOP_THIS_CANDIDATE；本资金块未在当前固定5TD/九字段/模型族/已消费开发窗下带来成本后增量，只结束此candidate。0独立OOS/新sealed/自然前向/真实限价fill/配置激活/QE提交/数据库写/其它模块或服务控制；不派生同族参数搜索或为负结果收集证据。累计131真实研究fit＋1旧INDEX_BUILD，不因计算修正加计。源码PR/currentCI/合入和自身cleanup仍独立处理，不由负结论推断已交付。
