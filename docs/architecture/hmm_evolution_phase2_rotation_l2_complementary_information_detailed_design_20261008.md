@@ -265,7 +265,7 @@ DESIGN-COMPLIANCE-001逐项源码复核：完整131目录/三方比较/四term�
 
 唯一正式终态：`F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/run/acceptance.json`；request为同根`input.json`。canonical acceptance=4512525706fbead2f43460751affd6e34071336047b158660699fb4b3f5c45ab；input=4ac21b8c54efce631a81718cd4541e9c986ae1a1e2e77cfea16923f1551ceb06；model=8a61e30e0474783b0677a08d946ea3d06561ef29df1ddf1f51e557cc23742b75；parameters=650784c6b0ea5ea4cd4d055f0a2cd1d3de24fa8d09895f88fe14202762a87222；两child prediction=ecc05eb78d145ea2c135356ebaf4f3a493ac1a07aeefc1b19334a66f1ea41db1。内容身份与来源commit分开，不为本次文档新HEAD更换模型hash。
 
-126个训练日/16,380行，无训练日删除；232×131=30,392预测行。每个成熟日130个available行业，222日成熟，28,860 available outcomes；222行官方不可报价保持unavailable，末10日1,310行outcome未成熟保持null；coverage 232/232日通过，evidence充分，不缩窗或补值。
+126个训练日/16,380行，无训练日删除；232×131=30,392预测行。全232日均130个available行业，prediction availability为30,160 available/232 unavailable（801011.SI官方不可报价）。outcome维度另计：222日成熟、28,860 available outcomes，222行prediction_unavailable，末10日1,310行outcome_not_mature保持null；后者含10行本就prediction unavailable，不把两种维度相加或误称仅222行预测不可用。coverage 232/232日通过，evidence充分，不缩窗或补值。
 
 | 模型（相同222成熟日及130共同合格行业/日） | mean daily Rank IC | 真实10D trending−fading相对收益差 |
 |---|---|---|
@@ -289,9 +289,9 @@ DESIGN-COMPLIANCE-001逐项源码复核：完整131目录/三方比较/四term�
 
 正式`rotation_l2_prediction.py::rows_from_acceptance`及其实际row/batch/四term/identity validator转换30,392行PASS；每日131行、run identity和状态保持，未实例化DB repository、未导入或写payload副本。无写入预检不等于DB CHECK、writer/readback或真实API/UI验收。下一步在具体DEV授权后验证已合入migration及同一run的writer/readback、API/UI，完整报告弱/不确定经济证据；无授权停在可导入结果，不增加研究平台或自动发布新默认。
 
-### 13.5 本轮状态更新的两轮作者复审（2026-10-08）
+### 13.5 本轮状态更新的三轮作者复审（2026-10-08）
 
-两轮均为作者复审，不冒称第三方独立审核。第一轮将摘要、任务顺序、索引/矩阵及权限同步到正式acceptance，保留历史源码审核语境；明确冷进程初始化修复不改数值环境/模型，正式2/2 fits与本次零新增fit分开，30,392行转换不代报数据库/页面。第二轮对照任务base核验§3～§7和§10精确合同逐字不变、父蓝图43条旧验收/版本行及历史矩阵保留；修正父蓝图“无增益不得标新能力”可能被误解为新增研究门的表述，明确研究资格与场景增益分层。参数/预测/acceptance身份复核通过，模型结果未重写。
+三轮均为作者复审，不冒称第三方独立审核。第一轮将摘要、任务顺序、索引/矩阵及权限同步到正式acceptance，保留历史源码审核语境；明确冷进程初始化修复不改数值环境/模型，正式2/2 fits与本次零新增fit分开，30,392行转换不代报数据库/页面。第二轮对照任务base核验§3～§7和§10精确合同逐字不变、父蓝图43条旧验收/版本行及历史矩阵保留；修正父蓝图“无增益不得标新能力”可能被误解为新增研究门的表述，明确研究资格与场景增益分层。第三轮逐行计数核对availability和outcome两个维度：232行prediction unavailable与222行outcome prediction_unavailable不同，末10日未成熟分层说明，消除混写计数歧义。参数/预测/acceptance身份复核通过，模型结果未重写。
 
 DESIGN-COMPLIANCE-001四项：完整131目录/222成熟日/两对照不缩为UI子集；合法NA、负spread和增量区间跨零不隐藏；原模型/特征/窗口/阈值/默认版本及其他业务行为不变；事后行业/月份/十分组分析不变成promotion gate或新审批。两份F2及仅两文档的L0、diff/范围检查通过，文档审核无阻断不等于真实产品、DB或runtime已验收。本次仅改两份HMM设计，无生产源码或数据库修改。
 
