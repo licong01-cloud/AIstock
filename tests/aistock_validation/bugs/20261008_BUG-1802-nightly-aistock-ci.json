@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-08T03:20:48.788208Z",
-  "description": "正式Nightly工作流验证使用生产AIstock。",
+  "description": "正式Nightly工作流验证使用生产AIstock。审核同时发现同一环境隔离政策测试仍断言TDX编译输出到RUNNER_TEMP，而最新主线已正确改为X盘隔离TMP；同步精确断言，保留离线测试与编译要求，不修改TDX业务或CI执行逻辑。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "公共workflow验证由预构建AIstock-CI运行，测试前校验身份及X盘隔离；禁止安装、生产环境回退。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261008_BUG-1802-nightly-aistock-ci.json",
       ".github/workflows/nightly.yml",
       "backend/tests/scripts/test_ci_workflow_policy_scan.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261008_BUG-1802-nightly-aistock-ci.json",
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/nightly.yml",
@@ -111,10 +117,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
