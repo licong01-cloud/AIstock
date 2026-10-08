@@ -15,16 +15,6 @@
   ],
   "created_at": "2026-10-08T05:37:48.842950Z",
   "description": "正式预检在加载 sklearn.linear_model.Ridge 前采集线程池，冷进程漏掉 vcomp OpenMP pool，误报与既有冻结数值环境不一致。Python、NumPy、SciPy、scikit-learn 和 threadpoolctl 实际版本未变；按 child 的估计器导入顺序加载后环境精确一致。修复只持久化依赖初始化顺序，保留数值身份严格比较，不改变模型、参数、特征、窗口、阈值或任何输入 pin。",
-  "root_cause": "cold preflight discovers native pools before loading the Ridge dependency chain; fit children discover pools after that import",
-  "research_execution_status": {
-    "formal_fits": 0,
-    "tail_accessed": false,
-    "database_write": false,
-    "dataset_write": false,
-    "dependency_install": false,
-    "runtime_action": false,
-    "offline_experiment_requires_backend_restart": false
-  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -38,12 +28,18 @@
   ],
   "expected": "preflight 与 child 都在批准模型数值依赖加载完成后采集同一完整单线程环境，真实环境漂移仍 fail closed",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1807-hmm-l2-ridge-preflight-sklearn.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
-      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py"
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1807-hmm-l2-ridge-preflight-sklearn.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
@@ -107,17 +103,33 @@
     "l0",
     "hmm_risk_pr_slice"
   ],
+  "research_execution_status": {
+    "database_write": false,
+    "dataset_write": false,
+    "dependency_install": false,
+    "formal_fits": 0,
+    "offline_experiment_requires_backend_restart": false,
+    "runtime_action": false,
+    "tail_accessed": false
+  },
   "risk_area": "bug",
+  "root_cause": "cold preflight discovers native pools before loading the Ridge dependency chain; fit children discover pools after that import",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview",
+    "fresh_process_evidence": [
+      "Conda base python -c imports backend.services.hmm_risk.rotation_l2_moneyflow_price_supervised and backend.routers.hmm_risk and backend.routers.health -> passed; model contract SHA 6412997efb07059adcb22b59b9e75e2fea94e0e142ae363694c5014cf1d81e47 unchanged; cold preflight process matches fit environment without fit, reference version drift rejected"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
