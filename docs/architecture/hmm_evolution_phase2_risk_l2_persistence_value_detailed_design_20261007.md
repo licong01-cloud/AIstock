@@ -1,8 +1,8 @@
 # HMM Evolution Phase 2：L2风险低换手消费详细设计
 
-> 版本：v1.1；日期：2026-10-07；tier：F2；owner：HMM。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.75；F-011/F-012/F-013。
-> 精确合同：**APPROVED**。2026-10-07用户明确批准L2-RISK-CONSUME-PERSISTENCE-D1～D6，并授权源码实施、多轮审修、满足合入条件后提交合入及同步。下列精确公式未改变；批准不代表源码或消费效果已经通过。本次先完成设计与源码交付，正式新消费回放另行确认。
+> 版本：v1.2；初始日期：2026-10-07；结果同步：2026-10-08；tier：F2；owner：HMM。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.76；F-011/F-012/F-013。
+> 精确合同：APPROVED，既有公式未变；源码及获授权双fresh-process零fit比较已完成。当前结果COMPLETED / INSUFFICIENT_REFERENCE_PATH / KNOWN_PAIRED_TURNOVER_LOWER，net UNASSESSED；换手下降不抵销延迟/回撤代价，不默认替换原政策。§13是正式当前结果，§12批准前与源码审修记录保留当时语境。
 > 一个完整业务包，版本建议为`hmm_risk_l2_warning_persistence_value_v1`；不是新模型，不是QE实验，不新增产品、数据库表或记录平台。
 
 ## 1. Background、目标与Non-goals
@@ -109,13 +109,13 @@ fresh process比较参数、源pins、完整population、全部动作和业务ca
 
 只写显式repo-external新任务目录，一个request、两紧凑child、一个parent终态；action canonical hash可由内存中的424×131状态算得，不额外落盘55,544行原概率/标签，不复制五源文件，不建历史日志平台。输出已存在则typed collision，不覆盖旧结果；新结果不用环境变量、runtime receipt或用户重启寻址。
 
-停止条件：一次真实正/负/不足代价结果即结束；或批准后实施验证包8小时上限；或三轮审修后仍有阻断；或需改变任何确认/初始/NA/成本/输入公式、跨owner或未授权动作。禁止为凑时长重跑旧结果/搜索参数。本次授权交付停在源码合入/同步，未运行正式新消费比较。
+原合同停止条件：一次真实正/负/不足代价结果、原8小时实施上限、三轮审修后仍有阻断或需要改变合同/跨owner/新授权即停。当前正式比较已完成，结果见§13；该候选已结束，不为时长重跑或搜索参数。原“源码合入后另确认回放”的授权边界已通过后续明确实验授权满足，不从文档倒推当时已经运行。
 
-设计及源码merge、源码实施和同步已获本次明确授权；正式新回放、cleanup、数据库DDL/DML、依赖、activation、进程控制不从该授权推导。本包本身无需生产动作；QE仍由QE窗口后置执行。文档runtime=none；代码按实际changed files分类，预期窄risk_l2_value_离线族为none，不手工降级运行文件或修改流水线。
+设计、源码和后续正式回放已按各自明确授权执行；cleanup、数据库DDL/DML、依赖、activation或进程控制不从这些动作推导。本包无需生产动作；QE仍由QE窗口后置执行。当前仅文档同步runtime=none；源码仍按实际changed-files分类，不手工降级运行文件或修改流水线。
 
 ## 9. Verification Plan、可合入标准与Review
 
-设计定义与源码直接合同均已完成作者复核；正式消费效果尚未运行。源码最小矩阵：
+设计与源码直接合同均已完成作者复核；正式消费比较已经完成、结果见§13。以下保留源码最小矩阵，不因结果同步重跑原测试/实验：
 
 | 合同 | 直接验证 |
 |---|---|
@@ -134,21 +134,21 @@ fresh process比较参数、源pins、完整population、全部动作和业务ca
 - F-012：显式五源、完整L2人口、原合法NA、严格因果和零重建。
 - F-013：完整薄执行/比较和真实终态，不耦合记录与后端，不推导产品升级。
 
-下表verified表示§3～§9定义与新源码直接合同已核对、实际执行的直接测试通过，不代表正式双process消费效果通过。最终HEAD CI/合入按PR实时状态独立核对；正式新比较仍未执行，不是被豁免的设计缺口。
+下表verified表示§3～§9定义与源码直接合同已核对，不把测试通过视为经济通过。正式双process比较已执行，当前执行/参考路径/换手/净值状态见§13，各状态不能相互代替。
 
 | 实际执行维度 | 当前状态 |
 |---|---|
 | 精确D1～D6批准 | APPROVED：2026-10-07用户明确授权 |
 | 新源码/直接测试 | IMPLEMENTED；新旧直接小矩阵51 passed，Ruff/py_compile通过 |
 | 最终CI/源码合入 | 以实现PR最终HEAD的CI与merge状态为准，不由本地测试推导 |
-| 五源只读预检 | PASS：131行业/424decision/423收益日/55,544标签；五源pins闭合，未执行compare |
-| 新双process消费比较/经济结论 | NOT_RUN / UNASSESSED |
+| 五源只读预检 | PASS：131行业/424decision/423收益日/55,544标签；预检阶段未compare，之后正式比较结果见§13 |
+| 新双process消费比较/经济结论 | COMPLETED；KNOWN_PAIRED_TURNOVER_LOWER；INSUFFICIENT_REFERENCE_PATH / net UNASSESSED，代价见§13 |
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-011 | §4～§7；backend/services/hmm_risk/risk_l2_value_persistence.py：actions/compare；risk_l2_value_replay.py：arm_day | test: backend/tests/hmm_risk/test_risk_l2_value_persistence.py；原回放直接回归 | verified | 无 |
 | F-012 | §3～§5；backend/services/hmm_risk/risk_l2_value_persistence.py：load_inputs/validate_baseline；risk_l2_prediction.py原reader | test: backend/tests/hmm_risk/test_risk_l2_value_persistence.py；真实五源file-only预检PASS | verified | 无 |
-| F-013 | §7～§9；scripts/hmm_risk/replay_risk_l2_value.py：显式contract-version dispatch；risk_l2_value_persistence.py：validate_child | test: backend/tests/hmm_risk/test_replay_risk_l2_value.py；两child权威/重复比较/typed失败/readback测试；正式新消费未运行 | verified | 无 |
+| F-013 | §7～§9；scripts/hmm_risk/replay_risk_l2_value.py：显式contract-version dispatch；risk_l2_value_persistence.py：validate_child | test: backend/tests/hmm_risk/test_replay_risk_l2_value.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261007/persistence-run/acceptance.json；双process权威闭合 | verified | 无 |
 
 ## 11. Rollout / Rollback、Risks及Production Gates
 
@@ -159,6 +159,8 @@ fresh process比较参数、源pins、完整population、全部动作和业务ca
 当前production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop、runtime_impact=none；database_write/dataset_write/active_profile_write/training/new_fit/tail/QE/runtime_activation/process_control=false。source merge、精确批准、实施、回放、经济结论分别报告。
 
 ## 12. DESIGN-COMPLIANCE-001与作者审修
+
+本节保存批准前和源码阶段的原记录；其中“待批准/未运行”仅指当时。当前批准/执行与经济状态以状态头及§13为准，不把历史过程改写成提前知道结果。
 
 | 要求 | 设计约束 |
 |---|---|
@@ -176,3 +178,21 @@ fresh process比较参数、源pins、完整population、全部动作和业务ca
 源码三轮作者审修（非独立第三方）：第一轮核对冷启动、双日确认、NA记忆、t-1消费、全预算/共同估值及漂移复用，新测试先RED（模块不存在），再GREEN。第二轮补齐父进程独立五源/人口/旧三臂读回核对，修复Python等值类型不能代替canonical合同hash的问题，并覆盖self-rehash漂移/未知字段/最终落盘失败；测试fixture缺Path导入已修正并定向重验。第三轮逐项复核D1～D6及DESIGN-COMPLIANCE-001，最终直接小矩阵51 passed、Ruff及py_compile通过，未发现剩余阻断finding；真实file-only预检通过，正式新消费比较未运行。
 
 实现调用维持既有CLI，用`--contract-version hmm_risk_l2_warning_persistence_value_v1`显式选择新版本，旧默认版本不变。request在原四源字段上增加`value_path/value_hash`及`contract/contract_sha256`，全部固定pins按§3，合同来自源码CONTRACT。父进程不再消费/过滤/fit，只验证独立输入权威及两个完整业务payload。runtime实际分类为none、target_ids=[]、backend_restart_required=false、pre_pr_ready=true、blocking=[]；changed-files路由只选择l0/hmm_risk_pr_slice，没有DEV数据库、前端或其他模块计划。
+
+## 13. 正式消费结果、风险取舍与终止（2026-10-08只读同步）
+
+结果`F:/Dev/AIstock_runtime/hmm_l2_risk/20261007/persistence-run/acceptance.json`，receipt=46b9ae7cbdf0e73450a8531939d16a72668aea830579515a1a9b2c2afaec64ea。两fresh process业务严格一致；0 fits/filter/predict、未重建标签、未访问数据库/tail、无runtime动作。原五源pins和131行业/424decision/423收益日闭合；55,544动作覆盖完整目录，不受UI Top30限制。
+
+仍411/423 paired收益日、12原合法NA、7块，完整NAV全部null，reference=INSUFFICIENT_REFERENCE_PATH/net=UNASSESSED。不得为完善账本补NA、拼块净值或重跑旧模型。换手结论只覆盖共同已知405日期：C−R=-15.645469440072413；控制各自同日敞口后的差=-6.017584292268828。各臂仍18日换手未知，不能用已知合计推导全期成本或净收益。
+
+| 比较（相同gross参考块） | 累计收益差 | MDD差 |
+|---|---|---|
+| C−R（双日确认减即时政策） | 3块正、4块负 | 7块均负，即确认政策回撤更深 |
+| C−X_C（同敞口参照） | 4块正、3块负 | 7块均正，即同敞口行业选择有减轻回撤迹象 |
+| C−B（无overlay） | 2块正、5块负 | 7块均正；其中包含降低总敞口的贡献 |
+
+三组结论必须同时报告；不能只取相对无overlay回撤改善或相对R换手改善推广。块间不拼接、7块不是7份独立证据、gross不等于股票可交易组合或成本后净收益。两day政策没有改变raw warning，原即时政策也未被推广为生产动作。
+
+事件覆盖即时3008/7299=0.4121112481161803，确认2938/7299=0.40252089327305113。延迟进入事件316行业日的10D平均收益=-5.5077%、回撤=-11.2786%；延迟解除非事件1131行业日的10D平均收益=+2.7980%，63.13%为正。非事件现金行业日从8900减为8592。因多日重叠，这些不是独立事故数或实际避免损失，不能将单个分母相减理解为新的漏报事故总数。
+
+结论：本版本确实降低共同已知日期换手，但牺牲一部分风险响应，且相对即时政策参考回撤更差、收益并非一致改善；**不默认替换原报警、产品或消费政策**。保留为一个已完成的研究比较。应用选择必须结合消费场景另行批准；本轮不搜索三日确认、减仓比例/新阈值，不执行QE，不把记录善后当主线。既有原模型与所有旧结果保持；该候选已结束，新增fit/消费重跑=0。
