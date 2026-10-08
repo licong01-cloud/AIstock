@@ -2300,7 +2300,10 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         if path == "scripts/aistock_issue_workflow.py":
             impacts.add("none")
             continue
-        if path in catalog_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
+        if (
+            path in catalog_non_runtime_files or lower.startswith(known_non_runtime_prefixes)
+            or (lower.startswith("tdx-api-main/") and lower.endswith("_test.go"))
+        ):
             impacts.add("none")
             continue
         matched_targets: list[tuple[str, str, str]] = []
