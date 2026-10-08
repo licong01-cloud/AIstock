@@ -1,19 +1,68 @@
-"""Exact immutable-prefix seeds for month-only SOURCE, never historical QA."""
+"""Exact construction facts for month-only SOURCE, never historical QA."""
 from __future__ import annotations
 
 from datetime import date
+from contextlib import AbstractContextManager
 import hashlib
 import json
 from pathlib import Path
-from typing import Callable, Mapping
+import re
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import pandas as pd
 
 from .monthly_legacy_factor import read_legacy_factor_tail
+from .errors import SourceManifestError
 from .index_contract import DOMESTIC_INDEX_DEFINITIONS
 from .monthly_legacy_prefix import (
     LegacyMonthlyPrefix, LegacyMonthlyPrefixError, _plain_chain, _relative, _signature, read_legacy_qfq_anchors,
 )
+
+
+def collect_suspended_daily_facts(
+    *,
+    descriptors: Sequence[Mapping[str, Any]],
+    partition_rows: Callable[[Mapping[str, Any]], AbstractContextManager[Iterable[Mapping[str, Any]]]],
+    suspended: frozenset[tuple[str, date]],
+    trading_dates: Sequence[date],
+    checkpoint: Callable[[], None],
+) -> Mapping[tuple[str, date], tuple[Mapping[str, Any], ...]]:
+    """Retain independent no-trade facts only inside this construction window.
+
+    A sealed empty current partition proves absence; a missing or old-only
+    partition does not. The supplied context verifies CAS streams on exit.
+    """
+    if not suspended:
+        return {}
+    if not descriptors:
+        raise SourceManifestError("sealed daily partitions are missing for suspension proof")
+    facts: dict[tuple[str, date], list[Mapping[str, Any]]] = {}
+    covered_dates: set[date] = set()
+    for descriptor in descriptors:
+        match = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})", str(descriptor.get("partition_key", "")))
+        if match is None:
+            raise SourceManifestError("daily suspension proof partition identity is invalid")
+        start, end = (date.fromisoformat(value) for value in match.groups())
+        if end < trading_dates[0] or start > trading_dates[-1]:
+            continue
+        covered_dates.update(day for day in trading_dates if start <= day <= end)
+        with partition_rows(descriptor) as rows:
+            for ordinal, row in enumerate(rows):
+                key = (str(row.get("ts_code", "")).upper(), date.fromisoformat(str(row.get("trade_date"))[:10]))
+                if key in suspended:
+                    values = facts.setdefault(key, [])
+                    values.append(dict(row))
+                    if len(values) > 1:
+                        raise SourceManifestError(
+                            "daily suspension proof is duplicated",
+                            context={"ts_code": key[0], "trade_date": key[1].isoformat()},
+                        )
+                if ordinal % 10_000 == 0:
+                    checkpoint()
+        checkpoint()
+    if any(day not in covered_dates for _, day in suspended if day in trading_dates):
+        raise SourceManifestError("sealed daily partitions do not cover the suspension proof window")
+    return {key: tuple(values) for key, values in facts.items()}
 
 
 def collect_qfq_construction_anchors(
