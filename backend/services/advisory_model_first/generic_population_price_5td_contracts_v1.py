@@ -72,7 +72,7 @@ class PopulationMetadataRequestV1(BaseModel):
 
 
 class PopulationInputPlanV1(BaseModel):
-    """Data component only. P27's model/code/journal contract is not implemented here."""
+    """Frozen P26 data component; adding study contracts does not rewrite this identity."""
     model_config = ConfigDict(extra="forbid", frozen=True)
     metadata_request: PopulationMetadataRequestV1
     daily_ref: EvidenceReferenceV1
@@ -89,3 +89,46 @@ class PopulationInputPlanV1(BaseModel):
     @property
     def component_id(self):
         return "advgp5popinputs_"+self.plan_sha256[:24]
+
+
+STATISTICS = {"block_sessions": 5, "bootstrap_count": 2000, "bootstrap_seed": 20261008}
+STUDY_ARMS = ("matched_anchor", "candidate_transfer")
+
+
+class PopulationStudyPlanV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_version: Literal["generic_population_price_5td_study_v1"] = "generic_population_price_5td_study_v1"
+    input_root_uri: str = Field(min_length=1)
+    input_plan_file_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    input_manifest_file_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    calendar_ref: EvidenceReferenceV1
+    implementation_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_commit: str = Field(pattern=r"^[a-f0-9]{40}$")
+    node_python_uri: str = Field(min_length=1)
+    qe_api_base: str = Field(min_length=1)
+    library_versions: dict[str, str]
+    execution_node: Literal["WSL", "EXISTING_WORKER"] = "WSL"
+    study_type: Literal["EXPLORATORY_SCREEN"] = "EXPLORATORY_SCREEN"
+    decision_use: Literal["NAVIGATION_ONLY"] = "NAVIGATION_ONLY"
+    objective_contract: Literal["RISK_MANAGED_ADVISORY"] = "RISK_MANAGED_ADVISORY"
+
+    @model_validator(mode="after")
+    def readonly_loopback(self):
+        from backend.mcp.common import assert_loopback_url
+        assert_loopback_url(self.qe_api_base)
+        if (set(self.library_versions) != {"numpy", "pandas", "scikit-learn", "pyarrow", "pydantic"}
+                or any(not v.strip() for v in self.library_versions.values())):
+            raise ValueError("population study requires the five explicit existing-node library identities")
+        return self
+
+    @property
+    def plan_sha256(self):
+        from backend.services.advisory_model_first.generic_population_price_5td_model_v1 import PARAMETERS, SCHEMA_SHA256
+        return sha(dict(plan=self.model_dump(mode="json"), policy_sha256=POLICY_SHA256,
+            schema_sha256=SCHEMA_SHA256, parameters=dict(PARAMETERS), statistics=STATISTICS,
+            unique_variable="TRAINING_POPULATION_BREADTH", physical_fit_budget=2,
+            source_identity_encoding="UTF8_SOURCE_CRLF_NORMALIZED_TO_LF"))
+
+    @property
+    def experiment_id(self):
+        return "advgp5popstudy_"+self.plan_sha256[:24]
