@@ -268,4 +268,12 @@ source_ref 保留结构化 locator；长 observation/basis 以带 truncated 标�
 
 直接测试经历缺模块 RED→GREEN。两轮代码审查修复了独立请求绑定、路径/类型边界、源漂移/缺失可见性和 AST 入口复用；最终审查逐项覆盖 DESIGN-COMPLIANCE-001：①不以消费端/fixture 冒充 owner 真生成；②不可读/未知/冲突均显式；③不改评价、PIT、DB、跨模块业务；④未新增生产门禁、审批或资源限制。源码合入以最终 HEAD 的 CI verdict 为准，不提前记录 CI 通过。
 
-实际 changed files 分类为 targeted_ci_required，factor_research_backend；dev_db_required=false，unexecuted_test_files=[]。仅修改 nox 收集触发其既有静态/计划验证。按执行时 runtime catalog，新 assistance.py 命中 backend-main：runtime_impact=backend，backend_restart_owner=user；未修改 catalog 降级。该 catalog 的 backend-main operator_runbook_ref、identity_ref、business_smoke_ref 当前为空，不能宣称正式运行时复验已就绪或只要重启即完成。CLI fresh process 可独立使用，不需要启动常驻后端；本轮交付源码/离线入口，不宣称后端 runtime identity 已更新。生产 DDL/DML、数据集/缓存/官方指标、依赖安装、客户端安装、进程控制均 noop。
+实际 changed files 分类为 targeted_ci_required，factor_research_backend；dev_db_required=false，unexecuted_test_files=[]。仅修改 nox 收集触发其既有静态/计划验证。按执行时 runtime catalog，新 assistance.py 命中 backend-main：runtime_impact=backend，backend_restart_owner=user；未修改 catalog 降级。**更正运行时说明**：catalog 的 operator_runbook_ref、identity_ref、business_smoke_ref 并非空值，而是 `bug_record.runtime_contract.*` 动态引用。上轮用空 record 调用 BUG 专用解析器，得到的是缺少具体 BUG 记录，不是 catalog 字段缺失，不能据此认定流水线缺陷或为本 feature 新增重启前置。分类结果与实际生效证据分开：当前生产源码调用者只有 scripts/factor_research.py，服务端没有导入；CLI fresh process 可独立使用，不需要启动常驻后端。本轮交付源码/离线入口，不宣称后端 runtime identity 已更新。生产 DDL/DML、数据集/缓存/官方指标、依赖安装、客户端安装、进程控制均 noop。
+
+### 13.4 合入后只读复验与剩余交接（2026-10-08）
+
+PR #5765 已合入，source HEAD `2fbcb38ae4b9de121c7922c5fcb82ec1c881b63c`，merge `7acdc7268338d2d8cb7c178db167ba6314ef5c8b`，CI verdict SUCCESS。主线新进程的 proposal-inspect --help 正常；experience 精确读取 05_runtime_failure_patterns.md，5条命中、分页返回2条，均标 unverified_historical。该只读复验没有重跑全库评价或触碰数据/DB/服务。
+
+余下是 §6 的 RD-ASSIST-01 真实生成交付，而不是“先补 catalog 再重启才能研究”。按已批准职责，RD-Agent owner 在其独立工作树实现单次问题包→提案入口，交回源码 PR/commit、原请求、提案文件、实际模型身份或未知原因，以及没有启动 Loop/coder/runner、访问行情或业务写入的执行说明。生成只使用本轮问题包，不跟随旧数据目录、旧股票池/单位/成交假设，不修改或补齐旧数据集；原始资料只作为带出处的经验参考。
+
+本窗口收到真实文件后，使用主线 `scripts/factor_research.py proposal-inspect --request <original-request.json> --input <proposal.json> [--context <experience.json>] --format json` 读回，核对两侧身份/输入/来源/边界；不以 fixture 代替真实返回，不自动执行候选或入库。CLI 文件均使用获准 X 盘研究目录。若用户希望本窗口实施 RD-Agent 源码，应先明确接管该 owner 范围并同步职责，不能从“继续任务”推导跨模块接管。真实因子评价另按 §7 执行，不以等待生成端阻断直接研究。
