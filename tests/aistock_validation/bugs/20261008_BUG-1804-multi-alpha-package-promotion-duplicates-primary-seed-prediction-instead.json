@@ -29,16 +29,26 @@
   "evidence_uris": [],
   "expected": "每个seed真实冻结并按原回测均值聚合，单seed语义不变",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/package_asset_backfill.py",
+      "backend/tests/strategy_package/test_multi_seed_package_assets.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1804-multi-alpha-package-promotion-duplicates-primary-seed-prediction-instead.json"
+    ],
     "added_files": [
       "backend/tests/strategy_package/test_multi_seed_package_assets.py"
     ],
     "changed_files": [
-      "backend/services/strategy_package/multi_alpha_promotion.py",
-      "backend/services/strategy_package/multi_alpha_live.py",
       "backend/services/strategy_package/frozen_runtime_self_check.py",
-      "backend/services/strategy_package/package_asset_backfill.py"
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "backend/services/strategy_package/package_asset_backfill.py",
+      "backend/tests/strategy_package/test_multi_seed_package_assets.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1804-multi-alpha-package-promotion-duplicates-primary-seed-prediction-instead.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/multi_alpha_promotion.py",
@@ -162,15 +172,19 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "fresh_process_evidence": [
       "Isolated pytest processes loaded tracked promotion/live/self-check/backfill code: targeted contracts passed including real tmp_path LocalPackageAssetStore freezing, three model bindings, two distinct seed scores 3 and 9 averaged to 6, all seed read receipts retained, per-seed feature probes invoked three times, damaged bindings rejected, legacy single-seed identities preserved; in-memory repositories and tmp_path only, no production writes, training, experiments or service control."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
