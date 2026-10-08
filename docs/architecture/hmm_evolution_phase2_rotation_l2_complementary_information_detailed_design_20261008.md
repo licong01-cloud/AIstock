@@ -1,8 +1,8 @@
 # HMM Evolution Phase 2：L2互补信息与风险实用价值连续任务详细设计
 
-> 版本：v1.4；日期：2026-10-09；owner：HMM；tier：F2。
-> 状态：APPROVED_BY_USER_FORMAL_EXPERIMENTS_COMPLETED_RANK_PRODUCTION_RESEARCH_VERIFIED_VALUE_UNPROVEN。原§3～§10及§15精确公式、模型、输入、特征、窗口、参数和效果规则不变。rank正式2/2 fits、30,392行DEV/生产writer/独立回读及用户重启后的真实API/无mock UI已完成，生产surface=AVAILABLE_EXPERIMENTAL、advisory=NOT_AVAILABLE；BUG-1807 close-sync #5754已合入/关闭。#5781 return-target正式2/2 fits也已结束，IC=0.0247737、spread=+0.00038245，但没有可信经济增量，只文件交付、不替换生产。各维度见§11/§15；§16为下一零fit价值方向，精确消费合同待批准，不自动执行。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.81。只展开申万L2预测及风险实用价值，不重建旧实验链。
+> 版本：v1.5；日期：2026-10-09；owner：HMM；tier：F2。
+> 状态：APPROVED_BY_USER_FORMAL_EXPERIMENTS_COMPLETED_RANK_PRODUCTION_RESEARCH_VERIFIED_VALUE_UNPROVEN。原§3～§10及§15精确公式、模型、输入、特征、窗口、参数和效果规则不变。rank正式2/2 fits、30,392行DEV/生产writer/独立回读及用户重启后的真实API/无mock UI已完成，生产surface=AVAILABLE_EXPERIMENTAL、advisory=NOT_AVAILABLE；BUG-1807 close-sync #5754已合入/关闭。#5781 return-target正式2/2 fits也已结束，IC=0.0247737、spread=+0.00038245，但没有可信经济增量，只文件交付、不替换生产。各维度见§11/§15；§16零fit价值消费D1～D6已于2026-10-09批准；源码/直接测试已完成，正式双process回放待源码授权交付，不推导合入或生产采用。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.82。只展开申万L2预测及风险实用价值，不重建旧实验链。
 > 初始review base：067ee3505df98caf958350793475285b2b3b73a8。实际授权和各执行状态独立报告；已有两份消费与两特征Ridge均不再运行。
 
 ## 1. Background、终极目标与唯一假设
@@ -173,7 +173,7 @@ selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED：已看过本区间旧实验
 
 ## 9. Verification Plan与三轮审修要求
 
-以下为完整验证合同；源码历史验证见§13.2，正式preflight与2-fit真实结果见§13.3，结果分析与无写入产品转换见§13.4。DEV迁移/写入、真实产品API/UI仍未运行，不能以转换通过或研究资格代报。
+以下为原模型完整验证合同；源码历史验证见§13.2，正式preflight与2-fit真实结果见§13.3，结果分析与无写入产品转换见§13.4。原rank DEV/生产迁移、写入和真实产品API/UI已完成，见§11；return仍只文件交付，新§16正式参考回放未执行，各自验收不得互相代报。
 
 - 20/25日预热及首日锚；pct百分比→小数/benchmark逐日收益/累计收益差/下行半偏差手算；源日期/列poison确保无decision当日或tail数值读取。
 - sparse ID/131目录、成员PIT/单成员/正常停牌/停发/zero-downside；报价NaN与moneyflow有限分离；未知alias/应有缺数/非有限显式失败。
@@ -201,6 +201,8 @@ selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED：已看过本区间旧实验
 旧receipt仅记录OMP/OPENBLAS/MKL/NUMEXPR四项变量，不把未记录的VECLIB/BLIS伪称已有证据；新request明确记录六项设置及实际threadpool=1。沿同host库信息为OpenBLAS 0.3.30与0.3.29.dev/pthreads/SkylakeX及vcomp/OpenMP；执行时逐项核对旧真实numeric payload，库版本字段null保留null，不补占位版本。不把数值环境核对变成CPU/内存/磁盘资源门或研究记录重启要求。
 
 F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真实比较，F-005=D5产品/身份，F-006=D6边界/停止。
+
+RV-001=§16 D1封闭身份/全人口，RV-002=D2时间因果，RV-003=D3四臂cohort，RV-004=D4成本/NA，RV-005=D5完整价值统计，RV-006=D6零fit/停止。批准和源码验收见§16.2，正式回放不能用单元测试代报。
 
 ## 11. Design Acceptance Matrix与实际状态
 
@@ -373,20 +375,20 @@ return自身spread HAC95%=[-0.00562974926130985,0.006394646175073454]，两个�
 
 本轮只读核对两份既有acceptance的byte/canonical pins、reference authority、mapping/quote hash、30,392逐键outcome和原rank/delta指标一致，零新增fit、源重建或tail读取。新outcome wrapper包含新schema/input/reference pins，其hash理应不同；比较的是相同逐键封闭facts，不要求不同版本的wrapper hash相等。旧acceptance均未改写，没有复制完整预测或另建历史证据档案。return继续文件交付，既有rank研究产品可用但不自动替换默认；未证明经济增益不是源码BUG，不再反复“修复”模型以制造通过。
 
-## 16. 下一完整任务建议：零fit匹配经济价值回放（规划，不是已批准消费合同）
+## 16. 当前完整任务：零fit匹配经济价值回放（已批准，尚未执行）
 
 唯一待回答问题：同一申万L2、同一历史日期、同一可用人口和长仓参考消费规则下，既有排序相对无排序参照是否有收益或风险价值。建议复用现有delta/rank/return封闭预测及其同源价格事实，不新模型、不搜索horizon/特征/参数，不把展示前后10当计算人口。风险原模型/两份消费结论保持，QE仍由QE窗口后置。
 
-推荐一次性决策包`L2-ROTATION-VALUE-D1～D6`如下；**全部为PROPOSED_PENDING_USER_APPROVAL，本次不实施或执行**。它定义一个完整参考实验，不增加新模型、promotion gate或另一个平台。
+一次性决策包`L2-ROTATION-VALUE-D1～D6`已于2026-10-09由用户明确批准，以下六条全部生效为APPROVED_BY_USER。它定义一个完整参考实验，不增加新模型、promotion gate或另一个平台；批准不等于源码已交付、回放完成或PR合入。
 
 | 决策 | 推荐精确内容 | 状态 |
 |---|---|---|
-| D1 输入与人口 | 绑定§15.6/原rank的正式acceptance及§15.3冻结input/pins。rank/return直接读封闭预测；delta仅从同一冻结input调用原确定性纯函数构造并核对已封闭metrics，不读数据库或重导源。完整131目录、逐日资格和quote authority保留；共同可预测人口由预测时刻数据决定，不按事后收益筛选。daily return只读原同源官方L2报价事实，不用个股近似、L1复制或改变mapping | PROPOSED_PENDING_USER_APPROVAL |
-| D2 因果/时间账本 | 只用原222个成熟decision（2025-04-16..2026-03-17），参考估值日历仍到2026-03-31，末10个未成熟decision不发新参考仓。信号t仅由≤t−1特征产生；在t收盘参考建仓，第一次收益为t→下一交易日收盘；持有10个开市日后退出。收盘只是官方指数参考，不声称可按该价成交。零fit/filter，不读取2026-04-01起tail | PROPOSED_PENDING_USER_APPROVAL |
-| D3 消费与参照 | rank/return/delta三臂均用各自原forecast_state=trending的完整可用组（原20%投影，不以UI前10筛选）等权长仓；第四臂不使用排序、按同日共同可预测L2等权。10个固定错开的独立cohort，初始各1/10现金，按decision序号mod10轮转；每cohort内部固定份额持有10日，期末全退出、若还有成熟decision再等权进入。不跨cohort净额抵消、不加杠杆/做空/择时；四臂入退时间及初始现金预算相同，实际敞口另报 | PROPOSED_PENDING_USER_APPROVAL |
-| D4 价格/成本/NA | held L2财富严格乘原官方日收益，r=同源sector_returns.pct_change/100，必须有限且1+r>0；使用原source覆盖到2026-03-31的标签报价视图，不以只到t−1的feature-price视图替代，不伪造价格或序列。cohort首次及每次买入按资金V配置notional=V/(1+c)，卖出到账notional×(1−c)，c∈{0,0.0005,0.001,0.002}为单边预算成本；转手全卖全买，故成本是明确保守参考、不是可成交费用。现金参考利息=0。未持有合法quote-NA不影响估值且不可生成假分数；held引用存在合法估值NA时全期路径为unavailable/完整可估值连续块另报，不拼接NAV。有效报价期缺数据、hash漂移或身份冲突typed fail closed，不补值、不回落 | PROPOSED_PENDING_USER_APPROVAL |
-| D5 价值读回 | 四臂同时报告全窗口gross参考累计收益、MDD、敞口/现金、买卖notional/换手及四档成本参考路径；三排序臂相对无排序参照、return相对rank/delta均作相同日历paired日收益差及HAC lag9区间，保留两原固定块与合法NA分母。不搜索最佳成本/日期/行业，不把有利块拼成全期；原0.02研究资格不改，不新增收益/显著性AND门 | PROPOSED_PENDING_USER_APPROVAL |
-| D6 执行/停止/交付 | 精确批准后一个HMM-owned连续包完成纯参考回放CLI、最小直接测试、最多三轮作者审修、授权源码交付及一次双fresh-process零fit回放；仅新compact结果，不改旧资产、生产run、数据库、环境变量、QE或服务。报告价值/代价/不足后即停，不自动调消费规则、训练第三候选或选择上线；个股实盘/QE净收益仍未评估 | PROPOSED_PENDING_USER_APPROVAL |
+| D1 输入与人口 | 绑定§15.6/原rank的正式acceptance及§15.3冻结input/pins。rank/return直接读封闭预测；delta仅从同一冻结input调用原确定性纯函数构造并核对已封闭metrics，不读数据库或重导源。完整131目录、逐日资格和quote authority保留；共同可预测人口由预测时刻数据决定，不按事后收益筛选。daily return只读原同源官方L2报价事实，不用个股近似、L1复制或改变mapping | APPROVED_BY_USER |
+| D2 因果/时间账本 | 只用原222个成熟decision（2025-04-16..2026-03-17），参考估值日历仍到2026-03-31，末10个未成熟decision不发新参考仓。信号t仅由≤t−1特征产生；在t收盘参考建仓，第一次收益为t→下一交易日收盘；持有10个开市日后退出。收盘只是官方指数参考，不声称可按该价成交。零fit/filter，不读取2026-04-01起tail | APPROVED_BY_USER |
+| D3 消费与参照 | rank/return/delta三臂均用各自原forecast_state=trending的完整可用组（原20%投影，不以UI前10筛选）等权长仓；第四臂不使用排序、按同日共同可预测L2等权。10个固定错开的独立cohort，初始各1/10现金，按decision序号mod10轮转；每cohort内部固定份额持有10日，期末全退出、若还有成熟decision再等权进入。不跨cohort净额抵消、不加杠杆/做空/择时；四臂入退时间及初始现金预算相同，实际敞口另报 | APPROVED_BY_USER |
+| D4 价格/成本/NA | held L2财富严格乘原官方日收益，r=同源sector_returns.pct_change/100，必须有限且1+r>0；使用原source覆盖到2026-03-31的标签报价视图，不以只到t−1的feature-price视图替代，不伪造价格或序列。cohort首次及每次买入按资金V配置notional=V/(1+c)，卖出到账notional×(1−c)，c∈{0,0.0005,0.001,0.002}为单边预算成本；转手全卖全买，故成本是明确保守参考、不是可成交费用。现金参考利息=0。未持有合法quote-NA不影响估值且不可生成假分数；held引用存在合法估值NA时全期路径为unavailable/完整可估值连续块另报，不拼接NAV。有效报价期缺数据、hash漂移或身份冲突typed fail closed，不补值、不回落 | APPROVED_BY_USER |
+| D5 价值读回 | 四臂同时报告全窗口gross参考累计收益、MDD、敞口/现金、买卖notional/换手及四档成本参考路径；三排序臂相对无排序参照、return相对rank/delta均作相同日历paired日收益差及HAC lag9区间，保留两原固定块与合法NA分母。不搜索最佳成本/日期/行业，不把有利块拼成全期；原0.02研究资格不改，不新增收益/显著性AND门 | APPROVED_BY_USER |
+| D6 执行/停止/交付 | 精确批准后一个HMM-owned连续包完成纯参考回放CLI、最小直接测试、最多三轮作者审修、授权源码交付及一次双fresh-process零fit回放；仅新compact结果，不改旧资产、生产run、数据库、环境变量、QE或服务。报告价值/代价/不足后即停，不自动调消费规则、训练第三候选或选择上线；个股实盘/QE净收益仍未评估 | APPROVED_BY_USER |
 
 精确递推：cohort第一次入场前保持现金；买入行业i金额=cohort可用资金/(1+c)/组大小，随后份额不变，每日按同源r_i更新行业财富；持满10次日收益后按(1−c)退出成现金。重新进入只用本日封闭信号，预算来自该cohort已有现金，不跨cohort转账/再平衡；全组合NAV为10个cohort财富之和。首日买入成本计入该日参考路径，最后成熟cohort退出后剩余日保持现金。第四臂沿相同cohort账本，不将模型收益导致的实际敞口差强制改成相同；报告差值，不能把潜在敞口差都归为选行业收益。若完整事实不足，结果诚实为路径不足，不补数重建。
 
@@ -394,8 +396,29 @@ return自身spread HAC95%=[-0.00562974926130985,0.006394646175073454]，两个�
 
 这首先是行业指数参考路径，不等于个股实际成交净收益；成本敏感性必须标注假设，不能直接冒称QE/荐股增益。selection_basis仍为RETROSPECTIVE_DEVELOPMENT_SELECTED：本区间已用于多次选择，HAC区间未校正整条研发选择历史，不称独立确认。只有明确合同及执行授权后，才在一个连续任务内完成最小HMM-owned代码、最多三轮作者审修和一次零fit回放；无价值就停止，不自动挑消费参数、第三模型或生产采用。既有研究门槛/产品状态不由该规划改写，不增加promotion gate。
 
-### 16.1 本轮作者审修与DESIGN-COMPLIANCE-001
+### 16.1 原提案作者审修与DESIGN-COMPLIANCE-001（历史记录）
 
 三轮作者自审（非独立第三方）：第一轮按封闭acceptance逐字核对数值与原精确合同，纠正所有active“实施中/正式fits=0/生产待重启”状态，保留原历史段落及版本记录；零fit读回先发现两个版本outcome wrapper身份不同，按正式schema独立核验wrapper并逐行业比较同一facts，未改正式源/结果。第二轮核对新提案只长仓、t−1→t收盘→后10日、cohort自融资/成本/现金/末端/合法NA；补齐百分比单位及标签报价视图边界，删除“实际每日敞口完全相同”的错误暗示，补充已消费development局限。第三轮对照父蓝图、状态矩阵、§15停止和§16待批准边界，修复PV-006缺直接artifact引用；F2只验文档，不能制造消费批准、业务通过或生产采用。
 
 四项逐条：完整131目录/222成熟decision和既有三排序对照不缩为UI子集，规划不冒充实现；NA/有限值/负spread/宽区间不隐瞒或补值；旧模型精确公式、源/hash、风险政策、生产默认及其他模块行为保持；新消费全部pending，不增加promotion、资源或记录审批门。实际仅两份HMM文档与ignored只读分析脚本，新增fit=0、tail/数据库/数据集/激活/依赖/服务动作均未执行。
+
+### 16.2 批准后的实施范围与验收索引
+
+allowed_write_scope仅包括本设计、父蓝图、`scripts/hmm_risk/rotation_l2_reference_value.py`、`scripts/hmm_risk/run_rotation_l2_reference_value.py`及`backend/tests/hmm_risk/test_rotation_l2_reference_value.py`。实现和CLI只离线读取现存冻结文件；不接入router、runtime registry或环境变量。原模型与产品行为不变，不修改全局CI、测试计划或其他模块。
+
+源码核验纠正提案期间的视图误解：原input的`source.sector_returns`只携带截至2025-04-15的训练标签；§16 D4使用的原source标签报价视图须由既有`rotation_l2_moneyflow_price_supervised.py::read_evaluation_facts`在同一冻结release读取2025-04-16..2026-03-31，并严格匹配原rank outcome SHA。这不是重新准备数据、重建预测或读取tail。不得用训练视图或到2026-03-30的feature-price视图代替末端估值。
+
+本包纯离线模块放在`scripts/hmm_risk/`，没有运行态消费者；canonical workflow按实际三源码/测试文件分类为runtime_impact=none、runtime_files=[]、target_ids=[]、catalog_error=null，不添加流水线例外，也不要求后端重启。
+
+三轮作者审核（非独立第三方）：第一轮修复非法数值通用异常与paired exposure分母，并补齐执行源码committed/clean约束；第二轮真实文件读回发现训练标签不能估值，改为原正式有界评价reader并严格重算原hash，预检PASS；第三轮补齐parent四臂/日期/成本身份、失败回执与不可覆盖读回测试，CLI采用现有run_命名以复用PR slice映射，无全局规则改动。最终直接测试34项通过；真实新价值回放尚未执行。
+
+DESIGN-COMPLIANCE-001：完整131/222/四臂四成本不缩为UI子集；合法NA路径不足显式报告、不补值或拼接NAV；旧模型/特征/seed/窗口/门槛及其他模块不变；不新增promotion或记录门禁。fit/tail/DB/数据集/生产默认/环境变量/服务动作=0。正式经济收益结论须等双process业务回放，源码/F2 PASS不代报其结果。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| RV-001 D1封闭身份与全人口 | scripts/hmm_risk/rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
+| RV-002 D2时间因果 | scripts/hmm_risk/rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
+| RV-003 D3四臂自融资账本 | scripts/hmm_risk/rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
+| RV-004 D4成本与合法NA | scripts/hmm_risk/rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
+| RV-005 D5完整价值统计 | scripts/hmm_risk/rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
+| RV-006 D6零fit及停止边界 | scripts/hmm_risk/run_rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
