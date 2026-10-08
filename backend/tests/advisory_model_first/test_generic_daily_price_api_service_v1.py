@@ -158,11 +158,44 @@ def test_budget_defers_atomically_after_snapshot_release(chain, monkeypatch):
     assert len(result["original_lists"]) == 1
 
 
-@pytest.mark.parametrize("requests", [[{"target_trade_date": "2099-01-01"}], [{}]*2, [{}]*21])
-def test_invalid_or_future_original_queries_do_not_open_snapshot(chain, requests):
+@pytest.mark.parametrize("requests", [[{"target_trade_date": "2099-13-01"}], [{}]*2, [{}]*21])
+def test_invalid_original_queries_do_not_open_snapshot(chain, requests):
     with pytest.raises(AdvisoryModelFirstError):
         chain.service.read_batch(program_id="p", requests=requests)
     assert not chain.events and not chain.model_loads
+
+
+def test_eod_can_value_original_next_session_without_future_quote_inputs(chain):
+    chain.service._now = lambda: datetime(2026, 6, 10, 8, tzinfo=timezone.utc)
+    result = chain.service.read_price(program_id="p", target_date=date(2026, 6, 11))
+    assert result["status"] == "COMPUTED" and result["complete"]
+    day = result["days"][0]
+    assert day["decision_date"] == "2026-06-10" and day["target_date"] == "2026-06-11"
+    assert day["target_calendar_verified"]
+    assert day["input_receipt"]["context"]["source_visible_through"] == date(2026, 6, 10)
+    assert day["advice"][0]["status"] == "ACCEPTABLE_PRICE_SET"
+    assert not result["outcomes_read"] and not result["model_activation"]
+
+
+def test_future_original_decision_is_rejected_before_market_queries(chain):
+    chain.service._now = lambda: datetime(2026, 6, 9, 8, tzinfo=timezone.utc)
+    with pytest.raises(AdvisoryModelFirstError, match="future original dates"):
+        chain.service.read_price(program_id="p", target_date=date(2026, 6, 11))
+    assert chain.closed and chain.events[-2:] == ["ROLLBACK", "CLOSE"]
+    assert [event for event in chain.events if event.startswith("SELECT")] == ["SELECT original_list"]
+
+
+def test_current_unclosed_D_preserves_roster_but_never_reads_quotes(chain):
+    chain.service._now = lambda: datetime(2026, 6, 10, 6, tzinfo=timezone.utc)
+    chain.service._input = api._db_input
+    chain.service._contexts = lambda pinned, now: api.GenericDailyPriceContextV1(read_session=pinned, now=lambda: now)
+    result = chain.service.read_price(program_id="p", target_date=date(2026, 6, 11))
+    assert result["status"] == "DEFERRED_D_NOT_CLOSED" and not result["complete"]
+    assert len(result["days"][0]["advice"]) == 1 and not result["days"][0]["target_calendar_verified"]
+    assert result["query_counts"]["shared_nine_field_selects"] == 0
+    assert result["query_counts"]["shared_legal_context_selects"] == 0
+    assert [event for event in chain.events if event.startswith("SELECT")] == ["SELECT original_list"]
+    assert chain.events[-2:] == ["ROLLBACK", "CLOSE"]
 
 
 def test_get_batch_routes_validation_and_no_config_does_not_open_database(monkeypatch):

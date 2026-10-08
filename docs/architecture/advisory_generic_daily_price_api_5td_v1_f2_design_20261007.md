@@ -1,10 +1,10 @@
 # Advisory 通用固定5交易日日频买价API F2详细设计
 
-2026-10-08，SOURCE_VERIFIED（本地依赖链），40定向测试及两日真实只读服务层读回通过。依赖BUG-1778/DB源码及本API尚未合入，生产HTTP/重启验收未完成，经济确认/模型激活仍false。
+2026-10-08，SOURCE_VERIFIED（本源码提交前状态）。BUG-1778 #5717/#5718 和 DB输入源码 #5722（4682d0b9）已合入；本API最终43项定向及真实两日/次日EOD只读服务层验证通过，使用正常导入，不覆盖旧依赖。本API当前CI/合入与生产HTTP/用户重启验收另报，经济确认/模型激活仍false。
 
 ## Background / Goal
 
-固定5TD纯价集消费者#5641已合入，通用九字段DB输入设计#5644已合入、源码本地验证而尚未合入，依赖BUG-1778 / Issue #5645公共交付分类仍未解决。本切片补全数据库原发布名单→D九字段→显式模型→买价集合的只读API，不重建Selection，也不继承M1父模型腿、行业分类或“五次有效复评”的语义。第一版持有期固定T..T+4五个交易日，未知不延长；10/20日另立版本。现有负候选只是功能用模型，不作为获利承诺或自动生产激活。
+固定5TD纯价集消费者#5641已合入，通用九字段DB输入设计#5644及独立源码#5722均已合入，BUG-1778源码#5717/close-sync#5718已闭环，Issue #5645 CLOSED，原公共分类阻断已解除。本切片补全数据库原发布名单→D九字段→显式模型→买价集合的只读API，不重建Selection，也不继承M1父模型腿、行业分类或“五次有效复评”的语义。第一版持有期固定T..T+4五个交易日，未知不延长；10/20日另立版本。现有负候选只是功能用模型，不作为获利承诺或自动生产激活。
 
 ## Scope / Non-goals
 
@@ -16,7 +16,7 @@
 
 ### 1. 接口、显式配置与状态
 
-增加GET /api/v1/advisory/programs/{program_id}/generic-entry-price，可传target_trade_date或list_version_id，两者同时提供必须精确对应。批量POST同路径/batch只查询1～20个已发布原日期，不修改数据库；单日直接调用批量同核。日期限当前消费日或过去；T是D后立即下一交易日，不允许读取T行情。固定5TD与旧sector-entry-price/economic-entry-price接口并存，原响应和旧模型不变。
+增加GET /api/v1/advisory/programs/{program_id}/generic-entry-price，可传target_trade_date或list_version_id，两者同时提供必须精确对应。批量POST同路径/batch只查询1～20个已发布原日期，不修改数据库；单日直接调用批量同核。决策日D限当前消费日或过去；T允许是原发布名单对应、权威日历可验证的D后立即下一交易日，可能晚于当前消费日。不按T>today误拒D收盘后的次日建议，也不允许未来D或读取T行情。非法远期目标不能绕过原名单/权威日历一致性。固定5TD与旧sector-entry-price/economic-entry-price接口并存，原响应和旧模型不变。
 
 服务只读取操作员显式AISTOCK_ADVISORY_GENERIC_PRICE_CONFIG；配置含schema_version、model_family=DAILY_5TD、原trained manifest EvidenceReference、唯一模型policy hash。首版只生成九字段，不能给minute/volume/joint模型静默补额外字段；未来family按独立适配扩展。配置没有package_id/parent腿、收益评分/资格或当前指数池限定；新包可直接消费原发布名单。同一次请求只装载一个不可变模型快照，manifest/model哈希是计算对象身份，不是父包准入。无配置→NOT_CONFIGURED，不读收益或DB、不自动选最好模型；坏配置/对象身份冲突显式INVALID_CONFIGURATION，不伪装无候选。配置本身不等于收益确认、用户资金指令或部署资格。
 
@@ -54,7 +54,7 @@ D close为reference_cny。若可证明T raw multiplier=m>0，T raw legal_low/hig
 
 ## Implementation Plan
 
-本设计多视角/F2通过→设计PR当前CI合入/自身清理。按用户2026-10-08批准的接续计划，从最新main同步自己的精确九文件API；公共依赖未ready时可继续完整本地实现与定向只读验证，但BUG-1778三文件及DB四文件必须分别交付，不捆绑依赖或假称API可独立合入。先原名单小fixture、pinned只读/单位坐标、多日同核/原empty/unknown、端点/router测试；同一套最小矩阵稳定后一次最终运行、Ruff/L0/F2/多轮修复，依赖独立合入且currentCI通过后合入API。运行加载需要用户重启，重启后只读identity+历史功能验收；不自行配置或激活权重，无配置状态不能冒充真实COMPUTED。UI不需要作为该只读业务切片前置。
+本设计多视角/F2通过→设计PR当前CI合入/自身清理。按用户2026-10-08批准的接续计划，从最新main同步自己的精确九文件API；BUG-1778三文件及DB四文件现均已分别合入；本API正常导入已合入依赖，不捆绑依赖或替换其源码。先原名单小fixture、pinned只读/单位坐标、多日同核/原empty/unknown、端点/router测试；同一套最小矩阵稳定后一次最终运行、Ruff/L0/F2/多轮修复，依赖独立合入且currentCI通过后合入API。运行加载需要用户重启，重启后只读identity+历史功能验收；不自行配置或激活权重，无配置状态不能冒充真实COMPUTED。UI不需要作为该只读业务切片前置。
 
 ## Verification Plan / Design Acceptance Index
 
@@ -78,16 +78,18 @@ D close为reference_cny。若可证明T raw multiplier=m>0，T raw legal_low/hig
 | F-794 | generic_daily_price_context_v1.py: GenericDailyPriceContextV1 | pytest backend/tests/advisory_model_first/test_generic_daily_price_context_v1.py: SQL D-only, future/pending, ST, unclosed D, normal UNKNOWN | SOURCE_VERIFIED | none |
 | F-795 | generic_daily_price_context_v1.py: project_generic_raw_price_sets_v1; existing pure regulatory math | pytest backend/tests/advisory_model_first/test_generic_daily_price_context_v1.py: ex-right raw cents, support holes, no-limit, dividend/ST | SOURCE_VERIFIED | none |
 | F-796 | generic_daily_price_api_service_v1.py: immutable explicit config/response; published-list identity | pytest backend/tests/advisory_model_first/test_generic_daily_price_api_service_v1.py: original roster hash, source flags; artifact: X:/AIstock_temp/advisory/next-mainline-20261008/gp5-api-readonly-result.json | SOURCE_VERIFIED | none |
-| F-797 | three direct tests; task-owned readonly local service smoke | pytest backend/tests/advisory_model_first/test_generic_daily_published_list_v1.py backend/tests/advisory_model_first/test_generic_daily_price_context_v1.py backend/tests/advisory_model_first/test_generic_daily_price_api_service_v1.py -q -> 40 passed; artifact: X:/AIstock_temp/advisory/next-mainline-20261008/gp5-api-readonly-result.json | SOURCE_VERIFIED | none |
+| F-797 | three direct tests; task-owned readonly local service smoke | pytest backend/tests/advisory_model_first/test_generic_daily_published_list_v1.py backend/tests/advisory_model_first/test_generic_daily_price_context_v1.py backend/tests/advisory_model_first/test_generic_daily_price_api_service_v1.py -q -> 43 passed; artifact: X:/AIstock_temp/advisory/next-mainline-20261008/gp5-api-readonly-result.json | SOURCE_VERIFIED | none |
 
-以上仅验收本地源码和服务层历史业务切片，不冒称生产HTTP/自然运行或获利验证。最小测试及既有consumer合同覆盖原空名单/最大50边界、legacy池unknown仍消费、重复/外来/日期冲突、未来quote未读、pending公司行动、分红/拆股坐标、原tick、假配置/预算/只读异常回滚、正常UNKNOWN及单日批量等价；既存nine formula和模型JSONparity不重复一套测试。真实8月27/28日两日80已排名项、16未排名WAITING全部保留，60可接受价集/20支持不足；22 SELECT=原身份16+九字段3+坐标3，非vintage且市场宽度UNKNOWN不填。只在task-owned短进程显式使用既存冻结GP5模型及本地未合入BUG/DB依赖，0训练/收益读取/DB写/生产配置变化；不把此模型当新增经济正结果。
+以上仅验收本地源码和服务层历史业务切片，不冒称生产HTTP/自然运行或获利验证。最小测试及既有consumer合同覆盖原空名单/最大50边界、legacy池unknown仍消费、重复/外来/日期冲突、未来quote未读、pending公司行动、分红/拆股坐标、原tick、假配置/预算/只读异常回滚、正常UNKNOWN及单日批量等价；既存nine formula和模型JSONparity不重复一套测试。依赖合入后的真实8月27/28日两日80已排名项、16未建模原业务项全部保留，60可接受价集/20支持不足；22 SELECT=原身份16+九字段3+坐标3，非vintage且市场宽度UNKNOWN不填。另将消费时钟置于8月26日16:00上海时区，原8月27日40候选+9原业务项仍完整，32可接受/8支持不足，14 SELECT；同一日输入hash与两日批量完全一致。该时钟模拟仅证明D→下一T功能，不证明原历史发布时刻或revision vintage。task-owned短进程正常导入已合入依赖、显式只读既存GP5模型，0训练/收益读取/DB写/生产配置变化；不把此模型当新增经济正结果。
 
 ## Risks / Rollout / Rollback / Production Gates
 
-依赖未合入、配置未设置、当前DB revision非vintage、法律坐标缺失和模型未经济确认是独立状态。它们不能通过伪配置/换来源/删股票消解，也不成为QE包资格要求。源合入后停用新route配置即可回滚，不需数据迁移。用户后端重启、运行配置、模型角色激活另行授权；本设计/后续源PR不授予这些操作。
+依赖已合入；生产配置未设置、当前DB revision非vintage、法律坐标缺失和模型未经济确认仍是独立状态。它们不能通过伪配置/换来源/删股票消解，也不成为QE包资格要求。源合入后停用新route配置即可回滚，不需数据迁移。用户后端重启、运行配置、模型角色激活另行授权；本设计/后续源PR不授予这些操作。
 
 ## Review / 多轮自审
 
 设计阶段复核（#5674时）：业务轮显式固定5TD而非旧M1；stock-only与未来rank context分开，包/池只是原元数据。PIT轮不借T日refresh audit、收益或当日未收盘quote；源证据不冒称native；ST采用既有状态而非只查T事件，未定公司行动不是无事件。资源轮采用一快照/一个budget、DB lease仅借连接不关闭外层、批量不是每日独立环境；列出额外SELECT而非虚称3总查询。追加价格审查明确复权tick非有限小数须原raw Decimal网格映射，m=1与旧数学逐节点一致，不简化遗漏分红/拆股。当时仅设计通过，源依赖未ready，API功能未实施，不能把当时设计结论冒充源码验证；最新本地状态见下。
 
-2026-10-08源码多轮复核：原未排名WAITING是合法业务项而非丢rank，不重排/补rank，保留unmodeled；修复测试fixture反射globals导致的假预算失败，失败nodeid先PASS；资源轮确认外层finally关闭、借用lease不关闭连接、三数据/三法律/其他原身份SELECT分报；40直接合同/Ruff/diff通过，两日真实服务链路COMPUTED。业务实现已本地验证，依赖公共交付阻断及生产HTTP待用户重启仍分别保留；不能以本地通过绕过依赖合入或虚报经济确认。
+2026-10-08源码多轮复核：原未排名WAITING是合法业务项而非丢rank，不重排/补rank，保留unmodeled；修复测试fixture反射globals导致的假预算失败，失败nodeid先PASS；资源轮确认外层finally关闭、借用lease不关闭连接、三数据/三法律/其他原身份SELECT分报；40直接合同/Ruff/diff通过，两日真实服务链路COMPUTED。该轮为历史检查点，随后依赖已独立合入；生产HTTP待用户重启仍单独保留，不能虚报经济确认。
+
+2026-10-08接续复核：新增测试先复现T>today错误，修复只禁止未来D；T仍由原发布名单及既存DB日历证明为立即下一交易日。三项EOD定向回归覆盖收盘后次日可计算、未来D在报价查询前拒绝、收盘前使用真实DB/坐标适配器保留原名单且零报价查询；全未收盘响应complete=false，不伪装计算完成。稳定后一次最终43项直接矩阵通过；真实EOD与历史批量同日输入hash一致，依赖均为正常已合入来源。三视角再审确认标签/成本/公式、原价格支持空洞、全候选/事务/PIT与模块边界未变；不把功能通过升级为经济、自然前向或生产运行验收。

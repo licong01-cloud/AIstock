@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.80
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.81
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-08
@@ -7,7 +7,7 @@
 
 > 最近已结束买价研究：[GP5-SELECTION-CONTEXT-1 F2](advisory_generic_selection_context_price_5td_v1_f2_design_20261007.md)设计#5667已合入934d8de0/自身清理；独立七文件producer0d457843、三轮复审/7定向/Ruff/L0/F2通过，源码尚未PR/合入。run advgp5selctx_6f39d9766917370927c5c778已于2026-10-07 13:00:46UTC一次完成，自己的等待helper自然退出；fit前后公开QE三路径均0，唯一2head拟合4.547秒/拟合评估5.375秒，累计117真实研究fit＋1旧index。386D/7720原KEY不删，80完整固定5TD配对cohort中base/frozen GP5/candidate/rule均值129.0145/73.6306/69.4097/131.5724bps，candidate−base/matched为−59.6049/−4.2209bps。已知拒买避免亏损43.2151、错过上涨104.8644、净−61.6492bps；UNKNOWN空槽+2.0444另列不归模型，1组未结算保留null。仅描述重叠cohort，不是NAV、独立确认或QE无Alpha证明；economic_confirmation/deployable=false，仅停止当前候选，不调参重跑或自动激活。后续主线为日频买价API及独立剩余净价值Exit标签审计，旧stock-only与模块边界不改。
 
-> 本轮必要业务主线：[通用固定5TD日频买价API F2](advisory_generic_daily_price_api_5td_v1_f2_design_20261007.md)与[固定5TD剩余净价值卖价F2](advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md)独立角色设计#5674已合入1dc3ad9d/自身清理。买价精确九文件源码已本地实现，多轮复核/40定向/Ruff/F2通过；原发布名单→D九字段→D可见raw法律坐标→显式模型→价集，单日/批量同核，不继承M1腿/五review。8月27/28日真实只读两日80已排名候选及16未排名WAITING完整保留，60可接受价集/20支持不足、80法律坐标可用；市场宽度UNKNOWN不补填，22 SELECT=原名单身份16+九字段3+法律坐标3，0训练/收益读取/DB写/模型激活。此为task-owned短进程显式本地未合入BUG/DB依赖的服务层验证，API尚未合入/生产HTTP未验证，不捆绑依赖，UI不前置。Exit新标签/四固定fit审计已一次完成（结果见下），S收盘后下一合法U卖价vs原E=T+4继续，T+1/沉没成本/episode聚类明确；没有可激活卖价family/尾风险head，非最佳分钟点。源码/服务层可用与经济确认/运行激活分别报告。
+> 本轮必要业务主线：[通用固定5TD日频买价API F2](advisory_generic_daily_price_api_5td_v1_f2_design_20261007.md)独立精确九文件已同步最新main，依赖BUG-1778 #5717/#5718与DB源码#5722（4682d0b9）均已合入。最终43直接合同与真实两日批量、D收盘后下一T只读功能通过；80排名候选+16未建模原项完整保留，60价集/20支持不足，22 SELECT。新增三项回归及真实8月26日16:00→27日名单读回修复了误拒未来T；禁止未来D/T报价，原权威日历仍验证立即T，收盘前DEFERRED/complete=false且不读未收盘报价。该模拟不证明原捕获时刻或历史vintage；市场宽度UNKNOWN不补填。当前源码CI/合入与生产HTTP/用户重启另报，0训练/收益读取/DB写/生产配置或模型激活。固定5TD不继承M1腿/五review，UI不前置；剩余卖价family/尾风险head及经济确认仍未完成。
 
 > 第一轮Exit完成检查点（2026-10-08）：EXIT5-REMAINING-VALUE-AUDIT-1源码精确七文件、22直接合同/Ruff/L0/F2及多视角复审通过，本地195c84e提交并同步main；Draft PR #5697初始HEAD39455df5 CI37679284047曾SUCCESS（历史检查，当前HEAD另查），该检查点公开合入曾待BUG-1778依赖；现依赖已交付，Draft源码仍按独立PR次序处理，不把本地显式固定依赖覆盖服务。run advexit5_6134993163be362f7e0bebc7一次prepare9.178秒，305原开发D/6100候选全部保留，1525原Top5 shadow episode，其中1500日期成熟/25边界未结算，6100决策=6000成熟+100未结算。金融parquet在解码前投影/日期过滤，不读原test或sealed；5968 AVAILABLE/16 NOT_HELD/16 UNKNOWN/100 UNSETTLED，S市场宽度仍UNKNOWN。四固定Ridge折各fit前后公开QE三0，合计train1.918秒、evaluate0.805秒，本检查点累计121研究fit＋1旧INDEX_BUILD；oracle0-fit另列，已无本窗口实验运行。240评价入场组保留，238完整配对、2 UNKNOWN；基线/candidate/oracle均值114.2579/70.5342/350.1849bps，candidate−base −43.7236，CI95 [−89.9113,4.0278]、MDE80 66.2288bps，clairvoyant理论增量+235.9270bps。完整配对组703干预episode/222入场组、覆盖93.2773%，支持次数满足而regime仍UNKNOWN；避免亏损/增加盈利不足抵消额外亏损/错失盈利，净和与原五槽账本精确对齐。结论仅NAVIGATION_ONLY/EXPLORATORY：合法退出有理论空间，当前九字段+简单模型不能转化为收益，不救参数、不自动激活、不证明全局不可学或上游无Alpha。本检查点之后独立设计并执行P21持仓路径，随后P22价格条件化也已一次结束（见当前权威接续与§16），不再将该下一假设重复立项；API生产与独立卖价family/尾风险头仍未交付。
 
@@ -15,7 +15,7 @@
 
 > 前轮已结束研究：[GP5-RETURN-VOLUME-LAG-1 F2](advisory_generic_return_volume_price_5td_v1_f2_design_20261007.md)设计#5658已合入b3a0a612a并自身清理。独立九文件源码三轮修复/9定向/Ruff/L0/F2通过，run advgp5rvlag_c1869cf9c60177309f17330f已首次prepare6.469秒/386D7720全保留、QE三入口拟合前后全0、唯一两head fit3.953秒/至完整四臂4.828秒。80共同完整5TD cohort candidate−base/−frozen daily为−71.2879/−15.9040bps；known拒买避免亏损44.9896、错过上涨118.3219、净−73.3323，UNKNOWN空槽＋2.0444另列。仅停止此candidate，不调阈值/seed/window、回选control或重跑，当前真实累计115研究fit＋1旧index；源码PR #5660/currentCI37578132818 SUCCESS已合入a599381703，自身官方cleanup23.031秒/0blocking/warnings，正式F产物保留。joint/ordered旧负结果不改判、不补证；下一主线必须先定义不同经济信息或可识别业务目标，不继续本块同族消融。0QE提交/DB写/其它模块修改/服务控制/激活，UI与BUG-1778公共分类不阻冻结来源研究。
 
-> 当前工程辅线：[九字段DB输入F1](advisory_generic_daily_db_input_v1_f1_design_20261007.md)设计#5644已合入51542a1dc。2026-10-08 原DB树安全同步当前main，BUG-1778源码#5717（9adcceb4）与close-sync#5718（f1db67e1）均已合入、Issue #5645 CLOSED、无需后端重启。DB源码/8项定向测试和既存真实只读单日20候选、20D400候选三SELECT7.141秒通过；当前发布仅精确四文件，公共CI/合入状态另报，不重复提交BUG或公共workflow。保留原名单及逐字段UNKNOWN，API尚待独立交付与用户重启；不把数据读取完成等同于模型盈利。原129研究fit+1旧INDEX_BUILD保持，0新增训练/收益读取/DB写/配置或服务操作。
+> 当前工程交付：[九字段DB输入F1](advisory_generic_daily_db_input_v1_f1_design_20261007.md)设计#5644、源码#5722（4682d0b9）已合入，当前HEAD必需CI PASS，自身官方清理22.703秒/0blocking/warnings。同步后8定向/Ruff/L0/F1通过，真实20D400候选三SELECT11.031秒；原7.141秒为前一缓存/负载条件，不直接外推。BUG-1778源码#5717及close-sync#5718已合入、Issue #5645 CLOSED。原名单/逐字段UNKNOWN保留，0收益读取/fit/写库/配置激活或进程控制；DB库无需重启。后续买价API源码与用户重启运行验收独立报告；当前129研究fit+1旧INDEX_BUILD保持，不把功能或数据读取成功冒称模型盈利。
 
 > 已交付工程：[固定5TD纯价集消费者F1](advisory_generic_price_set_consumer_v1_f1_design_20261007.md)设计#5637与源码#5641已合入a10b571a8/a3a260e5，各自官方清理完成；四family显式模型标准投影，原候选/缺失不删、不重训、不读父alpha，原数学/政策不改。四family的真实权重已各一次只读装载通过（新增joint纯装载0fit/收益读取），源码功能与收益、DB/API接入分别报告，不冒称已接入生产或有盈利。UI不作为主线前置。
 
@@ -1998,8 +1998,8 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | P23 / 后续实施顺序 | 首先交付P18独立依赖与P19真实买价API；模型主线下一立项须有不同经济信息或尚未实现角色的独立假设，不重复三种已结束Exit或救参数 | 暂无第四新模型/fit，不因同窗口多试得到好看点估计就称盈利；QE仅消费其交付包，不重复上游实验，UI/自然20日/旧负向补证不前置 |
 | P22 / 一次新研究已结束 | [价格条件化继续价值F2](advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md)设计#5705已合入fa5a6a686/自身清理；源码77824c1、13直接合同/Ruff/L0/F2及四fit完成，S-only曲线先发表后U查询 | 同240cohort/238完整：相对base −35.3964bps、CI95 [−72.7043,1.5447]；相对旧Exit +8.3272bps、CI95 [−11.4530,27.2837]；累计129+1，无经济确认/激活，不救旧阈值/family |
 | P21 / 一次研究已结束 | [持仓路径S信息F2](advisory_generic_exit_held_path_context_5td_v1_f2_design_20261008.md)源码13直接合同/Ruff/L0/F2及四新fit完成；独立Draft #5704以#5697为base，仅七文件；相对base/九字段 −47.4315/−3.7078bps，均区间跨0 | 原标签/控制/折/episode不变，0旧refit/新oracle；累计125研究fit+1旧index，0激活，不派生更多技术字段；source/CI/依赖/合入分别报告 |
-| P18 / 必要工程依赖 | BUG-1778源码#5717/close-sync#5718已合入、Issue #5645 CLOSED；四文件DB输入本地及真实只读已验证，进入独立源码交付 | 仅DB→API依赖顺序；不修改公共workflow或其它模块、不捆绑旧分支、不重跑研究；API运行加载由用户重启后另验 |
-| P19 / 本地业务链路通过 | [固定5TD日频API F2](advisory_generic_daily_price_api_5td_v1_f2_design_20261007.md)九文件/40直接合同、多轮/Ruff/L0/F2通过；真实两日80排名+16等待完整保留，22只读SELECT | 公开源码合入等待P18，配置/实际HTTP尚未激活；原raw tick/PIT/一snapshot/budget、UNKNOWN宽度不填、UI不前置 |
+| P18 / 必要工程依赖已交付 | BUG-1778 #5717/#5718及四文件DB源码#5722均已合入并自身清理；8定向/真实20D400候选三SELECT读回通过 | 不重复提交BUG或公共合同；DB读取功能完成不等于模型盈利，0新研究fit/写库/激活 |
+| P19 / 日频买价源码验证 | [固定5TD日频API F2](advisory_generic_daily_price_api_5td_v1_f2_design_20261007.md)九文件/43直接合同；依赖已合入，真实两日80排名+16原业务项/22 SELECT及收盘后下一T功能通过 | 当前源码CI/合入及用户重启生产HTTP另验；显式模型不自动绑定或激活，raw tick/PIT/同snapshot/budget、UNKNOWN宽度/支持空洞不填，UI不前置 |
 | P20 / 一次审计已结束 | [固定5TD剩余净价值F2](advisory_generic_remaining_value_exit_5td_v1_f2_design_20261007.md)源码22直接合同/Ruff/L0/F2及4fit已完成；Draft PR #5697 CI绿、仍待独立依赖 | 238完整/240原评价cohort；模型−43.7236bps、oracle+235.9270bps，区间跨零；不激活/救结果，源码/经济/卖价产品分报 |
 | P16/P17 / 历史完成，不再待办 | selection-context设计#5667已合入/清理；producer0d457843，一次2fit负向；相对base/GP5 −59.6049/−4.2209bps，117fit检查点 | 不猜父Alpha/绝对score、不重排、不为负向候选补证或派生排名变体；当前全任务129研究fit+1旧index，非仍在等QE |
 

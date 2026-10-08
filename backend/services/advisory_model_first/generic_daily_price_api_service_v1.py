@@ -112,9 +112,9 @@ class GenericDailyPriceAPIServiceV1:
                 _fail("generic daily API original list query schema differs")
             target = _day(request.get("target_trade_date"), nullable=True)
             version = request.get("list_version_id")
-            if target is not None and target > today or version is not None and (
+            if version is not None and (
                     not isinstance(version, str) or not version.strip() or len(version) > 128):
-                _fail("generic daily API target is future or list identity malformed")
+                _fail("generic daily API original list identity is malformed")
             queries.append(dict(target_date=target, list_version_id=version))
         if len({(q["target_date"], q["list_version_id"]) for q in queries}) != len(queries):
             _fail("generic daily API contains duplicate original list requests")
@@ -144,7 +144,9 @@ class GenericDailyPriceAPIServiceV1:
                     budget.check()
                 packets = [value["packet"] for value in originals]
                 days = [(_day(p["decision_date"]), _day(p["target_date"])) for p in packets]
-                if len(set(days)) != len(days) or any(t > today or d >= t for d, t in days):
+                # T may be the next trading session after today's closed D.
+                # The existing DB input verifies immediate T and reads only D bars.
+                if len(set(days)) != len(days) or any(d > today or d >= t for d, t in days):
                     _fail("generic daily API resolved duplicate/future original dates")
                 features = self._input(pinned, now).load_batch(packets=packets)
                 contexts = self._contexts(pinned, now).load_batch(packets=packets)
@@ -184,6 +186,8 @@ class GenericDailyPriceAPIServiceV1:
             states = {value["status"] for value in results}
             if states in ({"NO_CANDIDATES"}, {"DEFERRED_D_NOT_CLOSED"}):
                 result["status"] = next(iter(states))
+                if states == {"DEFERRED_D_NOT_CLOSED"}:
+                    result["complete"] = False
             budget.check()
             return result
         except AdvisoryModelFirstError as error:
