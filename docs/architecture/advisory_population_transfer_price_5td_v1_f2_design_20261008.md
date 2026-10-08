@@ -1,6 +1,6 @@
 # Advisory P25：跨包训练人口迁移的五交易日收益型价格模型 F2详细设计
 
-> 版本：v1.3；日期：2026-10-08；状态：P25设计已合入，P26两步输入准备已完成/PREPARED_IDENTIFIABLE_NO_FIT；第一步PR #5778 CI通过仍OPEN，第二步源码交付另报；P27～P29未完成。
+> 版本：v1.4；日期：2026-10-08；状态：P25设计已合入，P26两步输入准备完成/PREPARED_IDENTIFIABLE_NO_FIT；第一步PR #5778已合入850f83ac，第二步PR #5780同步main后等待新CI/合入；P27～P29未完成。
 > 上位依据：`advisory_strategy_conditioned_model_blueprint_v1_20260710.md` §6.3.4、§16.0 P25～P29。P25 PR #5771已合入268f2e0d并完成自身清理；本轮实施共同九字段、原5TD标签、purge及共享编码并完成真实只读准备/读回。未读取候选score、旧收益或sealed金融值；新开发窗的价格/监督标签已读取，但未评价新模型收益，新研究fit=0、盈利确认与生产启用=0。
 
 ## Background / Goal
@@ -32,7 +32,7 @@ P25设计提交只改本文和上位蓝图，未修改源码/数据/权重/运�
 
 首版仅买价价值，不同时实现卖价、Top20重排、动态仓位/资金权重或分钟执行。输出价格场景不等于当天最佳分钟买点、挂单成交或卖出择时；未来执行消费者属于其所有者。UI、未配置的旧API、旧Exit Draft与自然20日等待均不阻断离线主线。
 
-所有临时/cache/pytest在`X:/AIstock_temp/advisory-p25-design-20261008`；未来正式root为`F:/Dev/AIstock_model_artifacts/advisory_population_transfer_price_5td_v1_20261008`。禁止C临时目录、DB/DDL/DML/安装、profile/模型激活及任何进程控制。未来fit在既有WSL/worker环境运行，不在Windows backend拟合，不修改或安装worker基础设施；backend_restart_required=false，用户仍拥有重启权。
+所有临时/cache/pytest在`X:/AIstock_temp/advisory-p25-design-20261008`；正式root为`F:/Dev/AIstock_model_artifacts/advisory_population_transfer_price_5td_v1_20261008`。禁止C临时目录、DB/DDL/DML/安装、profile/模型激活及任何进程控制。未来fit在既有WSL/worker环境运行，不在Windows backend拟合，不修改或安装worker基础设施；backend_restart_required=false，用户仍拥有重启权。
 
 ## Phase 0：源码与文档发现 / Allowed APIs
 
@@ -81,7 +81,7 @@ P26先读取现有包/冻结文件的身份、列结构和日期KEY，后按冻�
 
 正常停牌、缺D行情/宽度/映射、H未成熟或不可执行均留在原人口、逐字段原因可见。特征可测部分按训练编码处理；无监督行不参与损失，但不从覆盖分母/原名单删除。现有标签遇路径停牌/缺bar保持UNKNOWN，不补0、延长H或改成可成交。按完整单包D组分块调用旧7720标签上界，再在新population层合并；最多200000原名单行、100000唯一训练簇，超过资源上界只报告本study范围不可产，不偷偷采样或缩日期。该上界不是业务股票池容量限制。
 
-金融投影先按允许日期过滤再解码，calendar可只读未来会话元数据但不是未来价格。新population额外保存`maturity_at_cutoff`：H超过声明cutoff为UNSETTLED_CUTOFF，H在cutoff内而缺bar才是正常UNKNOWN；旧标签helper没有cutoff参数，不能向它编造参数或把投影后缺未来bar说成真实数据缺口。边界原项不删除，原label状态/原因与新成熟性分别保留，评估先用该成熟性判null。任何H>train_end的监督都不进入训练/medians的标签统计。
+金融投影先按允许日期过滤再解码，calendar可只读未来会话元数据但不是未来价格。新population额外保存`maturity_at_cutoff`：H超过声明cutoff为UNSETTLED_CUTOFF，H在cutoff内而缺bar才是正常UNKNOWN；旧标签helper没有cutoff参数，不能向它编造参数或把投影后缺未来bar说成真实数据缺口。边界原项不删除，新输入核明确IMMATURE及cutoff原因，并与成熟性分别携带；H在cutoff内的正常标签状态/原因不改写，评估先按成熟性判null。任何H>train_end的监督都不进入训练/medians的标签统计。
 
 确认窗只登记元数据身份、日期、消费状态和隔离引用，在新模型输出前冻结；若已有一个附加包被留包且其evaluation窗口未消费，该窗口必须另标sealed并从本探索读/评估清单排除，不能借“留包”名义污染它。oracle/探索、模型prepare、预处理和阈值均不读sealed金融值；P25没有承诺一个尚未证明可用/未消费的新时间窗。未发现真实未消费历史窗时明确`CONFIRMATION_WINDOW_UNAVAILABLE`，不妨碍开发探索，也不假装开发正值支持激活。
 
@@ -185,7 +185,7 @@ purge前可测新增8590，purge后真正新增训练簇8363；held-only簇不�
 
 精确输入root为`F:/Dev/AIstock_model_artifacts/advisory_population_transfer_price_5td_v1_20261008/advgp5popinputs_fc14302167a95eab9972cbdd`，其plan/manifest绑定source `advgp5popsource_f303102e103371a637a60c4d`和原metadata请求SHA `3dc19abedd104af820abe0f8aa50a09cd38e3214a67bfba48f99e98580fd0405`。同root缓存只读读回通过，不重查DB；审核期旧输入组件不覆盖，正式消费仅引用此精确root，不扫latest。多轮修正了发布前候选引用复核、跨cutoff未成熟语义及purge后实际新增质量；最小定向合同测试和真实输入读回均通过，模型训练、JSON leaf parity及经济四臂仍属于P27/P28，不冒称已完成。
 
-下一步P27实现独立19维诚实联合森林、两固定臂及最小journal/JSON parity；本轮不启动fit。第一步/第二步源码PR仍待各自合入，不因输入ready自动配置生产；没有后端重启、DB/DDL/DML/profile或其它模块修改。
+下一步P27实现独立19维诚实联合森林、两固定臂及最小journal/JSON parity；本轮不启动fit。第一步#5778已合入，第二步#5780等待main基线CI及合入，不因输入ready自动配置生产；没有后端重启、DB/DDL/DML/profile或其它模块修改。
 
 ## Verification Plan / Design Acceptance Index
 
@@ -233,6 +233,6 @@ purge前可测新增8590，purge后真正新增训练簇8363；held-only簇不�
 2. 科学/公平性轮：固定锚主评价、19维同算法两臂/同support/同时间切点，旧39维模型不能当matched；去重只影响训练质量不删原名单，未见包与未见股票不混淆；补留包窗口可能同时sealed时排除探索读取，已消费GP5 test不能改名sealed，原始内生洞CI=null不压缩。
 3. 交付/边界轮：独立九项索引、两文档scope、2fit只是未来预算；新配置不伪造旧test、39维API不假调用、节点URI不得猜；0QE/数据/DB/服务修改、UI/旧失败证据不前置。新F2初检9/9、0warnings通过，蓝图初检将外部索引末项误作本表验收项，已改为九项独立索引说明，不复制制造完成证据。最终独立设计9/9、蓝图148/148、均0warnings及两文档scope/`git diff --check`通过；PR/CI/merge状态以本次实际交付读回为准。
 
-DESIGN-COMPLIANCE-001逐项：P25完整设计及本轮已批准P26第一步单独交付，不宣称完整P26/模型完成；UNKNOWN/身份不可证/未成熟/统计null及缺口可见，不伪成功；原基线/价格政策/名单/旧实验与模块边界不改；没有新增包资格审批、自然等待或平台工程。确认数字仍须真实开发方差/容量合同，不以探索性支持提示当激活门禁。
+DESIGN-COMPLIANCE-001逐项：P25完整设计及已批准P26两步输入准备单独交付，不宣称P27模型/经济完成；UNKNOWN/身份不可证/未成熟/统计null及缺口可见，不伪成功；原基线/价格政策/名单/旧实验与模块边界不改；没有新增包资格审批、自然等待或平台工程。确认数字仍须真实开发方差/容量合同，不以探索性支持提示当激活门禁。
 
 P26第一步多轮自审：第一轮业务/键身份检查保持原Top20、留包不训练、去重只改监督质量；7项直接合同测试通过，Ruff发现lambda写法已修。第二轮时钟/缺失检查补五原会话H/cutoff测试及日期成熟不等于标签可用，指数身份原样携带，不把held来源错误称未见股票或原生身份。第三轮范围/状态检查添加request/policy/窗口身份，明确metadata不是训练plan或原生receipt；仅本阶段八项合同测试和真实只读名单核对，不声称独立外审/经济验收。最终验证与源码PR状态以实际交付读回为准；后续未实施条款仍保留明确gap。
