@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.85
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.86
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-08
 
-> 当前执行断点：P25[跨包训练人口迁移的五交易日价格F2详细设计](advisory_population_transfer_price_5td_v1_f2_design_20261008.md)已形成完整规格并完成本次三轮自审/修订、F2与两文档范围检查；仅交付设计，不宣称P26人口或源码已完成。唯一新假设GP5-POPULATION-TRANSFER-1，原包/跨包两臂同九字段19维、同诚实联合学习器/政策/支持，只改变训练人口；原Top5与固定规则不改。下一步P26只读检查既存冻结候选/日频输入、去重监督与原名单、实际label end及未消费确认窗元数据，不重选股票、不提交QE实验、不等待所有包。新研究fit=0，累计仍131实际研究fit＋1旧INDEX_BUILD；0新盈利确认/生产激活，代码/实验/服务/数据库状态未因设计改变。
+> 当前执行断点：P25[跨包训练人口迁移的五交易日价格F2详细设计](advisory_population_transfer_price_5td_v1_f2_design_20261008.md)PR #5771已合入268f2e0d并完成自身工作树/分支清理。P26第一步contracts/population及测试已实现并完成真实只读名单核对，状态METADATA_PREPARED_ONLY，源码交付另报：三来源305开发D，原GP5 Top20 6100行＋两包既存Top50各15250行；只按日期潜在成熟训练并集14962，新增10682，held独立保留不训练。九字段/实际标签/单位规范化尚未读取验证，不能把潜在成熟数当可训练数或完整P26完成；legacy pool/run/list等未知不补原生receipt。唯一新假设GP5-POPULATION-TRANSFER-1，两臂同19维/学习器/政策/支持，只改训练人口；原Top5与规则不改。下一步P26第二步共同开发特征/5TD标签及实际purge/共享编码，不重选、不提交QE实验、不等所有包。新研究fit=0，累计仍131实际研究fit＋1旧INDEX_BUILD，0新盈利确认/生产激活/DB或服务变更。
 
 > 最近已结束资金流研究（历史事实）：[固定5TD资金流条件买价F2](advisory_generic_moneyflow_price_5td_v1_f2_design_20261008.md)设计#5741已合入d02711029/清理；独立九文件SOURCE及多轮修复/17定向/Ruff/L0/F2/ownership通过，源码#5744已于2026-10-08合入b6745ddd539654a44b8438b92c41c2537cbfde68并完成自身清理。唯一run advgp5moneyflow_e2ba3dbb6cad73b5b726acdd，首次prepare0.578秒，开发305D/6100原KEY保留，6081资金AVAILABLE/19零分母UNKNOWN不删；原3684成熟train/193D精确匹配冻结GP5，资金缺失12行仍训练。拟合前及每头前后公开QE三0，两新fit4.953秒、四臂0.453秒，累计131真实研究fit+1旧INDEX_BUILD，不是131个独立假设。80共同完整5TD cohort base/rule/frozen GP5/candidate均值135.3458/132.8314/59.1348/44.9299bps；candidate对base80配对−90.4159bps、对GP581成熟配对−14.0295bps/CI95 [−43.7728,7.4473]。base成熟panel的1内生缺失保留，CI=null不删洞；234已结算TAKE胜率47.4359%低于base52.7228%及GP548.6590%。已知干预164episode/57D和59episode/36D均满足数量支持，仍无收益增量；一次NO_FIT计量修正将归因与完整配对日对齐，原模型/plan/evaluation不覆盖且0新fit。仅停止此candidate，不救参数/追加旧证据/自动激活；test/sealed、DB/其它模块/生产配置/服务控制均0。本离线切片无需重启；资金日频API及盈利确认没有冒称完成。下一步按§16.0 P25～P29先重设计经济学习问题和样本结构，再执行一个明确的新候选；不再默认逐项追加特征。以下检查点及§9、§16.1～§16.6的旧计划只保留各自历史事实，现行优先级以§16.0为准。
 
@@ -2074,12 +2074,12 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 当前模型结论是“没有确认的Advisory盈利型Entry/Exit版本”，不是“所有QE策略包无Alpha”或“全部源码无用”。最新基线与规则在本窗口组均值仍为正；这些重叠组均值不是NAV或独立OOS，资金对base的内生缺口CI保持null，对GP5的CI跨0不冒称统计上已证明有害。
 
-以下是唯一新实施顺序。P25已有独立F2完整规格，状态为`DESIGN_SPECIFIED_PLAN_ONLY`；P26～P29仍`PLANNED_NOT_STARTED`。本轮只交付P25设计与蓝图进度；人口准备、代码、拟合和经济确认没有因文档合入而自动完成或启动：
+以下是唯一新实施顺序。P25独立F2已通过/合入并完成自身清理；P26第一步仅`METADATA_PREPARED_ONLY`，第二步特征/标签准备与P27～P29仍计划未完成。新研究fit=0；源码、metadata、完整可训练人口、经济确认与生产启用分态，不因设计合入自动完成：
 
 | 优先级 | 具体任务与交付 | 明确边界/完成条件 |
 |---|---|---|
-| P25 / 设计规格交付 | [GP5-POPULATION-TRANSFER-1详细设计](advisory_population_transfer_price_5td_v1_f2_design_20261008.md)：同19维日频价格条件、同诚实联合学习器/编码/支持/时钟/动作，原包训练对比跨包唯一stock/date训练；原Top5与固定规则，两新fit为后续固定预算 | 完整估计对象/D-T-H/成本/校准/动作/对照/评价规格及独立九项Design Acceptance Index；本轮无人口prepare/源码/fit。新变量为训练人口，不以旧39维模型或旧窗口均值当matched，不同时实现卖价/排名/仓位/新平台 |
-| P26 / 第二优先 | 基于P25对现有交付包、指数池和不同行情时期做有界只读人口准备，记录可用候选/预测/日频输入、stock/date重复簇、正常缺失、成熟与实际purge；冻结开发人口及未消费确认窗口的隔离引用 | 不重跑Selection、不拼新组合、不提交QE实验、不改数据或其它模块、不读取sealed收益；数据缺项只报告给owner，已有可用人口不等所有包/多个生产bundle，不为旧负模型扩窗补证 |
+| P25 / 已完成设计交付 | [GP5-POPULATION-TRANSFER-1详细设计](advisory_population_transfer_price_5td_v1_f2_design_20261008.md)：PR #5771合入268f2e0d/自身清理；同19维日频价格条件、同诚实联合学习器/编码/支持/时钟/动作，只改变训练人口；原Top5与固定规则不改 | 独立九项Design Acceptance Index；新变量不是旧39维模型或旧窗口均值，不同时实现卖价/排名/仓位/新平台。两新fit仍未来预算，不是已执行 |
+| P26 / 当前最高优先 | 第一步metadata源码及真实只读键投影已做：305D/36600原名单/36093跨源唯一键，锚＋训练来源潜在成熟并集14962/新增10682，留包不训练；第二步准备共同九字段/实际5TD标签/单位与重叠簇、正常UNKNOWN、实际purge及共享编码 | 当前METADATA_PREPARED_ONLY，特征与标签ready=false；4280锚日期成熟数不是旧3684可训练数，原Top20不扩为40。legacy源身份未知不造receipt；不重跑Selection/QE、不读score/旧收益/sealed，不改数据/其它模块或为旧负模型补证；确认窗可用性未承诺，不等所有包 |
 | P27 / 第三优先 | 实现一个P25固定的新candidate及共同新人口/目标下的matched控制，复用现有训练、JSON模型、最小registry及回放；按P26确定的训练预算一次执行 | 原Top5/事前简单规则不改；价格网格不算独立样本，按簇/时间分组；全部fit计账，不默认多模型/seed/阈值搜索，拟合不与QE训练并行 |
 | P28 / 第四优先 | 历史回放完成成本后收益与尾风险评价，按包/池/行情及完整配对组报告干预、避免亏损、错失盈利、UNKNOWN空槽和支持/区间；区分预测质量与决策价值 | 判据在结果前由P25固定；负向/不足停止精确candidate，不回选旧模型、降低阈值、进入补证/归档；有继续价值时只作一次未消费历史确认，不等待自然20日，不把组均值当NAV |
 | P29 / 有条件后置 | 值得继续且满足原确认口径的收益模型才接入必要日频recipe、角色binding和DB消费者/API；原名单/价格合法tick/UNKNOWN完整保留，UI最后 | 研究输出与生产强制拒买分离，不自动激活，不用规则填model；未确认时基线照常。只改Advisory，生产配置/重启等按各自授权，不研发分钟执行或动态资金仓位 |

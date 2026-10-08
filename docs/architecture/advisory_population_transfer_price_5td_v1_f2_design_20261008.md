@@ -1,7 +1,7 @@
 # Advisory P25：跨包训练人口迁移的五交易日收益型价格模型 F2详细设计
 
-> 版本：v1.0；日期：2026-10-08；设计状态：DESIGN_SPECIFIED_PLAN_ONLY，源码与数据实施待P26～P29。
-> 上位依据：`advisory_strategy_conditioned_model_blueprint_v1_20260710.md` §6.3.4、§16.0 P25～P29。本文只交付详细设计；P26人口尚未准备、源码未实现、新研究fit=0、盈利确认与生产启用=0。
+> 版本：v1.1；日期：2026-10-08；状态：P25设计已合入，P26第一步METADATA_PREPARED_ONLY；完整特征/标签人口与P27～P29仍未完成。
+> 上位依据：`advisory_strategy_conditioned_model_blueprint_v1_20260710.md` §6.3.4、§16.0 P25～P29。P25 PR #5771已合入268f2e0d并完成自身清理；本轮实施已批准的P26第一步合同/冻结键投影及只读人口核对，源码交付状态另报。未读取score/收益，新研究fit=0、盈利确认与生产启用=0。
 
 ## Background / Goal
 
@@ -15,7 +15,7 @@
 
 ## Scope / Non-goals
 
-本设计提交只改本文和上位蓝图；禁止任何业务源码、数据、权重或运行态修改。后续源码必须在最新main独立树内，精确范围为：
+P25设计提交只改本文和上位蓝图，未修改源码/数据/权重/运行态。P26第一步本轮精确范围为下列contracts、population、population测试及两文档；其余文件仅是后续P26第二步～P29计划范围，未实现。所有源码都在最新main独立树内，完整计划范围为：
 
 - `backend/services/advisory_model_first/generic_population_price_5td_contracts_v1.py`
 - `backend/services/advisory_model_first/generic_population_price_5td_population_v1.py`
@@ -134,6 +134,24 @@ P26先读取现有包/冻结文件的身份、列结构和日期KEY，后按冻�
 
 代码阶段按数据/统计、模型数学、业务/授权三个视角重复审核修复；失败只先重跑对应节点，行为稳定后一次小矩阵/Ruff/changed-file scope/F2/CI。P26可先实现只读prepare，不能把未有新人口的P27拟合当研究进展；可产性失败精确报告owner需求，不修改其他模块。约半日至两日工作量取决于既存候选可产性，不为凑长任务时长开无界模型搜索。
 
+### P26第一步实际进度（2026-10-08；仅metadata）
+
+已实现`PopulationMetadataRequestV1` / `FrozenPopulationSourceV1`和`prepare_population_metadata_v1(*, request)`：读取前后校验明确文件SHA/size，按开发日期过滤且只解码原键/排名/身份列；追加包的arm/package/manifest与原request及bundle文件描述绑定。原GP5控制严格复用`is_candidate_decision=true AND rank<=20`，不能将父文件的40只/日当新控制；追加包保留其既存Top50。单/并指数等已知pool身份仅原样携带，未证明的run/list/pool/source policy继续nullable，未生成原生receipt。
+
+只读catalogue观察21包/8未退役；当前公开Selection API未覆盖本次开发窗，但既存N2-B r3冻结文件覆盖，故无需重跑QE或Selection。只按身份/文件可产性取锚＋两附加来源，不按收益筛选，不声称全库或所有指数覆盖。三者均保留305个开发D，无缺名单日；实际键核对首次耗时13.286秒，原名单总数36600，跨所有来源唯一股票/日期键36093。统计如下：
+
+| 原冻结来源 | 角色 | 原名单行 | 仅按H日期可能成熟的train行 | evaluation原名单行 | H超过cutoff原行 |
+|---|---|---:|---:|---:|---:|
+| `pkg_ma_8ec5e389fa2c5e484a1ac7e9` / GP5 Top20 | matched anchor | 6100 | 4280 | 1720 | 100 |
+| `pkg_378eb9c91e104c64935404e257e932ee` / 既存Top50 | transfer train | 15250 | 10700 | 4300 | 250 |
+| `pkg_5a5ccb56ea5c4e3daaf6d836c8edfc27` / 既存Top50 | held package evaluation | 15250 | 10700（不进入训练） | 4300 | 250 |
+
+锚与追加训练来源重叠18个潜在成熟簇，新增10682，潜在训练并集14962；held原名单完整保留而不计训练。这个数量**不是可训练标签数**：九字段、价格单位、实际可执行/缺bar和AVAILABLE标签尚未读取验证；原GP5的3684可训练数也不能用4280日期成熟数替代。`features_ready=false / labels_ready=false / physical_fit_count=0 / deployable=false`。
+
+原H超过2025-09-30的边界保留`UNSETTLED_CUTOFF`；其余仅为`MATURE_BY_CALENDAR_ONLY`，不能伪称已有监督。原日程缺行区分有证据的EXPLICIT_EMPTY与UNKNOWN_ABSENT_FROZEN_DAY，不默认为0；簇质量1且supervision_ready=false，去重不删除任何包原名单。真实来源均legacy，当前pool/run/list/source-policy缺证项未升级；旧GP5 test及新的sealed金融值均未读取，确认窗未发现仍未承诺可用。
+
+下一步是P26第二步：在共同开发窗口准备九字段和原5TD价格标签，按共同单位核对重叠簇及正常UNKNOWN、实际label end/purge/共享编码；完成后才允许P27两臂拟合。本轮不启动QE/模型，不写DB、激活profile或控制服务，不将metadata准备说成完整P26或盈利模型完成。
+
 ## Verification Plan / Design Acceptance Index
 
 | ID | 必须验收 |
@@ -150,19 +168,19 @@ P26先读取现有包/冻结文件的身份、列结构和日期KEY，后按冻�
 
 ## Design Acceptance Matrix
 
-当前行验收的是设计规格及源码发现，不是尚不存在的源码或真实实验。`DESIGN_SPECIFIED_NOT_IMPLEMENTED`的gap是P26～P29计划内交付；不得对外声称这些功能已完成。
+设计规格与P26第一步实际源码分别记录；metadata状态只覆盖本轮已批准切片，不能冒充后续特征/标签/训练/经济验收。`DESIGN_SPECIFIED_NOT_IMPLEMENTED`的gap仍为P26第二步～P29计划内交付。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-841 | 本文Goal/§3/§5；拟新增contracts/model | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 本轮仅P25详细设计，P27代码/2fit未执行 |
-| F-842 | 本文§2；拟新增population | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_population_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 可产清单/索引池身份/留包仍待P26，未宣称新人口PASS |
-| F-843 | 本文§1～2；既有generic_price_5td_labels_v1.py | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_population_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 已有标签接口可复用，新跨包投影和单位读回未实施 |
+| F-841 | 本文Goal/§3/§5；metadata contracts已实现，训练model仍计划 | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 本轮仅实施已批准P26第一步，完整两公平学习臂/P27代码/2fit未执行 |
+| F-842 | generic_population_price_5td_contracts_v1.py / generic_population_price_5td_population_v1.py；本文P26进度 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_population_v1.py；真实3来源305D键投影 | P26_METADATA_IMPLEMENTED_ONLY | approved_by_user: 已批准分步实施；九字段/标签规范化待P26第二步，legacy pool/run/list未知不伪补，不宣称完整人口PASS |
+| F-843 | 本文§1～2；population成熟性/既有generic_price_5td_labels_v1.py | target: backend/tests/advisory_model_first/test_generic_population_price_5td_population_v1.py；原会话H/cutoff边界 | METADATA_CLOCK_VERIFIED_LABELS_PENDING | approved_by_user: 日程H验证仅metadata，新价格单位/复权/可执行和实际标签尚未读取 |
 | F-844 | 本文§2～3；拟新增contracts/model/population | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 原test已消费不可sealed，未证明新确认窗可用 |
 | F-845 | 本文§3；拟新增model，旧joint仅参考 | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 新19维实现/叶子parity/2fit尚未完成 |
 | F-846 | 本文§4；拟新增model | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 完整曲面与校准是计划，不是模型收益/执行承诺 |
 | F-847 | 本文§5；拟新增evaluation/pipeline | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 真实回放未运行，不将旧结果当新matched |
 | F-848 | 本文§5；既有registry/stage＋拟新增pipeline | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 新study未注册/拟合，131实际研究fit＋1旧index不变 |
-| F-849 | 本文Scope/实施/生产边界 | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；本轮changed-file只两文档 | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 文档交付不授权其它模块/服务/数据库操作 |
+| F-849 | 本文Scope/实施/生产边界；新增population只读实现 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_population_v1.py；仅两源码/一测试/两文档scope | METADATA_BOUNDARIES_VERIFIED_ONLY | approved_by_user: X临时/0金融列/0fit/0其它模块/DB/服务变更；后续fit互斥与正式stage仍计划，不宣称生产或完整P26验收 |
 
 最小测试按合同共享少量fixture，不做实现快照/重复场景：两包重叠stock/date只一份质量且原名单完整；不同池/manifest/价格单位冲突与历史未知；5原会话正常停牌、H跨界purge、validation/test poison不改变训练；新19维JSON与原生apply parity及手算叶子联合权重/无质量未知；Decimal合法边界与支持洞/成本一次；四臂各配对不同分母、UNKNOWN贡献和未结算null；QE忙/partial禁止隐式fit与stage输入hash变化。真实prepare/fit/经济读回另报，不用fixture取代业务结果。
 
@@ -180,4 +198,6 @@ P26先读取现有包/冻结文件的身份、列结构和日期KEY，后按冻�
 2. 科学/公平性轮：固定锚主评价、19维同算法两臂/同support/同时间切点，旧39维模型不能当matched；去重只影响训练质量不删原名单，未见包与未见股票不混淆；补留包窗口可能同时sealed时排除探索读取，已消费GP5 test不能改名sealed，原始内生洞CI=null不压缩。
 3. 交付/边界轮：独立九项索引、两文档scope、2fit只是未来预算；新配置不伪造旧test、39维API不假调用、节点URI不得猜；0QE/数据/DB/服务修改、UI/旧失败证据不前置。新F2初检9/9、0warnings通过，蓝图初检将外部索引末项误作本表验收项，已改为九项独立索引说明，不复制制造完成证据。最终独立设计9/9、蓝图148/148、均0warnings及两文档scope/`git diff --check`通过；PR/CI/merge状态以本次实际交付读回为准。
 
-DESIGN-COMPLIANCE-001逐项：仅完整P25设计交付，不宣称源码/模型完成；UNKNOWN/身份不可证/未成熟/统计null及缺口可见，不伪成功；原基线/价格政策/名单/旧实验与模块边界不改；没有新增包资格审批、自然等待或平台工程。确认数字仍须真实开发方差/容量合同，不以探索性支持提示当激活门禁。
+DESIGN-COMPLIANCE-001逐项：P25完整设计及本轮已批准P26第一步单独交付，不宣称完整P26/模型完成；UNKNOWN/身份不可证/未成熟/统计null及缺口可见，不伪成功；原基线/价格政策/名单/旧实验与模块边界不改；没有新增包资格审批、自然等待或平台工程。确认数字仍须真实开发方差/容量合同，不以探索性支持提示当激活门禁。
+
+P26第一步多轮自审：第一轮业务/键身份检查保持原Top20、留包不训练、去重只改监督质量；7项直接合同测试通过，Ruff发现lambda写法已修。第二轮时钟/缺失检查补五原会话H/cutoff测试及日期成熟不等于标签可用，指数身份原样携带，不把held来源错误称未见股票或原生身份。第三轮范围/状态检查添加request/policy/窗口身份，明确metadata不是训练plan或原生receipt；仅本阶段八项合同测试和真实只读名单核对，不声称独立外审/经济验收。最终验证与源码PR状态以实际交付读回为准；后续未实施条款仍保留明确gap。
