@@ -989,9 +989,17 @@ jobs:
             Get-Content -LiteralPath "$outDir/repo-hygiene-orphan-audit.md"
           }
 
+      - name: Verify prebuilt environment for workflow validation
+        env:
+          AISTOCK_CI_ENV_NAME: AIstock-CI
+          AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
+        run: |
+          conda run -n AIstock-CI python scripts/ci_environment_verify.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Validate CI/Nightly issue workflow automation
         run: |
-          conda run -n AIstock python -m nox -s validation_workflow_automation
+          conda run -n AIstock-CI python -m nox -s validation_workflow_automation
 
       - name: Print code intelligence graph summary manifest
         if: always()
