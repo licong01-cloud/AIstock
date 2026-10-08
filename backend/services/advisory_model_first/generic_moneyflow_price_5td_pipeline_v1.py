@@ -98,17 +98,18 @@ def _stage(plan, root, until):
     raise ValueError("unknown moneyflow study stage")
 
 
-def _record(plan, root, stage):
-    record = build_trial_record(experiment_id=plan.experiment_id, attempt_id="exact_attempt_v1",
+def _record(plan, root, stage, *, attempt_id="exact_attempt_v1", evidence_path=None):
+    record = build_trial_record(experiment_id=plan.experiment_id, attempt_id=attempt_id,
         research_stage=stage.upper(), study_type="EXPLORATORY_SCREEN", hypothesis_family_id="generic_moneyflow_price_5td_v1",
         parent_lineage=plan.parent_lineage, unique_variable="GP5-MONEYFLOW-INFO-1",
         objective_contract="RISK_MANAGED_ADVISORY", dataset_identity=plan.dataset_identity,
         schema_identity=SCHEMA_SHA256, policy_identity=POLICY_SHA256, planned_trial_count=1,
-        generated_trial_count=int(stage in ("trained", "evaluated")), evaluated_trial_count=int(stage == "evaluated"),
+        generated_trial_count=int(stage in ("trained", "evaluated", "measurement_correction")),
+        evaluated_trial_count=int(stage in ("evaluated", "measurement_correction")),
         selected_trial_count=0, consumed_windows=(ConsumedWindowV1(window_id="PREVIOUSLY_CONSUMED_DEVELOPMENT_ONLY",
             dataset_identity=plan.dataset_identity, start_date=plan.configuration.train_start,
             end_date=plan.configuration.validation_end),), result_class="EXPLORATORY", decision_use="NAVIGATION_ONLY",
-        evidence_refs=(evidence_reference_for_file(root/stage/"manifest.json", role="gp5_moneyflow_"+stage),))
+        evidence_refs=(evidence_reference_for_file(evidence_path or root/stage/"manifest.json", role="gp5_moneyflow_"+stage),))
     AdvisoryResearchTrialRegistryV1(root.parent/"trial_registry.jsonl").append_batch((record,))
 
 
@@ -332,6 +333,11 @@ def evaluate_moneyflow_price_5td_cohorts_v1(*, rows, fitted, frozen_control, dec
                for name in ("takes", "known_avoids", "unknown_cash", "not_executable", "unsettled_takes", "empty_slots")})
     increments, interventions = {}, {}
     mature_days = [day for day in decisions if days.index(day)+5 < len(days) and days[days.index(day)+5] <= cutoff]
+    common = [row for row in cohorts if _day(row["decision_date"]) in mature_days
+              and all(row["arms"][arm]["net_bps"] is not None for arm in arms)]
+    for arm in arms:
+        summaries[arm]["common_complete_mature_days"] = len(common)
+        summaries[arm]["common_complete_mature_mean_bps"] = float(np.mean([row["arms"][arm]["net_bps"] for row in common])) if common else None
     for opponent in ("baseline", "frozen_gp5"):
         differences = [None if row["arms"]["moneyflow"]["net_bps"] is None or row["arms"][opponent]["net_bps"] is None
                        else row["arms"]["moneyflow"]["net_bps"]-row["arms"][opponent]["net_bps"] for row in cohorts]
@@ -347,6 +353,8 @@ def evaluate_moneyflow_price_5td_cohorts_v1(*, rows, fitted, frozen_control, dec
                 and evaluable > 0 and changed_days/evaluable >= INTERVENTION_SUPPORT["minimum_day_fraction"]))
         panel = [value for day, value in zip(decisions, differences, strict=True) if day in mature_days]
         paired = [value for value in panel if value is not None]
+        paired_dates = {day.isoformat() for day, value in zip(decisions, differences, strict=True)
+                        if day in mature_days and value is not None}
         if any(days.index(b) != days.index(a)+1 for a, b in zip(mature_days, mature_days[1:])):
             panel = []  # An undeclared interior session cannot be compressed into a contiguous block.
         known_attribution, unknown_cash_difference, unresolved = 0., 0., 0
@@ -355,6 +363,8 @@ def evaluate_moneyflow_price_5td_cohorts_v1(*, rows, fitted, frozen_control, dec
             a, b = record["net_bps"]["moneyflow"], record["net_bps"][opponent]
             if a is None or b is None:
                 unresolved += 1
+            elif record["decision_date"] not in paired_dates:
+                continue  # Attribution and paired cohort means must use exactly the same days.
             elif "UNKNOWN" in (record["actions"]["moneyflow"], record["actions"][opponent]):
                 unknown_cash_difference += (a-b)/5
             else:
@@ -367,6 +377,8 @@ def evaluate_moneyflow_price_5td_cohorts_v1(*, rows, fitted, frozen_control, dec
                     else:
                         new_take_profit += max(0., value)
                         new_take_loss += max(0., -value)
+        if not np.isclose(known_attribution+unknown_cash_difference, sum(paired), rtol=1e-10, atol=1e-8):
+            raise ValueError("moneyflow attribution does not reconcile to original paired five-slot cohorts")
         increments[opponent] = dict(paired_days=len(paired), mean_increment_bps=float(np.mean(paired)) if paired else None,
             statistics=_statistics(panel), known_action_increment_sum_bps=known_attribution,
             loss_avoided_sum_bps=loss_avoided, missed_profit_sum_bps=missed_profit,
@@ -398,3 +410,39 @@ def evaluate_moneyflow_price_5td_study_v1(*, plan, output_root):
         decision_dates=dates, calendar=calendar, validation_end=plan.configuration.validation_end)
     _load(plan, output_root)
     return _publish(plan, root, "evaluated", trained["stage_sha256"], {"evaluation.json": _json_bytes(result)})
+
+
+def correct_moneyflow_measurement_v1(*, study_root):
+    """Append a calculation correction; never refit, overwrite or redefine a trial."""
+    declared, root = Path(study_root), Path(study_root).resolve()
+    if not declared.is_absolute() or root.drive.upper() == "C:" or declared != root:
+        raise ValueError("moneyflow correction requires explicit non-C real study")
+    plan = GenericMoneyflowPrice5TDPlanV1.model_validate_json((root/"preregistered"/"plan.json").read_bytes())
+    if root.name != plan.experiment_id:
+        raise ValueError("moneyflow correction study/plan identity differs")
+    original = _stage(plan, root, "evaluated")
+    for reference in (plan.gp5_plan_ref, plan.gp5_prepared_ref, plan.gp5_trained_ref, plan.moneyflow_prepared_ref):
+        _verify_reference(reference)
+    receipt_root = root/"measurement_correction_v1"
+    if (receipt_root/"evaluated").exists():
+        read_stage(receipt_root/"evaluated", stage="evaluated", plan_sha256=plan.plan_sha256,
+                   parent_sha256=original["stage_sha256"])
+        _record(plan, root, "measurement_correction", attempt_id="measurement_correction_v1",
+                evidence_path=receipt_root/"evaluated"/"manifest.json")
+        return receipt_root/"evaluated"
+    rows = pd.read_parquet(root/"prepared"/"rows.parquet")
+    rows = rows.loc[rows[KEY[0]].between(pd.Timestamp(plan.configuration.validation_start), pd.Timestamp(plan.configuration.validation_end))]
+    fitted = _fitted(json.loads((root/"trained"/"model.json").read_bytes()))
+    control = _control(json.loads((root/"prepared"/"control_model.json").read_bytes()))
+    result = evaluate_moneyflow_price_5td_cohorts_v1(rows=rows, fitted=fitted, frozen_control=control,
+        decision_dates=tuple(day for day in plan.decision_dates if plan.configuration.validation_start <= day <= plan.configuration.validation_end),
+        calendar=json.loads((root/"prepared"/"calendar.json").read_bytes()), validation_end=plan.configuration.validation_end)
+    body = dict(kind="NO_FIT_MEASUREMENT_CORRECTION", original_evaluated_stage_sha256=original["stage_sha256"],
+        original_producer_implementation_sha256=plan.implementation_sha256,
+        correction_implementation_sha256=implementation_sha256(), model_sha256=fitted.model_sha256,
+        physical_fit_count_added=0, population_changed=False, policy_changed=False, result=result)
+    publish_stage(study_root=receipt_root, stage="evaluated", plan_sha256=plan.plan_sha256,
+                  parent_sha256=original["stage_sha256"], artifacts={"receipt.json": _json_bytes(body)})
+    _record(plan, root, "measurement_correction", attempt_id="measurement_correction_v1",
+            evidence_path=receipt_root/"evaluated"/"manifest.json")
+    return receipt_root/"evaluated"

@@ -87,6 +87,12 @@ def test_stage_chain_read_only_parent_and_exact_completed_resume(tmp_path, monke
     assert len(records) == 4 and all(record["consumed_windows"][0]["end_date"] == plan.configuration.validation_end.isoformat() for record in records)
     assert pipeline.evaluate_moneyflow_price_5td_study_v1(plan=plan, output_root=output) == evaluated
     assert pipeline.prepare_moneyflow_price_5td_v1(plan=plan, output_root=output) == trained.parent/"prepared"
+    before = (evaluated/"evaluation.json").read_bytes()
+    correction = pipeline.correct_moneyflow_measurement_v1(study_root=trained.parent)
+    receipt = json.loads((correction/"receipt.json").read_bytes())
+    assert receipt["physical_fit_count_added"] == 0 and receipt["model_sha256"] == fitted.model_sha256
+    assert (evaluated/"evaluation.json").read_bytes() == before and (trained.parent/"fit_journal.jsonl").read_bytes() == journal
+    assert pipeline.correct_moneyflow_measurement_v1(study_root=trained.parent) == correction
 
 
 def test_busy_zero_fit_and_incomplete_attempt_never_refits(tmp_path, monkeypatch):
@@ -135,11 +141,13 @@ def test_four_arms_cash_attribution_boundaries_and_no_replacement(tmp_path):
     validation.loc[first, list(FEATURES)] = np.nan
     validation.loc[first+1, "label_status"] = "ENTRY_NOT_EXECUTABLE"
     validation.loc[first+1, ["observed_gap_bps", "gross_terminal_ratio", "path_min_ratio"]] = np.nan
+    validation.loc[first+5, "label_status"] = "UNKNOWN"
+    validation.loc[first+5, ["gross_terminal_ratio", "path_min_ratio"]] = np.nan
     result = pipeline.evaluate_moneyflow_price_5td_cohorts_v1(rows=validation, fitted=fitted, frozen_control=control,
         decision_dates=dates[40:], calendar=calendar, validation_end=config.validation_end)
     assert set(result["arms"]) == {"baseline", "rule_300bps", "frozen_gp5", "moneyflow"}
     assert result["arms"]["moneyflow"]["unknown_cash"] > 0 and result["arms"]["moneyflow"]["not_executable"] == 1
-    assert result["arms"]["baseline"]["unsettled_takes"] == 25
+    assert result["arms"]["baseline"]["unsettled_takes"] == 26
     assert len(result["episodes"]) == 100 and len(result["cohorts"]) == 20
     increment = result["increments"]["baseline"]
     assert increment["unknown_cash_difference_sum_bps"] < 0 and increment["known_action_increment_sum_bps"] == 0
@@ -152,4 +160,8 @@ def test_four_arms_cash_attribution_boundaries_and_no_replacement(tmp_path):
     result = pipeline.evaluate_moneyflow_price_5td_cohorts_v1(rows=validation, fitted=avoid, frozen_control=control,
         decision_dates=dates[40:], calendar=calendar, validation_end=config.validation_end)
     assert result["increments"]["baseline"]["missed_profit_sum_bps"] > 0
+    for opponent in ("baseline", "frozen_gp5"):
+        measured = result["increments"][opponent]
+        assert measured["known_action_increment_sum_bps"]+measured["unknown_cash_difference_sum_bps"] == pytest.approx(
+            measured["mean_increment_bps"]*measured["paired_days"])
     assert result["status"] == "NEGATIVE_STOP_THIS_CANDIDATE"
