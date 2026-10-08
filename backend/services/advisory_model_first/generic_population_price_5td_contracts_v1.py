@@ -5,6 +5,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.services.advisory_model_first.research_control_contracts import EvidenceReferenceV1
+from backend.services.advisory_model_first.generic_price_5td_contracts_v1 import FEATURES, POLICY_SHA256
+from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
+
+MATRIX_ORDER = (*FEATURES, *(f"missing_{name}" for name in FEATURES), "scenario_gap_bps/100")
+DAILY_FIELDS = ("trade_date", "instrument", "raw_open_cny", "raw_high_cny", "raw_low_cny", "raw_close_cny",
+                "adj_factor", "volume_hand", "up_limit", "down_limit", "suspended", "tradability_unknown",
+                "price_placeholder_fields")
+INDEX_FIELDS = ("trade_date", "instrument", "close")
 
 
 class FrozenPopulationSourceV1(BaseModel):
@@ -61,3 +69,23 @@ class PopulationMetadataRequestV1(BaseModel):
                 or len({(s.package_id, s.manifest_sha256) for s in self.sources}) != len(self.sources)):
             raise ValueError("population source identities/anchor differ")
         return self
+
+
+class PopulationInputPlanV1(BaseModel):
+    """Data component only. P27's model/code/journal contract is not implemented here."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    metadata_request: PopulationMetadataRequestV1
+    daily_ref: EvidenceReferenceV1
+    index_ref: EvidenceReferenceV1
+    source_receipt_ref: EvidenceReferenceV1
+    preparation_implementation_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @property
+    def plan_sha256(self):
+        return sha({**self.model_dump(mode="json"), "policy_sha256": POLICY_SHA256,
+            "matrix_order": MATRIX_ORDER, "hypothesis": "GP5-POPULATION-TRANSFER-1",
+            "component": "INPUT_PREPARATION_ONLY_NO_MODEL_RUN", "physical_fit_count": 0})
+
+    @property
+    def component_id(self):
+        return "advgp5popinputs_"+self.plan_sha256[:24]

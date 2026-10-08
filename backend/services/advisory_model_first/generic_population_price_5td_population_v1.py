@@ -178,3 +178,176 @@ def prepare_population_metadata_v1(*, request):
             "NOT_TESTABLE_POPULATION_CONTRAST", labels_ready=False, features_ready=False,
         financial_columns_read=False, physical_fit_count=0, native_receipt_created=False, deployable=False)
     return FrozenPopulationMetadataV1(roster, pd.DataFrame(day_rows), clusters, receipt)
+
+
+def build_population_inputs_v1(*, metadata, request, calendar, daily, index_daily, source_context, progress=None):
+    """One normalized source for all rosters; no estimator or future feature access."""
+    from backend.services.advisory_model_first.generic_daily_price_input_v1 import FEATURES, _number, build_generic_daily_price_input_v1
+    from backend.services.advisory_model_first.generic_price_5td_labels_v1 import PRICE_FIELDS, REFERENCE_FIELDS, build_generic_price_5td_labels_v1
+    from backend.services.advisory_model_first.generic_price_5td_models_v1 import _support, feature_values
+    from backend.services.advisory_model_first.generic_population_price_5td_contracts_v1 import DAILY_FIELDS, INDEX_FIELDS, MATRIX_ORDER
+
+    days = [_day(v) for v in calendar]
+    if days != sorted(set(days)) or not days:
+        raise ValueError("population input calendar differs")
+    positions = {d: i for i, d in enumerate(days)}
+    wanted_symbols = set(metadata.rosters.instrument)
+    daily, index_daily = daily.copy(deep=True), index_daily.copy(deep=True)
+    for frame, columns, symbols in ((daily, DAILY_FIELDS, wanted_symbols), (index_daily, INDEX_FIELDS, {"000300.SH"})):
+        if (not isinstance(frame, pd.DataFrame) or not frame.columns.is_unique or set(frame.columns) != set(columns)
+                or len(frame) > len(symbols)*len(days) or frame.duplicated(["trade_date", "instrument"]).any()
+                or not set(frame.instrument).issubset(symbols)):
+            raise ValueError("population common source schema/keys/budget differs")
+        frame["trade_date"] = frame.trade_date.map(_day).map(pd.Timestamp)
+        if (not frame.trade_date.isin(pd.to_datetime(days)).all()
+                or frame.trade_date.gt(pd.Timestamp(request.evaluation_end)).any()):
+            raise ValueError("population common source contains outside-cutoff finance")
+    numeric = [name for name in DAILY_FIELDS if name.startswith("raw_") or name in ("adj_factor", "volume_hand", "up_limit", "down_limit")]
+    for name in numeric:
+        daily[name] = daily[name].map(lambda v, n=name: _number(v, positive=n != "volume_hand", nonnegative=n == "volume_hand")).astype(float)
+    for name in ("suspended", "tradability_unknown"):
+        if not daily[name].map(lambda v: type(v) is bool).all():
+            raise ValueError("population common source trading states must be explicit")
+    if any(daily.raw_high_cny.lt(daily[name]).any() or daily.raw_low_cny.gt(daily[name]).any()
+           for name in ("raw_open_cny", "raw_close_cny")) or daily.raw_high_cny.lt(daily.raw_low_cny).any():
+        raise ValueError("population common source OHLC units contradict")
+    if metadata.rosters.empty:
+        from backend.services.advisory_model_first.generic_price_5td_labels_v1 import LABEL_FIELDS
+        rows, clusters = metadata.rosters.copy(), metadata.clusters.copy()
+        for frame in (rows, clusters):
+            for name in (*FEATURES, *LABEL_FIELDS):
+                if name not in frame:
+                    frame[name] = pd.Series(dtype="datetime64[ns]" if name == "label_information_end" else "object")
+        rows["feature_unknown_reasons"] = pd.Series(dtype="object")
+        return rows, clusters, _population_encoding_v1(clusters, request, MATRIX_ORDER, _support, feature_values)
+    quotes = daily.set_index(["trade_date", "instrument"]).sort_index()
+    features, prices, refs = [], [], []
+    source_specs = {s.source_id: s for s in request.sources}
+    for ordinal, (d, full) in enumerate(metadata.rosters.groupby(KEY[0], sort=True), 1):
+        pos = positions[d.date()]
+        symbols = sorted(set(full.instrument))
+        anchor = quotes.reindex(pd.MultiIndex.from_product(([d], symbols)))
+        factors = dict(zip(symbols, anchor.adj_factor, strict=True))
+        close = dict(zip(symbols, anchor.raw_close_cny, strict=True))
+        original = full.loc[:, KEY].drop_duplicates()
+        reference = original.copy()
+        reference["reference_cny"] = reference.instrument.map(close)
+        reference["reference_visible_through"] = d.date()
+        refs.append(reference)
+        history = None
+        if pos >= 19:
+            history_days = pd.to_datetime(days[pos-19:pos+1])
+            history = quotes.reindex(pd.MultiIndex.from_product((history_days, symbols))).dropna(how="all").reset_index()
+            history.columns = ["trade_date", "instrument", *quotes.columns]
+            scale = history.adj_factor / history.instrument.map(factors)
+            for name in ("open", "high", "low", "close"):
+                history[name] = history["raw_"+name+"_cny"]*scale
+            history["volume"] = history.volume_hand*100.
+        horizon = pd.to_datetime([day for day in days[pos+1:pos+6] if day <= request.evaluation_end])
+        path = quotes.reindex(pd.MultiIndex.from_product((horizon, symbols))).dropna(how="all").reset_index()
+        path.columns = ["trade_date", "instrument", *quotes.columns]
+        path[KEY[0]] = d
+        path["d_anchor_factor"] = path.adj_factor / path.instrument.map(factors)
+        for name in ("open", "high", "low", "close"):
+            path[name] = path["raw_"+name+"_cny"]
+        prices.append(path.loc[:, PRICE_FIELDS])
+        for source_id, group in full.groupby("source_id", sort=False):
+            group = group.sort_values("selection_effective_rank").reset_index(drop=True)
+            spec = source_specs[source_id]
+            if history is None:
+                block = group.loc[:, ROSTER].copy()
+                for name in FEATURES:
+                    block[name] = np.nan
+                reasons = [{name: "INSUFFICIENT_ORIGINAL_HISTORY" for name in FEATURES} for _ in range(len(block))]
+            else:
+                panel = history.loc[history.instrument.isin(group.instrument), ["trade_date", "instrument", "open", "high", "low", "close", "volume"]]
+                benchmark = index_daily.loc[index_daily.trade_date.isin(history_days)].copy()
+                block, evidence = build_generic_daily_price_input_v1(candidates=group.loc[:, ROSTER],
+                    calendar=days[pos-19:pos+2], panel=panel, benchmark_daily=benchmark,
+                    market_state=dict(trade_date=d.date(), market_up_ratio=None, market_definition_id=None, visible_through=None),
+                    source_context=dict(package_id=spec.package_id, run_id=spec.run_id, list_version_id=spec.list_version_id,
+                        universe_identity=spec.universe_identity, source_evidence=source_context["source_evidence"],
+                        price_basis="D_ADJUSTED_CNY", volume_basis="RAW_SHARES", source_visible_through=d.date(),
+                        benchmark_visible_through=d.date()))
+                reasons = [row["fields"] for row in evidence["unknown_fields"]]
+            block["source_id"] = source_id
+            block["feature_unknown_reasons"] = [json.dumps(r, sort_keys=True) for r in reasons]
+            features.append(block)
+        if progress is not None and ordinal % 20 == 0:
+            progress({"phase": "features", "decision_days_completed": ordinal})
+    price = pd.concat(prices, ignore_index=True)
+    reference = pd.concat(refs, ignore_index=True).loc[:, REFERENCE_FIELDS]
+    labels = []
+    for spec in request.sources:
+        original = metadata.rosters.loc[metadata.rosters.source_id.eq(spec.source_id), ROSTER]
+        decision_days = [d for d in spec.decision_dates if request.train_start <= d <= request.evaluation_end]
+        for start in range(0, len(decision_days), 100):
+            block = original.loc[original[KEY[0]].isin(pd.to_datetime(decision_days[start:start+100]))].copy()
+            if block.empty:
+                continue
+            block_prices = price.merge(block.loc[:, [KEY[0], "instrument"]], on=[KEY[0], "instrument"], validate="many_to_one")
+            block_refs = reference.merge(block.loc[:, KEY], on=list(KEY), validate="one_to_one")
+            result, _ = build_generic_price_5td_labels_v1(candidates=block, decision_dates=decision_days[start:start+100],
+                calendar=days, prices=block_prices, references=block_refs, source_context=source_context)
+            outside_cutoff = result.label_information_end.gt(pd.Timestamp(request.evaluation_end))
+            result.loc[outside_cutoff, "label_status"] = "IMMATURE"
+            result.loc[outside_cutoff, "label_reason"] = "HORIZON_BEYOND_SOURCE_CUTOFF"
+            result["source_id"] = spec.source_id
+            labels.append(result)
+    feature_rows = pd.concat(features, ignore_index=True).loc[:, ["source_id", *KEY, *FEATURES, "feature_unknown_reasons"]]
+    label_rows = pd.concat(labels, ignore_index=True).drop(columns=["selection_effective_rank", "candidate_group_size"])
+    rows = metadata.rosters.merge(feature_rows, on=["source_id", *KEY], validate="one_to_one", sort=False)
+    rows = rows.merge(label_rows.rename(columns={"label_information_end": "computed_label_information_end"}),
+                      on=["source_id", *KEY], validate="one_to_one", sort=False)
+    expected, actual = pd.to_datetime(rows.label_information_end), pd.to_datetime(rows.computed_label_information_end)
+    if not (expected.eq(actual) | expected.isna() & actual.isna()).all():
+        raise ValueError("population label horizon contradicts original frozen H")
+    rows = rows.drop(columns=["computed_label_information_end"])
+    if len(rows) != len(metadata.rosters):
+        raise ValueError("population input preparation changed original roster count")
+    value_fields = [*FEATURES, "observed_gap_bps", "gross_terminal_ratio", "path_min_ratio", "label_status", "label_reason",
+                    "label_information_end", "policy_sha256", "label_contract"]
+    unique = []
+    for key, group in rows.groupby(list(KEY), sort=True):
+        values = {}
+        for name in value_fields:
+            known = group[name].dropna().unique()
+            if len(known) > 1:
+                raise ValueError(f"population normalized cluster conflict: {key}/{name}/{list(group.source_id)}")
+            values[name] = known[0] if len(known) else None
+        unique.append(dict(zip(KEY, key, strict=True)) | values)
+    clusters = metadata.clusters.merge(pd.DataFrame(unique), on=list(KEY), validate="one_to_one", sort=False)
+    return rows, clusters, _population_encoding_v1(clusters, request, MATRIX_ORDER, _support, feature_values)
+
+
+def _population_encoding_v1(clusters, request, matrix_order, support_builder, feature_reader):
+    _, stock_known = feature_reader(clusters)
+    d, h = clusters[KEY[0]], pd.to_datetime(clusters.label_information_end)
+    train_time = d.between(pd.Timestamp(request.train_start), pd.Timestamp(request.train_end)) & h.le(pd.Timestamp(request.train_end))
+    anchor = clusters.loc[clusters.potential_anchor_train & train_time & stock_known].copy()
+    values, _ = feature_reader(anchor)
+    medians = [float(np.median(v[~np.isnan(v)])) if (~np.isnan(v)).any() else 0. for v in values.T]
+    support = support_builder(anchor)
+    supported = clusters.observed_gap_bps.map(lambda v: False if pd.isna(v) else support.contains(float(v)))
+    eligible = train_time & stock_known & supported & clusters.label_status.eq("AVAILABLE") & h.lt(pd.Timestamp(request.evaluation_start))
+    training_dates = sorted(clusters.loc[eligible & clusters.potential_anchor_train, KEY[0]].unique())
+    first = pd.Timestamp(training_dates[len(training_dates)//2]) if training_dates else None
+    for name, member in (("matched_anchor", clusters.potential_anchor_train), ("candidate_transfer", clusters.potential_transfer_train)):
+        field = name+"_pool"
+        clusters[field] = "NOT_TRAIN_SUPERVISION"
+        if first is not None:
+            clusters.loc[eligible & member & d.ge(first), field] = "ESTIMATION"
+            clusters.loc[eligible & member & d.lt(first) & h.lt(first), field] = "STRUCTURE"
+            clusters.loc[eligible & member & d.lt(first) & h.ge(first), field] = "PURGED_LABEL_OVERLAP"
+    clusters["supervision_ready"] = clusters.label_status.eq("AVAILABLE") & h.le(pd.Timestamp(request.evaluation_end))
+    new_before_purge = int((eligible & clusters.potential_transfer_train & ~clusters.potential_anchor_train).sum())
+    new = int((~clusters.potential_anchor_train & clusters.candidate_transfer_pool.isin(["STRUCTURE", "ESTIMATION"])).sum())
+    pools = {name: {str(k): int(v) for k, v in clusters[name+"_pool"].value_counts().items()}
+             for name in ("matched_anchor", "candidate_transfer")}
+    identifiable = new > 0 and all(pools[n].get(p, 0) > 0 for n in pools for p in ("STRUCTURE", "ESTIMATION"))
+    return dict(matrix_order=list(matrix_order), medians=medians, intervals_bps=support.intervals_bps,
+        estimation_first_D=None if first is None else first.date().isoformat(), encoding_anchor_rows=len(anchor),
+        eligible_new_training_clusters=new, eligible_new_training_clusters_before_purge=new_before_purge,
+        pools=pools, physical_fit_count=0, research_run_created=False,
+        population_contrast_status="PREPARED_IDENTIFIABLE_NO_FIT" if identifiable else "NOT_TESTABLE_POPULATION_CONTRAST",
+        features_ready=True, labels_ready=True, unknown_features_preserved=True, deployable=False)
