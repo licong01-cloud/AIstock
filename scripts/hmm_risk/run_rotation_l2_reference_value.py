@@ -27,8 +27,6 @@ class NoComputeImports(importlib.abc.MetaPathFinder):
                 "sklearn",
                 "hmmlearn",
                 "psycopg",
-                "psycopg2",
-                "backend.db",
                 "backend.data_service",
             )
         ):
@@ -41,9 +39,23 @@ def forbidden(*args, **kwargs):
 
 
 def install_zero_compute_guards() -> None:
+    # Shared PIT schemas import the driver; prohibit connection, not import.
+    import psycopg2
+    import psycopg2.pool
+
+    psycopg2.connect = forbidden
+    psycopg2.pool.AbstractConnectionPool.__init__ = forbidden
+    from backend.db import pg_pool
+
+    pg_pool.get_conn = forbidden
     sys.meta_path.insert(0, NoComputeImports())
     socket.create_connection = forbidden
-    socket.socket = forbidden
+
+    class FileOnlySocket(socket.socket):
+        connect = forbidden
+        connect_ex = forbidden
+
+    socket.socket = FileOnlySocket
     for api in (value.ridge, value.rank_model, value.return_model):
         api.run_process = forbidden
         api.training_matrix = forbidden

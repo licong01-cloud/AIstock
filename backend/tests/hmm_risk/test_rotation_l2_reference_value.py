@@ -261,12 +261,12 @@ def test_fresh_process_import_guards_do_not_allow_estimator_or_database():
     result = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True)
     assert result.returncode != 0 and "zero-fit/file-only guard: sklearn" in result.stderr
     result = subprocess.run(
-        [sys.executable, "-c", code.replace("import sklearn", "import backend.db.pg_pool")],
+        [sys.executable, "-c", code.replace("import sklearn", "from backend.db.pg_pool import get_conn; get_conn()")],
         cwd=root,
         capture_output=True,
         text=True,
     )
-    assert result.returncode != 0 and "zero-fit/file-only guard: backend.db" in result.stderr
+    assert result.returncode != 0 and "fit/filter/predict/database/network is forbidden" in result.stderr
 
 
 def test_cli_child_failure_is_durable_without_duplicating_success(tmp_path, monkeypatch, capsys):
