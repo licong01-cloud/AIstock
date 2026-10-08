@@ -31,15 +31,22 @@
   ],
   "expected": "Freeze the complete margin provider publication for each September date; independently validate declared counts; preserve PIT stock pools and existing strict prepared-limit path.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1818-monthly-source-pit-filtering-truncates-margin-provider-publication-denom.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/source_authority.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_source_authority.py",
+      "backend/services/dataset_release/source_authority.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_monthly_source_audit.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1818-monthly-source-pit-filtering-truncates-margin-provider-publication-denom.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -166,11 +173,15 @@
       "Fresh Python process: scripts/monthly_unified_dataset_release_worker.py --preflight -> PASS; adapter_version=12; adapter_contract_sha256=ec42ea26350080ff9d45ea2bbdceaec8f5fefee74045f61fb4c2997efca20874; registry_sha256=adaf41b8380d851cf5fba4b264ffa688bd87578521b14f59d0de015d1090f61a; database_opened=false; candidate/profile_write=false; operation_claimed=false.",
       "AISTOCK_MONTHLY_MARGIN_DEV_READBACK=1 pytest backend/tests/dataset_release/test_source_authority.py::test_margin_publication_sql_in_existing_readonly_dev -q -> 1 passed; existing DEV port5433; read-only CTE; no DDL/DML."
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -189,6 +200,13 @@
     "fingerprint": "4fa589aa0912acef712cdc89",
     "source_event_id": "FE-20261008-4fa589aa0912"
   },
+  "validation_evidence": [
+    "RED: provider-scope regression reproduced the PIT clipping failure (1 failed, 3 passed). GREEN: corrected provider domain plus unchanged tail-deferral/PIT queries -> 5 passed.",
+    "Final related matrix: source authority, monthly PostgreSQL source/audit, worker runtime, raw precision and index-pool sidecars -> 199 passed, 5 skipped. Skips are opt-in DEV checks; the new DEV margin SQL check passed separately.",
+    "只读生产事实核验（不是 release 验收）：2026-09-01..2026-09-29 共20个交易日、88916条提供方融资事实，独立冻结发布分母全部匹配；missing/duplicate/invalid均为0；64个停牌报价空值保持原值并按既有合同解释。实际停牌/零成交事实 canonical SHA256=5de370ee8df913ea208dd57cffb694e21e46926370833c02592733610ab1cf30。",
+    "18条 stk_limit.pre_close 原始空值均为独立全日S停牌且原始日线成交量/额为0；保留现有 strict prepared-limit 构建及同分母复验，不修改原始库，不豁免。",
+    "设计一致性四项审查：修复真实提供方域裁切；保留PIT/股票池隔离、完整发布分母和fail-closed；不增加历史审计或新门禁；候选/激活/运行态分别验收，不把SQL通过声明为月更完成。"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -236,13 +254,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "validation_evidence": [
-    "RED: provider-scope regression reproduced the PIT clipping failure (1 failed, 3 passed). GREEN: corrected provider domain plus unchanged tail-deferral/PIT queries -> 5 passed.",
-    "Final related matrix: source authority, monthly PostgreSQL source/audit, worker runtime, raw precision and index-pool sidecars -> 199 passed, 5 skipped. Skips are opt-in DEV checks; the new DEV margin SQL check passed separately.",
-    "只读生产事实核验（不是 release 验收）：2026-09-01..2026-09-29 共20个交易日、88916条提供方融资事实，独立冻结发布分母全部匹配；missing/duplicate/invalid均为0；64个停牌报价空值保持原值并按既有合同解释。实际停牌/零成交事实 canonical SHA256=5de370ee8df913ea208dd57cffb694e21e46926370833c02592733610ab1cf30。",
-    "18条 stk_limit.pre_close 原始空值均为独立全日S停牌且原始日线成交量/额为0；保留现有 strict prepared-limit 构建及同分母复验，不修改原始库，不豁免。",
-    "设计一致性四项审查：修复真实提供方域裁切；保留PIT/股票池隔离、完整发布分母和fail-closed；不增加历史审计或新门禁；候选/激活/运行态分别验收，不把SQL通过声明为月更完成。"
-  ],
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
