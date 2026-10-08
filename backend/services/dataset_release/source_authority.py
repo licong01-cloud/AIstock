@@ -4766,6 +4766,8 @@ _TEXT_PAYLOAD_COLUMNS = frozenset(
         "effective_to_exclusive",
         "source_provider",
         "source_reference",
+        "volume_shares_source",
+        "volume_shares_sha256",
         "updated_at",
     }
 )
