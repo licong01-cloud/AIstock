@@ -96,8 +96,8 @@
   },
   "first_seen_at": "2026-10-08T06:41:52.242487Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fd8444b70e1535cb45f2d220a17112378ef36db9",
+  "fixed_at": "2026-10-08T08:04:12Z",
   "github_issue_number": 5762,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5762",
   "last_seen_at": "2026-10-08T06:41:52.242487Z",
@@ -105,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5770",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,6 +131,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -141,7 +143,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1811",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0dee650b78b6779b",
+    "recorded_at": "2026-10-08T08:04:52.835531Z",
+    "runtime_contract_digest": "82dd60cf55c154c1e959c2e8c61fb216fca08c5e2aafeeda072970a7b6e4e1c0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4e3a83bde7ecde5ad46388b9b4750711dc2abbf9",
+    "source_merge_commit": "fd8444b70e1535cb45f2d220a17112378ef36db9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5770",
+    "validation_evidence": [
+      "validation-receipt: id=7e30ab7e66c35ebc commit=4e3a83bde7ecde5ad46388b9b4750711dc2abbf9 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_runtime_cache_isolation.py backend/tests/paper_trading_v2/test_live_inference_params_origin.py backend/tests/selection_center/test_runtime_selection.py -q -p no:cacheprovider` result=`63 passed`",
+      "validation-receipt: id=4a601e6ffafb479e commit=4e3a83bde7ecde5ad46388b9b4750711dc2abbf9 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/live_inference.py backend/tests/strategy_package/test_runtime_cache_isolation.py tests/aistock_validation/bugs/20261008_BUG-1811-strategy-package-concurrent-inference-resets-shared-runtime-cache.json` result=`passed files=3 blocking=0`"
+    ],
+    "validation_evidence_digest": "df985323decfcc416069f48782fdff205306327f5c497920dc2c408ed12317df"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.strategy_package"
   ],
@@ -150,6 +174,10 @@
     "fingerprint": "9a332497725e3ee82a2a67e1",
     "source_event_id": "FE-20261008-9a332497725e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=7e30ab7e66c35ebc commit=4e3a83bde7ecde5ad46388b9b4750711dc2abbf9 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_runtime_cache_isolation.py backend/tests/paper_trading_v2/test_live_inference_params_origin.py backend/tests/selection_center/test_runtime_selection.py -q -p no:cacheprovider` result=`63 passed`",
+    "validation-receipt: id=4a601e6ffafb479e commit=4e3a83bde7ecde5ad46388b9b4750711dc2abbf9 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/live_inference.py backend/tests/strategy_package/test_runtime_cache_isolation.py tests/aistock_validation/bugs/20261008_BUG-1811-strategy-package-concurrent-inference-resets-shared-runtime-cache.json` result=`passed files=3 blocking=0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
