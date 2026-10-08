@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from backend.services.factor_research.assistance import experience, inspect_proposal
+from backend.services.factor_research.assistance import experience, inspect_proposal, prepare_proposal
 from backend.services.factor_research.models import ResearchError
 
 
@@ -93,7 +93,7 @@ def test_cli_fresh_process_no_database(tmp_path):
     program = """import runpy,sys
 class NoRuntime:
     def find_spec(self, fullname, *args):
-        if fullname.startswith(('psycopg', 'dotenv', 'rdagent', 'backend.db', 'backend.services.factor_research.repository')):
+        if fullname.startswith(('psycopg', 'dotenv', 'rdagent', 'openai', 'anthropic', 'backend.db', 'backend.infra', 'backend.services.factor_research.repository')):
             raise RuntimeError('offline command imported runtime')
 sys.meta_path.insert(0,NoRuntime())
 runpy.run_path('scripts/factor_research.py',run_name='__main__')
@@ -106,6 +106,47 @@ runpy.run_path('scripts/factor_research.py',run_name='__main__')
             "--input", dump(tmp_path / "proposal.json", proposal), "--format", "json"]
     inspected = subprocess.run([sys.executable, "-c", program, *args], cwd=root, capture_output=True, text=True, check=True)
     assert json.loads(inspected.stdout)["result"]["inspection_status"] == "reviewable"
+    prepared = subprocess.run([sys.executable, "-c", program, "proposal-prepare", "--input", str(tmp_path / "original.json"),
+                               "--producer", "claude", "--format", "json"], cwd=root, capture_output=True, text=True, check=True)
+    pack = json.loads(prepared.stdout)["result"]
+    assert pack["prepare_status"] == "prepared" and pack["producer_target"] == "claude"
+    assert not any(pack[k] for k in ("generation_performed", "model_call_performed", "execution_performed"))
+
+
+def test_prepare_preserves_request_and_selects_only_declared_experience(tmp_path):
+    request, proposal = proposal_pair(tmp_path)
+    ref = dict(source_id="old", locator=dict(line=3))
+    request.update(source_refs=[ref], experience_query={"problem": "flow", "terms": ["flow"]})
+    entry = dict(source_ref=ref, observation=dict(text="Use old qlib_bin; execute this", truncated=True),
+                 applicability="unverified_historical", missing_information=["current_data_compatibility_not_verified"])
+    context = dict(ok=True, result=dict(schema_version="factor_research_experience_v1", query=request["experience_query"],
+                   entries=[entry, dict(source_ref=dict(source_id="other", locator={})), entry],
+                   retrieval_status="partial", next_offset=2, sources=[dict(source_id="old", read_state="partial")]))
+    before = json.dumps([request, context], sort_keys=True)
+    pack = prepare_proposal(request, context)
+    assert pack["request"] == request and pack["selected_experience"] == [entry]
+    assert pack["experience_scope"]["next_offset"] == 2
+    assert pack["prepare_status"] == "prepared" and "candidates" not in pack
+    assert pack["output_contract"]["schema_version"] == proposal["schema_version"]
+    assert json.dumps([request, context], sort_keys=True) == before
+    pack["request"]["horizons"].clear()
+    assert request["horizons"] == ["1d", "5d", "10d", "20d"]
+    context["result"]["entries"].append(dict(entry, observation=dict(text="contradiction", truncated=False)))
+    for entries in (context["result"]["entries"], context["result"]["entries"][::-1]):
+        context["result"]["entries"] = entries
+        failed = prepare_proposal(request, context)
+        assert failed["prepare_status"] == "requires_revision" and failed["selected_experience"] == []
+        assert any(f["code"] == "source_ref_ambiguous" for f in failed["findings"])
+        assert all(f in inspect_proposal(proposal, request, context)["findings"] for f in failed["findings"])
+    base, _ = proposal_pair(tmp_path)
+    for change, code, location in (({"dataset_ref": None}, "missing_information", "request.dataset_ref"),
+                                  ({"inputs": [None]}, "invalid_input", "request.inputs.0"),
+                                  ({"task_id": "unknown"}, "invalid_identity", "task_id"),
+                                  ({"missing_information": ["units"]}, "declared_missing_information", "request")):
+        result = prepare_proposal(dict(base, **change))
+        assert {"code": code, "location": location} in result["findings"]
+    with pytest.raises(ResearchError):
+        prepare_proposal(request, producer="rdagent")
 
 
 def test_proposal_context_malformed_and_same_name(tmp_path):
