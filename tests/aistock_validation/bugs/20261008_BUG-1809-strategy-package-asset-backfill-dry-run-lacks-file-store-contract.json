@@ -2,6 +2,7 @@
   "actual": "Default backfill dry-run fails for model weight freeze and materialization",
   "allowed_write_scope": [
     "scripts/strategy_package_asset_backfill.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "backend/tests/strategy_package/test_asset_backfill_dry_run_store.py",
     "tests/aistock_validation/bugs/20261008_BUG-1809-strategy-package-asset-backfill-dry-run-lacks-file-store-contract.json"
   ],

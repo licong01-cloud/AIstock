@@ -998,6 +998,7 @@ rules:
     priority: 80
     include:
       - backend/services/strategy_package/**
+      - scripts/strategy_package_asset_backfill.py
       - backend/routers/strategy_package*.py
       - backend/tests/strategy_package/**
       - frontend/src/app/strategy-package-governance/**
