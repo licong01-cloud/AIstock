@@ -3,9 +3,15 @@
   "allowed_write_scope": [
     "backend/services/qe_archive/workspace_lifecycle.py",
     "backend/tests/test_qe_workspace_lifecycle_safety.py",
+    "backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py",
     "tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json"
   ],
   "assigned_agent": null,
+  "backend_restart_owner": "user",
+  "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
+  "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+  "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+  "fresh_process_evidence": ["python -m pytest backend/tests/test_qe_workspace_lifecycle_safety.py -q -> isolated fresh process loads cleanup service and verifies only tmp_path deletions"],
   "bug_id": "BUG-1808",
   "closed_at": null,
   "closure_requirements": [
