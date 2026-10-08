@@ -2,7 +2,7 @@
   "actual": "文件被父目录active_process/shared reference引用时plan仍eligible，apply没有实时保护复验",
   "allowed_write_scope": [
     "backend/services/qe_archive/workspace_lifecycle.py",
-    "backend/tests/test_qe_workspace_lifecycle_safety.py",
+    "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py",
     "backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py",
     "tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json"
   ],
@@ -31,16 +31,16 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/qe_archive/workspace_lifecycle.py",
-      "backend/tests/test_qe_workspace_lifecycle_safety.py",
+      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py",
       "backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py",
       "tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json"
     ],
     "added_files": [
-      "backend/tests/test_qe_workspace_lifecycle_safety.py"
+      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py"
     ],
     "changed_files": [
       "backend/services/qe_archive/workspace_lifecycle.py",
-      "backend/tests/test_qe_workspace_lifecycle_safety.py",
+      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py",
       "backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py",
       "tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json"
     ],
@@ -48,7 +48,7 @@
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/workspace_lifecycle.py",
-        "backend/tests/test_qe_workspace_lifecycle_safety.py"
+        "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py"
       ],
       "impacted_modules": [
         "qe.archive",
@@ -68,7 +68,7 @@
           "rule_id": "qe_archive_services"
         },
         {
-          "file": "backend/tests/test_qe_workspace_lifecycle_safety.py",
+          "file": "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py",
           "impact_modules": [],
           "primary_module": "tests.backend",
           "risk_level": "medium",
@@ -81,18 +81,18 @@
       ],
       "suggested_scope": [
         "backend/services/qe_archive/workspace_lifecycle.py",
-        "backend/tests/test_qe_workspace_lifecycle_safety.py"
+        "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/qe_archive/workspace_lifecycle.py",
-      "backend/tests/test_qe_workspace_lifecycle_safety.py"
+      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/qe_archive/workspace_lifecycle.py",
-      "backend/tests/test_qe_workspace_lifecycle_safety.py"
+      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py"
     ]
   },
   "first_seen_at": "2026-10-08T05:53:27.455522Z",
@@ -100,7 +100,7 @@
   "fix_commit": null,
   "fixed_at": null,
   "fresh_process_evidence": [
-    "python -m pytest backend/tests/test_qe_workspace_lifecycle_safety.py -q -> isolated fresh process loads cleanup service and verifies only tmp_path deletions"
+    "python -m pytest backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py -q -> isolated fresh process loads cleanup service and verifies only tmp_path deletions"
   ],
   "github_issue_number": 5751,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5751",
@@ -125,7 +125,7 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
     "fresh_process_evidence": [
-      "python -m pytest backend/tests/test_qe_workspace_lifecycle_safety.py -q -> fresh-process loads persistent cleanup code; tmp_path only"
+      "python -m pytest backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py -q -> fresh-process loads persistent cleanup code; tmp_path only"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",

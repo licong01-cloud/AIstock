@@ -1,3 +1,5 @@
+"""Exact workspace lifecycle safety contracts, isolated to pytest temporary files."""
+
 from __future__ import annotations
 
 import hashlib
