@@ -31,14 +31,24 @@
   ],
   "expected": "Existing proven suspended placeholder semantics remain consistent through prepared minute coverage; conflicts retain precise keys and fail closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/services/dataset_release/monthly_construction_facts.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1819-artifact-ready-minute-preparation-rejects-proven-suspended-zero-turnover.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/services/dataset_release/monthly_construction_facts.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_artifact_ready_build_source.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1819-artifact-ready-minute-preparation-rejects-proven-suspended-zero-turnover.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/artifact_ready_source.py",
@@ -148,13 +158,18 @@
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "Fresh Python process: scripts/monthly_unified_dataset_release_worker.py --preflight -> PASS; adapter_version=13; adapter_contract_sha256=ec42ea26350080ff9d45ea2bbdceaec8f5fefee74045f61fb4c2997efca20874; registry_sha256=6fd5719808d93fc0605be548da65b01625aa09934f1ade76649a5d98d223e8c4; database_opened=false; operation_claimed=false; candidate/profile_write=false.",
-      "RED: test_minute_preparation_preserves_proven_suspended_placeholder -> 2 failed with original SOURCE suspension rejection; GREEN: 163 related tests passed; subsequent pure construction-fact extraction -> 22 focused tests passed."
+      "RED: test_minute_preparation_preserves_proven_suspended_placeholder -> 2 failed with original SOURCE suspension rejection; GREEN: 163 related tests passed; subsequent pure construction-fact extraction -> 22 focused tests passed.",
+      "Fresh official monthly worker --preflight -> PASS; adapter_version=13; registry_sha256=6fd5719808d93fc0605be548da65b01625aa09934f1ade76649a5d98d223e8c4; no database connection, task claim, candidate/profile writes or service control"
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
