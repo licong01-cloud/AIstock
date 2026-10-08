@@ -1151,6 +1151,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/ingestion/test_tdx_scheduler_cyq_engine_routing.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
         "backend/tests/ingestion/test_tdx_go_integrity.py",
+        "backend/tests/scripts/test_start_tdx_go_backend.py",
         "backend/tests/ingestion/test_tdx_scheduler_adj_factor.py",
         "backend/tests/test_ingestion_data_stats_readiness_api.py",
         "backend/tests/test_dataset_refresh_audit.py",
