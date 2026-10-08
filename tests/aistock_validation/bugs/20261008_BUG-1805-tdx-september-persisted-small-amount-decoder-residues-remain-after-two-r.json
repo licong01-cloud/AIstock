@@ -5,7 +5,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1805",
-  "closed_at": null,
+  "closed_at": "2026-10-08T08:40:21Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -211,14 +211,16 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-08T05:11:08.892656Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "30ee9dfe6923cdfde7d40bbc768adf566fb7e92a",
+  "fixed_at": "2026-10-08T08:40:21Z",
   "github_issue_number": 5743,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5743",
   "last_seen_at": "2026-10-08T05:11:08.892656Z",
@@ -226,6 +228,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5775",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -243,6 +246,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -252,7 +256,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1805",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ad6877a7c9d4b363",
+    "recorded_at": "2026-10-08T08:41:18.046838Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "08b4b9311fad3571c1e50bb951f8eda6b319fca4",
+    "source_merge_commit": "30ee9dfe6923cdfde7d40bbc768adf566fb7e92a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5775",
+    "validation_evidence": [
+      "python -m nox -s l0 -- tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json -> passed"
+    ],
+    "validation_evidence_digest": "b339653a8baa1b89871bc5533d9c6fdc1ec97790c6e599c460abb42288fea44f"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -261,6 +286,9 @@
     "fingerprint": "f2f82a0c99ffb6bce7e95247",
     "source_event_id": "FE-20261008-f2f82a0c99ff"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- tests/aistock_validation/bugs/20261008_BUG-1805-tdx-september-persisted-small-amount-decoder-residues-remain-after-two-r.json -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
