@@ -3016,6 +3016,7 @@ def validation_coverage_backend(session: nox.Session) -> None:
 def factor_research_backend(session: nox.Session) -> None:
     """Collect all research tests with DEV writes explicitly disabled, even if inherited."""
     full_targets = [
+        "backend/tests/factor_research/test_assistance.py",
         "backend/tests/factor_research/test_contracts.py",
         "backend/tests/factor_research/test_comparison.py",
         "backend/tests/factor_research/test_recovery.py",
