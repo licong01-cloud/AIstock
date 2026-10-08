@@ -310,8 +310,8 @@
   },
   "first_seen_at": "2026-10-08T14:13:01.920990Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bb0e3572af74de4ac96b52b1db48d474a80d6778",
+  "fixed_at": "2026-10-08T15:02:49Z",
   "github_issue_number": 5783,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5783",
   "last_seen_at": "2026-10-08T14:13:01.920990Z",
@@ -319,6 +319,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5784",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -343,6 +344,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -354,7 +356,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1815",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "143c3278fe356df4",
+    "recorded_at": "2026-10-08T15:03:55.571464Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8f41c0f79056a4e632f374b0fd07ffa57151f7b4",
+    "source_merge_commit": "bb0e3572af74de4ac96b52b1db48d474a80d6778",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5784",
+    "validation_evidence": [
+      "validation-receipt: id=68552929afd746d8 commit=8f41c0f79056a4e632f374b0fd07ffa57151f7b4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_source_quality.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py::test_finalizer_pins_quality_report_and_evidence_without_rewriting_data backend/tests/routers/test_monthly_dataset_releases.py::test_source_quality_binding_route_preserves_operator_identity backend/tests/scripts/test_monthly_unified_dataset_release.py::test_bind_quality_only_uses_existing_operator_api backend/tests/dataset_release/test_monthly_postgres_source.py::test_monthly_adapter_registry_identity_pins_sector_publication_policy -q` result=`passed (24 passed)`",
+      "validation-receipt: id=3bdbee096cad0f81 commit=8f41c0f79056a4e632f374b0fd07ffa57151f7b4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed (8 passed)`",
+      "validation-receipt: id=a1065e884ea9c020 commit=8f41c0f79056a4e632f374b0fd07ffa57151f7b4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=d157497705a5caec commit=8f41c0f79056a4e632f374b0fd07ffa57151f7b4 kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`"
+    ],
+    "validation_evidence_digest": "c55976a1e8ccc2292ebd6fb149b216daf407d10288de061b8a29171e8e8a1990"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -363,6 +389,12 @@
     "fingerprint": "a3da62098cd3d87c1f05872a",
     "source_event_id": "FE-20261008-a3da62098cd3"
   },
+  "validation_evidence": [
+    "validation-receipt: id=68552929afd746d8 commit=8f41c0f79056a4e632f374b0fd07ffa57151f7b4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_source_quality.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py::test_finalizer_pins_quality_report_and_evidence_without_rewriting_data backend/tests/routers/test_monthly_dataset_releases.py::test_source_quality_binding_route_preserves_operator_identity backend/tests/scripts/test_monthly_unified_dataset_release.py::test_bind_quality_only_uses_existing_operator_api backend/tests/dataset_release/test_monthly_postgres_source.py::test_monthly_adapter_registry_identity_pins_sector_publication_policy -q` result=`passed (24 passed)`",
+    "validation-receipt: id=3bdbee096cad0f81 commit=8f41c0f79056a4e632f374b0fd07ffa57151f7b4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed (8 passed)`",
+    "validation-receipt: id=a1065e884ea9c020 commit=8f41c0f79056a4e632f374b0fd07ffa57151f7b4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=d157497705a5caec commit=8f41c0f79056a4e632f374b0fd07ffa57151f7b4 kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
