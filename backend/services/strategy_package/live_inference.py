@@ -849,7 +849,7 @@ class QEExperimentRuntimeAssetResolver:
         )
         if namespace:
             source_dir = source_dir / namespace
-        self._reset_cache_dir(source_dir)
+        source_dir = self._new_cache_dir(source_dir)
         factors_dir = source_dir / "factors"
         model_dir = source_dir / "mlruns" / "package_asset" / "artifacts"
         factors_dir.mkdir(parents=True, exist_ok=True)
@@ -1901,7 +1901,7 @@ class QEExperimentRuntimeAssetResolver:
         if namespace:
             cache_key = f"{cache_key}__{namespace}"
         workspace_path = self.cache_root / package_id / cache_key
-        self._reset_cache_dir(workspace_path)
+        workspace_path = self._new_cache_dir(workspace_path)
         (workspace_path / "model").mkdir(parents=True, exist_ok=True)
 
         model_dest = workspace_path / "model" / "params.pkl"
@@ -2069,7 +2069,7 @@ class QEExperimentRuntimeAssetResolver:
             / _safe_cache_component(qe_task_id)
             / _safe_cache_component(qe_loop_id)
         )
-        self._reset_cache_dir(source_dir)
+        source_dir = self._new_cache_dir(source_dir)
 
         # Mutable origin holder threaded into the inner async closure so the
         # return value reflects the actual provenance of params.pkl.
@@ -2230,17 +2230,18 @@ class QEExperimentRuntimeAssetResolver:
                 },
             ) from exc
 
-    def _reset_cache_dir(self, path: Path) -> None:
+    def _new_cache_dir(self, path: Path) -> Path:
         cache_root = self.cache_root.resolve(strict=False)
         target = path.resolve(strict=False)
         if target == cache_root or cache_root not in target.parents:
             raise ArtifactGenerationFailedError(
-                "refusing to reset a path outside the StrategyPackage runtime cache",
+                "refusing to create a path outside the StrategyPackage runtime cache",
                 context={"path": str(path), "cache_root": str(self.cache_root)},
             )
-        if path.exists():
-            shutil.rmtree(path)
         path.mkdir(parents=True, exist_ok=True)
+        # One atomic request directory per materialization, including remote
+        # sources. Never erase another reader sharing the package/seed/date.
+        return Path(tempfile.mkdtemp(prefix="request_", dir=path))
 
     async def _download_workspace_file(
         self,
