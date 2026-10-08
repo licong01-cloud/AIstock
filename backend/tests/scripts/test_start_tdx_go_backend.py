@@ -7,6 +7,12 @@ import pytest
 from scripts import start_tdx_go_backend as launcher
 
 
+def test_standalone_entrypoint_uses_shared_whole_package_launcher():
+    source = (launcher.ROOT / 'tdx-api-main/web/start.bat').read_text(encoding='utf-8')
+    assert 'start_tdx_go_backend.py' in source and 'go run server.go' not in source
+    assert '--database-target production' in source and '--env-file' in source
+
+
 @pytest.mark.parametrize('target', ['production', 'dev'])
 def test_explicit_target_replaces_inherited_credentials(monkeypatch, target):
     prefix = 'TDX_DB_DEV_' if target == 'dev' else 'TDX_DB_'

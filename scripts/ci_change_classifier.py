@@ -290,7 +290,18 @@ DEPENDENCY_FILES = {
     "frontend/package-lock.json",
 }
 GO_PATH_PREFIXES = ("tdx-api-main/",)
-GO_FILES = {"tdx-api-main/go.mod", "tdx-api-main/go.sum"}
+GO_FILES = {"tdx-api-main/go.mod", "tdx-api-main/go.sum", "tdx-api-main/web/go.mod", "tdx-api-main/web/go.sum"}
+# Python consumers still need their own catalog plans; these additionally
+# validate the shared TDX protocol/build contract without market or DB access.
+TDX_GO_VALIDATION_INPUTS = {
+    "tdx-api-main/web/start.bat",
+    "scripts/start_tdx_go_backend.py",
+    "start_all_ai_stock.bat",
+    "backend/data_service/tdx_adapter.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_go_integrity.py",
+    "backend/tests/scripts/test_start_tdx_go_backend.py",
+}
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".sql", ".sh", ".ps1")
 CODE_ROOT_FILES = {"noxfile.py", "pyproject.toml", "pytest.ini"}
 
@@ -985,12 +996,12 @@ def classify_changed_files(
     ]
     workflow_test_targets = _workflow_test_targets(workflow_fast_files)
     frontend_files = [path for path in routable_non_bug_registry_files if _is_frontend_path(path)]
-    go_files = [path for path in routable_non_bug_registry_files if _is_go_path(path)]
+    go_files = [path for path in routable_non_bug_registry_files if _is_go_path(path) or path in TDX_GO_VALIDATION_INPUTS]
     business_files = [
         path
         for path in routable_non_bug_registry_files
         if path not in workflow_fast_files
-        and path not in go_files
+        and not _is_go_path(path)
         and not _is_docs_path(path)
         and not _catalog_validation_required(path)
     ]
@@ -1059,7 +1070,7 @@ def classify_changed_files(
     if frontend_files:
         reasons.append("frontend code changed; run the single frontend type/lint gate")
     if go_files:
-        reasons.append("TDX Go code changed; run the Go unit-test gate")
+        reasons.append("TDX source, dependencies, launcher or shared collector changed; run offline Go validation")
 
     backend_required = bool(backend_sessions) and not docs_lite_only and not close_sync_metadata_only
     dev_db_required = bool(dev_db_plan_keys) and not docs_lite_only and not close_sync_metadata_only

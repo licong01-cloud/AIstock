@@ -1219,6 +1219,27 @@ def test_frontend_uses_module_tests_while_go_uses_its_language_gate(tmp_path: Pa
     assert go_docs["backend_sessions"] == []
 
 
+@pytest.mark.parametrize("path", ["tdx-api-main/go.mod", "tdx-api-main/web/go.mod", "tdx-api-main/web/go.sum",
+                                   "tdx-api-main/web/start.bat", "scripts/start_tdx_go_backend.py",
+                                   "start_all_ai_stock.bat", "backend/data_service/tdx_adapter.py",
+                                   "backend/ingestion/tdx_scheduler.py", "backend/tests/ingestion/test_tdx_go_integrity.py",
+                                   "backend/tests/scripts/test_start_tdx_go_backend.py"])
+def test_tdx_shared_inputs_keep_go_and_python_validation(path):
+    result = classifier.classify_changed_files([path], repo_root=Path.cwd())
+    assert result["go_required"] and result["workflow_gate"] == "passed"
+    if not classifier._is_go_path(path) and path != "start_all_ai_stock.bat":
+        assert "data_sync_autonomy_backend" in result["backend_sessions"]
+
+
+def test_tdx_go_lane_is_offline_and_cannot_inherit_dev_write_authority():
+    import yaml
+    step = next(s for s in yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))["jobs"]["ci-verdict"]["steps"] if s.get("id") == "go_validation")
+    assert step["env"] == {"GOPROXY": "off", "GOSUMDB": "off", "GOTOOLCHAIN": "local", "TDX_DEV_TEST_DSN": ""}
+    for command in ["go test -mod=readonly ./protocol", "go test -mod=readonly . -run '^TestPagination'", "go build -mod=readonly ./...", "go test -mod=readonly . -count=1"]:
+        assert command in step["run"]
+    assert "go test ./..." not in step["run"] and "${TMP}/aistock-tdx-web.exe" in step["run"]
+
+
 def test_advisory_modeling_neighbor_plan_static_coverage_remains_closed() -> None:
     paths = ["backend/tests/advisory_model_first/test_economic_moneyflow_price_v1.py", "backend/tests/advisory_modeling/test_artifacts_shadow_isolation.py"]
     result = classifier.classify_changed_files(paths, repo_root=Path.cwd())

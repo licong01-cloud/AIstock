@@ -4,7 +4,7 @@
 
 ## 配置与构建
 
-现有一键启动使用 `scripts/start_tdx_go_backend.py`，
+现有一键启动与 `tdx-api-main/web/start.bat` 使用 `scripts/start_tdx_go_backend.py`，
 显式传递 `--database-target production --env-file <repo>/.env`；只读取数据库配置，
 不打印凭据，不继承其他目标的 DSN，按完整 Git SHA 编译整个 Go web package。
 手工 `go run .` 仍要求操作者先提供完整环境变量，不再依赖源码内生产默认密码。
