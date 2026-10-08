@@ -44,12 +44,18 @@
   "evidence_uris": [],
   "expected": "Frozen model preprocessor must be recorded and protected with the same manifest reference and SHA; valid package save succeeds, mismatches still fail.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/repository.py",
+      "backend/tests/strategy_package/test_package_asset_ledger.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1797-p1-strategy-package-ledger-omits-frozen-fitted-preprocessor-assets.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/strategy_package/repository.py",
-      "backend/tests/strategy_package/test_package_asset_ledger.py"
+      "backend/tests/strategy_package/test_package_asset_ledger.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1797-p1-strategy-package-ledger-omits-frozen-fitted-preprocessor-assets.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/repository.py",
@@ -132,11 +138,15 @@
       "Isolated Python loaded tracked repository fix and real TCN/LSTM Loop4 through complete StrategyPackageService creation: original frozen assets, WSL CPU model admission, in-memory atomic package/ledger persistence; TCN=29 protected assets/input44, LSTM=31/input46, exact manifest/ledger parity, one original fitted preprocessor each; central CAS/runtime model params same physical file. PGOPTIONS enforced read-only database metadata; no production package writes, training, experiment submission or process control."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
