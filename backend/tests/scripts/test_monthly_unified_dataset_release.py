@@ -34,6 +34,16 @@ def test_bind_repairs_uses_authenticated_single_api_and_does_not_resume_or_activ
     assert len(calls) == 1
 
 
+def test_bind_quality_only_uses_existing_operator_api(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    path = tmp_path / "quality.json"
+    path.write_text(json.dumps({"schema_version": "aistock_monthly_source_quality_acceptance_v1"}))
+    assert cli.main(["bind-quality", "--operation-id", OPERATION_ID, "--inputs", str(path.absolute())]) == 0
+    assert len(calls) == 1
+    assert calls[0]["suffix"] == f"/{OPERATION_ID}/source-quality-inputs"
+    assert calls[0]["body"]["inputs"] == json.loads(path.read_text())
+
+
 def test_plan_calls_the_single_backend_api_without_activation(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

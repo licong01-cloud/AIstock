@@ -33,6 +33,7 @@ from .monthly_source_audit import (
     validate_trading_calendar,
 )
 from .monthly_source_producer import SourceArtifact
+from .monthly_source_quality import accepted_parity_warning, read_quality_evidence, source_quality_report
 from .monthly_unified import SOURCE_GATES
 from .sealed_source_reader import CASSealedPartitionReader
 from .monthly_sector_mapping import build_bound_sector_enricher, frozen_sector_mapping_binding
@@ -103,6 +104,7 @@ class GateCounter:
     invalid_count: int = 0
     duplicate_count: int = 0
     exceptions: list[TypedGap] = field(default_factory=list)
+    quality_warning_refs: list[Mapping[str, Any]] = field(default_factory=list)
     emit: Callable[[Mapping[str, Any]], None] | None = None
     expected_keys: Any = field(default_factory=hashlib.sha256)
 
@@ -256,6 +258,7 @@ def audit_month_rows(
     authority_sha256: str,
     minute_start: date,
     aliases: Any = None,
+    quality_acceptance: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], set[tuple[str, date]]]:
     """Audit independent expected stock/date keys; never infer a denominator from rows."""
     dates = set(sessions)
@@ -396,6 +399,11 @@ def audit_month_rows(
                             for name, value in _ohlcv(daily[0]).items()
                             if not math.isclose(value, actual[name], rel_tol=1e-4, abs_tol=1e-4)
                         }}
+                        warning = accepted_parity_warning(quality_acceptance, symbol=key[0],
+                            trade_date=key[1], mismatches=details["mismatches"])
+                        if warning is not None and not summary.duplicate_count and len(daily) == 1:
+                            bad = False
+                            gate.quality_warning_refs.append(warning)
                 if bad:
                     gate.invalid_count += 1
                     gate.issue(key, reason, "kline_minute_raw", details=details)
@@ -597,6 +605,7 @@ def audit_frozen_source(
     checkpoint: Callable[[], None] = lambda: None,
     audit_causal_history: bool = True,
     deferred_margin_authority_sha256: str | None = None,
+    quality_acceptance: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[SourceGateEvidence, ...], tuple[SourceArtifact, ...]]:
     # The shared builders depend on the build bridge, which imports the SOURCE
     # bundle schema. Load them only after adapter module initialization.
@@ -751,6 +760,7 @@ def audit_frozen_source(
                 authority_sha256=frozen.source_manifest_ref.sha256,
                 minute_start=profile.minute_start_date,
                 aliases=aliases,
+                quality_acceptance=quality_acceptance,
             )
             for day in dates:
                 checkpoint()
@@ -886,6 +896,7 @@ def audit_frozen_source(
             counter.duplicate_count,
             counter.invalid_count,
             tuple(counter.exceptions),
+            tuple(counter.quality_warning_refs),
         )
         _write(
             expectation,
@@ -918,4 +929,20 @@ def audit_frozen_source(
         artifacts.extend(
             SourceArtifact(path.relative_to(artifact_root).as_posix(), path) for path in (expectation, readback)
         )
+    if quality_acceptance is not None:
+        acceptance_path = input_root / "source-quality-acceptance.json"
+        _write(acceptance_path, quality_acceptance)
+        report_path = input_root / "source-quality-report.json"
+        artifacts.extend(SourceArtifact(path.relative_to(artifact_root).as_posix(), path)
+                         for path in (acceptance_path, report_path))
+        evidence_refs = []
+        for index, reference in enumerate(quality_acceptance["evidence_refs"]):
+            evidence_path = input_root / f"source-quality-evidence-{index}.json"
+            with evidence_path.open("xb") as handle:
+                handle.write(read_quality_evidence(reference))
+            artifacts.append(SourceArtifact(evidence_path.relative_to(artifact_root).as_posix(), evidence_path))
+            evidence_refs.append({"path": evidence_path.name, "sha256": reference["sha256"], "size": reference["size"]})
+        _write(report_path, {**source_quality_report(quality_acceptance,
+            [warning for counter in counters.values() for warning in counter.quality_warning_refs]),
+            "frozen_evidence_refs": evidence_refs})
     return tuple(result), tuple(artifacts)

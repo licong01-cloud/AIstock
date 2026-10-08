@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 import hashlib
 import json
@@ -259,6 +260,54 @@ def test_finalizer_seals_all_release_files_and_manifest_identity(tmp_path: Path)
         ),
         context=_context(tmp_path),
     )
+
+
+@pytest.mark.parametrize('drift', [False, True])
+def test_finalizer_pins_quality_report_and_evidence_without_rewriting_data(tmp_path, drift):
+    from backend.tests.dataset_release.test_monthly_source_quality import acceptance
+    from backend.services.dataset_release.monthly_source_quality import (
+        accepted_parity_warning, source_quality_report, validate_source_quality_acceptance,
+    )
+    staging, _cas, stage_refs, source_ref, validation = _setup(tmp_path)
+    context = _context(tmp_path)
+    value = acceptance(tmp_path)
+    value['operation_id'] = context.operation_id
+    value = validate_source_quality_acceptance(value, operation_id=context.operation_id,
+        predecessor_manifest_sha256='a' * 64, target_cutoff=date(2026, 9, 30))
+    warning = accepted_parity_warning(value, symbol='688799.SH', trade_date=date(2026, 9, 14),
+        mismatches={'open': {'daily': 10.0, 'minute': 11.0}})
+    context = replace(context, plan={**context.plan, 'monthly_source_quality_inputs': value,
+        'predecessor': {'dataset_manifest_sha256': 'a' * 64}})
+    compiled = _compiled(tmp_path, source_ref)
+    reference = value['evidence_refs'][0]
+    (compiled.source_bundle_path.parent / 'source-quality-evidence-0.json').write_bytes(
+        Path(reference['path']).read_bytes())
+    report = {**source_quality_report(value, [warning]), 'frozen_evidence_refs': [
+        {**reference, 'path': 'source-quality-evidence-0.json'}]}
+    if drift:
+        report['quality_warning_count'] = 0
+    compiled.source_bundle_path.write_bytes(canonical_json_bytes({'source_quality_report': report}) + b'\n')
+    compiled = replace(compiled, source_bundle_sha256=hashlib.sha256(compiled.source_bundle_path.read_bytes()).hexdigest())
+    finalizer = UnifiedMonthlyCandidateFinalizer(_Shared())
+    if drift:
+        with pytest.raises(MonthlyCandidateFinalizerError, match='counts or semantics differ'):
+            finalizer.execute(context=context, staging_root=staging, compiled=compiled,
+                validation_result=validation, stage_refs=stage_refs)
+        assert not (staging / 'qe_dataset_manifest.json').exists()
+        return
+    result = finalizer.execute(context=context, staging_root=staging, compiled=compiled,
+        validation_result=validation, stage_refs=stage_refs)
+    manifest = json.loads(result.manifest_path.read_bytes())
+    pin = manifest['source_quality']
+    assert pin['quality_status'] == 'ACCEPTED_WITH_WARNINGS'
+    assert pin['quality_warning_count'] == 1
+    report_path = staging / pin['path']
+    assert pin['sha256'] == hashlib.sha256(report_path.read_bytes()).hexdigest()
+    assert any(row['path'] == pin['path'] for row in manifest['components'].values())
+    frozen = json.loads(report_path.read_bytes())
+    assert frozen['missing_data_waived'] is False
+    proof = staging / frozen['frozen_evidence_refs'][0]['path']
+    assert proof.read_bytes() == Path(reference['path']).read_bytes()
 
 
 def test_native_finalizer_uses_actual_writer_digest_and_hashes_hardlinks_once(tmp_path, monkeypatch):

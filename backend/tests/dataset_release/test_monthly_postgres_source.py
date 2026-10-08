@@ -229,7 +229,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "8"
+    assert adapter.adapter_version == "9"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -240,6 +240,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             "business_validation_scope": "target_calendar_month_only_v1",
             "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
             "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
+            "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
             "component_preparation_dependency_digest": digest_named_fields(
                 "aistock_monthly_component_dependency_v1",
                 source.component_dependencies(),
@@ -297,7 +298,8 @@ def test_canonical_pit_readiness_blocks_before_freeze(tmp_path, monkeypatch, sta
             root=tmp_path, latest_source_snapshot=lambda **_kwargs: pytest.fail("no baseline read")
         ),
     )
-    context = SimpleNamespace(plan={"predecessor": {"cutoff": "2026-08-31"}, "target_cutoff": DAY.isoformat()})
+    context = SimpleNamespace(operation_id="dmr_" + "1" * 32,
+        plan={"predecessor": {"cutoff": "2026-08-31"}, "target_cutoff": DAY.isoformat()})
     connection = Connection()
     with pytest.raises(MonthlyReleaseSourceBlocked) as caught:
         adapter.read(connection, MonthlySnapshotIdentity("1-AA-1", "2026-10-02T00:00:00+00:00", "watermark"), context)

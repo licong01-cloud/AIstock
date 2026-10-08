@@ -50,6 +50,31 @@ python scripts/monthly_unified_dataset_release.py rollback --operation-id dmr_<3
 - CONSUMER_VALIDATE 失败：记录具体 consumer、节点、窗口和身份；不得静默退回旧路径。
 - 激活并发冲突：CAS 失败且 active 不变；重新读取后决定是否仍需切换。
 
+### 4.1 已接受的来源质量差异（BUG-1815）
+
+缺行/必需字段空值与来源差异不是同一种问题。经用户明确接受的有限值日线—分钟线差异，
+可在同一 operation 的 SOURCE 封存前绑定为质量警告；不需要 Tushare 历史分钟权限，也不修改数据。
+
+```powershell
+python scripts/monthly_unified_dataset_release.py bind-quality --operation-id dmr_<32hex> --inputs X:\<本轮精确质量接受文件>.json
+python scripts/monthly_unified_dataset_release.py resume --operation-id dmr_<32hex>
+```
+
+输入使用 `aistock_monthly_source_quality_acceptance_v1`：绑定 operation、前驱 manifest、
+目标 cutoff、真实证据文件 SHA/size，以及明确的 symbol/date/字段/daily/minute 值。
+只支持 `PROVIDER_VOLUME_PRECISION_VARIANCE`（vol）和 `KNOWN_PROVIDER_PRICE_VARIANCE`（OHLC）。
+前者表示已观察并接受的来源精度差异，不声称已证明上游具体舍入算法。禁止 amount 差异、任意字段或缺失事实豁免。
+
+只对完整、唯一、有限的 240 根分钟线与唯一有效日线应用精确匹配。新键、新字段、值漂移、
+缺分钟、重复、NaN、PIT/停牌冲突仍按原合同处理。绑定 create-exclusive、幂等，不重写既存
+`monthly_repair_inputs`（包括获批的单日 margin_detail 延后），SOURCE 封存后不可更改。
+后续月份不继承这些键；新差异需要独立明确接受，不能把本轮授权变成全市场自动放宽。
+
+SOURCE 的物理完整性仍按真实分母计数；质量状态独立为 `ACCEPTED_WITH_WARNINGS`，
+不能称为“差异已修复”或“质量全部无异常”。候选保存
+`reports/monthly_source_quality.json`、精确接受文件及原证据字节，全部由 manifest 钉住并随三端部署。
+只有已接受警告不再阻断其余数据集发布；真实残余阻断仍报告具体键/字段。
+
 ## 5. 独立状态报告
 
 最终报告必须分别列出：源码/CI、数据库 DDL/DML、source snapshot、candidate 构建、
