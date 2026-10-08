@@ -1,15 +1,15 @@
 # RD-Agent 因子研发辅助整合详细设计
 
-日期：2026-10-08；版本：1.1；级别：F2（跨 AIstock 研究消费与 RD-Agent 生成边界）；状态：AIstock 离线读取/提案检查已实现，生成端仍待 owner，未运行因子研究。依据[蓝图 v1.8 §20](factor_research_evolution_blueprint_20260908.md#rdagent-integration)与[方法论 v2.5 §2.5](../analysis/factor_research_methodology.md#rdagent-assistance)。本文落实接口、映射、实现范围和验收，不复制或改变方法论 C-1～C-7。
+日期：2026-10-08；版本：1.2；级别：F2；状态：AIstock 问题包准备已实现并通过本地验收，源码合入以 PR/CI 为准，研究计算未启动。依据[蓝图 §20](factor_research_evolution_blueprint_20260908.md#rdagent-integration)与[方法论 §2.5](../analysis/factor_research_methodology.md#rdagent-assistance)。本文落实接口、映射、实现范围和验收，不复制或改变方法论 C-1～C-7。1.2 以 §6 的 AIstock 文件交接取代原 RD-ASSIST-01 原生生成器交付；§10/13 是当时的验收历史，不代表仍需修改 RD-Agent。
 
 1.0（PR #5756）仅交付设计及蓝图/方法论入口链接，当时没有代码实施。1.1 仅实施 §8 的 AIstock 离线边界，实测和未交付项见 §13；不改 Skill、数据库、数据集、模型配置或研究计算。P1/P2/研究比较既有历史验收与研究结果不追溯修改。
 
 <a id="scope"></a>
 ## 1. 背景、目标、范围与非目标
 
-AIstock 因子研发继续为主线：Codex/Claude 提出和审查假设，AIstock 提供确定性评价与历史记录，RD-Agent 提供可选经验和候选。不恢复其整套 SOTA 自主循环，不将检索可用、旧回测成功或更强模型当作新因子有效。
+AIstock 因子研发继续为主线：Codex/Claude 提出和审查假设，AIstock 提供问题包、确定性评价与历史记录，RD-Agent 只提供可选历史经验与方法参考，不修改或调用其生成程序。不恢复其整套 SOTA 自主循环，不将检索可用、旧回测成功或更强模型当作新因子有效。
 
-交付目标：一次研究可以按问题读取已有经验，选择直接研发或取得 RD-Agent 候选，通过相同受审查脚本/评价路径得出结论，后续窗口从原研究表恢复。经验或生成支路不可用时，返回实际缺口，不阻塞现有研究。不要求在两节点全量盘点后才开始使用。
+交付目标：一次研究可以按问题读取已有经验，选择直接研发或通过 AIstock 问题包辅助 Codex/Claude 形成提案，再通过相同受审查脚本/评价路径得出结论，后续窗口从原研究表恢复。经验不可用或提案未生成时，返回实际缺口，不阻塞现有研究。不要求在两节点全量盘点后才开始使用。
 
 不新增表、枚举、writer、HTTP/MCP/UI、常驻服务、调度器、向量库、embedding 批处理、知识图谱、模型网关、审批或资源门禁。不修改官方指标、相关性/评级引擎、QE/数仓、股票池、交易规则或数据集；不导出、补录、冻结或全量哈希数据。完整评价仍是既有研究交付要求，不增设生产准入线；正式因子入库继续由用户批准。
 
@@ -20,17 +20,17 @@ AIstock 因子研发继续为主线：Codex/Claude 提出和审查假设，AIsto
 
 | 现有位置 | 已确认事实 | 本设计处理 |
 |---|---|---|
-| `scripts/factor_research.py` | list/show/context/run/record/attach；salvage 系列在 DB configure 之前分发 | 新增两个离线纯读子命令，同样在 configure 之前分发；旧参数/返回不变 |
+| `scripts/factor_research.py` | list/show/context/run/record/attach；salvage 系列在 DB configure 之前分发 | 1.1读取/检查、1.2准备三个离线命令同样在 configure 之前分发；旧参数/返回不变 |
 | `factor_research/service.py:context` | 返回表达式、声明范围依赖提示、指标和相关性；指标日期筛选为 calculated_at | 读取已有输出，不把它视为全库搜索或行情日期过滤；不改 service/repository |
 | `factor_research/repository.py:show/list` | 研究任务、records、分页和 revision 已有 | 由已有命令提供相关结果；新辅助不增加 SQL 或隐式写入 |
 | `factor_research/rdagent_salvage.py` | source_inventory/candidate_groups/review_candidates 等 JSONL、代码身份、同名冲突及适配 | 优先消费已有 source_inventory；不运行 salvage 扫描全部节点，review_candidates 不能代表全部研究历史 |
 | `rdagent_candidate_service.py:get_task_loops` | 会确保任务入库；缓存未命中可能访问节点并写缓存 | 新纯读辅助不调用，不假装 GET 无写入；需要新读取能力交 owner |
 | `rdagent/components/workflow/rd_loop.py` | RDLoop 构造 coder/runner，后续包含执行和反馈 | 不实例化整条 Loop，不通过启动后及时取消实现“仅生成” |
-| `rdagent/components/proposal/__init__.py` | HypothesisGen 与 Hypothesis2Experiment 分开请求 LLM | 可供 RD-Agent owner 提取生成边界，AIstock 不直接导入 RD-Agent 包 |
+| `rdagent/components/proposal/__init__.py` | HypothesisGen 与 Hypothesis2Experiment 分开请求 LLM | 借鉴问题→假设→反例→公式的组织，不提取或修改其生成器，不导入 RD-Agent 包 |
 | `rdagent/scenarios/qlib/proposal/factor_proposal.py` | convert_response 构造 QlibFactorExperiment，并按名称过滤历史任务 | 不能直接复用为纯提案接口；需保持同名异公式并跳过实验对象创建 |
 | `rdagent/scenarios/qlib/experiment/factor_experiment.py` | 默认 scenario 读取旧场景/数据介绍；experiment 构造 workspace | 生成时使用本次问题包提供的语义，不隐式绑定旧数据或创建实验 workspace |
 
-CoSTEER 的 pickle、独立向量库和实时节点记录并非本设计首版必读源；不声称已全面解码或已接通 RAG。生成适配是明确待交付项，不以现有类存在或 mock 通过冒充完成。
+CoSTEER 的 pickle、独立向量库和实时节点记录并非本设计首版必读源；不声称已全面解码或已接通 RAG。§2 记录设计初始基线；1.1 已交付的读取/检查见 §13，1.2 仅补问题包，不把它称为自动生成器。
 
 <a id="architecture"></a>
 ## 3. 架构与职责
@@ -39,8 +39,8 @@ CoSTEER 的 pickle、独立向量库和实时节点记录并非本设计首版�
 既有研究/目录查询结果 + 已提取 RD-Agent 记录 + 精确知识文本
                              ↓ experience（只读）
                          研究上下文包
-                             ↓ Codex/Claude
-              直接假设/代码 ←┴→ RD-Agent 仅提案入口（owner）
+                             ↓ proposal-prepare（只读）
+              直接假设/代码 ←┴→ Codex/Claude 读取包并生成提案
                              ↓ proposal-inspect（只读）
                     受审查候选及明确输入
                              ↓ 原 run/完整评价/比较
@@ -48,19 +48,20 @@ CoSTEER 的 pickle、独立向量库和实时节点记录并非本设计首版�
                              ↓ 用户批准后正式交付；QE另交接
 ```
 
-辅助层只做记录读取、来源映射与提案检查，不读行情面板、不执行候选、不自动选赢家。模型生成、候选计算和数据库登记分别可见；不把检索输出自动喂入执行器。新模块保持惰性导入，读取帮助/本地 JSON 不建立 DB、节点或 LLM 连接。
+辅助层只做记录读取、问题包准备、来源映射与提案检查，不读行情面板、不执行候选、不自动选赢家。问题包准备、模型生成、候选计算和数据库登记分别可见；不把检索输出自动喂入执行器。新模块保持惰性导入，读取帮助/本地 JSON 不建立 DB、节点或 LLM 连接。
 
 <a id="experience"></a>
 ## 4. 经验读取接口契约
 
-### 4.1 CLI（1.1 已实现）
+### 4.1 CLI（读取/检查为1.1；准备为1.2）
 
 ```text
 python scripts/factor_research.py experience --input <request.json> --format summary|json
+python scripts/factor_research.py proposal-prepare --input <proposal-request.json> [--context <context.json>] [--producer codex|claude] --format summary|json
 python scripts/factor_research.py proposal-inspect --input <proposal.json> --request <proposal-request.json> [--context <context.json>] --format summary|json
 ```
 
-两个命令不接受 env-file/target，不调用 configure，不写文件/数据库、不联网、不执行代码。输出复用 models.response/encode 的包络；context.json 是调用者保存的 experience 完整 JSON 输出。需要查询现有 DB 时，先使用已有 list/show/context 的显式目标及授权；辅助层仅消费其结果文件。输出如需留存，使用当次允许的 X 盘研究目录和既有记录流程，不创造自动导出/同步命令。
+三个命令不接受 env-file/target，不调用 configure，不写文件/数据库、不联网、不执行代码。输出复用 models.response/encode 的包络；context.json 是调用者保存的 experience 完整 JSON 输出。需要查询现有 DB 时，先使用已有 list/show/context 的显式目标及授权；辅助层仅消费其结果文件。输出如需留存，使用当次允许的 X 盘研究目录和既有记录流程，不创造自动导出/同步命令。
 
 ### 4.2 experience 请求
 
@@ -134,15 +135,15 @@ proposal-inspect 只读取提案、原问题包、experience 输出及明确引�
 之后沿已有 create/record 登记研究取舍，由 Codex 准备原 run 请求；candidates **仍只含 factor_name/script**，不能把新 provenance 字段塞入严格 run schema。来源和 request_id 存 task.context_json 或 record.payload 中的 `assistance` 对象；run 的数据、股票池、日期、full_evaluation/comparison 仍按现行合同显式准备，不由模型响应覆盖。没有新增“inspect 后自动 run”命令。
 
 <a id="owner"></a>
-## 6. RD-Agent owner 交付与跨模块边界
+## 6. AIstock 问题包与 Codex/Claude 生成分工（1.2）
 
-提出一项需求 `RD-ASSIST-01`（本文局部交接标识，不新增 BUG/平台）：在现有获准模型配置中提供“问题包→提案 JSON”的离线单次入口；具体 CLI 名由 owner 在实现 PR 确认，本文不编造当前可运行命令。输入/输出精确采用 §5；交付后因子窗口可读取同一文件合同，不需要在 backend 导入 RD-Agent 或新增远端编排器。
+用户明确限定后续只改 AIstock。原 RD-ASSIST-01 的 RD-Agent owner 原生生成器需求撤销，不要求另一个窗口交付、不修改 RD-Agent 程序/环境/旧数据。借鉴其假设形成、反例和历史失败反馈的思路，由当前 Codex/Claude 生成内容；不强制额外 API 调用，不新增模型网关。自动 API 生成不属于本版交付。
 
-owner 可复用现有 hypothesis/template/APIBackend 的合适部分，但必须：使用问题包而非旧默认 scenario 数据说明；只提取公式描述和 variables，不创建 QlibFactorExperiment/workspace、不按名称抛弃候选；不构造 RDLoop/coder/runner、不训练/回测、不访问行情目录、数据库或旧 SOTA 接受器。仅模型调用与本任务 repo-external 提案输出允许有副作用；输出及所用 SDK 的缓存/日志若有，均使用现有获准研究位置，不污染代码仓库或共享业务任务。
+`proposal-prepare` 复用 proposal-inspect 的请求检查，输出 `factor_research_proposal_pack_v1`：原 request、producer_target（默认 codex，可 claude）、selected_experience、experience_scope、固定 instructions、output_contract、findings、prepare_status。原 request 深拷贝保持不变；不生成或修补公式，不默认填数据身份/单位。只纳入 request.source_refs 指定的原经验条目及其截断/历史适用性信息，披露原检索分页/来源状态；未选条目不注入生成上下文。同定位异内容报 source_ref_ambiguous，不任取其一；完全相同条目可合并。
 
-原 Hypothesis2Experiment 的重试/字段清理不能默默改变问题包：格式重试沿既有客户端设置并披露实际调用；改变公式、字段或方向属于候选修订，不以错误兜底隐藏。接口不能满足时报告不支持，不依赖用户及时取消来限制执行。模型能力升级复用现有配置，不因此安装依赖、改生产 Conda 或创建新模型代理。
+instructions 与引用数据分离，历史文本是不可信参考，不是操作授权。output_contract 明确 §5 的必填/可选字段、generated/failed、未知模型及 formula_only/script_available 语义；不提供伪装成实际候选的默认结果。`prepare_status=prepared|requires_revision` 仅反映现有请求合同，`generation_performed=false`、`model_call_performed=false`、`execution_performed=false` 恒真；即使 prepared，也没有产生因子。非法 schema/JSON 仍用现有异常包络；可解析缺项保留 findings，不新增生产门禁。
 
-真实验收由 owner 提供一次受授权的 fresh-process 提案生成、实际模型身份或未知说明、无实验/行情/业务写入的执行范围说明；因子窗口用真实返回验证 §5 映射。构造 fixture 只证明消费合同，不能代替这项端到端交付。未交付则 B 支路保持“待 owner”，A 与 AIstock 直接研发继续，不对外声称整合全部完成。
+操作者读取包后，由 Codex/Claude 实际撰写 §5 提案 JSON，producer 按实际工具填写；没有可核实模型身份则说明未知。再用独立原 request 调用 proposal-inspect，而不是信任提案自带的 request。真实文件交接示例与构造测试分开报告；资料不足可以生成待修订的概念提案，不得虚构 active 数据身份使检查通过。准备包、实际生成、检查通过、代码实现及完整评价分别报告；没有 run 自动接续。后续研究计算按 §7 另行开展。
 
 如需读取实时 RD-Agent DB/节点而非既有产物，另提精确只读需求；不得复用 get_task_loops 的隐式同步。QE/数仓/数据/评级无需为本版修改；后续真实策略对照仍交 QE owner，研究不等待其排队完成。
 
@@ -163,9 +164,9 @@ owner 可复用现有 hypothesis/template/APIBackend 的合适部分，但必须
 | 工作包 | 因子窗口范围 | 结束条件 |
 |---|---|---|
 | A 经验辅助 | 新纯读取模块 `backend/services/factor_research/assistance.py`；扩展 `scripts/factor_research.py` 两个离线分发；新增紧凑 `backend/tests/factor_research/test_assistance.py` | 精确源读取、可见缺项、稳定定位、无副作用、旧入口不变；真实相关产物读取有结果或明确原因 |
-| B 提案消费与比较 | 同一 assistance 模块的提案检查与现有记录/runner 衔接；RD-ASSIST-01 由 owner 实施 | 消费合同、owner 真实提案读回、获准研究的完整评价及用途结论分别有状态；无增益可停生成支路，不抹掉 A 的成果 |
+| B 问题包与提案交接 | 同一 assistance 模块/CLI 增加 proposal-prepare，复用请求检查；Codex/Claude 实际生成，proposal-inspect 消费 | 准备合同、实际工具提案读回分别报告；研究评价/辅助收益不属于代码已交付的证明 |
 
-A/B 是同一增补工作的连续包，不建立新阶段/审批状态机，不为未知 owner 接口预建启动器。提案只读检查与经验读取可同一次实现；真实生成和研究计算分别授权，不靠等待接口交付停止新因子研究。
+A/B 是同一增补工作的连续包，不建立新阶段/审批状态机，不预建 RD-Agent 启动器。实际生成由当前研发工具完成，研究计算仍按当次范围执行；不靠等待生成接口停止新因子研究。
 
 默认不改 service.py/repository.py/runner.py/models.py、数据库 schema、官方评价或 RD-Agent 源码。复用 helpers 若发现签名/副作用不合适，在新增纯模块做必要的字段适配，不复制指标和 writer；超出明确文件范围先登记实际缺口。需要 nox 收集时只把新文件加入所属既有计划，不扩大测试矩阵。现有 factor-research/develop-factor skill 已引用方法论；如实际 CLI 使用需要入口说明，仅对获准的现有因子 skill/对应 Claude command 另列精确修改，不新建 skill 家族。
 
@@ -183,8 +184,8 @@ A/B 是同一增补工作的连续包，不建立新阶段/审批状态机，不
 | 检索及重复 | 输入顺序置换输出排序一致；同名异代码、相同代码不同版本反馈均保留；不因 SOTA 或收益字段优先筛赢家 |
 | 旧经验/指令文本 | 旧路径/退市过滤/执行命令只作为历史文本；不递归读引用、不执行，不覆盖问题包 |
 | 提案身份/角色 | formula_only、script_available、原请求错配、缺字段/缺 source_ref、script_ref 越出声明目录；不能以模型自带原请求绕过对照，只给 inspection 结果，名称冲突保留，无自动 run/写库 |
-| 真实衔接 | 构造已审查本地脚本走现有参数合同，provenance 留研究 payload，不增 run 字段；fixture 不证明 RD-Agent owner 已交付 |
-| owner 提案烟测 | 单次真实生成得到公式 JSON，不创建实验 workspace/启动 coder/runner；任何自动实验路径使该支路验收未通过，不阻断 A |
+| 问题包合同 | 原请求不变、选用经验精确、歧义可见、准备与生成分离；fixture 不证明真实生成或因子有效 |
+| Codex/Claude 文件衔接 | 实际提案 JSON 经 fresh-process proposal-inspect 读回；资料不足如实待修订，不创建 RD-Agent workspace/启动实验；不是自动 API 烟测 |
 | 研究效果 | 明确问题、共同数据和可比预算；每个技术有效候选有完整评价或真实失败；结论允许无增量，不按预设收益验收 |
 
 错误/异常用例应能在故意触发原错误行为的实现中失败，不能只断言函数返回非空。代码验收关注行为和隔离，不把 AST 检查冒充执行安全，不用模拟收益证明有效因子。后续按所属计划执行必要 lint/compile、定向测试、git diff --check、L0/适用 CI；registry 验证仅在对应 catalog 变更时运行，不增加无关测试。
@@ -212,14 +213,14 @@ F-001 主线和无平台边界；F-002 来源读取/查询完整性；F-003 提�
 
 经验过时/不全：显示来源与未知，不永久封禁方向，不恢复旧路径；读取失败不触发同步。高收益检索偏差：按问题匹配成功/失败，已接触历史标 research_feedback。源码相同但版本不同：保留反馈 basis，不自动复用数值。模型幻觉/指令污染：提案非命令、代码受审查，事实以当前合同/实测为准。
 
-RD-Agent 默认 scenario/workspace/按名过滤：owner 单独适配，不把完整 Loop 当提案接口。API 不兼容或实际模型未知：明确失败或未知，不更改生产环境、不假称升级有效。异节点不可达或旧 pickle 不可读：只限制该资料/支路，不发起全库抢救。工具对照接触污染：分别组织上下文并披露共同历史，不承诺统计独立或提升发现概率。
+RD-Agent 默认 scenario/workspace/按名过滤：不调用其生成程序，不把完整 Loop 当提案接口。实际模型未知：明确未知，不更改生产环境、不假称升级有效。异节点不可达或旧 pickle 不可读：只限制该资料，不发起全库抢救。工具对照接触污染：分别组织上下文并披露共同历史，不承诺统计独立或提升发现概率。
 
 实施发现必须改现有合同/数据/跨 owner 业务时，只提交精确需求，不能自行降级、填零或扩范围。没有增益停止生成支路；既定研究问题已被回答或无值得追加的证据时结束，不为满时长、凑因子或存档继续投入。
 
 <a id="rollout"></a>
 ## 12. 发布、回滚与 Production gates
 
-默认旧命令/研究路径完全不变，新辅助显式调用。实现先在现有环境验证离线 fixture，再读取当次允许的真实产物；owner 支路有真实交付后才说明端到端可用。生成和计算按具体授权，不因文档合入启动长任务。需要回退时停止使用新辅助并走原 CLI/直接研发，不删除任务记录、历史结果或源码产物；不改数据库或关闭任何服务。
+默认旧命令/研究路径完全不变，新辅助显式调用。实现先验证离线合同，再验证 Codex/Claude 文件交接；问题包准备不是自动模型生成，提案可检查不是研究有效。生成和计算按具体授权，不因文档合入启动研究长任务。需要回退时停止使用新辅助并走原 CLI/直接研发，不删除任务记录、历史结果或源码产物；不改数据库或关闭任何服务。
 
 1.0 文档交付的 `runtime_impact=none`、`backend_restart_required=false`。1.1 代码分类见 §13，不能把文档 none 复制为代码结论；backend_restart_owner=user。两次均保持 `production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_install=noop`、`client_install=noop`、`production_activation=false`、`process_control=false`、`research_execution=false`。任何生产数据库操作按精确目标单独授权并先 DEV 验证。
 
@@ -270,10 +271,34 @@ source_ref 保留结构化 locator；长 observation/basis 以带 truncated 标�
 
 实际 changed files 分类为 targeted_ci_required，factor_research_backend；dev_db_required=false，unexecuted_test_files=[]。仅修改 nox 收集触发其既有静态/计划验证。按执行时 runtime catalog，新 assistance.py 命中 backend-main：runtime_impact=backend，backend_restart_owner=user；未修改 catalog 降级。**更正运行时说明**：catalog 的 operator_runbook_ref、identity_ref、business_smoke_ref 并非空值，而是 `bug_record.runtime_contract.*` 动态引用。上轮用空 record 调用 BUG 专用解析器，得到的是缺少具体 BUG 记录，不是 catalog 字段缺失，不能据此认定流水线缺陷或为本 feature 新增重启前置。分类结果与实际生效证据分开：当前生产源码调用者只有 scripts/factor_research.py，服务端没有导入；CLI fresh process 可独立使用，不需要启动常驻后端。本轮交付源码/离线入口，不宣称后端 runtime identity 已更新。生产 DDL/DML、数据集/缓存/官方指标、依赖安装、客户端安装、进程控制均 noop。
 
-### 13.4 合入后只读复验与剩余交接（2026-10-08）
+### 13.4 1.1 合入后只读复验与当时剩余交接（已由1.2 §6替代）
 
 PR #5765 已合入，source HEAD `2fbcb38ae4b9de121c7922c5fcb82ec1c881b63c`，merge `7acdc7268338d2d8cb7c178db167ba6314ef5c8b`，CI verdict SUCCESS。主线新进程的 proposal-inspect --help 正常；experience 精确读取 05_runtime_failure_patterns.md，5条命中、分页返回2条，均标 unverified_historical。该只读复验没有重跑全库评价或触碰数据/DB/服务。
 
 余下是 §6 的 RD-ASSIST-01 真实生成交付，而不是“先补 catalog 再重启才能研究”。按已批准职责，RD-Agent owner 在其独立工作树实现单次问题包→提案入口，交回源码 PR/commit、原请求、提案文件、实际模型身份或未知原因，以及没有启动 Loop/coder/runner、访问行情或业务写入的执行说明。生成只使用本轮问题包，不跟随旧数据目录、旧股票池/单位/成交假设，不修改或补齐旧数据集；原始资料只作为带出处的经验参考。
 
 本窗口收到真实文件后，使用主线 `scripts/factor_research.py proposal-inspect --request <original-request.json> --input <proposal.json> [--context <experience.json>] --format json` 读回，核对两侧身份/输入/来源/边界；不以 fixture 代替真实返回，不自动执行候选或入库。CLI 文件均使用获准 X 盘研究目录。若用户希望本窗口实施 RD-Agent 源码，应先明确接管该 owner 范围并同步职责，不能从“继续任务”推导跨模块接管。真实因子评价另按 §7 执行，不以等待生成端阻断直接研究。
+
+<a id="proposal-pack-readback"></a>
+## 14. 1.2 AIstock-only 问题包实现与验收
+
+用户后续明确“由本窗口接手，只能修改 AIstock、不得修改 RD-Agent”。因此 §6 替换原生生成器 owner 需求，§13.4 保留的旧交接不再执行。新增的 proposal-prepare 是准备命令，不是 LLM 调用器；Codex/Claude 在现有会话中生成，保留统一 proposal-inspect 和后续原 runner。没有外部 API 适配、RD-Agent 原生生成能力或因子效果交付承诺。
+
+源码范围：assistance.py 抽出原请求共用检查并增加 prepare_proposal；scripts/factor_research.py 在 configure 之前分发；test_assistance.py 增加一个紧凑合同测试并扩充既有 fresh-process 测试。本轮同时更新本文、蓝图 §20 和方法论 §2.5，不修改 RD-Agent、service/repository/runner/models、nox、catalog、官方指标或跨业务源码。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-001 | assistance.prepare_proposal；CLI离线分发 | backend/tests/factor_research/test_assistance.py::test_cli_fresh_process_no_database | passed | 无 |
+| F-002 | assistance._inspect_request；选用经验与检索范围说明 | backend/tests/factor_research/test_assistance.py::test_prepare_preserves_request_and_selects_only_declared_experience | passed | 无 |
+| F-003 | 原 request深拷贝、共用检查、输出合同 | backend/tests/factor_research/test_assistance.py | passed | 无 |
+| F-004 | §6用户批准的新分工；Codex/Claude文件提案 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#proposal-pack-readback | passed | 无 |
+| F-005 | 原完整评价未修改 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#execution | not_applicable | 用户批准本轮实施辅助代码；研究计算不属本轮范围，完整评价要求保持§7 |
+| F-006 | models.response/encode复用，未调用writer | backend/tests/factor_research/test_assistance.py::test_cli_fresh_process_no_database | passed | 无 |
+| F-007 | 精确6文件归属、直接合同测试及CI计划 | backend/tests/factor_research/test_assistance.py | passed | 无 |
+| F-008 | 原catalog分类未降级；CLI fresh-process | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#proposal-pack-readback | passed | 无 |
+
+实际文件交接位于 `X:/AIstock_factor_research/proposal-pack-20261008/request.json` 和 `proposal.json`：由当前 Codex 撰写一项资金流先后次序的概念公式，无模型身份回执则明确 unknown。fresh-process prepare/inspect 都正常返回，数据身份、字段映射/单位/可得时点及研究日期未知，所以正确为 requires_revision；没有虚构当前 active profile 使其通过。请求中的 task_id 仅为本接口示例关联 UUID，没有对应数据库研究任务。该示例不是待晋升因子，不证明行情适配、辅助增益或生成模型质量；完整请求的 prepared/reviewable 行为由程序合同测试验证。
+
+本地验证：新增函数前 RED ImportError；实现和审核修正后定向9项通过、Ruff通过、py_compile通过、L0 blocking=0、git diff --check通过。fresh-process 测试禁止导入DB、RD-Agent、模型SDK和backend.infra，覆盖准备、经验读取、检查三条离线分发。多轮顺序审核（未委派其他agent）：第一轮核对AIstock-only范围与生成/准备区别；第二轮核对原请求不变、选用经验/歧义、缺项与身份、无自动执行并修复重复findings与缺context状态；第三轮核对蓝图/方法论/详细设计、测试和真实文件交接结论一致。实际classifier为 targeted_ci_required，backend_sessions=[factor_research_backend]，dev_db_required=false，unexecuted_test_files=[]；完整所属计划由PR CI执行，不机械重跑评价。
+
+DESIGN-COMPLIANCE-001：①按用户批准的新分工完整交付问题包/检查，不把模板、概念公式或fixture冒充自动生成器/有效因子；②未知数据/模型/经验冲突可见，不静默修补；③不改变评价、PIT、记录、官方写入与其他业务，旧历史验收不改写；④无新增生产门禁、审批、资源限制或平台。catalog仍按backend-main默认分类（runtime_impact=backend，backend_restart_owner=user），不以CLI用途手工降级；本次CLI新进程可独立使用，不依赖后端重启，也不宣称常驻服务身份更新。production_ddl_gate、production_dml_gate、dependency_install、client_install均noop；数据写入、因子入库、正式指标刷新、QE实验、进程控制均未执行。
