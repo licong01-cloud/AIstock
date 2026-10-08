@@ -33,6 +33,8 @@ QFQ_DENOMINATOR_AUTHORITY_SCHEMA = "dataset_release_qfq_denominator_authority_v1
 PRICE_UNIT_DIVISOR = 1000.0
 VALUE_COMPARE_ABS_TOL = 1e-4
 MINUTE_FREQ = "1m"
+PRECISION_FIELDS = ('volume_shares', 'volume_shares_source', 'volume_shares_sha256')
+PRECISION_SOURCES = frozenset({'tushare_daily', 'tushare_stk_mins', 'tdx_decoded'})
 _STOCK_CODE = re.compile(r"[0-9]{6}\.(?:SH|SZ)\Z")
 _INDEX_CODES = frozenset(item.daily_code for item in DOMESTIC_INDEX_DEFINITIONS)
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -48,6 +50,36 @@ _RAW_VALUE_FIELDS = (
 
 class CanonicalStockTransformError(DatasetReleaseError):
     code = "BLOCKED_CANONICAL_STOCK_TRANSFORM_INVALID"
+
+
+def raw_volume_shares(row: Mapping[str, Any]) -> float:
+    """Use pinned provider share precision; legacy frozen rows retain semantics.
+
+    Present invalid precision is an error, never a reason to silently revert
+    to whole hands. This function is shared by frozen audit and bin transform.
+    """
+    hand = row.get('volume_hand')
+    if isinstance(hand, bool) or not isinstance(hand, (int, float, Decimal)):
+        raise ValueError('legacy raw volume must be numeric hands')
+    legacy = float(hand) * 100
+    if not math.isfinite(legacy) or legacy < 0:
+        raise ValueError('legacy raw volume is invalid')
+    shares = row.get('volume_shares')
+    if shares is None:
+        if any(row.get(field) is not None for field in PRECISION_FIELDS[1:]):
+            raise ValueError('raw share precision has orphan provenance')
+        return legacy
+    if isinstance(shares, bool) or not isinstance(shares, (int, float, Decimal)):
+        raise ValueError('raw share precision must be numeric')
+    value = float(shares)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError('raw share precision is invalid')
+    if row.get('volume_shares_source') not in PRECISION_SOURCES:
+        raise ValueError('raw share precision provider is unsupported')
+    pin = row.get('volume_shares_sha256')
+    if not isinstance(pin, str) or re.fullmatch('[0-9a-f]{64}', pin) is None:
+        raise ValueError('raw share precision provenance is invalid')
+    return value
 
 
 def _minute_session_times() -> tuple[time, ...]:
@@ -559,7 +591,7 @@ class CanonicalStockTransformer:
                 and suspended_zero_turnover_placeholder(
                     full_day_suspend=full_day_suspend, has_1300=True,
                     all_minute_turnover_zero=all(
-                        row["volume_hand"] == 0 and row["amount_li"] == 0 for row in raw_day_rows
+                        raw_volume_shares(row) == 0 and row["amount_li"] == 0 for row in raw_day_rows
                     ), daily_rows=daily_facts,
                 )
             ):
@@ -632,13 +664,17 @@ def suspended_zero_turnover_placeholder(
 ) -> bool:
     """Frozen equivalent of the ingestion guard's independently proven no-trade case."""
     values = tuple(daily_rows)
+    try:
+        volumes_zero = all(raw_volume_shares(row) == 0 for row in values)
+    except ValueError:
+        return False
     return (
-        full_day_suspend and has_1300 and all_minute_turnover_zero and len(values) <= 1
+        full_day_suspend and has_1300 and all_minute_turnover_zero and len(values) <= 1 and volumes_zero
         and all(
             not isinstance(row.get(field), bool)
             and isinstance(row.get(field), (int, float, Decimal))
             and math.isfinite(float(row[field])) and row[field] == 0
-            for row in values for field in ("volume_hand", "amount_li")
+            for row in values for field in ("amount_li",)
         )
     )
 
@@ -750,6 +786,12 @@ def _normalize_raw_values(raw: Mapping[str, Any], *, source: str, ordinal: int) 
         if field_name in {"volume_hand", "amount_li"} and value < 0:
             raise CanonicalStockTransformError(f"{source} {field_name} must be nonnegative at ordinal {ordinal}")
         output[field_name] = value
+    try:
+        raw_volume_shares(raw)
+    except ValueError as exc:
+        raise CanonicalStockTransformError(f"{source} {exc} at ordinal {ordinal}") from exc
+    if raw.get('volume_shares') is not None:
+        output.update({field: raw[field] for field in PRECISION_FIELDS})
     return output
 
 
@@ -961,7 +1003,7 @@ def _transform_raw_row(
         "high": raw_high * qfq,
         "low": raw_low * qfq,
         "close": raw_close * qfq,
-        "volume": float(row["volume_hand"]) * 100.0 / qfq,
+        "volume": raw_volume_shares(row) / qfq,
         "amount": float(row["amount_li"]) / PRICE_UNIT_DIVISOR,
         "factor": qfq,
         "up_limit_price": float(limit["up_limit"]),

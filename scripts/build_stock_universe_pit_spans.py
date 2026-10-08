@@ -27,7 +27,7 @@ import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 import psycopg2
 import psycopg2.extras as pgx
@@ -1215,6 +1215,84 @@ def _build_spans(
     return spans
 
 
+def _audit_st_span_exclusion(
+    conn: Any,
+    *,
+    spans: Sequence[SpanRow],
+    events: Sequence[EventRow],
+    calendar: TradingCalendar,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> dict[str, Any]:
+    """Check target-month eligibility against independent observed risk state.
+
+    A disappearing snapshot row is not evidence of an ST removal: in particular,
+    a delisting-period rename must not admit the security again. Only the existing
+    typed, publication-as-of restore event may clear a previously observed risk.
+    This is validation only; it neither synthesizes events nor rewrites spans.
+    """
+    audit_start = max(start_date, end_date.replace(day=1))
+    days = tuple(day for day in calendar.days if audit_start <= day <= end_date)
+    by_code: dict[str, list[SpanRow]] = defaultdict(list)
+    for span in spans:
+        if span.eligible_start <= end_date and span.eligible_end >= audit_start:
+            by_code[span.ts_code].append(span)
+    boundary = calendar.before(audit_start) or audit_start
+    snapshots: dict[dt.date, set[str]] = defaultdict(set)
+    if by_code:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ann_date::date, ts_code
+                  FROM market.stock_st
+                 WHERE ann_date BETWEEN %s AND %s AND ts_code = ANY(%s)
+                 ORDER BY ann_date, ts_code
+                """,
+                (boundary, end_date, sorted(by_code)),
+            )
+            for day, code in cur.fetchall():
+                snapshots[day].add(str(code))
+    risk: set[str] = set()
+    terminal: set[str] = set()
+    ordered_events = sorted(
+        (event for event in events if event.ts_code in by_code),
+        key=lambda event: (event.action_date, 0 if event.terminal else 1 if event.event_kind != "st_restore" else 2),
+    )
+    event_index = 0
+    conflicts: list[dict[str, str]] = []
+    for day in (boundary, *days) if boundary < audit_start else days:
+        while event_index < len(ordered_events) and ordered_events[event_index].action_date <= day:
+            event = ordered_events[event_index]
+            if event.terminal:
+                terminal.add(event.ts_code)
+            elif event.event_kind == "st_negative":
+                risk.add(event.ts_code)
+            elif event.event_kind == "st_restore":
+                risk.discard(event.ts_code)
+            event_index += 1
+        risk.update(snapshots.get(day, ()))
+        if day < audit_start:
+            continue
+        for code in sorted(risk | terminal):
+            if any(span.eligible_start <= day <= span.eligible_end for span in by_code[code]):
+                conflicts.append({"ts_code": code, "trade_date": day.isoformat()})
+    receipt = {
+        "audit_start": audit_start.isoformat(),
+        "audit_end": end_date.isoformat(),
+        "trading_day_count": len(days),
+        "conflict_key_count": len(conflicts),
+        "conflict_symbol_count": len({row["ts_code"] for row in conflicts}),
+        "conflicts": conflicts,
+        "status": "blocked" if conflicts else "ready",
+    }
+    if conflicts:
+        raise CanonicalPitEvidenceError(
+            f"ST/terminal risk state intersects selectable PIT spans: conflict_key_count={len(conflicts)}",
+            context=receipt,
+        )
+    return receipt
+
+
 def _validate(spans: list[SpanRow], events: list[EventRow]) -> dict[str, Any]:
     spans_by_stock: dict[str, list[SpanRow]] = defaultdict(list)
     for span in spans:
@@ -1560,6 +1638,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             calendar=calendar,
         )
         validation = _validate(spans, events)
+        st_span_exclusion = _audit_st_span_exclusion(
+            conn, spans=spans, events=events, calendar=calendar,
+            start_date=start_date, end_date=end_date,
+        )
         event_counts = Counter(event.event_kind for event in events)
         span_counts = Counter(span.exit_reason for span in spans)
         spans_by_code: dict[str, list[SpanRow]] = defaultdict(list)
@@ -1593,6 +1675,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "exception_ledger_status": exception_ledger["status"] if exception_ledger else None,
             "exception_ledger": exception_ledger,
             "st_snapshot_continuity": st_snapshot_continuity,
+            "st_span_exclusion": st_span_exclusion,
             "terminal_evidence": terminal_evidence,
             "delist_pit": not st_only_active,
             "pause_pit": not st_only_active,

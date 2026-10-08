@@ -1,0 +1,373 @@
+{
+  "actual": "已完成TCN24 Top25实验qe_20261006_013449_0c29_L4入包时报expected_features=3而冻结特征44。核实张量维度推断与模型实际特征schema，禁止将kernel宽度当输入特征。模型权重应复用中央不可变CAS且仅一份物理权重，保留程序内哈希/来源/特征顺序一致性，不新增人工门禁或环境锁。",
+  "allowed_write_scope": [
+    "backend/tests/strategy_package/test_freeze_completeness_build_gate.py",
+    "backend/inference_engine.py",
+    "backend/tests/test_inference_strict_scoring_alignment.py",
+    "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
+    "backend/services/strategy_package/frozen_runtime_self_check.py",
+    "backend/services/strategy_package/package_asset_freeze.py",
+    "backend/services/strategy_package/package_asset_store.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+    "tests/aistock_validation/bugs/20261007_BUG-1788-qe-tcn.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1788",
+  "closed_at": "2026-10-08T02:08:57.146196Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-07T18:28:15.490019Z",
+  "description": "已完成TCN24 Top25实验qe_20261006_013449_0c29_L4入包时报expected_features=3而冻结特征44。核实张量维度推断与模型实际特征schema，禁止将kernel宽度当输入特征。模型权重应复用中央不可变CAS且仅一份物理权重，保留程序内哈希/来源/特征顺序一致性，不新增人工门禁或环境锁。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261007-6bc7ad2e636f",
+      "timestamp": "2026-10-07T18:28:15.490004Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/package_asset_store.py",
+      "backend/tests/strategy_package/test_freeze_completeness_build_gate.py",
+      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+      "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1788-qe-tcn.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/package_asset_store.py",
+      "backend/tests/strategy_package/test_freeze_completeness_build_gate.py",
+      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+      "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1788-qe-tcn.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/strategy_package/frozen_runtime_self_check.py",
+        "backend/services/strategy_package/package_asset_freeze.py",
+        "backend/services/strategy_package/package_asset_store.py",
+        "backend/services/strategy_package/live_inference.py",
+        "backend/tests/strategy_package/test_package_asset_freeze_batch1.py"
+      ],
+      "impacted_modules": [
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/strategy_package/frozen_runtime_self_check.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/package_asset_freeze.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/package_asset_store.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/live_inference.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/strategy_package/frozen_runtime_self_check.py",
+        "backend/services/strategy_package/package_asset_freeze.py",
+        "backend/services/strategy_package/package_asset_store.py",
+        "backend/services/strategy_package/live_inference.py",
+        "backend/tests/strategy_package/test_package_asset_freeze_batch1.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/package_asset_store.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/strategy_package/frozen_runtime_self_check.py",
+      "backend/services/strategy_package/package_asset_freeze.py",
+      "backend/services/strategy_package/package_asset_store.py",
+      "backend/services/strategy_package/live_inference.py",
+      "backend/tests/strategy_package/test_package_asset_freeze_batch1.py"
+    ]
+  },
+  "first_seen_at": "2026-10-07T18:28:15.490019Z",
+  "fix_branch": null,
+  "fix_commit": "965c17664a5e12ddadb7bdbf60cc6f9598d88216",
+  "fixed_at": "2026-10-07T19:54:30Z",
+  "github_issue_number": 5677,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5677",
+  "last_seen_at": "2026-10-07T18:28:15.490019Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5687",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
+    "fresh_process_evidence": [
+      "WSL rdagent-gpu isolated Python, CUDA_VISIBLE_DEVICES empty, loaded actual TCN_10D_d02 frozen params: model_expected_features=44, fitted_feature_order=44, fitted_preprocessor_count=2; no training or service control",
+      "WSL fresh process loaded actual trained TCN_10D_d02 params: input_features=44, fitted_preprocessor_count=2, CPU only no training or DB writes",
+      "WSL isolated CPU fresh-process probe loaded actual TCN weights with 44 input features and 2 fitted preprocessors; no training or database writes"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1788/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1788",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_success",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5def821da2b2f9bf12f92e9a9b16b00492e8646643bf191fe7755d6539d4a9c1",
+      "contract_digest": "82dd60cf55c154c1e959c2e8c61fb216fca08c5e2aafeeda072970a7b6e4e1c0",
+      "expected_identity": "965c17664a5e12ddadb7bdbf60cc6f9598d88216",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-08T02:07:57.965848Z",
+      "mode": "read_only",
+      "observed_identity": "d14501365257c39b425d40fe397149d387ad546e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "9ae43c0057406b7bedd98fe42eef6ffb4e529a93f444735a1574c2399fa084b8",
+      "receipt_sha256": "69ef5a105ebb89de6884f1d78952c17f666401f5fd76df27507875f2c07cc935",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8e0b9a1058b6877dfc4674069c6ac9f411ca22d0b999d25da31eb1f708edd9f1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1788",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9c1e8c597e65d6f0",
+    "recorded_at": "2026-10-07T19:55:05.094108Z",
+    "runtime_contract_digest": "82dd60cf55c154c1e959c2e8c61fb216fca08c5e2aafeeda072970a7b6e4e1c0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8f16de8e40451563d1f992a2c370e0bda5e85d7f",
+    "source_merge_commit": "965c17664a5e12ddadb7bdbf60cc6f9598d88216",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5687",
+    "validation_evidence": [
+      "validation-receipt: id=87f3c664415f1a0a commit=8f16de8e40451563d1f992a2c370e0bda5e85d7f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+      "validation-receipt: id=a1a2e76049d07ffd commit=8f16de8e40451563d1f992a2c370e0bda5e85d7f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_freeze_completeness_build_gate.py::test_alpha158_schema_missing_and_sha_mismatch_fail_closed` result=`passed; SHA assertions unchanged; related 67 regressions and 7 direct contracts passed`"
+    ],
+    "validation_evidence_digest": "78e5cbd704e74754dbb88dffdb4445728e85e68cadc6cdc995fe83594851b3cc"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "QE TCN策略包入包误判卷积核维度且重复冻结模型权重",
+  "trigger_condition": {
+    "fingerprint": "6bc7ad2e636f0ed2835d3750",
+    "source_event_id": "FE-20261007-6bc7ad2e636f"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=87f3c664415f1a0a commit=8f16de8e40451563d1f992a2c370e0bda5e85d7f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, blocking=0`",
+    "validation-receipt: id=a1a2e76049d07ffd commit=8f16de8e40451563d1f992a2c370e0bda5e85d7f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_freeze_completeness_build_gate.py::test_alpha158_schema_missing_and_sha_mismatch_fail_closed` result=`passed; SHA assertions unchanged; related 67 regressions and 7 direct contracts passed`",
+    "post-restart-verify --bug-id BUG-1788 --target backend-main -> verified health identity business probes; runtime_identity_match=true"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

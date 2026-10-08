@@ -4726,56 +4726,38 @@ class TDXScheduler:
 
             # 直接查实际数据的 MAX date（TimescaleDB chunk range_end 是预分配区间，
             # 不代表实际数据的最大日期，会导致误判 "already up to date"）
-            max_rows = self._fetchall(
-                f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']}"
-            )
-            current_max = max_rows[0]["mx"] if max_rows else None
+            current_max = None
 
-            if current_max is None:
-                start_date = dt.date(1990, 1, 1)
+            requested_start = options.get("start_date")
+            requested_end = options.get("end_date")
+            if bool(requested_start) != bool(requested_end):
+                raise RuntimeError("explicit TDX window requires both start_date and end_date")
+            if requested_start:
+                start_date = dt.date.fromisoformat(str(requested_start))
+                end_date = dt.date.fromisoformat(str(requested_end))
+                if start_date > end_date or end_date > latest_trading:
+                    raise RuntimeError("explicit TDX date window is invalid")
             else:
-                next_rows = self._fetchall(
-                    "SELECT MIN(cal_date) AS nt FROM market.trading_calendar"
-                    " WHERE is_trading = TRUE AND cal_date > %s",
-                    (current_max,),
+                max_rows = self._fetchall(
+                    f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']}"
                 )
-                nt = next_rows[0]["nt"] if next_rows else None
-                start_date = nt if nt else latest_trading
+                current_max = max_rows[0]["mx"] if max_rows else None
+                # A MAX timestamp proves neither a complete day nor all symbols.
+                # Re-read the latest observed day; Go inserts identical keys
+                # idempotently and rejects conflicting existing raw facts.
+                start_date = (dt.date(1990, 1, 1) if current_max is None else current_max
+                              if isinstance(current_max, dt.date) else dt.date.fromisoformat(str(current_max)))
+                end_date = latest_trading
 
             if start_date > latest_trading:
-                # already up to date
-                status = "success"
-                summary["message"] = "already up to date"
-                try:
-                    self._record_refresh_audit_from_table_range(
-                        dataset=dataset,
-                        job_id=job_id,
-                        start_date=current_max,
-                        end_date=current_max,
-                        data_source="tdx_api",
-                        metadata={"mode": "incremental", "via": "go_init", "already_up_to_date": True},
-                    )
-                except Exception as audit_exc:
-                    _logger.warning("%s already-up-to-date refresh audit failed: %s", dataset, audit_exc)
-                # 更新 job 记录（由 _scheduled_ingestion_run 预创建）
-                if job_id:
-                    try:
-                        self._execute(
-                            "UPDATE market.ingestion_jobs SET status='success', finished_at=NOW(), summary=%s WHERE job_id=%s",
-                            (json.dumps(summary, ensure_ascii=False), job_id),
-                        )
-                    except Exception as exc:
-                        _logger.error("unexpected error: %s", exc)
-                if schedule_id:
-                    self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status=status)
-                return
+                raise RuntimeError("TDX source maximum date is beyond latest trading date")
 
             # 2) create job record (or reuse one from _scheduled_ingestion_run)
             workers = int(options.get("workers") or spec["default_workers"])
             summary.update({
                 "data_kind": spec["data_kind"],
                 "start_date": start_date.isoformat(),
-                "end_date": latest_trading.isoformat(),
+                "end_date": end_date.isoformat(),
                 "workers": workers,
             })
             if job_id:
@@ -4798,8 +4780,9 @@ class TDXScheduler:
             start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
             go_payload = {
                 "job_id": str(job_id),
-                "codes": [],
+                "codes": options.get("codes") or [],
                 "start_time": start_dt.isoformat(),
+                "end_time": end_date.isoformat(),
                 "workers": workers,
                 "options": {
                     "truncate_before": False,
@@ -4812,7 +4795,7 @@ class TDXScheduler:
             resp.raise_for_status()
             data = resp.json()
 
-            if isinstance(data, dict) and data.get("code") not in (0, None):
+            if not isinstance(data, dict) or data.get("code") != 0:
                 raise RuntimeError(f"Go task error: {data}")
 
             # extract go task_id
@@ -4820,8 +4803,11 @@ class TDXScheduler:
             go_task_id = None
             if isinstance(payload_data, dict):
                 raw_tid = payload_data.get("task_id")
-                if raw_tid is not None:
-                    go_task_id = str(raw_tid)
+                if isinstance(raw_tid, str) and raw_tid.strip():
+                    go_task_id = raw_tid.strip()
+
+            if not go_task_id:
+                raise RuntimeError("Go ingestion response lacks task identity")
 
             summary["go_task_id"] = go_task_id
 
@@ -4840,6 +4826,8 @@ class TDXScheduler:
                         poll_resp = requests.get(poll_url, timeout=10)
                         poll_resp.raise_for_status()
                         poll_data = poll_resp.json()
+                        if not isinstance(poll_data, dict) or poll_data.get('code') != 0:
+                            raise RuntimeError("Go task poll returned invalid status envelope")
                         task_info = poll_data.get("data") if isinstance(poll_data, dict) else poll_data
                         if isinstance(task_info, dict):
                             go_status = str(task_info.get("status", "")).lower()
@@ -4862,7 +4850,7 @@ class TDXScheduler:
                     dataset=dataset,
                     job_id=job_id,
                     start_date=start_date,
-                    end_date=latest_trading,
+                    end_date=end_date,
                     data_source="tdx_api",
                     metadata={"mode": "incremental", "via": "go_init", "go_task_id": go_task_id},
                 )
@@ -4873,27 +4861,12 @@ class TDXScheduler:
             summary["error"] = str(exc)
             if job_id is not None:
                 try:
-                    # Defensive: check if Go backend already marked job as success
-                    # (e.g., poll timed out but task actually finished).
-                    actual_rows = self._fetchall(
-                        "SELECT status FROM market.ingestion_jobs WHERE job_id = %s",
-                        (job_id,),
+                    # A database success row alone cannot override a malformed
+                    # response, missing task identity, source error or failed poll.
+                    self._execute(
+                        "UPDATE market.ingestion_jobs SET status='failed', finished_at=NOW(), summary=%s WHERE job_id=%s",
+                        (json.dumps(summary, ensure_ascii=False), job_id),
                     )
-                    actual_status = actual_rows[0].get("status") if actual_rows else None
-                    if actual_status == "success":
-                        # Go backend completed — poll timeout was a false alarm.
-                        status = "success"
-                        summary.pop("error", None)
-                        summary["poll_warning"] = str(exc)
-                        self._execute(
-                            "UPDATE market.ingestion_jobs SET summary=%s WHERE job_id=%s",
-                            (json.dumps(summary, ensure_ascii=False), job_id),
-                        )
-                    else:
-                        self._execute(
-                            "UPDATE market.ingestion_jobs SET status='failed', finished_at=NOW(), summary=%s WHERE job_id=%s",
-                            (json.dumps(summary, ensure_ascii=False), job_id),
-                        )
                 except Exception as exc:
                     _logger.error("unexpected error: %s", exc)
             self._log_ingestion_run(

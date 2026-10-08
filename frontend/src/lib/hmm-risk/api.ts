@@ -48,7 +48,7 @@ export interface RotationOverview {
 }
 
 export interface RotationL2Row {
-  model_version?: "hmm_risk_l2_postcalibration_effect_v1";
+  model_version?: "hmm_risk_l2_postcalibration_effect_v1" | "hmm_risk_rotation_l2_moneyflow_supervised_v1";
   semantic_state?: RotationState | null;
   daily_rank_group?: RotationState | null;
   prediction_id: string;
@@ -72,7 +72,7 @@ export interface RotationL2Row {
 }
 
 export interface RotationL2Overview {
-  model_version?: "hmm_risk_l2_postcalibration_effect_v1";
+  model_version?: "hmm_risk_l2_postcalibration_effect_v1" | "hmm_risk_rotation_l2_moneyflow_supervised_v1";
   run_id: string;
   model_hash: string;
   trade_date: string;
@@ -94,7 +94,10 @@ export interface RotationL2Overview {
   forward_power_status: "UNAVAILABLE";
   forward_confirmation: "NOT_STARTED";
   advisory_status: "NOT_AVAILABLE";
-  validation_basis: "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT" | "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT";
+  validation_basis: "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT" | "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT" | "HISTORICAL_CAUSAL_FIXED_TRAIN_DEVELOPMENT";
+  training_end?: string;
+  training_outcome_end?: string;
+  selection_basis?: "RETROSPECTIVE_DEVELOPMENT_SELECTED";
   input_hash: string;
   mapping_hash: string;
   quote_authority_hash: string;

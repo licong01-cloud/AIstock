@@ -497,6 +497,7 @@ def _query(
         order_by_source_keys=order_by_source_keys,
         query_version=(
             f"{query_id}_canonical_row_code_major_v3"
+            + (":share_precision_v1" if query_id in {"kline_daily_raw", "kline_minute_raw"} else "")
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
             + (":profile_required_from_v1" if code_policy == "profile_index_codes" else "")
@@ -524,6 +525,7 @@ _OHLCV_RAW_VALUES = (
     "volume_hand",
     "amount_li",
 )
+_RAW_PRECISION_VALUES = ("volume_shares", "volume_shares_source", "volume_shares_sha256")
 _DAILY_BASIC_VALUES = (
     "close",
     "turnover_rate",
@@ -649,7 +651,7 @@ _QUERY_SPECS = (
         "kline_daily_raw",
         _ALL_NON_INDEX,
         ("ts_code", "trade_date"),
-        values=_OHLCV_RAW_VALUES,
+        values=(*_OHLCV_RAW_VALUES, *_RAW_PRECISION_VALUES),
         non_null_values=_OHLCV_RAW_VALUES,
         date_expression="source_row.trade_date",
         audit_dataset="kline_daily_raw",
@@ -699,7 +701,7 @@ _QUERY_SPECS = (
         "kline_minute_raw",
         (Component.MINUTE_BIN,),
         ("ts_code", "trade_time", "freq"),
-        values=_OHLCV_RAW_VALUES,
+        values=(*_OHLCV_RAW_VALUES, *_RAW_PRECISION_VALUES),
         non_null_values=_OHLCV_RAW_VALUES,
         date_expression="source_row.trade_time",
         date_range_policy="timestamp_day_half_open",

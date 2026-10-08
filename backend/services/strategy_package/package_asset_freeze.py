@@ -133,6 +133,7 @@ class StrategyPackageAssetSource:
                     return PackageAssetBytes(
                         data=_read_non_empty(path, reason_code="strategy_package_model_params_missing"),
                         source_uri=f"{store_uri}/model_params",
+                        local_path=path,
                     )
                 attempts.append(
                     {
@@ -159,6 +160,7 @@ class StrategyPackageAssetSource:
                 return PackageAssetBytes(
                     data=_read_non_empty(path, reason_code="strategy_package_model_params_missing"),
                     source_uri=f"aistock-prediction-store://runs/{quote(run_id, safe='')}/model_params",
+                    local_path=path,
                 )
             except Exception as exc:
                 attempts.append(
@@ -546,6 +548,10 @@ class StrategyPackageAssetSource:
     def _db_runtime_locators(self, manifest: StrategyPackageManifest) -> list[QERuntimeAssetLocator]:
         source_type = manifest.source.source_type.value
         locators: list[QERuntimeAssetLocator] = []
+        if isinstance((manifest.source_evidence or {}).get("trained_model_source"), Mapping):
+            for experiment_id in _model_experiment_candidates(manifest):
+                locators.extend(self._load_locators_by_experiment_id(experiment_id, source="trained_model_source"))
+            return locators
         if source_type == "candidate_strategy_package":
             locators.extend(self._candidate_runtime_locators(manifest.source.source_id))
             return locators
@@ -1145,7 +1151,15 @@ class PackageAssetFreezeService:
             if self._model_params_reader is not None
             else self.source.model_params_bytes(manifest)
         )
-        blob = self.asset_store.put(source.data, kind=StrategyPackageAssetType.MODEL_WEIGHT.value)
+        digest = hashlib.sha256(source.data).hexdigest()
+        blob = (
+            self.asset_store.put_file(
+                source.local_path, kind=StrategyPackageAssetType.MODEL_WEIGHT.value,
+                sha256=digest, size_bytes=len(source.data),
+            )
+            if source.local_path is not None
+            else self.asset_store.put(source.data, kind=StrategyPackageAssetType.MODEL_WEIGHT.value)
+        )
         asset_ref = _logical_asset_ref(blob.uri, asset_type=StrategyPackageAssetType.MODEL_WEIGHT, logical_name=logical_name)
         frozen = model.model_copy(
             update={
@@ -1575,6 +1589,9 @@ def _is_multi_alpha_parent_manifest(manifest: StrategyPackageManifest) -> bool:
 
 
 def _model_run_candidates(manifest: StrategyPackageManifest) -> list[str]:
+    trained = (manifest.source_evidence or {}).get("trained_model_source")
+    if isinstance(trained, Mapping):
+        return [str(trained["experiment_id"])]
     candidates: list[str] = []
     for value in (manifest.source.run_id, manifest.source.source_id):
         if str(value or "").strip():
@@ -1594,6 +1611,9 @@ def _model_run_candidates(manifest: StrategyPackageManifest) -> list[str]:
 
 
 def _model_experiment_candidates(manifest: StrategyPackageManifest) -> list[str]:
+    trained = (manifest.source_evidence or {}).get("trained_model_source")
+    if isinstance(trained, Mapping):
+        return [str(trained["experiment_id"])]
     candidates: list[str] = []
     evidence = manifest.source_evidence or {}
     for value in (evidence.get("experiment_id"), manifest.source.source_id):
@@ -1654,6 +1674,10 @@ def _model_asset_summary(value: ModelAsset | Sequence[ModelAsset]) -> list[Mappi
 
 def _manifest_runtime_locators(manifest: StrategyPackageManifest) -> list[QERuntimeAssetLocator]:
     evidence = manifest.source_evidence if isinstance(manifest.source_evidence, Mapping) else {}
+    trained = evidence.get("trained_model_source")
+    if isinstance(trained, Mapping):
+        # Code, conf.yaml and fitted processors follow the same original fit.
+        return _locators_from_mapping(trained, source="manifest.trained_model_source")
     locators: list[QERuntimeAssetLocator] = []
     locators.extend(_locators_from_mapping(evidence, source="manifest.source_evidence"))
 

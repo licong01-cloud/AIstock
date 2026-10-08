@@ -1,0 +1,284 @@
+{
+  "actual": "Both PIT keys are ready/clean but selectable spans intersect ST snapshots; active pointer remains legacy generation 0.",
+  "allowed_write_scope": [
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "tests/aistock_validation/bugs/20261006_BUG-1779-pit-builder-accepts-selectable-st-snapshot-conflicts-when-lifecycle-even.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1779",
+  "closed_at": "2026-10-07T01:59:19Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-06T18:47:07.126737Z",
+  "description": "Both PIT keys are ready/clean but selectable spans intersect ST snapshots; active pointer remains legacy generation 0.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261006-8519d30ccba3",
+      "timestamp": "2026-10-06T18:47:07.126737Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/tushare-st-source.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/dev-source-readback.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/dev-pit-readback.json"
+  ],
+  "expected": "Latest-month PIT selectable intervals exclude authoritative ST risk state and terminal events; missing event evidence cannot yield ready; causal publication/restore semantics and historical provider data remain unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1779-pit-builder-accepts-selectable-st-snapshot-conflicts-when-lifecycle-even.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261006_BUG-1779-pit-builder-accepts-selectable-st-snapshot-conflicts-when-lifecycle-even.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/tests/test_stock_universe_pit_spans.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "selection_center",
+        "qe.core",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/build_stock_universe_pit_spans.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/tests/test_stock_universe_pit_spans.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/tests/test_stock_universe_pit_spans.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/tests/test_stock_universe_pit_spans.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/tests/test_stock_universe_pit_spans.py"
+    ]
+  },
+  "first_seen_at": "2026-10-06T18:47:07.126737Z",
+  "fix_branch": null,
+  "fix_commit": "83fd1d48a17eafafac25dec00745324e79a06a0b",
+  "fix_verification": {
+    "design_compliance": {
+      "business_semantics_unchanged": "252-session IPO, announcement-as-of ST restore/terminal semantics and legitimate pre-risk history remain unchanged; QE/HMM/Selection consumer code untouched.",
+      "no_partial_as_complete": "Source guard, DEV correction and exact production source insert/readback passed; derived rolling PIT persistence, immutable monthly release and canonical activation are not claimed complete and remain under BUG-1685/monthly owner.",
+      "no_silent_error": "Independent positive ST/terminal evidence conflicts are typed failures with exact stock/date keys, not empty success or manually rewritten ready.",
+      "no_unapproved_gates": "Implements the user's existing ST/terminal exclusion requirement; audit stays within target month, no new full-history quote audit or approval system."
+    },
+    "dev_receipt_sha256": "fa321effa5177bd9f87fd880dea06171e0c906280c32b119a567c14da82ddcfb",
+    "dev_validation": "22 Tushare ST source rows verified; 13 missing rows inserted in existing DEV only, 0 existing rows overwritten. Formal all-market PIT computation examined 5560 source stocks / 5662 spans; September 2026 (21 sessions) conflict_symbol_count=0 and conflict_key_count=0. No derived-span writes or candidate activation performed.",
+    "production_apply": "PASS: 13 exact missing market.stock_st_events keys inserted; 22 frozen source rows verified through a new read-only connection; 0 existing values overwritten; no DDL.",
+    "production_authorization": "User authorized merge and following steps after presentation of the exact 13-key insert-only production plan; plan SHA256 fe48c839d84b24caf35e4c19261a5eed2dba4886817dc1e095b8b91c40fc9907.",
+    "production_pit_readback": "Merged formal producer functions: 5560 securities / 5662 spans; target-month September (21 sessions), ST/terminal selectable conflict keys=0. In-memory computation only; derived-span writes=0. 301139 has 0 eligible September sessions; 002743 retains 2026-09-01..04 only.",
+    "production_pit_readback_path": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/production-pit-readback.json",
+    "production_pit_readback_sha256": "dd0efe9aff39bd32a69a08686af482cdb275a392f266759d2737ab9cc2f6deb2",
+    "production_source_receipt_path": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/production-source-readback.json",
+    "production_source_receipt_sha256": "aa82185e2c66877aea98f53bab2768dbe8fe5069e0f95f83303bb41b45bc193a",
+    "profile_activation": "noop",
+    "repair": "Shared builder audits only the target month plus one causal ST snapshot anchor, requires positive typed restore evidence, and refuses ST/terminal eligibility conflicts before any span write. No source events, prices, availability timestamps or eligibility intervals are synthesized.",
+    "review_rounds": [
+      "RED: missing cross-source validator caused four targeted failures. GREEN: target-month scope, causal boundary, positive restore and before-write placement pass.",
+      "Second review: same-day ST observation defeats a conflicting restore, future restores do not leak, terminal exits cannot re-enter; immutable dataclass test setup corrected. Independent fresh DEV source and all-market monthly readback passed."
+    ],
+    "root_cause": "Stock ST date audits accepted empty_valid while the upstream now supplies missing historical lifecycle events; some affected dates also have provider_contract_error. Event-only span checks and snapshot-date continuity did not cross-check independent positive ST risk state. Canonical live migration remains separately tracked by BUG-1685.",
+    "source_rows_sha256": "e35508aebc1612df3e931ed653220df9fa7c85a21012002cb0b392fd46020455"
+  },
+  "fixed_at": "2026-10-07T01:59:19Z",
+  "github_issue_number": 5647,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5647",
+  "last_seen_at": "2026-10-06T18:47:07.126737Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5649",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "PIT builder accepts selectable ST snapshot conflicts when lifecycle event rows are missing",
+  "trigger_condition": {
+    "fingerprint": "8519d30ccba302fad0bbc0fd",
+    "source_event_id": "FE-20261006-8519d30ccba3"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/test_stock_universe_pit_spans.py backend/tests/test_stock_universe_pit_service.py -q -> 68 passed",
+    "python -m nox -s l0 -- scripts/build_stock_universe_pit_spans.py backend/tests/test_stock_universe_pit_spans.py tests/aistock_validation/bugs/20261006_BUG-1779-pit-builder-accepts-selectable-st-snapshot-conflicts-when-lifecycle-even.json -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

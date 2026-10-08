@@ -44,6 +44,26 @@ def test_policy_test_has_one_owner_matching_its_guardrail_source() -> None:
     assert owner.primary_module == catalog.match_path("scripts/ci_workflow_policy_scan.py").primary_module
 
 
+def test_tdx_ci_is_offline_and_builds_web_module() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    step = next(s for s in workflow["jobs"]["ci-verdict"]["steps"] if s.get("id") == "go_validation")
+    assert str(step["env"]["GOPROXY"]).lower() in {"off", "false"}
+    assert str(step["env"]["GOSUMDB"]).lower() in {"off", "false"}
+    assert step["env"]["GOTOOLCHAIN"] == "local"
+    assert "go test -mod=readonly ./protocol -count=1" in step["run"]
+    assert "go test -mod=readonly . -run '^TestPagination' -count=1" in step["run"]
+    assert "go test -mod=readonly . -count=1" in step["run"]
+    assert "go build -mod=readonly ./..." in step["run"]
+    assert "cd web" in step["run"]
+    assert 'go build -mod=readonly -o "${RUNNER_TEMP}/aistock-tdx-web.exe" .' in step["run"]
+    assert "go test ./..." not in step["run"]
+    from backend.services.validation.file_ownership import FileOwnershipCatalog
+    catalog = FileOwnershipCatalog()
+    for path in ("tdx-api-main/protocol/unit.go", "tdx-api-main/web/server.go",
+                 "tdx-api-main/web/go.mod", "tdx-api-main/protocol/unit_test.go"):
+        assert catalog.match_path(path).primary_module == "local_data"
+
+
 @pytest.mark.parametrize("mutation", ["empty-base", "wrong-head", "pr-only-condition"])
 def test_manual_preparation_policy_rejects_event_input_regressions(mutation: str) -> None:
     text = Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8")

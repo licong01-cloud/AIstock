@@ -29,7 +29,7 @@ function rotationRows(availableCount = 131, tradeDate = "2026-03-31") {
   }));
 }
 
-async function mockRotationApi(page: import("@playwright/test").Page, availableCount = 131, hmm = false, mixed = false) {
+async function mockRotationApi(page: import("@playwright/test").Page, availableCount = 131, hmm = false, mixed = false, supervised = false) {
   const version = "hmm_risk_l2_postcalibration_effect_v1";
   await page.route("**/api/v1/hmm-risk/rotation-l2/overview?*", async (route) => {
     await route.fulfill({
@@ -47,12 +47,16 @@ async function mockRotationApi(page: import("@playwright/test").Page, availableC
           binding_mbe_rank_ic: 0.02,
           research_surface_status: "AVAILABLE_EXPERIMENTAL",
           rotation_l2_capability_status: "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED",
-          ...(hmm ? { model_version: version } : {}),
+          ...(hmm ? { model_version: version } : supervised ? {
+            model_version: "hmm_risk_rotation_l2_moneyflow_supervised_v1",
+            training_end: "2025-03-31", training_outcome_end: "2025-04-15",
+            selection_basis: "RETROSPECTIVE_DEVELOPMENT_SELECTED",
+          } : {}),
           effect_status: hmm ? "DEVELOPMENT_EFFECT_REACHED_FORWARD_UNCONFIRMED" : "DEVELOPMENT_EFFECT_QUALIFIED",
           forward_power_status: "UNAVAILABLE",
           forward_confirmation: "NOT_STARTED",
           advisory_status: "NOT_AVAILABLE",
-          validation_basis: hmm ? "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT" : "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT",
+          validation_basis: hmm ? "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT" : supervised ? "HISTORICAL_CAUSAL_FIXED_TRAIN_DEVELOPMENT" : "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT",
           input_hash: INPUT_HASH,
           mapping_hash: MAPPING_HASH,
           quote_authority_hash: "1".repeat(64),
@@ -76,6 +80,8 @@ async function mockRotationApi(page: import("@playwright/test").Page, availableC
           semantic_state: row.availability === "available" ? "neutral" : null,
           forecast_state: row.availability === "available" ? "neutral" : null,
           daily_rank_group: row.forecast_state,
+        } : supervised ? {
+          ...row, model_version: mixed && index === 0 ? undefined : "hmm_risk_rotation_l2_moneyflow_supervised_v1",
         } : row) },
       }),
     });
@@ -129,6 +135,20 @@ test("distinguishes frozen industry semantics from daily relative ranks", async 
 
 test("rejects mixed HMM and delta product rows", async ({ page }) => {
   await mockRotationApi(page, 127, true, true);
+  await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
+  await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
+  await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
+});
+
+test("shows the supervised fixed-train boundaries without claiming forward confirmation", async ({ page }) => {
+  await mockRotationApi(page, 127, false, false, true);
+  await assertRotationSurface(page);
+  await expect(page.getByText("训练 decision 截止 2025-03-31", { exact: false })).toBeVisible();
+  await expect(page.getByText("不是 untouched / 前瞻确认", { exact: false })).toBeVisible();
+});
+
+test("rejects mixed supervised and baseline detail rows", async ({ page }) => {
+  await mockRotationApi(page, 127, false, true, true);
   await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
   await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
   await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);

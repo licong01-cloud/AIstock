@@ -19,14 +19,14 @@ if not exist "%AISTOCK_BACKEND_PYTHON%" (
 
 where wt >nul 2>nul
 if %errorlevel%==0 (
-  wt -w 0 new-tab --title "TDX Go Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT%\tdx-api-main\web & set TDX_HTTP_PORT=19080 & go run ." ^
+  wt -w 0 new-tab --title "TDX Go Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% & set TDX_HTTP_PORT=19080 & %AISTOCK_BACKEND_PYTHON% scripts\start_tdx_go_backend.py --database-target production --env-file %AIROOT%\.env" ^
     ; new-tab --title "AIstock Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% && call %AISTOCK_CONDA_BAT% activate AIstock && %AISTOCK_BACKEND_PYTHON% -m uvicorn backend.main:app --host 0.0.0.0 --port 8001" ^
     ; new-tab --title "AIstock Frontend" cmd /k "chcp 65001>nul & cd /d %AIROOT%\frontend & call conda activate AIstock & npm run dev"
   goto :done
 )
 
 REM === 1. 启动 TDX Go 后端（端口 19080） ===
-start "TDX Go Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT%\tdx-api-main\web & set TDX_HTTP_PORT=19080 & go run ."
+start "TDX Go Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% & set TDX_HTTP_PORT=19080 & %AISTOCK_BACKEND_PYTHON% scripts\start_tdx_go_backend.py --database-target production --env-file %AIROOT%\.env"
 
 REM === 2. 启动 AIstock 后端（FastAPI, 端口 8001） ===
 start "AIstock Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% && call %AISTOCK_CONDA_BAT% activate AIstock && %AISTOCK_BACKEND_PYTHON% -m uvicorn backend.main:app --host 0.0.0.0 --port 8001"
