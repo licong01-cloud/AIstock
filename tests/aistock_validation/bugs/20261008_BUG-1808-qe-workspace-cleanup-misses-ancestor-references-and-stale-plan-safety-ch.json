@@ -8,11 +8,8 @@
   ],
   "assigned_agent": null,
   "backend_restart_owner": "user",
-  "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
-  "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-  "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-  "fresh_process_evidence": ["python -m pytest backend/tests/test_qe_workspace_lifecycle_safety.py -q -> isolated fresh process loads cleanup service and verifies only tmp_path deletions"],
   "bug_id": "BUG-1808",
+  "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -32,13 +29,22 @@
   "evidence_uris": [],
   "expected": "只删除明确可再生的精确文件，祖先或后代的活动/共享引用均保护，执行时重新核对路径与保护证据",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/qe_archive/workspace_lifecycle.py",
+      "backend/tests/test_qe_workspace_lifecycle_safety.py",
+      "backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json"
+    ],
     "added_files": [
       "backend/tests/test_qe_workspace_lifecycle_safety.py"
     ],
     "changed_files": [
-      "backend/services/qe_archive/workspace_lifecycle.py"
+      "backend/services/qe_archive/workspace_lifecycle.py",
+      "backend/tests/test_qe_workspace_lifecycle_safety.py",
+      "backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/workspace_lifecycle.py",
@@ -93,13 +99,18 @@
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
+  "fresh_process_evidence": [
+    "python -m pytest backend/tests/test_qe_workspace_lifecycle_safety.py -q -> isolated fresh process loads cleanup service and verifies only tmp_path deletions"
+  ],
   "github_issue_number": 5751,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5751",
+  "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
   "last_seen_at": "2026-10-08T05:53:27.455522Z",
   "module": "qe.archive",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -112,14 +123,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["python -m pytest backend/tests/test_qe_workspace_lifecycle_safety.py -q -> fresh-process loads persistent cleanup code; tmp_path only"],
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/test_qe_workspace_lifecycle_safety.py -q -> fresh-process loads persistent cleanup code; tmp_path only"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
