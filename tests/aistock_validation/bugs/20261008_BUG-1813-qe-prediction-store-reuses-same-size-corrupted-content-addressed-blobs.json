@@ -4,6 +4,7 @@
     "backend/services/model_store/artifact_store.py",
     "backend/tests/test_model_store_prediction_store.py",
     "backend/tests/model_registry/test_prediction_store_integrity.py",
+    "backend/tests/model_registry/test_model_registry_phase5.py",
     "tests/aistock_validation/bugs/20261008_BUG-1813-qe-prediction-store-reuses-same-size-corrupted-content-addressed-blobs.json"
   ],
   "assigned_agent": null,
