@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1807",
-  "closed_at": null,
+  "closed_at": "2026-10-08T14:58:00.972233Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -128,10 +128,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/workflow/BUG-1807-post-restart-20261008.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1807",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_rotation_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5def821da2b2f9bf12f92e9a9b16b00492e8646643bf191fe7755d6539d4a9c1",
+      "contract_digest": "5d598028d691def9c6053524accf9017de1ee92a3a9767a7ef6b9cc55eeaa371",
+      "expected_identity": "1988e7909f8ba58a7651f44c25cb62fae81376dc",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-08T14:50:57.747640Z",
+      "mode": "read_only",
+      "observed_identity": "0bc09f0b78397c527c3d3584a1a17e6b3d3484cb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a234e0471cee16f7c34f6f74360b9d2886283030f78bb5e08b3e2432e74d34fb",
+      "receipt_sha256": "169404820e6c0e13aa8e7b39109434b45287d2e261b69a1f8581673a424325b4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "416d055c3d4448a0a6b005f6b7d148116da71046cafe94ecc8f95d1f7114cee6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -162,7 +184,7 @@
     ],
     "validation_evidence_digest": "e23b27ffdd0ec03181bbd1a1cc571b3399c17dfef0a1b3d3a332e35940a2f8b1"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -172,7 +194,8 @@
     "source_event_id": "FE-20261008-55d4501e2b61"
   },
   "validation_evidence": [
-    "gh pr checks 5752 -> passed, CI verdict SUCCESS at final PR HEAD da6abe8e05c49811baf82cbbc46ad3a04000aa5e"
+    "gh pr checks 5752 -> passed, CI verdict SUCCESS at final PR HEAD da6abe8e05c49811baf82cbbc46ad3a04000aa5e",
+    "post-restart-verify: health/identity/run-bound Rotation L2 semantic PASS; observed 0bc09f0b is origin/main descendant of source merge 1988e7909"
   ],
   "verification_budget": {
     "budget": "standard",
