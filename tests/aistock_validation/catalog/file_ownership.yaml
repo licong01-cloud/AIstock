@@ -463,6 +463,7 @@ rules:
     include:
       - scripts/aistock_feature_workflow.py
       - scripts/aistock_issue_workflow.py
+      - scripts/aistock_runtime_semantics.py
       - scripts/aistock_runner_health.py
       - scripts/bug_github_sync.py
       - scripts/bug_github_webhook.py

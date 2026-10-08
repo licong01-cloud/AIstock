@@ -125,6 +125,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py",
     "scripts/aistock_runner_health.py",
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
@@ -161,6 +162,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
 }
 WORKFLOW_VALIDATION_FAST_LANE_PREFIXES: tuple[str, ...] = ()
 WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
+    "scripts/aistock_runtime_semantics.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
     ".github/workflows/runner-queue-watchdog.yml": (
         "backend/tests/scripts/test_aistock_runner_health.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
