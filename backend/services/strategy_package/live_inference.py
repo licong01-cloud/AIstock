@@ -67,6 +67,16 @@ DIAGNOSTIC_BACKTEST_SOURCE_TYPE = "qe_mlruns_pred_pkl_v1"
 DIAGNOSTIC_BACKTEST_SCOPE = "diagnostic_backtest_only"
 
 
+class _RuntimeCachePath(type(Path())):
+    """An ordinary platform Path retaining its returned node-source lifetime.
+
+    The legacy (path, origin) API stays unchanged: unpacking its pair must not
+    destroy the scratch directory while the returned path is still in use.
+    """
+
+    cache_lifetime: tempfile.TemporaryDirectory
+
+
 @dataclass(frozen=True)
 class QEExperimentRuntimeSource:
     experiment_id: str
@@ -1850,7 +1860,7 @@ class QEExperimentRuntimeAssetResolver:
         # cached params.pkl (feedback_no_silent_errors). Callers that need
         # cache fallback must construct the source through a dedicated path
         # that flips this flag and records origin='cache' downstream.
-        asset_workspace, model_params_origin, cache_lifetime = self._materialize_runtime_source_from_node(
+        asset_workspace, model_params_origin = self._materialize_runtime_source_from_node(
             experiment_id=experiment_id,
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
@@ -1868,7 +1878,7 @@ class QEExperimentRuntimeAssetResolver:
             custom_params=custom_params,
             data_split=data_split,
             model_params_origin=model_params_origin,
-            cache_lifetime=cache_lifetime,
+            cache_lifetime=getattr(asset_workspace, "cache_lifetime", None),
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
             execution_node_id=execution_node_id,
@@ -2056,10 +2066,10 @@ class QEExperimentRuntimeAssetResolver:
         custom_params: dict[str, Any],
         data_split: dict[str, Any],
         allow_cache_fallback: bool = False,
-    ) -> tuple[Path, ModelParamsOrigin, tempfile.TemporaryDirectory]:
+    ) -> tuple[Path, ModelParamsOrigin]:
         """Materialize a QE runtime source workspace from the node API.
 
-        Returns (source_dir, origin, cache_lifetime). ``origin`` is ``'node'`` when
+        Returns (source_dir, origin). ``origin`` is ``'node'`` when
         ``download_mlruns_params`` succeeded; ``'cache'`` only when both
         ``allow_cache_fallback=True`` AND the node fetch failed but a local
         cache hit replaced the params.
@@ -2079,7 +2089,8 @@ class QEExperimentRuntimeAssetResolver:
             / _safe_cache_component(qe_loop_id)
         )
         cache_lifetime = self._new_cache_dir(source_dir)
-        source_dir = Path(cache_lifetime.name)
+        source_dir = _RuntimeCachePath(cache_lifetime.name)
+        source_dir.cache_lifetime = cache_lifetime
 
         # Mutable origin holder threaded into the inner async closure so the
         # return value reflects the actual provenance of params.pkl.
@@ -2222,7 +2233,7 @@ class QEExperimentRuntimeAssetResolver:
 
         try:
             resolved = _run_async_blocking(_download)
-            return resolved, origin_holder["origin"], cache_lifetime
+            return resolved, origin_holder["origin"]
         except TradingCoreError:
             raise
         except DataUnavailableError:
