@@ -128,6 +128,7 @@
    pytest 执行统计复用 `scripts.ci_plan_coverage`，记录实际墙钟/测试阶段耗时、执行数及用例集合摘要；只有源码 HEAD、预构建环境指纹、计划、调用参数和用例集合均相同时才报告重复成功运行候选。PR CI 自动记录；本地/nightly 可通过该插件与 `AISTOCK_CI_TEST_COLLECTION_RECEIPT` 或 `AISTOCK_TEST_METRICS_RECEIPT` 接入，缺失数据保持未知，不宣称覆盖所有窗口。统计失败只告警，不替代真实测试结果，不自动复用或跳过测试，也不新增门禁、独立 job 或全量历史扫描。
 6. 同一计划在一个交付周期只进入一个权威执行阶段：本地仅保留 `l0`、changed-file/scope 和直接 fix-point；可在预构建 runner 执行的模块计划由 PR CI 一次完成；DEV/人工计划作为外部 pre-merge receipt；完整覆盖率、UI/business-flow 与跨模块深度回归由 nightly 去重执行。禁止为了取得 PR 前本地 receipt 重跑 CI 将要执行的完整模块套件。
 7. 阶段计划不得嵌套全模块回归或全局 catalog gate；全模块回归和 catalog integrity 在各自权威计划中各执行一次。全局 warning 只影响其自身 catalog 结果，不得把已通过的无关业务 session 改判为失败。
+8. 测试债务的真实比例检查按 changed files 的 primary owner 触发，包含该 owner 的生产/测试删除；不因仅有 impact_modules 关联、普通文档或无关 catalog 修改而要求验证另一模块比例。预算引擎本身变更运行其直接合同，Nightly 在所属权威计划保留完整预算回归；catalog integrity 不嵌套真实模块比例断言。保留诚实的生产分母及既定 30% 上限，不通过重命名归属、虚增分母或跳过相关检查规避。
 
 ### 4.3 测试价值标准
 
@@ -304,7 +305,7 @@ CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须�
 
 其他确需 JavaScript Action 的 workflow 仅允许使用经 runner 实跑验证的原生 Node 24 主版本：`actions/checkout@v7`、`actions/upload-artifact@v7`、`actions/download-artifact@v8`、`actions/github-script@v9`；不得为了消除告警依赖 runner 的强制 Node 版本兼容层。版本升级必须同步 machine-policy evidence 与合同测试，但不得把这些远端 Action 重新引入 CodeQL 或 Code Intelligence 快速路径。
 
-main 必须启用“通过 PR 合入”的分支保护，并与自动合入器统一只消费 `CI verdict`。PR Quality 与 Semgrep 的实际强制检查必须作为唯一普通 runner `CI verdict` job 内的 fail-closed steps 执行；其独立 workflow 只保留手工诊断入口，不得在每个 PR 重复 checkout、分类或获取普通 runner。自动合入器禁止追加 GitHub 分支保护之外的 CodeQL、Security、报告或诊断上下文。PR 与 Issue 的关闭关系直接使用 GitHub closing keywords，并由 issue workflow/finalizer 在合入前后校验，不得再为每次 PR 启动只做重复评论的 auto-link workflow；PR CI 失败保留在该 PR 的 `CI verdict`，Nightly 失败由 `full-summary` 的去重候选链处理，不得为每个已完成 CI 创建必然跳过的 `workflow_run` listener。仅修改 BUG registry JSON 的官方 close-sync PR 只运行 GitHub-hosted stdlib metadata `CI verdict`；其他 PR 继续执行 changed-file 分类和精确相关 CI，但都不触发 CodeQL。每日 Nightly CodeQL 与代码智能使用各自唯一的定时 owner；需要安全 runner 的 workflow 必须先在 GitHub-hosted 轻量 preflight 验证精确角色，离线时快速失败并留下证据，不得无限排队。每日 Nightly CodeQL 与手工全量安全扫描独立于 PR 生命周期，安全 runner 离线、自更新或排队不得转换为 PR 阻断、重复提交、重复授权或跨角色 fallback。
+main 必须启用“通过 PR 合入”的分支保护，并与自动合入器统一只消费 `CI verdict`。PR Quality 与 Semgrep 的实际强制检查必须作为每个 PR 唯一的 `CI verdict` job 内的 fail-closed steps 执行，该 job 可由任一具备 `aistock-ci` 标签的合规 Windows runner 领取；其独立 workflow 只保留手工诊断入口，不得在每个 PR 重复 checkout、分类或获取普通 runner。自动合入器禁止追加 GitHub 分支保护之外的 CodeQL、Security、报告或诊断上下文。PR 与 Issue 的关闭关系直接使用 GitHub closing keywords，并由 issue workflow/finalizer 在合入前后校验，不得再为每次 PR 启动只做重复评论的 auto-link workflow；PR CI 失败保留在该 PR 的 `CI verdict`，Nightly 失败由 `full-summary` 的去重候选链处理，不得为每个已完成 CI 创建必然跳过的 `workflow_run` listener。仅修改 BUG registry JSON 的官方 close-sync PR 只运行 GitHub-hosted stdlib metadata `CI verdict`；其他 PR 继续执行 changed-file 分类和精确相关 CI，但都不触发 CodeQL。每日 Nightly CodeQL 与代码智能使用各自唯一的定时 owner；需要安全 runner 的 workflow 必须先在 GitHub-hosted 轻量 preflight 验证精确角色，离线时快速失败并留下证据，不得无限排队。每日 Nightly CodeQL 与手工全量安全扫描独立于 PR 生命周期，安全 runner 离线、自更新或排队不得转换为 PR 阻断、重复提交、重复授权或跨角色 fallback。
 
 Nox、测试 helper 和脚本内部同样受零安装约束：GitHub Actions 或 `AISTOCK_CI_INSTALL_FORBIDDEN=1` 下发现依赖缺失必须直接失败，禁止在 helper 内自动执行安装。CI policy scanner 同时检查 workflow YAML、Windows `AIstock-CI` runner/环境/DEV-DB 路由标记和 Nox 隐式安装边界；仅做关键词扫描不得宣称完整合同通过。
 
