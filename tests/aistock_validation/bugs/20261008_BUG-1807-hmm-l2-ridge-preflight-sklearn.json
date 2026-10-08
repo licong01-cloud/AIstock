@@ -85,8 +85,8 @@
   },
   "first_seen_at": "2026-10-08T05:37:48.842950Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1988e7909f8ba58a7651f44c25cb62fae81376dc",
+  "fixed_at": "2026-10-08T06:01:40Z",
   "github_issue_number": 5749,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5749",
   "last_seen_at": "2026-10-08T05:37:48.842950Z",
@@ -94,6 +94,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5752",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,6 +129,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -139,7 +141,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1807",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "101ecb9012454dad",
+    "recorded_at": "2026-10-08T06:02:26.558839Z",
+    "runtime_contract_digest": "d127338b9304968eaac9a57f95160edaf1558c844206f34d3292fdde7b9cd9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "da6abe8e05c49811baf82cbbc46ad3a04000aa5e",
+    "source_merge_commit": "1988e7909f8ba58a7651f44c25cb62fae81376dc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5752",
+    "validation_evidence": [
+      "gh pr checks 5752 -> passed, CI verdict SUCCESS at final PR HEAD da6abe8e05c49811baf82cbbc46ad3a04000aa5e"
+    ],
+    "validation_evidence_digest": "e23b27ffdd0ec03181bbd1a1cc571b3399c17dfef0a1b3d3a332e35940a2f8b1"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -148,6 +171,9 @@
     "fingerprint": "55d4501e2b61a1a9a2fe4f91",
     "source_event_id": "FE-20261008-55d4501e2b61"
   },
+  "validation_evidence": [
+    "gh pr checks 5752 -> passed, CI verdict SUCCESS at final PR HEAD da6abe8e05c49811baf82cbbc46ad3a04000aa5e"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
