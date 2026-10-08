@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence
 
@@ -84,6 +84,15 @@ class MultiAlphaWeightArtifact:
 
 
 @dataclass(frozen=True)
+class ParentSeedRuntimeSlice:
+    seed_run_id: str
+    model_asset: ModelAsset
+    factor_set: tuple[FactorAsset, ...]
+    runtime_assets: RuntimeAssetManifest
+    factor_artifact_refs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ParentLegRuntimeSlice:
     parent_package_id: str
     parent_manifest_sha256: str
@@ -96,6 +105,8 @@ class ParentLegRuntimeSlice:
     ensemble_method: str
     terminal_weight: float | None
     legacy_child_ref_ignored: bool
+    seed_assets: tuple[ParentSeedRuntimeSlice, ...] = ()
+    seed_cache_namespace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -829,6 +840,46 @@ class MultiAlphaLivePredictionProvider:
         inference_backend: str,
         historical_read_only: bool = False,
     ) -> ParentLegLiveInferenceResult:
+        executions: dict[str, ParentLegLiveInferenceResult] = {}
+        for seed_slice in _seed_leg_slices(leg_slice):
+            executions[seed_slice.seed_run_ids[0]] = self._run_single_seed_live_inference(
+                manifest=manifest, leg_slice=seed_slice, trade_date=trade_date, cutoff_date=cutoff_date,
+                runtime_config=runtime_config, inference_backend=inference_backend,
+                historical_read_only=historical_read_only,
+            )
+        first = next(iter(executions.values()))
+        if len(executions) == 1:
+            return first
+        # Reuse the existing PIT compatibility checks across seeds, then retain
+        # every seed's read receipts and history-window lineage in the parent.
+        context = _aggregate_parent_leg_input_context(leg_executions=executions, requested_trade_date=cutoff_date or trade_date)
+        frames = {seed: execution.seed_frames[seed] for seed, execution in executions.items()}
+        combined = _ensemble_seed_frames(
+            frames, leg_id=leg_slice.leg_id, model_id=leg_slice.model_asset.model_id,
+            package_id=leg_slice.parent_package_id, trade_date=cutoff_date or trade_date, allow_empty=True,
+        )
+        return ParentLegLiveInferenceResult(
+            seed_frames=frames,
+            live_result=_CombinedLiveInferenceResult(
+                scores=[{"symbol": row.instrument, "score": float(row.score)} for row in combined.itertuples()],
+                universe_count=int(context["parent_input_universe_count"]),
+                source_read_receipts=[receipt for execution in executions.values() for receipt in execution.live_result.source_read_receipts or []],
+                input_context={**first.live_result.input_context, "seed_input_context": context},
+            ),
+            source=first.source, prepared=first.prepared,
+        )
+
+    def _run_single_seed_live_inference(
+        self,
+        *,
+        manifest: StrategyPackageManifest,
+        leg_slice: ParentLegRuntimeSlice,
+        trade_date: date,
+        cutoff_date: date | None,
+        runtime_config: Mapping[str, Any],
+        inference_backend: str,
+        historical_read_only: bool = False,
+    ) -> ParentLegLiveInferenceResult:
         if not leg_slice.seed_run_ids:
             _raise(
                 "MULTI_ALPHA leg has no seed_run_ids",
@@ -852,6 +903,10 @@ class MultiAlphaLivePredictionProvider:
             historical_cache_namespace = (
                 f"historical_{trade_date.isoformat()}" if historical_read_only else None
             )
+            seed_namespace = leg_slice.seed_cache_namespace
+            source_namespace = seed_namespace
+            if historical_cache_namespace is not None:
+                source_namespace = f"{seed_namespace}__{historical_cache_namespace}" if seed_namespace else historical_cache_namespace
             source = source_loader(
                 manifest=manifest,
                 package_id=leg_slice.parent_package_id,
@@ -859,9 +914,11 @@ class MultiAlphaLivePredictionProvider:
                 model_asset=leg_slice.model_asset,
                 factor_set=list(leg_slice.factor_set),
                 runtime_assets=leg_slice.runtime_assets,
-                cache_namespace=historical_cache_namespace,
+                cache_namespace=source_namespace,
             )
             workspace_cache_namespace = f"leg_{leg_slice.leg_id}"
+            if seed_namespace:
+                workspace_cache_namespace = f"{workspace_cache_namespace}__{seed_namespace}"
             if historical_cache_namespace is not None:
                 workspace_cache_namespace = f"{workspace_cache_namespace}__{historical_cache_namespace}"
             prepared = self.runtime_asset_resolver.prepare_workspace(
@@ -915,7 +972,7 @@ class MultiAlphaLivePredictionProvider:
                 trade_date=trade_date.isoformat(),
             )
         return ParentLegLiveInferenceResult(
-            seed_frames={seed_run_id: representative.copy() for seed_run_id in leg_slice.seed_run_ids},
+            seed_frames={representative_seed: representative},
             live_result=result,
             source=source,
             prepared=prepared,
@@ -1094,6 +1151,7 @@ def _legs(evidence: Mapping[str, Any], *, package_id: str) -> list[dict[str, Any
                 "seed_run_ids": seed_run_ids,
                 "ensemble_method": item.get("ensemble_method") or "mean_by_trade_date_instrument",
                 "terminal_weight": item.get("terminal_weight"),
+                "seed_assets": item.get("seed_assets"),
                 "runtime_assets": (
                     item.get("runtime_assets")
                     if isinstance(item.get("runtime_assets"), Mapping)
@@ -1197,6 +1255,36 @@ def _parent_leg_runtime_slices(
             factors=factors,
             runtime_assets=runtime_assets,
         )
+        seed_assets: list[ParentSeedRuntimeSlice] = []
+        seed_ids = tuple(leg["seed_run_ids"])
+        raw_seeds = leg.get("seed_assets")
+        if raw_seeds is None and len(seed_ids) == 1:
+            seed_assets.append(ParentSeedRuntimeSlice(seed_ids[0], model_asset, factors, runtime_assets))
+        else:
+            if (
+                not isinstance(raw_seeds, list)
+                or len(raw_seeds) != len(seed_ids)
+                or len(set(seed_ids)) != len(seed_ids)
+                or any(not isinstance(seed, Mapping) for seed in raw_seeds)
+                or [seed.get("seed_run_id") for seed in raw_seeds] != list(seed_ids)
+            ):
+                _raise("MULTI_ALPHA requires one frozen asset binding per seed", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id)
+            for seed in raw_seeds:
+                seed_model = model_index.get(str(seed.get("model_id") or ""))
+                if seed_model is None or (seed.get("asset_ref"), seed.get("sha256")) != (seed_model.asset_ref, seed_model.sha256):
+                    _raise("MULTI_ALPHA seed model identity does not match parent assets", REASON_PARENT_LEG_MODEL_ASSET_MISSING, package_id=package_id, leg_id=leg_id, seed_run_id=seed["seed_run_id"])
+                refs = seed.get("factor_artifact_refs")
+                if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref.strip() for ref in refs):
+                    _raise("MULTI_ALPHA seed feature refs are required", REASON_PARENT_LEG_FACTOR_REFS_MISSING, package_id=package_id, leg_id=leg_id)
+                seed_factors = tuple(_resolve_parent_factor_ref(ref, factor_index=factor_index, package_id=package_id, leg_id=leg_id, model_id=seed_model.model_id) for ref in refs)
+                if not isinstance(seed.get("runtime_assets"), Mapping):
+                    _raise("MULTI_ALPHA seed runtime schema is required", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id)
+                seed_runtime = _leg_runtime_assets(seed, parent_runtime_assets=parent_runtime_assets, package_id=package_id, leg_id=leg_id, model_id=seed_model.model_id)
+                _ensure_leg_runtime_assets_complete(package_id=package_id, leg_id=leg_id, model_id=seed_model.model_id, model_asset=seed_model, factors=seed_factors, runtime_assets=seed_runtime)
+                seed_assets.append(ParentSeedRuntimeSlice(seed["seed_run_id"], seed_model, seed_factors, seed_runtime, tuple(refs)))
+            first_seed = seed_assets[0]
+            if first_seed.model_asset.model_id != model_id or first_seed.factor_set != factors or first_seed.runtime_assets != runtime_assets:
+                _raise("MULTI_ALPHA primary component differs from its first seed", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=package_id, leg_id=leg_id)
         legacy_ref = str(component.lineage.model_artifact_ref or "").strip()
         slices.append(
             ParentLegRuntimeSlice(
@@ -1211,9 +1299,28 @@ def _parent_leg_runtime_slices(
                 ensemble_method=str(leg.get("ensemble_method") or "mean_by_trade_date_instrument"),
                 terminal_weight=_finite_float(leg.get("terminal_weight")),
                 legacy_child_ref_ignored=legacy_ref.startswith("child_package:"),
+                seed_assets=tuple(seed_assets),
             )
         )
     return slices
+
+
+def _seed_leg_slices(leg: ParentLegRuntimeSlice) -> tuple[ParentLegRuntimeSlice, ...]:
+    """Project each actual fitted seed into the existing per-model runtime contract."""
+    seeds = leg.seed_assets
+    if not seeds and len(leg.seed_run_ids) == 1:
+        seeds = (ParentSeedRuntimeSlice(leg.seed_run_ids[0], leg.model_asset, leg.factor_set, leg.runtime_assets),)
+    if not seeds or tuple(seed.seed_run_id for seed in seeds) != leg.seed_run_ids:
+        _raise("MULTI_ALPHA seed assets do not cover the roster", REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE, package_id=leg.parent_package_id, leg_id=leg.leg_id)
+    return tuple(replace(
+        leg, model_asset=seed.model_asset, factor_set=seed.factor_set, runtime_assets=seed.runtime_assets,
+        seed_run_ids=(seed.seed_run_id,), seed_assets=(seed,),
+        seed_cache_namespace=(f"seed_{hashlib.sha256(seed.seed_run_id.encode()).hexdigest()[:16]}" if len(seeds) > 1 else None),
+        component=leg.component.model_copy(update={
+            "model_id": seed.model_asset.model_id,
+            "lineage": leg.component.lineage.model_copy(update={"factor_artifact_refs": list(seed.factor_artifact_refs or leg.component.lineage.factor_artifact_refs)}),
+        }),
+    ) for seed in seeds)
 
 
 def _runtime_config_for_parent_leg(
@@ -1569,7 +1676,7 @@ def _ensemble_seed_frames(
     merged: pd.DataFrame | None = None
     for seed_run_id, frame in seed_frames.items():
         selected = frame[["trade_date", "instrument", "score"]].rename(columns={"score": f"score__{seed_run_id}"})
-        merged = selected if merged is None else merged.merge(selected, on=["trade_date", "instrument"], how="inner")
+        merged = selected if merged is None else merged.merge(selected, on=["trade_date", "instrument"], how="outer")
     if merged is None or merged.empty:
         if allow_empty:
             return pd.DataFrame(columns=["trade_date", "instrument", "score"])
