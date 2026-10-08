@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -676,6 +677,7 @@ def test_frontend_change_selects_owning_module_tests(tmp_path: Path) -> None:
 
 
 def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) -> None:
+    _write_test_file(tmp_path, 'frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts')
     payload = classifier.classify_changed_files(
         [
             "frontend/src/app/paper-v2/advisory/page.tsx",
@@ -685,9 +687,48 @@ def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) ->
     )
 
     _assert_fields(payload,
-        classification='frontend_ci_required', workflow_gate='passed', frontend_required=True,
+        classification='unexecuted_test_blocked', workflow_gate='blocked', frontend_required=True,
         backend_required=False, frontend_test_targets=[], unmapped_code_files=[],
     )
+    assert payload['unexecuted_test_files'] == ['frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts']
+
+
+@pytest.mark.parametrize('path,targets,unexecuted', [
+    ('frontend/tests/hmm-risk/risk-l1.spec.ts', ['tests/hmm-risk/risk-l1.spec.ts'], []),
+    ('frontend/tests/hmm-risk/hmm-risk.spec.ts', ['tests/hmm-risk/risk-l1.spec.ts'],
+     ['frontend/tests/hmm-risk/hmm-risk.spec.ts']),
+    ('frontend/tests/hmm-evolution/worker.test.js', ['tests/hmm-evolution'], []),
+    ('frontend/e2e/example.spec.tsx', [], ['frontend/e2e/example.spec.tsx']),
+    ('frontend/tests/helper.ts', [], []),
+    ('frontend/tests/hmm-evolution-extra/worker.spec.ts', ['tests/hmm-evolution'],
+     ['frontend/tests/hmm-evolution-extra/worker.spec.ts']),
+    ('frontend/tests/hmm-risk/risk-l1.spec.tsx', ['tests/hmm-risk/risk-l1.spec.ts'],
+     ['frontend/tests/hmm-risk/risk-l1.spec.tsx']),
+    ('frontend/tests/a.spec.ts-snapshots/image.png', [], []),
+])
+def test_changed_frontend_tests_require_executed_target(tmp_path, path, targets, unexecuted):
+    _write_test_file(tmp_path, path)
+    report = classifier._changed_test_plan_coverage(
+        [path], repo_root=tmp_path, file_backend_sessions={}, frontend_test_targets=targets)
+    assert report['unexecuted_test_files'] == unexecuted
+    assert report['deferred_test_files'] == []
+
+
+@pytest.mark.parametrize('enabled,runner_enabled', [(True, True), (False, True), (True, False)])
+def test_frontend_targets_include_only_automatic_plans(monkeypatch, enabled, runner_enabled):
+    plans = {'ui': dict(ci_lane='frontend', frontend_test_path='tests/example',
+                        enabled=enabled, runner_enabled=runner_enabled)}
+    monkeypatch.setattr(classifier.flow, 'validation_catalog_snapshot', lambda: SimpleNamespace(plans=plans))
+    monkeypatch.setattr(classifier.flow, 'select_validation', lambda *args, **kwargs: {'required_plans': ['ui']})
+    selected = classifier._catalog_backend_selection(['frontend/tests/example/a.spec.ts'])
+    assert selected['frontend_test_targets'] == (['tests/example'] if enabled and runner_enabled else [])
+
+
+def test_deleted_frontend_test_needs_no_execution(tmp_path):
+    (tmp_path / '.git').mkdir()
+    result = classifier.classify_changed_files(['frontend/tests/hmm-risk/hmm-risk.spec.ts'], repo_root=tmp_path)
+    assert result['workflow_gate'] == 'passed'
+    assert result['frontend_changed_test_files'] == result['backend_changed_test_files'] == []
 
 
 def test_frontend_root_page_selects_shared_frontend_contract() -> None:
