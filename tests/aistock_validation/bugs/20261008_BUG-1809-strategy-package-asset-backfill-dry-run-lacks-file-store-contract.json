@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1809",
-  "closed_at": null,
+  "closed_at": "2026-10-08T06:50:03Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,7 +30,8 @@
     "actual_changed_files": [
       "backend/tests/strategy_package/test_asset_backfill_dry_run_store.py",
       "scripts/strategy_package_asset_backfill.py",
-      "tests/aistock_validation/bugs/20261008_BUG-1809-strategy-package-asset-backfill-dry-run-lacks-file-store-contract.json"
+      "tests/aistock_validation/bugs/20261008_BUG-1809-strategy-package-asset-backfill-dry-run-lacks-file-store-contract.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
       "backend/tests/strategy_package/test_asset_backfill_dry_run_store.py"
@@ -38,7 +39,8 @@
     "changed_files": [
       "backend/tests/strategy_package/test_asset_backfill_dry_run_store.py",
       "scripts/strategy_package_asset_backfill.py",
-      "tests/aistock_validation/bugs/20261008_BUG-1809-strategy-package-asset-backfill-dry-run-lacks-file-store-contract.json"
+      "tests/aistock_validation/bugs/20261008_BUG-1809-strategy-package-asset-backfill-dry-run-lacks-file-store-contract.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -95,8 +97,8 @@
   },
   "first_seen_at": "2026-10-08T06:11:02.478922Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "47235cdb13964622f4d6cd1d0c10ae56492b9bf6",
+  "fixed_at": "2026-10-08T06:50:03Z",
   "github_issue_number": 5755,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5755",
   "last_seen_at": "2026-10-08T06:11:02.478922Z",
@@ -104,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5761",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -121,6 +124,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -130,7 +134,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1809",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e748d8142122d32d",
+    "recorded_at": "2026-10-08T06:50:50.534797Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b692acde1d2100bfe82266961005f5f1a9ab988c",
+    "source_merge_commit": "47235cdb13964622f4d6cd1d0c10ae56492b9bf6",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5761",
+    "validation_evidence": [
+      "validation-receipt: id=f0c02a788fe0bbe1 commit=b692acde1d2100bfe82266961005f5f1a9ab988c kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_asset_backfill_dry_run_store.py -q` result=`8 passed`",
+      "validation-receipt: id=43708daea211e2ad commit=b692acde1d2100bfe82266961005f5f1a9ab988c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/strategy_package_asset_backfill.py backend/tests/strategy_package/test_asset_backfill_dry_run_store.py tests/aistock_validation/bugs/20261008_BUG-1809-strategy-package-asset-backfill-dry-run-lacks-file-store-contract.json tests/aistock_validation/catalog/file_ownership.yaml` result=`passed files=4 blocking=0`",
+      "validation-receipt: id=fdf887b24e608420 commit=b692acde1d2100bfe82266961005f5f1a9ab988c kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed 8 tests files=14 mapped=14`"
+    ],
+    "validation_evidence_digest": "0540369f804b2a195051730671c72b3bb0c1da55557ae24c9ae5a42db509092a"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "qe.strategy_package"
   ],
@@ -139,6 +166,11 @@
     "fingerprint": "019f03761db36ff31ba480ac",
     "source_event_id": "FE-20261008-019f03761db3"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f0c02a788fe0bbe1 commit=b692acde1d2100bfe82266961005f5f1a9ab988c kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_asset_backfill_dry_run_store.py -q` result=`8 passed`",
+    "validation-receipt: id=43708daea211e2ad commit=b692acde1d2100bfe82266961005f5f1a9ab988c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- scripts/strategy_package_asset_backfill.py backend/tests/strategy_package/test_asset_backfill_dry_run_store.py tests/aistock_validation/bugs/20261008_BUG-1809-strategy-package-asset-backfill-dry-run-lacks-file-store-contract.json tests/aistock_validation/catalog/file_ownership.yaml` result=`passed files=4 blocking=0`",
+    "validation-receipt: id=fdf887b24e608420 commit=b692acde1d2100bfe82266961005f5f1a9ab988c kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed 8 tests files=14 mapped=14`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
