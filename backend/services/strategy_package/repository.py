@@ -295,9 +295,10 @@ def _validate_asset_records_for_manifest(
             StrategyPackageAssetType.FACTOR_CODE,
             StrategyPackageAssetType.FACTOR_SCHEMA,
             StrategyPackageAssetType.MODEL_CODE,
+            StrategyPackageAssetType.PREPROCESSOR,
         }:
             raise StrategyPackageValidationError(
-                "package freeze only accepts runtime-owned model, factor, schema, and model-code assets",
+                "package freeze only accepts runtime-owned model, factor, schema, model-code, and preprocessor assets",
                 context={
                     "reason_code": "strategy_package_asset_unexpected_type",
                     "package_id": manifest.package_id,
@@ -345,6 +346,18 @@ def _expected_manifest_asset_keys(
                 },
             )
         expected.add((StrategyPackageAssetType.MODEL_WEIGHT, model.asset_ref, model.sha256))
+        processor = model.preprocessor_asset
+        if processor is not None:
+            if not (processor.asset_ref and processor.sha256):
+                raise StrategyPackageValidationError(
+                    "manifest preprocessor asset is not frozen",
+                    context={
+                        "reason_code": "strategy_package_assets_incomplete",
+                        "package_id": manifest.package_id,
+                        "model_id": model.model_id,
+                    },
+                )
+            expected.add((StrategyPackageAssetType.PREPROCESSOR, processor.asset_ref, processor.sha256))
         for code_asset in model.model_code_assets:
             if not (code_asset.asset_ref and code_asset.sha256):
                 raise StrategyPackageValidationError(

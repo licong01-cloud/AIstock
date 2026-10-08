@@ -125,6 +125,9 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_validation_budget.py",
+    "backend/tests/scripts/test_aistock_validation_budget.py",
+    "scripts/aistock_runtime_semantics.py",
     "scripts/aistock_runner_health.py",
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
@@ -161,6 +164,8 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
 }
 WORKFLOW_VALIDATION_FAST_LANE_PREFIXES: tuple[str, ...] = ()
 WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
+    "scripts/aistock_validation_budget.py": ("backend/tests/scripts/test_aistock_validation_budget.py",),
+    "scripts/aistock_runtime_semantics.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
     ".github/workflows/runner-queue-watchdog.yml": (
         "backend/tests/scripts/test_aistock_runner_health.py",
         "backend/tests/scripts/test_ci_workflow_policy_scan.py",
@@ -740,10 +745,13 @@ def _plan_routing(plan_key: str, plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
+def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str] | None = None) -> dict[str, Any]:
     catalog = flow.validation_catalog_snapshot()
     plans = catalog.plans
     selection = flow.select_validation(paths, _catalog=catalog)
+    budget_ownership = flow.match_changed_files(
+        budget_scope_paths, _modules=catalog.modules, _rules=catalog.rules,
+    ) if budget_scope_paths else {}
     selected_plan_keys: list[str] = []
     dev_db_plan_keys: list[str] = []
     frontend_test_targets: list[str] = []
@@ -812,6 +820,10 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         "file_backend_sessions": file_backend_sessions,
         "impacted_modules": selection.get("impacted_modules") or [],
         "required_plans": selected_plan_keys,
+        "workflow_budget_required": any(
+            rule.get("primary_module") == "validation.workflow_automation"
+            for rule in budget_ownership.get("matched_rules", [])
+        ),
     }
 
 
@@ -1017,7 +1029,6 @@ def classify_changed_files(
         for path in routable_non_bug_registry_files
         if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
     ]
-    workflow_test_targets = _workflow_test_targets(workflow_fast_files)
     frontend_files = [path for path in routable_non_bug_registry_files if _is_frontend_path(path)]
     go_files = [path for path in routable_non_bug_registry_files if _is_go_path(path) or path in TDX_GO_VALIDATION_INPUTS]
     business_files = [
@@ -1028,10 +1039,18 @@ def classify_changed_files(
         and not _is_docs_path(path)
         and not _catalog_validation_required(path)
     ]
-    catalog_selection = _catalog_backend_selection(business_files)
+    catalog_selection = _catalog_backend_selection(business_files, budget_scope_paths=non_bug_registry_files)
     selected_plan_keys = catalog_selection["selected_plan_keys"]
     suppressed_plan_keys = catalog_selection["suppressed_plan_keys"]
     backend_sessions = catalog_selection["backend_sessions"]
+    workflow_test_targets = _workflow_test_targets(workflow_fast_files)
+    budget_test = "backend/tests/scripts/test_aistock_validation_budget.py"
+    if (catalog_selection["workflow_budget_required"]
+            and "validation_workflow_automation" not in backend_sessions
+            and budget_test not in workflow_test_targets):
+        workflow_test_targets.append(
+            budget_test + "::test_workflow_automation_has_an_honest_production_denominator"
+        )
     dev_db_plan_keys = catalog_selection["dev_db_plan_keys"]
     frontend_test_targets = catalog_selection["frontend_test_targets"]
     mapped_backend_files = catalog_selection["mapped_files"]

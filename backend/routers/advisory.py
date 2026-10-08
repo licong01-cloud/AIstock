@@ -41,6 +41,7 @@ from backend.services.advisory_model_first.economic_entry_daily_service import (
     AdvisoryEconomicEntryDailyServiceV1, build_environment_economic_entry_daily_service_v1,
 )
 from backend.services.advisory_model_first.economic_sector_daily_service_v1 import AdvisorySectorDailyServiceV1
+from backend.services.advisory_model_first.generic_daily_price_api_service_v1 import GenericDailyPriceAPIServiceV1
 from backend.services.advisory_forward.scheduler import advisory_forward_scheduler
 from backend.services.advisory_forward.service import AdvisoryForwardService
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
@@ -252,6 +253,10 @@ def get_advisory_model_shadow_service() -> AdvisoryModelShadowService:
 
 def get_advisory_entry_price_service() -> AdvisoryEntryPriceDailyService:
     return AdvisoryEntryPriceDailyService()
+
+
+def get_advisory_generic_daily_price_service() -> GenericDailyPriceAPIServiceV1:
+    return GenericDailyPriceAPIServiceV1()
 
 
 def get_advisory_economic_entry_service() -> AdvisoryEconomicEntryDailyServiceV1:
@@ -1043,6 +1048,48 @@ def _raise_economic_entry_http(exc):
 
 def get_advisory_sector_daily_service() -> AdvisorySectorDailyServiceV1:
     return AdvisorySectorDailyServiceV1()
+
+
+class GenericDailyPriceListQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    target_trade_date: date | None = None
+    list_version_id: str | None = Field(None, min_length=1, max_length=128)
+
+
+class GenericDailyPriceBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    requests: list[GenericDailyPriceListQuery] = Field(min_length=1, max_length=20)
+
+
+def _raise_generic_daily_price_http(exc):
+    reason = getattr(exc, "reason_code", "ADVISORY_GENERIC_DAILY_QUERY_FAILED")
+    state = ("INVALID_CONFIGURATION" if reason == "ADVISORY_GENERIC_DAILY_INVALID_CONFIGURATION" else
+        "ORIGINAL_LIST_NOT_READY" if reason == "ADVISORY_GENERIC_ORIGINAL_LIST_NOT_READY" else "COMPUTATION_ERROR")
+    unavailable = reason.endswith("UNAVAILABLE") or reason.endswith("QUERY_FAILED") or state == "ORIGINAL_LIST_NOT_READY"
+    raise HTTPException(status_code=503 if unavailable else 409,
+        detail=dict(status=state, reason_code=reason, error_type=type(exc).__name__, economic_confirmation=False,
+                    deployable=False)) from exc
+
+
+@router.get("/programs/{program_id}/generic-entry-price")
+def generic_daily_entry_price(program_id: str, target_trade_date: date | None = Query(None),
+    list_version_id: str | None = Query(None, min_length=1, max_length=128),
+    service: GenericDailyPriceAPIServiceV1 = Depends(get_advisory_generic_daily_price_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.read_price(program_id=program_id, target_date=target_trade_date,
+                                               list_version_id=list_version_id)}
+    except Exception as exc:
+        _raise_generic_daily_price_http(exc)
+
+
+@router.post("/programs/{program_id}/generic-entry-price/batch")
+def generic_daily_entry_price_batch(program_id: str, request: GenericDailyPriceBatchRequest,
+    service: GenericDailyPriceAPIServiceV1 = Depends(get_advisory_generic_daily_price_service)) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.read_batch(program_id=program_id,
+            requests=[query.model_dump() for query in request.requests])}
+    except Exception as exc:
+        _raise_generic_daily_price_http(exc)
 
 
 @router.get("/programs/{program_id}/sector-entry-price")

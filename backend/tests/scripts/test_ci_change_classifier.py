@@ -8,6 +8,10 @@ import pytest
 
 from scripts import ci_change_classifier as classifier
 
+_WORKFLOW_BUDGET_NODE = (
+    'backend/tests/scripts/test_aistock_validation_budget.py::'
+    'test_workflow_automation_has_an_honest_production_denominator'
+)
 
 def _assert_fields(payload: dict, **expected) -> None:
     """Check each explicit field, retaining boolean/None identity contracts."""
@@ -49,6 +53,29 @@ def _write_test_file(root: Path, relative_path: str) -> None:
 
 def _write_noxfile(root: Path, body: str) -> None:
     (root / "noxfile.py").write_text(body, encoding="utf-8")
+
+
+@pytest.mark.parametrize('path,required', [
+    ('scripts/aistock_issue_workflow.py', True),
+    ('backend/tests/scripts/test_aistock_issue_workflow_fast.py', True),
+    ('scripts/ci_change_classifier.py', False),
+    ('tests/aistock_validation/catalog/file_ownership.yaml', False),
+    ('docs/analysis/example.md', False),
+    ('scripts/nightly_active_discovery_summary.py', True),  # Nightly-deferred code keeps the small PR budget gate.
+])
+def test_workflow_budget_gate_is_primary_owner_scoped(tmp_path, path, required):
+    report = classifier.classify_changed_files([path], repo_root=tmp_path)
+    node = 'backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator'
+    assert (node in report['workflow_test_targets']) is required
+
+
+def test_budget_engine_has_direct_coverage_and_deleted_workflow_still_checks_ratio(tmp_path):
+    budget = 'backend/tests/scripts/test_aistock_validation_budget.py'
+    report = classifier.classify_changed_files(['scripts/aistock_validation_budget.py'], repo_root=tmp_path)
+    assert report['workflow_test_targets'] == [budget]
+    (tmp_path / '.git').mkdir()
+    report = classifier.classify_changed_files(['scripts/aistock_issue_workflow.py'], repo_root=tmp_path)
+    assert report['workflow_test_targets'] == [_WORKFLOW_BUDGET_NODE]
 
 
 def test_catalog_selection_reads_each_yaml_once_and_reloads_next_call(monkeypatch) -> None:
@@ -220,7 +247,7 @@ def test_standard_skill_workflow_and_runtime_catalog_stay_in_focused_lane(tmp_pa
     _assert_fields(payload,
         classification='workflow_validation_only', workflow_validation_required=True, backend_required=False,
         frontend_required=False,
-        workflow_test_targets=['backend/tests/test_aistock_guardrail_scan.py', 'backend/tests/scripts/test_aistock_issue_workflow_fast.py', 'backend/tests/scripts/test_issue_flow.py', 'backend/tests/scripts/test_aistock_issue_workflow_task_root.py'],
+        workflow_test_targets=['backend/tests/test_aistock_guardrail_scan.py', 'backend/tests/scripts/test_aistock_issue_workflow_fast.py', 'backend/tests/scripts/test_issue_flow.py', 'backend/tests/scripts/test_aistock_issue_workflow_task_root.py', _WORKFLOW_BUDGET_NODE],
     )
 
 
@@ -812,7 +839,7 @@ def test_validation_mcp_issue_files_use_focused_workflow_lane(tmp_path: Path) ->
     _assert_fields(payload,
         classification='workflow_validation_only', workflow_gate='passed', backend_required=False,
         unmapped_code_files=[],
-        workflow_test_targets=['backend/tests/scripts/test_aistock_issue_workflow_fast.py', 'backend/tests/scripts/test_aistock_mcp_github_issue_tools.py', 'backend/tests/scripts/test_aistock_issue_workflow_task_root.py'],
+        workflow_test_targets=['backend/tests/scripts/test_aistock_issue_workflow_fast.py', 'backend/tests/scripts/test_aistock_mcp_github_issue_tools.py', 'backend/tests/scripts/test_aistock_issue_workflow_task_root.py', _WORKFLOW_BUDGET_NODE],
     )
 
 
@@ -824,7 +851,7 @@ def test_workflow_fast_contract_test_has_direct_self_mapping(tmp_path: Path) -> 
 
     _assert_fields(payload,
         workflow_gate='passed', unmapped_code_files=[],
-        workflow_test_targets=['backend/tests/scripts/test_aistock_issue_workflow_fast.py'],
+        workflow_test_targets=['backend/tests/scripts/test_aistock_issue_workflow_fast.py', _WORKFLOW_BUDGET_NODE],
     )
 
 
@@ -858,7 +885,8 @@ def test_ci_environment_and_policy_scripts_use_direct_workflow_tests(tmp_path: P
             classification='workflow_validation_only', workflow_gate='passed', backend_required=False,
             unmapped_code_files=[],
         )
-        assert payload["workflow_test_targets"] == [test_target]
+        budget = [] if source in {'scripts/ci_environment_verify.py', 'scripts/ci_workflow_policy_scan.py'} else [_WORKFLOW_BUDGET_NODE]
+        assert payload["workflow_test_targets"] == [test_target, *budget]
 
 
 def test_validation_ui_target_contract_uses_catalog_gate_only(tmp_path: Path) -> None:
@@ -1460,7 +1488,7 @@ def test_runner_queue_watchdog_uses_focused_runner_health_contracts(tmp_path: Pa
 
     _assert_fields(payload,
         classification='workflow_validation_only', backend_required=False, workflow_validation_required=True,
-        workflow_test_targets=['backend/tests/scripts/test_aistock_runner_health.py', 'backend/tests/scripts/test_ci_workflow_policy_scan.py'],
+        workflow_test_targets=['backend/tests/scripts/test_aistock_runner_health.py', 'backend/tests/scripts/test_ci_workflow_policy_scan.py', _WORKFLOW_BUDGET_NODE],
         unmapped_code_files=[],
     )
 
@@ -1477,7 +1505,7 @@ def test_nightly_session_runner_uses_its_direct_workflow_target(tmp_path: Path) 
 
     _assert_fields(payload,
         classification='workflow_validation_only', backend_required=False, workflow_validation_required=True,
-        workflow_test_targets=['backend/tests/scripts/test_nightly_session_runner.py'], unmapped_code_files=[],
+        workflow_test_targets=['backend/tests/scripts/test_nightly_session_runner.py', _WORKFLOW_BUDGET_NODE], unmapped_code_files=[],
     )
 
 
@@ -1904,6 +1932,7 @@ def test_workflow_sources_select_only_their_direct_test_targets(tmp_path: Path) 
         "backend/tests/scripts/test_issue_flow_pr_quality.py",
         "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/test_noxfile_validation_env.py",
+        _WORKFLOW_BUDGET_NODE,
     ]
     assert "backend/tests/scripts/test_llm_provider_adapter.py" not in payload["workflow_test_targets"]
     assert "backend/tests/scripts/test_nightly_adaptive_scheduler.py" not in payload["workflow_test_targets"]
