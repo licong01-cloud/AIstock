@@ -135,8 +135,8 @@
   },
   "first_seen_at": "2026-10-08T20:14:23.960245Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "85fe9c30471dc7ee3340808e33428dc414df3445",
+  "fixed_at": "2026-10-08T20:50:34Z",
   "github_issue_number": 5800,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5800",
   "last_seen_at": "2026-10-08T20:14:23.960245Z",
@@ -144,6 +144,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5801",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -168,6 +169,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -179,7 +181,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1819",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d8fd2649a4be00e2",
+    "recorded_at": "2026-10-08T20:51:19.111697Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f94cb4e6a94e9597eb7974a805cd66dc42b11835",
+    "source_merge_commit": "85fe9c30471dc7ee3340808e33428dc414df3445",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5801",
+    "validation_evidence": [
+      "pytest backend/tests/dataset_release/test_artifact_ready_source.py -q -> passed",
+      "python -m nox -s l0 -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "f6a3ee215c01124afe5134fcff131b03f40dad80f680db63352ff9cb53529850"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -188,6 +213,11 @@
     "fingerprint": "ac6c16925d86e06a00a1f5f6",
     "source_event_id": "FE-20261008-ac6c16925d86"
   },
+  "validation_evidence": [
+    "pytest backend/tests/dataset_release/test_artifact_ready_source.py -q -> passed",
+    "python -m nox -s l0 -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
