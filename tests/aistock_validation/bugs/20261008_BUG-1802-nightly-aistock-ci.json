@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1802",
-  "closed_at": null,
+  "closed_at": "2026-10-08T03:37:02Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,15 +27,15 @@
   "expected": "公共workflow验证由预构建AIstock-CI运行，测试前校验身份及X盘隔离；禁止安装、生产环境回退。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261008_BUG-1802-nightly-aistock-ci.json",
       ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1802-nightly-aistock-ci.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261008_BUG-1802-nightly-aistock-ci.json",
       ".github/workflows/nightly.yml",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1802-nightly-aistock-ci.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-08T03:20:48.788208Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2a9d22b1f7bc5fbd4dd55053ffd42b41c4843263",
+  "fixed_at": "2026-10-08T03:37:02Z",
   "github_issue_number": 5735,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5735",
   "last_seen_at": "2026-10-08T03:20:48.788208Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5739",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -121,6 +122,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -130,7 +132,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1802",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5dad9550e7175b72",
+    "recorded_at": "2026-10-08T03:37:48.835597Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c50394e272b4569b0f4d2efd45cfdff6c6bbe4e7",
+    "source_merge_commit": "2a9d22b1f7bc5fbd4dd55053ffd42b41c4843263",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5739",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_nightly_workflow_validation_requires_prebuilt_ci_and_x_temp -q -> 1 passed",
+      "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_tdx_ci_is_offline_and_builds_web_module -q -> 1 passed",
+      "python -m nox -s validation_catalog_integrity guardrail_changed_files -- --changed-only -> passed"
+    ],
+    "validation_evidence_digest": "c11ef2b6f79633f7792116c78136fa96fcdc87ebb51ad0133fd669c3b06a645d"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -139,6 +164,11 @@
     "fingerprint": "f85377d4e7840d4b29ac2989",
     "source_event_id": "FE-20261008-f85377d4e784"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_nightly_workflow_validation_requires_prebuilt_ci_and_x_temp -q -> 1 passed",
+    "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_tdx_ci_is_offline_and_builds_web_module -q -> 1 passed",
+    "python -m nox -s validation_catalog_integrity guardrail_changed_files -- --changed-only -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
