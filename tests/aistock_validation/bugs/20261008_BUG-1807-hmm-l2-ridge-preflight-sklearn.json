@@ -117,7 +117,7 @@
   "root_cause": "cold preflight discovers native pools before loading the Ridge dependency chain; fit children discover pools after that import",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=5fc8337f4681c508174df55933d4b3f3e483edd3e593b743151d27ab143cc320",
     "fresh_process_evidence": [
       "Conda base python -c imports backend.services.hmm_risk.rotation_l2_moneyflow_price_supervised and backend.routers.hmm_risk and backend.routers.health -> passed; model contract SHA 6412997efb07059adcb22b59b9e75e2fea94e0e142ae363694c5014cf1d81e47 unchanged; cold preflight process matches fit environment without fit, reference version drift rejected"
     ],
