@@ -5,8 +5,8 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,7 @@ class QEWorkspaceCleanupPlan:
     file_identities: tuple[tuple[str, str, int], ...]
     remove_directories: tuple[str, ...]
     grace_until: str
+    source_request: QEWorkspaceCleanupRequest = field(repr=False)
 
 
 class QEWorkspaceLifecycleService:
@@ -85,9 +86,7 @@ class QEWorkspaceLifecycleService:
         file_identities = tuple(
             (entry.path, str(entry.sha256), int(entry.size_bytes))
             for entry in normalized_entries
-            if entry.entry_type == "file"
-            and entry.sha256 is not None
-            and entry.size_bytes is not None
+            if entry.entry_type == "file" and entry.sha256 is not None and entry.size_bytes is not None
         )
         directories = tuple(
             sorted(
@@ -109,11 +108,9 @@ class QEWorkspaceLifecycleService:
         unique_reasons = tuple(dict.fromkeys(reasons))
         return QEWorkspaceCleanupPlan(
             eligible=not unique_reasons,
-            workspace_status="cleanup_pending" if not unique_reasons else (
-                "grace_period"
-                if unique_reasons == ("qe_workspace_cleanup_grace_period",)
-                else "active"
-            ),
+            workspace_status="cleanup_pending"
+            if not unique_reasons
+            else ("grace_period" if unique_reasons == ("qe_workspace_cleanup_grace_period",) else "active"),
             reason_codes=unique_reasons,
             manifest_digest=sha256_json(
                 [
@@ -130,50 +127,105 @@ class QEWorkspaceLifecycleService:
             file_identities=file_identities,
             remove_directories=directories,
             grace_until=grace_until.isoformat(),
+            source_request=request,
         )
 
-    def apply(self, plan: QEWorkspaceCleanupPlan) -> dict[str, Any]:
+    def apply(
+        self,
+        plan: QEWorkspaceCleanupPlan,
+        *,
+        refresh_request: Callable[[], QEWorkspaceCleanupRequest] | None = None,
+    ) -> dict[str, Any]:
+        """Refresh existing programmatic safety checks, never ask for manual approval."""
         if not plan.eligible:
             raise ValueError(f"workspace cleanup plan is not eligible: {plan.reason_codes}")
+        if refresh_request is None:
+            raise ValueError("qe_workspace_cleanup_fresh_checks_required")
         items: list[dict[str, Any]] = []
         failed = False
         identities = {path: (digest, size) for path, digest, size in plan.file_identities}
+        try:
+            self._refresh(plan, refresh_request)
+        except (OSError, ValueError) as exc:
+            return _receipt(plan, [{"status": "unknown", "error": f"{type(exc).__name__}: {exc}"}], True)
         for value in plan.delete_files:
             path = Path(value)
-            if not path.exists():
-                items.append({"path": value, "status": "already_absent"})
-                continue
             try:
+                self._refresh(plan, refresh_request)
+                if not path.exists():
+                    items.append({"path": value, "status": "already_absent"})
+                    continue
                 expected = identities.get(value)
                 if expected is None:
                     raise ValueError("qe_workspace_cleanup_file_identity_missing")
+                before = path.stat(follow_symlinks=False)
                 actual_sha, actual_size = _hash_file(path)
                 if (actual_sha, actual_size) != expected:
+                    raise ValueError("qe_workspace_cleanup_file_identity_changed")
+                self._refresh(plan, refresh_request)
+                after = path.stat(follow_symlinks=False)
+                if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                ):
                     raise ValueError("qe_workspace_cleanup_file_identity_changed")
                 path.unlink()
                 items.append({"path": value, "status": "deleted"})
             except (OSError, ValueError) as exc:
                 failed = True
                 items.append({"path": value, "status": "unknown", "error": f"{type(exc).__name__}: {exc}"})
+                break
         for value in plan.remove_directories:
+            if failed:
+                break
             path = Path(value)
-            if not path.exists():
-                items.append({"path": value, "status": "already_absent"})
-                continue
             try:
+                self._refresh(plan, refresh_request)
+                if not path.exists():
+                    items.append({"path": value, "status": "already_absent"})
+                    continue
                 path.rmdir()
                 items.append({"path": value, "status": "deleted"})
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 failed = True
                 items.append({"path": value, "status": "unknown", "error": f"{type(exc).__name__}: {exc}"})
-        return {
-            "schema_version": "qe_workspace_cleanup_receipt_v1",
-            "workspace_status": "cleanup_incomplete" if failed else "cleaned",
-            "manifest_digest": plan.manifest_digest,
-            "items": items,
-            "archive_rows_deleted": 0,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        }
+        return _receipt(plan, items, failed)
+
+    def _refresh(self, plan: QEWorkspaceCleanupPlan, refresh_request: Callable[[], QEWorkspaceCleanupRequest]) -> None:
+        request = refresh_request()
+        original = plan.source_request
+        if (
+            request.source_identity != original.source_identity
+            or request.value_class != original.value_class
+            or request.reason_code != original.reason_code
+            or request.terminal_at != original.terminal_at
+            or request.allowed_roots != original.allowed_roots
+            or request.manifest != original.manifest
+        ):
+            raise ValueError("qe_workspace_cleanup_request_changed")
+        fresh = self.plan(request)
+        if not fresh.eligible:
+            raise ValueError(f"qe_workspace_cleanup_safety_changed: {fresh.reason_codes}")
+        if (
+            fresh.manifest_digest != plan.manifest_digest
+            or fresh.delete_files != plan.delete_files
+            or fresh.file_identities != plan.file_identities
+            or fresh.remove_directories != plan.remove_directories
+        ):
+            raise ValueError("qe_workspace_cleanup_plan_changed")
+
+
+def _receipt(plan: QEWorkspaceCleanupPlan, items: list[dict[str, Any]], failed: bool) -> dict[str, Any]:
+    return {
+        "schema_version": "qe_workspace_cleanup_receipt_v1",
+        "workspace_status": "cleanup_incomplete" if failed else "cleaned",
+        "manifest_digest": plan.manifest_digest,
+        "items": items,
+        "archive_rows_deleted": 0,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _grace_period(value_class: str, reason_code: str) -> timedelta:
@@ -213,7 +265,7 @@ def _validate_manifest(
         if not any(resolved == root or root in resolved.parents for root in allowed_roots):
             reasons.append("qe_workspace_cleanup_path_outside_allowed_root")
             continue
-        if path.exists() and _is_link_or_reparse(path):
+        if _has_link_ancestor(path):
             reasons.append("qe_workspace_cleanup_link_forbidden")
             continue
         if entry.entry_type not in {"file", "directory"}:
@@ -253,10 +305,24 @@ def _is_link_or_reparse(path: Path) -> bool:
     return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)) if os.name == "nt" else False
 
 
+def _has_link_ancestor(path: Path) -> bool:
+    absolute = path.absolute()
+    return any(_is_link_or_reparse(item) for item in (absolute, *absolute.parents) if os.path.lexists(item))
+
+
 def _path_intersection(candidates: Sequence[str], protected: Sequence[str]) -> tuple[str, ...]:
-    candidate_paths = {str(Path(item).resolve(strict=False)) for item in candidates}
-    protected_paths = {str(Path(item).resolve(strict=False)) for item in protected}
-    return tuple(sorted(candidate_paths.intersection(protected_paths)))
+    candidate_paths = {Path(item).resolve(strict=False) for item in candidates}
+    protected_paths = {Path(item).resolve(strict=False) for item in protected}
+    return tuple(
+        sorted(
+            str(candidate)
+            for candidate in candidate_paths
+            if any(
+                candidate == reference or candidate in reference.parents or reference in candidate.parents
+                for reference in protected_paths
+            )
+        )
+    )
 
 
 def _hash_file(path: Path) -> tuple[str, int]:
