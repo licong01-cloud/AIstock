@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from threading import Thread
@@ -85,6 +85,7 @@ class QEExperimentRuntimeSource:
     source_workspace_type: str = "aistock_node_api_cache"
     package_id: str | None = None
     manifest_sha256: str | None = None
+    cache_lifetime: tempfile.TemporaryDirectory | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,8 @@ class PreparedInferenceWorkspace:
     # 'package_asset' = package-owned immutable asset blob; 'unavailable' is
     # reserved for failed runs written from upstream error handlers.
     model_params_origin: ModelParamsOrigin = "node"
+    cache_lifetime: tempfile.TemporaryDirectory | None = field(default=None, repr=False, compare=False)
+    source_cache_lifetime: tempfile.TemporaryDirectory | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -849,7 +852,8 @@ class QEExperimentRuntimeAssetResolver:
         )
         if namespace:
             source_dir = source_dir / namespace
-        source_dir = self._new_cache_dir(source_dir)
+        cache_lifetime = self._new_cache_dir(source_dir)
+        source_dir = Path(cache_lifetime.name)
         factors_dir = source_dir / "factors"
         model_dir = source_dir / "mlruns" / "package_asset" / "artifacts"
         factors_dir.mkdir(parents=True, exist_ok=True)
@@ -936,6 +940,7 @@ class QEExperimentRuntimeAssetResolver:
             source_workspace_type="strategy_package_asset_store",
             package_id=package_key,
             manifest_sha256=manifest_sha,
+            cache_lifetime=cache_lifetime,
         )
 
     def _materialize_alpha158_conf(
@@ -1845,7 +1850,7 @@ class QEExperimentRuntimeAssetResolver:
         # cached params.pkl (feedback_no_silent_errors). Callers that need
         # cache fallback must construct the source through a dedicated path
         # that flips this flag and records origin='cache' downstream.
-        asset_workspace, model_params_origin = self._materialize_runtime_source_from_node(
+        asset_workspace, model_params_origin, cache_lifetime = self._materialize_runtime_source_from_node(
             experiment_id=experiment_id,
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
@@ -1863,6 +1868,7 @@ class QEExperimentRuntimeAssetResolver:
             custom_params=custom_params,
             data_split=data_split,
             model_params_origin=model_params_origin,
+            cache_lifetime=cache_lifetime,
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
             execution_node_id=execution_node_id,
@@ -1901,7 +1907,8 @@ class QEExperimentRuntimeAssetResolver:
         if namespace:
             cache_key = f"{cache_key}__{namespace}"
         workspace_path = self.cache_root / package_id / cache_key
-        workspace_path = self._new_cache_dir(workspace_path)
+        cache_lifetime = self._new_cache_dir(workspace_path)
+        workspace_path = Path(cache_lifetime.name)
         (workspace_path / "model").mkdir(parents=True, exist_ok=True)
 
         model_dest = workspace_path / "model" / "params.pkl"
@@ -2034,6 +2041,8 @@ class QEExperimentRuntimeAssetResolver:
             model_candidate_count=model_candidate_count,
             dataset_processor_path=dataset_processor_dest,
             model_params_origin=source.model_params_origin,
+            cache_lifetime=cache_lifetime,
+            source_cache_lifetime=source.cache_lifetime,
         )
 
     def _materialize_runtime_source_from_node(
@@ -2047,10 +2056,10 @@ class QEExperimentRuntimeAssetResolver:
         custom_params: dict[str, Any],
         data_split: dict[str, Any],
         allow_cache_fallback: bool = False,
-    ) -> tuple[Path, ModelParamsOrigin]:
+    ) -> tuple[Path, ModelParamsOrigin, tempfile.TemporaryDirectory]:
         """Materialize a QE runtime source workspace from the node API.
 
-        Returns the (source_dir, origin) tuple. ``origin`` is ``'node'`` when
+        Returns (source_dir, origin, cache_lifetime). ``origin`` is ``'node'`` when
         ``download_mlruns_params`` succeeded; ``'cache'`` only when both
         ``allow_cache_fallback=True`` AND the node fetch failed but a local
         cache hit replaced the params.
@@ -2069,7 +2078,8 @@ class QEExperimentRuntimeAssetResolver:
             / _safe_cache_component(qe_task_id)
             / _safe_cache_component(qe_loop_id)
         )
-        source_dir = self._new_cache_dir(source_dir)
+        cache_lifetime = self._new_cache_dir(source_dir)
+        source_dir = Path(cache_lifetime.name)
 
         # Mutable origin holder threaded into the inner async closure so the
         # return value reflects the actual provenance of params.pkl.
@@ -2212,7 +2222,7 @@ class QEExperimentRuntimeAssetResolver:
 
         try:
             resolved = _run_async_blocking(_download)
-            return resolved, origin_holder["origin"]
+            return resolved, origin_holder["origin"], cache_lifetime
         except TradingCoreError:
             raise
         except DataUnavailableError:
@@ -2230,7 +2240,7 @@ class QEExperimentRuntimeAssetResolver:
                 },
             ) from exc
 
-    def _new_cache_dir(self, path: Path) -> Path:
+    def _new_cache_dir(self, path: Path) -> tempfile.TemporaryDirectory:
         cache_root = self.cache_root.resolve(strict=False)
         target = path.resolve(strict=False)
         if target == cache_root or cache_root not in target.parents:
@@ -2241,7 +2251,9 @@ class QEExperimentRuntimeAssetResolver:
         path.mkdir(parents=True, exist_ok=True)
         # One atomic request directory per materialization, including remote
         # sources. Never erase another reader sharing the package/seed/date.
-        return Path(tempfile.mkdtemp(prefix="request_", dir=path))
+        # The source/prepared objects own the lifetime; prepared also retains
+        # the source lease. The last reader releases only its own scratch tree.
+        return tempfile.TemporaryDirectory(prefix="request_", dir=path)
 
     async def _download_workspace_file(
         self,

@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import gc
 import os
 
 from backend.services.strategy_package.live_inference import QEExperimentRuntimeAssetResolver
@@ -61,3 +62,29 @@ def test_parallel_prepared_workspaces_are_isolated_but_share_model_inode(tmp_pat
     for prepared in (first, second, third):
         assert prepared.factor_order_path.exists()
         assert os.path.samefile(prepared.model_params_path, store._path_from_uri(manifest.model_asset.asset_ref))
+
+
+def test_last_reader_releases_only_owned_scratch_and_never_cas(tmp_path):
+    store = LocalPackageAssetStore(tmp_path / "cas")
+    manifest = _frozen_manifest(store)
+    resolver = QEExperimentRuntimeAssetResolver(cache_root=tmp_path / "cache", asset_store=store)
+    source = resolver.load_source_for_strategy_package(
+        source_type="qe_experiment",
+        source_id="frozen",
+        manifest=manifest,
+        package_id=manifest.package_id,
+    )
+    source_path = source.asset_workspace_path
+    prepared = resolver.prepare_workspace(
+        package_id=manifest.package_id, manifest_sha256=manifest.manifest_sha256, source=source
+    )
+    prepared_path = prepared.workspace_path
+    del source
+    gc.collect()
+    assert source_path.exists()  # Prepared retains the source lease.
+    assert prepared.model_params_path.exists()
+    del prepared
+    gc.collect()
+    assert not source_path.exists()
+    assert not prepared_path.exists()
+    assert store._path_from_uri(manifest.model_asset.asset_ref).read_bytes() == b"model params"
