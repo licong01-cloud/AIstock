@@ -511,12 +511,9 @@ class PackageAssetBackfillService:
         return False
 
     def _ledger_covers(self, manifest: StrategyPackageManifest) -> bool:
-        expected = _manifest_asset_keys(manifest)
-        if not expected:
-            return False
-        rows = self.repository.list_package_assets(manifest.package_id)
-        actual = {(row.asset_type, row.asset_ref, row.asset_sha256) for row in rows}
-        return all(item in actual for item in expected)
+        from .repository import manifest_asset_ledger_covers
+
+        return manifest_asset_ledger_covers(manifest, self.repository.list_package_assets(manifest.package_id))
 
     @staticmethod
     def _unrecoverable_item(
