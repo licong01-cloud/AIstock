@@ -164,6 +164,7 @@ def test_snapshot_is_transactional_readonly_and_retains_suspend_and_zero_placeho
 @pytest.fixture
 def study(inputs, tmp_path):
     import json
+    from importlib.metadata import version
     from backend.services.advisory_model_first.economic_entry_pipeline import _json_bytes, publish_stage
     from backend.services.advisory_model_first.generic_population_price_5td_contracts_v1 import PopulationInputPlanV1, PopulationStudyPlanV1
     from backend.services.advisory_model_first.generic_population_price_5td_pipeline_v1 import _parquet, study_implementation_sha256
@@ -193,7 +194,8 @@ def study(inputs, tmp_path):
         input_plan_file_sha256=evidence_reference_for_file(first/"plan.json", role="plan").sha256,
         input_manifest_file_sha256=evidence_reference_for_file(root/"prepared"/"manifest.json", role="inputs").sha256,
         calendar_ref=calref, implementation_sha256=study_implementation_sha256(), source_commit="a"*40,
-        node_python_uri="/existing/python", qe_api_base="http://127.0.0.1:8001/api/v1")
+        node_python_uri="/existing/python", qe_api_base="http://127.0.0.1:8001/api/v1",
+        library_versions={name: version(name) for name in ("numpy", "pandas", "scikit-learn", "pyarrow", "pydantic")})
     return plan, tmp_path
 
 

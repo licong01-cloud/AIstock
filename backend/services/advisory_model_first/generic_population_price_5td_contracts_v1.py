@@ -106,6 +106,7 @@ class PopulationStudyPlanV1(BaseModel):
     source_commit: str = Field(pattern=r"^[a-f0-9]{40}$")
     node_python_uri: str = Field(min_length=1)
     qe_api_base: str = Field(min_length=1)
+    library_versions: dict[str, str]
     execution_node: Literal["WSL", "EXISTING_WORKER"] = "WSL"
     study_type: Literal["EXPLORATORY_SCREEN"] = "EXPLORATORY_SCREEN"
     decision_use: Literal["NAVIGATION_ONLY"] = "NAVIGATION_ONLY"
@@ -115,6 +116,9 @@ class PopulationStudyPlanV1(BaseModel):
     def readonly_loopback(self):
         from backend.mcp.common import assert_loopback_url
         assert_loopback_url(self.qe_api_base)
+        if (set(self.library_versions) != {"numpy", "pandas", "scikit-learn", "pyarrow", "pydantic"}
+                or any(not v.strip() for v in self.library_versions.values())):
+            raise ValueError("population study requires the five explicit existing-node library identities")
         return self
 
     @property

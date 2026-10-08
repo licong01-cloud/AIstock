@@ -208,7 +208,7 @@ P26两步源码PR #5778/#5780分别合入850f83ac/10e86ed9，后者同步最新m
 
 ### P27研究控制/P28评价实现进度（本地审核，不是研究收益）
 
-`PopulationStudyPlanV1`显式绑定原P26 plan/manifest、原calendar、源码内容/commit、现有节点Python与QE loopback base。CLI仅新增preregister/prepare-study/train/evaluate，不创建服务或QE任务。每次fit前后对公开single/custom_evo/multi-alpha的running/pending六个GET重新观测；未知/陈旧/忙的观测不启动fit。真正拟合仅允许显式已有WSL/worker Python；部分STARTED不隐式重fit，已完成单臂非执行模型先保存，若QE新启动则不开始第二臂。并发claim失败者不得写他方失败收据。registry stage计数为同experiment/attempt累计值，不将登记行相加成新trial。
+`PopulationStudyPlanV1`显式绑定原P26 plan/manifest、原calendar、源码内容/commit、现有节点Python及五库版本与QE loopback base；fit前读回numpy/pandas/scikit-learn/pyarrow/pydantic的已存在版本，不安装或默默更换库。CLI仅新增preregister/prepare-study/train/evaluate，不创建服务或QE任务。每次fit前后对公开single/custom_evo/multi-alpha的running/pending六个GET重新观测；未知/陈旧/忙的观测不启动fit。真正拟合仅允许显式已有WSL/worker Python；部分STARTED不隐式重fit，已完成单臂非执行模型先保存，若QE新启动则不开始第二臂。并发claim失败者不得写他方失败收据。registry stage计数为同experiment/attempt累计值，不将登记行相加成新trial。
 
 WSL既存`/home/lc999/miniconda3/envs/rdagent/bin/python`的numpy2.2.5/pandas2.3.3/sklearn1.7.2/pyarrow19.0.1和Pydantic已只读验证，`/mnt/f`输入及Windows现有API loopback可读；无安装/重启。原calendar只映射为节点URI而不改原SHA；共同finance不重新查询。P28只对唯一KEY的D特征和实际g查询，再映射原Top5；未来Y/L/rank/score/包身份不进入predictor。UNKNOWN现金、不可执行、正常缺失、未成熟和未知原名单日分列；全局先按包/D再同D均值，配对归因与同一分母对账、原D洞不压缩。校准仅诊断、不再fit或调门槛。
 

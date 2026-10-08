@@ -257,7 +257,11 @@ def prepare_population_study_v1(*, plan, output_root):
 def _node_observation(plan):
     if os.name == "nt" or Path(sys.executable).resolve() != Path(plan.node_python_uri).resolve():
         raise ValueError("population real research requires its explicit existing WSL/worker Python, not Windows")
-    return dict(execution_node=plan.execution_node, python_uri=sys.executable, platform=sys.platform)
+    from importlib.metadata import version
+    versions = {name: version(name) for name in plan.library_versions}
+    if versions != plan.library_versions:
+        raise ValueError("population current node libraries differ from its preregistered identity; no fit")
+    return dict(execution_node=plan.execution_node, python_uri=sys.executable, platform=sys.platform, library_versions=versions)
 
 
 def _qe_observation(probe, *, idle):
