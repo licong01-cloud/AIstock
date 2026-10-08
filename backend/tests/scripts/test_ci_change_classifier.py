@@ -703,6 +703,28 @@ def test_frontend_change_selects_owning_module_tests(tmp_path: Path) -> None:
     assert payload["unmapped_code_files"] == []
 
 
+@pytest.mark.parametrize('path,covered', [
+    ('frontend/tests/hmm-risk/risk-l1.spec.ts', True),
+    ('frontend/tests/hmm-risk/hmm-risk.spec.ts', True),
+    ('frontend/tests/hmm-risk-extra/unregistered.spec.ts', False),
+])
+def test_hmm_ui_catalog_matches_nox_directory_and_changed_spec_coverage(tmp_path, monkeypatch, path, covered):
+    import noxfile
+
+    executed = []
+    monkeypatch.setattr(noxfile, '_run_mocked_frontend_target', lambda session, target: executed.append(target))
+    noxfile.hmm_risk_ui(SimpleNamespace())
+    assert executed == ['tests/hmm-risk']  # Inspect the plan without starting frontend/browser/backend.
+    plan = classifier.flow.validation_catalog_snapshot().plans['hmm_risk_ui']
+    assert plan['frontend_test_path'] == executed[0]
+    _write_test_file(tmp_path, path)
+    payload = classifier.classify_changed_files(['frontend/src/app/hmm-risk/page.tsx', path], repo_root=tmp_path)
+    assert payload['frontend_test_targets'] == executed
+    assert payload['unexecuted_test_files'] == ([] if covered else [path])
+    assert payload['workflow_gate'] == ('passed' if covered else 'blocked')
+    assert payload['classification'] == ('frontend_ci_required' if covered else 'unmapped_code_blocked')
+
+
 def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) -> None:
     _write_test_file(tmp_path, 'frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts')
     payload = classifier.classify_changed_files(
