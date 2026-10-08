@@ -83,7 +83,8 @@ def read_quality_evidence(reference: Mapping[str, Any]) -> bytes:
     with path.open('rb') as handle:
         raw = handle.read(size + 1)
     after = path.stat()
-    signature = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
+    def signature(item):
+        return item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns
     if signature(before) != signature(after) or len(raw) != size or hashlib.sha256(raw).hexdigest() != reference['sha256']:
         raise ValueError('quality evidence bytes differ')
     return raw

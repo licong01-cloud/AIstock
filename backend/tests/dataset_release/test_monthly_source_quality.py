@@ -61,16 +61,26 @@ def test_acceptance_binds_exact_values_operation_month_and_evidence(tmp_path):
 @pytest.mark.parametrize('mutation', ['operation', 'manifest', 'month', 'duplicate', 'unknown', 'null', 'nan', 'amount', 'evidence'])
 def test_rejects_unapproved_scope_and_bad_evidence(tmp_path, mutation):
     value = acceptance(tmp_path)
-    if mutation == 'operation': value['operation_id'] = 'dmr_' + 'c' * 32
-    if mutation == 'manifest': value['predecessor_dataset_manifest_sha256'] = 'c' * 64
-    if mutation == 'month': value['entries'][0]['trade_date'] = '2026-08-31'
-    if mutation == 'duplicate': value['entries'].append(deepcopy(value['entries'][0]))
-    if mutation == 'unknown': value['entries'][0]['reason_code'] = 'ANY_MISSING_DATA'
-    if mutation == 'null': value['entries'][0]['mismatches']['open']['daily'] = None
-    if mutation == 'nan': value['entries'][0]['mismatches']['open']['daily'] = float('nan')
-    if mutation == 'amount': value['entries'][0]['mismatches'] = {'amount': {'daily': 1, 'minute': 2}}
-    if mutation == 'evidence': value['evidence_refs'][0]['sha256'] = 'f' * 64
-    with pytest.raises(ValueError): validate(value)
+    if mutation == 'operation':
+        value['operation_id'] = 'dmr_' + 'c' * 32
+    if mutation == 'manifest':
+        value['predecessor_dataset_manifest_sha256'] = 'c' * 64
+    if mutation == 'month':
+        value['entries'][0]['trade_date'] = '2026-08-31'
+    if mutation == 'duplicate':
+        value['entries'].append(deepcopy(value['entries'][0]))
+    if mutation == 'unknown':
+        value['entries'][0]['reason_code'] = 'ANY_MISSING_DATA'
+    if mutation == 'null':
+        value['entries'][0]['mismatches']['open']['daily'] = None
+    if mutation == 'nan':
+        value['entries'][0]['mismatches']['open']['daily'] = float('nan')
+    if mutation == 'amount':
+        value['entries'][0]['mismatches'] = {'amount': {'daily': 1, 'minute': 2}}
+    if mutation == 'evidence':
+        value['evidence_refs'][0]['sha256'] = 'f' * 64
+    with pytest.raises(ValueError):
+        validate(value)
 
 
 def _rows(*, bars=240, duplicate=False):
@@ -80,7 +90,8 @@ def _rows(*, bars=240, duplicate=False):
     minutes = [{**raw, 'trade_time': stamp.isoformat(), 'volume_hand': 1, 'amount_li': 1000,
                 'open_li': 11000 if i == 0 else 10000}
                for i, stamp in enumerate(cn_a_share_minute_labels(DAY)[:bars])]
-    if duplicate: minutes.append(dict(minutes[0]))
+    if duplicate:
+        minutes.append(dict(minutes[0]))
     return {'kline_daily_raw': [raw], 'kline_minute_raw': minutes}
 
 

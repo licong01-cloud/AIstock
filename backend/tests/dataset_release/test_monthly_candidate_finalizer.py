@@ -284,7 +284,8 @@ def test_finalizer_pins_quality_report_and_evidence_without_rewriting_data(tmp_p
         Path(reference['path']).read_bytes())
     report = {**source_quality_report(value, [warning]), 'frozen_evidence_refs': [
         {**reference, 'path': 'source-quality-evidence-0.json'}]}
-    if drift: report['quality_warning_count'] = 0
+    if drift:
+        report['quality_warning_count'] = 0
     compiled.source_bundle_path.write_bytes(canonical_json_bytes({'source_quality_report': report}) + b'\n')
     compiled = replace(compiled, source_bundle_sha256=hashlib.sha256(compiled.source_bundle_path.read_bytes()).hexdigest())
     finalizer = UnifiedMonthlyCandidateFinalizer(_Shared())
