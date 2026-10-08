@@ -136,6 +136,11 @@ def prepare_inputs(*, reference_acceptance_path: Path, **source_args: Any) -> di
 
     old = ridge.prepare_inputs(**source_args)
     reference, _ = _reference(reference_acceptance_path)
+    # Load the same estimator dependencies as the fit child before discovering
+    # and limiting native pools. A cold preflight otherwise omits sklearn's
+    # OpenMP library from the frozen environment; importing does not fit.
+    from sklearn.linear_model import Ridge  # noqa: F401
+
     with threadpool_limits(limits=1):
         environment = numeric_environment()
     expected = {**reference["numeric_environment"], "thread_variables": {key: "1" for key in THREADS}}

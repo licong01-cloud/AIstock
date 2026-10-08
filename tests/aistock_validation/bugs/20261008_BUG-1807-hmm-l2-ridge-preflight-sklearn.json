@@ -14,7 +14,17 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-08T05:37:48.842950Z",
-  "description": "preflight 两个 pools 对 frozen 三个 pools 不等，hmm_risk_rotation_l2_supervised_identity_invalid，completed_fits_known=0",
+  "description": "正式预检在加载 sklearn.linear_model.Ridge 前采集线程池，冷进程漏掉 vcomp OpenMP pool，误报与既有冻结数值环境不一致。Python、NumPy、SciPy、scikit-learn 和 threadpoolctl 实际版本未变；按 child 的估计器导入顺序加载后环境精确一致。修复只持久化依赖初始化顺序，保留数值身份严格比较，不改变模型、参数、特征、窗口、阈值或任何输入 pin。",
+  "root_cause": "cold preflight discovers native pools before loading the Ridge dependency chain; fit children discover pools after that import",
+  "research_execution_status": {
+    "formal_fits": 0,
+    "tail_accessed": false,
+    "database_write": false,
+    "dataset_write": false,
+    "dependency_install": false,
+    "runtime_action": false,
+    "offline_experiment_requires_backend_restart": false
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -92,7 +102,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "rtk pytest backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py::test_cold_preflight_captures_the_same_numeric_pools_as_fit_without_fitting -q -p no:cacheprovider",
   "required_verification": [
     "l0",
     "hmm_risk_pr_slice"
@@ -102,6 +112,9 @@
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
