@@ -1,7 +1,7 @@
 # HMM Evolution Phase 2：L2资金流监督增量完整详细设计
 
-> 版本：v1.0；日期：2026-10-07；owner：HMM；tier：F2。
-> 状态：APPROVED_BY_USER_IMPLEMENTATION_IN_PROGRESS。用户明确批准D1～D6、源码实施、审修通过后的提交合入，以及合入后双fresh-process共2fit；另明确批准仅在既有`aistock_dev`进行事务回滚式迁移及写入/回读验证，已完成并全部回滚。本轮补充授权源码审修、全绿后合入及本任务worktree/local branch/remote branch精确清理；本轮只交付源码，不启动正式训练。tail、持久化数据库写入、production DDL/DML、runtime activation、依赖及进程控制未授权。
+> 版本：v1.1；初始日期：2026-10-07；状态更新：2026-10-08；owner：HMM；tier：F2。
+> 当前状态：APPROVED_BY_USER_EXECUTED_BELOW_BINDING_MBE。既有D1～D6未变；源码已交付，获授权的正式双fresh-process共2fit已完成，结果详见§14。原DEV事务回滚验证已全部回滚，未持久化安装迁移或导入正式新run；新候选surface/capability/advisory均NOT_AVAILABLE。tail、生产DDL/DML、runtime activation、依赖及进程控制未执行。以下源码阶段及批准前历史记录保留，不作为当前待训练指令。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md`当前L2主线；直接基线：`hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md` v1.6。本文只展开“已有L2资金流成果的单一模型增量”，不替代C-010/A5二十维正式HMM合同。
 > 初始review base：`81d43fe8202f9e09e43f62f7cf5adad157ca7622`。该时点P1产品状态文档PR #5653为OPEN；本提案不将该快照外推为实时PR状态，不改其两个文件。
 
@@ -153,7 +153,7 @@ spread仍为展示state下真实`y`的trending均值减fading均值；不是组�
 2. 用户批准并源码交付后：一次有界file-only preflight、两个fresh children各1 fit、同窗口基线0 fit、配对评价。输出一份紧凑parent结果、必需的参数和真实预测payload；不保存逐股票大日志、源拷贝或重建旧证据。
 3. 如需验证真实产品：沿已有L2导入与API/UI合同申请具体DEV/production写入目标；复用表和页面，不再重做基础架构。没有这项授权时交付有效离线结果及可导入payload，不冒报生产完成。
 
-预计源码/聚焦验证和审修约半日至一日，数据预检和2-fit计算另按实测估时，不承诺为凑10小时持续运行。用户本轮批准源码合入后启动正式2-fit；当前正式fit仍为0，源码门禁和模型结果分别核算。
+本段保留原实施预算，不承诺为凑10小时持续运行。用户此前批准源码合入后的2-fit已完成；当前2/2 fits，源码门禁与模型结果分别核算，实际终态见§14，不再重复该实验。
 
 终止条件：D1～D6未批准停止于本文；批准后输入或执行失败保存typed reason并停止；两process不一致不得选择其中成功者；有效评价完成即停止该唯一候选。源码BUG登记独立BUG按现有流程修复，不能以BUG名义改模型合同。没有改善不自动生产写入、重训、读取tail或开启第二候选。
 
@@ -203,7 +203,7 @@ F-001=D1正式文件输入及人口；F-002=D2特征/标签；F-003=D3固定训�
 
 发布不替换现存baseline/risk。只有新run实际完成产品闭合才可选它；若效果不足则保留真实研究结果、旧run继续使用，不覆写旧数据。回滚是显式选择旧已验证run，不是产生预测失败时悄悄fallback。新source影响runtime时用户控制backend-main重启；仅记录研究结果不能成为重启理由。
 
-本设计任务：production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；runtime_activation=noop；process_control=false；dataset_write=false；active_profile_write=false；正式fits=0；tail_accessed=false。`dev_rollback_validation=passed`、`dev_persistent_change=false`：仅既有`aistock_dev`的临时迁移/262行测试写入已执行并全部回滚。将来持久化DEV/production迁移及正式数据写入、activation、重启权限均不由此验证产生。
+当前文档同步：production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；runtime_activation=noop；process_control=false；dataset_write=false；active_profile_write=false；本轮新增fits=0，既有正式fits=2；tail_accessed=false。`dev_rollback_validation=passed`、`dev_persistent_change=false`：仅既有`aistock_dev`的临时迁移/262行测试写入已执行并全部回滚。未持久化DEV/production迁移、正式数据写入或激活，不由历史回滚验证产生权限。
 
 ## 12. 本次设计审核、批准与实施状态
 
@@ -213,7 +213,7 @@ F-001=D1正式文件输入及人口；F-002=D2特征/标签；F-003=D3固定训�
 
 设计提交`4f9767282`阶段F2检查实际PASS：6项索引/6行矩阵、warnings=0。严格UTF-8解码通过、replacement character为false；新文件用`git diff --no-index --check -- NUL <本文件>`检查无空白错误，普通`git diff --check`也通过。Git提示LF将按仓库配置转换CRLF是格式提示，不当作业务结果。该阶段只有本文件新增，模型/数据/tail/DB/process零操作；此历史PASS不能替代当前源码验收。
 
-F2 validator只核文档结构和验收索引，不等同用户批准、源码审核或正式模型验收。D1～D6状态为APPROVED_BY_USER；源码已实现，正式fit=0，真实新run产品验收未执行。提交、PR、CI、合入及清理的实时状态以本功能PR/Git为准，下面保存源码提交阶段的验证结论；不在正文预报尚未完成的合入。实施方案和验收矩阵是唯一任务进度入口，不另建历史证据档案。
+F2 validator只核文档结构和验收索引，不等同用户批准、源码审核或正式模型验收。D1～D6为APPROVED_BY_USER，源码已交付、正式2/2fit效果不足，真实新run产品验收未执行。下面保存2026-10-07源码阶段记录，其中“未运行/fit=0”指当时快照；当前只以§14为执行终态，不另建历史证据档案。
 
 ### 12.1 源码实施与当前审核状态（2026-10-07）
 
@@ -241,3 +241,20 @@ python -m pytest backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py
 ## 13. 技术依据
 
 [scikit-learn 1.8 Ridge正式接口](https://scikit-learn.org/1.8/modules/generated/sklearn.linear_model.Ridge.html)：采用加权平方误差加L2收缩，显式SVD、截距和sample_weight；SVD路径不使用随机seed。实施必须核对现有数值环境及输出，而非安装最新版本。
+
+## 14. 正式实验终态与本轮只读同步（2026-10-08）
+
+执行工作树`F:/Dev/AIstock_worktrees/validation-hmm-l2-moneyflow-supervised-20261008`，固定源码`1dc3ad9d81bac4bb7edcf3023331e4b1addb89ec`；结果`F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_supervised_20261008_1dc3ad9d/run/acceptance.json`。file-only preflight及双process各1fit完成，总2/2，参数与预测严格相同；父进程正常方程/authority读回为零额外fit。输入generation=20260928-v15-unified-moneyflow1、manifest=2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc，与批准合同闭合。
+
+232日/30,392目录行：30,160 available、232合法quote-unavailable，后者均801011.SI；126训练日、222成熟评价日，coverage pass share=1.0。执行COMPLETED、效果BELOW_BINDING_MBE；这不是未知数据缺口、正常停牌/停发或数值失败造成的终态。
+
+| 同222日口径 | 候选 | 原delta基线 |
+|---|---|---|
+| mean daily Rank IC | 0.018100248031013167 | 0.01804921719709577 |
+| 展示状态真实10D spread | 0.0013824402023636126 | 0.001929789977978202 |
+
+候选减基线IC均值=0.00005103083391739742，HAC95%区间[-0.005580388888226639,0.005682450556061434]。两块候选IC约0.03301/0.00178；块差不能证明机制时变。结论：两项同源特征的监督拟合未产生可信增量，候选低于既有0.02量级；不是所有非线性模型、价格信息或HMM均已被证伪。原358日0.0297321不能与本222日横比。
+
+model hash=518fbb2ac7cf1b574d1a2fafe9545f442cafe2ad5ec05a872d0435133cc69aa9；参数hash=cf572c524548fb3705917fdd074aa84fa86a8db8351c17497d26119c4a80e3aa；双process预测hash=199db281e8c5a1307e6c073426c0d7904d2853f12e7fd06fa9308f9f2a3e1b1c。只引用既有结果，不复制输入/预测或重建历史证据。
+
+该候选已经结束：不改alpha、窗口、符号、特征或阈值重跑；原基线及产品未覆盖。surface/capability/advisory=NOT_AVAILABLE、forward=NOT_STARTED、tail未读、数据库/数据集/runtime动作=0。本轮仅文档同步，新增fit=0；新互补信息提案另有精确合同，不从此批准自动继承。

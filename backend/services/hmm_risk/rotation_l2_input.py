@@ -766,4 +766,38 @@ def build_rotation_l2_input_bundle(
     return body
 
 
-__all__ = ["build_rotation_l2_input_bundle"]
+def bounded_price_features(source: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze official price facts for t-1 features, separately from label views."""
+    parsed = validate_input_bundle(source)
+    calendar = list(parsed["calendar"])
+    binding = source["evaluation_source_binding"]
+    root = Path(binding["root"])
+    if not root.is_absolute():
+        raise _fail("source_invalid", "price feature root must be absolute")
+    files = {name: _require_file(root, binding[name]["path"], binding[name]["sha256"]) for name in ("sector", "index")}
+    body = {
+        "schema_version": "hmm_risk_rotation_l2_official_price_features_v1",
+        "start": calendar[0].isoformat(),
+        "end": calendar[-2].isoformat(),
+        "sector_returns": _sector_returns(
+            files["sector"],
+            id_to_code={int(k): v for k, v in binding["id_to_code"].items()},
+            quote_entries={
+                code: tuple((date.fromisoformat(a), date.fromisoformat(b)) for a, b in spans)
+                for code, spans in binding["quote_entries"].items()
+            },
+            catalog=list(parsed["catalog_codes"]),
+            calendar=calendar,
+            start=calendar[0],
+            end=calendar[-2],
+        ),
+        "benchmark_close": bounded_benchmark_close(files["index"], start=calendar[0], end=calendar[-2]),
+        "source_pins": {name: dict(binding[name]) for name in files},
+    }
+    for name in files:
+        _require_file(root, binding[name]["path"], binding[name]["sha256"])
+    body["price_sha256"] = canonical_sha256(body)
+    return body
+
+
+__all__ = ["build_rotation_l2_input_bundle", "bounded_price_features"]
