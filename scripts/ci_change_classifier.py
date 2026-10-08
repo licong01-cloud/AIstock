@@ -470,6 +470,17 @@ def _is_python_test_file(path: str, *, repo_root: Path) -> bool:
     )
 
 
+def _is_frontend_test_file(path: str, *, repo_root: Path) -> bool:
+    normalized = _normalize_path(path)
+    name = normalized.rsplit("/", 1)[-1]
+    return (
+        normalized.startswith(("frontend/tests/", "frontend/e2e/", "frontend/src/"))
+        and any(name.endswith(f".{kind}.{ext}") for kind in ("spec", "test")
+                for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs"))
+        and (repo_root / normalized).is_file()
+    )
+
+
 def _resolve_nox_literal(node: ast.AST, values: dict[str, list[str]]) -> list[str]:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return [node.value]
@@ -662,6 +673,7 @@ def _changed_test_plan_coverage(
     *,
     repo_root: Path,
     file_backend_sessions: dict[str, list[str]],
+    frontend_test_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     test_files = [path for path in paths if _is_python_test_file(path, repo_root=repo_root)]
     selected_sessions = list(
@@ -683,9 +695,19 @@ def _changed_test_plan_coverage(
             for session in sessions
             if any(_test_target_covers_path(target, path) for target in targets_by_session.get(session, set()))
         ]
+    # Type/lint is not execution of a changed spec. Compare only the targets
+    # emitted to the frontend runner; never infer coverage from module ownership.
+    frontend_tests = [path for path in paths if _is_frontend_test_file(path, repo_root=repo_root)]
+    for path in frontend_tests:
+        coverage[path] = [
+            f"frontend:{target}" for target in frontend_test_targets or []
+            if _test_target_covers_path(f"frontend/{target}", path)
+        ]
     unexecuted = [path for path, covering_sessions in coverage.items() if not covering_sessions]
     return {
-        "changed_test_files": test_files,
+        "changed_test_files": test_files + frontend_tests,
+        "backend_changed_test_files": test_files,
+        "frontend_changed_test_files": frontend_tests,
         "coverage": coverage,
         "deferred_test_files": deferred_test_files,
         "resolution_error": resolution_error,
@@ -750,7 +772,8 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             if _plan_requires_dev_db(plan) and plan_key not in dev_db_plan_keys:
                 dev_db_plan_keys.append(plan_key)
             target = str(plan.get("frontend_test_path") or "").strip()
-            if plan.get("ci_lane") == "frontend" and target and target not in frontend_test_targets:
+            if (plan.get("ci_lane") == "frontend" and plan.get("enabled", True)
+                    and plan.get("runner_enabled", True) and target and target not in frontend_test_targets):
                 frontend_test_targets.append(target)
         has_related_deferred_plan = any(
             plan_key not in SHARED_PLAN_KEYS
@@ -1023,6 +1046,7 @@ def classify_changed_files(
         business_files,
         repo_root=repo_root,
         file_backend_sessions=catalog_selection["file_backend_sessions"],
+        frontend_test_targets=frontend_test_targets,
     )
     unexecuted_test_files = changed_test_plan_coverage["unexecuted_test_files"]
     if changed_test_plan_coverage["resolution_error"]:
@@ -1165,7 +1189,8 @@ def classify_changed_files(
         "codeql_pr_test_only": bool(codeql_languages) and not codeql_pr_languages,
         "unmapped_code_files": unmapped_code_files,
         "changed_test_plan_coverage": changed_test_plan_coverage,
-        "backend_changed_test_files": changed_test_plan_coverage["changed_test_files"],
+        "backend_changed_test_files": changed_test_plan_coverage["backend_changed_test_files"],
+        "frontend_changed_test_files": changed_test_plan_coverage["frontend_changed_test_files"],
         "unexecuted_test_files": unexecuted_test_files,
         "obsolete_surface_removal": bool(deleted_files),
         "nightly_deferred_verification": {
