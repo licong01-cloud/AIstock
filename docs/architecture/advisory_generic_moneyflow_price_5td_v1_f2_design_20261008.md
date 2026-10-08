@@ -157,4 +157,6 @@ clean producer `9b4171e64558b8d573a33fc9fbecf65312c98e7c`、implementation SHA `
 
 资金对base80完整配对5TD cohort均值增量−90.4159bps，对GP581个成熟配对增量−14.0295bps、原5D block CI95 [−43.7728,7.4473]、MDE80 36.9422bps。base成熟panel有1个内生未结算洞，CI/MDE=null，绝不删洞重连；单纯负点估计不宣称显著性。已知干预对base164episode/57D/70.3704%、对GP559episode/36D/44.4444%，达到预登记数量要求，regime仍UNKNOWN。
 
-结论NEGATIVE_STOP_THIS_CANDIDATE；本资金块未在当前固定5TD/九字段/模型族/已消费开发窗下带来成本后增量，只结束此candidate。0独立OOS/新sealed/自然前向/真实限价fill/配置激活/QE提交/数据库写/其它模块或服务控制；不派生同族参数搜索或为负结果收集证据。模型文件SHA身份、实际配对归因与修正收据在当前交付后填入；累计131真实研究fit＋1旧INDEX_BUILD，不因计算修正加计。
+模型身份 `885a6487973263136d22138be13a219d47f64d3a0a95949b8d11148b7189e1cb` 原样保持；计量修正producer `2f4d535ab60c64cb123d0bdb6e2278a4918c85cb`、implementation `0807158a6764f13b92ee79aeb4513771d0e2be8a0ca77191066b00b697a753f7`，原子附加收据在本run的 `measurement_correction_v1/evaluated/receipt.json`，文件SHA `0af347c668314f641ca8e9d05c3267b5527e304a7e4a6f5cd4e7c974bda9b1ba`；正式新产物共3,212,177 bytes。同80完整日base/rule/frozen GP5/candidate均值135.3458/132.8314/59.1348/44.9299bps。对base配对归因：避免亏损3549.1988、错失盈利10844.0874、已知动作净−7294.8886bps（五槽加权总和，非每日均值），UNKNOWN空槽差+61.6172另列、不归模型；净−7233.2714=80×−90.4159。对GP5已知净−1136.3933=81×−14.0295，UNKNOWN差0。不同arm完整日均值不直接相减，统一四臂面板80D与GP5对照81D分报；补救的是汇总错误，不是负模型。
+
+结论NEGATIVE_STOP_THIS_CANDIDATE；本资金块未在当前固定5TD/九字段/模型族/已消费开发窗下带来成本后增量，只结束此candidate。0独立OOS/新sealed/自然前向/真实限价fill/配置激活/QE提交/数据库写/其它模块或服务控制；不派生同族参数搜索或为负结果收集证据。累计131真实研究fit＋1旧INDEX_BUILD，不因计算修正加计。源码PR/currentCI/合入和自身cleanup仍独立处理，不由负结论推断已交付。
