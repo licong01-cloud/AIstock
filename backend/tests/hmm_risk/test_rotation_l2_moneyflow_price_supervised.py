@@ -102,6 +102,67 @@ def test_formal_numeric_contract_remains_fixed():
     }
 
 
+@pytest.mark.parametrize("reference_drift", [False, True])
+def test_cold_preflight_captures_the_same_numeric_pools_as_fit_without_fitting(reference_drift):
+    """Isolate cold imports: module-level fixtures otherwise mask lazy sklearn loading."""
+    root = Path(__file__).resolve().parents[3]
+    env = {**os.environ, **{key: "1" for key in subject.THREADS}, "PYTHONPATH": str(root)}
+    control = """
+import json
+from backend.services.hmm_risk import rotation_l2_moneyflow_price_supervised as m
+from sklearn.linear_model import Ridge
+from threadpoolctl import threadpool_limits
+with threadpool_limits(limits=1):
+    print(json.dumps(m.numeric_environment()))
+"""
+    reference = subprocess.run(
+        [sys.executable, "-c", control], cwd=root, env=env, capture_output=True, text=True, check=False
+    )
+    assert reference.returncode == 0, reference.stderr
+    expected = json.loads(reference.stdout)
+    if reference_drift:
+        expected["versions"]["scikit-learn"] = "0.0.0"
+    program = """
+import json, sys
+from pathlib import Path
+from backend.services.hmm_risk import rotation_l2_moneyflow_price_supervised as m
+from backend.services.hmm_risk import rotation_l2_input as reader
+assert 'sklearn.linear_model' not in sys.modules, 'test must begin with a cold model import'
+expected = json.loads(sys.argv[1])
+# Only file construction and unrelated shape validation are stubbed. The actual
+# prepare_inputs numeric initialization, thread limit and comparison remain live.
+m.ridge.prepare_inputs = lambda **kwargs: {'source': {}}
+m._reference = lambda path: ({'numeric_environment': expected, 'input_identity': {}}, {})
+reader.bounded_price_features = lambda source: {}
+m.validate_input = lambda bundle: None
+def forbid_fit(frame, event, arg):
+    if event == 'call' and frame.f_code.co_name == 'fit':
+        raise AssertionError('preflight must never fit')
+sys.setprofile(forbid_fit)
+try:
+    bundle = m.prepare_inputs(reference_acceptance_path=Path('reference.json'))
+finally:
+    sys.setprofile(None)
+assert bundle['numeric_environment'] == expected
+print(json.dumps({'matches_fit_environment': True, 'fits': 0}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", program, json.dumps(expected)],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if reference_drift:
+        assert result.returncode != 0
+        assert "preflight numeric payload differs from the approved prior environment" in result.stderr
+        assert "preflight must never fit" not in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {"matches_fit_environment": True, "fits": 0}
+
+
 def test_numeric_drift_is_rejected_even_after_rehash(price_panel):
     for key, value in (
         ("python", "0.0.0"),

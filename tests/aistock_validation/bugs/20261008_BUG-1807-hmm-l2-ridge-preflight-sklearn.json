@@ -1,0 +1,259 @@
+{
+  "actual": "preflight 两个 pools 对 frozen 三个 pools 不等，hmm_risk_rotation_l2_supervised_identity_invalid，completed_fits_known=0",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+    "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+    "tests/aistock_validation/bugs/20261008_BUG-1807-hmm-l2-ridge-preflight-sklearn.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1807",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-08T05:37:48.842950Z",
+  "description": "正式预检在加载 sklearn.linear_model.Ridge 前采集线程池，冷进程漏掉 vcomp OpenMP pool，误报与既有冻结数值环境不一致。Python、NumPy、SciPy、scikit-learn 和 threadpoolctl 实际版本未变；按 child 的估计器导入顺序加载后环境精确一致。修复只持久化依赖初始化顺序，保留数值身份严格比较，不改变模型、参数、特征、窗口、阈值或任何输入 pin。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261008-55d4501e2b61",
+      "timestamp": "2026-10-08T05:37:48.842932Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock_runtime\\hmm_rotation_l2\\moneyflow_price_20261008_6c7073b79\\input.json.failure.json"
+  ],
+  "expected": "preflight 与 child 都在批准模型数值依赖加载完成后采集同一完整单线程环境，真实环境漂移仍 fail closed",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1807-hmm-l2-ridge-preflight-sklearn.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1807-hmm-l2-ridge-preflight-sklearn.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+        "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+        "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py"
+    ]
+  },
+  "first_seen_at": "2026-10-08T05:37:48.842950Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5749,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5749",
+  "last_seen_at": "2026-10-08T05:37:48.842950Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "rtk pytest backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py::test_cold_preflight_captures_the_same_numeric_pools_as_fit_without_fitting -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "research_execution_status": {
+    "database_write": false,
+    "dataset_write": false,
+    "dependency_install": false,
+    "formal_fits": 0,
+    "offline_experiment_requires_backend_restart": false,
+    "runtime_action": false,
+    "tail_accessed": false
+  },
+  "risk_area": "bug",
+  "root_cause": "cold preflight discovers native pools before loading the Ridge dependency chain; fit children discover pools after that import",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview",
+    "fresh_process_evidence": [
+      "Conda base python -c imports backend.services.hmm_risk.rotation_l2_moneyflow_price_supervised and backend.routers.hmm_risk and backend.routers.health -> passed; model contract SHA 6412997efb07059adcb22b59b9e75e2fea94e0e142ae363694c5014cf1d81e47 unchanged; cold preflight process matches fit environment without fit, reference version drift rejected"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM L2 四特征 Ridge preflight 在加载 sklearn 前采集线程池导致冻结环境误报",
+  "trigger_condition": {
+    "fingerprint": "55d4501e2b61a1a9a2fe4f91",
+    "source_event_id": "FE-20261008-55d4501e2b61"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
