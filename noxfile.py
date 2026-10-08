@@ -3145,7 +3145,6 @@ def validation_catalog_integrity(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/test_validation_catalog_integrity.py",
-        "backend/tests/scripts/test_aistock_validation_budget.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -3177,6 +3176,7 @@ def validation_workflow_automation(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_aistock_validation_budget.py",
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
         "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",

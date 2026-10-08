@@ -21,6 +21,16 @@ def _reset_nox_env_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile, "_VALIDATION_ENV_LOADED", False)
 
 
+def test_budget_contract_is_not_nested_in_catalog_but_remains_in_nightly():
+    from scripts.ci_change_classifier import _selected_nox_test_targets
+    targets, error = _selected_nox_test_targets(repo_root=ROOT,
+        sessions=['validation_catalog_integrity', 'validation_workflow_automation'])
+    assert error is None
+    budget = 'backend/tests/scripts/test_aistock_validation_budget.py'
+    assert budget not in targets['validation_catalog_integrity']
+    assert budget in targets['validation_workflow_automation']
+
+
 def test_l0_scan_paths_use_explicit_scope_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("git should not run"))
 
