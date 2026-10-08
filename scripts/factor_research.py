@@ -36,6 +36,13 @@ def configure(env_file: Path, target: str):
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     sub = result.add_subparsers(dest="command", required=True)
+    for command in ("experience", "proposal-inspect"):
+        item = sub.add_parser(command)
+        item.add_argument("--input", type=Path, required=True)
+        item.add_argument("--format", choices=("summary", "json"), default="summary")
+        if command == "proposal-inspect":
+            item.add_argument("--request", type=Path, required=True)
+            item.add_argument("--context", type=Path)
     salvage = sub.add_parser("salvage")
     salvage.add_argument("--input", type=Path, required=True)
     salvage.add_argument("--artifact-root", type=Path, required=True)
@@ -89,6 +96,13 @@ def parser():
 
 
 def dispatch(args):
+    if args.command in {"experience", "proposal-inspect"}:
+        from backend.services.factor_research.assistance import experience, inspect_proposal
+
+        payload = read_json(args.input)
+        result = experience(payload) if args.command == "experience" else inspect_proposal(
+            payload, read_json(args.request), read_json(args.context) if args.context else None)
+        return response(result=result)
     if args.command == "salvage":
         from backend.services.factor_research.rdagent_salvage import run_salvage
 
