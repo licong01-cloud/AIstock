@@ -1,8 +1,8 @@
 # HMM Evolution Phase 2：L2互补信息与风险实用价值连续任务详细设计
 
-> 版本：v1.5；日期：2026-10-09；owner：HMM；tier：F2。
-> 状态：APPROVED_BY_USER_FORMAL_EXPERIMENTS_COMPLETED_RANK_PRODUCTION_RESEARCH_VERIFIED_VALUE_UNPROVEN。原§3～§10及§15精确公式、模型、输入、特征、窗口、参数和效果规则不变。rank正式2/2 fits、30,392行DEV/生产writer/独立回读及用户重启后的真实API/无mock UI已完成，生产surface=AVAILABLE_EXPERIMENTAL、advisory=NOT_AVAILABLE；BUG-1807 close-sync #5754已合入/关闭。#5781 return-target正式2/2 fits也已结束，IC=0.0247737、spread=+0.00038245，但没有可信经济增量，只文件交付、不替换生产。各维度见§11/§15；§16零fit价值消费D1～D6已于2026-10-09批准；源码/直接测试已完成，正式双process回放待源码授权交付，不推导合入或生产采用。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.82。只展开申万L2预测及风险实用价值，不重建旧实验链。
+> 版本：v1.6；日期：2026-10-09；owner：HMM；tier：F2。
+> 状态：APPROVED_BY_USER_FORMAL_EXPERIMENTS_COMPLETED_RANK_PRODUCTION_RESEARCH_VERIFIED_VALUE_UNPROVEN。原§3～§10及§15/§16 D1～D6精确公式、模型、输入、特征、窗口、参数和效果规则不变。rank正式2/2 fits、30,392行DEV/生产writer/独立回读及用户重启后的真实API/无mock UI已完成，surface=AVAILABLE_EXPERIMENTAL、advisory=NOT_AVAILABLE；BUG-1807 close-sync #5754已合入/关闭。#5781 return-target正式2/2 fits也已结束，IC=0.0247737、spread=+0.00038245，无可信增量、只文件交付。§16源码#5791已合入，正式双process零fit参考回放已完成：16/16路径完整、20个全期paired区间跨零；结果见§16.3，不推导生产采用或独立确认。后续新窗口验证见另页待批准设计，不重复本页模型或回放。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.83。只展开申万L2预测及风险实用价值，不重建旧实验链。
 > 初始review base：067ee3505df98caf958350793475285b2b3b73a8。实际授权和各执行状态独立报告；已有两份消费与两特征Ridge均不再运行。
 
 ## 1. Background、终极目标与唯一假设
@@ -173,7 +173,7 @@ selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED：已看过本区间旧实验
 
 ## 9. Verification Plan与三轮审修要求
 
-以下为原模型完整验证合同；源码历史验证见§13.2，正式preflight与2-fit真实结果见§13.3，结果分析与无写入产品转换见§13.4。原rank DEV/生产迁移、写入和真实产品API/UI已完成，见§11；return仍只文件交付，新§16正式参考回放未执行，各自验收不得互相代报。
+以下为原模型完整验证合同；源码历史验证见§13.2，正式preflight与2-fit真实结果见§13.3，结果分析与无写入产品转换见§13.4。原rank DEV/生产迁移、写入和真实产品API/UI已完成，见§11；return仍只文件交付，§16正式参考回放已执行、结果见§16.3，各自验收不得互相代报。
 
 - 20/25日预热及首日锚；pct百分比→小数/benchmark逐日收益/累计收益差/下行半偏差手算；源日期/列poison确保无decision当日或tail数值读取。
 - sparse ID/131目录、成员PIT/单成员/正常停牌/停发/zero-downside；报价NaN与moneyflow有限分离；未知alias/应有缺数/非有限显式失败。
@@ -202,7 +202,7 @@ selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED：已看过本区间旧实验
 
 F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真实比较，F-005=D5产品/身份，F-006=D6边界/停止。
 
-RV-001=§16 D1封闭身份/全人口，RV-002=D2时间因果，RV-003=D3四臂cohort，RV-004=D4成本/NA，RV-005=D5完整价值统计，RV-006=D6零fit/停止。批准和源码验收见§16.2，正式回放不能用单元测试代报。
+RV-001=§16 D1封闭身份/全人口，RV-002=D2时间因果，RV-003=D3四臂cohort，RV-004=D4成本/NA，RV-005=D5完整价值统计，RV-006=D6零fit/停止。批准和源码验收见§16.2，正式回放见§16.3，不能用单元测试代报。
 
 ## 11. Design Acceptance Matrix与实际状态
 
@@ -375,7 +375,7 @@ return自身spread HAC95%=[-0.00562974926130985,0.006394646175073454]，两个�
 
 本轮只读核对两份既有acceptance的byte/canonical pins、reference authority、mapping/quote hash、30,392逐键outcome和原rank/delta指标一致，零新增fit、源重建或tail读取。新outcome wrapper包含新schema/input/reference pins，其hash理应不同；比较的是相同逐键封闭facts，不要求不同版本的wrapper hash相等。旧acceptance均未改写，没有复制完整预测或另建历史证据档案。return继续文件交付，既有rank研究产品可用但不自动替换默认；未证明经济增益不是源码BUG，不再反复“修复”模型以制造通过。
 
-## 16. 当前完整任务：零fit匹配经济价值回放（已批准，尚未执行）
+## 16. 已完成业务包：零fit匹配经济价值回放
 
 唯一待回答问题：同一申万L2、同一历史日期、同一可用人口和长仓参考消费规则下，既有排序相对无排序参照是否有收益或风险价值。建议复用现有delta/rank/return封闭预测及其同源价格事实，不新模型、不搜索horizon/特征/参数，不把展示前后10当计算人口。风险原模型/两份消费结论保持，QE仍由QE窗口后置。
 
@@ -402,7 +402,7 @@ return自身spread HAC95%=[-0.00562974926130985,0.006394646175073454]，两个�
 
 四项逐条：完整131目录/222成熟decision和既有三排序对照不缩为UI子集，规划不冒充实现；NA/有限值/负spread/宽区间不隐瞒或补值；旧模型精确公式、源/hash、风险政策、生产默认及其他模块行为保持；新消费全部pending，不增加promotion、资源或记录审批门。实际仅两份HMM文档与ignored只读分析脚本，新增fit=0、tail/数据库/数据集/激活/依赖/服务动作均未执行。
 
-### 16.2 批准后的实施范围与验收索引
+### 16.2 批准后的实施范围与验收索引（正式回放前的历史记录）
 
 allowed_write_scope仅包括本设计、父蓝图、`scripts/hmm_risk/rotation_l2_reference_value.py`、`scripts/hmm_risk/run_rotation_l2_reference_value.py`及`backend/tests/hmm_risk/test_rotation_l2_reference_value.py`。实现和CLI只离线读取现存冻结文件；不接入router、runtime registry或环境变量。原模型与产品行为不变，不修改全局CI、测试计划或其他模块。
 
@@ -422,3 +422,22 @@ DESIGN-COMPLIANCE-001：完整131/222/四臂四成本不缩为UI子集；合法N
 | RV-004 D4成本与合法NA | scripts/hmm_risk/rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
 | RV-005 D5完整价值统计 | scripts/hmm_risk/rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
 | RV-006 D6零fit及停止边界 | scripts/hmm_risk/run_rotation_l2_reference_value.py | backend/tests/hmm_risk/test_rotation_l2_reference_value.py | APPROVED_BY_USER_SOURCE_VERIFIED | undefined |
+
+### 16.3 正式双process零fit结果及后续边界（2026-10-09）
+
+源码PR #5791已合入，merge=`84278758c1cea0cd00d6fa2796c00ce689fd8828`；正式运行在该固定源码的独立validation worktree，不使用未提交源码。结果：`F:/Dev/AIstock_runtime/hmm_rotation_l2/reference_value_20261009_84278758c/run/acceptance.json`，1,338,254 bytes，byte SHA=`9260b1a2765d40fcc7491e5092d20382a01c543f47988f787fcc42414f0a4b47`，canonical SHA=`9610eccec6fa76c61446dc4ec4baa491b00f5bc4f6ab83acb9be6ce51b67c523`，业务result canonical SHA=`b6b9ff3b3304eeeec4d127f21de4b876f4c3846698940734d3360cd3c727e84e`。2026-10-09本轮再读回并重算结果身份通过，未重跑回放。
+
+两个fresh process业务payload bitwise一致；新增fits=0，filter/model.predict=0，tail≥2026-04-01数值读取=0，DB/数据集/生产run/环境变量/服务动作=0。131目录、130共同可用行业、三个排序臂各26个trending；2025-04-16..2026-03-17共222成熟decision，估值至2026-03-31共232日。四臂×四成本共16完整路径，missing_valuation_days=0。RV-001～RV-006正式回放均有实际读回；“通过”仅指本页参考计算合同，不是经济有效或产品采用。
+
+| 参考臂 | 0bp累计收益 | 5bp累计收益 | 10bp累计收益 | 20bp累计收益 | 0bp MDD幅度 |
+|---|---:|---:|---:|---:|---:|
+| no_order | 25.48185% | 22.72676% | 20.03217% | 14.81923% | 9.87378% |
+| rank | 24.98376% | 22.24074% | 19.55793% | 14.36772% | 7.21120% |
+| return | 26.77487% | 23.99263% | 21.27146% | 16.00703% | 7.50067% |
+| delta | 25.37512% | 22.62318% | 19.93166% | 14.72461% | 9.24674% |
+
+return毛收益相对no_order高1.293014个百分点、MDD较小2.373108个百分点；rank收益低0.498097个百分点、MDD较小2.662575个百分点。20个全期paired HAC lag9区间全部跨零；两原固定块return/no_order累计收益为21.17376%/21.22298%和4.62237%/3.51326%，不能只用后块正差宣称稳定增益。完整数字、敞口/换手及成本由同一结果读回，不新增历史结果副本。
+
+结论为已消费development中的`REFERENCE_VALUE_INCONCLUSIVE`（结论说明，不覆盖原receipt执行状态）；点估计值得新的独立历史检验，但不是稳定经济增量、真实股票净收益或QE有效证明。`selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED`、`qe_net_value_status=UNASSESSED`；原0.02研究规则、rank生产surface、return文件交付及风险原政策保持。
+
+下一步与P0结果同步合为一个连续业务设计：`hmm_evolution_phase2_l2_frozen_history_validation_detailed_design_20261009.md`。P1固定原两模型参数/delta及同一消费规则验证新历史；P2固定原20D风险模型/即时warning独立报告价值。新窗口/推断/消费精确合同尚待批准，未消费独立性尚未核实，不把该提案计作执行完成；本页旧合同和成果不再运行，也不归档旧证据。自然停发导致持仓引用不可估值时诚实报告路径不足，不提前按未来停发删除行业或补价格。
