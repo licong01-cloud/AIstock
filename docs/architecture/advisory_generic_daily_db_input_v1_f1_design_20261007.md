@@ -1,6 +1,6 @@
 # Advisory 通用九字段日频DB输入 F1详细设计
 
-2026-10-07，SOURCE_VERIFIED、真实历史DB只读读回通过；依赖BUG-1778公共source-role分类未闭合，未报告合入。本切片解除固定5TD消费者仅能由调用方准备D字段的功能缺口，不新训模型、不增加资格门。
+2026-10-08，SOURCE_VERIFIED（本源码提交前状态；当前CI与合入另报）、真实历史DB只读读回通过。BUG-1778 源码 #5717 / close-sync #5718 已合入，原公共分类阻断解除。本切片解除固定5TD消费者仅能由调用方准备D字段的功能缺口，不新训模型、不增加资格门。
 
 ## Background / Goal
 
@@ -21,7 +21,7 @@
 
 ## Implementation Plan
 
-设计三视角/F1/diff先合入→独立四文件 source→三个有界SELECT/单位坐标转换/调用同pure builder→同日批量与UNKNOWN/PIT/只读三视角复审修复→一套小cursor fixture直接测试/Ruff/L0/F1/current CI→合入、自身清理。只读实际历史D做一次源功能校验，不读收益/旧负实验结果；数据库不可用只停真DB验收，不假mock完成。联合分布研究仍独立prepare-only等QE；这不是新QE/模型实验，0研究fit计数。该CLI/library切片无需后端重启，后续API挂载单独任务，用户重启边界保留。
+设计三视角/F1/diff先合入→独立四文件 source→三个有界SELECT/单位坐标转换/调用同pure builder→同日批量与UNKNOWN/PIT/只读三视角复审修复→一套小cursor fixture直接测试/Ruff/L0/F1/current CI→合入、自身清理。只读实际历史D做一次源功能校验，不读收益/旧负实验结果；数据库不可用只停真DB验收，不假mock完成。这不是新QE/模型实验，不重跑已结束联合分布或Exit研究，0新增研究fit。该CLI/library切片无需后端重启，后续API挂载单独任务，用户重启边界保留。
 
 ## Verification Plan / Design Acceptance Index
 
@@ -55,8 +55,8 @@
 
 ## Review / 多轮自审
 
-业务轮：必要日频DB→九字段适配，不再增加UI/旧证据/ModelOps；model training和parent QE不存在依赖。PIT轮：精确D anchor和原20session、不使用T quote/未来factor；正常缺失独立保留，股票池只来源元数据、不将上市/停牌再设置父包准入。性能轮：三SELECT按请求KEY批量去重、同核单日/批，超限取+1后失败不截断，空人口不访问DB；复用既存只读session/纯公式，无公共改动。以上为本窗口自审、设计合同通过，不冒称实现或真实DB已验收。
+业务轮：必要日频DB→九字段适配，不再增加UI/旧证据/ModelOps；model training和parent QE不存在依赖。PIT轮：精确D anchor和原20session、不使用T quote/未来factor；正常缺失独立保留，股票池只来源元数据、不将上市/停牌再设置父包准入。性能轮：三SELECT按请求KEY批量去重、同核单日/批，超限取+1后失败不截断，空人口不访问DB；复用既存只读session/纯公式，无公共改动。以上为本窗口设计审查；实现与真实只读验收结果以下文独立记录为准，不冒称API或模型收益验收。
 
 源码第一轮发现并修复原生date无法JSON哈希的问题，只在新reader规范日期，不改公共hash/helper；第二轮发现旧pure的整列None比较Bug，独立BUG-1778，不用假价格/压缩日期绕过。第三轮确保严格数值校验后float缺失类型，原OHLC矛盾即便复权坐标未知也拒绝；成交量不随factor缺失丢失。第四轮校验真实上海EOD时钟、30秒预算关闭、不伪行情完整/历史vintage；最终7项矩阵/Ruff通过及单日/20日批量真实只读功能验收。第五轮补全缺raw和benchmark的1项定向测试，仍保留原名单而非空人口，单节点通过，未重跑整套矩阵；共8项直接测试已通过。均为本窗口多视角自审，不冒称独立外审。
 
-交付依赖：BUG-1778本地ba12ffe87，经官方nox l0通过，但canonical finish因公共runtime source-role将纯builder判为backend-main且合同缺失而阻断。该公共分类交给流水线owner，不由Advisory修改、不降级或伪造运行证据。当前DB树本地合入该依赖用于真测试，最终DB PR须待其进入main后核对精确四文件差异，不把BUG与业务功能合成大PR。联合分布原producer字节不改、训练未开始、累计111fit+1旧index不变。
+交付接续：公共分类 #5712 已修复；BUG-1778 源码 #5717（9adcceb4）和 close-sync #5718（f1db67e1）已合入，Issue #5645 已关闭，non-runtime 无需后端重启。2026-10-08 原DB树同步当前main，冲突保留主线的正式BUG闭环与后续研究进展；最终PR仅本设计规定的四文件，不重复提交BUG源码或公共合同。同步后的8项定向、Ruff、L0及F1六项矩阵全通过；同一只读20D/400候选复验仍为3个数据SELECT，总11.031秒（calendar0.015/raw9.344/benchmark0.953秒），8字段各400已知、市场宽度UNKNOWN。速度依赖缓存与并发负载，不把两次耗时差异解释为模型性能。原129研究fit+1旧INDEX_BUILD保持，0新增训练/收益读取；后续API仍须独立源码、用户重启与历史业务验收。
