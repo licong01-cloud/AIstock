@@ -27,14 +27,22 @@
   "evidence_uris": [],
   "expected": "Read exact known historical types without changing protection or ownership semantics; unknown types return explicit typed error",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/package_asset.py",
+      "backend/services/strategy_package/repository.py",
+      "backend/tests/strategy_package/test_legacy_asset_readback.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1810-strategy-package-asset-readback-rejects-exact-legacy-ledger-types.json"
+    ],
     "added_files": [
       "backend/tests/strategy_package/test_legacy_asset_readback.py"
     ],
     "changed_files": [
+      "backend/services/strategy_package/package_asset.py",
       "backend/services/strategy_package/repository.py",
-      "backend/services/strategy_package/package_asset.py"
+      "backend/tests/strategy_package/test_legacy_asset_readback.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1810-strategy-package-asset-readback-rejects-exact-legacy-ledger-types.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/repository.py",
@@ -127,14 +135,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["python -m pytest backend/tests/strategy_package/test_legacy_asset_readback.py -q -> fresh-process loads persistent exact legacy deserializer; no database mutation"],
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/strategy_package/test_legacy_asset_readback.py -q -> fresh-process loads persistent exact legacy deserializer; no database mutation"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
