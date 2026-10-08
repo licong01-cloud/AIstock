@@ -32,21 +32,21 @@
   "expected": "严格证实只写cutoff之后的TDX raw增量不会阻断目标月份；相交、未知、全历史复权写入继续按真实范围处理",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261008_BUG-1816-monthly-source-journal-blocks-target-month-on-bounded-post-cutoff-tdx-wr.json",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_repair_journal.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_repair_journal.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261008_BUG-1816-monthly-source-journal-blocks-target-month-on-bounded-post-cutoff-tdx-wr.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261008_BUG-1816-monthly-source-journal-blocks-target-month-on-bounded-post-cutoff-tdx-wr.json",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_repair_journal.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_repair_journal.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261008_BUG-1816-monthly-source-journal-blocks-target-month-on-bounded-post-cutoff-tdx-wr.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -135,8 +135,8 @@
   },
   "first_seen_at": "2026-10-08T15:38:30.119777Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "155a65997226f0cf5d8000636d068a7aaf8a345e",
+  "fixed_at": "2026-10-08T15:54:58Z",
   "github_issue_number": 5787,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5787",
   "last_seen_at": "2026-10-08T15:38:30.119777Z",
@@ -144,6 +144,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5789",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -168,6 +169,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -179,7 +181,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1816",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "eb915d9873075bf9",
+    "recorded_at": "2026-10-08T15:55:52.199660Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f6dabc9b8434c0f99baea375ddd8892ea713be9b",
+    "source_merge_commit": "155a65997226f0cf5d8000636d068a7aaf8a345e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5789",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py -q -> passed (218 passed, 49 skipped)",
+      "python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py::test_bounded_tdx_scope_sql_in_readonly_dev backend/tests/dataset_release/test_monthly_repair_journal.py::test_actual_overlap_sql_in_readonly_dev backend/tests/dataset_release/test_monthly_repair_journal.py::test_actual_postgres_writer_query_in_readonly_dev -q -> passed (49 passed; existing DEV readonly)",
+      "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed",
+      "ruff check changed files -> passed"
+    ],
+    "validation_evidence_digest": "5c9385ca585a2d91e02ab7bef7f304576475817d9c4f1afcede23fa3b9614cd1"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -188,6 +214,12 @@
     "fingerprint": "8afb76f935301648b2e09505",
     "source_event_id": "FE-20261008-8afb76f93530"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_snapshot.py -q -> passed (218 passed, 49 skipped)",
+    "python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py::test_bounded_tdx_scope_sql_in_readonly_dev backend/tests/dataset_release/test_monthly_repair_journal.py::test_actual_overlap_sql_in_readonly_dev backend/tests/dataset_release/test_monthly_repair_journal.py::test_actual_postgres_writer_query_in_readonly_dev -q -> passed (49 passed; existing DEV readonly)",
+    "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed",
+    "ruff check changed files -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
