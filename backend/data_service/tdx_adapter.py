@@ -8,8 +8,9 @@ historical windows compatible with other adapters.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
-from typing import Dict, List, Optional, Tuple
+import math
+from datetime import date, datetime, timedelta, timezone
+from typing import Dict, List, Optional
 
 import os
 
@@ -139,11 +140,14 @@ def fetch_realtime_snapshot_tdx(
             if v is None:
                 return None
             try:
-                return float(v) / scale
-            except Exception:
-                return None
+                value = float(v) / scale
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError(f"TDX snapshot {name} is invalid: {instrument}") from exc
+            if isinstance(v, bool) or not math.isfinite(value):
+                raise RuntimeError(f"TDX snapshot {name} is non-finite: {instrument}")
+            return value
 
-        close = _p("Last")
+        close = _p("Close")
         open_ = _p("Open")
         high = _p("High")
         low = _p("Low")
@@ -204,7 +208,8 @@ def fetch_minute_kline_tdx(
     """
     tdx_code = _to_tdx_code(instrument)
     url = f"{TDX_BASE_URL}/api/kline-all/tdx"
-    resp = requests.get(url, params={"code": tdx_code, "type": "minute1"}, timeout=10)
+    resp = requests.get(url, params={"code": tdx_code, "type": "minute1",
+                                   "start_date": trade_date.isoformat(), "end_date": trade_date.isoformat()}, timeout=10)
     resp.raise_for_status()
     payload = resp.json()
 
@@ -216,37 +221,65 @@ def fetch_minute_kline_tdx(
     if not data or not isinstance(data, dict):
         return []
 
-    kline_list = data.get("list") or []
+    kline_list = data.get("list")
+    if not isinstance(kline_list, list):
+        raise RuntimeError("TDX kline response lacks fact list")
 
     bars: List[Dict] = []
     for k in kline_list:
         if not isinstance(k, dict):
-            continue
+            raise RuntimeError("TDX minute fact is not an object")
 
         time_str = k.get("Time")
         if not time_str:
-            continue
+            raise RuntimeError("TDX minute fact lacks timestamp")
 
         # Time 格式: "2026-03-18T09:31:00+08:00" 或类似 ISO 格式
         try:
             bar_time = datetime.fromisoformat(time_str)
-        except (ValueError, TypeError):
-            continue
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("TDX minute timestamp is invalid") from exc
+        if bar_time.tzinfo is None:
+            raise RuntimeError("TDX minute timestamp lacks exchange offset")
+        bar_time = bar_time.astimezone(timezone(timedelta(hours=8)))
 
         # 只保留目标日期的数据
         if bar_time.date() != trade_date:
             continue
 
-        bars.append({
+        values = {}
+        for name in ("Open", "High", "Low", "Close", "Volume"):
+            raw = k.get(name)
+            if isinstance(raw, bool) or not isinstance(raw, (int, float)) or abs(raw) > 2**63 - 1 or not math.isfinite(raw):
+                raise RuntimeError(f"TDX minute lacks finite {name}: {instrument}/{bar_time}")
+            values[name] = float(raw)
+        if (values['Low'] <= 0 or values['High'] < values['Low']
+                or not values['Low'] <= values['Open'] <= values['High']
+                or not values['Low'] <= values['Close'] <= values['High'] or values['Volume'] < 0):
+            raise RuntimeError("TDX minute OHLCV is invalid")
+        row = {
             "time": bar_time,
-            "open": float(k.get("Open", 0)) / PRICE_SCALE,
-            "high": float(k.get("High", 0)) / PRICE_SCALE,
-            "low": float(k.get("Low", 0)) / PRICE_SCALE,
-            "close": float(k.get("Close", 0)) / PRICE_SCALE,
-            "volume": float(k.get("Volume", 0)),
-        })
+            "open": values['Open'] / PRICE_SCALE,
+            "high": values['High'] / PRICE_SCALE,
+            "low": values['Low'] / PRICE_SCALE,
+            "close": values['Close'] / PRICE_SCALE,
+            "volume": values['Volume'],
+        }
+        if 'Amount' in k:
+            amount = k['Amount']
+            if isinstance(amount, bool) or not isinstance(amount, (int, float)) or abs(amount) > 2**63 - 1 or not math.isfinite(amount) or amount < 0:
+                raise RuntimeError("TDX minute amount is invalid")
+            row['amount'] = amount / PRICE_SCALE
+        if 'VolumeShares' in k:
+            shares = k['VolumeShares']
+            if isinstance(shares, bool) or not isinstance(shares, int) or shares < 0 or shares // 100 != values['Volume']:
+                raise RuntimeError("TDX minute share/hand units differ")
+            row['volume_shares'] = shares
+        bars.append(row)
 
     bars.sort(key=lambda b: b["time"])
+    if len({b['time'] for b in bars}) != len(bars):
+        raise RuntimeError("TDX minute duplicate timestamp")
     return bars
 
 

@@ -111,7 +111,7 @@ func Decode(bs []byte) (*Response, error) {
 			return nil, err
 		}
 		defer r.Close()
-		resp.Data, err = io.ReadAll(r)
+		resp.Data, err = io.ReadAll(io.LimitReader(r, int64(resp.Length)+1))
 		if err != nil {
 			return nil, err
 		}

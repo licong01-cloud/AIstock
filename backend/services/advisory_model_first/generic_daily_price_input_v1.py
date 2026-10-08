@@ -151,7 +151,7 @@ def build_generic_daily_price_input_v1(*, candidates, calendar, panel, benchmark
         if clock is not None and frame.trade_date.gt(pd.Timestamp(clock)).any():
             _fail("generic price consumed bar is newer than its source clock")
     for column in ("open", "high", "low", "close", "volume"):
-        raw[column] = raw[column].map(lambda value, field=column: _number(value, positive=field != "volume", nonnegative=field == "volume"))
+        raw[column] = raw[column].map(lambda value, field=column: _number(value, positive=field != "volume", nonnegative=field == "volume")).astype(float)
     if (raw.high.lt(raw.low).any() or raw.open.lt(raw.low).any() or raw.open.gt(raw.high).any()
             or raw.close.lt(raw.low).any() or raw.close.gt(raw.high).any()):
         _fail("generic price OHLC values contradict their range")
