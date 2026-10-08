@@ -150,8 +150,8 @@
   },
   "first_seen_at": "2026-10-08T04:40:06.100030Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ab8a26efa19f701a9a20cc4867b1902ec9e4de6f",
+  "fixed_at": "2026-10-08T05:34:30Z",
   "github_issue_number": 5742,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5742",
   "last_seen_at": "2026-10-08T04:40:06.100030Z",
@@ -159,6 +159,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5745",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -183,6 +184,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -194,7 +196,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1804",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "172caa3bf43564fd",
+    "recorded_at": "2026-10-08T05:35:15.560854Z",
+    "runtime_contract_digest": "82dd60cf55c154c1e959c2e8c61fb216fca08c5e2aafeeda072970a7b6e4e1c0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6bcd20d748818c62e88b1aff759f70728a416232",
+    "source_merge_commit": "ab8a26efa19f701a9a20cc4867b1902ec9e4de6f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5745",
+    "validation_evidence": [
+      "validation-receipt: id=15adeb45af1b535e commit=6bcd20d748818c62e88b1aff759f70728a416232 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_multi_seed_package_assets.py -q` result=`15 passed`",
+      "validation-receipt: id=1f814260528c1b4d commit=6bcd20d748818c62e88b1aff759f70728a416232 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/multi_alpha_promotion.py backend/services/strategy_package/multi_alpha_live.py backend/services/strategy_package/frozen_runtime_self_check.py backend/services/strategy_package/package_asset_backfill.py backend/tests/strategy_package/test_multi_seed_package_assets.py tests/aistock_validation/bugs/20261008_BUG-1804-multi-alpha-package-promotion-duplicates-primary-seed-prediction-instead.json` result=`passed six actual changed files blocking=0`"
+    ],
+    "validation_evidence_digest": "5d9b892c21e6b94e0fd8b06f818f745cf08a40abc441ea6242565a49a5f18984"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -203,6 +227,10 @@
     "fingerprint": "f4499e115846f0bfc8000dde",
     "source_event_id": "FE-20261008-f4499e115846"
   },
+  "validation_evidence": [
+    "validation-receipt: id=15adeb45af1b535e commit=6bcd20d748818c62e88b1aff759f70728a416232 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_multi_seed_package_assets.py -q` result=`15 passed`",
+    "validation-receipt: id=1f814260528c1b4d commit=6bcd20d748818c62e88b1aff759f70728a416232 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/multi_alpha_promotion.py backend/services/strategy_package/multi_alpha_live.py backend/services/strategy_package/frozen_runtime_self_check.py backend/services/strategy_package/package_asset_backfill.py backend/tests/strategy_package/test_multi_seed_package_assets.py tests/aistock_validation/bugs/20261008_BUG-1804-multi-alpha-package-promotion-duplicates-primary-seed-prediction-instead.json` result=`passed six actual changed files blocking=0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
