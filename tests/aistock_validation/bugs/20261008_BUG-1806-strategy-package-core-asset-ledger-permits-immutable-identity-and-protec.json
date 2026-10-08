@@ -131,8 +131,8 @@
   },
   "first_seen_at": "2026-10-08T05:32:57.796722Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "832bc22bec624930264ce64c3359aec78825deb5",
+  "fixed_at": "2026-10-08T05:57:52Z",
   "github_issue_number": 5746,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5746",
   "last_seen_at": "2026-10-08T05:32:57.796722Z",
@@ -140,6 +140,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5750",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -164,6 +165,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -175,7 +177,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1806",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "52bd93c1f34c0a22",
+    "recorded_at": "2026-10-08T05:58:40.631642Z",
+    "runtime_contract_digest": "82dd60cf55c154c1e959c2e8c61fb216fca08c5e2aafeeda072970a7b6e4e1c0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9799cf7b380182c95d88bbfb4425cefc1242a646",
+    "source_merge_commit": "832bc22bec624930264ce64c3359aec78825deb5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5750",
+    "validation_evidence": [
+      "validation-receipt: id=4d555c4f86e20448 commit=9799cf7b380182c95d88bbfb4425cefc1242a646 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_core_asset_ledger_integrity.py backend/tests/strategy_package/test_multi_seed_package_assets.py -q` result=`31 passed`",
+      "validation-receipt: id=da50518e975eff1a commit=9799cf7b380182c95d88bbfb4425cefc1242a646 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/repository.py backend/services/strategy_package/package_asset_backfill.py backend/tests/strategy_package/test_core_asset_ledger_integrity.py tests/aistock_validation/bugs/20261008_BUG-1806-strategy-package-core-asset-ledger-permits-immutable-identity-and-protec.json` result=`passed four actual changed files blocking=0`"
+    ],
+    "validation_evidence_digest": "b8a91535be132c496debf0d9a94d0f2aaff64337aefc8dbcf01ac797e4240d03"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -184,6 +208,10 @@
     "fingerprint": "43859638bc16ac3ac6106ee6",
     "source_event_id": "FE-20261008-43859638bc16"
   },
+  "validation_evidence": [
+    "validation-receipt: id=4d555c4f86e20448 commit=9799cf7b380182c95d88bbfb4425cefc1242a646 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_core_asset_ledger_integrity.py backend/tests/strategy_package/test_multi_seed_package_assets.py -q` result=`31 passed`",
+    "validation-receipt: id=da50518e975eff1a commit=9799cf7b380182c95d88bbfb4425cefc1242a646 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/repository.py backend/services/strategy_package/package_asset_backfill.py backend/tests/strategy_package/test_core_asset_ledger_integrity.py tests/aistock_validation/bugs/20261008_BUG-1806-strategy-package-core-asset-ledger-permits-immutable-identity-and-protec.json` result=`passed four actual changed files blocking=0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
