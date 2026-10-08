@@ -92,8 +92,8 @@
   },
   "first_seen_at": "2026-10-08T07:09:04.023184Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "70aef04fa9416a3ce5eb1e698b7d86a257be2b61",
+  "fixed_at": "2026-10-08T08:11:05Z",
   "github_issue_number": 5769,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5769",
   "last_seen_at": "2026-10-08T07:09:04.023184Z",
@@ -101,6 +101,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5772",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,6 +128,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -138,7 +140,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1813",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2587e1cb4f47d282",
+    "recorded_at": "2026-10-08T08:11:43.984104Z",
+    "runtime_contract_digest": "82dd60cf55c154c1e959c2e8c61fb216fca08c5e2aafeeda072970a7b6e4e1c0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "10f610802727a6d9d03a72a9f1faa8a0a973d32f",
+    "source_merge_commit": "70aef04fa9416a3ce5eb1e698b7d86a257be2b61",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5772",
+    "validation_evidence": [
+      "validation-receipt: id=06b722d0c39dfc04 commit=10f610802727a6d9d03a72a9f1faa8a0a973d32f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_model_store_prediction_store.py backend/tests/model_registry/test_model_registry_phase5.py backend/tests/strategy_package/test_runtime_cache_isolation.py -q -p no:cacheprovider` result=`37 passed`",
+      "validation-receipt: id=17a04b34f7e123e7 commit=10f610802727a6d9d03a72a9f1faa8a0a973d32f kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/model_store/artifact_store.py backend/tests/model_registry/test_model_registry_phase5.py tests/aistock_validation/bugs/20261008_BUG-1813-qe-prediction-store-reuses-same-size-corrupted-content-addressed-blobs.json` result=`passed files=3 blocking=0`"
+    ],
+    "validation_evidence_digest": "28df7a2fec88ac780c6ee4d7543738cf20fffc85bb3a36f64a812580fae38937"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "model_registry"
   ],
@@ -147,6 +171,10 @@
     "fingerprint": "7425598e5911a40de7d10b22",
     "source_event_id": "FE-20261008-7425598e5911"
   },
+  "validation_evidence": [
+    "validation-receipt: id=06b722d0c39dfc04 commit=10f610802727a6d9d03a72a9f1faa8a0a973d32f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_model_store_prediction_store.py backend/tests/model_registry/test_model_registry_phase5.py backend/tests/strategy_package/test_runtime_cache_isolation.py -q -p no:cacheprovider` result=`37 passed`",
+    "validation-receipt: id=17a04b34f7e123e7 commit=10f610802727a6d9d03a72a9f1faa8a0a973d32f kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/model_store/artifact_store.py backend/tests/model_registry/test_model_registry_phase5.py tests/aistock_validation/bugs/20261008_BUG-1813-qe-prediction-store-reuses-same-size-corrupted-content-addressed-blobs.json` result=`passed files=3 blocking=0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
