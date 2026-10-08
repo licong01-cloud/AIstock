@@ -125,7 +125,7 @@ P26先读取现有包/冻结文件的身份、列结构和日期KEY，后按冻�
 
 P27先交付完整模型内核，再交付研究控制/执行切片，不以其中一项冒称整个P27或收益完成。新接口限定`train_population_price_5td_v1(*, clusters, encoding, arm, input_plan_sha256, before_fit, after_fit)`、`query_population_price_nodes_v1(*, fitted, features, scenario_gap_bps)`、`population_price_set_5td_v1(*, fitted, d_features, reference_cny, legal_low_cny, legal_high_cny, tick_cny)`及显式非执行JSON读写。两个fit callback保留真实研究登记/QE互斥接口，本轮fixture拟合不是已注册研究。
 
-内核的成对分布来自同一估计样本权重；均值净收益、P(net>0)、q10(L)及q90实际路径不利波动分别计算。离散经验分布使用左连续CDF首次达到目标概率的加权分位点（inverted CDF）：`q90(max(0,1-L/a))`直接从风险样本计算，不能在恰好10%原子质量边界上简单以`1-q10(L)/a`替代。此约定在研究fit前固定，两臂一致，不是结果后修改风险阈值。独立19维float32树walk、叶子成对样本索引及Decimal原tick全网格/支持洞都需定向验证；不修改旧39维实现、不调用旧train、不增加新信息或调参。
+内核的成对分布来自同一估计样本权重；均值净收益、P(net>0)、q10(L)及q90实际路径不利波动分别计算。离散经验分布使用经验CDF首次达到目标概率的加权分位点（inverted CDF，边界取第一个满足累计质量>=目标概率的样本，不作插值）：`q90(max(0,1-L/a))`直接从风险样本计算，不能在恰好10%原子质量边界上简单以`1-q10(L)/a`替代。此约定在研究fit前固定，两臂一致，不是结果后修改风险阈值。独立19维float32树walk、叶子成对样本索引及Decimal原tick全网格/支持洞都需定向验证；不修改旧39维实现、不调用旧train、不增加新信息或调参。
 
 | 阶段 | 交付与源码依据 | 必须核对 / Anti-pattern |
 |---|---|---|
