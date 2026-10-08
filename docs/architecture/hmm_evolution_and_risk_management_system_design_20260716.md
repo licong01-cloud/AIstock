@@ -2,7 +2,7 @@
 
 > **版本**：v2.81
 > **初始日期**：2026-07-16
-> **修订日期**：2026-10-08
+> **修订日期**：2026-10-09
 > **维护范围**：HMM Evolution；不接管QE、Selection、Paper、Advisory或数据生产
 > **已记录成果（历史验收保留，当前只读核对见§1.5）**：Phase 0/1已完成历史验收。G2-A v1.6已经完成正式双fresh-process零fit development、生产OOF authority reclosure、`2026-08-31/as-of 2026-08-28`真实31-sector单日写入、repository/API/UI readback及用户重启后的runtime验证；mean Rank IC=`0.039580909571655214`，当前为`AVAILABLE_EXPERIMENTAL / RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED / INSUFFICIENT / PENDING_INSUFFICIENT_POWER / NOT_AVAILABLE`。G2-B `risk_L1`也已完成源码、正式双fresh-process 12/12 fits、19,220行生产OOF、独立表/API/UI及重启后runtime验证；其research surface为`AVAILABLE_EXPERIMENTAL`，但precision lift=`0.05844358555076558 < 0.10`、recall=`0.34237132352941174 >= 0.25`，因此capability/advisory仍为`NOT_AVAILABLE`。两者tail均未读取，不得冒充forward-confirmed advisory。
 > **当前方向**：后续统一申万L2，目标仍是可用且可证明经济价值的轮动与独立风险信号；QE后置。§1.10四特征rank模型已完成正式2/2 fits及DEV/生产真实研究产品验收，IC=0.0289565，spread为负。§1.11唯一return-target版本也已完成正式2/2 fits，IC=0.0247737、10D spread=+0.00038245；相对rank及delta的配对区间跨零，没有证明经济增量，不切换原生产run。风险原政策/双日确认的代价与终态保持。下一步仅收敛§1.12的零fit匹配价值回放合同；新消费公式仍待用户批准，不自动第三模型。L1历史成果/兼容保持；UI前10＋后10、自定义总数≤30，计算/消费覆盖完整合格L2；不为记录重启、整理旧证据或新增平台。
@@ -679,7 +679,7 @@ DESIGN-COMPLIANCE-001逐项结论：不缩小计算人口或用设计冒充交�
 
 ### 14.3 变更历史
 
-2026-10-08 v2.81：同步rank30,392行生产真实API/无mock UI、同进程文件登记、BUG-1807 close-sync #5754及源树清理；同步#5781唯一return正式2/2 fits与原两对照完整222日价值比较，IC=0.0247737、spread=+0.00038245但经济增量未证明。P0/P1包已结束，下一步收敛一个零fit匹配价值回放方向，精确消费合同待用户批准；不自动第三模型、不替换生产。所有原精确合同/终态/历史行不回写，本次零新增fit/DB/tail/进程动作，不新增平台或历史归档。
+2026-10-09 v2.81：同步rank30,392行生产真实API/无mock UI、同进程文件登记、BUG-1807 close-sync #5754及源树清理；同步#5781唯一return正式2/2 fits与原两对照完整222日价值比较，IC=0.0247737、spread=+0.00038245但经济增量未证明。P0/P1包已结束，下一步收敛一个零fit匹配价值回放方向，精确消费合同待用户批准；不自动第三模型、不替换生产。所有原精确合同/终态/历史行不回写，本次零新增fit/DB/tail/进程动作，不新增平台或历史归档。
 
 2026-10-08 v2.80：同步四特征DEV真实API/UI、获具体授权的aistock:5432迁移/原30,392行写入及独立fresh-process全payload回读；旧run/默认未改，生产API/UI仍待用户加载源码。P0交付与P1唯一收益幅度目标对齐合为一个业务包，L2-RETURN-TARGET-D1～D6已获用户确认、源码实施中，正式新fits=0。原合同、结果和全部历史保留，无tail/QE/进程控制，不以记录触发重启。
 

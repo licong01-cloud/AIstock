@@ -1,6 +1,6 @@
 # HMM Evolution Phase 2：L2互补信息与风险实用价值连续任务详细设计
 
-> 版本：v1.4；日期：2026-10-08；owner：HMM；tier：F2。
+> 版本：v1.4；日期：2026-10-09；owner：HMM；tier：F2。
 > 状态：APPROVED_BY_USER_FORMAL_EXPERIMENTS_COMPLETED_RANK_PRODUCTION_RESEARCH_VERIFIED_VALUE_UNPROVEN。原§3～§10及§15精确公式、模型、输入、特征、窗口、参数和效果规则不变。rank正式2/2 fits、30,392行DEV/生产writer/独立回读及用户重启后的真实API/无mock UI已完成，生产surface=AVAILABLE_EXPERIMENTAL、advisory=NOT_AVAILABLE；BUG-1807 close-sync #5754已合入/关闭。#5781 return-target正式2/2 fits也已结束，IC=0.0247737、spread=+0.00038245，但没有可信经济增量，只文件交付、不替换生产。各维度见§11/§15；§16为下一零fit价值方向，精确消费合同待批准，不自动执行。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.81。只展开申万L2预测及风险实用价值，不重建旧实验链。
 > 初始review base：067ee3505df98caf958350793475285b2b3b73a8。实际授权和各执行状态独立报告；已有两份消费与两特征Ridge均不再运行。
