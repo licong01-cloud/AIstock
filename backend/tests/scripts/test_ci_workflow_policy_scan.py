@@ -44,6 +44,23 @@ def test_policy_test_has_one_owner_matching_its_guardrail_source() -> None:
     assert owner.primary_module == catalog.match_path("scripts/ci_workflow_policy_scan.py").primary_module
 
 
+def test_nightly_workflow_validation_requires_prebuilt_ci_and_x_temp() -> None:
+    jobs = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"]
+    steps = jobs["code-intelligence-weekly"]["steps"]
+    validation_index = next(i for i, step in enumerate(steps)
+                            if step.get("name") == "Validate CI/Nightly issue workflow automation")
+    verify = steps[validation_index - 1]
+    validation = steps[validation_index]
+    assert verify["name"] == "Verify prebuilt environment for workflow validation"
+    assert verify["env"] == {"AISTOCK_CI_ENV_NAME": "AIstock-CI", "AISTOCK_CI_TEST_TEMP_REQUIRED": "1"}
+    assert "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in verify["run"]
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in verify["run"]
+    assert validation["run"].strip() == "conda run -n AIstock-CI python -m nox -s validation_workflow_automation"
+    for step in (verify, validation):
+        assert not step.get("continue-on-error", False)
+        assert "if" not in step  # Default success() prevents running after failed preflight.
+
+
 def test_tdx_ci_is_offline_and_builds_web_module() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
     step = next(s for s in workflow["jobs"]["ci-verdict"]["steps"] if s.get("id") == "go_validation")
@@ -55,7 +72,7 @@ def test_tdx_ci_is_offline_and_builds_web_module() -> None:
     assert "go test -mod=readonly . -count=1" in step["run"]
     assert "go build -mod=readonly ./..." in step["run"]
     assert "cd web" in step["run"]
-    assert 'go build -mod=readonly -o "${RUNNER_TEMP}/aistock-tdx-web.exe" .' in step["run"]
+    assert 'go build -mod=readonly -o "${TMP}/aistock-tdx-web.exe" .' in step["run"]
     assert "go test ./..." not in step["run"]
     from backend.services.validation.file_ownership import FileOwnershipCatalog
     catalog = FileOwnershipCatalog()
