@@ -30,16 +30,26 @@
   "evidence_uris": [],
   "expected": "catalog完整性检查保持，预算检查只在相关生产/测试修改与Nightly执行，30%要求不降低。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "noxfile.py",
-      "scripts/ci_change_classifier.py",
+    "actual_changed_files": [
       "backend/tests/scripts/test_ci_change_classifier.py",
       "backend/tests/test_noxfile_validation_env.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1801-catalog-workflow-automation.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1801-catalog-workflow-automation.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "noxfile.py",
@@ -188,10 +198,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
