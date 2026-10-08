@@ -32,21 +32,21 @@
   "expected": "合法来源和SHA文本可随真实股数冻结；非法类型、数值、来源和hash仍按既存合同处理",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261008_BUG-1817-monthly-source-treats-raw-volume-provenance-text-as-numeric.json",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/source_authority.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_raw_volume_precision.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1817-monthly-source-treats-raw-volume-provenance-text-as-numeric.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261008_BUG-1817-monthly-source-treats-raw-volume-provenance-text-as-numeric.json",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/source_authority.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_raw_volume_precision.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1817-monthly-source-treats-raw-volume-provenance-text-as-numeric.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -135,8 +135,8 @@
   },
   "first_seen_at": "2026-10-08T17:09:09.242905Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "08c3211b1dea3e42e6e0205e92ad2a7759a1dfbc",
+  "fixed_at": "2026-10-08T17:21:32Z",
   "github_issue_number": 5792,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5792",
   "last_seen_at": "2026-10-08T17:09:09.242905Z",
@@ -144,6 +144,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5793",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -167,6 +168,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -178,7 +180,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1817",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d92f01e7582e63cc",
+    "recorded_at": "2026-10-08T17:22:02.821923Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9744b5160c88d96933440a9c1a2b7af52538279f",
+    "source_merge_commit": "08c3211b1dea3e42e6e0205e92ad2a7759a1dfbc",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5793",
+    "validation_evidence": [
+      "validation-receipt: id=f2d610660377838f commit=9744b5160c88d96933440a9c1a2b7af52538279f kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_raw_volume_precision.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`passed (163 passed, 4 skipped)`",
+      "validation-receipt: id=e534269e4262f6ba commit=9744b5160c88d96933440a9c1a2b7af52538279f kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_raw_volume_precision.py::test_production_precision_sql_in_existing_readonly_dev -q` result=`passed (4 passed; existing DEV readonly; explicitly enabled)`",
+      "validation-receipt: id=59f972af0ce5ddf2 commit=9744b5160c88d96933440a9c1a2b7af52538279f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=513c365430c57831 commit=9744b5160c88d96933440a9c1a2b7af52538279f kind=ruff plan=direct status=passed command=`ruff check changed files; compileall; git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "cc69c64ee7dce8bd6d14211b12286056183c68015fa96c8f7aeb45b0e24790b0"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -187,6 +213,12 @@
     "fingerprint": "4b4789c126c7ebd960303dd4",
     "source_event_id": "FE-20261008-4b4789c126c7"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f2d610660377838f commit=9744b5160c88d96933440a9c1a2b7af52538279f kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_raw_volume_precision.py backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`passed (163 passed, 4 skipped)`",
+    "validation-receipt: id=e534269e4262f6ba commit=9744b5160c88d96933440a9c1a2b7af52538279f kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_raw_volume_precision.py::test_production_precision_sql_in_existing_readonly_dev -q` result=`passed (4 passed; existing DEV readonly; explicitly enabled)`",
+    "validation-receipt: id=59f972af0ce5ddf2 commit=9744b5160c88d96933440a9c1a2b7af52538279f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=513c365430c57831 commit=9744b5160c88d96933440a9c1a2b7af52538279f kind=ruff plan=direct status=passed command=`ruff check changed files; compileall; git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
