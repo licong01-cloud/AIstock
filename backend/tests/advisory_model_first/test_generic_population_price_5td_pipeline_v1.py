@@ -159,3 +159,149 @@ def test_snapshot_is_transactional_readonly_and_retains_suspend_and_zero_placeho
     assert connection.rollbacks == 1 and cursor.closed
     assert all(s.lstrip().upper().startswith(("SELECT", "SET LOCAL")) for s in cursor.statements)
     assert not receipt["database_written"] and not receipt["native_capture"]
+
+
+@pytest.fixture
+def study(inputs, tmp_path):
+    import json
+    from backend.services.advisory_model_first.economic_entry_pipeline import _json_bytes, publish_stage
+    from backend.services.advisory_model_first.generic_population_price_5td_contracts_v1 import PopulationInputPlanV1, PopulationStudyPlanV1
+    from backend.services.advisory_model_first.generic_population_price_5td_pipeline_v1 import _parquet, study_implementation_sha256
+    from backend.services.advisory_model_first.research_control import evidence_reference_for_file
+    calendar = tmp_path/"calendar.json"
+    calendar.write_bytes(_json_bytes([d.isoformat() for d in inputs["calendar"]]))
+    calref = evidence_reference_for_file(calendar, role="original_calendar")
+    request = inputs["request"].model_copy(update=dict(calendar_ref=calref))
+    inputs["request"] = request
+    rows, clusters, encoding = build_population_inputs_v1(**inputs)
+    rows["package_id"] = rows.source_id.map({s.source_id: s.package_id for s in request.sources})
+    rows["manifest_sha256"] = rows.source_id.map({s.source_id: s.manifest_sha256 for s in request.sources})
+    days = rows.groupby(["source_id", KEY[0]], as_index=False).size().rename(columns={"size": "candidate_count"})
+    days["roster_status"] = "PRESENT"
+    ref = request.sources[0].candidate_ref
+    parent = PopulationInputPlanV1(metadata_request=request, daily_ref=ref, index_ref=ref,
+                                  source_receipt_ref=ref, preparation_implementation_sha256="a"*64)
+    root = tmp_path/parent.component_id
+    first = publish_stage(study_root=root, stage="preregistered", plan_sha256=parent.plan_sha256, parent_sha256=None,
+                          artifacts={"plan.json": _json_bytes(parent.model_dump(mode="json"))})
+    first_sha = json.loads((first/"manifest.json").read_bytes())["stage_sha256"]
+    publish_stage(study_root=root, stage="prepared", plan_sha256=parent.plan_sha256, parent_sha256=first_sha,
+        artifacts={"clusters.parquet": _parquet(clusters), "encoding.json": _json_bytes(encoding),
+                   "rows.parquet": _parquet(rows), "days.parquet": _parquet(days),
+                   "receipt.json": _json_bytes(dict(plan_sha256=parent.plan_sha256, original_rows=len(rows), unique_clusters=len(clusters)))})
+    plan = PopulationStudyPlanV1(input_root_uri=str(root),
+        input_plan_file_sha256=evidence_reference_for_file(first/"plan.json", role="plan").sha256,
+        input_manifest_file_sha256=evidence_reference_for_file(root/"prepared"/"manifest.json", role="inputs").sha256,
+        calendar_ref=calref, implementation_sha256=study_implementation_sha256(), source_commit="a"*40,
+        node_python_uri="/existing/python", qe_api_base="http://127.0.0.1:8001/api/v1")
+    return plan, tmp_path
+
+
+def _idle():
+    from datetime import datetime, timezone
+    return dict(captured_at=datetime.now(timezone.utc).isoformat(), active_counts=dict(single=0, custom_evo=0, multi_alpha=0))
+
+
+def test_registered_two_arm_fixture_fit_idempotence_and_journal(study, monkeypatch):
+    import json
+    from backend.services.advisory_model_first import generic_population_price_5td_pipeline_v1 as p
+    plan, output = study
+    p.preregister_population_study_v1(plan=plan, output_root=output)
+    prepared = p.prepare_population_study_v1(plan=plan, output_root=output)
+    monkeypatch.setattr(p, "_node_observation", lambda _: dict(execution_node="SYNTHETIC_UNIT_TEST"))
+    calls = []
+    def probe():
+        calls.append(1)
+        return _idle()
+    trained = p.train_population_study_v1(plan=plan, output_root=output, qe_idle_probe=probe)
+    assert len(calls) == 4 and json.loads((trained/"fit_receipt.json").read_bytes())["physical_fit_count"] == 2
+    p.train_population_study_v1(plan=plan, output_root=output, qe_idle_probe=lambda: pytest.fail("cached stage must not fit"))
+    journal = [json.loads(line) for line in (prepared.parent/"fit_journal.jsonl").read_text().splitlines()]
+    assert [v["arm"] for v in journal if v["kind"] == "PHYSICAL_FIT_COMPLETED"] == ["matched_anchor", "candidate_transfer"]
+    registry = [json.loads(line) for line in (output/"trial_registry.jsonl").read_text().splitlines()]
+    assert max(r["generated_trial_count"] for r in registry) == 2
+    assert {r["objective_contract"] for r in registry} == {"RISK_MANAGED_ADVISORY"}
+    from backend.services.advisory_model_first import generic_population_price_5td_model_v1 as model
+    original_query = model.query_population_price_nodes_v1
+    def query(**kw):
+        assert list(kw["features"].columns) == [*KEY, *FEATURES]
+        return original_query(**kw)
+    monkeypatch.setattr(model, "query_population_price_nodes_v1", query)
+    evaluated = p.evaluate_population_study_v1(plan=plan, output_root=output)
+    result = json.loads((evaluated/"evaluation.json").read_bytes())
+    assert result["status"].startswith("NEGATIVE")
+    assert result["source_summaries"]["0"]["paired"]["baseline"]["confidence_interval_95_bps"] is None
+    p.evaluate_population_study_v1(plan=plan, output_root=output)
+    records = [json.loads(line) for line in (output/"trial_registry.jsonl").read_text().splitlines()]
+    assert [r["result_class"] for r in records if r["research_stage"] == "EVALUATED"] == ["NEGATIVE"]
+
+
+def test_failed_started_attempt_preserved_without_implicit_refit(study, monkeypatch):
+    from backend.services.advisory_model_first import generic_population_price_5td_pipeline_v1 as p
+    from backend.services.advisory_model_first import generic_population_price_5td_model_v1 as model
+    plan, output = study
+    p.preregister_population_study_v1(plan=plan, output_root=output)
+    prepared = p.prepare_population_study_v1(plan=plan, output_root=output)
+    monkeypatch.setattr(p, "_node_observation", lambda _: {})
+    def failure(**kw):
+        kw["before_fit"](kw["arm"])
+        raise RuntimeError("synthetic fit failure")
+    monkeypatch.setattr(model, "train_population_price_5td_v1", failure)
+    with pytest.raises(RuntimeError, match="synthetic fit failure"):
+        p.train_population_study_v1(plan=plan, output_root=output, qe_idle_probe=_idle)
+    assert (prepared.parent/"fit_failure.json").is_file()
+    with pytest.raises(ValueError, match="never implicitly refit"):
+        p.train_population_study_v1(plan=plan, output_root=output, qe_idle_probe=_idle)
+
+
+def test_windows_boundary_busy_and_stale_qe_never_start(study, monkeypatch):
+    from backend.services.advisory_model_first import generic_population_price_5td_pipeline_v1 as p
+    plan, output = study
+    p.preregister_population_study_v1(plan=plan, output_root=output)
+    prepared = p.prepare_population_study_v1(plan=plan, output_root=output)
+    with pytest.raises(ValueError, match="explicit existing WSL/worker Python"):
+        p.train_population_study_v1(plan=plan, output_root=output, qe_idle_probe=_idle)
+    monkeypatch.setattr(p, "_node_observation", lambda _: {})
+    for observed in (_idle() | dict(captured_at="2020-01-01T00:00:00+00:00"),
+                     _idle() | dict(active_counts=dict(single=0, custom_evo=1, multi_alpha=0))):
+        with pytest.raises(ValueError, match="stale|idle QE"):
+            p.train_population_study_v1(plan=plan, output_root=output, qe_idle_probe=lambda: observed)
+    assert not (prepared.parent/"fit_attempt.json").exists()
+
+
+def test_public_qe_probe_covers_six_gets_and_rejects_unknown():
+    from backend.services.advisory_model_first.generic_population_price_5td_cli_v1 import public_qe_observation_v1
+    calls = []
+    def get(path, params):
+        calls.append((path, params["status"]))
+        if path.endswith("experiments"):
+            return dict(ok=True, total=0, items=[], has_more=False)
+        if path.endswith("tasks"):
+            return dict(status="success", data=[])
+        return dict(status="success", data=dict(count=0, runs=[]))
+    assert not any(public_qe_observation_v1("http://127.0.0.1:8001/api/v1", get=get)["active_counts"].values())
+    assert len(calls) == 6 and {s for _, s in calls} == {"running", "pending"}
+    with pytest.raises(ValueError, match="incomplete"):
+        public_qe_observation_v1("http://127.0.0.1:8001/api/v1", get=lambda *a, **kw: {})
+
+
+def test_input_hash_change_and_qe_started_after_fit_preserve_boundaries(study, monkeypatch):
+    import json
+    from pathlib import Path
+    from backend.services.advisory_model_first import generic_population_price_5td_pipeline_v1 as p
+    plan, output = study
+    p.preregister_population_study_v1(plan=plan, output_root=output)
+    prepared = p.prepare_population_study_v1(plan=plan, output_root=output)
+    monkeypatch.setattr(p, "_node_observation", lambda _: {})
+    observations = iter([_idle(), _idle() | dict(active_counts=dict(single=1, custom_evo=0, multi_alpha=0))])
+    with pytest.raises(ValueError, match="QE started during this fit"):
+        p.train_population_study_v1(plan=plan, output_root=output, qe_idle_probe=lambda: next(observations))
+    failure = json.loads((prepared.parent/"fit_failure.json").read_bytes())
+    assert failure["completed_arms"] == ["matched_anchor"] and failure["started_fit_count"] == 1
+    assert (prepared.parent/"fits"/"matched_anchor"/"trained"/"model.json").is_file()
+    assert not (prepared.parent/"fits"/"candidate_transfer").exists()
+    source_file = Path(plan.input_root_uri)/"prepared"/"encoding.json"
+    source_file.write_bytes(b"{}")
+    from backend.services.advisory_model_first.errors import AdvisoryModelFirstError
+    with pytest.raises(AdvisoryModelFirstError, match="artifact hash mismatch"):
+        p.train_population_study_v1(plan=plan, output_root=output, qe_idle_probe=lambda: pytest.fail("changed source must not fit"))
