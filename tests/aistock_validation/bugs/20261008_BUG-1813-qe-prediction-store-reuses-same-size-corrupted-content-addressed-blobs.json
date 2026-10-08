@@ -30,13 +30,13 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/model_store/artifact_store.py",
-      "backend/tests/test_model_store_prediction_store.py",
+      "backend/tests/model_registry/test_model_registry_phase5.py",
       "tests/aistock_validation/bugs/20261008_BUG-1813-qe-prediction-store-reuses-same-size-corrupted-content-addressed-blobs.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/model_store/artifact_store.py",
-      "backend/tests/test_model_store_prediction_store.py",
+      "backend/tests/model_registry/test_model_registry_phase5.py",
       "tests/aistock_validation/bugs/20261008_BUG-1813-qe-prediction-store-reuses-same-size-corrupted-content-addressed-blobs.json"
     ],
     "changed_files_source": "git_finish",
@@ -116,7 +116,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
     "fresh_process_evidence": [
-      "python -m pytest backend/tests/test_model_store_prediction_store.py -q -> isolated fresh-process CAS validation in tmp_path; no production upload or database mutation"
+      "python -m pytest backend/tests/test_model_store_prediction_store.py -q -> isolated fresh-process CAS validation in tmp_path; no production upload or database mutation",
+      "Isolated pytest process loaded CAS SHA verification; same-size corruption restore and interrupted-upload contracts passed; no production assets touched"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
