@@ -33,6 +33,7 @@ DEFAULT_CODEGRAPH_CRITICAL_FILES = [
     "scripts/llm_provider_adapter.py",
     "scripts/nightly_adaptive_scheduler.py",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py",
     ".github/workflows/nightly.yml",
 ]
 GRAPH_SOURCE_ROOT_ENV = "AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT"
