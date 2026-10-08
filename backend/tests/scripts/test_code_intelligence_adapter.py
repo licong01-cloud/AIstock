@@ -491,6 +491,14 @@ def test_codegraph_oversized_critical_source_fails_before_wasted_reindex(tmp_pat
     assert "split oversized source" in payload["command_result"]["stderr"]
 
 
+def test_real_workflow_sources_fit_provider_and_remain_critical():
+    root = Path(__file__).resolve().parents[3]
+    for relative in ('scripts/aistock_issue_workflow.py', 'scripts/aistock_runtime_semantics.py'):
+        source = root / relative
+        assert source.stat().st_size <= adapter.CODEGRAPH_MAX_SOURCE_BYTES, relative
+        assert relative in adapter._codegraph_critical_files(root)
+
+
 def test_graph_workflow_uses_lf_without_changing_global_git_and_retains_failures(tmp_path):
     import os
     import subprocess
