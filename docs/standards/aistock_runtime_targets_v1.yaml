@@ -1,11 +1,13 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-10-06"
+updated_at: "2026-10-08"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
   post_restart_verify_mode: read_only
   tracked_artifact_writes: forbidden
 non_runtime_source_paths:
+  # Pure D-input computation; consumers are research/artifact modules, not API/worker entrypoints.
+  - backend/services/advisory_model_first/generic_daily_price_input_v1.py
   - backend/services/advisory_model_first/qe_alpha_generator_contracts.py
   - backend/services/advisory_model_first/qe_alpha_generator_pipeline.py
   - backend/services/advisory_model_first/historical_price_replay.py
@@ -87,6 +89,11 @@ targets:
     source_globs:
       - tdx-api-main/**/*.go
       - tdx-api-main/web/start.bat
+      - tdx-api-main/go.mod
+      - tdx-api-main/go.sum
+      - tdx-api-main/web/go.mod
+      - tdx-api-main/web/go.sum
+      - scripts/start_tdx_go_backend.py
     production_port: 19080
     isolated_validation_ports: [19081, 19082]
     probe_origins: [http://127.0.0.1:19080, http://localhost:19080]
