@@ -46,24 +46,51 @@
   ],
   "expected": "精确已接受46键保留原始值和hash，来源质量与物理完整性分开，月更可继续不依赖Tushare分钟权限",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_candidate_finalizer.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_source_audit.py",
+      "backend/services/dataset_release/monthly_source_producer.py",
+      "backend/services/dataset_release/monthly_source_quality.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_source_quality.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "noxfile.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1815-monthly-source-audit-blocks-whole-release-on-explicitly-accepted-provide.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_source_quality.py",
       "backend/tests/dataset_release/test_monthly_source_quality.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/monthly_source_audit.py",
+      ".codex/skills/update-backtest-dataset/SKILL.md",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_candidate_finalizer.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_source_audit.py",
+      "backend/services/dataset_release/monthly_source_producer.py",
+      "backend/services/dataset_release/monthly_source_quality.py",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/routers/monthly_dataset_releases.py",
-      "scripts/monthly_unified_dataset_release.py",
-      "backend/tests/dataset_release/test_monthly_source_audit.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_source_quality.py",
       "backend/tests/routers/test_monthly_dataset_releases.py",
-      ".codex/skills/update-backtest-dataset/SKILL.md",
-      "docs/operations/monthly_unified_dataset_release_v2_runbook.md"
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "noxfile.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1815-monthly-source-audit-blocks-whole-release-on-explicitly-accepted-provide.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_source_audit.py",
@@ -304,16 +331,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -m pytest backend/tests/dataset_release/test_monthly_source_quality.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py::test_finalizer_pins_quality_report_and_evidence_without_rewriting_data backend/tests/routers/test_monthly_dataset_releases.py::test_source_quality_binding_route_preserves_operator_identity backend/tests/scripts/test_monthly_unified_dataset_release.py::test_bind_quality_only_uses_existing_operator_api -q -> PASS; isolated fresh process, no service or database writes"
     ],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "database_readback_ref": "not_required",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
