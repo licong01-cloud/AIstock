@@ -42,6 +42,9 @@ def test_raw_source_sealer_keeps_row_identity_and_emits_exact_month_leaves(tmp_p
         if query_id == "kline_minute_raw":
             payload["freq"] = "1min"
         payload.update({field: 1000 for field in query.value_columns})
+        if query_id in {'kline_daily_raw', 'kline_minute_raw'}:
+            payload.update(volume_shares_source='tushare_daily' if query_id == 'kline_daily_raw' else 'tushare_stk_mins',
+                           volume_shares_sha256='a' * 64)
         payloads.append(payload)
     expected_rows = [
         {
@@ -112,6 +115,8 @@ def test_validated_text_keys_avoid_reencoding_without_weakening_identity(monkeyp
         "trade_time": "2026-09-30 09:31:00",
         "freq": "1min",
         **{field: 1000 for field in query.value_columns},
+        'volume_shares_source': 'tushare_stk_mins',
+        'volume_shares_sha256': 'a' * 64,
     }
     keys = [payload[field] for field in query.key_columns]
     if mismatch:
@@ -146,6 +151,7 @@ def test_numeric_key_identity_still_distinguishes_integer_and_float(key, value):
     query = replace(PRODUCTION_QUERY_SPECS["kline_daily_raw"], key_columns=("close_li",))
     spec = _query_partition_spec(query, "numeric-key", SourceTableSchema(query.table_identity, query.required_columns))
     payload = {field: 1000 for field in query.value_columns}
+    payload.update(volume_shares_source='tushare_daily', volume_shares_sha256='a' * 64)
     payload["close_li"] = value
     raw = {"row_key": json.dumps([key]), "row_payload": json.dumps(payload)}
     if isinstance(value, float):
@@ -168,6 +174,7 @@ def test_optimized_raw_validator_retains_fail_closed_payload_contract(fault):
     query = PRODUCTION_QUERY_SPECS["kline_daily_raw"]
     spec = _query_partition_spec(query, "fail-closed", SourceTableSchema(query.table_identity, query.required_columns))
     payload = {"ts_code": "000001.SZ", "trade_date": "2026-09-30", **{field: 1000 for field in query.value_columns}}
+    payload.update(volume_shares_source='tushare_daily', volume_shares_sha256='a' * 64)
     if fault == "null_key":
         payload["ts_code"] = None
     elif fault == "numeric_text_key":
