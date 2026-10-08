@@ -1,8 +1,8 @@
 # HMM Evolution Phase 2：L2互补信息与风险实用价值连续任务详细设计
 
-> 版本：v1.0；日期：2026-10-08；owner：HMM；tier：F2。
-> 状态：APPROVED_BY_USER_DESIGN_NOT_IMPLEMENTED。用户于2026-10-08明确批准§10的D1～D6精确合同；全部模型/输入/特征/窗口/权重/参数/效果量级及停止条件保持原审修版本。当前只同步批准状态；源码、双process共2fit、提交合入及产品验收尚未执行，按对应动作授权继续。生产写入、tail、依赖、激活、cleanup及服务控制不从设计批准推导，文档F2 PASS也不产生这些授权。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.77。只展开申万L2预测及风险实用价值，不重建旧实验链。
+> 版本：v1.1；日期：2026-10-08；owner：HMM；tier：F2。
+> 状态：APPROVED_BY_USER_SOURCE_IMPLEMENTED_PENDING_PR_ACCEPTANCE。用户于2026-10-08明确批准§10的D1～D6精确合同并开始下一步实施；全部模型/输入/特征/窗口/权重/参数/效果量级及停止条件不变。完整源码及直接测试已实现，三轮作者审修和本地最小矩阵已通过；PR/CI、正式file-only preflight、双process共2fit及真实产品验收分别待完成。生产写入、tail、依赖、激活、cleanup及服务控制不从设计批准推导，源码测试和文档F2 PASS也不产生这些授权。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.78。只展开申万L2预测及风险实用价值，不重建旧实验链。
 > 初始review base：067ee3505df98caf958350793475285b2b3b73a8。实际授权和各执行状态独立报告；已有两份消费与两特征Ridge均不再运行。
 
 ## 1. Background、终极目标与唯一假设
@@ -36,7 +36,7 @@ Non-goals：多候选/参数搜索、GBDT或新HMM结构、滚动重训、horizo
 | `rotation_l2_moneyflow_supervised.py` | 已批准两特征版本的参数、因果reader、双process与零fit正常方程验证参考；旧contract/字段不能改为四特征 |
 | `rotation_l2_prediction.py`与既有表/API/UI | 增加精确新version分支；旧零fit与两fit版本保持原约束，未知版本拒绝 |
 
-现存source bundle的`sector_returns`仅从2024-09-19起，训练标签最多到2025-04-15，不能拿此标签视图代替价格预热或预测特征。**新的价格feature视图尚未实现**；须明确新增有界reader，不虚构“现有API已经支持四特征”。源HDF可共用，读取权限/列/日期及hash分开，不要求第二数据集或复制文件。
+现存source bundle的`sector_returns`仅从2024-09-19起，训练标签最多到2025-04-15，不能拿此标签视图代替价格预热或预测特征。已实现`rotation_l2_input.py::bounded_price_features`有界reader及独立canonical视图；共源sector/index pins与request source identity逐项闭合。源HDF可共用，读取权限/列/日期及hash分开，不要求第二数据集或复制文件。正式源数据preflight尚未执行，不能由合成测试代报。
 
 ## 3. Contracts D1：正式输入、源边界与L2资格（已批准）
 
@@ -165,15 +165,15 @@ selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED：已看过本区间旧实验
 
 一个任务内：D1～D6已集中批准 → HMM-owned有界reader/纯函数复用/新模型CLI/直接测试/精确产品分支 → 至少两轮、最多三轮作者审修（无finding可提前结束） → 最小门禁与CI、获授权合入 → 一次file-only preflight及双process2fit → 配对价值结论。风险结果已分析，不再创建政策候选。文档/源码PR是授权与版本边界，不新增业务小阶段，不规定持续运行小时数。
 
-建议实现scope（当前均未实施）：`rotation_l2_input.py`的窄feature-view、新`rotation_l2_moneyflow_price_supervised.py`、新CLI `scripts/hmm_risk/run_rotation_l2_moneyflow_price_supervised.py`及新direct tests；旧`rotation_l2_moneyflow_supervised.py`仅允许公共纯函数抽取且旧hash不变；必要`rotation_l2_prediction.py`精确分支、HMM自有CHECK migration、既有HMM UI类型/贡献说明和直接UI测试。实施前按实际scope登记，不改全局CI/nox/test plan或其他业务模块。
+实际实施scope：`backend/services/hmm_risk/rotation_l2_input.py`窄feature-view；新增`rotation_l2_moneyflow_price_supervised.py`和`scripts/hmm_risk/run_rotation_l2_moneyflow_price_supervised.py`；复用`rotation_l2_moneyflow_supervised.py`的固定Ridge训练/独立参数核验及`scripts/hmm_risk/run_rotation_l2_moneyflow_supervised.py`的受保护双process runner，以显式variant参数展开四维，旧默认/schema/contract hash保持；`rotation_l2_prediction.py`精确版本分支；新增HMM自有`extend_hmm_risk_rotation_l2_moneyflow_price_20261008.sql`；既有HMM UI类型/贡献说明/直接测试；新direct test文件及旧测试fixture补充两个共源file pins。批准蓝图及本文只同步实施状态。无全局CI/nox/test plan、规范、其他业务源码或数据集修改。
 
 记录限一个显式request、两个业务child、一个parent终态、必要参数与真实预测，不复制股票源或重物化旧预测/标签；已有两特征acceptance作为只读对照引用。结果直接通过文件/既有store定位，写记录不要求runtime activation/重启。
 
-终止：本轮已获设计精确批准，尚未执行源码或实验；后续按动作授权执行。合法完整实验一旦给出正/负/不足结果即结束该候选，不自动第二候选、重fit、调参或读tail。自然NA报告不足但不当作修复请求。源码BUG按既有BUG流程登记修复且合同不变；最多三轮后仍有阻断则报告，不无限审修。缺特定数据库/生产/依赖/激活/cleanup权限停在该动作前，不能由“连续任务”推导授权。
+终止：本轮已获设计精确批准并实施源码，正式实验仍未执行；本次交付停在提交/PR/CI及用户确认前。合法完整实验一旦给出正/负/不足结果即结束该候选，不自动第二候选、重fit、调参或读tail。自然NA报告不足但不当作修复请求。源码BUG按既有BUG流程登记修复且合同不变；最多三轮后仍有阻断则报告，不无限审修。缺特定数据库/生产/依赖/激活/cleanup权限停在该动作前，不能由“连续任务”推导授权。
 
 ## 9. Verification Plan与三轮审修要求
 
-本轮只验证设计和结果同步，未运行以下拟新增源码测试；不能将计划写成通过。
+以下为完整验证合同；本轮已运行的直接源码测试、静态检查和三轮审修见§13.2。正式preflight、DEV迁移、真实产品API/UI、正式fit未运行，不能将计划或合成测试写成这些验收通过。
 
 - 20/25日预热及首日锚；pct百分比→小数/benchmark逐日收益/累计收益差/下行半偏差手算；源日期/列poison确保无decision当日或tail数值读取。
 - sparse ID/131目录、成员PIT/单成员/正常停牌/停发/zero-downside；报价NaN与moneyflow有限分离；未知alias/应有缺数/非有限显式失败。
@@ -204,22 +204,23 @@ F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真
 
 ## 11. Design Acceptance Matrix与实际状态
 
-以下verified_design仅表示文档定义及引用复核完成；不是approved、源码测试通过或正式模型验收。gap列只表示未闭合文档条款；实现/审批缺口在紧接的状态表明示，不借结构validator隐藏。
+以下APPROVED_BY_USER_SOURCE_VERIFIED表示已批准D1～D6范围内的源码实现与本地直接合同验证，不表示正式模型、数据库或真实产品验收。用户批准的§8动作边界仍有效：本次交付源码，正式实验/数据库/真实API/UI分别待授权与验证；不是批准跳过这些验收。具体动作缺口在矩阵和状态表明示，不借结构validator隐藏。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §3；现有rotation_l2_input.py::build_rotation_l2_input_bundle；拟新增窄价格视图 | backend/tests/hmm_risk/test_rotation_l2_input.py；§3首日历账本核验 | verified_design | 无 |
-| F-002 | §4；拟rotation_l2_moneyflow_price_supervised.py的四项纯计算 | 拟backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；§9手算/因果反例 | verified_design | 无 |
-| F-003 | §5；拟同新module/CLI；旧Ridge为API参考不是新实现 | backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py；拟新direct tests | verified_design | 无 |
-| F-004 | §6；现有rotation_l2.py::evaluate_predictions_for_calendar及拟三方匹配 | artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_supervised_20261008_1dc3ad9d/run/acceptance.json；拟新配对反例 | verified_design | 无 |
-| F-005 | §7；既有rotation_l2_prediction.py与HMM产品，新version尚未实现 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；frontend/tests/hmm-risk/hmm-risk.spec.ts拟新分支 | verified_design | 无 |
-| F-006 | §8～§9；拟新CLI/parent，已有CLI作为失败/预算参考 | 拟backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；§8权限/停止定义 | verified_design | 无 |
+| F-001 | §3；rotation_l2_input.py::bounded_price_features；新module::validate_input | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；有界reader/8类重hash反例/首日锚测试 | APPROVED_BY_USER_SOURCE_VERIFIED | 已批准§8动作边界：正式文件preflight尚未执行 |
+| F-002 | §4；新module::feature_rows/training_matrix | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；20D手算、E0 rank保持、零下行合法、未来feature隔离 | APPROVED_BY_USER_SOURCE_VERIFIED | 无 |
+| F-003 | §5；共享Ridge trainer显式variant与新CLI | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；真实合成双fresh-process各1fit、正常方程/联合篡改拒绝；旧contract/hash回归 | APPROVED_BY_USER_SOURCE_VERIFIED | 已批准§8动作边界：正式双process2fit未执行 |
+| F-004 | §6；新module::_reference/_paired/close_processes | artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_supervised_20261008_1dc3ad9d/run/acceptance.json；backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；两组222日共同IC | APPROVED_BY_USER_SOURCE_VERIFIED | 已批准§8动作边界：新模型经济效果尚未评估 |
+| F-005 | §7；rotation_l2_prediction.py、精确CHECK migration及HMM UI四term分支 | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；backend/tests/hmm_risk/test_rotation_l2_prediction.py；frontend/tests/hmm-risk/hmm-risk.spec.ts collect；strict typecheck | APPROVED_BY_USER_SOURCE_VERIFIED_PENDING_REAL_PRODUCT | 已批准§7～§8动作边界：DEV迁移/写入、真实API/UI未执行；UI运行交CI |
+| F-006 | §8～§9；新CLI复用受保护runner、独立parent核验 | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；source drift/失败receipt、zero-fit核验、fresh-process router imports | APPROVED_BY_USER_SOURCE_VERIFIED | 已批准§8动作边界：PR/CI待完成；合入/实验/生产分别授权 |
 
 | 实际交付维度 | 当前状态 |
 |---|---|
 | 风险结果分析、旧Ridge结果同步 | 已复用原正式结果完成，无新fit或消费回放 |
 | 本文精确D1～D6 | APPROVED_BY_USER：2026-10-08明确批准 |
-| 新源码/测试/正式preflight | NOT_IMPLEMENTED / NOT_RUN，不由文档检查代替 |
+| 新源码/直接测试 | IMPLEMENTED；本地最小slice 80 passed / 1 skipped；不代报CI或业务验收 |
+| 正式文件preflight / PR / CI | NOT_RUN / PENDING；提交及PR报告记录实时状态 |
 | 正式新fit、产品writer/API/UI | 0 / NOT_RUN |
 | 当前生产迁移/写入、依赖、激活/进程、cleanup | 未授权、未执行 |
 
@@ -229,7 +230,7 @@ F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真
 
 有值只形成采用建议；匹配成本后收益/风险价值还需未来对应业务场景，QE继续由QE窗口后置。无值终止该候选，不恢复旧grid。新版本不会自动替代旧基线/风险/生产run；若以后选择变更，须显式版本选择并回读，失败不silent fallback。rollback是保留/显式选择旧已验证版本，不覆盖旧资产或改hash。
 
-本轮文档production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop、runtime_impact=none、backend_restart_required=false、dataset_write/active_profile_write=false、training/new_fit/tail/QE/runtime_activation/process_control=false。将来源码/正式fit/DEV回滚/生产写入/激活/cleanup各自需具体授权；后端启停仍归用户。
+本轮源码production_ddl_gate=pending（migration文件已实现，DEV/production均未执行）、production_dml_gate=noop、dependency_gates=noop；canonical实际changed-files分类runtime_impact=backend、target_ids=[backend-main]、catalog_error=null。首次运行源码加载及post-restart验证单独pending，后端重启权限=false；不把写研究记录绑定重启。dataset_write/active_profile_write=false、正式training/new_fit/tail/QE/runtime_activation/process_control=false。正式fit、DEV回滚、生产写入、激活和cleanup各自需具体授权；后端启停仍归用户。
 
 ## 13. DESIGN-COMPLIANCE-001与作者审修
 
@@ -245,6 +246,16 @@ F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真
 ### 13.1 精确批准与状态复核（2026-10-08）
 
 用户明确“授权批准设计”，对应§10一次性D1～D6整包。只将当前proposal/pending改为APPROVED_BY_USER，保留§13三轮批准前审核语境；不改四特征公式、资格/标签/窗口、权重、SVD/alpha、正常方程、对照pins、0.02/0.90、2-fit预算或停止条件。复核完整L2、自然NA/fail-closed、旧默认版本和无新增门禁四项保持；批准是设计状态，不等于源码、实验、产品或生产已经完成。本轮不执行提交合入、fit、tail、DB、dataset、依赖、activation、cleanup或进程操作。
+
+### 13.2 源码三轮作者审修与最小验证（2026-10-08）
+
+三轮均为作者自审，不冒称独立第三方审核。第一轮修复旧acceptance与child的outcome字段形状差异，明确只比较封闭prediction字段，同时保持原模型/input/outcome pins；原默认版本contract hash未变化。第二轮将有界价格视图的sector/index file pins闭合到source identity，拒绝两个child共同重hash后的非法价格/日期/quote authority；八类反例通过。第三轮修复三方共同截面IC调用将list误传给code→value接口的问题，分别断言candidate-minus-delta及candidate-minus-old-Ridge均有222个成熟日；补全共同spread空组typed原因及process_index拒绝bool。剩余源码阻断finding=0；不据此改阈值、模型或增加fit。
+
+实际本地最小矩阵：`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py backend/tests/hmm_risk/test_rotation_l2_input.py backend/tests/hmm_risk/test_rotation_l2_prediction.py`，结果80 passed、1 skipped；跳过DEV回滚验证，不算数据库通过。合成fixture的两次fit仅为源码合同测试，正式实验fit=0。现存冻结旧acceptance及两child只读identity核验通过，无重新fit/predict/filter。
+
+Ruff、py_compile通过；ownership 12/12文件映射、无unmapped/ambiguous；validation_module_registry_l0为8 passed、14/14映射。Frontend API与Dashboard strict TypeScript静态检查通过；Playwright仅collect到20项，未运行页面/后端，真实UI与数据库验收仍待授权，mock合同运行交CI。F2/L0及最终HEAD证据随PR门禁更新，不伪造沿用不同HEAD的结论。
+
+DESIGN-COMPLIANCE-001逐项源码复核：完整131目录/三方比较/四term产品分支均实现，不用删减人口或空实现冒充交付；缺失与identity漂移fail closed，正常NA不补值；只HMM-owned源码/CLI/产品直接测试，旧默认hash/参数/QE/风险policy保持；沿已批准0.02/0.90及独立充分性规则，无新增统计AND、自然事件或资源审批门。DEV/production、正式数据preflight/模型效果、CI/运行加载各自保持未完成状态。
 
 ## 14. 技术依据与适用局限
 

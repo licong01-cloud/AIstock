@@ -29,7 +29,7 @@ function rotationRows(availableCount = 131, tradeDate = "2026-03-31") {
   }));
 }
 
-async function mockRotationApi(page: import("@playwright/test").Page, availableCount = 131, hmm = false, mixed = false, supervised = false) {
+async function mockRotationApi(page: import("@playwright/test").Page, availableCount = 131, hmm = false, mixed = false, supervised = false, price = false) {
   const version = "hmm_risk_l2_postcalibration_effect_v1";
   await page.route("**/api/v1/hmm-risk/rotation-l2/overview?*", async (route) => {
     await route.fulfill({
@@ -48,7 +48,7 @@ async function mockRotationApi(page: import("@playwright/test").Page, availableC
           research_surface_status: "AVAILABLE_EXPERIMENTAL",
           rotation_l2_capability_status: "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED",
           ...(hmm ? { model_version: version } : supervised ? {
-            model_version: "hmm_risk_rotation_l2_moneyflow_supervised_v1",
+            model_version: price ? "hmm_risk_rotation_l2_moneyflow_price_supervised_v1" : "hmm_risk_rotation_l2_moneyflow_supervised_v1",
             training_end: "2025-03-31", training_outcome_end: "2025-04-15",
             selection_basis: "RETROSPECTIVE_DEVELOPMENT_SELECTED",
           } : {}),
@@ -81,7 +81,13 @@ async function mockRotationApi(page: import("@playwright/test").Page, availableC
           forecast_state: row.availability === "available" ? "neutral" : null,
           daily_rank_group: row.forecast_state,
         } : supervised ? {
-          ...row, model_version: mixed && index === 0 ? undefined : "hmm_risk_rotation_l2_moneyflow_supervised_v1",
+          ...row, model_version: mixed && index === 0 ? undefined : price ? "hmm_risk_rotation_l2_moneyflow_price_supervised_v1" : "hmm_risk_rotation_l2_moneyflow_supervised_v1",
+          ...(price ? { feature_contributions: row.availability === "available" ? {
+            raw_prediction: row.rotation_score, intercept: 0, moneyflow_level_linear_term: 0,
+            moneyflow_delta_linear_term: 0, relative_momentum_linear_term: row.rotation_score,
+            relative_downside_linear_term: 0, average_rank_score: row.rotation_score,
+            daily_rank_group: row.forecast_state, model_parameter_sha256: "2".repeat(64),
+          } : null } : {}),
         } : row) },
       }),
     });
@@ -151,6 +157,37 @@ test("rejects mixed supervised and baseline detail rows", async ({ page }) => {
   await mockRotationApi(page, 127, false, true, true);
   await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
   await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
+  await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
+});
+
+test("shows four-feature linear explanation separately from rank without claiming forward value", async ({ page }) => {
+  await mockRotationApi(page, 127, false, false, true, true);
+  await assertRotationSurface(page);
+  const first = page.getByRole("region", { name: "申万二级行业轮动排名" }).locator("article").first();
+  await expect(first).toContainText("原始预测");
+  await expect(first).toContainText("相对动量项");
+  await expect(first).toContainText("下行半偏差项");
+  await expect(page.getByText("不是 untouched / 前瞻确认", { exact: false })).toBeVisible();
+});
+
+test("rejects mixed four-feature and old model detail rows", async ({ page }) => {
+  await mockRotationApi(page, 127, false, true, true, true);
+  await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
+  await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
+  await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
+});
+
+test("rejects four-feature missing explanation rather than silently displaying scores", async ({ page }) => {
+  await mockRotationApi(page, 127, false, false, true, true);
+  await page.route("**/api/v1/hmm-risk/rotation-l2?*", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ status: "ok", data: {
+      run_id: RUN_ID, trade_date: "2026-03-31", rows: rotationRows(127).map((row) => ({
+        ...row, model_version: "hmm_risk_rotation_l2_moneyflow_price_supervised_v1",
+      })),
+    } }) });
+  });
+  await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
+  await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_explanation_invalid");
   await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
 });
 

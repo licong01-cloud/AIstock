@@ -213,26 +213,27 @@ def training_matrix(bundle: Mapping[str, Any], rows: list[dict[str, Any]]) -> di
     }
 
 
-def _arrays(training: Mapping[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _arrays(training: Mapping[str, Any], *, feature_count: int = 2) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     entries = training["entries"]
     x = np.asarray([row["x"] for row in entries], dtype=np.float64)
     y = np.asarray([row["y"] for row in entries], dtype=np.float64)
     w = np.asarray([row["weight"] for row in entries], dtype=np.float64)
-    if x.shape != (len(entries), 2) or not all(np.isfinite(a).all() for a in (x, y, w)):
+    if x.shape != (len(entries), feature_count) or not all(np.isfinite(a).all() for a in (x, y, w)):
         raise fail("training matrix is non-finite or has an invalid shape", "fit_failed")
     if (w <= 0).any() or not math.isclose(math.fsum(w), 1.0, rel_tol=1e-12, abs_tol=1e-12):
         raise fail("date-equal training weights do not sum to one", "fit_failed")
     return x, y, w
 
 
-def _validate_parameter_identity(parameters: Mapping[str, Any]) -> None:
+def _validate_parameter_identity(parameters: Mapping[str, Any], *, variant: Any = None) -> None:
+    api = variant or sys.modules[__name__]
     verify(parameters, "parameter_sha256")
     coefficients, intercept = parameters.get("coefficients"), parameters.get("intercept")
     if (
-        parameters.get("contract_hash") != MODEL_CONTRACT_HASH
-        or parameters.get("feature_names") != list(FEATURE_NAMES)
+        parameters.get("contract_hash") != api.MODEL_CONTRACT_HASH
+        or parameters.get("feature_names") != list(api.FEATURE_NAMES)
         or not isinstance(coefficients, list)
-        or len(coefficients) != 2
+        or len(coefficients) != len(api.FEATURE_NAMES)
         or any(type(v) not in (int, float) or not math.isfinite(v) for v in coefficients)
         or type(intercept) not in (int, float)
         or not math.isfinite(intercept)
@@ -240,8 +241,9 @@ def _validate_parameter_identity(parameters: Mapping[str, Any]) -> None:
         raise fail("model parameter identity/shape differs", "fit_failed")
 
 
-def _validate_parameters(parameters: Mapping[str, Any], training: Mapping[str, Any]) -> None:
-    _validate_parameter_identity(parameters)
+def _validate_parameters(parameters: Mapping[str, Any], training: Mapping[str, Any], *, variant: Any = None) -> None:
+    api = variant or sys.modules[__name__]
+    _validate_parameter_identity(parameters, variant=api)
     if (
         parameters.get("training_sha256") != training["training_sha256"]
         or parameters.get("train_rows") != len(training["entries"])
@@ -250,14 +252,19 @@ def _validate_parameters(parameters: Mapping[str, Any], training: Mapping[str, A
         raise fail("model parameter training authority differs")
     beta = np.asarray(parameters.get("coefficients"), dtype=np.float64)
     intercept = parameters.get("intercept")
-    x, y, w = _arrays(training)
+    x, y, w = _arrays(training, feature_count=len(api.FEATURE_NAMES))
     residual = x @ beta + intercept - y
-    gradient = x.T @ (w * residual) + CONTRACT["alpha"] * beta
+    gradient = x.T @ (w * residual) + api.CONTRACT["alpha"] * beta
     if not np.allclose(gradient, 0, rtol=0, atol=1e-10) or abs(float(w @ residual)) > 1e-10:
         raise fail("parameters do not satisfy the frozen weighted Ridge objective")
 
 
-def predictions_from_parameters(rows: list[dict[str, Any]], parameters: Mapping[str, Any]) -> list[dict[str, Any]]:
+LINEAR_TERMS = ("moneyflow_level_linear_term", "moneyflow_delta_linear_term")
+
+
+def predictions_from_parameters(
+    rows: list[dict[str, Any]], parameters: Mapping[str, Any], *, term_names: tuple[str, ...] = LINEAR_TERMS
+) -> list[dict[str, Any]]:
     beta, b = parameters["coefficients"], parameters["intercept"]
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -266,10 +273,12 @@ def predictions_from_parameters(rows: list[dict[str, Any]], parameters: Mapping[
     output = []
     for _, daily in sorted(groups.items()):
         raw: dict[str, float] = {}
-        terms: dict[str, tuple[float, float]] = {}
+        terms: dict[str, tuple[float, ...]] = {}
         for row in daily:
             if row["availability"] == "available":
-                terms[row["sector_code"]] = (beta[0] * row["x"][0], beta[1] * row["x"][1])
+                if len(beta) != len(term_names) or len(row["x"]) != len(term_names):
+                    raise fail("linear explanation dimension differs", "score_failed")
+                terms[row["sector_code"]] = tuple(a * b for a, b in zip(beta, row["x"], strict=True))
                 raw[row["sector_code"]] = math.fsum((b, *terms[row["sector_code"]]))
         if not all(math.isfinite(value) for value in raw.values()):
             raise fail("raw prediction is non-finite", "score_failed")
@@ -284,8 +293,7 @@ def predictions_from_parameters(rows: list[dict[str, Any]], parameters: Mapping[
                     feature_contributions={
                         "raw_prediction": raw[code],
                         "intercept": b,
-                        "moneyflow_level_linear_term": terms[code][0],
-                        "moneyflow_delta_linear_term": terms[code][1],
+                        **dict(zip(term_names, terms[code], strict=True)),
                         "average_rank_score": scores[code],
                         "daily_rank_group": states[code],
                         "model_parameter_sha256": parameters["parameter_sha256"],
@@ -311,23 +319,24 @@ def numeric_environment() -> dict[str, Any]:
     }
 
 
-def run_process(bundle: Mapping[str, Any], *, process_index: int) -> dict[str, Any]:
+def run_process(bundle: Mapping[str, Any], *, process_index: int, variant: Any = None) -> dict[str, Any]:
     from sklearn.linear_model import Ridge
     from threadpoolctl import threadpool_limits
 
-    if process_index not in (1, 2):
+    if type(process_index) is not int or process_index not in (1, 2):
         raise fail("process index differs")
-    rows, _, _ = feature_rows(bundle)
-    training = training_matrix(bundle, rows)
-    x, y, w = _arrays(training)
+    api = variant or sys.modules[__name__]
+    rows, _, _ = api.feature_rows(bundle)
+    training = api.training_matrix(bundle, rows)
+    x, y, w = _arrays(training, feature_count=len(api.FEATURE_NAMES))
     with threadpool_limits(limits=1):
         model = Ridge(alpha=0.01, fit_intercept=True, solver="svd", positive=False)
         model.fit(x, y, sample_weight=w)
         parameters = seal(
             {
-                "contract_hash": MODEL_CONTRACT_HASH,
+                "contract_hash": api.MODEL_CONTRACT_HASH,
                 "training_sha256": training["training_sha256"],
-                "feature_names": list(FEATURE_NAMES),
+                "feature_names": list(api.FEATURE_NAMES),
                 "coefficients": [float(v) for v in model.coef_],
                 "intercept": float(model.intercept_),
                 "train_rows": len(training["entries"]),
@@ -335,13 +344,13 @@ def run_process(bundle: Mapping[str, Any], *, process_index: int) -> dict[str, A
             },
             "parameter_sha256",
         )
-        _validate_parameters(parameters, training)
-        predictions = predictions_from_parameters(rows, parameters)
-        environment = numeric_environment()
+        _validate_parameters(parameters, training, variant=api)
+        predictions = api.predictions_from_parameters(rows, parameters)
+        environment = api.numeric_environment()
     return seal(
         {
-            "schema_version": PROCESS_SCHEMA,
-            "contract": CONTRACT,
+            "schema_version": api.PROCESS_SCHEMA,
+            "contract": api.CONTRACT,
             "input_hash": bundle["input_hash"],
             "source_commit": bundle["source"]["identity"]["source_git_commit"],
             "process_index": process_index,
@@ -395,17 +404,19 @@ def read_evaluation_facts(bundle: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def verify_processes(
-    first: Mapping[str, Any], second: Mapping[str, Any], *, input_bundle: Mapping[str, Any]
+    first: Mapping[str, Any], second: Mapping[str, Any], *, input_bundle: Mapping[str, Any], variant: Any = None
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    parsed = validate_input(input_bundle)
-    rows, _, _ = feature_rows(input_bundle)
-    training = training_matrix(input_bundle, rows)
+    api = variant or sys.modules[__name__]
+    parsed = api.validate_input(input_bundle)
+    rows, _, _ = api.feature_rows(input_bundle)
+    training = api.training_matrix(input_bundle, rows)
     for index, child in enumerate((first, second), 1):
         verify(child, "report_sha256")
         if (
-            child.get("schema_version") != PROCESS_SCHEMA
-            or child.get("contract") != CONTRACT
+            child.get("schema_version") != api.PROCESS_SCHEMA
+            or child.get("contract") != api.CONTRACT
             or child.get("input_hash") != input_bundle["input_hash"]
+            or type(child.get("process_index")) is not int
             or child.get("process_index") != index
             or child.get("source_commit") != parsed["identity"]["source_git_commit"]
             or any(
@@ -425,21 +436,22 @@ def verify_processes(
             )
         ):
             raise fail("child differs from parent authority or fit budget")
-        _validate_parameters(child["parameters"], training)
+        _validate_parameters(child["parameters"], training, variant=api)
         if child.get("training_summary") != {k: v for k, v in training.items() if k != "entries"}:
             raise fail("child training summary differs from parent")
         environment = child.get("numeric_environment", {})
         if (
-            environment.get("versions") != numeric_environment()["versions"]
+            environment.get("versions") != api.numeric_environment()["versions"]
             or environment.get("python") != sys.version.split()[0]
             or not environment.get("thread_pools")
             or any(pool.get("num_threads") != 1 for pool in environment["thread_pools"])
-            or set(environment.get("thread_variables", {}))
-            != {"OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"}
+            or set(environment.get("thread_variables", {})) != set(api.numeric_environment()["thread_variables"])
             or any(value != "1" for value in environment.get("thread_variables", {}).values())
         ):
             raise fail("child numeric environment differs from the fixed single-thread contract")
-        expected = predictions_from_parameters(rows, child["parameters"])
+        if variant is not None and environment != input_bundle.get("numeric_environment"):
+            raise fail("child numeric payload differs from frozen request")
+        expected = api.predictions_from_parameters(rows, child["parameters"])
         if child.get("predictions") != expected or child.get("prediction_sha256") != canonical_sha256(expected):
             raise fail("child predictions differ from parent zero-fit readback")
     comparable = {k: v for k, v in first.items() if k not in {"process_index", "report_sha256"}}
@@ -552,19 +564,22 @@ def close_processes(
     )
 
 
-def validate_acceptance(value: Mapping[str, Any]) -> None:
+def validate_acceptance(value: Mapping[str, Any], *, variant: Any = None) -> None:
+    api = variant or sys.modules[__name__]
     verify(value, "acceptance_sha256")
-    _validate_parameter_identity(value["parameters"])
+    _validate_parameter_identity(value["parameters"], variant=api)
     if (
-        value.get("schema_version") != ACCEPTANCE_SCHEMA
-        or value.get("contract_version") != VERSION
-        or value.get("contract") != CONTRACT
-        or value.get("evaluation_contract") != EVALUATION_CONTRACT
-        or value.get("evaluation_contract_hash") != EVALUATION_HASH
-        or value.get("model_contract_hash") != MODEL_CONTRACT_HASH
+        value.get("schema_version") != api.ACCEPTANCE_SCHEMA
+        or value.get("contract_version") != api.VERSION
+        or value.get("contract") != api.CONTRACT
+        or value.get("evaluation_contract") != api.EVALUATION_CONTRACT
+        or value.get("evaluation_contract_hash") != api.EVALUATION_HASH
+        or value.get("model_contract_hash") != api.MODEL_CONTRACT_HASH
         or value.get("model_parameter_sha256") != value["parameters"]["parameter_sha256"]
         or value.get("model_hash")
-        != canonical_sha256({"contract_hash": MODEL_CONTRACT_HASH, "parameter_sha256": value["model_parameter_sha256"]})
+        != canonical_sha256(
+            {"contract_hash": api.MODEL_CONTRACT_HASH, "parameter_sha256": value["model_parameter_sha256"]}
+        )
         or any(type(value.get(k)) is not int for k in ("planned_fits", "started_fits", "completed_fits", "failed_fits"))
         or value.get("planned_fits") != 2
         or value.get("started_fits") != 2
@@ -581,7 +596,7 @@ def validate_acceptance(value: Mapping[str, Any]) -> None:
     expected_run = canonical_sha256(
         {
             "model_hash": value["model_hash"],
-            "evaluation_hash": EVALUATION_HASH,
+            "evaluation_hash": api.EVALUATION_HASH,
             "input_hash": value["input_hash"],
             "outcome_hash": value["outcome_sha256"],
         }
@@ -628,19 +643,22 @@ def validate_acceptance(value: Mapping[str, Any]) -> None:
         raise fail("acceptance daily L2 directory is not complete")
 
 
-def validate_product_explanation(row: Mapping[str, Any]) -> None:
+def validate_product_explanation(row: Mapping[str, Any], *, variant: Any = None) -> None:
     """Exact new version branch; never impersonate the zero-fit baseline."""
+    api = variant or sys.modules[__name__]
     summary = row["run_summary"]
     parameters = summary.get("parameters")
     if not isinstance(parameters, Mapping):
         raise fail("product parameter identity is absent")
-    _validate_parameter_identity(parameters)
+    _validate_parameter_identity(parameters, variant=api)
     if (
-        parameters.get("contract_hash") != MODEL_CONTRACT_HASH
-        or summary.get("model_contract_hash") != MODEL_CONTRACT_HASH
+        parameters.get("contract_hash") != api.MODEL_CONTRACT_HASH
+        or summary.get("model_contract_hash") != api.MODEL_CONTRACT_HASH
         or row["model_hash"]
-        != canonical_sha256({"contract_hash": MODEL_CONTRACT_HASH, "parameter_sha256": parameters["parameter_sha256"]})
-        or row["evaluation_contract_hash"] != EVALUATION_HASH
+        != canonical_sha256(
+            {"contract_hash": api.MODEL_CONTRACT_HASH, "parameter_sha256": parameters["parameter_sha256"]}
+        )
+        or row["evaluation_contract_hash"] != api.EVALUATION_HASH
     ):
         raise fail("product model/evaluation contract differs")
     if (row["availability"] == "available" and (not row["structural_eligible"] or not row["feature_eligible"])) or (
@@ -652,8 +670,7 @@ def validate_product_explanation(row: Mapping[str, Any]) -> None:
         fields = {
             "raw_prediction",
             "intercept",
-            "moneyflow_level_linear_term",
-            "moneyflow_delta_linear_term",
+            *api.LINEAR_TERMS,
             "average_rank_score",
             "daily_rank_group",
             "model_parameter_sha256",
@@ -674,9 +691,7 @@ def validate_product_explanation(row: Mapping[str, Any]) -> None:
             or contribution["average_rank_score"] != row["rotation_score"]
             or not math.isclose(
                 contribution["raw_prediction"],
-                math.fsum(
-                    contribution[k] for k in ("intercept", "moneyflow_level_linear_term", "moneyflow_delta_linear_term")
-                ),
+                math.fsum(contribution[k] for k in ("intercept", *api.LINEAR_TERMS)),
                 rel_tol=1e-10,
                 abs_tol=1e-12,
             )

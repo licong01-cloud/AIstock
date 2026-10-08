@@ -14,6 +14,7 @@ import styles from "./rotation-l1.module.css";
 const CONFIGURED_RUN_ID = process.env.NEXT_PUBLIC_HMM_ROTATION_L2_RUN_ID?.trim() || "";
 const FROZEN_HMM_VERSION = "hmm_risk_l2_postcalibration_effect_v1";
 const SUPERVISED_VERSION = "hmm_risk_rotation_l2_moneyflow_supervised_v1";
+const PRICE_SUPERVISED_VERSION = "hmm_risk_rotation_l2_moneyflow_price_supervised_v1";
 
 function formatNumber(value: number | null, digits = 4): string {
   return value === null ? "—" : value.toFixed(digits);
@@ -89,7 +90,7 @@ export default function RotationL2Dashboard() {
           throw new HMMRiskApiError("L2 日期明细与 run/模型/输入身份不一致。", "hmm_risk_rotation_l2_ui_identity_invalid", 500);
         }
         const hmm = nextOverview.model_version === FROZEN_HMM_VERSION;
-        const supervised = nextOverview.model_version === SUPERVISED_VERSION;
+        const supervised = [SUPERVISED_VERSION, PRICE_SUPERVISED_VERSION].includes(nextOverview.model_version || "");
         const states = new Set(["trending", "neutral", "fading"]);
         if ((nextOverview.model_version !== undefined && !hmm && !supervised)
           || (supervised && (nextOverview.validation_basis !== "HISTORICAL_CAUSAL_FIXED_TRAIN_DEVELOPMENT"
@@ -103,7 +104,7 @@ export default function RotationL2Dashboard() {
               && (row.semantic_state !== row.forecast_state || !states.has(row.semantic_state || "")
                 || !states.has(row.daily_rank_group || "") || row.rotation_score === null || !Number.isFinite(row.rotation_score)
                 || row.rotation_score < -0.5 || row.rotation_score > 0.5))
-            : supervised ? row.model_version !== SUPERVISED_VERSION
+            : supervised ? row.model_version !== nextOverview.model_version
             : row.model_version !== undefined || nextOverview.validation_basis !== "HISTORICAL_CAUSAL_REPLAY_ZERO_FIT")) {
           throw new HMMRiskApiError("L2 模型版本与状态/排名投影不一致，拒绝混用。", "hmm_risk_rotation_l2_ui_version_invalid", 500);
         }
@@ -112,6 +113,19 @@ export default function RotationL2Dashboard() {
             || row.rotation_score > 0.5 || !states.has(row.forecast_state || "")
           : row.availability !== "unavailable" || row.rotation_score !== null || row.forecast_state !== null || !row.reason_code)) {
           throw new HMMRiskApiError("L2 分数或不可用状态不合法，不生成默认排名。", "hmm_risk_rotation_l2_ui_prediction_invalid", 500);
+        }
+        if (nextOverview.model_version === PRICE_SUPERVISED_VERSION && detail.rows.some((row) => {
+          const c = row.feature_contributions;
+          if (row.availability === "unavailable") return c !== null;
+          if (!c || !/^[0-9a-f]{64}$/.test(c.model_parameter_sha256)) return true;
+          const terms = [c.intercept, c.moneyflow_level_linear_term, c.moneyflow_delta_linear_term,
+            c.relative_momentum_linear_term, c.relative_downside_linear_term];
+          return terms.some((value) => typeof value !== "number" || !Number.isFinite(value))
+            || !Number.isFinite(c.raw_prediction) || c.average_rank_score !== row.rotation_score
+            || c.daily_rank_group !== row.forecast_state
+            || Math.abs(c.raw_prediction - terms.reduce<number>((sum, value) => sum + (value as number), 0)) > 1e-12 + 1e-10 * Math.abs(c.raw_prediction);
+        })) {
+          throw new HMMRiskApiError("四特征解释与原始预测不一致。", "hmm_risk_rotation_l2_ui_explanation_invalid", 500);
         }
         setOverview(nextOverview);
         setDetailDate(tradeDate);
@@ -264,6 +278,11 @@ export default function RotationL2Dashboard() {
                   </>
                 ) : <span>{stateLabel(row)}</span>}
                 <b>{formatNumber(row.rotation_score, 5)}</b>
+                {row.model_version === PRICE_SUPERVISED_VERSION && row.feature_contributions && <>
+                  <span>原始预测 {formatNumber(row.feature_contributions.raw_prediction, 5)}；截距 {formatNumber(row.feature_contributions.intercept, 5)}</span>
+                  <span>资金流水平项 {formatNumber(row.feature_contributions.moneyflow_level_linear_term, 5)}；变化项 {formatNumber(row.feature_contributions.moneyflow_delta_linear_term, 5)}</span>
+                  <span>相对动量项 {formatNumber(row.feature_contributions.relative_momentum_linear_term ?? null, 5)}；下行半偏差项 {formatNumber(row.feature_contributions.relative_downside_linear_term ?? null, 5)}</span>
+                </>}
               </article>
             ))}
           </section>
@@ -271,7 +290,7 @@ export default function RotationL2Dashboard() {
             <span>run {overview.run_id}</span><span>model {overview.model_hash}</span>
             <span>input {overview.input_hash}</span><span>mapping {overview.mapping_hash}</span>
             <span>quote {overview.quote_authority_hash}</span><span>validation {overview.validation_basis}</span>
-            {overview.model_version === SUPERVISED_VERSION && <span>训练 decision 截止 {overview.training_end}；训练标签截止 {overview.training_outcome_end}。固定模型历史样本外回放；研发已查看历史，不是 untouched / 前瞻确认。</span>}
+            {[SUPERVISED_VERSION, PRICE_SUPERVISED_VERSION].includes(overview.model_version || "") && <span>训练 decision 截止 {overview.training_end}；训练标签截止 {overview.training_outcome_end}。固定模型历史样本外回放；研发已查看历史，不是 untouched / 前瞻确认。</span>}
           </footer>
         </>
       )}
