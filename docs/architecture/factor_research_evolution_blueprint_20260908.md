@@ -575,6 +575,8 @@ DESIGN-COMPLIANCE-001逐项要求：不把设计或工具通过冒充新因子�
 <a id="rdagent-integration"></a>
 ## 20. v1.8：RD-Agent 经验来源与可选生成支路（2026-10-08）
 
+接口映射、文件范围和实现验收由[RD-Agent 辅助整合详细设计](factor_research_rdagent_assistance_detailed_design_20261008.md)承接；该文档是设计，不代表辅助能力已交付，本文方向和权限不变。
+
 ### 20.1 目标与当前事实
 
 保留 Codex/Claude 主导、AIstock 提供基础能力的架构。来源可以多种，评价沿用一套；经验辅助选题，候选生成不接管评价、入库、QE 或调度。研究动作和结论边界只引用[方法论 §2.5](../analysis/factor_research_methodology.md#rdagent-assistance)，不复制统计定义。§19 的发现方向仍有效，本节不是新因子成功声明或新增研发阶段。

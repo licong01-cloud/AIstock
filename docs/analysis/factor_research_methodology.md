@@ -181,6 +181,8 @@ B 与 B+F 同目标、窗口、样本权重和参数选择规则，分别拟合�
 <a id="rdagent-assistance"></a>
 ### 2.5 RD-Agent 经验辅助与可选候选生成
 
+实施接口见[RD-Agent 辅助整合详细设计](../architecture/factor_research_rdagent_assistance_detailed_design_20261008.md)；统计定义与研究判断仍以本文为准，不因详细设计提交而启动研究。
+
 Codex/Claude 主导问题、取舍和解释；AIstock 提供统一执行、评价及研究记录；RD-Agent 只作为经验来源和可选生成支路。架构与实施边界见[蓝图 §20](../architecture/factor_research_evolution_blueprint_20260908.md#rdagent-integration)。本节是规划，不表示新的查询/生成接口已经可用，不改变 §2.4 的发现主线、三种角色、两条结论轴、C-1～C-7 或完整评价。
 
 **按问题取经验，不做知识库工程。** 先读现有研究结论和存量公式，再按需定位 RD-Agent 相关任务、代码、反馈及已整理知识。优先复用已有提取/去重产物，不重新扫描两节点全部历史，不只检索 SOTA/高收益赢家。技术实现经验、带条件的研究观察、旧环境说明分开展示；找不到、节点不可达或记录不可比时说明范围，继续可独立开展的研究，不增加门禁。
