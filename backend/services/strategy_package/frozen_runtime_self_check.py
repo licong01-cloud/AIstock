@@ -496,13 +496,14 @@ class FrozenRuntimeSelfCheckService:
         manifest_sha: str,
     ) -> FrozenRuntimeSelfCheckResult:
         try:
-            from .multi_alpha_live import _multi_alpha_evidence, _parent_leg_runtime_slices
+            from .multi_alpha_live import _multi_alpha_evidence, _parent_leg_runtime_slices, _seed_leg_slices
 
             leg_slices = _parent_leg_runtime_slices(
                 manifest,
                 evidence=_multi_alpha_evidence(manifest),
                 package_id=manifest.package_id,
             )
+            leg_slices = [seed for leg in leg_slices for seed in _seed_leg_slices(leg)]
             leg_results: dict[str, dict[str, Any]] = {}
             first_result: FrozenRuntimeSelfCheckResult | None = None
             total_dynamic = 0
@@ -516,6 +517,7 @@ class FrozenRuntimeSelfCheckService:
                     model_asset=leg_slice.model_asset,
                     factor_set=list(leg_slice.factor_set),
                     runtime_assets=leg_slice.runtime_assets,
+                    cache_namespace=leg_slice.seed_cache_namespace,
                 )
                 if source.model_params_origin != "package_asset" or source.source_workspace_type != "strategy_package_asset_store":
                     raise StrategyPackageValidationError(
@@ -533,7 +535,7 @@ class FrozenRuntimeSelfCheckService:
                     package_id=manifest.package_id,
                     manifest_sha256=manifest_sha,
                     source=source,
-                    cache_namespace=f"leg_{leg_slice.leg_id}",
+                    cache_namespace=(f"leg_{leg_slice.leg_id}__{leg_slice.seed_cache_namespace}" if leg_slice.seed_cache_namespace else f"leg_{leg_slice.leg_id}"),
                 )
                 probe = self._probe_model(prepared.model_params_path)
                 expected_features = int(probe.expected_features or 0)
@@ -593,7 +595,9 @@ class FrozenRuntimeSelfCheckService:
                     model_probe_backend=probe.backend,
                 )
                 first_result = first_result or result
-                leg_results[leg_slice.leg_id] = {**result.to_context(), "model_id": leg_slice.model_asset.model_id}
+                seed_context = {**result.to_context(), "model_id": leg_slice.model_asset.model_id}
+                leg_context = leg_results.setdefault(leg_slice.leg_id, {**seed_context, "seed_checks": {}})
+                leg_context["seed_checks"][leg_slice.seed_run_ids[0]] = seed_context
                 total_dynamic += len(prepared.dynamic_factors)
                 total_alpha += len(prepared.alpha158_factors)
                 total_factor_order += factor_order_count
@@ -608,11 +612,11 @@ class FrozenRuntimeSelfCheckService:
                 manifest_sha256=manifest_sha,
                 origin="package_asset",
                 model_kind="multi_alpha_parent",
-                model_expected_features=sum(item["model_expected_features"] for item in leg_results.values()),
+                model_expected_features=sum(seed["model_expected_features"] for item in leg_results.values() for seed in item["seed_checks"].values()),
                 dynamic_factor_count=total_dynamic,
                 alpha158_alias_count=total_alpha,
                 factor_order_count=total_factor_order,
-                feature_count_delta=sum(item["feature_count_delta"] for item in leg_results.values()),
+                feature_count_delta=sum(seed["feature_count_delta"] for item in leg_results.values() for seed in item["seed_checks"].values()),
                 model_params_path=first_result.model_params_path,
                 model_probe_backend=first_result.model_probe_backend,
                 leg_results=leg_results,

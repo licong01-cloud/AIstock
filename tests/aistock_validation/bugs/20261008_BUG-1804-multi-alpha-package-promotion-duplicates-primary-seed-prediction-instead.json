@@ -161,7 +161,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages?limit=5",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "fresh_process_evidence": [
+      "Isolated pytest processes loaded tracked promotion/live/self-check/backfill code: targeted contracts passed including real tmp_path LocalPackageAssetStore freezing, three model bindings, two distinct seed scores 3 and 9 averaged to 6, all seed read receipts retained, per-seed feature probes invoked three times, damaged bindings rejected, legacy single-seed identities preserved; in-memory repositories and tmp_path only, no production writes, training, experiments or service control."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

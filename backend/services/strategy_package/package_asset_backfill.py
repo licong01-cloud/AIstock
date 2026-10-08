@@ -431,6 +431,12 @@ class PackageAssetBackfillService:
     ) -> PackageAssetBackfillItem:
         desired = desired_manifest.model_copy(update={"manifest_sha256": None, "package_status": record.package_status})
         try:
+            evidence = (desired.source_evidence or {}).get("multi_alpha") or {}
+            multi_seed = any(len(leg.get("seed_run_ids") or []) > 1 for leg in evidence.get("legs", []) if isinstance(leg, Mapping))
+            if desired.alpha_mode == AlphaMode.MULTI_ALPHA and multi_seed and manifest_has_frozen_runtime_assets(desired):
+                from .multi_alpha_live import _multi_alpha_evidence, _parent_leg_runtime_slices
+
+                _parent_leg_runtime_slices(desired, evidence=_multi_alpha_evidence(desired), package_id=record.package_id)
             frozen_candidate = freeze_manifest(desired)
             admission_passed, _admission_context = runtime_asset_admission_status(frozen_candidate)
             if (

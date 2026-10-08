@@ -86,6 +86,7 @@ class _ParentLegAssetPlan:
     terminal_weight: float
     manifest: StrategyPackageManifest
     seed_provenance: tuple[SeedProvenance, ...]
+    seed_assets: tuple[dict[str, Any], ...] = ()
     materialization: dict[str, Any] = field(default_factory=dict)
 
 
@@ -311,23 +312,58 @@ class MultiAlphaPackagePromotionService:
                 component_weight=terminal_weight,
             )
         seed_sources = self._resolve_leg_seed_sources(leg_id=leg_id, seed_run_ids=seed_run_ids, run_id=run_id)
-        manifest = self._build_parent_leg_asset_manifest(
-            leg_id=leg_id,
-            seed_run_ids=seed_run_ids,
-            seed_sources=seed_sources,
-            run_id=run_id,
-        )
-        frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
-        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        component = frozen_assets.manifest.alpha_components[0]
-        model_assets = frozen_assets.manifest.model_asset if isinstance(frozen_assets.manifest.model_asset, list) else [frozen_assets.manifest.model_asset]
-        model = model_assets[0] if model_assets else None
+        seed_manifests: list[StrategyPackageManifest] = []
+        seed_assets: list[dict[str, Any]] = []
+        for index, (seed_ref, provenance) in enumerate(zip(seed_run_ids, seed_sources, strict=True)):
+            manifest = self._build_parent_leg_asset_manifest(
+                leg_id=leg_id, seed_run_ids=(seed_ref,), seed_sources=(provenance,), run_id=run_id,
+            )
+            frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
+            self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
+            seed_manifest = frozen_assets.manifest
+            models = seed_manifest.model_asset if isinstance(seed_manifest.model_asset, list) else [seed_manifest.model_asset]
+            if len(models) != 1:
+                _fail_manifest_incomplete("each seed requires exactly one fitted model", leg_id=leg_id, seed_ref=seed_ref)
+            model = models[0]
+            if index:
+                # Alias the model identity, not its bytes: CAS continues to deduplicate weights.
+                suffix = hashlib.sha256(f"{leg_id}:{seed_ref}".encode()).hexdigest()[:16]
+                model = model.model_copy(update={"model_id": f"{model.model_id}__seed_{suffix}"})
+            seed_manifest = seed_manifest.model_copy(update={"model_asset": model})
+            seed_manifests.append(seed_manifest)
+            seed_assets.append({
+                "seed_run_id": seed_ref,
+                "model_id": model.model_id,
+                "asset_ref": model.asset_ref,
+                "sha256": model.sha256,
+                "factor_artifact_refs": list(seed_manifest.alpha_components[0].lineage.factor_artifact_refs),
+                "runtime_assets": (seed_manifest.runtime_assets or RuntimeAssetManifest()).model_dump(mode="json"),
+            })
+        primary = seed_manifests[0]
+        source_evidence = dict(primary.source_evidence or {})
+        source_evidence["seed_run_ids"] = list(seed_run_ids)
+        source_evidence["multi_alpha_parent_leg_asset"] = {
+            **source_evidence["multi_alpha_parent_leg_asset"],
+            "seed_run_ids": list(seed_run_ids),
+            "seed_provenance": [source.to_meta() for source in seed_sources],
+            "seed_assets": seed_assets,
+        }
+        manifest = freeze_manifest(primary.model_copy(update={
+            "factor_set": _merge_factor_assets(seed_manifests),
+            "model_asset": _merge_model_assets(seed_manifests),
+            "runtime_assets": _merge_runtime_assets(seed_manifests, package_id=primary.package_id),
+            "source_evidence": source_evidence,
+            "manifest_sha256": None,
+        }))
+        component = primary.alpha_components[0]
+        model = seed_manifests[0].model_asset
         return _ParentLegAssetPlan(
             leg_id=leg_id,
             seed_run_ids=seed_run_ids,
             terminal_weight=terminal_weight,
-            manifest=frozen_assets.manifest,
+            manifest=manifest,
             seed_provenance=tuple(seed_sources),
+            seed_assets=tuple(seed_assets),
             materialization={
                 "leg_id": leg_id,
                 "mode": "parent_leg_inlined_package_asset",
@@ -335,15 +371,16 @@ class MultiAlphaPackagePromotionService:
                 "seed_source_count": len(seed_sources),
                 "model_id": component.model_id,
                 "model_asset_sha256": getattr(model, "sha256", None),
-                "factor_count": len(frozen_assets.manifest.factor_set),
+                "factor_count": len(manifest.factor_set),
+                "seed_assets": seed_assets,
                 "alpha158_enabled": bool(
-                    frozen_assets.manifest.runtime_assets
-                    and frozen_assets.manifest.runtime_assets.alpha158.enabled
+                    manifest.runtime_assets
+                    and manifest.runtime_assets.alpha158.enabled
                 ),
                 "alpha158_schema_sha256": (
-                    frozen_assets.manifest.runtime_assets.alpha158.sha256
-                    if frozen_assets.manifest.runtime_assets
-                    and frozen_assets.manifest.runtime_assets.alpha158.enabled
+                    manifest.runtime_assets.alpha158.sha256
+                    if manifest.runtime_assets
+                    and manifest.runtime_assets.alpha158.enabled
                     else None
                 ),
             },
@@ -356,6 +393,8 @@ class MultiAlphaPackagePromotionService:
         seed_run_ids: tuple[str, ...],
         run_id: str,
     ) -> list[SeedProvenance]:
+        if not seed_run_ids or len(set(seed_run_ids)) != len(seed_run_ids):
+            _fail("seed roster must be nonempty and unique", reason_code="multi_alpha_roster_mismatch", run_id=run_id, leg_id=leg_id)
         resolved: list[SeedProvenance] = []
         for seed_ref in seed_run_ids:
             try:
@@ -608,6 +647,7 @@ class MultiAlphaPackagePromotionService:
                     {
                         "leg_id": leg.leg_id,
                         "seed_run_ids": list(leg.seed_run_ids),
+                        **({"seed_assets": list(leg.seed_assets)} if len(leg.seed_assets) > 1 else {}),
                         "ensemble_method": "mean_by_trade_date_instrument",
                         "terminal_weight": leg.terminal_weight,
                         "model_id": leg.manifest.alpha_components[0].model_id,
