@@ -116,6 +116,7 @@ targets:
       # a restart/readback requirement. Unrelated backend routes stay backend-main.
       - backend/routers/monthly_dataset_releases.py
       - backend/services/dataset_release/api_models.py
+      - backend/services/dataset_release/monthly_repair_journal.py
       - backend/services/dataset_release/monthly_*.py
       - backend/services/dataset_release/monthly_frozen_source_audit.py
       - backend/services/dataset_release/candidate_consumer_smoke.py
@@ -171,6 +172,7 @@ targets:
     probe_routes:
       - route_id: monthly_release_worker_process
         source_globs:
+          - backend/services/dataset_release/monthly_repair_journal.py
           - backend/routers/monthly_dataset_releases.py
           - backend/services/dataset_release/api_models.py
           - backend/services/dataset_release/monthly_*.py
@@ -191,6 +193,7 @@ targets:
           - backend/services/dataset_release/monthly_worker_nodes.py
           - backend/services/dataset_release/monthly_worker_runtime.py
         required_source_globs:
+          - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
           - backend/services/dataset_release/source_authority.py
           - backend/services/dataset_release/monthly_construction_facts.py
