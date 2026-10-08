@@ -2,8 +2,9 @@
   "actual": "SOURCE preparation fails with ArtifactReadyCoverageIncomplete full-day suspension has minute rows and empty context.",
   "allowed_write_scope": [
     "backend/services/dataset_release/artifact_ready_source.py",
+    "backend/services/dataset_release/monthly_construction_facts.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
-    "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+    "backend/tests/dataset_release/test_artifact_ready_source.py",
     "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "tests/aistock_validation/bugs/20261008_BUG-1819-artifact-ready-minute-preparation-rejects-proven-suspended-zero-turnover.json"
   ],
@@ -16,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-08T20:14:23.960245Z",
-  "description": "SOURCE preparation fails with ArtifactReadyCoverageIncomplete full-day suspension has minute rows and empty context.",
+  "description": "九月月更 attempt-250 在原始冻结与月度审计后，artifact-ready 分钟准备错误拒绝已批准的全日停牌零成交占位记录。只读核对35只停牌股首日：30只为240行、含13:00、零成交占位，5只无分钟记录，日线成交均为零。修复复用既有停牌合同；将当月独立日线证据采集归入共享 monthly_construction_facts，不扫描旧历史，不修改原始行情。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -145,8 +146,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh Python process: scripts/monthly_unified_dataset_release_worker.py --preflight -> PASS; adapter_version=13; adapter_contract_sha256=ec42ea26350080ff9d45ea2bbdceaec8f5fefee74045f61fb4c2997efca20874; registry_sha256=6fd5719808d93fc0605be548da65b01625aa09934f1ade76649a5d98d223e8c4; database_opened=false; operation_claimed=false; candidate/profile_write=false.",
+      "RED: test_minute_preparation_preserves_proven_suspended_placeholder -> 2 failed with original SOURCE suspension rejection; GREEN: 163 related tests passed; subsequent pure construction-fact extraction -> 22 focused tests passed."
+    ],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
