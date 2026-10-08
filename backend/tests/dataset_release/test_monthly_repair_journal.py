@@ -50,6 +50,88 @@ class Connection:
         return Cursor(self)
 
 
+def _future_tdx(connection: Connection, *, ledger='ingestion_jobs', dataset='kline_minute_raw') -> tuple:
+    scope = {
+        'dataset': dataset, 'data_kind': dataset, 'mode': 'incremental',
+        'via': 'go_init', 'start_date': '2026-10-08', 'end_date': '2026-10-08',
+    }
+    return (ledger, 'future-raw', 'running' if ledger == 'ingestion_jobs' else 'started',
+            dataset, connection.now, connection.now, None, scope, False,
+            date(2026, 10, 8) if ledger == 'data_sync_attempts' else None)
+
+
+@pytest.mark.parametrize('ledger', ['ingestion_jobs', 'data_sync_attempts'])
+@pytest.mark.parametrize('dataset', ['kline_daily_raw', 'kline_minute_raw'])
+def test_bounded_future_tdx_does_not_block_month_at_start_or_seal(ledger, dataset) -> None:
+    connection = Connection()
+    row = _future_tdx(connection, ledger=ledger, dataset=dataset)
+    connection.active = [row]
+    journal = ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30))
+    watermark = journal.initial_watermark(connection)
+    connection.overlaps = [row]
+    assert journal.overlapping_repairs(connection, watermark) == ()
+
+
+@pytest.mark.parametrize('case', [
+    'no_cutoff', 'on_cutoff', 'cross_cutoff', 'reversed', 'bad_date', 'compact_date',
+    'missing_end', 'missing_via', 'full_history', 'wrong_dataset', 'wrong_data_kind',
+    'truncate', 'additional_dataset', 'target_conflict', 'missing_owner',
+])
+def test_unproven_or_overlapping_tdx_writer_stays_blocking(case) -> None:
+    connection = Connection()
+    row = list(_future_tdx(connection, ledger='data_sync_attempts'))
+    scope = row[7]
+    cutoff = None if case == 'no_cutoff' else date(2026, 9, 30)
+    if case in {'on_cutoff', 'cross_cutoff', 'bad_date', 'compact_date'}:
+        scope['start_date'] = {
+            'on_cutoff': '2026-09-30', 'cross_cutoff': '2026-09-29',
+            'bad_date': '2026-02-30', 'compact_date': '20261008',
+        }[case]
+    elif case == 'reversed':
+        scope['end_date'] = '2026-10-07'
+    elif case == 'missing_end':
+        scope.pop('end_date')
+    elif case == 'missing_via':
+        scope.pop('via')
+    elif case == 'full_history':
+        scope['mode'] = 'init'
+    elif case == 'wrong_dataset':
+        scope['dataset'] = 'adj_factor'
+    elif case == 'wrong_data_kind':
+        scope['data_kind'] = 'minute_1m'
+    elif case == 'truncate':
+        scope['truncate_before'] = True
+    elif case == 'additional_dataset':
+        scope['datasets'] = ['kline_minute_raw', 'adj_factor']
+    elif case == 'target_conflict':
+        row[9] = date(2026, 9, 30)
+    elif case == 'missing_owner':
+        row[7] = None
+    connection.active = [tuple(row)]
+    journal = ManagedRepairImpactJournal(source_cutoff=cutoff)
+    with pytest.raises(MonthlyRepairJournalError, match='not terminal'):
+        journal.initial_watermark(connection)
+    connection.overlaps = [tuple(row)]
+    assert len(journal.overlapping_repairs(
+        connection, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00',
+    )) == 1
+
+
+def test_post_cutoff_claim_does_not_hide_adj_factor_history_restatement() -> None:
+    connection = Connection()
+    row = _future_tdx(connection, dataset='adj_factor')
+    connection.active = [row]
+    with pytest.raises(MonthlyRepairJournalError, match='not terminal'):
+        ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30)).initial_watermark(connection)
+
+
+def test_truncated_active_writer_query_does_not_certify_no_overlap() -> None:
+    connection = Connection()
+    connection.active = [_future_tdx(connection)] * 50
+    with pytest.raises(MonthlyRepairJournalError, match='scope is incomplete'):
+        ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30)).initial_watermark(connection)
+
+
 def _future_empty_suspend(connection: Connection, *, ledger: str = 'ingestion_jobs') -> tuple:
     scope = {
         'dataset': 'suspend_d', 'actual_dataset': 'suspend_d',
@@ -322,6 +404,59 @@ def readonly_dev_connection():  # type: ignore[no-untyped-def]
         connection.close()
 
 
+def _ledger_cte_query(sql: str) -> str:
+    for table, cte in (('market.ingestion_jobs', 'fixture_jobs'),
+                       ('market.data_sync_attempts', 'fixture_attempts'),
+                       ('market.data_sync_targets', 'fixture_targets')):
+        sql = sql.replace(table, cte)
+    return '''WITH fixture_jobs AS (
+        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS j(
+            job_id text,status text,summary jsonb,created_at timestamptz,
+            started_at timestamptz,finished_at timestamptz)
+    ), fixture_attempts AS (
+        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS a(
+            attempt_id text,target_id text,status text,job_id text,run_id text,
+            rows_written bigint,rows_observed bigint,context_json jsonb,
+            created_at timestamptz,started_at timestamptz,finished_at timestamptz)
+    ), fixture_targets AS (
+        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS t(
+            target_id text,dataset text,target_date date,target_scope jsonb)
+    ), ''' + sql.strip().removeprefix('WITH ')
+
+
+@pytest.mark.parametrize('case', ['bounded', 'on_cutoff', 'wrong_via', 'missing_owner', 'wrong_target', 'adj_history'])
+def test_bounded_tdx_scope_sql_in_readonly_dev(readonly_dev_connection, case) -> None:
+    fake = Connection()
+    scope = _future_tdx(fake)[7]
+    if case == 'on_cutoff':
+        scope['start_date'] = '2026-09-30'
+    elif case == 'wrong_via':
+        scope['via'] = 'unregistered'
+    elif case == 'adj_history':
+        scope.update(dataset='adj_factor', data_kind='adj_factor')
+    moment = '2026-10-08T15:00:00+00:00'
+    jobs = [dict(job_id='j', status='running', summary=scope, created_at=moment, started_at=moment)]
+    attempts = [dict(attempt_id='a', target_id='t', status='started', job_id='missing' if case == 'missing_owner' else 'j',
+                     created_at=moment, started_at=moment)]
+    targets = [dict(target_id='t', dataset=scope['dataset'],
+                    target_date='2026-09-30' if case == 'wrong_target' else '2026-10-08')]
+    journal = ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30))
+    journal.initial_watermark(fake)
+    active_query = fake.calls[1]
+    journal.overlapping_repairs(fake, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00')
+    for sql, params in (active_query, fake.calls[2]):
+        with readonly_dev_connection.cursor() as cursor:
+            cursor.execute('SHOW transaction_read_only')
+            assert cursor.fetchone()[0] == 'on'
+            cursor.execute(_ledger_cte_query(sql), (json.dumps(jobs), json.dumps(attempts), json.dumps(targets), *params))
+            rows = cursor.fetchall()
+        assert len(rows) == 2
+        assert [journal._bounded_future_tdx(row) for row in rows] == {
+            'bounded': [True, True], 'on_cutoff': [False, False], 'wrong_via': [False, False],
+            'missing_owner': [False, True], 'wrong_target': [False, True], 'adj_history': [False, False],
+        }[case]
+
+
 @pytest.mark.parametrize('case,excluded', [
     ('closed_empty', True), ('positive', False), ('unknown_quality', False),
     ('closed_midday', True), ('mismatched_schedule', False), ('unknown_schedule', False),
@@ -358,23 +493,7 @@ def test_actual_overlap_sql_in_readonly_dev(readonly_dev_connection, case: str, 
     journal = ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30))
     journal.overlapping_repairs(fake, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00')
     sql, params = fake.calls[0]
-    for table, cte in (('market.ingestion_jobs', 'fixture_jobs'),
-                       ('market.data_sync_attempts', 'fixture_attempts'),
-                       ('market.data_sync_targets', 'fixture_targets')):
-        sql = sql.replace(table, cte)
-    sql = '''WITH fixture_jobs AS (
-        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS j(
-            job_id text,status text,summary jsonb,created_at timestamptz,
-            started_at timestamptz,finished_at timestamptz)
-    ), fixture_attempts AS (
-        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS a(
-            attempt_id text,target_id text,job_id text,status text,
-            rows_written bigint,rows_observed bigint,context_json jsonb,
-            created_at timestamptz,started_at timestamptz,finished_at timestamptz)
-    ), fixture_targets AS (
-        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS t(
-            target_id text,dataset text,target_date date,target_scope jsonb)
-    ), ''' + sql.strip().removeprefix('WITH ')
+    sql = _ledger_cte_query(sql)
     with readonly_dev_connection.cursor() as cursor:
         cursor.execute('SHOW transaction_read_only')
         assert cursor.fetchone()[0] == 'on'
@@ -460,20 +579,7 @@ def test_actual_postgres_writer_query_in_readonly_dev(
     fake = Connection()
     ManagedRepairImpactJournal().initial_watermark(fake)
     sql, params = fake.calls[1]
-    for table, cte in (("market.ingestion_jobs", "fixture_jobs"),
-                       ("market.data_sync_attempts", "fixture_attempts"),
-                       ("market.data_sync_targets", "fixture_targets")):
-        sql = sql.replace(table, cte)
-    fixture_sql = """WITH fixture_jobs AS (
-        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS j(
-            job_id text,status text,summary jsonb,created_at timestamptz,finished_at timestamptz)
-    ), fixture_attempts AS (
-        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS a(
-            attempt_id text,target_id text,status text,job_id text,run_id text,
-            created_at timestamptz,started_at timestamptz,finished_at timestamptz)
-    ), fixture_targets AS (
-        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS t(target_id text,dataset text)
-    ), """ + sql.strip().removeprefix("WITH ")
+    fixture_sql = _ledger_cte_query(sql)
     with readonly_dev_connection.cursor() as cursor:
         cursor.execute("SHOW transaction_read_only")
         assert cursor.fetchone()[0] == "on"

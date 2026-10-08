@@ -51,6 +51,8 @@ MANAGED_SOURCE_DATASETS = frozenset(
     }
 )
 
+MANAGED_WRITER_SCOPE_POLICY = 'bounded_post_cutoff_go_raw_v1'
+
 # Exact producer contracts registered in backend/db/init_tushare_schedules.py.
 # A schedule-name prefix or a date strategy alone cannot prove writer scope.
 _EMPTY_FUTURE_SUSPEND_SCHEDULES = frozenset({
@@ -90,6 +92,46 @@ class ManagedRepairImpactJournal:
         if self.source_cutoff is not None and type(self.source_cutoff) is not date:
             raise ValueError("managed source cutoff must be an exact date")
 
+    def _bounded_future_tdx(self, row: Sequence[object]) -> bool:
+        """Exclude only the bounded raw Go incremental producer, never a date claim alone.
+
+        TDXScheduler._run_tdx_go_api_sync supplies both bounds and disables
+        truncate_before. Go rawRows filters BEFORE insert/precision update.
+        This proves non-overlap, not job completion or next-month completeness.
+        adj_factor and other producers may rewrite history and are not eligible.
+        Sync events additionally require the exact owner job and target date.
+        """
+        if self.source_cutoff is None or len(row) != 10:
+            return False
+        ledger, _, _, dataset, _, _, _, scope, _, target_date = row
+        if ledger not in {'ingestion_jobs', 'data_sync_attempts'}:
+            return False
+        if dataset not in {'kline_daily_raw', 'kline_minute_raw'} or not isinstance(scope, Mapping):
+            return False
+        if any(scope.get(key) != value for key, value in {
+            'dataset': dataset, 'data_kind': dataset, 'mode': 'incremental', 'via': 'go_init',
+        }.items()):
+            return False
+        for key in ('actual_dataset', 'schedule_dataset'):
+            if key in scope and scope[key] not in (None, dataset):
+                return False
+        if 'datasets' in scope and scope['datasets'] != [dataset]:
+            return False
+        if 'truncate_before' in scope and scope['truncate_before'] is not False:
+            return False
+        bounds = [scope.get(key) for key in ('start_date', 'end_date')]
+        if any(not isinstance(value, str) for value in bounds):
+            return False
+        try:
+            start, end = (date.fromisoformat(value) for value in bounds)
+        except ValueError:
+            return False
+        if bounds != [start.isoformat(), end.isoformat()] or not self.source_cutoff < start <= end:
+            return False
+        if ledger == 'data_sync_attempts':
+            return type(target_date) is date and start <= target_date <= end
+        return target_date is None
+
     def _empty_future_suspend(self, row: Sequence[object]) -> bool:
         """Recognize only the registered empty BY_DATE replacement contract.
 
@@ -99,9 +141,9 @@ class ManagedRepairImpactJournal:
         Positive writes, failures, other producers and unknown scopes stay
         conservative until their own complete write bounds are registered.
         """
-        if self.source_cutoff is None or len(row) != 9 or row[3] != 'suspend_d':
+        if self.source_cutoff is None or len(row) not in (9, 10) or row[3] != 'suspend_d':
             return False
-        ledger, _, status, _, _, _, finished, scope, empty_completion = row
+        ledger, _, status, _, _, _, finished, scope, empty_completion = row[:9]
         expected_status = 'success' if ledger == 'ingestion_jobs' else 'reconciled'
         if status != expected_status or finished is None or empty_completion is not True:
             return False
@@ -164,7 +206,10 @@ class ManagedRepairImpactJournal:
                                NULLIF(summary->>'actual_dataset', ''),
                                NULLIF(summary->>'schedule_dataset', ''),
                                NULLIF(summary->>'dataset', '')
-                           ) AS dataset
+                           ) AS dataset,
+                           job.created_at,job.started_at,job.finished_at,
+                           job.summary AS writer_scope,
+                           FALSE AS empty_date_completion,NULL::date AS target_date
                       FROM market.ingestion_jobs AS job
                      WHERE job.status IS NULL
                         OR lower(job.status) <> ALL(%s)
@@ -173,10 +218,15 @@ class ManagedRepairImpactJournal:
                     SELECT 'data_sync_attempts'::text AS ledger_kind,
                            attempt.attempt_id::text AS ledger_identity,
                            lower(attempt.status) AS status,
-                           target.dataset
+                           target.dataset,
+                           attempt.created_at,attempt.started_at,attempt.finished_at,
+                           owner.summary AS writer_scope,
+                           FALSE AS empty_date_completion,target.target_date
                       FROM market.data_sync_attempts AS attempt
                       JOIN market.data_sync_targets AS target
                         ON target.target_id=attempt.target_id
+                      LEFT JOIN market.ingestion_jobs AS owner
+                        ON owner.job_id::text=attempt.job_id
                      WHERE target.dataset = ANY(%s)
                        AND (
                             attempt.status IS NULL
@@ -202,7 +252,8 @@ class ManagedRepairImpactJournal:
                             ))
                        )
                 )
-                SELECT ledger_kind,ledger_identity,status,dataset
+                SELECT ledger_kind,ledger_identity,status,dataset,
+                       created_at,started_at,finished_at,writer_scope,empty_date_completion,target_date
                   FROM (
                         SELECT * FROM active_ingestion
                          WHERE dataset IS NULL OR dataset = ANY(%s)
@@ -224,6 +275,9 @@ class ManagedRepairImpactJournal:
             active = list(cursor.fetchall() or ())
         if not row or not isinstance(row[0], datetime) or row[0].tzinfo is None:
             raise MonthlyRepairJournalError("database did not return a timezone-aware journal watermark")
+        if len(active) >= 50:
+            raise MonthlyRepairJournalError("managed active query reached its bound; scope is incomplete")
+        active = [item for item in active if not self._bounded_future_tdx(item)]
         if active:
             identities = [f"{item[0]}:{item[1]}" for item in active[:3]]
             raise MonthlyRepairJournalError(
@@ -270,7 +324,7 @@ class ManagedRepairImpactJournal:
                                   AND completed.finished_at IS NOT NULL
                                   AND completed.rows_written=0 AND completed.rows_observed=0
                                   AND completed.context_json->>'quality_status'='empty_valid'
-                           ) AS empty_date_completion
+                           ) AS empty_date_completion,NULL::date AS target_date
                       FROM market.ingestion_jobs AS job
                      WHERE job.created_at > %s OR job.started_at > %s OR job.finished_at > %s
                 ), sync_overlap AS (
@@ -286,7 +340,7 @@ class ManagedRepairImpactJournal:
                                AND target.target_scope='{"query_mode":"by_date"}'::jsonb
                                AND attempt.rows_written=0 AND attempt.rows_observed=0
                                AND attempt.context_json->>'quality_status'='empty_valid'
-                           ) AS empty_date_completion
+                           ) AS empty_date_completion,target.target_date
                       FROM market.data_sync_attempts AS attempt
                       JOIN market.data_sync_targets AS target
                         ON target.target_id=attempt.target_id
@@ -300,7 +354,7 @@ class ManagedRepairImpactJournal:
                        )
                 )
                 SELECT ledger_kind,ledger_identity,status,dataset,
-                       created_at,started_at,finished_at,writer_scope,empty_date_completion
+                       created_at,started_at,finished_at,writer_scope,empty_date_completion,target_date
                   FROM (
                         SELECT * FROM ingestion_overlap
                          WHERE dataset IS NULL OR dataset = ANY(%s)
@@ -334,7 +388,7 @@ class ManagedRepairImpactJournal:
                 raise MonthlyRepairJournalError("managed writer query returned an unknown dataset")
             if ledger_kind == "data_sync_attempts" and not dataset:
                 raise MonthlyRepairJournalError("managed sync writer lacks dataset identity")
-            if self._empty_future_suspend(row):
+            if self._empty_future_suspend(row) or self._bounded_future_tdx(row):
                 continue
             result.append(
                 f"{ledger_kind}:{identity}:{dataset or 'unclassified'}:{str(status).lower()}"
@@ -344,6 +398,7 @@ class ManagedRepairImpactJournal:
 
 __all__ = (
     "MANAGED_SOURCE_DATASETS",
+    "MANAGED_WRITER_SCOPE_POLICY",
     "ManagedRepairImpactJournal",
     "MonthlyRepairJournalError",
     "RepairJournalConnection",

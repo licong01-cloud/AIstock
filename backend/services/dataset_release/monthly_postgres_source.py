@@ -27,6 +27,7 @@ from .contracts import Scope
 from .control_store import ControlStore, SourceSnapshotCatalogSpec
 from .index_sources import independent_postgres_connection_factory
 from .monthly_snapshot import MonthlySnapshotIdentity, SnapshotConnection
+from .monthly_repair_journal import MANAGED_WRITER_SCOPE_POLICY
 from .monthly_component_preparation import component_dependencies, preparation_plan
 from .monthly_preparation_source import PreparationSourceSnapshot, freeze_preparation_source
 from .monthly_source_audit import close_source_audit
@@ -53,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "9"
+POSTGRES_SOURCE_ADAPTER_VERSION = "10"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -358,6 +359,7 @@ class PostgresMonthlySourceAdapter:
                 "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
                 "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
                 "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
+                "managed_writer_scope_policy": MANAGED_WRITER_SCOPE_POLICY,
             },
         )
 

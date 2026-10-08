@@ -229,7 +229,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "9"
+    assert adapter.adapter_version == "10"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -241,6 +241,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
             "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
             "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
+            "managed_writer_scope_policy": "bounded_post_cutoff_go_raw_v1",
             "component_preparation_dependency_digest": digest_named_fields(
                 "aistock_monthly_component_dependency_v1",
                 source.component_dependencies(),
