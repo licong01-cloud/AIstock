@@ -170,7 +170,11 @@ def feature_rows(bundle: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[
     return rows, train, pred
 
 
-def training_matrix(bundle: Mapping[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
+def training_matrix(
+    bundle: Mapping[str, Any], rows: list[dict[str, Any]], *, raw_return_target: bool = False
+) -> dict[str, Any]:
+    if type(raw_return_target) is not bool:
+        raise fail("target variant must be an explicit boolean")
     parsed = validate_input(bundle)
     train, _ = schedule(list(parsed["calendar"]))
     train_rows = [row for row in rows if date.fromisoformat(row["trade_date"]) in set(train)]
@@ -200,7 +204,7 @@ def training_matrix(bundle: Mapping[str, Any], rows: list[dict[str, Any]]) -> di
                     "trade_date": day,
                     "sector_code": row["sector_code"],
                     "x": row["x"],
-                    "y": ranks[row["sector_code"]],
+                    "y": row["relative_return_10d"] if raw_return_target else ranks[row["sector_code"]],
                     "weight": 1.0 / (len(groups) * len(daily)),
                 }
             )

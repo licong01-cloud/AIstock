@@ -73,7 +73,11 @@ def _old_bundle(bundle: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
-def _reference(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def _reference(
+    path: Path, *, variant: Any = None, pins: Mapping[str, Any] | None = None
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    api = variant or ridge
+    expected_pins = REFERENCE_PINS if pins is None else pins
     if not path.is_absolute() or path.name != "acceptance.json":
         raise fail("reference requires an explicit absolute acceptance.json path")
     for target in (path, path.parent / "process_1.json", path.parent / "process_2.json"):
@@ -82,13 +86,13 @@ def _reference(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         ):
             raise fail("reference must be ordinary immutable files")
     acceptance = read_json(path)
-    ridge.validate_acceptance(acceptance)
+    api.validate_acceptance(acceptance)
     children = [read_json(path.parent / f"process_{i}.json") for i in (1, 2)]
     for i, child in enumerate(children, 1):
         verify(child, "report_sha256")
         if (
-            child.get("schema_version") != ridge.PROCESS_SCHEMA
-            or child.get("contract") != ridge.CONTRACT
+            child.get("schema_version") != api.PROCESS_SCHEMA
+            or child.get("contract") != api.CONTRACT
             or child.get("process_index") != i
             or child.get("parameters") != acceptance["parameters"]
             or child.get("numeric_environment") != acceptance["numeric_environment"]
@@ -110,10 +114,10 @@ def _reference(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if comparable(children[0]) != comparable(children[1]):
         raise fail("frozen reference children differ")
     observed = {
-        **{k: acceptance.get(k) for k in REFERENCE_PINS if k != "prediction_sha256"},
+        **{k: acceptance.get(k) for k in expected_pins if k != "prediction_sha256"},
         "prediction_sha256": children[0]["prediction_sha256"],
     }
-    if observed != REFERENCE_PINS:
+    if observed != expected_pins:
         raise fail("frozen reference differs from approved pins")
     raw = children[0]["predictions"]
     if [
@@ -352,7 +356,12 @@ def read_evaluation_facts(bundle: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
-def _paired(calendar: list[date], evaluations: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _paired(
+    calendar: list[date],
+    evaluations: list[Mapping[str, Any]],
+    *,
+    comparison_names: tuple[str, str] = ("candidate_minus_delta", "candidate_minus_old_ridge"),
+) -> dict[str, Any]:
     indexed = [{(r["trade_date"], r["sector_code"]): r for r in e["evaluated_rows"]} for e in evaluations]
     if any(set(table) != set(indexed[0]) for table in indexed[1:]):
         raise fail("three-way date/sector directories differ")
@@ -409,7 +418,7 @@ def _paired(calendar: list[date], evaluations: list[Mapping[str, Any]]) -> dict[
             for j in range(2):
                 differences[j][date.fromisoformat(day)] = ic[0] - ic[j + 1]
     result = {"population": "three_way_common_mature_eligible", "daily": daily}
-    for name, values in zip(("candidate_minus_delta", "candidate_minus_old_ridge"), differences, strict=True):
+    for name, values in zip(comparison_names, differences, strict=True):
         result[name] = {
             "valid_date_count": len(values),
             "hac": baseline._newey_west(calendar, values),

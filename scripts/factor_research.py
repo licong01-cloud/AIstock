@@ -36,6 +36,16 @@ def configure(env_file: Path, target: str):
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     sub = result.add_subparsers(dest="command", required=True)
+    for command in ("experience", "proposal-prepare", "proposal-inspect"):
+        item = sub.add_parser(command)
+        item.add_argument("--input", type=Path, required=True)
+        item.add_argument("--format", choices=("summary", "json"), default="summary")
+        if command == "proposal-inspect":
+            item.add_argument("--request", type=Path, required=True)
+        if command in {"proposal-prepare", "proposal-inspect"}:
+            item.add_argument("--context", type=Path)
+        if command == "proposal-prepare":
+            item.add_argument("--producer", choices=("codex", "claude"), default="codex")
     salvage = sub.add_parser("salvage")
     salvage.add_argument("--input", type=Path, required=True)
     salvage.add_argument("--artifact-root", type=Path, required=True)
@@ -89,6 +99,17 @@ def parser():
 
 
 def dispatch(args):
+    if args.command in {"experience", "proposal-prepare", "proposal-inspect"}:
+        from backend.services.factor_research.assistance import experience, inspect_proposal, prepare_proposal
+
+        payload = read_json(args.input)
+        if args.command == "experience":
+            result = experience(payload)
+        else:
+            context = read_json(args.context) if args.context else None
+            result = prepare_proposal(payload, context, producer=args.producer) if args.command == "proposal-prepare" else inspect_proposal(
+                payload, read_json(args.request), context)
+        return response(result=result)
     if args.command == "salvage":
         from backend.services.factor_research.rdagent_salvage import run_salvage
 
