@@ -1235,6 +1235,15 @@ def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
     assert retired.isdisjoint(catalog["non_runtime_source_paths"])
 
 
+@pytest.mark.parametrize("path,targets", [("tdx-api-main/pagination_test.go", []), ("tdx-api-main/web/integrity_test.go", []),
+    ("tdx-api-main/protocol/model_kline.go", ["tdx-go-backend"]), ("tdx-api-main/web/server.go", ["tdx-go-backend"]),
+    ("tdx-api-main/go.mod", ["tdx-go-backend"]), ("tdx-api-main/web/go.sum", ["tdx-go-backend"]),
+    ("scripts/start_tdx_go_backend.py", ["tdx-go-backend"]), ("backend/data_service/tdx_adapter.py", ["backend-main"])])
+def test_tdx_runtime_roles_distinguish_tests_launchers_dependencies_and_collectors(path, targets):
+    result = workflow._classify_runtime_impact([path])
+    assert result["target_ids"] == targets and result["runtime_impact"] == ("backend" if targets else "none")
+
+
 @pytest.fixture
 def invalid_runtime_catalog(monkeypatch: pytest.MonkeyPatch) -> str:
     message = "runtime target catalog contains one stale source"
@@ -1258,16 +1267,10 @@ def test_runtime_classifier_surfaces_catalog_validation_error(invalid_runtime_ca
 
 
 def test_runtime_contract_blocks_on_catalog_validation_error(invalid_runtime_catalog: str) -> None:
-    contract = workflow.build_runtime_contract(
-        record={
-            "runtime_contract": {
-                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
-                "runtime_impact": "none",
-                "target_ids": [],
-            }
-        },
-        changed_files=["backend/services/hmm_risk/contracts.py"],
-    )
+    record = {"runtime_contract": dict(
+        schema_version=workflow.RUNTIME_CONTRACT_SCHEMA, runtime_impact="none", target_ids=[]
+    )}
+    contract = workflow.build_runtime_contract(record=record, changed_files=["backend/services/hmm_risk/contracts.py"])
 
     assert contract["runtime_impact"] == "unknown"
     assert contract["catalog_validation_error"] == invalid_runtime_catalog
