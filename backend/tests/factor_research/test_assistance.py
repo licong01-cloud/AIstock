@@ -138,8 +138,13 @@ def test_prepare_preserves_request_and_selects_only_declared_experience(tmp_path
         assert failed["prepare_status"] == "requires_revision" and failed["selected_experience"] == []
         assert any(f["code"] == "source_ref_ambiguous" for f in failed["findings"])
         assert all(f in inspect_proposal(proposal, request, context)["findings"] for f in failed["findings"])
-    for change in ({"dataset_ref": None}, {"inputs": [None]}, {"task_id": "unknown"}, {"missing_information": ["units"]}):
-        assert prepare_proposal(dict(request, **change))["prepare_status"] == "requires_revision"
+    base, _ = proposal_pair(tmp_path)
+    for change, code, location in (({"dataset_ref": None}, "missing_information", "request.dataset_ref"),
+                                  ({"inputs": [None]}, "invalid_input", "request.inputs.0"),
+                                  ({"task_id": "unknown"}, "invalid_identity", "task_id"),
+                                  ({"missing_information": ["units"]}, "declared_missing_information", "request")):
+        result = prepare_proposal(dict(base, **change))
+        assert {"code": code, "location": location} in result["findings"]
     with pytest.raises(ResearchError):
         prepare_proposal(request, producer="rdagent")
 
