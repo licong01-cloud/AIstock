@@ -1,7 +1,7 @@
 # Advisory P25：跨包训练人口迁移的五交易日收益型价格模型 F2详细设计
 
-> 版本：v1.4；日期：2026-10-08；状态：P25设计已合入，P26两步输入准备完成/PREPARED_IDENTIFIABLE_NO_FIT；第一步PR #5778已合入850f83ac，第二步PR #5780同步main后等待新CI/合入；P27～P29未完成。
-> 上位依据：`advisory_strategy_conditioned_model_blueprint_v1_20260710.md` §6.3.4、§16.0 P25～P29。P25 PR #5771已合入268f2e0d并完成自身清理；本轮实施共同九字段、原5TD标签、purge及共享编码并完成真实只读准备/读回。未读取候选score、旧收益或sealed金融值；新开发窗的价格/监督标签已读取，但未评价新模型收益，新研究fit=0、盈利确认与生产启用=0。
+> 版本：v1.5；日期：2026-10-08；状态：P25设计已合入，P26两步输入准备完成/PREPARED_IDENTIFIABLE_NO_FIT；PR #5778/#5780分别已合入850f83ac/10e86ed9并完成自身清理。P27独立19维模型内核已实现并定向验证，源码未交付；研究控制/真实两fit及P28～P29仍未完成。
+> 上位依据：`advisory_strategy_conditioned_model_blueprint_v1_20260710.md` §6.3.4、§16.0 P25～P29。P25 PR #5771已合入268f2e0d并完成自身清理；P26完成共同九字段、原5TD标签、purge、共享编码及真实只读准备/读回，本轮仅开发P27模型内核。未读取候选score、旧收益或sealed金融值；此前开发窗的价格/监督标签已读取，本轮仅合成fixture拟合/查询测试，未评价真实新模型收益，新研究fit=0、盈利确认与生产启用=0。
 
 ## Background / Goal
 
@@ -15,7 +15,7 @@
 
 ## Scope / Non-goals
 
-P25设计提交只改本文和上位蓝图，未修改源码/数据/权重/运行态。P26第一步范围为下列contracts、population、population测试及两文档；第二步仅扩展该范围内contracts/population，新增pipeline/CLI和pipeline测试来准备共同输入，其余model/evaluation/model测试仍是P27～P29计划，未实现。所有源码均在已同步最新main的独立树内，完整计划范围为：
+P25设计提交只改本文和上位蓝图，未修改源码/数据/权重/运行态。P26第一步范围为下列contracts、population、population测试及两文档；第二步扩展该范围内contracts/population，新增pipeline/CLI和pipeline测试来准备共同输入。本轮P27内核仅新增model、model测试及更新两文档；P27研究控制/pipeline/CLI扩展、evaluation仍是后续计划，未实现。独立树基于最新合入main `10e86ed9453b41aa4faedf60166960af81bec35b`，完整计划范围为：
 
 - `backend/services/advisory_model_first/generic_population_price_5td_contracts_v1.py`
 - `backend/services/advisory_model_first/generic_population_price_5td_population_v1.py`
@@ -89,7 +89,7 @@ P26先读取现有包/冻结文件的身份、列结构和日期KEY，后按冻�
 
 `matched_anchor`只用锚包成熟唯一监督，`candidate_transfer`用锚包＋附加训练包的成熟唯一监督。两臂使用相同9原字段、9缺失旗、g/100（共19维）；包alpha/score/rank/pool身份不入x。九字段与现有generic输入完全相同，不追加资金、分钟或HMM头。rank仅绑定原Top5账本，不作为收益解释变量。
 
-两臂共用锚训练段导出的9 medians和g支持，保证唯一变量不是编码/支持范围。缺失median数值是训练编码，原缺失旗/原因仍保留；某字段全未知用0编码＋缺失旗，不把0说成真实行情。个股七字段全未知的点仍UNKNOWN。g支持复用现有固定算法：锚训练可见观察价的2.5%～97.5%范围、100bps桶、每桶至少30观察/5原D、上边界不包含且保留洞；不扩大支持以救候选。支持只定义查询可估计范围，不评审策略包/股票Alpha资格；两臂使用同一支持内训练监督和完整评价名单。
+两臂共用锚训练段导出的9 medians和g支持，保证唯一变量不是编码/支持范围。缺失median数值是训练编码，原缺失旗/原因仍保留；某字段全未知用0编码＋缺失旗，不把0说成真实行情。沿用现有`STOCK_FEATURES`六个直接个股字段全未知的点仍UNKNOWN，不改变generic输入的可测语义。g支持复用现有固定算法：锚训练可见观察价的2.5%～97.5%范围、100bps桶、每桶至少30观察/5原D、上边界不包含且保留洞；不扩大支持以救候选。支持只定义查询可估计范围，不评审策略包/股票Alpha资格；两臂使用同一支持内训练监督和完整评价名单。
 
 取锚成熟支持内D排序的中位D作为共同估计池首D。两臂结构池均为该D之前且`label_information_end < estimation_first_D`的各自训练簇；估计池均为其后至train_end、标签已成熟的各自训练簇。训练标签H还必须早于首evaluation D；跨界标签purge但原名单仍保留。附加包不能结果后移动分割点；没有任一臂的结构/估计监督则0fit、精确原因，不寻找另一切点。
 
@@ -122,6 +122,10 @@ P26先读取现有包/冻结文件的身份、列结构和日期KEY，后按冻�
 可继续条件为预先固定的两条成本后均值增量均>0、已知动作贡献>0；尾部风险、缺失与跨包结果同时报告，不能用UNKNOWN空槽改善替代模型价值。CI跨0/MDE不足仅EXPLORATORY_POSITIVE，不支持激活；任何一条不满足为NEGATIVE_OR_INSUFFICIENT，只停止精确candidate，不改loss/seed/support/概率阈值，不补旧证据、不宣布整个业务无效。后续确认还须在未消费窗口前依据开发方差/cluster MDE、实际容量折损与业务最小效应预注册数字，不借本探索提示或0bps符号检验冒充经济激活合同；成本已扣，不二次收费。当前设计不承诺自动进入confirmation/生产。
 
 ## Implementation Plan / 按P25～P29顺序
+
+P27先交付完整模型内核，再交付研究控制/执行切片，不以其中一项冒称整个P27或收益完成。新接口限定`train_population_price_5td_v1(*, clusters, encoding, arm, input_plan_sha256, before_fit, after_fit)`、`query_population_price_nodes_v1(*, fitted, features, scenario_gap_bps)`、`population_price_set_5td_v1(*, fitted, d_features, reference_cny, legal_low_cny, legal_high_cny, tick_cny)`及显式非执行JSON读写。两个fit callback保留真实研究登记/QE互斥接口，本轮fixture拟合不是已注册研究。
+
+内核的成对分布来自同一估计样本权重；均值净收益、P(net>0)、q10(L)及q90实际路径不利波动分别计算。离散经验分布使用经验CDF首次达到目标概率的加权分位点（inverted CDF，边界取第一个满足累计质量>=目标概率的样本，不作插值）：`q90(max(0,1-L/a))`直接从风险样本计算，不能在恰好10%原子质量边界上简单以`1-q10(L)/a`替代。此约定在研究fit前固定，两臂一致，不是结果后修改风险阈值。独立19维float32树walk、叶子成对样本索引及Decimal原tick全网格/支持洞都需定向验证；不修改旧39维实现、不调用旧train、不增加新信息或调参。
 
 | 阶段 | 交付与源码依据 | 必须核对 / Anti-pattern |
 |---|---|---|
@@ -183,9 +187,17 @@ P26先读取现有包/冻结文件的身份、列结构和日期KEY，后按冻�
 
 purge前可测新增8590，purge后真正新增训练簇8363；held-only簇不训练，跨包同stock/date质量仍1。状态`PREPARED_IDENTIFIABLE_NO_FIT / features_ready=true / labels_ready=true / physical_fit_count=0 / research_run_created=false / deployable=false`，不证明跨包收益迁移或所有池完整。legacy run/list/pool/source-policy未知、现库非vintage和未有独立确认窗的限制不变。
 
-精确输入root为`F:/Dev/AIstock_model_artifacts/advisory_population_transfer_price_5td_v1_20261008/advgp5popinputs_fc14302167a95eab9972cbdd`，其plan/manifest绑定source `advgp5popsource_f303102e103371a637a60c4d`和原metadata请求SHA `3dc19abedd104af820abe0f8aa50a09cd38e3214a67bfba48f99e98580fd0405`。同root缓存只读读回通过，不重查DB；审核期旧输入组件不覆盖，正式消费仅引用此精确root，不扫latest。多轮修正了发布前候选引用复核、跨cutoff未成熟语义及purge后实际新增质量；最小定向合同测试和真实输入读回均通过，模型训练、JSON leaf parity及经济四臂仍属于P27/P28，不冒称已完成。
+精确输入root为`F:/Dev/AIstock_model_artifacts/advisory_population_transfer_price_5td_v1_20261008/advgp5popinputs_fc14302167a95eab9972cbdd`，其plan/manifest绑定source `advgp5popsource_f303102e103371a637a60c4d`和原metadata请求SHA `3dc19abedd104af820abe0f8aa50a09cd38e3214a67bfba48f99e98580fd0405`。同root缓存只读读回通过，不重查DB；审核期旧输入组件不覆盖，正式消费仅引用此精确root，不扫latest。多轮修正了发布前候选引用复核、跨cutoff未成熟语义及purge后实际新增质量；输入定向合同测试和真实读回均通过。该输入阶段没有模型fit/JSON leaf parity或经济四臂结果，后续P27内核验证见下，不回写为输入阶段完成证据。
 
-下一步P27实现独立19维诚实联合森林、两固定臂及最小journal/JSON parity；本轮不启动fit。第一步#5778已合入，第二步#5780等待main基线CI及合入，不因输入ready自动配置生产；没有后端重启、DB/DDL/DML/profile或其它模块修改。
+P26两步源码PR #5778/#5780分别合入850f83ac/10e86ed9，后者同步最新main后以新HEAD运行CI通过再合入，两树/分支均经官方流程清理，F正式输入原样保留。下一步P27状态如下，不因输入ready自动配置生产；没有后端重启、DB/DDL/DML/profile或其它模块修改。
+
+### P27模型内核进度（2026-10-08；非真实研究结果）
+
+新增独立19维诚实联合森林：仅STRUCTURE标签参与128树分裂，ESTIMATION成对(Y,L)挂接同一叶子权重；两训练臂共用P26编码/支持/时间切点。原生sklearn.apply与非执行JSON的float32 walk在结构/估计输入逐叶一致。held、evaluation、purged行的特征/结果不解码，标签边界矛盾在fit前报错；两个callback仅是研究控制接入点，不能替代尚未实现的注册/QE互斥/journal。
+
+查询计算同权重净均值、盈利概率、直接风险q90和q10(L)，成本各一次；无叶子质量为UNKNOWN而非全局均值填充。完整Decimal合法tick扫描保留多段价集、UNKNOWN洞和空集合；不改价格/风险阈值，不加入score/rank/包身份特征。JSON仅数据，不持久化可执行pickle。九项定向测试共用合成fixture，覆盖公平两臂、监督时间分离/毒化、叶子联合质量/手算成本、零质量、JSON读回及支持洞；这些单元拟合不属于研究trial，也不能证明经济收益。
+
+当前仅模型内核完成，源码PR/CI/合入另报，真实study未注册、0真实新fit，累计仍131研究fit＋1旧INDEX_BUILD。下一切片为显式冻结当前模型源码/参数、接入既有registry/stage、逐臂fit attempt journal和公开QE互斥，确认WSL/worker可用路径后只执行两fit；随后P28四臂评价。P26组件创建时源码身份保持原值，本轮模型源码另绑定，不以Git合入的换行差异重做输入或覆盖旧manifest。未改旧生产绑定，无需后端重启。
 
 ## Verification Plan / Design Acceptance Index
 
@@ -203,19 +215,19 @@ purge前可测新增8590，purge后真正新增训练簇8363；held-only簇不�
 
 ## Design Acceptance Matrix
 
-设计规格与P26两步实际源码分别记录；输入准备状态只覆盖本轮已批准切片，不能冒充训练/经济验收。`DESIGN_SPECIFIED_NOT_IMPLEMENTED`的gap仍为P27～P29计划内交付。
+设计规格、P26两步输入及P27模型内核分别记录；本轮内核交付不冒充真实研究/经济验收。`DESIGN_SPECIFIED_NOT_IMPLEMENTED`的gap仍为P27研究控制～P29计划内交付。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-841 | 本文Goal/§3/§5；input contracts已实现，训练model仍计划 | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 本轮实施已批准P26两步，完整两公平学习臂/P27代码/2fit未执行 |
+| F-841 | 本文Goal/§3/§5；input contracts/独立19维model | target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | MODEL_KERNEL_VERIFIED_NO_RESEARCH_FIT | approved_by_user: 按顺序分步开发；两公平臂接口/编码经fixture验证，真实两fit及四臂收益尚未执行 |
 | F-842 | generic_population_price_5td_contracts_v1.py / generic_population_price_5td_population_v1.py；本文P26结果 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_population_v1.py；target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py；真实3来源305D/36600保留 | POPULATION_INPUTS_PREPARED_NO_FIT | approved_by_user: 已批准分步实施；九字段/标签已规范化，legacy pool/run/list未知不伪补，不宣称全库/所有池或收益泛化PASS |
 | F-843 | 本文§1～2；population/原5TD标签核 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py；真实cutoff/原H及单位读回 | INPUT_LABEL_CLOCK_VERIFIED_NO_FIT | approved_by_user: 600未成熟保留、106不可执行/147未知不删除；不是native或成交证明 |
-| F-844 | 本文§2～3；population共享编码/结构估计池 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py；held/evaluation poison及实际purge计数 | TRAIN_ENCODING_PURGE_VERIFIED_NO_FIT | approved_by_user: 共同19维/首D2024-12-24/实际新增8363；旧test已消费不可sealed，未证明新确认窗可用，模型仍待实现 |
-| F-845 | 本文§3；拟新增model，旧joint仅参考 | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 新19维实现/叶子parity/2fit尚未完成 |
-| F-846 | 本文§4；拟新增model | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 完整曲面与校准是计划，不是模型收益/执行承诺 |
+| F-844 | 本文§2～3；population共享编码/结构估计池；model监督池选择 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py；target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py；毒化/purge | TRAIN_ISOLATION_KERNEL_VERIFIED_NO_RESEARCH_FIT | approved_by_user: 共同19维/首D2024-12-24/实际新增8363；旧test已消费不可sealed，新确认窗未证明可用，真实study仍待执行 |
+| F-845 | 本文§3；generic_population_price_5td_model_v1.py，旧joint仅参考 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py；19维原生/JSON parity和手算成对质量 | MODEL_KERNEL_VERIFIED_NO_RESEARCH_FIT | approved_by_user: 新19维内核已实现/验证；真实2fit、跨节点运行预算和stage验证仍属下一切片 |
+| F-846 | 本文§4；generic_population_price_5td_model_v1.py | target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py；Decimal全网格/支持洞/空集/概率解释 | PRICE_SET_KERNEL_VERIFIED_ONLY | approved_by_user: 完整价集/概率接口已实现；真实校准与收益P28未执行，不是执行/盈利承诺 |
 | F-847 | 本文§5；拟新增evaluation/pipeline | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 真实回放未运行，不将旧结果当新matched |
 | F-848 | 本文§5；既有registry/stage＋拟新增pipeline | artifact: docs/architecture/advisory_population_transfer_price_5td_v1_f2_design_20261008.md；target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py | DESIGN_SPECIFIED_NOT_IMPLEMENTED | approved_by_user: 新study未注册/拟合，131实际研究fit＋1旧index不变 |
-| F-849 | 本文Scope/实施/生产边界；新增population/pipeline/CLI只读实现 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py；本轮四源码/一测试/两文档scope | INPUT_BOUNDARIES_VERIFIED_ONLY | approved_by_user: X临时/F正式输入、只读开发价格/0fit/0其它模块/DB/服务变更；后续fit互斥及模型stage仍计划，不宣称生产或模型经济验收 |
+| F-849 | 本文Scope/实施/生产边界；population/pipeline/CLI及本轮纯模型内核 | target: backend/tests/advisory_model_first/test_generic_population_price_5td_model_v1.py；本轮一源码/一测试/两文档scope | MODEL_KERNEL_BOUNDARIES_VERIFIED_ONLY | approved_by_user: X临时/F旧输入保留、0新研究fit/0其它模块/DB/服务变更；研究fit互斥及模型stage仍计划，不宣称生产或模型经济验收 |
 
 最小测试按合同共享少量fixture，不做实现快照/重复场景：两包重叠stock/date只一份质量且原名单完整；不同池/manifest/价格单位冲突与历史未知；5原会话正常停牌、H跨界purge、validation/test poison不改变训练；新19维JSON与原生apply parity及手算叶子联合权重/无质量未知；Decimal合法边界与支持洞/成本一次；四臂各配对不同分母、UNKNOWN贡献和未结算null；QE忙/partial禁止隐式fit与stage输入hash变化。真实prepare/fit/经济读回另报，不用fixture取代业务结果。
 
@@ -234,5 +246,7 @@ purge前可测新增8590，purge后真正新增训练簇8363；held-only簇不�
 3. 交付/边界轮：独立九项索引、两文档scope、2fit只是未来预算；新配置不伪造旧test、39维API不假调用、节点URI不得猜；0QE/数据/DB/服务修改、UI/旧失败证据不前置。新F2初检9/9、0warnings通过，蓝图初检将外部索引末项误作本表验收项，已改为九项独立索引说明，不复制制造完成证据。最终独立设计9/9、蓝图148/148、均0warnings及两文档scope/`git diff --check`通过；PR/CI/merge状态以本次实际交付读回为准。
 
 DESIGN-COMPLIANCE-001逐项：P25完整设计及已批准P26两步输入准备单独交付，不宣称P27模型/经济完成；UNKNOWN/身份不可证/未成熟/统计null及缺口可见，不伪成功；原基线/价格政策/名单/旧实验与模块边界不改；没有新增包资格审批、自然等待或平台工程。确认数字仍须真实开发方差/容量合同，不以探索性支持提示当激活门禁。
+
+P27内核多轮同窗口自审（非独立外审）：第一轮实现/回读修复DatetimeIndex与Series比较接口不一致，失败节点先定向复验；第二轮数学/业务核对修正经验分位点零质量端点，固定直接风险q90而非变换q10(L)，增加手算成本/成对权重/整森林零质量及全价集已知AVOID验证；第三轮JSON/时钟/交付核对明确数值类型、原日期、完整叶子样本质量和只读非执行身份，保持P27研究控制/P28经济条款未完成，不用单元fit夸大研究计数。最终内核9项定向测试/0 warnings、Ruff、四文件ownership与scope/diff均通过，独立F2 9/9、蓝图148/148、均0 warnings。内核接口完整交付，整个P27仍未完成；不会把未接入研究控制的函数直接当作正式实验入口。固定日期只属于这一Advisory研究版本，既不设置QE全局历史窗，也不影响其它实验。
 
 P26第一步多轮自审：第一轮业务/键身份检查保持原Top20、留包不训练、去重只改监督质量；7项直接合同测试通过，Ruff发现lambda写法已修。第二轮时钟/缺失检查补五原会话H/cutoff测试及日期成熟不等于标签可用，指数身份原样携带，不把held来源错误称未见股票或原生身份。第三轮范围/状态检查添加request/policy/窗口身份，明确metadata不是训练plan或原生receipt；仅本阶段八项合同测试和真实只读名单核对，不声称独立外审/经济验收。最终验证与源码PR状态以实际交付读回为准；后续未实施条款仍保留明确gap。
