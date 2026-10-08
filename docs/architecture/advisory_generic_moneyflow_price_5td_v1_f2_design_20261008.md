@@ -1,6 +1,6 @@
 # Advisory 固定5交易日资金流条件买价 GP5-MONEYFLOW-INFO-1 F2详细设计
 
-2026-10-08，DESIGN_REVIEW_VERIFIED；本交付仅详细设计与当前路线更新。0新源码、0研究fit、0经济确认或模型激活。不是把旧M6/M19负向结果升级为正结果。
+2026-10-08，SOURCE_VERIFIED；已实施本设计批准的九文件离线切片，17项定向合同及Ruff通过。正式来源prepare、最多两次新研究fit与开发评价在clean producer后执行，不提前计入研究或经济进度。不是把旧M6/M19负向结果升级为正结果。
 
 ## Background / Goal
 
@@ -12,7 +12,7 @@
 
 ## Scope / Non-goals
 
-本次文档允许范围仅本文与主蓝图 `advisory_strategy_conditioned_model_blueprint_v1_20260710.md`，独立docs worktree。源码实施必须另从最新main创建工作树，预登记以下九文件，不扩修改旧helper：
+原设计交付仅本文与主蓝图 `advisory_strategy_conditioned_model_blueprint_v1_20260710.md`，#5741已合入并清理。本次源码从最新main创建独立工作树，仅实施以下批准的九文件，不扩修改旧helper：
 
 - backend/services/advisory_model_first/generic_moneyflow_price_5td_contracts_v1.py
 - backend/services/advisory_model_first/generic_moneyflow_price_5td_source_v1.py
@@ -106,20 +106,20 @@ KEY=(decision_as_of_trade_date,target_trade_date,instrument)。在开发窗口�
 
 ## Design Acceptance Matrix
 
-本表仅验收设计完整性；implementation_refs是批准后的计划位置，不是已存在的新源码。尚未实现/拟合状态不能以本文F2结构通过替代。
+本表验收离线SOURCE交付；引用均指本叶源码及定向节点，不以源码/结构PASS替代研究或经济验收。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-831 | planned contracts_v1.py/pipeline_v1.py；本文§1 | artifact: 本文§1/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-832 | planned source_v1.py；本文§2 | artifact: 本文§2 target-free 6100 KEY/status spike与source pins | DESIGN_REVIEW_VERIFIED | none |
-| F-833 | planned source_v1.py/models_v1.py；本文§3 | artifact: 本文§3/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-834 | planned models_v1.py/pipeline_v1.py；本文§4 | artifact: 本文§4 frozen19/25/two-fit合同 | DESIGN_REVIEW_VERIFIED | none |
-| F-835 | planned models_v1.py price adapter；本文§5 | artifact: 本文§5/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-836 | planned pipeline_v1.py；本文§6 | artifact: 本文§6四臂与开发窗口 | DESIGN_REVIEW_VERIFIED | none |
-| F-837 | planned contracts_v1.py/pipeline_v1.py；本文§7/Scope | artifact: 本文§7/Scope/Review | DESIGN_REVIEW_VERIFIED | none |
-| F-838 | 本文/蓝图及独立九文件计划 | artifact: 本文Implementation/Review | DESIGN_REVIEW_VERIFIED | none |
+| F-831 | backend/services/advisory_model_first/generic_moneyflow_price_5td_contracts_v1.py / generic_moneyflow_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_pipeline_v1.py::test_stage_chain_read_only_parent_and_exact_completed_resume | SOURCE_VERIFIED | none |
+| F-832 | backend/services/advisory_model_first/generic_moneyflow_price_5td_source_v1.py::read_moneyflow_development_v1 | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_source_v1.py::test_projection_excludes_test_legacy_and_immature_numbers | SOURCE_VERIFIED | none |
+| F-833 | backend/services/advisory_model_first/generic_moneyflow_price_5td_source_v1.py::join_moneyflow_features_v1 / moneyflow_values | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_source_v1.py | SOURCE_VERIFIED | none |
+| F-834 | backend/services/advisory_model_first/generic_moneyflow_price_5td_models_v1.py::matrix_v1 / train_moneyflow_price_5td_v1 | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_models_v1.py::test_only_two_heads_same_keys_and_json_parity | SOURCE_VERIFIED | none |
+| F-835 | backend/services/advisory_model_first/generic_moneyflow_price_5td_models_v1.py::moneyflow_price_set_5td_v1 | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_models_v1.py::test_legal_grid_support_holes_unknown_and_foreign_family | SOURCE_VERIFIED | none |
+| F-836 | backend/services/advisory_model_first/generic_moneyflow_price_5td_pipeline_v1.py::evaluate_moneyflow_price_5td_cohorts_v1 | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_pipeline_v1.py::test_four_arms_cash_attribution_boundaries_and_no_replacement | SOURCE_VERIFIED | none |
+| F-837 | backend/services/advisory_model_first/generic_moneyflow_price_5td_pipeline_v1.py::train_moneyflow_price_5td_study_v1 / _record | backend/tests/advisory_model_first/test_generic_moneyflow_price_5td_pipeline_v1.py::test_busy_zero_fit_and_incomplete_attempt_never_refits | SOURCE_VERIFIED | none |
+| F-838 | 本文/蓝图及独立九文件交付 | artifact: 本文Implementation/Review；X:/AIstock_temp/advisory/gp5-moneyflow-source-20261008/pytest-final.xml | SOURCE_VERIFIED | none |
 
-none仅指本次设计交付无未处理的设计例外，不指源码或经济完成；新source/数值来源验证/实际fit与开发评价均pending，日频资金API/config/runtime未实施。状态在§Scope/Implementation/Rollout明确，实施后按真实证据逐项改为SOURCE_VERIFIED，不提前通过。
+none仅指本次离线源码切片无未处理的合同例外；正式数值来源验证/实际研究fit与开发评价单独报告，不提前通过。日频资金API/config/runtime不在本切片且未实施，源码可查询价集不代表已部署、跨包盈利或真实限价执行。
 
 最小源码测试仅覆盖新增合同：projection/未来毒值/visible clock、唯一键与19行未知保留、同监督与原19列精确parity/新六编码/旧bundle拒混、两fit及JSONparity/资金missing不筛训练、query价格改变与支持洞/包元数据不影响预测、边界null/五槽不补股/部分恢复和QE busy零fit。不重复GP5标签/监管坐标大套件或增加实现快照/重复fixture债务。
 
@@ -138,3 +138,9 @@ none仅指本次设计交付无未处理的设计例外，不指源码或经济�
 第三轮测量/授权复核：冻结控制/同训练KEY、原价格数学及完整四臂；边界null不删洞、overlapping cohort非NAV，正点不改判或激活。source未来独立九文件、0生产操作/外模块，API NOT_CONFIGURED及旧BUG状态不阻研发。以上本窗口多视角自审，不冒称独立外审；最终F2结构与当前CI通过仍不等于源码/研究交付。
 
 第四轮修订复核：补齐数值目标按E成熟条件过滤后才解码，边界只留元数据，不以D合法为由提前读取未来目标；连续推断段只按事前calendar成熟定义，禁止收益后选段。初次F2将source pending误作本设计的未授权例外而FAIL；矩阵现明确只审设计无例外、所有源码/研究pending独立列明，不改公共校验器、不伪报实装。
+
+第五轮SOURCE复核（2026-10-08）：原manifest链只读引用，资金Parquet限定三比率/KEY/status/截止；GP5的D特征与成熟监督分开Arrow过滤，测试以未来Inf及旧目标毒值证明不解码。正常资金未知保留，不同包元数据不改变数学。仅新增25维mean/path两JSON树，精确19列parity及手算单次成本、m=1全合法网格、多段支持洞通过。
+
+第六轮SOURCE修订复核：补齐价集输入hash/逐字段未知及空网格非法值检查；模型拒绝非25维树/错长度median。边界监督非空在首fit前报错，评价仅接受冻结validation范围，原成熟连续panel不删洞重连。fit前后均fresh QE三路径、两个STARTED/COMPLETED事件与fsync，首次忙不建attempt；未完成STARTED不自动重拟合、完整原子stage可无fit恢复。总产物/RSS/时间预算有界，17项测试和Ruff通过；本窗口多视角自审，不冒称独立外审。
+
+第七轮交付复核：F-831～F-838矩阵路径与17项真实测试逐项匹配，F2结构8/8 PASS/0警告；九文件ownership全部映射、0歧义，L0无P0/P1阻断。两项ALGO-COMPLEXITY-001 P2提示均为来源merge：双侧最大7720唯一KEY、one_to_one、集合完全相等，不会行膨胀；Arrow只投影开发窗口，合并内存O(N)、无逐日重建/数据库访问。使用L0同款脚本并显式输出到X，不用固定F临时目录或扩改nox/workflow。

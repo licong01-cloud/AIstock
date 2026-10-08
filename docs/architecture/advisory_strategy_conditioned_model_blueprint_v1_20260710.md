@@ -1,7 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.82
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.83
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-08
+
+> 最新执行断点：[固定5TD资金流条件买价F2](advisory_generic_moneyflow_price_5td_v1_f2_design_20261008.md)设计#5741已合入d02711029并清理；独立九文件SOURCE已实现完整来源投影、25维唯一candidate/冻结19维控制、纯合法价集、四臂及原子恢复。两轮SOURCE自审修复后17定向合同/Ruff通过。下一步clean producer→正式开发来源prepare→QE三入口fresh全0最多两head研究fit→一次validation四臂。当前仍129真实研究fit+1旧INDEX_BUILD，不提前加计；test/sealed未消费，DB/其它模块/生产配置/服务控制均0。本切片离线，无需重启；资金日频API及盈利确认没有冒称完成。以下旧研究段为历史检查点，不再派生Exit或技术量价同族研究。
 
 > 当前权威接续（本轮三假设已结束）：[价格条件化继续价值F2](advisory_generic_exit_price_conditioned_5td_v1_f2_design_20261008.md)设计#5705已合入fa5a6a686/自身官方清理；源码77824c1、多轮审查/13直接合同/Ruff/L0/F2及4fit完成，独立Draft #5706以#5697为base，不捆绑#5704。run advexitquery_fed4d4edcba7bcb89ddaff94 prepare0.158秒/train与S曲线发表2.311秒/评价0.894秒，原6100决策/1525episode保持；240原cohort/238完整/2 UNKNOWN，相对base −35.3964bps，CI95 [−72.7043,1.5447]，相对旧Exit +8.3272bps，CI95 [−11.4530,27.2837]。594完整干预episode/211cohort/88.6555%；4368支持内query、404支持外及28原值UNKNOWN完整保留。S-only曲线先于U结果查询，0旧refit/新oracle study，各fold前后QE三0，累计129真实研究fit+1旧INDEX_BUILD，目前无自己的实验运行或新激活。较旧负向overlay改善仍不能当增量盈利；三种Exit candidate均结束，不补证/重训/同族family搜索。源码与公开CI/依赖/运行态分报；BUG-1778源码#5717/close-sync#5718已合入、Issue #5645已关闭，公共依赖解除，接续DB/API独立交付，不用UI/自然20日或额外QE实验拖住主线。
 
