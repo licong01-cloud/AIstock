@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/source_authority.py",
     "backend/tests/dataset_release/test_raw_volume_precision.py",
+    "backend/tests/dataset_release/test_source_authority.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
     "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "tests/aistock_validation/bugs/20261008_BUG-1817-monthly-source-treats-raw-volume-provenance-text-as-numeric.json"
@@ -16,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-08T17:09:09.242905Z",
-  "description": "SOURCE attempt248 FAILED: source query numeric value is invalid: kline_daily_raw:2026-09-01_2026-09-30:volume_shares_source",
+  "description": "九月SOURCE attempt248将原始成交量精度的来源和SHA文本误判为数值。共享类型白名单漏掉两个已存在的文本字段，旧测试把所有value_columns生成为数值掩盖了问题。修复daily/minute实际JSON封存路径及真实类型fixture，保留合法NULL、精度单位和全部原有校验。仅查询九月四行生产事实和既有DEV只读SQL，不改数据、模型、股票池或校验窗口。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -30,14 +31,24 @@
   ],
   "expected": "合法来源和SHA文本可随真实股数冻结；非法类型、数值、来源和hash仍按既存合同处理",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261008_BUG-1817-monthly-source-treats-raw-volume-provenance-text-as-numeric.json",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "backend/tests/dataset_release/test_source_authority.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/source_authority.py",
-      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "tests/aistock_validation/bugs/20261008_BUG-1817-monthly-source-treats-raw-volume-provenance-text-as-numeric.json",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "backend/tests/dataset_release/test_source_authority.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -145,11 +156,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "pytest backend/tests/dataset_release/test_raw_volume_precision.py::test_raw_precision_metadata_survives_real_source_sealing backend/tests/dataset_release/test_raw_volume_precision.py::test_source_precision_provenance_retains_text_type_contract -q -> passed (16 passed; actual SOURCE JSON/CAS sealing, no database writes)",
+      "pytest backend/tests/dataset_release/test_monthly_worker_runtime.py::test_preflight_proves_current_shared_execution_scope_without_running backend/tests/dataset_release/test_monthly_postgres_source.py::test_monthly_adapter_registry_identity_pins_sector_publication_policy -q -> passed (4 passed; fresh process, no task claim or database access)"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
