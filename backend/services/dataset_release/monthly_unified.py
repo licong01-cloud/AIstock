@@ -1545,6 +1545,61 @@ class MonthlyReleaseService:
                 "monthly_repair_inputs_ref": {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}})
             return receipt
 
+    def bind_source_quality_inputs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str) -> dict[str, Any]:
+        """Bind finite parity warnings to this operation before SOURCE seals."""
+        from .monthly_source_quality import (
+            BINDING_SCHEMA, acceptance_file_sha256, load_bound_source_quality, validate_source_quality_acceptance,
+        )
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            predecessor = plan["predecessor"]
+            try:
+                normalized = validate_source_quality_acceptance(inputs, operation_id=operation_id,
+                    predecessor_manifest_sha256=predecessor["dataset_manifest_sha256"],
+                    target_cutoff=date.fromisoformat(plan["target_cutoff"]))
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("source quality input validation failed", context={"cause": str(exc)}) from exc
+            existing = plan.get("monthly_source_quality_inputs")
+            if existing is not None or plan.get("monthly_source_quality_inputs_ref") is not None:
+                try:
+                    bound = load_bound_source_quality(plan, operation_id=operation_id, operation_root=root)
+                except (ValueError, KeyError, TypeError, OSError) as exc:
+                    raise MonthlyReleaseConflict("source quality binding bytes differ") from exc
+                if bound != normalized:
+                    raise MonthlyReleaseConflict("source quality inputs are already bound to different observations")
+                return _read_json(root / plan["monthly_source_quality_inputs_ref"]["id"], label="source quality binding")
+            state = self.store.read_state(operation_id)
+            if (state["status"] not in {ReleaseState.PLANNED.value, ReleaseState.FAILED.value,
+                    ReleaseState.SOURCE_BLOCKED.value, ReleaseState.CANCELLED.value}
+                    or any(self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES)
+                    or plan.get("plan_state") != "AWAITING_SOURCE_SNAPSHOT"):
+                raise MonthlyReleaseConflict("source quality inputs can only bind before any SOURCE seal")
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed before quality binding")
+            digest = acceptance_file_sha256(normalized)
+            relative = f"inputs/quality-{digest}.json"
+            path = root / relative
+            receipt = {"schema_version": BINDING_SCHEMA, "operation_id": operation_id,
+                "input_sha256": digest, "inputs": normalized, "bound_by": principal,
+                "bound_at": datetime.now(UTC).isoformat(), "database_write": False,
+                "active_profile_write": False, "runtime_action": False, "publication_allowed": False}
+            if path.exists():
+                receipt = _read_json(path, label="existing source quality binding")
+                if (receipt.get("inputs") != normalized or receipt.get("operation_id") != operation_id
+                        or receipt.get("schema_version") != BINDING_SCHEMA or receipt.get("input_sha256") != digest
+                        or not receipt.get("bound_by")
+                        or any(receipt.get(flag) is not False for flag in ("database_write", "active_profile_write", "runtime_action", "publication_allowed"))):
+                    raise MonthlyReleaseConflict("existing source quality binding differs")
+            else:
+                _write_exclusive(path, receipt)
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed during quality binding")
+            self.store.replace_plan(operation_id, {**plan, "monthly_source_quality_inputs": normalized,
+                "monthly_source_quality_binding_path": str(path),
+                "monthly_source_quality_inputs_ref": {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}})
+            return receipt
+
     def _finalize_plan_from_source(
         self,
         operation_id: str,

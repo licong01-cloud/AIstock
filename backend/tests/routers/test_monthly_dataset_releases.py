@@ -204,7 +204,7 @@ def test_all_routes_require_dataset_release_operator(tmp_path: Path) -> None:
         for route in app.routes
         if isinstance(route, APIRoute) and route.path.startswith("/api/v1/qlib/monthly-releases")
     ]
-    assert len(routes) == 11
+    assert len(routes) == 12
     for route in routes:
         dependencies = {dependency.call for dependency in route.dependant.dependencies}
         assert require_dataset_release_operator in dependencies, route.path
@@ -223,6 +223,22 @@ def test_repair_binding_route_only_passes_authenticated_preparation_command(tmp_
         "schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": {"field": "pinned"}})
     assert response.status_code == 200
     assert calls == [(operation_id, {"field": "pinned"}, "dataset-operator:test")]
+    assert response.json()["data"]["publication_allowed"] is False
+
+
+def test_source_quality_binding_route_preserves_operator_identity(tmp_path):
+    client, _, app = _client(tmp_path)
+    calls = []
+    class Service:
+        def bind_source_quality_inputs(self, operation_id, *, inputs, principal):
+            calls.append((operation_id, inputs, principal))
+            return {"publication_allowed": False}
+    app.dependency_overrides[api.get_monthly_release_service] = lambda: Service()
+    operation_id = "dmr_" + "a" * 32
+    response = client.post(f"/api/v1/qlib/monthly-releases/{operation_id}/source-quality-inputs", json={
+        "schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": {"field": "exact-observation"}})
+    assert response.status_code == 200
+    assert calls == [(operation_id, {"field": "exact-observation"}, "dataset-operator:test")]
     assert response.json()["data"]["publication_allowed"] is False
 
 
