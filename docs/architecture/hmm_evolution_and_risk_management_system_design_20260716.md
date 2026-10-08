@@ -1,17 +1,17 @@
 # HMM 演进与风险管理系统总体蓝图（唯一产品目标权威）
 
-> **版本**：v2.75
+> **版本**：v2.78
 > **初始日期**：2026-07-16
-> **修订日期**：2026-10-07
+> **修订日期**：2026-10-08
 > **维护范围**：HMM Evolution；不接管QE、Selection、Paper、Advisory或数据生产
 > **已记录成果（历史验收保留，当前只读核对见§1.5）**：Phase 0/1已完成历史验收。G2-A v1.6已经完成正式双fresh-process零fit development、生产OOF authority reclosure、`2026-08-31/as-of 2026-08-28`真实31-sector单日写入、repository/API/UI readback及用户重启后的runtime验证；mean Rank IC=`0.039580909571655214`，当前为`AVAILABLE_EXPERIMENTAL / RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED / INSUFFICIENT / PENDING_INSUFFICIENT_POWER / NOT_AVAILABLE`。G2-B `risk_L1`也已完成源码、正式双fresh-process 12/12 fits、19,220行生产OOF、独立表/API/UI及重启后runtime验证；其research surface为`AVAILABLE_EXPERIMENTAL`，但precision lift=`0.05844358555076558 < 0.10`、recall=`0.34237132352941174 >= 0.25`，因此capability/advisory仍为`NOT_AVAILABLE`。两者tail均未读取，不得冒充forward-confirmed advisory。
-> **当前方向**：后续板块模型统一申万L2，目标仍是可使用且可证明经济价值的轮动与独立风险信号。A提供预测，B最终通过QE/荐股/模拟盘匹配历史对照验证成本后增益；QE继续后置。R1效果不足并停止，独立风险达到development要求且完整研究产品已有历史验收。原风险消费价值包已形成`INSUFFICIENT_REFERENCE_PATH`真实终态，不重复执行。§1.8记录解耦源码已合入，运行态/close-sync另核验，不阻断合法离线研究。当前实施§1.9的唯一低换手风险消费候选，精确D1～D6已批准，不为记录重启或重做旧实验，不更换模型。L1历史成果、兼容与批准context保持；默认前10+后10、自定义总数≤30，计算与消费覆盖完整合格L2。运行源码加载由用户负责，普通结果登记不等于runtime activation。
+> **当前方向**：后续统一申万L2，目标仍是可用且可证明经济价值的轮动与独立风险信号；QE后置。原HMM/R1及两特征资金流Ridge效果不足；独立风险有development价值和历史研究产品验收。两份风险消费已完成，双日确认降换手但有响应/回撤代价，不默认替代原政策，净价值未证明。当前连续任务见§1.10/§7：复用结果，唯一资金流＋价格互补候选D1～D6已获用户批准，完整源码/直接测试及三轮作者审修完成，PR/CI和正式实验待完成。不为记录重启、重做旧实验或新增平台。L1历史成果/兼容保持；UI前10＋后10、自定义总数≤30，计算/消费覆盖完整合格L2；普通记录不等于runtime activation。
 > **本轮核验状态**：最终v17 formal executor已完成双fresh-process **5184/5184 fits**；autocycle L1/L2的train-only D5均选seed47，原D6为29/31、121/131，legacy两个层级无完整D5候选。原全grid仍`d3_d6_accepted=false/ready=false`。另一方面，2026-10-03实时只读L2 API确认既有资金流基线mean Rank IC=`0.02973212294698707`，358个有效评价日、coverage通过，开发期效果合格；HAC区间跨零，当前`research_surface_status=NOT_AVAILABLE/advisory_status=NOT_AVAILABLE`，不代报浏览器通过。2026-09-22输入阻断仅是历史；不同模型、输入和窗口的结果不可混写。
 > **历史生产动作**：G2-A v1.6、G2-B risk_L1及独立risk_L2的生产DDL/DML、产品receipt绑定和用户重启后runtime验证均已按各自明确授权完成。risk_L2为HMM自有两表55,544行，未修改其他业务表。本次蓝图同步不执行新的DDL/DML、依赖安装、runtime activation或进程控制。
 
 > **研究读回及源码**：已批准C-008-L2-D6-PERSISTENT-RC-A和C-008-L2-INDEPENDENT-A；全131行业zero-refit读回127/131语义有效，seed47及原模型hash不变，4项1～3日稀有状态仍不足。#5325已合入`f49ebc600ac0cb4d52689443ed2bb304e29b01e4`；效果设计#5326已合入`a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a`，效果源码#5345已合入`369e6c6a6a04ad0ea72a024cc3fb990dc4f31823`。原acceptance不回写，语义通过不推导经济有效；此前起草时的PR状态只作历史。
 >
-> **当前结果与下一步**：原HMM零fit IC=`0.009072776767716752 < 0.02`，同标签基线IC=`0.022023310723322743`；R1终态BELOW_BINDING_MBE，IC=`-0.009341302842128188`；独立L2风险precision=`0.25260329190460196`、lift=`0.1174666556015582`、recall=`0.4121112481161803`达到development要求。#5444/#5447及完整产品源码#5449均已合入（#5449 merge=`d0a074ddce7bd992b2d45d660b765245615c679f`）。2026-10-06完成DEV先验、生产55,544行事务读回、用户重启后3个日期的真实API/无mock页面及产品receipt验证，surface=`AVAILABLE_EXPERIMENTAL`、capability=`RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`、forward=`NOT_STARTED`、advisory=`NOT_AVAILABLE`。源任务树已按授权清理，正式资产保留。随后#5547合入并完成风险消费回放：411/423日paired、12日原合法收益NA、7块，完整路径不足；7块回撤均优于同敞口参照，gross收益增量5正/2负、换手更高，未证明净增益。#5541/#5545的旧历史日期缺陷已闭合；记录源码已合入、加载/close-sync另核验。下一步为§1.9低换手消费实施，精确合同与源码交付已获授权；实现分支源码及51项直接合同已完成，最终CI/合入按PR实时状态独立核对；正式新回放未执行，不重复已完成操作。
+> **当前结果与下一步**：原HMM/R1不足；独立L2风险lift=0.1174667、recall=0.4121112达到development要求，已有55,544行研究产品历史验收。本轮只读实验文件不代报当前运行态。原消费411/423日paired、12日合法NA、7块，未证明净增益。双日确认已完成，已知换手下降但相对即时政策七块MDD均更差，详见§1.9。两特征资金流Ridge完成2/2 fits，IC=0.018100248031013167，同窗口delta基线=0.01804921719709577，增量区间跨零；停止该候选。§1.10互补候选D1～D6已批准且源码/直接测试完成；下一步PR/CI及获授权合入后正式preflight/唯一2-fit，不重跑旧结果或推导QE收益。
 
 ## 1. 执行摘要
 
@@ -59,7 +59,7 @@
 
 - 当前Design Acceptance Matrix保留17个验收项（§11.2另有3行历史原文，不重复计数），F-001～F-010A共11行已verified，`11/17=64.71%`。这是既有基础及Phase 1验收计数，**不是板块预测功能完成了64.71%**。
 - Phase 2已记录成果：rotation_L1真实历史OOF与v1.6单日预测已经交付，状态为`AVAILABLE_EXPERIMENTAL / RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`；risk_L1真实OOF/API/UI也已交付，但状态为`AVAILABLE_EXPERIMENTAL / NOT_AVAILABLE`。两者`advisory_status=NOT_AVAILABLE`、`FULL_READY=0`；前者是未forward确认的研究预测能力，后者只是诚实的实验展示面。
-- L2资金流基线development合格，原HMM及R1效果不足；独立L2风险已达到development要求且完成生产研究产品/用户重启后的真实API/UI验证。原消费回放完整参考路径不足，未证明净增益；轮动历史日期BUG及#5545已闭合。§1.8记录解耦源码已合入，运行善后独立；当前§1.9低换手消费D1～D6已批准，实现分支源码/三轮作者审修/51项直接测试已完成，最终CI/合入独立核对，正式新比较未运行，QE后置。模型效果、产品、场景增量和实时日期分别报告，不继承L1结果或用基础计数/文档/fit数量计算预测业务完成度。
+- L2资金流基线development合格，原HMM/R1及两特征资金流Ridge不足；独立L2风险有development价值及历史产品验收。两份消费路径仍不足，双日确认有换手改善与响应代价，不证明净增益。当前§1.10互补候选精确合同已批准，源码/直接测试完成、正式fit未执行；记录善后独立、QE后置。模型、产品、场景和实时状态分开，不用文档/fit数量计算业务完成度。
 
 ### 1.3 A线既有五轴状态与B线完成责任
 
@@ -80,7 +80,7 @@
 
 ### 1.4 反过度工程与非目标
 
-- §7两个旧模型包、风险研究产品及原风险价值回放已形成真实终态；旧历史日期缺陷和记录解耦源码已闭合，运行善后另核验且不作离线研究前置。当前实施§1.9一个已批准低换手风险消费包，不重做P0或原效果比较，不立即换模型。A/B是责任边界，不按adapter、BUG、测试、API/UI或复审拆微阶段，QE继续后置。
+- §7旧模型包、风险产品、两份消费回放及两特征资金流Ridge均已有终态；记录善后不作离线研究前置。当前只推进§1.10一个已批准互补候选，源码已实施；不重做P0/旧比较，不调报警阈值或确认天数。A/B是责任边界，不按adapter、测试、API/UI或复审拆微阶段，QE后置。
 - 不建设通用feature store、evidence平台、训练平台、新registry或Phase 3 scheduler；不为了缩短失败日志而弱化因果、typed error或状态不可逆保护。
 - 只保留运行必要模型/输入身份、紧凑结果和真实预测。旧实验资产不修改、不搬迁、不重新物化；不为历史证据整理另开任务。
 - 不重复导出数据、查询全历史数据库或为每个fresh process重建同一输入；新实验只读同一最小immutable bundle。
@@ -133,13 +133,23 @@ L2-RISK-VALUE按批准D1～D6完成薄源码、19项直接测试、三轮作者�
 
 本次核验口径：BUG-1741的close-sync #5545已合入，旧历史日期验收不再列为待重做；本轮新源码尚未完成实际运行态加载，具体commit、CI及close-sync状态只在对应BUG报告维护。此前模型及真实产品验收保留为历史事实；source、登记、表面验证、模型能力、经济增益和forward仍分别判断。记录/运行pending不得反过来阻断合法离线研发，也不能靠忽略损坏记录制造产品PASS。
 
-### 1.9 当前主线：已批准唯一低换手风险消费（2026-10-07）
+### 1.9 双日确认风险消费：已完成结果与适用边界（2026-10-08）
 
 原风险识别有development价值，不等于报警后整行业现金动作已证明净收益。只读原封存行发现2142段首尾可观察报警中835段为单日（39.0%）；其中789段有成熟标签，事件比例13.9417%，接近总体13.5137%。它支持评估去抖，不证明去抖有效；孤立单日定义使用事后下一日，不能直接用于当日行动。
 
-当前实施一个已批准的`hmm_risk_l2_warning_persistence_value_v1`：原0.20阈值/模型/20D/窗口/seed/标签不变，双日确认进入和解除现金，初始无overlay、合法NA断连续计数但保留政策记忆，完整131行业/424decision/423收益日。新C及同敞口X_C与旧B/R/X_R结果匹配；五源只读，不重跑原消费或模型，不补12个估值NA。
+已完成批准版本`hmm_risk_l2_warning_persistence_value_v1`：原0.20阈值/模型/20D/窗口/seed/标签不变；双日确认进入/解除现金、冷启动无overlay、合法NA断计数而留政策记忆；完整131行业/424decision/423收益日。新C及同敞口X_C匹配旧B/R/X_R，零fit/filter/predict，不重跑旧消费，不补12个估值NA。
 
-精确L2-RISK-CONSUME-PERSISTENCE D1～D6已获用户明确批准，详见`hmm_evolution_phase2_risk_l2_persistence_value_detailed_design_20261007.md`。源码实施/三轮作者审修/51项直接测试与五源预检已完成；本次授权满足最终CI条件后合入/同步；正式新回放另行确认。只检验一个版本，报告换手、延迟风险及上涨机会成本，保持reference/net/forward和产品状态分离，不预定经济成功、不增全同过门。记录运行善后及流水线probe修复单独由原owner处理，不阻断该设计。当前不启动QE、生产或服务。
+正式acceptance：`F:/Dev/AIstock_runtime/hmm_l2_risk/20261007/persistence-run/acceptance.json`。双process一致、COMPLETED；411/423日paired、7连续块，仍INSUFFICIENT_REFERENCE_PATH/net UNASSESSED。405共同已知换手日C−R=-15.645469440072413，敞口调整差=-6.017584292268828。C−R gross收益3正/4负、七块MDD均更差；C−X_C gross收益4正/3负、七块MDD均更好。相同参考块并非七个独立试验或实际交易净收益。
+
+事件覆盖即时0.4121112481、确认0.4025208933；延迟进入事件316行业日、延迟解除非事件1131行业日，后者10D平均收益+2.798%。重叠行业日不等于独立事故或避免损失。只支持“已知日期换手更低”，不支持默认替代原报警/即时政策。原warning、产品和默认不改，不自动试三日确认、其他阈值或仓位比例；结果回填直接设计，记录善后不阻断研究。
+
+### 1.10 当前连续任务：L2互补信息与风险实用价值（2026-10-08）
+
+两特征资金流监督候选已完成：`F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_supervised_20261008_1dc3ad9d/run/acceptance.json`。2/2 fits、双process参数/预测一致，232日/30,392目录行、222成熟评价日，coverage通过；IC=0.018100248031013167低于0.02，同窗口delta基线IC=0.01804921719709577。配对增量0.00005103083391739742，HAC95%区间[-0.005580388888226639,0.005682450556061434]，终态BELOW_BINDING_MBE，没有可信增量。801011.SI的232行官方不可报价保持合法unavailable，效果不足不能归因为正常停牌/停发；旧358日IC不横比本222日结果。
+
+唯一已批准候选设计为`hmm_evolution_phase2_rotation_l2_complementary_information_detailed_design_20261008.md`：资金流＋官方L2相对动量/下行半偏差，共享SVD Ridge，保留10D目标、训练/隔离/评价窗口、alpha和效果量级，改变信息集。D1～D6为APPROVED_BY_USER（2026-10-08）；完整HMM-owned源码及直接测试已实施，三轮作者审修后本地slice为80 passed/1 skipped。PR/CI、正式preflight、唯一2-fit及真实产品验证分别待完成。这仍是待检验假设，不是已证实根因、源码BUG或保证有效方向。不扩三态grid、不并行多候选、不引入新数据面/平台。
+
+一个任务内已完成设计/集中精确批准、源码和三轮作者审修，后续连续PR/CI、获授权合入后的唯一双process实验、匹配比较及采用建议；不设必须运行时长，不把reader/CLI/API/UI拆微阶段。价格视图共源pins、原E0 rank和三方共同截面IC已由直接反例闭合；正式输入/模型效果尚未评估。实际产品源码runtime=backend-main，首次加载与真实读回另行处理，不为研究记录重启。已有风险代价本轮由原结果分析闭合，不启动新政策实验。正/负/不足均为该批终点；产品写入、运行态选择、cleanup及用户重启分别授权，离线结论不以生产或QE为前置。
 
 ## 2. 总体架构
 
@@ -229,7 +239,10 @@ Phase 2已经形成两个真实L1产品component，但它们处于不同能力�
 - [ ] B保留版本化L2输出与消费边界，QE正式验证后置；未来由QE窗口执行同场景回放，荐股/模拟盘须各自验证，不自动继承QE增益。本项不阻塞近期两个HMM模型包。
 - [x] 独立L2绝对10D/-8%风险两process2fit历史评价完成，lift=0.11747、recall=0.41211达到development要求；源码已合入，不计作产品/收益增益。
 - [x] risk封存成果已闭合完整持久化/API/UI：#5449合入、DEV/生产55,544行、产品receipt、用户重启后真实验证及源任务清理；只表示研究产品完成，不计经济增益。
-- [x] 批准的零fit风险消费价值回放已完成，终态INSUFFICIENT_REFERENCE_PATH；分块诊断不替代全期/净增益，不再列待启动。
+- [x] 批准的零fit风险消费价值回放已完成，终态INSUFFICIENT_REFERENCE_PATH；不替代全期/净增益，不再列待启动。
+- [x] 双日确认已完成：换手更低但有响应/回撤代价、路径仍不足；不默认替代政策、不重做结果。
+- [x] 两特征资金流Ridge双process2fit已完成：BELOW_BINDING_MBE，同窗口增量接近零，不覆盖旧产品或调参。
+- [x] 唯一互补信息候选整包设计及D1～D6精确批准、完整源码/直接测试完成；PR/CI、正式实验和产品验收独立待完成，不借旧成果代报。
 - [x] 既有资金流轮动历史日期缺陷#5541及close-sync #5545已闭合，不重复旧验收。§1.8记录修复的源码加载单独报告，复用存储/API，不新增模型/导入或QE实验。
 - [ ] 新L2研究能力、独立确认和业务采用分别验收；历史L1状态及tail权限不因L2转向升级，experimental页面不得代替capability。
 
@@ -391,24 +404,25 @@ development与sealed tail是两个隔离role，不是两个开发阶段；每rol
 | 推理依赖标签/每次重做准备 | feature-only显式as-of读取，无未来outcome、无fit、共享公式与冻结market状态 |
 | 结果弱却通过页面制造假进度 | 研究面板、component capability、forward、advisory分别展示；risk效果未过仍可诚实保留experimental surface，但不能生成风险能力或新增单日warning |
 | “预测”被理解成交易指令 | 当前产品无交易副作用；B只有显式历史消费，测试旧版本/默认配置不变。生产采用不由回放结果自动触发 |
-| 无限候选/无限文档循环 | §7两个完整任务包复用已有结果；新候选说明依据、可检验假设与预算，但不新增“先证明根因”的门。没有增量或互补价值时结束该批，不为提高结构通过率扩大grid，不默认新增平台或多模型方向 |
+| 无限候选/无限文档循环 | §7一个完整任务复用已有结果；新候选说明依据、可检验假设与预算，但不新增“先证明根因”的门。没有增量或互补价值时结束该批，不为提高结构通过率扩大grid，不默认新增平台或多模型方向 |
 | 旧版曾有效即回退v1.6 | 保留旧方法和资金流基线；旧QE正向数值存在归因疑点，当前优劣需同场景比较，不以模型年龄、新旧名称或复杂度替代结果 |
 | 不同指标硬比较 | A Rank IC和B策略收益不是同一目标；B报告成本后增量、回撤、换手等取舍，精确主指标在设计中批准，不要求通用全场景冠军 |
 | 把目标对齐假设写成已证实BUG | raw-return回归不是实现错误；rank标签改变学习中的收益幅度信息，不等同直接优化Rank IC，不保证改善；精确合同须说明损失/标签尺度与冻结参数的兼容性 |
 | 反复使用development形成选择偏差 | 现有development已参与多轮方向选择；新候选通过只形成开发期资格，不是独立泛化证明；paired改善与HAC区间如实报告但不新增AND promotion gate，tail保持隔离 |
 
-L2资金流基线及HMM同口径比较均已完成，不重跑；R1未改善，风险development合格且研究产品已闭合，当前优先验证风险使用代价并闭合既有轮动表面。三段IC点值走弱提示局限，不证明机制漂移；硬三态压缩、utility噪声仍只是可检验假设。HMM不必胜出：没有增益则保留终态，较有价值的基线继续保留，不为合法性重跑grid。
+L2资金流基线/HMM/R1/两特征资金流Ridge均已有终态，不重跑；独立risk有development价值及历史产品验收，两份消费代价已分析。当前唯一互补候选设计已获精确批准：价格与资金流不同源，但互补及可预测性未证明。不能仅凭分块IC断言机制漂移，不能因降换手忽略七块回撤代价。HMM不必胜出；保留较有价值基线，不为合法性重跑grid。
 
 旧L1 risk的precision不足用于界定风险选题，不要求恢复旧训练链；L2风险须独立评价绝对风险与相对弱势，预警结果和消费后风险下降分开。后续有限改进必须服务可消费效果，而不是模型复杂度、fit数量或更多receipt；不同时扩展多个研究方向。
 
 L2是当前业务目标而非可选的样本扩容手段：它可能减轻L1内部细分行业相互抵消，同时可能增加小行业集中度、噪声和覆盖变化。不能断言L1绝无价值或L2必然更准；L2行业数更多也不意味着独立日期更多、HAC功效按行业数等比提高。L2主指标、horizon、成熟日期和效果量在新合同中明确，不机械继承L1 Rank IC=0.02、risk阈值或窗口；无需新增“先证明信息集可学习”门。
 
-## 7. 后续优先级：低换手风险价值主线，记录善后独立，不拆微阶段
+## 7. 后续优先级：一个L2互补信息完整任务，已有风险结果复用
 
 | 优先级 | 业务任务与顺序 | 结束条件 |
 |---|---|---|
 | 原P1已完成，不重复 | L2-RISK-VALUE #5547及两process零fit回放结束；411/423日paired、7块、12日原合法NA；完整路径不足，分块迹象和成本代价见§1.7 | INSUFFICIENT_REFERENCE_PATH；未证明完整路径/净增益，不改变模型/产品，不补数重建或自动开新候选 |
-| 当前P1：唯一低换手风险消费完整包 | §1.9精确D1～D6已批准；实现分支薄源码、51项直接测试、三轮作者审修及五源预检完成；最终CI通过后授权合入/同步；正式双process零fit比较另行确认，复用旧结果不重跑 | 当前源码交付，正式新比较尚未执行；后续一个真实换手/风险/机会成本正负或不足结论即停，不改变模型/阈值/产品，不补旧NA，不搜索确认参数 |
+| 已完成：风险消费与监督资金流 | §1.9/§1.10及直接设计回填终态；确认政策有换手改善和回撤/延迟代价，Ridge无可信增量 | 不因单项改善默认替换政策，不补NA、拼净值、降阈值或调参 |
+| 当前唯一任务：L2互补信息完整闭环 | 一份F2展开相对动量/下行半偏差与资金流，固定简单模型和窗口；源码/直接测试及三轮审修完成，继续PR/CI、获授权合入后唯一实验及匹配比较 | 正式fit=0，真实产品尚未验收；正/负/不足即停，不自动第二候选/平台/微阶段；生产、QE及cleanup分别处理 |
 | 独立善后，不作主线前置 | §1.8记录解耦源码已合入，运行态及close-sync按原BUG核验；流水线probe归属流水线owner，不为记录制造新实验或写库 | 未获真实加载/读回仍pending；不用环境变量绑定记录，不启动停用worker或重复旧验收 |
 | 后置：目标场景增益与有限演进 | QE仍由QE窗口在用户恢复后执行；荐股/模拟盘各自匹配验证。新候选只有明确问题与精确批准后才能启动，保留旧版可选项 | 场景成本后收益/风险与代价；不自动继承A线效果，不将smoke/fit次数当增益 |
 
@@ -441,7 +455,7 @@ P0/原效果/R1/risk及risk产品均有真实终态，不重复；#5433/#5444/#5
 
 ## 8. Design Acceptance Index
 
-§7两个旧完整包原预算8～12小时、硬上限12小时，源码和正式回放均已有终态，旧历史日期BUG亦已闭合。§1.8记录源码已合入，加载/善后独立核验；正常登记不需要环境变量或为记录重启。当前§1.9精确合同、源码实施/合入/同步已获2026-10-07明确授权；正式新回放、cleanup及生产/激活权限不从该授权推导，不凑时长、不自行重启或开新实验。
+§7旧完整包、双日确认及两特征资金流Ridge均已有真实终态。§1.8加载/善后独立，正常记录不绑环境变量或为记录重启。当前§1.10新候选F2的D1～D6已获用户明确批准；批准不代报源码、实验或产品完成；不设运行时长，不自行重启、写生产或开第二候选。
 
 - **F-001 / Phase 0**：QE artifact与Prediction Store可信读取。
 - **F-002 / Phase 0**：canonical DB、交易日与PIT合同。
@@ -454,7 +468,7 @@ P0/原效果/R1/risk及risk产品均有真实终态，不重复；#5433/#5444/#5
 - **F-009 / Phase 1**：top-3研究推荐语义与隔离。
 - **F-010 / Phase 1**：真实演进API/UI与可见错误态。
 - **F-010A / Phase 1**：独立自动评估worker service，不创建实验或触发训练。
-- **F-011 / Phase 2**：L1历史保留；L2资金流development合格、原HMM/R1效果不足；独立risk两process2fit达lift/recall要求，源码PR #5444已合入，无forward/QE增益。127/131语义不是预测有效，完整计算不缩为UI子集。
+- **F-011 / Phase 2**：L1历史保留；L2资金流基线development合格，原HMM/R1/两特征资金流Ridge不足；独立risk有lift/recall价值，无forward/QE增益。127/131语义不是预测有效；新候选设计已批准且源码/直接测试完成，正式fit/效果及真实产品待验收，不由文档PASS推导完成。
 - **F-012 / Phase 2**：当前真实v17效果输入已完成构造/身份与两process评价；quote cutoff等历史消费者阻断已修复，不再当活跃数据缺口。显式版本、PIT、quote authority及跨owner边界不变，合法NA仍单列。
 - **F-013 / Phase 2**：risk_L2历史验收已完成55,544行DEV/生产读回与真实API/no-mock/runtime，历史surface=AVAILABLE_EXPERIMENTAL；消费回放完整路径不足、不证明净增益。既有资金流轮动DB/API可读，#5541/#5545已闭合；当前记录修复、源码加载与表面读取分别报告，不能借历史验收推导新源码已生效。前10+后10/≤30只影响展示，风险研究产品不代替轮动或成本后增益。
 
@@ -468,7 +482,7 @@ P0/原效果/R1/risk及risk产品均有真实终态，不重复；#5433/#5444/#5
 
 1. 保留v1.6、risk v1、旧QE模型、全部历史结果与运行配置；本次不重跑、不替换、不读取tail。
 2. 保留已完成P0、formal原终态和本次效果精确批准；当前零fit回放已完成，不重复。只用当前compact结果分析新提案，不重建旧证据或扩展数据平台。
-3. R1、独立risk、risk产品及原风险价值回放已有真实终态，不重复fit/标签/导入/回放。§1.8记录解耦源码已合入，加载/close-sync独立；当前按§1.9已批准精确合同实施唯一低换手消费版本。已有文件/数据库登记不另绑环境变量或重启，记录善后不阻断该设计。当前不操作进程或激活，QE及其他场景仍后置，不代操作其他窗口。
+3. R1、独立risk、risk产品、两份消费及两特征资金流Ridge均已有终态，不重复fit/标签/导入/回放。§1.8加载/close-sync独立；当前§1.10唯一互补候选精确合同已闭合并获批准，源码/三轮审修完成，后续按动作授权连续PR交付及唯一实验。记录不绑环境变量或重启，不操作其他窗口、生产激活或QE。
 4. 每批结果用于决定保留、升级、场景化并存或停止该批；不自动替换旧运行版本或组合模型。L1历史结果持续可查，新增研发与候选统一围绕L2，无增益不得标为新能力通过。
 5. 历史验证成立后再安排相应业务推广和实时验证。数据更新、生产写入、依赖、runtime及用户进程控制各自处理，不因文档合入或包内连续执行自动授权。
 
@@ -489,7 +503,7 @@ P0/原效果/R1/risk及risk产品均有真实终态，不重复；#5433/#5444/#5
 
 ## 11. Design Acceptance Matrix
 
-记录v2.72当前方向。11行历史verified逐字保留；F-011～F-013同步§1.5～§1.7实际终态及各自产品状态，原行仍保留§11.2。模型、产品与消费增益分开，不把source-ready/基础计数当L2业务完成度。
+记录v2.78当前方向。11行历史verified逐字保留；F-011～F-013同步§1.5～§1.10，原行保留§11.2。模型、产品与消费增益分开；新候选设计已批准且源码/直接测试完成，直接设计明确列出正式实验/产品尚未验收的状态，不用基础计数/文档通过率冒充完成度。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -504,9 +518,9 @@ P0/原效果/R1/risk及risk产品均有真实终态，不重复；#5433/#5444/#5
 | F-009 | Phase 1 详细设计 §9；`scorer.py`、`repository.py::_apply_recommendations_with_cursor()`；BUG-776 | `python -m pytest backend/tests/hmm_evolution/test_scorer.py backend/tests/hmm_evolution/test_repository_integration.py -q`；`metric_availability_ratio` 明确替代误导性的 confidence 展示；历史受 BUG-773 影响的推荐只读不复用 | verified | 无 |
 | F-010 | Phase 1 详细设计 §14/§15；真实 QE asset/candidate/evaluation/batch API、共享 HMM 导航、演进 UI；BUG-744～BUG-748、BUG-770～BUG-772、BUG-788/BUG-789 | `python -m pytest backend/tests/hmm_evolution/test_api.py backend/tests/hmm_evolution/test_qe_workspace_client_catalog.py backend/tests/hmm_evolution/test_frontend_contract.py -q`；2026-07-21 Loop1～Loop10 同口径 evaluation 全部 succeeded，单例 69.3～99.3 秒，degraded evidence 显式；详细设计 §17.4.6 真实 UI/Playwright 18 场景（8011/3011，无 mock，生产端口守卫）全过 + 18 张截图 | verified | 无 |
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
-| F-011 | 原formal/effect及已批准R1/risk，L1历史保留 | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json；0/2-fit两包终态见§1.6 | APPROVED_BY_USER_MODEL_RESULTS_VERIFIED_SOURCE_MERGED | 原HMM/R1不足，risk development合格未forward确认；产品完成不证明消费净增益，QE后置 |
+| F-011 | 原formal/effect及已批准R1/risk/两特征资金流Ridge，L1历史保留；新四特征源码完成 | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json；artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_supervised_20261008_1dc3ad9d/run/acceptance.json；backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；§1.6/§1.10 | APPROVED_BY_USER_MODEL_RESULTS_VERIFIED_NEW_SOURCE_LOCAL_VERIFIED | 原HMM/R1/Ridge不足；risk未forward确认；新候选PR/CI/正式fit待完成，产品不证明净增益，QE后置 |
 | F-012 | 正式reader、共享身份与20D risk输入 | backend/tests/hmm_risk/test_formal_state_input.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/preflight.json；131/20D及601/591/424/414闭合 | APPROVED_BY_USER_MODEL_INPUTS_VERIFIED | 不改旧失败/源/hash；156合法观测NA保留，P/S不冒充目录全无缺失 |
-| F-013 | 既有rotation产品、已闭合历史日期BUG与risk_l2产品/价值回放；记录解耦见§1.8 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/product/production_database_validation_20261006.json；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261006/value-run/acceptance.json；§1.7～§1.8 | APPROVED_BY_USER_HISTORICAL_PRODUCTS_VERIFIED_RECORD_SOURCE_LOADING_SEPARATE | 历史risk真实表面完成；价值回放完整路径不足、未证明净增益；#5545已合入；本轮新源码运行态加载仍独立pending，不重复旧模型/产品验收 |
+| F-013 | 既有rotation/risk产品、历史日期BUG及两份消费；记录解耦见§1.8 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/product/production_database_validation_20261006.json；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261007/persistence-run/acceptance.json；§1.7～§1.9 | APPROVED_BY_USER_HISTORICAL_PRODUCTS_VERIFIED_RECORD_SOURCE_LOADING_SEPARATE | 历史risk表面完成；两次消费路径不足、未证明净增益；新候选无产品验证，不代报当前runtime |
 | F-014 | 本文Phase 3 UI与独立候选方向 | 目标`backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts` | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 独立实现级设计待后置任务；不是G2-A前置 |
 | F-015 | manual-first与未来scheduler边界 | 目标`backend/tests/hmm_training/test_scheduler_contract.py` | APPROVED_BY_USER_MANUAL_FIRST_DIRECTION_AUTOMATION_NOT_APPROVED | 自动调度未批准；G2-A受控单日推理不需要scheduler |
 | F-016 | 全阶段隔离与发布边界 | 目标`tests/aistock_validation/test_hmm_evolution_isolation.py`及各阶段直接无副作用测试 | APPROVED_BY_USER_DESIGN_READY_PENDING_PHASE_IMPLEMENTATION | 对应阶段真实证据待完成；本次文档无运行动作 |
@@ -553,7 +567,9 @@ G2-A rotation与G2-B risk的最小schema、生产OOF写入、产品receipt和当
 - `hmm_evolution_phase2_rotation_l2_p0_detailed_design_20260922.md`：原P1历史及§8.2已批准R1/risk精确模型合同；两模型真实终态见PR #5444的§8.4，不从其源码完成推导产品完成。
 - `hmm_evolution_phase2_risk_l2_product_detailed_design_20261005.md`：已交付风险研究产品DB/API/UI、显式封存身份与零refit合同；#5449及实际DEV/生产/用户重启后验收见v1.3状态，不重复执行。
 - `hmm_evolution_phase2_risk_l2_value_replay_detailed_design_20261006.md`：已批准并完成源码/两process零fit的消费价值合同；v1.1同步INSUFFICIENT_REFERENCE_PATH真实结果，区别识别效果、分块参考价值与可执行场景利润，不改变现有模型或产品状态。
-- `hmm_evolution_phase2_risk_l2_persistence_value_detailed_design_20261007.md`：唯一双日确认消费，L2-RISK-CONSUME-PERSISTENCE D1～D6已批准；零新增fit/旧回放，保留NA及延迟风险/机会成本，实现分支源码及直接测试已完成，最终CI/合入独立核对，不新增产品状态。
+- `hmm_evolution_phase2_risk_l2_persistence_value_detailed_design_20261007.md`：唯一双日确认消费，D1～D6已批准、源码与正式零fit比较完成；v1.2/§13同步降换手与七块对即时政策回撤代价，保留NA/net UNASSESSED，不自动替换默认政策。
+- `hmm_evolution_phase2_rotation_l2_moneyflow_supervised_increment_detailed_design_20261007.md`：两特征共享Ridge合同与已完成2-fit终态；v1.1/§14同步同窗口微小增量、BELOW_BINDING_MBE和合法quote-unavailable，不重复旧实验。
+- `hmm_evolution_phase2_rotation_l2_complementary_information_detailed_design_20261008.md`：当前唯一四特征共享Ridge连续包、D1～D6已批准；有界官方L2价格视图、旧对照零fit、完整population及真实价值比较。文档通过不等于源码、模型或产品交付。
 - `hmm_phase2_qe_assistance_three_arm_f2_detailed_design_20260916.md`：保留旧L2/新版L1三臂方向、adapter、consumer-effect及阻断记录。后续执行方向由本蓝图L2要求取代，不能沿其L1精确合同启动新主线实验；L2消费需新的匹配模型和窗口合同。
 - `hmm_evolution_phase2_rotation_l1_g2a_detailed_design_20260903.md`：保留L1各版本精确合同与真实终态，不再作为新增L2参数、人口、31-sector验收或前后展示合同；P0显式列出复用与改变项。
 
@@ -635,7 +651,17 @@ DESIGN-COMPLIANCE-001逐项结论：不缩小计算人口或用设计冒充交�
 
 两轮作者文档复审（非独立第三方）：第一轮统一摘要/任务/Index/Matrix与真实结果，修正价值回放仍未运行的旧描述，逐字保留42条旧版本/verified/原状态行、§1.1历史结果及价值D1～D5全部公式；第二轮读取正式acceptance及GitHub源码merge/close-sync状态，核对423/411/131、12日NA/7块、零fit/数据动作及不足终态，明确新历史日期交互未运行态验收。DESIGN-COMPLIANCE-001四项：完整分母和三臂不简化；合法NA不补值或拼NAV；模型/QE/真实持仓不迁移；不增统计门/审批，不由合入推导激活/重启。未发现剩余文档阻断；F2与diff只验文档，不把参考迹象计作净增益或轮动表面完成。
 
+#### v2.76本轮结果同步与设计审核
+
+三轮作者文档自审（非独立第三方）：以真实acceptance修正当前状态，明确双日确认换手/回撤/延迟取舍和两特征Ridge无可信增量；补全新四特征候选的价格预热视图、旧对照pins、合法资格/共同交集与正常方程；核对一个连续任务、待批准精确合同和模型/产品/场景价值分离。所有旧验收、版本行及§11.2保留；当前只读结果分析和文档编辑，未实施/训练/写库/激活。DESIGN-COMPLIANCE-001四项：全L2人口不缩为UI子集；NA/失败/效果不足不静默；旧模型/政策/QE行为不迁移；新合同明确pending，不增加显著性、全行业或资源门。文档审核无阻断不等于模型合同已获批。
+
 ### 14.3 变更历史
+
+2026-10-08 v2.78：已批准唯一四特征L2候选完成HMM-owned源码/CLI、精确产品分支和直接测试；三轮作者审修、本地slice 80 passed/1 skipped、旧对照只读identity核验及frontend静态检查通过。正式fit=0、DEV/production及真实API/UI未执行；PR/CI与runtime加载分别待完成，不改变模型、阈值或旧历史。不新增证据平台、不为记录重启。
+
+2026-10-08 v2.77：用户明确批准唯一L2互补信息候选D1～D6，同步目标摘要、任务顺序、Index/Matrix及直接设计批准状态。v2.76待批准记录保留当时事实；特征/目标/窗口/权重/alpha/人口/对照/效果量级与预算未变，源码/fit未执行，不从设计批准推导提交合入、生产或服务动作。
+
+2026-10-08 v2.76：只读正式acceptance同步双日确认及两特征资金流Ridge终态，收敛为一个L2互补信息连续任务；新精确合同待批准，未训练/写库/激活。旧版本行、§11.2及11行历史verified保留，不另建历史证据档案。
 
 本表逐字保留各旧版本当时的判断，不是当前待办；v2.59取代旧行中“L1主线/L2后置/四component共同目标”等未来执行排序。已完成实验的数值、历史验收与对应合同不被新方向回写；更早记录仍在原decision log/详细设计和Git历史，不另做证据归档。
 

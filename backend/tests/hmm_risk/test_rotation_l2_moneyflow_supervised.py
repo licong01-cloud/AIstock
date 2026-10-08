@@ -77,7 +77,7 @@ def panel() -> dict:
             "mapping_hash": "3" * 64,
             "quote_authority_hash": "4" * 64,
             "calendar_hash": "5" * 64,
-            "source_file_hashes": {"test": "6" * 64},
+            "source_file_hashes": {"test": "6" * 64, "sector_data_h5": "7" * 64, "index_daily_h5": "8" * 64},
             "release_id": "qe_hmm_full_v2_20260831",
             "cutoff": "2026-08-31",
             "sector_display_name_authority": "canonical_sw_l2_code_only",
