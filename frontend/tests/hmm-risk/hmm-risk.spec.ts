@@ -110,7 +110,8 @@ test("renders configurable L2 top and bottom ranks from a complete 131-sector AP
   await mockRotationApi(page);
 
   await assertRotationSurface(page);
-  await expect(page.getByRole("region", { name: "L1 历史风险独立能力" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "L1 板块轮动预测" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "L1 历史风险独立能力" })).toContainText("不属于 L2 轮动分数");
   await page.getByLabel("前列数量").fill("15");
   await expect(page.getByText("合计 25 / 30", { exact: false })).toBeVisible();
   await page.getByLabel("后列数量").fill("16");
@@ -142,7 +143,7 @@ test("distinguishes frozen industry semantics from daily relative ranks", async 
 test("rejects mixed HMM and delta product rows", async ({ page }) => {
   await mockRotationApi(page, 127, true, true);
   await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
-  await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
+  await expect(page.getByRole("alert").filter({ hasText: "预测暂不可用" })).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
   await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
 });
 
@@ -156,7 +157,7 @@ test("shows the supervised fixed-train boundaries without claiming forward confi
 test("rejects mixed supervised and baseline detail rows", async ({ page }) => {
   await mockRotationApi(page, 127, false, true, true);
   await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
-  await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
+  await expect(page.getByRole("alert").filter({ hasText: "预测暂不可用" })).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
   await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
 });
 
@@ -173,7 +174,7 @@ test("shows four-feature linear explanation separately from rank without claimin
 test("rejects mixed four-feature and old model detail rows", async ({ page }) => {
   await mockRotationApi(page, 127, false, true, true, true);
   await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
-  await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
+  await expect(page.getByRole("alert").filter({ hasText: "预测暂不可用" })).toContainText("hmm_risk_rotation_l2_ui_version_invalid");
   await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
 });
 
@@ -187,7 +188,7 @@ test("rejects four-feature missing explanation rather than silently displaying s
     } }) });
   });
   await page.goto(`/hmm-risk?run_id=${RUN_ID}`);
-  await expect(page.getByRole("alert")).toContainText("hmm_risk_rotation_l2_ui_explanation_invalid");
+  await expect(page.getByRole("alert").filter({ hasText: "预测暂不可用" })).toContainText("hmm_risk_rotation_l2_ui_explanation_invalid");
   await expect(page.getByRole("region", { name: "申万二级行业轮动排名" })).toHaveCount(0);
 });
 

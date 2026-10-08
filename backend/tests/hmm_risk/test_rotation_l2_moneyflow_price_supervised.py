@@ -55,6 +55,9 @@ def price_panel(panel, completed, reference_assets, monkeypatch):
         monkeypatch.setenv(key, "1")
     with threadpool_limits(limits=1):
         environment = subject.numeric_environment()
+    # Synthetic unit/subprocess fixtures use the test interpreter, not the
+    # separately authorized Conda-base formal experiment environment.
+    monkeypatch.setattr(subject, "APPROVED_NUMERIC", {k: environment[k] for k in ("python", "versions")})
     source = deepcopy(panel["source"])
     binding = source["evaluation_source_binding"]
     binding.update(
@@ -90,6 +93,27 @@ def price_panel(panel, completed, reference_assets, monkeypatch):
             "reference": {"path": str(reference / "acceptance.json"), "pins": pins, "input_identity": identity},
         }
     )
+
+
+def test_formal_numeric_contract_remains_fixed():
+    assert subject.APPROVED_NUMERIC == {
+        "python": "3.13.5",
+        "versions": {"numpy": "2.3.3", "scipy": "1.16.3", "scikit-learn": "1.8.0", "threadpoolctl": "3.6.0"},
+    }
+
+
+def test_numeric_drift_is_rejected_even_after_rehash(price_panel):
+    for key, value in (
+        ("python", "0.0.0"),
+        ("versions", {**price_panel["numeric_environment"]["versions"], "numpy": "0.0.0"}),
+        ("thread_variables", {}),
+        ("thread_pools", []),
+        ("thread_pools", [{"num_threads": 2}]),
+    ):
+        changed = deepcopy(price_panel)
+        changed["numeric_environment"][key] = value
+        with pytest.raises(RuntimeError, match="request numeric contract differs"):
+            subject.validate_input(reseal(changed))
 
 
 def test_formulas_first_anchor_e0_ranks_and_zero_downside(price_panel):
@@ -292,6 +316,7 @@ def test_synthetic_two_fresh_processes_reproduce_without_reference_refit(price_p
         "from backend.services.hmm_risk import rotation_l2_moneyflow_price_supervised as m; "
         "b=read_json(Path(sys.argv[1])); m.REFERENCE_PINS=b['reference']['pins']; "
         "m.APPROVED_INPUT={k:b['source']['identity'].get(k) for k in m.APPROVED_INPUT}; "
+        "m.APPROVED_NUMERIC={k:b['numeric_environment'][k] for k in ('python','versions')}; "
         "write_once(Path(sys.argv[2]),m.run_process(b,process_index=int(sys.argv[3])))"
     )
     env = {**os.environ, **{k: "1" for k in subject.THREADS}, "PYTHONPATH": str(root)}

@@ -47,6 +47,10 @@ THREADS = (
     "VECLIB_MAXIMUM_THREADS",
     "BLIS_NUM_THREADS",
 )
+APPROVED_NUMERIC = {
+    "python": "3.13.5",
+    "versions": {"numpy": "2.3.3", "scipy": "1.16.3", "scikit-learn": "1.8.0", "threadpoolctl": "3.6.0"},
+}
 APPROVED_INPUT = {
     "generation": "20260928-v15-unified-moneyflow1",
     "manifest_sha256": "2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc",
@@ -231,9 +235,8 @@ def validate_input(bundle: Mapping[str, Any]) -> dict[str, Any]:
         raise fail("price benchmark does not cover the frozen calendar")
     environment = bundle.get("numeric_environment", {})
     if (
-        environment.get("python") != "3.13.5"
-        or environment.get("versions")
-        != {"numpy": "2.3.3", "scipy": "1.16.3", "scikit-learn": "1.8.0", "threadpoolctl": "3.6.0"}
+        environment.get("python") != APPROVED_NUMERIC["python"]
+        or environment.get("versions") != APPROVED_NUMERIC["versions"]
         or environment.get("thread_variables") != {k: "1" for k in THREADS}
         or not environment.get("thread_pools")
         or any(p.get("num_threads") != 1 for p in environment["thread_pools"])
