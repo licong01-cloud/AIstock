@@ -25,14 +25,17 @@ THREADS = (
 )
 
 
-def parser(*, with_reference: bool = False) -> argparse.ArgumentParser:
+def parser(*, with_reference: bool = False, frozen_reference: bool = False) -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     modes = result.add_subparsers(dest="mode", required=True)
     prep = modes.add_parser("preflight")
-    for flag in ("active-profile", "dataset-root", "security-identity-manifest", "provider-absence-manifest"):
-        prep.add_argument("--" + flag, type=Path, required=True)
-    for flag in ("security-identity-sha256", "provider-absence-sha256", "approved-manifest-sha256"):
-        prep.add_argument("--" + flag, required=True)
+    if frozen_reference:
+        prep.add_argument("--original-input", type=Path, required=True)
+    else:
+        for flag in ("active-profile", "dataset-root", "security-identity-manifest", "provider-absence-manifest"):
+            prep.add_argument("--" + flag, type=Path, required=True)
+        for flag in ("security-identity-sha256", "provider-absence-sha256", "approved-manifest-sha256"):
+            prep.add_argument("--" + flag, required=True)
     prep.add_argument("--output", type=Path, required=True)
     if with_reference:
         prep.add_argument("--reference-acceptance", type=Path, required=True)
@@ -53,7 +56,8 @@ def source_head() -> str:
 
 def main(argv: list[str] | None = None, *, engine=None, child_script: Path | None = None) -> int:
     selected_model = engine or model
-    args = parser(with_reference=engine is not None).parse_args(argv)
+    frozen_reference = getattr(selected_model, "FROZEN_REFERENCE_INPUT", False)
+    args = parser(with_reference=engine is not None, frozen_reference=frozen_reference).parse_args(argv)
     # Reject unsafe destinations before any write, including a failure receipt.
     try:
         output = validate_output_location(args.output, dataset_root=getattr(args, "dataset_root", None))
@@ -64,19 +68,29 @@ def main(argv: list[str] | None = None, *, engine=None, child_script: Path | Non
     output_authorized = args.mode == "preflight"
     try:
         if args.mode == "preflight":
-            profile = read_json(args.active_profile)
-            if profile.get("components", {}).get("dataset_manifest_sha256") != args.approved_manifest_sha256:
-                raise selected_model.fail("active manifest differs from the explicitly approved input")
-            bundle = selected_model.prepare_inputs(
-                active_profile_path=args.active_profile,
-                dataset_root=args.dataset_root,
-                source_commit=source_head(),
-                security_identity_manifest_path=args.security_identity_manifest,
-                security_identity_sha256=args.security_identity_sha256,
-                provider_absence_manifest_path=args.provider_absence_manifest,
-                provider_absence_sha256=args.provider_absence_sha256,
-                **({"reference_acceptance_path": args.reference_acceptance} if engine is not None else {}),
-            )
+            if frozen_reference:
+                bundle = selected_model.prepare_inputs(
+                    original_input_path=args.original_input,
+                    reference_acceptance_path=args.reference_acceptance,
+                    source_commit=source_head(),
+                )
+                validate_output_location(
+                    output, dataset_root=Path(bundle["source"]["evaluation_source_binding"]["root"])
+                )
+            else:
+                profile = read_json(args.active_profile)
+                if profile.get("components", {}).get("dataset_manifest_sha256") != args.approved_manifest_sha256:
+                    raise selected_model.fail("active manifest differs from the explicitly approved input")
+                bundle = selected_model.prepare_inputs(
+                    active_profile_path=args.active_profile,
+                    dataset_root=args.dataset_root,
+                    source_commit=source_head(),
+                    security_identity_manifest_path=args.security_identity_manifest,
+                    security_identity_sha256=args.security_identity_sha256,
+                    provider_absence_manifest_path=args.provider_absence_manifest,
+                    provider_absence_sha256=args.provider_absence_sha256,
+                    **({"reference_acceptance_path": args.reference_acceptance} if engine is not None else {}),
+                )
             write_once(output, bundle)
             print(f"preflight=PASS; input={bundle['input_hash']}; fits=0; tail=false")
         elif args.mode == "child":

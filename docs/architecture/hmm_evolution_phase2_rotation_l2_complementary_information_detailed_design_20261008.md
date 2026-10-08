@@ -1,8 +1,8 @@
 # HMM Evolution Phase 2：L2互补信息与风险实用价值连续任务详细设计
 
-> 版本：v1.2；日期：2026-10-08；owner：HMM；tier：F2。
-> 状态：APPROVED_BY_USER_DEVELOPMENT_EFFECT_QUALIFIED_PENDING_REAL_PRODUCT。D1～D6、全部模型/输入/特征/窗口/权重/参数/效果量级及停止条件不变。源码#5730已合入；冷进程preflight数值库初始化缺陷BUG-1807由#5752修复合入。正式file-only preflight及双fresh-process共2/2 fits已完成，IC=0.028956504333745588达到原研究门槛；增量区间跨零且真实头尾收益差为负，不能宣称经济增益。正式导入转换30,392行通过，但DEV/production writer、真实API/UI尚未验收，surface仍NOT_AVAILABLE。各项状态见§11/§13.3～§13.4；生产写入、tail、依赖、激活或进程控制不从研究资格推导。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.79。只展开申万L2预测及风险实用价值，不重建旧实验链。
+> 版本：v1.3；日期：2026-10-08；owner：HMM；tier：F2。
+> 状态：APPROVED_BY_USER_DEVELOPMENT_EFFECT_QUALIFIED_DEV_PRODUCT_VERIFIED_PRODUCTION_WRITTEN_RUNTIME_PENDING。原§3～§10 D1～D6及模型/输入/特征/窗口/权重/参数/效果量级不变；新§15 L2-RETURN-TARGET-D1～D6已获用户批准，不回写原版本。源码#5730/#5752已合入，正式2/2 fits已完成，IC=0.028956504333745588达到原研究门槛，但增量区间跨零、真实头尾收益差负，不宣称经济增益。30,392行DEV writer/readback及真实API/UI通过，DEV surface=AVAILABLE_EXPERIMENTAL；同一30,392行生产已写入并独立回读，当前用户后端尚未加载新源码。各项状态见§11/§15.1；生产、新fit、tail、激活或进程控制不从研究资格推导。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.80。只展开申万L2预测及风险实用价值，不重建旧实验链。
 > 初始review base：067ee3505df98caf958350793475285b2b3b73a8。实际授权和各执行状态独立报告；已有两份消费与两特征Ridge均不再运行。
 
 ## 1. Background、终极目标与唯一假设
@@ -16,7 +16,7 @@
 
 唯一新模型假设：在保持共享线性模型、10D目标与原训练/评价账本的前提下，官方L2相对价格趋势和下行半偏差可能补足资金流level/delta未覆盖的信息。只改变信息集及其派生资格；价格不同源不等于已证明独立、低相关或可预测。合法人口若不同则明示，不能把差异全归因于新增特征。
 
-本连续任务的风险分析已用原结果闭合：保留原模型、warning和默认消费行为，双日确认仅保留为带代价的研究版本。不再开发风险政策、搜索确认天数或估值补齐。新模型只预测L2相对排序，不是新的风险分类器，不将下行特征自动解释为warning。
+本连续任务的风险分析已用原结果闭合：保留原模型、warning和默认消费行为，双日确认仅保留为带代价的研究版本。不再开发风险政策、搜索确认天数或估值补齐。原四特征模型已结束且DEV产品验收通过；§15只新增针对收益幅度的唯一已批准候选，不是新风险分类器，不将下行特征自动解释为warning。
 
 ## 2. Scope、Non-goals与Architecture
 
@@ -169,7 +169,7 @@ selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED：已看过本区间旧实验
 
 记录限一个显式request、两个业务child、一个parent终态、必要参数与真实预测，不复制股票源或重物化旧预测/标签；已有两特征acceptance作为只读对照引用。结果直接通过文件/既有store定位，写记录不要求runtime activation/重启。
 
-终止：本候选已完成正式2/2 fits及配对评价，研究资格合格、增量与经济价值未证明，模型实验已结束；当前只分析封闭结果并推进已批准的研究产品合同，不自动第二候选、重fit、调参或读tail。自然NA报告不足但不当作修复请求。源码BUG按既有BUG流程登记修复且合同不变；最多三轮后仍有阻断则报告，不无限审修。缺特定数据库/生产/依赖/激活/cleanup权限停在该动作前，不能由“连续任务”推导授权。
+终止：原候选已完成正式2/2 fits及配对评价，研究资格合格、增量与经济价值未证明，模型实验已结束，原结果不再fit。DEV产品已验收，继续既有研究产品生产边界及§15唯一已批准候选；不由此自动执行第二候选、调参或读tail。自然NA报告不足但不当作修复请求。源码BUG按既有BUG流程登记修复且合同不变；最多三轮后仍有阻断则报告，不无限审修。缺特定模型/数据库/生产/依赖/激活/cleanup权限停在该动作前，不能由“连续任务”推导授权。
 
 ## 9. Verification Plan与三轮审修要求
 
@@ -204,7 +204,7 @@ F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真
 
 ## 11. Design Acceptance Matrix与实际状态
 
-下表分别记录正式输入、模型/评价、源码与产品状态。正式实验已按用户授权完成；数据库/真实API/UI尚未验收，不能以F2、转换或效果合格跳过。具体动作缺口明示，不借结构validator隐藏。
+下表分别记录正式输入、模型/评价、源码与产品状态。正式实验和DEV真实产品已按用户授权完成；生产仍未验收，不能以F2、DEV或效果合格跳过。具体动作缺口明示，不借结构validator隐藏。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -212,7 +212,7 @@ F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真
 | F-002 | §4；新module::feature_rows/training_matrix | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；20D手算、E0 rank保持、零下行合法、未来feature隔离 | APPROVED_BY_USER_SOURCE_VERIFIED | 无 |
 | F-003 | §5；共享Ridge trainer显式variant与新CLI | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/run/acceptance.json；两child参数/预测hash相同、正式2/2 fits、parent零fit | APPROVED_BY_USER_FORMAL_MODEL_VERIFIED | 未独立forward确认，不再fit |
 | F-004 | §6；新module::_reference/_paired/close_processes | artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/run/acceptance.json；§13.3～§13.4同人口222日IC/spread及两份固定对照 | APPROVED_BY_USER_DEVELOPMENT_EFFECT_QUALIFIED | 相对两对照增量区间跨零，spread为负；无可信净收益或场景增益证明，不新增promotion gate |
-| F-005 | §7；rotation_l2_prediction.py、精确CHECK migration及HMM UI四term分支 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；frontend/tests/hmm-risk/hmm-risk.spec.ts；§13.4正式30,392行rows_from_acceptance转换通过 | APPROVED_BY_USER_SOURCE_VERIFIED_PENDING_REAL_PRODUCT | 已批准§7～§8动作边界：DEV迁移/写入、真实API/UI未执行；转换不是DB或surface验收 |
+| F-005 | §7；rotation_l2_prediction.py、精确CHECK migration及HMM UI四term分支 | backend/tests/hmm_risk/test_rotation_l2_prediction.py；frontend/tests/hmm-risk/hmm-risk.spec.ts；artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/dev_delivery_20261008.json | APPROVED_BY_USER_PRODUCTION_WRITTEN_RUNTIME_PENDING | 30,392行DEV writer/readback、真实API/UI及DEV隔离store已通过；生产已写入并独立回读、运行加载/API/UI仍待用户重启，不用DEV或测试进程冒称生产surface |
 | F-006 | §8～§9；新CLI复用受保护runner、独立parent核验 | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py；#5730/#5752源码CI通过并合入；§13.4结果只读/零fit核验 | APPROVED_BY_USER_SOURCE_AND_EXPERIMENT_VERIFIED | BUG-1807运行态close-sync #5754 OPEN；不作离线研究前置，不自行重启 |
 
 | 实际交付维度 | 当前状态 |
@@ -222,7 +222,7 @@ F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真
 | 新源码/直接测试 | IMPLEMENTED；本地最小slice 80 passed / 1 skipped；不代报CI或业务验收 |
 | 正式文件preflight / 源码PR / CI | PASS；#5730与BUG-1807 #5752已合入，最终源码CI通过 |
 | 正式新fit、真实预测 | 2/2 fits，232日×131=30,392行，222成熟日；本次分析新增fit=0 |
-| 正式产品转换 / writer/API/UI | 30,392行转换PASS；DEV/production writer及真实API/UI NOT_RUN，surface NOT_AVAILABLE |
+| 正式产品转换 / writer/API/UI | 30,392行DEV writer/readback及真实API/UI PASS；DEV surface AVAILABLE_EXPERIMENTAL；生产writer同一30,392行及独立回读PASS；运行加载/API/UI待用户重启验收 |
 | 当前生产迁移/写入、依赖、激活/进程 | 未执行；缺具体权限时停在动作前，不为记录重启 |
 | BUG-1807 source cleanup / runtime close-sync | 源worktree与本地/远端分支已清理；#5754 OPEN/pending_user_restart，验证树及最终结果仍保留 |
 
@@ -232,7 +232,7 @@ F-001=D1源/资格，F-002=D2特征/标签，F-003=D3模型/预算，F-004=D4真
 
 有值只形成采用建议；匹配成本后收益/风险价值还需未来对应业务场景，QE继续由QE窗口后置。无值终止该候选，不恢复旧grid。新版本不会自动替代旧基线/风险/生产run；若以后选择变更，须显式版本选择并回读，失败不silent fallback。rollback是保留/显式选择旧已验证版本，不覆盖旧资产或改hash。
 
-已有源码runtime_impact=backend、target_ids=[backend-main]；BUG-1807 runtime close-sync仍pending。正式离线实验已完成2/2 fits，不需等后端重启。当前结果分析/设计状态更新runtime_impact=none；production_ddl_gate=pending（既有migration文件，DEV/production均未执行）、production_dml_gate=noop、dependency_gates=noop；本次new_fit/tail/QE/database_write/dataset_write/active_profile_write/runtime_activation/process_control=false。DEV回滚/写入、生产、激活与cleanup仍按具体授权执行；后端启停归用户，不把写研究记录绑定重启。
+已有源码runtime_impact=backend、target_ids=[backend-main]；BUG-1807 runtime close-sync仍pending。正式离线实验已完成2/2 fits，DEV迁移/写入/真实API/UI均通过，不需为实验记录等后端重启。当前设计状态更新runtime_impact=none；production_ddl_gate=pending（DEV已验证，生产未执行）、production_dml_gate=pending、dependency_gates=noop；本轮new_fit/tail/QE/database_write/dataset_write/active_profile_write/runtime_activation/process_control=false。当前运行SHA不含四特征源码及BUG-1807，生产后验需要用户加载新源码再验证；不得把测试进程替代用户生产。生产、激活与cleanup按具体授权执行。
 
 ## 13. DESIGN-COMPLIANCE-001与作者审修
 
@@ -259,7 +259,7 @@ Ruff、py_compile通过；ownership 12/12文件映射、无unmapped/ambiguous；
 
 DESIGN-COMPLIANCE-001逐项源码复核：完整131目录/三方比较/四term产品分支均实现，不用删减人口或空实现冒充交付；缺失与identity漂移fail closed，正常NA不补值；只HMM-owned源码/CLI/产品直接测试，旧默认hash/参数/QE/风险policy保持；沿已批准0.02/0.90及独立充分性规则，无新增统计AND、自然事件或资源审批门。DEV/production、正式数据preflight/模型效果、CI/运行加载各自保持未完成状态。
 
-### 13.3 正式实验终态与真实价值比较（2026-10-08）
+### 13.3 正式实验终态与真实价值比较（2026-10-08，当时产品状态保留）
 
 源码#5730合入后，零fit preflight遇到冷进程缺少已冻结sklearn/OpenMP库身份的问题；BUG-1807仅将Ridge import前置到numeric discovery，不改模型/特征/阈值/窗口/依赖。#5752 CI通过并合入1988e7909f8ba58a7651f44c25cb62fae81376dc，原失败attempt为0 fits。该merge的独立validation worktree随后完成正式file-only preflight及2个fresh process各1fit，parent零fit，COMPLETED；正常方程、双process参数/预测hash和原两份对照身份闭合。
 
@@ -277,7 +277,7 @@ DESIGN-COMPLIANCE-001逐项源码复核：完整131目录/三方比较/四term�
 
 终态DEVELOPMENT_EFFECT_QUALIFIED、capability=RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED；surface=NOT_AVAILABLE、forward=NOT_STARTED、advisory=NOT_AVAILABLE。资格通过不等于可信增量、可执行净收益、产品上线或QE增益；增量区间跨零、spread为负均完整保留为诊断，不回写0.02/0.90合同。
 
-### 13.4 封闭结果诊断及无写入产品预检（2026-10-08）
+### 13.4 封闭结果诊断及无写入产品预检（2026-10-08，当时动作状态保留）
 
 本次只读正式acceptance、两child和原对照；fresh process禁止Ridge.fit、网络及正式源输入/outcome reader调用。正式validate_acceptance及child canonical/参数/预测身份复核通过，原文件字节不变；新增fit=0、tail=false、DB写入=false，不重建标签或旧结果。
 
@@ -300,3 +300,59 @@ DESIGN-COMPLIANCE-001四项：完整131目录/222成熟日/两对照不缩为UI�
 [scikit-learn 1.8 Ridge接口](https://scikit-learn.org/1.8/modules/generated/sklearn.linear_model.Ridge.html)支持SVD、截距及sample_weight；本包沿旧合同的权重/alpha尺度，不改为CV搜索。
 
 [Moskowitz与Grinblatt的行业动量研究](https://onlinelibrary.wiley.com/doi/abs/10.1111/0022-1082.00146)为行业价格信息提供研究动机，而非本项目效果证明。原市场、样本和horizon不等于申万L2/20D输入/10D目标；本文不据此预报效果达标。下行半偏差只是事前明确的特征，不声称已证实最佳定义。
+
+## 15. P0＋P1连续业务包与唯一收益目标对齐合同（已批准，实施中）
+
+### 15.1 已完成事实与P0动作边界
+
+原30,392行已在既有aistock_dev完成受控迁移、writer/幂等/独立fresh-process全payload回读，232日×131目录，30,160 available/232 unavailable，既有run未改。实际HMM router、只读DEV repository、Next.js及Chromium无mock验证通过，runner-owned8012/3012子进程已回收。正式product_validation_store只登记DEV隔离路径；同API进程登记前后即时生效，DEV surface=AVAILABLE_EXPERIMENTAL、advisory=NOT_AVAILABLE。
+
+唯一compact结果：`F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/dev_delivery_20261008.json`；all-row canonical=b70085e58ec90c4eaf72ba0a6cf9535baf139a51eed36e1ce01ebfb381370438，DEV validation receipt=e1ab2330519f95ef0a9eaad25968cef13d0a15eaa640b47c183f08b7ee70d652。原acceptance字节和model/input/parameter/prediction身份不变。不是新的训练/数据准备或生产验收。
+
+P0指定生产目标aistock:5432，仅HMM自有表hmm_risk.rotation_l2_prediction；migration为已合入`backend/db/migrations/extend_hmm_risk_rotation_l2_moneyflow_price_20261008.sql`，Git blob=ec74bf07172150385513175cf19b58b743d1431e，LF规范化内容SHA=1c521acb66d0277a311212175608307c1260e054a28d198b5f8faf5b76ab72b5。DEV脚本原migration_file_sha256字段记录的是该LF内容身份，不冒称Windows CRLF checkout字节身份；本次checkout byte SHA=5d1278574b0a9edb5926f661774cbe94bd4902e52c0d0e90d0ce35c100e9041b，Git blob与DEV验证时相同。
+
+2026-10-08用户明确授权后，已在aistock:5432以单事务应用上述迁移并用正式writer写入原30,392行；提交后独立fresh-process只读全payload回读PASS，canonical=b70085e58ec90c4eaf72ba0a6cf9535baf139a51eed36e1ce01ebfb381370438，旧run及默认版本未改变。compact结果为`F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/production_delivery_20261008.json`。生产API/UI与正式store登记仍待用户加载源码后实际验证，不能复制DEV receipt冒充生产通过。用户backend-main此前runtime SHA=fb3911a6e0b5977c468fb2a6b0f1e56b6c1015d7不包含四特征源merge或BUG-1807；后端重启用户所有，服务控制=false。
+
+### 15.2 唯一假设、目标与非目标
+
+L2-RETURN-TARGET-D1～D6整体状态APPROVED_BY_USER_DESIGN_READY_PENDING_IMPLEMENTATION（2026-10-08用户确认及批准）。唯一假设：原四项x不变，使用真实10D相对收益幅度训练而非当日收益rank，可能改善极端组实际收益；这是loss/目标信息的变化，不是简单对原预测作单调变换，也不证明rank目标是既有负spread根因。Ridge只是平方损失回归，不直接优化组合收益、Rank IC或回撤；新目标也可能过拟合大幅收益。
+
+只做一个模型，不增加特征、非线性、分行业选模、horizon/窗口/alpha搜索、滚动refit、winsorize、标准化y、行业/月份筛选或风险政策。风险现有结果不重复运行；QE与真实持仓/交易成本验证后置，不宣称本包已完成场景增益。
+
+### 15.3 L2-RETURN-TARGET-D1～D6精确推荐
+
+| 决策 | 精确合同 | 状态 |
+|---|---|---|
+| D1 输入/人口/因果 | 复用原四特征input.json，原input hash=4ac21b8c54efce631a81718cd4541e9c986ae1a1e2e77cfea16923f1551ceb06、v15 manifest=2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc；只读验证既有冻结对象及pins，不重建源视图/切换active或补数；131文本L2、E0/E+/T+和正常NA沿§3～§4 | APPROVED_BY_USER_DESIGN_READY_PENDING_IMPLEMENTATION |
+| D2 唯一目标变化 | x1～x4和10D raw outcome定义沿§4，训练y改为原relative_return_10d本身，以小数收益计，不rank/center/clip/winsorize/z-score标签；只用train decision已成熟至2025-04-15的原文件事实，不交预测outcome给child | APPROVED_BY_USER_DESIGN_READY_PENDING_IMPLEMENTATION |
+| D3 模型/预算/账本 | 沿126 train＋10 purge＋232 prediction＋222 mature；w=1/(D*N_t)且总和1，float64/SVD Ridge alpha=0.01、带截距、无positive约束、seed不适用；同Conda base固定六项单线程环境；双process各一次fit，总2fits，parent正常方程核验零fit，未成熟10日照常输出null outcome | APPROVED_BY_USER_DESIGN_READY_PENDING_IMPLEMENTATION |
+| D4 主价值对照/评价 | 原四特征rank-target模型为主对照，只读封闭预测且不fit/filter；原delta为辅助，由既有冻结input的原纯函数零fit计算，不调用源reader，核验其旧baseline_metrics一致。完整人口及共同交集按相同成熟raw outcome同时报告Rank IC、真实trending−fading收益差及paired差、HAC lag9区间、两个原固定时间块和覆盖/组大小。原0.02/0.90研究资格与充分性沿用，不加spread/显著性AND promotion gate；净收益UNASSESSED | APPROVED_BY_USER_DESIGN_READY_PENDING_IMPLEMENTATION |
+| D5 版本/产品 | 新version=hmm_risk_rotation_l2_moneyflow_price_return_supervised_v1，model_type=pooled_ridge_moneyflow_price_return；新contract/parameter/input-wrapper/prediction身份，不借旧model hash；输出同四项线性解释＋raw_prediction，以完整E+ average rank作rotation_score/state；raw的单位明确为预测相对收益而非概率。旧版本/默认run不变；原P0生产资产不被替换，新结果先保持文件交付，不由本包自动写入生产 | APPROVED_BY_USER_DESIGN_READY_PENDING_IMPLEMENTATION |
+| D6 执行/停止 | 批准后同一业务包实现、最多三轮作者审修/最小门禁/最终CI及明确获授权合入、唯一双process2fit、一次诚实历史价值结论；不要求跑足小时。不读2026-04-01起tail，不开下一候选；源BUG修复不改变合同。无改善或区间宽时报告未证明，不重调y/alpha/窗口或翻转预测 | APPROVED_BY_USER_DESIGN_READY_PENDING_IMPLEMENTATION |
+
+输入复用不是让新version假称原input hash等于自己的input hash：新wrapper只绑定原冻结对象的绝对路径、原hash与新contract，形成独立canonical input identity。既有原对象以只读reference使用，不复制或修改35MB acceptance、源数据或旧预测。新训练标签从已有source中的有界sector_returns/benchmark_close按同一正式函数派生，无市场DB；原训练entry集合/日期/特征/权重应逐键完全一致，唯一变化为y和由其决定的参数/预测。
+
+主对照固定为`F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/run/acceptance.json`：canonical=4512525706fbead2f43460751affd6e34071336047b158660699fb4b3f5c45ab，model=8a61e30e0474783b0677a08d946ea3d06561ef29df1ddf1f51e557cc23742b75，parameters=650784c6b0ea5ea4cd4d055f0a2cd1d3de24fa8d09895f88fe14202762a87222，prediction=ecc05eb78d145ea2c135356ebaf4f3a493ac1a07aeefc1b19334a66f1ea41db1，outcome=4a900bac2e104326572471aacaa67b649ebd45a03b8a90ac751dd8fc22b32d1c。现存acceptance仅保存delta汇总baseline_metrics，不能伪称有缓存完整delta预测：原delta仅从已冻结source视图用原函数确定性构造并核对旧指标，不fit、不重新读取源文件或依新结果改规则。评价用主对照predictions已封闭的逐行业relative_return_10d/outcome_status与训练source中的原raw事实，核对原acceptance及child hashes，不伪称单凭outcome_sha256就已拥有其原完整facts对象；不能读tail或重建旧标签。
+
+parent按新contract从原source构造训练X/y/w，核对截距/四系数和绝对1e-10正常方程及1e-12总权重；双process参数/预测bitwise一致，不得由两个child自证。评价阶段才加载222日成熟封闭outcome，child不得接收它。方向结论只是证据解读，原研究资格、产品可用性、forward/advisory分别保持，正spread不冒充交易成本后净收益或风险下降。
+
+### 15.4 最小实现与验证，不新增平台
+
+HMM-owned范围：复用`rotation_l2_moneyflow_supervised.py`固定trainer/正常方程及`rotation_l2_moneyflow_price_supervised.py`纯特征、身份和封闭对照函数；增加明确return-target variant/CLI与backend/tests/hmm_risk直接测试。旧默认contract/hash不得变化；不把未知variant开放为可配置搜索。新结果默认文件交付，生产table/API/UI只在后续具体采用授权后增加精确version分支；本包P0是旧rank-target的既有产品，不暗中混为新return模型上线。 本次显式文件共9个：两份本文/父蓝图，rotation_l2.py、rotation_l2_moneyflow_supervised.py、rotation_l2_moneyflow_price_supervised.py、rotation_l2_moneyflow_price_return_supervised.py、共享run_rotation_l2_moneyflow_supervised.py、新run_rotation_l2_moneyflow_price_return_supervised.py及对应新测试；无跨模块/流水线修改。
+
+测试至少覆盖手算raw小数收益目标/与rank目标差异；旧原hash与输出保持；X/日期/资格/权重逐键相同；bool/非有限/标签越界typed拒绝；future feature/label perturbation隔离；双process与parent正常方程独立核验；主对照hash漂移/缺失不可省略；共同人口IC/spread按原state不重投影、合法NA和末10日未成熟；数据库/network/旧fit调用poison；失败终态与路径保护。最小direct pytest/Ruff/py_compile/fresh-process/scope/F2/L0和最终CI；不重跑完整HMM或历史验证矩阵。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| PV-001 | §15.1；既有HMM migration/writer/router/UI | artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/production_delivery_20261008.json | APPROVED_BY_USER_PRODUCTION_WRITTEN_RUNTIME_PENDING | 同一30,392行生产迁移/提交/独立全payload读回通过；用户加载源码和生产API/UI未完成 |
+| PV-002 | §15.3 D1/D2；rotation_l2_moneyflow_price_return_supervised.py、共享training_matrix | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py：raw小数手算/逐键人口/因果/bool及缺数拒绝 | APPROVED_BY_USER_SOURCE_TESTS_VERIFIED_FORMAL_EXPERIMENT_PENDING | 最小slice 95 passed/1 skipped；正式新fits=0，CI和源码交付待完成 |
+| PV-003 | §15.3 D3；共享trainer/正常方程与新variant | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py：parent联合rehash拒绝/两真实synthetic fresh children | APPROVED_BY_USER_SOURCE_TESTS_VERIFIED_FORMAL_EXPERIMENT_PENDING | 单元测试不是正式fit；预算2fits已批准，未启动 |
+| PV-004 | §15.3 D4；sealed-reference/共享统计汇总/_paired及spread HAC | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py：原主对照/delta指标一致、state不重投影、NA/末10日和hash漂移 | APPROVED_BY_USER_SOURCE_TESTS_VERIFIED_FORMAL_EXPERIMENT_PENDING | 无新正式预测或经济结论；仅主对照封闭outcome可供parent读取 |
+| PV-005 | §15.3 D5；新version/parameter/wrapper/acceptance及四term | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py：identity/解释/旧版本；原合同hash核验 | APPROVED_BY_USER_SOURCE_TESTS_VERIFIED_FORMAL_EXPERIMENT_PENDING | 原模型和默认无切换操作；新结果仍只允许文件交付 |
+| PV-006 | §15.3 D6/§15.4；run_rotation_l2_moneyflow_price_return_supervised.py及共享guarded CLI | backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py：DB/network/旧fit poison及durable CLI失败；F2/ownership/L0/fresh import | APPROVED_BY_USER_SOURCE_TESTS_VERIFIED_FORMAL_EXPERIMENT_PENDING | 两轮作者审修无剩余阻断，95 passed/1 skipped；source CI/授权合入、正式实验和P0 runtime分别待完成 |
+
+技术解释仅据[Ridge固定平方损失与L2惩罚文档](https://scikit-learn.org/1.8/modules/generated/sklearn.linear_model.Ridge.html)及[Spearman秩相关定义](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.spearmanr.html)：两种统计对象不相同；这些定义不提供新模型效果保证，假设只能用本包正式历史预测检验。
+
+### 15.5 DESIGN-COMPLIANCE-001
+
+完整131目录和232/222日/原四特征，不将UI前后20当评价人口或删负贡献行业；合法NA/未成熟与数值错误明确分离，不补值或静默回退；原模型/参数、风险政策、QE和其他模块零变更，新目标已明确批准但不得代报实验完成；不增加统计AND、全行业合取、资源门或记录重启要求。P0已有DEV通过可单独继续，不以P1效果成功作为原研究产品交付前置。
