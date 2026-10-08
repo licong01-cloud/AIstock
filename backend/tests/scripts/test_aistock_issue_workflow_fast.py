@@ -15,6 +15,25 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize('fault', ['wrapper', 'empty', 'count', 'missing', 'price', 'duplicate', 'shares', 'overflow'])
+def test_tdx_raw_smoke_rejects_corrupt_facts(fault):
+    row = {'Time': '2026-09-10T11:21:00+08:00', 'Open': 12800, 'High': 12800,
+           'Low': 12800, 'Close': 12800, 'Volume': 0, 'Amount': 13000, 'VolumeShares': 1}
+    payload = {'code': 0, 'data': {'count': 1, 'list': [row]}}
+    validator = workflow._business_smoke_semantic_contract('/api/kline-all/tdx')[1]
+    assert validator(payload)[0] == 'passed'
+    mutations = {
+        'wrapper': lambda: payload.update(code=-1),
+        'empty': lambda: payload['data'].update(list=[]),
+        'count': lambda: payload['data'].update(count=2),
+        'missing': lambda: row.pop('Open'), 'price': lambda: row.update(Close=20000),
+        'overflow': lambda: row.update(Amount=10**400), 'shares': lambda: row.update(VolumeShares=101),
+        'duplicate': lambda: payload['data'].update(count=2, list=[row, dict(row)]),
+    }
+    mutations[fault]()
+    assert validator(payload)[0] == 'failed'
+
+
 @pytest.mark.parametrize("duration", [None, 0, 2.5])
 def test_workflow_timing_never_labels_event_wait_as_execution(monkeypatch, duration):
     events = [dict(timestamp="2026-10-06T00:00:00Z", stage="fix_in_progress", duration_seconds=duration),
@@ -1216,6 +1235,15 @@ def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
     assert retired.isdisjoint(catalog["non_runtime_source_paths"])
 
 
+@pytest.mark.parametrize("path,targets", [("tdx-api-main/pagination_test.go", []), ("tdx-api-main/web/integrity_test.go", []),
+    ("tdx-api-main/protocol/model_kline.go", ["tdx-go-backend"]), ("tdx-api-main/web/server.go", ["tdx-go-backend"]),
+    ("tdx-api-main/go.mod", ["tdx-go-backend"]), ("tdx-api-main/web/go.sum", ["tdx-go-backend"]),
+    ("scripts/start_tdx_go_backend.py", ["tdx-go-backend"]), ("backend/data_service/tdx_adapter.py", ["backend-main"])])
+def test_tdx_runtime_roles_distinguish_tests_launchers_dependencies_and_collectors(path, targets):
+    result = workflow._classify_runtime_impact([path])
+    assert result["target_ids"] == targets and result["runtime_impact"] == ("backend" if targets else "none")
+
+
 @pytest.fixture
 def invalid_runtime_catalog(monkeypatch: pytest.MonkeyPatch) -> str:
     message = "runtime target catalog contains one stale source"
@@ -1239,16 +1267,10 @@ def test_runtime_classifier_surfaces_catalog_validation_error(invalid_runtime_ca
 
 
 def test_runtime_contract_blocks_on_catalog_validation_error(invalid_runtime_catalog: str) -> None:
-    contract = workflow.build_runtime_contract(
-        record={
-            "runtime_contract": {
-                "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
-                "runtime_impact": "none",
-                "target_ids": [],
-            }
-        },
-        changed_files=["backend/services/hmm_risk/contracts.py"],
-    )
+    record = {"runtime_contract": dict(
+        schema_version=workflow.RUNTIME_CONTRACT_SCHEMA, runtime_impact="none", target_ids=[]
+    )}
+    contract = workflow.build_runtime_contract(record=record, changed_files=["backend/services/hmm_risk/contracts.py"])
 
     assert contract["runtime_impact"] == "unknown"
     assert contract["catalog_validation_error"] == invalid_runtime_catalog
