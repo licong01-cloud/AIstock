@@ -480,31 +480,21 @@ def evaluate_predictions_for_calendar(
     for raw in predictions:
         row = dict(raw)
         by_day[_parse_day(row["trade_date"], "prediction.trade_date")].append(row)
-    daily_ic: dict[date, float] = {}
-    daily_spread: dict[date, float] = {}
-    metric_days = 0
-    mature_days = 0
-    outcome_counts: dict[str, int] = defaultdict(int)
     evaluated_rows: list[dict[str, Any]] = []
     for trade_date in sorted(by_day):
         offset = calendar.index(trade_date)
         source_rows = by_day[trade_date]
-        eligible = [row for row in source_rows if row["availability"] == "available"]
-        scores = {row["sector_code"]: float(row["rotation_score"]) for row in eligible}
         if offset + HORIZON >= len(calendar) or calendar[offset + HORIZON] > outcome_end:
             for row in source_rows:
                 row["outcome_status"] = "outcome_not_mature"
                 evaluated_rows.append(row)
-                outcome_counts[row["outcome_status"]] += 1
             continue
-        mature_days += 1
         outcome_days = calendar[offset + 1 : offset + HORIZON + 1]
         market_end = benchmark.get(outcome_days[-1])
         market_start = benchmark.get(trade_date)
         if market_end is None or market_start is None:
             raise _fail("source_invalid", "benchmark outcome path is incomplete", trade_date=trade_date.isoformat())
         market_return = market_end / market_start - 1.0
-        outcomes: dict[str, float] = {}
         for row in source_rows:
             if row["availability"] != "available":
                 row["outcome_status"] = "prediction_unavailable"
@@ -535,9 +525,72 @@ def evaluate_predictions_for_calendar(
                     relative = sector_return - market_return
                     row["outcome_status"] = "available"
                     row["relative_return_10d"] = relative
-                    outcomes[row["sector_code"]] = relative
-            outcome_counts[row["outcome_status"]] += 1
             evaluated_rows.append(row)
+
+    return summarize_evaluated_predictions(
+        calendar=calendar,
+        evaluated_rows=evaluated_rows,
+        decision_start=decision_start,
+        decision_end=decision_end,
+        outcome_end=outcome_end,
+        report_blocks=report_blocks,
+    )
+
+
+def summarize_evaluated_predictions(
+    *,
+    calendar: Sequence[date],
+    evaluated_rows: Sequence[Mapping[str, Any]],
+    decision_start: date,
+    decision_end: date,
+    outcome_end: date,
+    report_blocks: Sequence[tuple[str, date, date]],
+) -> dict[str, Any]:
+    """Same statistics for authenticated, already sealed outcomes; no source read."""
+    by_day: dict[date, list[Mapping[str, Any]]] = defaultdict(list)
+    keys = set()
+    outcome_counts: dict[str, int] = defaultdict(int)
+    for row in evaluated_rows:
+        day = _parse_day(row["trade_date"], "prediction.trade_date")
+        key = day, row["sector_code"]
+        if key in keys or day not in calendar or not decision_start <= day <= decision_end:
+            raise _fail("source_invalid", "evaluated prediction identity is duplicated/outside window")
+        keys.add(key)
+        by_day[day].append(row)
+        status = row.get("outcome_status")
+        offset = calendar.index(day)
+        mature = offset + HORIZON < len(calendar) and calendar[offset + HORIZON] <= outcome_end
+        allowed = (
+            (
+                {"available", "outcome_unavailable_quote_discontinued"}
+                if row["availability"] == "available"
+                else {"prediction_unavailable"}
+            )
+            if mature
+            else {"outcome_not_mature"}
+        )
+        if status not in allowed or (status != "available" and row.get("relative_return_10d") is not None):
+            raise _fail("source_invalid", "sealed outcome availability/maturity differs")
+        if status == "available":
+            _finite(row.get("relative_return_10d"), "relative_return_10d")
+        outcome_counts[status] += 1
+    daily_ic: dict[date, float] = {}
+    daily_spread: dict[date, float] = {}
+    metric_days = 0
+    mature_days = 0
+    for trade_date in sorted(by_day):
+        offset = calendar.index(trade_date)
+        if offset + HORIZON >= len(calendar) or calendar[offset + HORIZON] > outcome_end:
+            continue
+        mature_days += 1
+        source_rows = by_day[trade_date]
+        eligible = [row for row in source_rows if row["availability"] == "available"]
+        scores = {row["sector_code"]: _finite(row["rotation_score"], "rotation_score") for row in eligible}
+        outcomes = {
+            row["sector_code"]: row["relative_return_10d"]
+            for row in source_rows
+            if row["outcome_status"] == "available"
+        }
         required = max(2, math.ceil(COVERAGE_THRESHOLD * len(eligible)))
         if len(outcomes) >= required:
             metric_days += 1
