@@ -21,6 +21,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261008-668f01b5d348",
       "timestamp": "2026-10-08T02:31:39.199908Z"
+    },
+    {
+      "action": "root_cause_and_review_round_1",
+      "actor": "Codex",
+      "note": "根因：PREPROCESSOR 未计入 manifest 应有资产，也未进入已有运行资产类型白名单。仅补齐既有合同两处遗漏；无门禁放宽，无新审批，无模型、参数或执行策略变更。新增合同测试修复前 14 failed / 5 passed，修复后 19 passed。",
+      "timestamp": "2026-10-08T02:50:09Z"
+    },
+    {
+      "action": "design_compliance_review_round_2",
+      "actor": "Codex",
+      "note": "DESIGN-COMPLIANCE-001：①完整修复清单和台账闭环，非 mock-only，真实 TCN/LSTM 资产经完整 Service 路径和 WSL CPU fresh-process 检验；②缺失、错引用、错哈希、跨包、多余资产继续显式拒绝，预测文件不得冒充运行资产；③无预处理器的历史包语义不变，训练/回测/因子/seed 不变；④不增加收益阈值、环境锁、人工配置或其他门禁。只读生产元数据；正式包持久化使用内存仓库验证，未生产入包。",
+      "timestamp": "2026-10-08T02:50:09Z"
+    },
+    {
+      "action": "asset_lifecycle_review_round_3",
+      "actor": "Codex",
+      "note": "核对两种 repository 共用同一严格校验；冻结预处理器已被模型 manifest/hash/self-check 包含，此修复仅使台账精确对应。既有迁移已支持 preprocessor，无 DDL。真实 TCN=29 / LSTM=31 protected assets，原拟合预处理器各1条，中央CAS与验证runtime模型权重 samefile=true。未复制模型权重、未删除历史资产、未启动实验或控制服务。",
+      "timestamp": "2026-10-08T02:50:09Z"
     }
   ],
   "evidence_uris": [],
@@ -109,8 +127,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/qe_20261006_013449_0c29?detail=summary",
+    "fresh_process_evidence": [
+      "Isolated Python loaded tracked repository fix and real TCN/LSTM Loop4 through complete StrategyPackageService creation: original frozen assets, WSL CPU model admission, in-memory atomic package/ledger persistence; TCN=29 protected assets/input44, LSTM=31/input46, exact manifest/ledger parity, one original fitted preprocessor each; central CAS/runtime model params same physical file. PGOPTIONS enforced read-only database metadata; no production package writes, training, experiment submission or process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
