@@ -2870,13 +2870,32 @@ class StrategyPackageRepository:
 
     @staticmethod
     def _package_asset_from_row(row: dict[str, Any]) -> StrategyPackageAssetRecord:
+        # Only this exact historical spelling is a known alias. Do not case-fold
+        # arbitrary values or silently classify unknown rows as OTHER.
+        raw_type = row["asset_type"]
+        metadata = dict(row["metadata"] or {})
+        if raw_type == "MODEL_WEIGHT":
+            metadata["legacy_asset_type"] = raw_type
+            raw_type = StrategyPackageAssetType.MODEL_WEIGHT.value
+        try:
+            asset_type = StrategyPackageAssetType(raw_type)
+        except ValueError as exc:
+            raise StrategyPackageValidationError(
+                "strategy package asset type is unsupported",
+                context={
+                    "reason_code": "strategy_package_asset_type_unsupported",
+                    "package_id": row["package_id"],
+                    "asset_id": row["asset_id"],
+                    "asset_type": raw_type,
+                },
+            ) from exc
         return StrategyPackageAssetRecord(
             asset_id=row["asset_id"],
             package_id=row["package_id"],
-            asset_type=StrategyPackageAssetType(row["asset_type"]),
+            asset_type=asset_type,
             asset_ref=row["asset_ref"],
             asset_sha256=row["asset_sha256"],
-            metadata=row["metadata"] or {},
+            metadata=metadata,
             asset_role=row.get("asset_role") or "governed_asset",
             asset_size_bytes=row.get("asset_size_bytes"),
             protected_asset=bool(row.get("protected_asset", True)),

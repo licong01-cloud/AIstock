@@ -1,8 +1,8 @@
 # RD-Agent 因子研发辅助整合详细设计
 
-日期：2026-10-08；版本：1.0；级别：F2（跨 AIstock 研究消费与 RD-Agent 生成边界）；状态：设计交付，未实现、未运行研究。依据[蓝图 v1.8 §20](factor_research_evolution_blueprint_20260908.md#rdagent-integration)与[方法论 v2.5 §2.5](../analysis/factor_research_methodology.md#rdagent-assistance)。本文落实接口、映射、实现范围和验收，不复制或改变方法论 C-1～C-7。
+日期：2026-10-08；版本：1.1；级别：F2（跨 AIstock 研究消费与 RD-Agent 生成边界）；状态：AIstock 离线读取/提案检查已实现，生成端仍待 owner，未运行因子研究。依据[蓝图 v1.8 §20](factor_research_evolution_blueprint_20260908.md#rdagent-integration)与[方法论 v2.5 §2.5](../analysis/factor_research_methodology.md#rdagent-assistance)。本文落实接口、映射、实现范围和验收，不复制或改变方法论 C-1～C-7。
 
-本轮仅新增本文，并给蓝图/方法论添加入口链接；代码、Skill、数据库、数据集、模型配置、研究计算和运行时均不变。后续实施按本文明确范围执行，不能把文档合入当作接口上线。P1/P2/研究比较既有历史验收与研究结果不追溯修改。
+1.0（PR #5756）仅交付设计及蓝图/方法论入口链接，当时没有代码实施。1.1 仅实施 §8 的 AIstock 离线边界，实测和未交付项见 §13；不改 Skill、数据库、数据集、模型配置或研究计算。P1/P2/研究比较既有历史验收与研究结果不追溯修改。
 
 <a id="scope"></a>
 ## 1. 背景、目标、范围与非目标
@@ -53,7 +53,7 @@ CoSTEER 的 pickle、独立向量库和实时节点记录并非本设计首版�
 <a id="experience"></a>
 ## 4. 经验读取接口契约
 
-### 4.1 拟新增 CLI（未实现）
+### 4.1 CLI（1.1 已实现）
 
 ```text
 python scripts/factor_research.py experience --input <request.json> --format summary|json
@@ -189,10 +189,10 @@ A/B 是同一增补工作的连续包，不建立新阶段/审批状态机，不
 
 错误/异常用例应能在故意触发原错误行为的实现中失败，不能只断言函数返回非空。代码验收关注行为和隔离，不把 AST 检查冒充执行安全，不用模拟收益证明有效因子。后续按所属计划执行必要 lint/compile、定向测试、git diff --check、L0/适用 CI；registry 验证仅在对应 catalog 变更时运行，不增加无关测试。
 
-本轮文档走 docs-fast-new/update：多轮审查与修订、UTF-8/本地引用/锚点、F2 结构和 git diff --check，最终 PR CI 通过后合入。设计接受与实现/研究通过分开，文档不触发 DEV 表验证或因子计算。
+1.0 文档走 docs-fast-new/update，多轮审查与修订后通过 PR #5756 合入。设计接受与实现/研究通过分开，当时未触发 DEV 表验证或因子计算；1.1 代码验证见 §13。
 
 <a id="acceptance"></a>
-## 10. Design Acceptance Index 与设计验收矩阵
+## 10. Design Acceptance Index 与 1.0 设计验收历史
 
 F-001 主线和无平台边界；F-002 来源读取/查询完整性；F-003 提案合同/非执行；F-004 RD-Agent owner 交接；F-005 完整统一评价；F-006 原记录/恢复；F-007 最小范围/验证；F-008 发布/权限与可回退。编号仅为本文验收映射，不是新业务门禁。
 
@@ -221,6 +221,51 @@ RD-Agent 默认 scenario/workspace/按名过滤：owner 单独适配，不把完
 
 默认旧命令/研究路径完全不变，新辅助显式调用。实现先在现有环境验证离线 fixture，再读取当次允许的真实产物；owner 支路有真实交付后才说明端到端可用。生成和计算按具体授权，不因文档合入启动长任务。需要回退时停止使用新辅助并走原 CLI/直接研发，不删除任务记录、历史结果或源码产物；不改数据库或关闭任何服务。
 
-本轮 `runtime_impact=none`、`backend_restart_required=false`、`production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_install=noop`、`client_install=noop`、`production_activation=false`、`process_control=false`、`research_execution=false`。后续代码 runtime contract 由实际 catalog 推导，不能把文档 none 复制为代码结论；backend_restart_owner=user。任何生产数据库操作按精确目标单独授权并先 DEV 验证。
+1.0 文档交付的 `runtime_impact=none`、`backend_restart_required=false`。1.1 代码分类见 §13，不能把文档 none 复制为代码结论；backend_restart_owner=user。两次均保持 `production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_install=noop`、`client_install=noop`、`production_activation=false`、`process_control=false`、`research_execution=false`。任何生产数据库操作按精确目标单独授权并先 DEV 验证。
 
-DESIGN-COMPLIANCE-001：不把文档或 fixture 当完整接入；不把缺资料/接口/成本隐藏成成功；不改变评价/PIT/写库/owner 语义；不新增审批或资源限制。合入只交付本文及两处入口引用；独立 worktree/分支清理需相应授权，不删除已有研究资料。
+DESIGN-COMPLIANCE-001：不把文档或 fixture 当完整接入；不把缺资料/接口/成本隐藏成成功；不改变评价/PIT/写库/owner 语义；不新增审批或资源限制。1.0 合入只交付本文及两处入口引用，1.1 交付范围见下节；独立 worktree/分支清理需相应授权，不删除已有研究资料。
+
+<a id="implementation-readback"></a>
+## 13. 1.1 AIstock 实现、旧资料梳理与验收
+
+### 13.1 实现与使用
+
+新增 `backend/services/factor_research/assistance.py`，原 CLI 在 configure 前分发 experience/proposal-inspect；没有第二个 writer、服务、数据库调用、RDLoop 或生成器启动器。`noxfile.py` 只为原所属计划添加一个测试文件。
+
+JSON 细化：variables 为所用 inputs.name 的字符串数组；baseline_refs/neighbor_refs 为原计划引用字符串数组；研究角色复用 predictive_increment/replacement/conditional。这些是提案信息，不覆盖 run schema。未知语义字段、原请求冲突或缺项返回 requires_revision；formula_only 可以 reviewable，但不能自动执行。script_available 复用既有 inspect_factor_code 的 AST/入口检查，语法通过不证明代码安全、因果性或公式正确，仍须代码审核。
+
+source_ref 保留结构化 locator；长 observation/basis 以带 truncated 标记的片段呈现，完整原文仍在精确来源。检索不执行文本内指令或读取其引用路径。knowledge_text 的 legacy_environment_cues 只是字面词命中，帮助定位旧环境描述，不推测真实行情截止日期；所有来源均标 unverified_historical，当前适用性需研究主体结合原问题包判断。没有自动修旧数据、hash 全数据或刷新官方指标。
+
+操作者在获准 X 盘任务目录保存非秘密请求后，按 §4.1 调用两个入口。来源顺序不影响排序；分页只影响返回数量，不伪装搜索全库。提案的原请求单独提供；用到经验时提供原查询返回，没用则记录不用的原因。检查后由 Codex 准备原 create/record/run 请求，assistance 元数据只进入原 context_json/payload，不进入 candidates.factor_name/script 之外的执行字段。
+
+### 13.2 只读梳理结论（2026-10-08）
+
+读取范围是 `F:/Dev/RD-Agent-main/RAG/01..06` 六个精确 Markdown 文件及 `X:/AIstock_factor_research/rdagent_salvage/20260917-dry-run-1/artifacts-v7/source_inventory.jsonl`。未读取价格面板、生产 DB、节点状态或 pickle；没有重启旧任务或修改 RD-Agent 文件。
+
+| 旧资料观察 | 对本次研究的处理 |
+|---|---|
+| 01 文档仍称当前 provider 为 qlib_bin_20251209 | 只能证明文档包含旧路径，不能证明当前任何节点实际加载它；不跟随该路径，不继承其数据身份 |
+| 01 声称 market: all 已排除 ST/退市/停牌股票 | 不用作当前历史 PIT 规则；以本轮显式 universe_ref 与现行研究合同为准 |
+| 02 单位写“可能已转换”，字段说明依赖旧导出 | 不能由它猜测新数据单位/覆盖；inputs.unit/available_at 未知时保持缺项 |
+| 03 默认当前目录 result.h5 mode=w、epsilon；05 建议放宽窗口来修 NaN | 可借鉴索引对齐与诊断，不照搬覆盖写入、epsilon 或窗口修改；缺失处理按当前受审查公式 |
+| 04 使用旧 close 成交、0.095 阈值，且承认 T+1/日内结构缺口 | 旧收益只作历史反馈，不等同 AIstock 当前评价或 QE 可交易价值 |
+| 05/06 的字段核对、保留索引、显式错误、按问题挑经验 | 可作为工程/研究思路线索；不升级为当前数据 authority，也不宣称能保证找到 alpha |
+
+真实 fresh-process experience 查询：7/7 指定源可读，inventory 1,258 行；知识文本分段50条；所选词共命中1,279条，分页返回8条、next_offset=8。这是已读范围的检索结果，不是因子候选数量或价值评估。实际请求保存在本次 X 盘任务目录；没有新增历史证据固化/全库扫描任务。
+
+### 13.3 设计验收矩阵（1.1 实现）与限制
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-001 | assistance.py；CLI configure 前分发 | backend/tests/factor_research/test_assistance.py | passed | 无 |
+| F-002 | assistance.experience/_rows | backend/tests/factor_research/test_assistance.py；artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#implementation-readback | passed | 无 |
+| F-003 | assistance.inspect_proposal/_script_status | backend/tests/factor_research/test_assistance.py | passed | 无 |
+| F-004 | 原 §6 RD-ASSIST-01；提案消费合同 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#owner | 用户批准分工 | 按用户批准详细设计，RD-Agent owner 单次真实生成仍未交付；不宣称端到端完成 |
+| F-005 | 原 runner/full_evaluation/comparison 未修改 | backend/tests/factor_research/test_contracts.py | not_applicable | 本轮授权实施代码，不运行新因子研究；完整评价仍按用户批准 §7 |
+| F-006 | 原 models.response/encode 与 record/attach 未修改 | backend/tests/factor_research/test_recovery.py | passed | 无 |
+| F-007 | 直接测试与 nox 原模块收集 | pytest backend/tests/factor_research/test_assistance.py | passed | 无 |
+| F-008 | 无服务/依赖/数据操作；catalog 原分类 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#rollout | passed | 无 |
+
+直接测试经历缺模块 RED→GREEN。两轮代码审查修复了独立请求绑定、路径/类型边界、源漂移/缺失可见性和 AST 入口复用；最终审查逐项覆盖 DESIGN-COMPLIANCE-001：①不以消费端/fixture 冒充 owner 真生成；②不可读/未知/冲突均显式；③不改评价、PIT、DB、跨模块业务；④未新增生产门禁、审批或资源限制。源码合入以最终 HEAD 的 CI verdict 为准，不提前记录 CI 通过。
+
+实际 changed files 分类为 targeted_ci_required，factor_research_backend；dev_db_required=false，unexecuted_test_files=[]。仅修改 nox 收集触发其既有静态/计划验证。按执行时 runtime catalog，新 assistance.py 命中 backend-main：runtime_impact=backend，backend_restart_owner=user；未修改 catalog 降级。该 catalog 的 backend-main operator_runbook_ref、identity_ref、business_smoke_ref 当前为空，不能宣称正式运行时复验已就绪或只要重启即完成。CLI fresh process 可独立使用，不需要启动常驻后端；本轮交付源码/离线入口，不宣称后端 runtime identity 已更新。生产 DDL/DML、数据集/缓存/官方指标、依赖安装、客户端安装、进程控制均 noop。
