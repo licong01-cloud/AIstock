@@ -1,7 +1,7 @@
-# 两个新单Alpha包的父信号条件买价模型 F2 详细设计 v1.4
+# 两个新单Alpha包的父信号条件买价模型 F2 详细设计 v1.5
 
 > 设计日期：2026-10-09；源码实施：2026-10-10。唯一候选 `GP5-PARENT-SCORE-CONDITION-1`；目标合同 `RISK_MANAGED_ADVISORY`，研究用途 `EXPLORATORY_SCREEN / NAVIGATION_ONLY`。
-> 当前六个离线Advisory源码模块与四个测试文件已实现，三轮审核修复及13项定向合同测试通过；PR/CI/合入另报。尚未执行真实输入准备、新收益读取或正式研究fit，未配置日频输出。设计、源码、输入、拟合、经济确认、生产启用各自分态。
+> 当前设计#5834及源码#5847已合入/自身清理，最终HEAD CI通过；305D真实只读prepare、一次两fit和完整四臂评价已结束。候选减基线−66.6311bps、减同核matched+5.2607bps/同时区间跨零，未达标，仅停止此精确candidate，不上线或救阈值。设计、源码、输入、拟合、经济确认、生产启用各自分态。
 > 权威方向：[荐股蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) §6.3.4。上游Alpha/因子/seed训练由QE独占；本任务只学习Advisory五交易日价格价值，不重新验证QE包资格。
 
 ## Background / Summary / 业务目标及单一假设
@@ -16,12 +16,31 @@
 
 ## Current Progress / 当前事实
 
-- BUG-1824源码#5826/闭环#5827及跨包消费者#5828已合入清理；当前不存在新训练。跨包172经济单元中156有配对、65正点/91负点/16无配对，7/8包有结果，但没有确认的Advisory盈利型模型。22旧角色输入不足及65旧Top25来源不足格保持未测，不因这些历史问题阻断本新候选。
+- BUG-1824源码#5826/闭环#5827及跨包消费者#5828已合入清理；本候选两fit已自然结束，当前没有运行中的研究。跨包172经济单元中156有配对、65正点/91负点/16无配对，7/8包有结果，但没有确认的Advisory盈利型模型。22旧角色输入不足及65旧Top25来源不足格保持未测，不为其补旧证据。
 - BUG-1824独立V2保留两新包各118D：LSTM/TCN Top5五槽假设清算净估值均值194.6966/60.8872bps，13原Entry臂各自仍全部负。V2估值不等于实际退出，不能替代原V1结果、八包综合或独立确认。
 - 两包公开预测描述符均2,581,509行、5,108股票，声明2024-07-01..2026-08-31。`GET /prediction-store/pred/{run_id}?head=0`两者200，返回AIstock-owned F盘blob；前后SHA/size吻合。
-- 只读D分数/KEY投影已确认：2024-07-04..2025-09-30各305个D，每日全市场4790～4917个原评分。未读取新label/returns/QE label文件、未写SQL、未运行模型或提交QE任务。这只是输入覆盖，不是收益/泛化验收。
+- 最初source spike只读D分数/KEY投影：2024-07-04..2025-09-30各305个D，每日全市场4790～4917个原评分；该阶段未读label/returns或运行模型。随后正式prepare读取本开发窗日频行情并生成独立5TD标签，两fit及评价另报；全过程未读取QE label文件、未写数据库或提交QE任务。
 - 原score唯一键/有限数值已读回；各包实际原Top50为15250项、按H日历成熟的train分数10700项。LSTM train-only center/IQR=0.2571457028388977/0.06164543330669403，TCN=0.36988355219364166/0.07484138011932373，均非退化；这是分数坐标可产，不证明Alpha或跨日期金融可比性。实现须按同一冻结窗口/原H规则重算并验证，不将本源观察误作已生成model encoding。
-- 六模块离线源码及13项定向合同测试已完成；公共源码、旧模型和生产绑定未改。真实305D prepare、一次2fit、四臂经济反馈仍PENDING，0新增真实研究fit；pytest小型合成forest仅验证维度/质量/float32 parity，不属于金融研究。既有133研究fit＋1旧INDEX_BUILD不增加、不重置成独立实验数。源码/单元测试通过不表示模型有盈利价值。
+- 六模块离线源码#5847（merge=`b68eae59dee1eaebe33dd685e7c030917ae78029`，CI=`37962302377`）已合入清理；13定向/Ruff及两F2通过，公共源码、旧模型和生产绑定未改。run `advgp5parentscore_48e050329b8e910166e52d4c`已完成30500原项prepare、两个真实fit及四臂反馈，累计135研究fit＋1旧INDEX_BUILD；合成forest不计真实fit。结果`NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE`，经济确认/启用均false。
+
+### 本次真实研究结果（2026-10-10）
+
+新F根为 `F:/Dev/AIstock_model_artifacts/advisory_parent_score_price_5td_v1_20261010/advgp5parentscore_48e050329b8e910166e52d4c`，由原子preregistered/prepared/trained/evaluated stage及上一级trial_registry.jsonl显式绑定；旧研究根不覆盖。已读回preregistered manifest的完整plan SHA=`48e050329b8e910166e52d4c35fe9d72d414961f1faa3a26bb5bc1dd592f5bb6`。
+
+完整prepare保持610包/D、30500原Top50、28119唯一stock/D簇。现库只读补19个真实warmup会话，原calendar文件不变；结构9665行/估计10179行/标签重叠purge467行，其余10189行不进训练。evaluation仅2025-06-03..2025-09-30：86原D/172包D/8600原Top50/860原Top5均保留，81成熟D/810原槽形成完整四臂比较；末5D未成熟保留为null，不当现金或删日期。
+
+| 原两包等权、原五槽5TD估值 | 成本后均值bps | 已结算TAKE | TAKE胜率 |
+|---|---:|---:|---:|
+| 原Top5 baseline | 128.3898 | 809 | 50.5562% |
+| 固定±300bps rule | 121.6306 | 798 | 50.5013% |
+| 20维matched_core | 56.4980 | 212 | 54.7170% |
+| 22维candidate_parent_score | 61.7587 | 223 | 54.7085% |
+
+候选减baseline=−66.6311bps，Bonferroni同时95%区间[−181.7213,32.0872]；减matched=+5.2607bps，区间[−0.9845,13.1909]。两比较各81完整配对D，MDE80分别148.1909/9.8941bps。候选与matched仅11次已结算动作差异、6D（7.4074%）；只作导航，不支持独立确认或方向全局关闭。LSTM相对matched/base为+11.1428/−48.6995bps（5次差异），TCN为−0.6214/−84.5627bps（6次差异）；不能事后只选LSTM。
+
+相对baseline的已知拒买贡献−59.0166bps：避亏116.8726、错过盈利175.8892；UNKNOWN现金贡献−7.6145另列，不归模型。candidate原810成熟价节点为223 ACCEPTABLE/571 AVOID/16 UNKNOWN_GAP_SUPPORT；571拒买中302仅风险、261风险与净价值共同、8仅净价值。只读现有输出诊断（0fit/SQL/新trial）中，302风险单独拒买的实际路径超过800bps频率7.9470%；794个已知节点实际路径超过模型q90频率4.9118%（matched4.5340%）。这是开发窗口的风险高估/分布错配导航线索，不是独立校准证据；不得据此改旧800bps风险限额或事后校准。两臂Brier为0.2551895/0.2552680，未显示父score稳定增强概率校准。
+
+两次WSL物理fit的前后六个QE running/pending公开列表均0，journal记录两次STARTED/COMPLETE；matched/candidate模型SHA=`d544148d000eb28c334ea9b68d7fbfa87ab4d182699163654d0ab54654b20eb4` / `4dc07098e7b1a8c9c2b78b5ca1c991e21575df3b93321fbe5f5d5d404d4751ec`。价格价值是重叠5TD假设清算估值，不是资金NAV、真实fill或绝对收益承诺；当前库非vintage/原池成员未证明等限制不升级。无sealed金融读取/DB写/QE或其他模块修改/生产配置/进程控制。本候选停止且0binding，不作旧失败补证项目；下一研究先明确风险学习与校准新假设的独立信息/训练内验证，不继续叠加score或降低旧阈值。
 
 | 来源 | 原包 / manifest SHA256 | run / 原预测 SHA256 |
 |---|---|---|
@@ -32,7 +51,7 @@
 
 ## Scope / Non-goals / 精确范围
 
-设计交付#5834已完成。本次实施范围为以下十个源码/测试文件，以及本文验收矩阵和蓝图当前断点的状态更新；编辑前已登记此精确范围。经济假设、模型、人口、费用和判据均沿已批准v1.3，不扩大研究范围：
+设计交付#5834及以下十个源码/测试文件的源码交付#5847已完成；编辑前已登记精确范围。本次结果更新只有本文及蓝图两文档，不再次修改业务源码。经济假设、模型、人口、费用和判据均沿已批准v1.3，不扩大研究范围：
 
 - `backend/services/advisory_model_first/parent_score_price_5td_contracts_v1.py`
 - `backend/services/advisory_model_first/parent_score_price_5td_inputs_v1.py`
@@ -158,19 +177,19 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-861 | backend/services/advisory_model_first/parent_score_price_5td_contracts_v1.py；model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py | SOURCE_CONTRACT_TESTED | approved_by_user: 实施离线源码；真实研究未执行，不表示有增量 |
-| F-862 | backend/services/advisory_model_first/parent_score_price_5td_inputs_v1.py | artifact: 原score SHA/305D spike；target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py | SOURCE_CONTRACT_TESTED_REAL_PREPARE_PENDING | approved_by_user: 无新行情/label/真实fit；完整新人口尚未准备 |
-| F-863 | parent_score_price_5td_inputs_v1.py；V2核 | target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py | SOURCE_CONTRACT_TESTED | approved_by_user: 停牌/冷启动合成合同通过，无新真实结算，估值不升级为成交 |
-| F-864 | parent_score_price_5td_inputs_v1.py；model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py | SOURCE_CONTRACT_TESTED | approved_by_user: train-only/poison/共同质量已验证；实际源切片待prepare |
-| F-865 | backend/services/advisory_model_first/parent_score_price_5td_model_v1.py | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py | SOURCE_CONTRACT_TESTED_REAL_FIT_PENDING | approved_by_user: 合成forest的20/22维及JSON parity通过，不是盈利模型或正式fit |
+| F-861 | backend/services/advisory_model_first/parent_score_price_5td_contracts_v1.py；model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py；本次结果 | REAL_NAVIGATION_COMPLETED_NOT_CONFIRMED | approved_by_user: 一假设两公平臂已执行，不表示有经济增量 |
+| F-862 | backend/services/advisory_model_first/parent_score_price_5td_inputs_v1.py | artifact: 新F run prepared/receipt.json；target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py | REAL_PREPARE_COMPLETED | approved_by_user: 30500原项/28119簇/610包D保留，无DB写或原生证明升级 |
+| F-863 | parent_score_price_5td_inputs_v1.py；V2核 | target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py；本次结果 | REAL_VALUATION_COMPLETED_NOT_FILL | approved_by_user: 正常停牌与未成熟均保留，估值不升级为成交 |
+| F-864 | parent_score_price_5td_inputs_v1.py；model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py；新F encoding | REAL_TRAIN_ONLY_ENCODING_COMPLETED | approved_by_user: source尺度/共同质量/实际H purge通过，0sealed金融消费 |
+| F-865 | backend/services/advisory_model_first/parent_score_price_5td_model_v1.py | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py；本次模型SHA | REAL_TWO_FITS_COMPLETED_NOT_CONFIRMED | approved_by_user: 两个真实20/22维模型已生成，不是确认盈利或正式启用 |
 | F-866 | parent_score_price_5td_model_v1.py：parent_score_price_set | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py | SOURCE_CONTRACT_TESTED | approved_by_user: Decimal完整价集/未知洞/空集已实现；API/UI/实盘权重不在本切片 |
-| F-867 | backend/services/advisory_model_first/parent_score_price_5td_evaluation_v1.py | target: backend/tests/advisory_model_first/test_parent_score_price_5td_evaluation_v1.py | SOURCE_CONTRACT_TESTED_ECONOMIC_PENDING | approved_by_user: 原D/费用/两包/不同分母/未知归因合成对账通过；尚无真实四臂/OOS/NAV |
-| F-868 | backend/services/advisory_model_first/parent_score_price_5td_pipeline_v1.py；CLI | target: backend/tests/advisory_model_first/test_parent_score_price_5td_pipeline_v1.py；CLI --help | SOURCE_CONTRACT_TESTED_REAL_RUN_PENDING | approved_by_user: QE忙/partial/两attempt/原子stage已测，未提交研究训练 |
-| F-869 | 本文Scope；六源码/四测试精确范围 | artifact: 本文；scope/AST/Ruff/diff检查 | SOURCE_CONTRACT_TESTED_NO_ACTIVATION | approved_by_user: 所有其他模块/生产/数据库/服务控制NOOP，真实研究另报 |
+| F-867 | backend/services/advisory_model_first/parent_score_price_5td_evaluation_v1.py | target: backend/tests/advisory_model_first/test_parent_score_price_5td_evaluation_v1.py；新F evaluated/evaluation.json | REAL_FOUR_ARM_NEGATIVE_NOT_CONFIRMED | approved_by_user: 81完整成熟配对D、双增量/区间/已知与UNKNOWN归因均报告，无OOS/NAV或激活 |
+| F-868 | backend/services/advisory_model_first/parent_score_price_5td_pipeline_v1.py；CLI | target: backend/tests/advisory_model_first/test_parent_score_price_5td_pipeline_v1.py；新F journal | REAL_TWO_FITS_QE_IDLE_COMPLETED | approved_by_user: 两物理fit前后QE六路径均0，阴性停止此candidate、不隐式重试 |
+| F-869 | 本文Scope；六源码/四测试精确范围 | artifact: 本文；scope/AST/Ruff/diff及源码#5847 | REAL_RESEARCH_SCOPE_VERIFIED_NO_ACTIVATION | approved_by_user: 所有其他模块/生产/数据库/服务控制NOOP，真实研究已单列，源码合入不等于盈利确认 |
 
 ## Rollout / Rollback / Production Gates
 
-设计#5834已交付，本轮离线源码合同已实现并定向测试通过，按已有明确授权提交/PR/合入/自身清理；真实prepare/fit/金融反馈不改成合成PASS。不依赖UI/自然等待/两个旧缺口或再次审核QE包。新输入/模型/结果写请求指定的新F研究根，旧产物不覆盖；回滚只不再调用本离线candidate，原生产绑定/基线/数据库不变。
+设计#5834及源码#5847已交付/自身清理，真实prepare/两fit/四臂反馈已完成但经济未达标，候选停止且无binding。不依赖UI/自然等待/旧缺口或再次审核QE包。新输入/模型/结果均在新F研究根，旧产物不覆盖；回滚只不再调用此离线candidate，原生产绑定/基线/数据库不变。
 
 `production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_install=noop`、`runtime_activation=noop`、`backend_restart_required=false`、`client_reload=noop`。任何后端重启仍由用户执行；后续真正业务接入是独立设计与运行验收，本离线fit及源码合入不授权上线。
 
@@ -197,3 +216,7 @@ DESIGN-COMPLIANCE-001逐项：本轮只完成完整设计/真实源spike、不�
 第二轮数学/统计：四臂费用须逐行对账；同stock/D金融冲突、预测manifest/run混用、删除共同日期或半包重新归一均失败。UNKNOWN值不假报概率；mark-only与假设清算分别计量，两主比较同D同步块/Bonferroni/MDE不变。相关5项通过，未拿合成结果作金融证据。
 
 第三轮边界/交付：本study冻结四个批准窗口而不修改QE；训练金融解码前及fit后校验自身prepared stage，QE后观察变忙保留attempt且不假成功，partial不隐式重fit；非有限数学、未知价洞、月校准/分数漂移只读诊断明确。最终13定向、Ruff、10文件AST与CLI帮助通过。登记范围六源码/四测试/两文档；所有临时log/pytest/cache全X。正式研究fit计数仍133，真实prepare/收益/权重及激活均未完成。上述三轮均是同窗口自审，不冒称独立外部审核；最终main同步/CI/合入分别报。
+
+### 真实结果文档复审（2026-10-10）
+
+本次文档范围只有本文和蓝图，旧阶段三轮记录保留其时点。第一轮按实际stage/journal核对30500→8600/860→81D810槽、两次fit/135累计及前后QE空闲；第二轮按evaluation逐条核对双增量/同时区间/包别/现金归因，不拿胜率上升判收益通过；第三轮审边界和前后一致性，将当前PENDING改为研究结束而保留历史检查点，不把本候选失败扩成全局不可学或QE无Alpha，不调阈值/选包/追加fit。F2、diff及最终HEAD CI独立读回；本次为同窗口自审，不声称外部审核。
