@@ -131,6 +131,7 @@ class CodeOwnedSubprocessNodeProbeRunner:
     runner_version: str = "1"
     timeout_seconds: int = 1_800
     executor: Callable[..., subprocess.CompletedProcess[bytes]] = _run_subprocess
+    command_factory: Callable[[], tuple[str, ...]] | None = None
 
     def __post_init__(self) -> None:
         if self.node_id not in {"wsl2-5080", "rdagent-node1"}:
@@ -148,7 +149,7 @@ class CodeOwnedSubprocessNodeProbeRunner:
     def run(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
         payload = canonical_json_bytes(request) + b"\n"
         completed = self.executor(
-            self.command,
+            self.command_factory() if self.command_factory is not None else self.command,
             payload=payload,
             timeout_seconds=self.timeout_seconds,
         )

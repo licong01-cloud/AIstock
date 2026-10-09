@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -24,6 +24,7 @@ from .monthly_node_probe_runner import (
     build_wsl_node_probe_runner,
 )
 from .monthly_runtime import MonthlyRuntimeConfigurationError, MonthlyRuntimeSettings
+from .monthly_node_tools import MonthlyNodeTools
 
 
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -110,6 +111,13 @@ class MonthlyNodeRuntimeSettings:
         )
 
     def probe_runners(self) -> Mapping[str, MonthlyNodeProbeRunner]:
+        tools = self._node1_tools()
+        node1 = build_ssh_node_probe_runner(
+            host=self.node1_host,
+            project_root=self.node1_project_root,
+            python_executable=self.node1_python,
+        )
+        node1 = replace(node1, command_factory=lambda: tools.command("monthly_node_probe"))
         return MappingProxyType(
             {
                 "wsl2-5080": build_wsl_node_probe_runner(
@@ -117,11 +125,7 @@ class MonthlyNodeRuntimeSettings:
                     project_root=self.wsl_project_root,
                     python_executable=self.wsl_python,
                 ),
-                "rdagent-node1": build_ssh_node_probe_runner(
-                    host=self.node1_host,
-                    project_root=self.node1_project_root,
-                    python_executable=self.node1_python,
-                ),
+                "rdagent-node1": node1,
             }
         )
 
@@ -129,6 +133,7 @@ class MonthlyNodeRuntimeSettings:
         self,
         runtime: MonthlyRuntimeSettings,
     ) -> Mapping[str, MonthlyNodeReleaseTransport]:
+        tools = self._node1_tools()
         remote = (
             "cd -- "
             + shlex.quote(self.node1_project_root)
@@ -168,8 +173,17 @@ class MonthlyNodeRuntimeSettings:
                         self.node1_host,
                         remote,
                     ),
+                    command_factory=lambda: tools.command("monthly_remote_deploy"),
                 ),
             }
+        )
+
+    def _node1_tools(self) -> MonthlyNodeTools:
+        return MonthlyNodeTools(
+            host=self.node1_host,
+            legacy_project_root=self.node1_project_root,
+            python_executable=self.node1_python,
+            source_root=Path(__file__).resolve().parents[3],
         )
 
     def consumer_executor(

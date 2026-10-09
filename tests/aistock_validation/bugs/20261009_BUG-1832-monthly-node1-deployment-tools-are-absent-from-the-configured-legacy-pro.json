@@ -1,0 +1,314 @@
+{
+  "actual": "node1 /home/lc999/projects/AIstock 为旧非Git副本，6个必需文件缺失；WSL当前源码具备。",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_worker_nodes.py",
+    "backend/services/dataset_release/monthly_node_probe_runner.py",
+    "backend/services/dataset_release/monthly_immutable_deploy.py",
+    "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+    "backend/services/dataset_release/monthly_node_tools.py",
+    "tests/aistock_validation/bugs/20261009_BUG-1832-monthly-node1-deployment-tools-are-absent-from-the-configured-legacy-pro.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1832",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-09T16:38:22.348002Z",
+  "description": "node1 /home/lc999/projects/AIstock 为旧非Git副本，6个必需文件缺失；WSL当前源码具备。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261009-dcafaef560d7",
+      "timestamp": "2026-10-09T16:38:22.347487Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "同一提交的代码工具以独立不可变目录发布；部署和只读probe使用相同路径/哈希；preflight不访问网络、不写节点。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1832-monthly-node1-deployment-tools-are-absent-from-the-configured-legacy-pro.json"
+    ],
+    "added_files": [
+      "backend/services/dataset_release/monthly_node_tools.py"
+    ],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1832-monthly-node1-deployment-tools-are-absent-from-the-configured-legacy-pro.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_worker_nodes.py",
+        "backend/services/dataset_release/monthly_node_probe_runner.py",
+        "backend/services/dataset_release/monthly_immutable_deploy.py",
+        "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+        "backend/services/dataset_release/monthly_node_tools.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_worker_nodes.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_node_probe_runner.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_immutable_deploy.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_node_tools.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_worker_nodes.py",
+        "backend/services/dataset_release/monthly_node_probe_runner.py",
+        "backend/services/dataset_release/monthly_immutable_deploy.py",
+        "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+        "backend/services/dataset_release/monthly_node_tools.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "backend/services/dataset_release/monthly_node_tools.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "backend/services/dataset_release/monthly_node_tools.py"
+    ]
+  },
+  "first_seen_at": "2026-10-09T16:38:22.348002Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5843,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5843",
+  "last_seen_at": "2026-10-09T16:38:22.348002Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_worker_nodes.py::test_probe_prepares_code_lazily_not_during_runtime_preflight -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "RED: node probe had no lazy committed-tools preparation hook; GREEN: deploy and probe prepare code only when run and share the pinned source identity, with preflight network/write count zero.",
+      "Final targeted code matrix: 53 passed, 2 skipped. Windows fixture tests cover exclusive publish, resume, source/archive drift, traversal, duplicate inventory, symlink archive rejection and Git-only bytes; no candidate, market database or service was operated.",
+      "Fresh official monthly worker composition preflight PASS with canonical dotenv; database_opened=false, operation_claimed=false, network_access=false, runtime_action=false. WSL Python bootstrap compiled and rejected linked POSIX parent without data writes; WSL pytest unavailable, no dependency installed.",
+      "三轮审核：1. 修正 frozen dataclass 接线为 replace，并验证 DEPLOY/probe 均惰性准备；2. 代码只取 Git 提交字节，排除 dotenv/测试/二进制产物，拒绝路径逃逸和 hash 漂移，不覆盖旧项目；3. 严格核对工具 schema/identity，Git 和 SSH 均有超时，不安装依赖，不切换 active，不产生新的源数据门禁。",
+      "DESIGN-COMPLIANCE-001：仅修复已确认节点工具缺失，不宣称数据已 READY；无静默旧路径回退；不修改模型/PIT/业务合同；源码合入、工具发布、运行身份及真实候选验收分别报告。"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly node1 deployment tools are absent from the configured legacy project tree",
+  "trigger_condition": {
+    "fingerprint": "dcafaef560d745771013f856",
+    "source_event_id": "FE-20261009-dcafaef560d7"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
