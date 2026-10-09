@@ -38,6 +38,26 @@ def _read_calendar(qlib_bin: Path) -> pd.DatetimeIndex:
     return pd.DatetimeIndex(dates["date"])
 
 
+def read_trading_calendar(
+    qlib_bin: Optional[Path] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> pd.DatetimeIndex:
+    """Read the frozen daily calendar without removing missing-price dates."""
+    dates = _read_calendar(qlib_bin if qlib_bin is not None else _default_qlib_bin_path())
+    if (
+        dates.empty or dates.hasnans or dates.has_duplicates
+        or dates.tz is not None or not dates.is_monotonic_increasing
+        or not dates.equals(dates.normalize())
+    ):
+        raise ValueError("Qlib daily calendar must contain ordered unique market dates")
+    if start_date is not None:
+        dates = dates[dates >= pd.Timestamp(start_date)]
+    if end_date is not None:
+        dates = dates[dates <= pd.Timestamp(end_date)]
+    return dates
+
+
 def _read_instruments(qlib_bin: Path) -> dict[str, list[tuple[str, str]]]:
     """Read every declared instrument span, preserving repeated symbols."""
     inst_file = qlib_bin / "instruments" / "all.txt"
