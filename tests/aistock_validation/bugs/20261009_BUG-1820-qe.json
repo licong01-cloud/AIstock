@@ -157,8 +157,8 @@
   },
   "first_seen_at": "2026-10-09T03:17:08.033258Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "584e8f3abc8b280f3a1390be3c28212dbdcb78f5",
+  "fixed_at": "2026-10-09T03:58:18Z",
   "github_issue_number": 5803,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5803",
   "last_seen_at": "2026-10-09T03:17:08.033258Z",
@@ -166,6 +166,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5805",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -193,6 +194,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -204,7 +206,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1820",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "06717feb91e15179",
+    "recorded_at": "2026-10-09T03:59:09.012256Z",
+    "runtime_contract_digest": "35ff736d3f66b629fabb2895cee391f0b171a627bfccd02568a9606b4a636d3b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2ea5146a553b259f9dde0770fae0ff7b45f3196e",
+    "source_merge_commit": "584e8f3abc8b280f3a1390be3c28212dbdcb78f5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5805",
+    "validation_evidence": [
+      "validation-receipt: id=4f9d03e7724e1979 commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=nox plan=l0 status=passed command=`python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 qe_read_backend` result=`passed all 4 sessions; qe_read_backend 701 passed 1 skipped; staged guardrail 5 files blocking=0`",
+      "validation-receipt: id=492cf45d75185681 commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 qe_read_backend` result=`passed all 4 sessions; qe_read_backend 701 passed 1 skipped; staged guardrail 5 files blocking=0`",
+      "validation-receipt: id=933619015f5a579c commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 qe_read_backend` result=`passed all 4 sessions; qe_read_backend 701 passed 1 skipped; staged guardrail 5 files blocking=0`",
+      "validation-receipt: id=04470ca2739d2216 commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=nox plan=qe_read_backend status=passed command=`python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 qe_read_backend` result=`passed all 4 sessions; qe_read_backend 701 passed 1 skipped; staged guardrail 5 files blocking=0`",
+      "validation-receipt: id=8ed539a6493e04fd commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_durable_capacity.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q` result=`59 passed 3 skipped; final HEAD minimum 12 passed with existing DEV rollback-only`",
+      "validation-receipt: id=ec9b6a637f6d5c7a commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/quantevolver/qe_execution_reservation.py backend/services/quantevolver/qe_active_execution_capacity.py backend/tests/multi_alpha/test_durable_capacity.py backend/tests/multi_alpha/test_qe_submission_coordinator.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "beb9773c3f2d35371334313bc02463e04d2c0cd4fdc50bac4a851778419329a9"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -213,6 +241,14 @@
     "fingerprint": "e7e1877f736c6af40867c33a",
     "source_event_id": "FE-20261009-e7e1877f736c"
   },
+  "validation_evidence": [
+    "validation-receipt: id=4f9d03e7724e1979 commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=nox plan=l0 status=passed command=`python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 qe_read_backend` result=`passed all 4 sessions; qe_read_backend 701 passed 1 skipped; staged guardrail 5 files blocking=0`",
+    "validation-receipt: id=492cf45d75185681 commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 qe_read_backend` result=`passed all 4 sessions; qe_read_backend 701 passed 1 skipped; staged guardrail 5 files blocking=0`",
+    "validation-receipt: id=933619015f5a579c commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 qe_read_backend` result=`passed all 4 sessions; qe_read_backend 701 passed 1 skipped; staged guardrail 5 files blocking=0`",
+    "validation-receipt: id=04470ca2739d2216 commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=nox plan=qe_read_backend status=passed command=`python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 qe_read_backend` result=`passed all 4 sessions; qe_read_backend 701 passed 1 skipped; staged guardrail 5 files blocking=0`",
+    "validation-receipt: id=8ed539a6493e04fd commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/multi_alpha/test_durable_capacity.py backend/tests/multi_alpha/test_qe_submission_coordinator.py -q` result=`59 passed 3 skipped; final HEAD minimum 12 passed with existing DEV rollback-only`",
+    "validation-receipt: id=ec9b6a637f6d5c7a commit=2ea5146a553b259f9dde0770fae0ff7b45f3196e kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/quantevolver/qe_execution_reservation.py backend/services/quantevolver/qe_active_execution_capacity.py backend/tests/multi_alpha/test_durable_capacity.py backend/tests/multi_alpha/test_qe_submission_coordinator.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
