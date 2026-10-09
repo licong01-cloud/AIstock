@@ -98,7 +98,7 @@ sys.meta_path.insert(0,NoRuntime())
 runpy.run_path('scripts/factor_research.py',run_name='__main__')
 """
     def run(*args, status=0):
-        result = subprocess.run([sys.executable, "-c", program, *args], cwd=root, capture_output=True, text=True)
+        result = subprocess.run([sys.executable, "-X", "utf8", "-c", program, *args], cwd=root, capture_output=True, text=True, encoding="utf-8")
         assert result.returncode == status, result.stderr
         return result.stdout
     request, proposal = proposal_pair(tmp_path)
