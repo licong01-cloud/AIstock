@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-10-09T07:37:12.087263Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7424ba99669d0174072e522c84908507738b100a",
+  "fixed_at": "2026-10-09T08:03:14Z",
   "github_issue_number": 5830,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5830",
   "last_seen_at": "2026-10-09T07:37:12.087263Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5832",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -140,6 +141,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -151,7 +153,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1828",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ed4250388b2c49c0",
+    "recorded_at": "2026-10-09T08:03:50.937129Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6953e5cfd1930083f4f524bb476bb84b6d393552",
+    "source_merge_commit": "7424ba99669d0174072e522c84908507738b100a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5832",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed"
+    ],
+    "validation_evidence_digest": "385417cfef66b1fd68b653e544555236d2f267ef0b9275fb15e9239dd1eafd5b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -160,6 +183,9 @@
     "fingerprint": "b745c7c926b3d54eceb6db48",
     "source_event_id": "FE-20261009-b745c7c926b3"
   },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
