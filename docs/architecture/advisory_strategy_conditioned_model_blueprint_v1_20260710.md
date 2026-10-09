@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.94
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.95
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-10
 
-> 当前接续：BUG-1824 #5826/#5827及跨包验证#5828已合入/自身清理。172旧经济单元有156配对，7/8包有结果，仍无确认的Advisory盈利模型；22旧角色输入/65旧Top25来源格未测不阻新研发。两新单Alpha包父分数条件5TD设计#5834、源码#5847（merge=b68eae59dee1eaebe33dd685e7c030917ae78029、最终HEAD CI37962302377 SUCCESS）均已合入及自身清理。run `advgp5parentscore_48e050329b8e910166e52d4c`已完整prepare/一次两fit/四臂反馈：305D30500原项，evaluation 86D8600项/860原Top5保留，81成熟D810槽完整配对。base/rule/matched/candidate均值128.3898/121.6306/56.4980/61.7587bps；candidate减base−66.6311、减matched+5.2607/同时区间跨零，仅11次已结算差异。候选未达标并停止，不调旧阈值或选包救结果；累计135实际研究fit＋1旧index，当前无运行中实验、0经济确认/启用。下一步先设计独立的风险学习/校准假设，现有风险高估仅为开发窗导航线索；不继续叠加父score、同族loss/seed搜索或旧负补证。QE包直接消费不加资格门、不重复上游实验，UI后置；完整结果见[独立设计](advisory_parent_score_conditioned_price_5td_v1_f2_design_20261009.md)及§16.0。
+> 当前接续：BUG-1824 #5826/#5827及跨包验证#5828已合入/自身清理。172旧经济单元有156配对，7/8包有结果，仍无确认的Advisory盈利模型；22旧角色输入/65旧Top25来源格未测不阻新研发。两新单Alpha包父分数条件5TD设计#5834、源码#5847（merge=b68eae59dee1eaebe33dd685e7c030917ae78029、最终HEAD CI37962302377 SUCCESS）及反馈#5852均已合入及自身清理。run `advgp5parentscore_48e050329b8e910166e52d4c`已完整prepare/一次两fit/四臂反馈：305D30500原项，evaluation 86D8600项/860原Top5保留，81成熟D810槽完整配对。base/rule/matched/candidate均值128.3898/121.6306/56.4980/61.7587bps；candidate减base−66.6311、减matched+5.2607/同时区间跨零，仅11次已结算差异。候选未达标并停止，不调旧阈值或选包救结果；累计135实际研究fit＋1旧index，0经济确认/启用。下一独立[训练内尾风险校准F2](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)已形成完整详细合同及日期/键元数据坐标，源码/prepare/fit尚未开始；仅检验共享新底座上的诚实风险校准，不追加父score或同族loss/seed搜索。QE包直接消费不加资格门、不重复上游实验，UI/旧负补证后置；完整历史结果见[父分数设计](advisory_parent_score_conditioned_price_5td_v1_f2_design_20261009.md)，当前唯一顺序见§16.0。
 
 > 最近人口迁移研究（历史事实）：P25～P28设计、输入、源码及唯一人口迁移研究已完整执行；#5782内核及#5786研究入口/评价均已合入并自身清理。study `advgp5popstudy_ba41efc67d1a5b373b36bc75`在既存WSL完成2fit/合计5.446秒，前后QE六路径均0，累计133实际研究fit＋1旧INDEX_BUILD。三包各86D/10320原行/10214唯一预测簇/1290原Top5保留。锚candidate−base为−69.1166bps（80配对）、−matched为−28.8833（81配对）；另外两包也为负，STOP_THIS_CANDIDATE。P29不启动、0独立/盈利确认及生产激活；不复fit或调阈值/支持救结果，不补旧失败证据。原P26全部305D/36600行、legacy/NON_VINTAGE限制保留，0QE或其他模块修改、DB/服务操作，无需重启。
 
@@ -789,6 +789,16 @@ H-CONTEXT-VALUE-1设计由#5383合入，五源码叶/14定向测试、857/304共
 5. **单一候选与可归因对照。** 先用现有稳定、可解释的学习器和训练/回放工具，实现一个详细设计已固定的candidate。若新数据人口与目标均有变化，先在该共同新人口/目标下建立matched控制，再比较模型差异；不混用旧窗口均值声称信息增量。需要包条件时保留显式adapter，分别报告公共、包内基线及留包泛化，不预建多套生产bundle或大网络。
 6. **评价经济价值而非少买。** 完整固定五槽对照原Top5和事前简单规则，报告净收益、风险、真实干预、避免亏损、错失盈利与UNKNOWN空槽贡献。重叠五日组均值不冒充资金NAV；无增量或证据不足停止精确candidate，不新增强制拒买，不回选旧matched或调整门槛。允许不推荐是业务能力，不是效果证明。
 7. **成功后才扩大交付。** 值得继续的candidate才进入未消费历史确认与必要日频recipe/binding/API适配；历史验证不等待自然20日。自然前向、独立历史确认和开发导航分报。旧OPEN_DISTRIBUTION仅作辅助，Exit、HMM、复杂模型及UI后置；失败模型补证/归档、自动更新平台和额外审批均不进入该顺序。
+
+#### 6.3.5 当前单一候选：训练内时序尾风险校准
+
+落实§6.3.4的是[独立F2详细设计](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)，唯一假设`GP5-RISK-TAIL-CALIBRATION-1`。它检验晚期训练段的风险分位残差修正能否改善原Top5净价值，不声称增加Alpha或证明Exit可学；旧父分数候选阴性不改写。
+
+同一既存两包305D/原Top50输入只读复用，原Top5和固定规则仍为经济基线；新共享20D core只一次RF.fit，未校准臂与校准臂共享树、均值/盈利概率、人口、成本和原800bps约束。末60个训练成熟D（2025-02-25..05-23，H≤05-30）只用于一个全局q0.9风险残差delta；底座信息截止提前至02-24，STRUCTURE/ESTIMATION依日历固定切分和实际H purge，不复用已经见过校准标签的旧权重。原evaluation仍06-03..09-30，86D/860原槽、末5D未成熟保留。完整坐标由日期/键元数据推得，不表示真实监督/校准已可用。
+
+delta可以为正、负或零，但不得根据evaluation改符号、长度、算法或风险门槛；未知残差保留原质量/名单，不能填0或自动退回旧模型。全局经验校准只估计观察分布的边际偏移，不保证每股票/价格节点90%条件coverage，不把价网格当真实成交监督。原收益增量与已知/UNKNOWN现金归因才是经济评价；coverage改善不替代盈利。source/政策/base模型/CAL名单和角色绑定在新run，旧输入/模型/结果不覆盖。
+
+本设计为`RISK_MANAGED_ADVISORY / EXPLORATORY_SCREEN / NAVIGATION_ONLY`，计划1次实际RF fit＋1次明确记账的标量校准估计，0oracle/QE任务。仅Advisory独立九文件后续实施，无DB写/数据激活/其他模块/生产拒买、配置或服务控制。当前只是完整设计/元数据可行性，真实拟合前才fresh检查QE；不存在为了文档交付等待QE或重启的步骤。
 
 ### 6.4 训练资源边界
 
@@ -1635,6 +1645,8 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-270 | 一个新候选和共同新人口/目标下的matched控制、原Top5及事前简单规则对照；禁止旧窗口均值拼接、价格网格伪样本与事后控制调整，未识别动作不伪造监督 |
 | F-271 | 经济评价完整报告收益幅度、尾风险、干预、错失机会及UNKNOWN空槽贡献；五日组均值不是NAV，未确认模型不新增生产强制拒买/自动binding，既有基线/shadow不被文档自动禁用 |
 | F-272 | 唯一顺序仍为详细设计、人口准备、单候选、收益验证、有条件接入；旧P25～P29及负结果保持历史。父信号条件5TD源码/完整输入/两fit/四臂已执行且未达标，按§16.0停止此candidate并先设计下一独立风险学习假设，不事后调旧阈值；UI/旧负补证/归档/自然20日等待/自动平台均不前置 |
+| F-273 | §6.3.5单一训练内风险校准新假设：STRUCTURE/ESTIMATION/CAL诚实分段、base仅一次20D新fit、一个冻结delta，原800bps/收益头/原Top5不改；不以旧权重或evaluation校准 |
+| F-274 | 新风险校准的来源SHA/名单/政策/角色/base绑定、原CAL簇质量/UNKNOWN、完整tick价集/四臂经济与QE互斥；经验coverage非条件保证，设计/源码/研究/确认/激活分态 |
 
 ## 11. Design Acceptance Matrix
 
@@ -1788,6 +1800,8 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-270 | §6.3.4/12.5；§16.0 P27；population model/pipeline/CLI | target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py；artifact: 人口迁移详细设计真实结果 | REGISTERED_TWO_FITS_COMPLETED | approved_by_user: 既存WSL两fit/5.446秒，累计133研究fit+1index；只有人口不同，不夸大收益完成 |
 | F-271 | §5.4/6.3.4/12.5；§16.0 P28/P29；population evaluation | target: backend/tests/advisory_model_first/test_generic_population_price_5td_evaluation_v1.py；artifact: 人口迁移详细设计真实结果 | FOUR_ARM_EVALUATION_COMPLETE_CANDIDATE_NEGATIVE | approved_by_user: 86D三包/10320原行保留，配对/UNKNOWN对账，经济负；P29不启动、0独立确认/启用 |
 | F-272 | §0/1.4/6.12/16.0；父信号5TD六源码/四测试；历史population源码 | artifact: docs/architecture/advisory_parent_score_conditioned_price_5td_v1_f2_design_20261009.md；target: backend/tests/advisory_model_first/test_parent_score_price_5td_pipeline_v1.py；源码#5847 | REAL_NAVIGATION_COMPLETED_NEGATIVE_NO_ACTIVATION | approved_by_user: 305D30500原项/两真实fit/81成熟D四臂已完成，candidate未达标只停止自身；累计135fit、不重审包资格，不改其它模块/DB/服务或启用失败模型 |
+| F-273 | §6.3.5/16.0；新校准F2 Contracts §2/3/4 | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_model_v1.py | DESIGN_COMPLETE_NO_FIT | approved_by_user: 完整详细设计及元数据坐标；源码/真实监督/一个fit＋一个校准估计未执行，累计仍135 |
+| F-274 | §6.3.5/14/16.0；独立校准F2的九项验收合同 | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_study_v1.py | DESIGN_COMPLETE_NO_ECONOMIC_RESULT | approved_by_user: 九文件后续Advisory范围已声明；本轮两文档，不改其他模块/DB/服务或升级证据 |
 
 ## 12. Verification Plan
 
@@ -2074,16 +2088,16 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 ## 16. 当前下一步
 
-### 16.0 当前唯一任务队列与真实断点（2026-10-10 父信号条件5TD）
+### 16.0 当前唯一任务队列与真实断点（2026-10-10 训练内尾风险校准）
 
 本次唯一新假设[两新单Alpha父分数条件5TD买价](advisory_parent_score_conditioned_price_5td_v1_f2_design_20261009.md)已结束，未达到双增量目标；不能再列为待prepare/fit。设计#5834、源码#5847及最终HEAD CI均完成且自身清理。真实run `advgp5parentscore_48e050329b8e910166e52d4c`保持305D30500原项/28119簇，WSL只2fit，前后QE六列表全0；evaluation原86D8600项/860 Top5和5个末端未成熟D均保留，81成熟D/810原槽完整四臂比较。累计135真实研究fit+1旧index，0sealed金融/其他模块或DB写/服务控制/生产启用。
 
 | 当前顺序 | 具体任务 | 当前状态 / 边界 |
 |---|---|---|
 | 1 | 当前研究的停止与机制导航 | COMPLETED：候选减base−66.6311bps，减matched+5.2607/同时CI跨零、仅11动作/6D。已知拒买净贡献−59.0166、UNKNOWN−7.6145分账；两包不能择优挑一个报成功。停止本candidate，不重跑/救阈值/补证 |
-| 2 | 下一风险学习/校准假设的详细设计 | NOT_STARTED / NO_FIT：候选571 AVOID中302仅尾风险，794已知节点实际超过q90频率4.9118%，显示风险高估/信息错配线索；先规定独立信息或训练内诚实校准、风险与收益端点/基线/政策/原槽和预算，不据开发结果改旧800bps限额，不预先承诺哪种模型有收益 |
-| 3 | 有实质可识别新假设才实现 | NOT_STARTED：独立Advisory叶模块/明确scope，多轮审核与最小测试后交付；无可识别新变量则先调整设计，不自动追加父score、换同族loss/seed或建设平台 |
-| 4 | 单候选一次完整研究 | NOT_STARTED：不读取sealed，不重训上游或增加包资格门；QE fit空闲才拟合，原D/五槽/两包/成本/现金与UNKNOWN归因完整，fit数量预注册，失败只停自身 |
+| 2 | 独立风险校准完整详细设计 | DESIGN_COMPLETE / NO_FIT：[新F2](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)固定一个60训练D残差delta，新的共享20D底座不消费CAL标签；只读日期/键推得三段坐标，真实监督仍未验证；风险与收益端点/两基线/原槽/费用/800bps已固定，0新增fit或收益读取 |
+| 3 | 新校准源码实现 | NEXT / NOT_STARTED：按新F2六源码/三最小合同测试，只复用Advisory纯计算；不绕过旧parent trainer/伪造score尺度，不重复旧父score或同族loss/seed搜索；多轮审核后独立PR交付，不建平台 |
+| 4 | 单候选一次完整研究 | NOT_STARTED：新身份只读既存prepared，1次共享RF fit＋1次标量校准估计；不读sealed/重训QE/加包门槛，fit前后fresh公开QE；原86D/五槽/两包/四臂和已知/UNKNOWN现金归因完整，失败只停此candidate |
 | 5 | 真有增量才独立确认/业务接入 | NOT_STARTED：不拿点估计/历史估值冒称OOS、真实成交/NAV或激活；后端重启继续用户所有，UI和旧负补证不阻主线 |
 
 本次base/rule/matched/candidate五槽成本后5TD cohort均值为128.3898/121.6306/56.4980/61.7587bps；候选对base同时95%区间[−181.7213,32.0872]、对matched[−0.9845,13.1909]，MDE80为148.1909/9.8941bps。TAKE胜率虽由baseline50.5562%提高为candidate54.7085%，错过盈利175.8892大于避亏116.8726，不能宣称改善收益。302仅风险拒买节点中实际路径超过800bps频率7.9470%，只是现有输出零fit/SQL诊断，不是方向确认/后验阈值来源。仍无已确认盈利Advisory模型，但此窗口原两包baseline均正（LSTM110.4656、TCN146.3140bps），不足以归罪于QE无Alpha或断言所有价格学习不可行。
