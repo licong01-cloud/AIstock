@@ -16,13 +16,31 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-09T03:17:08.033258Z",
-  "description": "孤儿预约长期计入节点active_count，第二训练槽位被占用。",
+  "description": "rdagent-node1上qe_20260921_113731_fe6a/Loop1的来源task和loop已删除，节点权威submission回执为not_reserved，但reconciling预约永久早退并继续计入active_count，造成配置2并行时CPU训练实际串行。本修复仅在权威not_reserved且无process、来源task和loop均不存在、原lease已过期、revision/fence仍匹配时释放预约；保留terminal身份与once-only语义。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261009-e7e1877f736c",
       "timestamp": "2026-10-09T03:17:08.033239Z"
+    },
+    {
+      "action": "orphan_reservation_root_cause_and_review",
+      "actor": "Codex",
+      "timestamp": "2026-10-09T03:38:08Z",
+      "note": "两轮审核：第一轮核对not_reserved永久早退与源任务删除造成的孤儿；第二轮检查真实PostgreSQL语义、admission锁、row_version/fencing CAS、lease/post保护、保留terminal身份、错误显式上报和只唤醒既有调度。无模型/因子/参数/并行度改动，无新增人工审批。"
+    },
+    {
+      "action": "dev_rollback_only_reservation_validation",
+      "actor": "Codex",
+      "timestamp": "2026-10-09T03:38:08Z",
+      "note": "现有aistock_dev:5433，AISTOCK_QE_ORPHAN_DEV_VERIFY=1下7个真实SQL场景通过（orphan/live_source/live_lease/stale_version/stale_fence/post_pending/terminal）；相邻running预约status/version/fence均不变。每例finally rollback并回读2条fixture预约均不存在；不创建数据库、schema或表。完整两文件矩阵59 passed/3 skipped（既有独立DB集成未启用）；新5项对账合同已通过。"
+    },
+    {
+      "action": "design_compliance_001_review",
+      "actor": "Codex",
+      "timestamp": "2026-10-09T03:38:08Z",
+      "note": "1完整持久化修复且实DEV验证，非mock-only；2未知/不可达/进程证据冲突不释放且显式报错；3只回收已删除来源且无远端执行的孤儿，不改变once-only、模型、策略、股票池、资产与并行上限；4无新增门禁或授权步骤，仅复用既有lease/CAS/post保护。l0/guardrail/module registry/qe_read_backend均过（701 passed/1 skipped）；guardrail对5个staged文件blocking=0，ownership=5/5。生产单预约释放待源码合入后执行；backend重启权限=false。"
     }
   ],
   "evidence_uris": [],
@@ -152,7 +170,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1",
+    "fresh_process_evidence": [
+      "独立python进程从本BUG worktree加载tracked QEExecutionReservationReconciler与QEExecutionReservationRepository，orphan recovery method存在，fresh_process_import=PASS，process_control_performed=false。",
+      "新进程运行两文件矩阵59 passed/3 skipped；显式DEV rollback-only场景7/7通过，真实lease/CAS/once-only与相邻running预约保护已验证。"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
