@@ -1,73 +1,74 @@
 {
-  "actual": "生产者与LOCAL_VALIDATE白名单不一致；下游多处独立_sha256重复读取完整release。",
+  "actual": "worker存活但8分钟后仍卡在启动Git subprocess communicate，attempt253 PLANNED。",
   "allowed_write_scope": [
-    "backend/tests/dataset_release/test_monthly_preparation_source.py",
-    "backend/services/dataset_release/monthly_candidate_finalizer.py",
-    "backend/services/dataset_release/monthly_local_validation.py",
-    "backend/services/dataset_release/monthly_official_adapters.py",
-    "backend/services/dataset_release/monthly_worker.py",
+    "backend/services/dataset_release/monthly_worker_nodes.py",
+    "backend/services/dataset_release/monthly_node_tools.py",
+    "backend/services/dataset_release/monthly_hmm_derive.py",
+    "backend/services/dataset_release/monthly_node_probe_runner.py",
     "backend/services/dataset_release/monthly_immutable_deploy.py",
+    "backend/services/dataset_release/monthly_worker.py",
+    "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
     "backend/tests/dataset_release/test_monthly_local_validation.py",
-    "backend/services/dataset_release/monthly_file_identity.py",
-    "tests/aistock_validation/bugs/20261009_BUG-1831-monthly-downstream-validation-rejects-sealed-provenance-and-repeatedly-s.json"
+    "backend/services/dataset_release/monthly_subprocess.py",
+    "tests/aistock_validation/bugs/20261009_BUG-1834-windows-supervised-monthly-worker-hangs-on-console-subprocess-pipes-befo.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-1831",
-  "closed_at": "2026-10-09T17:28:25.672387Z",
+  "bug_id": "BUG-1834",
+  "closed_at": "2026-10-09T18:13:35.827697Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-10-09T16:22:49.297300Z",
-  "description": "生产者与LOCAL_VALIDATE白名单不一致；下游多处独立_sha256重复读取完整release。",
+  "created_at": "2026-10-09T17:27:35.011077Z",
+  "description": "worker存活但8分钟后仍卡在启动Git subprocess communicate，attempt253 PLANNED。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20261009-3bca7584bc53",
-      "timestamp": "2026-10-09T16:22:49.297300Z"
+      "note": "Promoted from IC-20261009-ea6080412f97",
+      "timestamp": "2026-10-09T17:27:35.011077Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "生产者钉住的provenance可通过；文件漂移仍拒绝；同一物理文件和hardlink在未变化时只读取一次，正式writer已有hash可复用。",
+  "expected": "受监督无窗口worker完成只读组合预检并领取原operation；Git/节点/派生子命令不创建持有输出管道的console host；保持原超时、stderr和fail-closed语义。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/services/dataset_release/monthly_candidate_finalizer.py",
-      "backend/services/dataset_release/monthly_file_identity.py",
+      "backend/services/dataset_release/monthly_hmm_derive.py",
       "backend/services/dataset_release/monthly_immutable_deploy.py",
-      "backend/services/dataset_release/monthly_local_validation.py",
-      "backend/services/dataset_release/monthly_official_adapters.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_subprocess.py",
       "backend/services/dataset_release/monthly_worker.py",
-      "backend/tests/dataset_release/test_monthly_local_validation.py",
-      "backend/tests/dataset_release/test_monthly_preparation_source.py",
-      "tests/aistock_validation/bugs/20261009_BUG-1831-monthly-downstream-validation-rejects-sealed-provenance-and-repeatedly-s.json"
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1834-windows-supervised-monthly-worker-hangs-on-console-subprocess-pipes-befo.json"
     ],
     "added_files": [
-      "backend/services/dataset_release/monthly_file_identity.py"
+      "backend/services/dataset_release/monthly_subprocess.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/monthly_candidate_finalizer.py",
-      "backend/services/dataset_release/monthly_file_identity.py",
+      "backend/services/dataset_release/monthly_hmm_derive.py",
       "backend/services/dataset_release/monthly_immutable_deploy.py",
-      "backend/services/dataset_release/monthly_local_validation.py",
-      "backend/services/dataset_release/monthly_official_adapters.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_subprocess.py",
       "backend/services/dataset_release/monthly_worker.py",
-      "backend/tests/dataset_release/test_monthly_local_validation.py",
-      "backend/tests/dataset_release/test_monthly_preparation_source.py",
-      "tests/aistock_validation/bugs/20261009_BUG-1831-monthly-downstream-validation-rejects-sealed-provenance-and-repeatedly-s.json"
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1834-windows-supervised-monthly-worker-hangs-on-console-subprocess-pipes-befo.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
-        "backend/services/dataset_release/monthly_candidate_finalizer.py",
-        "backend/services/dataset_release/monthly_local_validation.py",
-        "backend/services/dataset_release/monthly_official_adapters.py",
-        "backend/services/dataset_release/monthly_worker.py",
+        "backend/services/dataset_release/monthly_node_tools.py",
+        "backend/services/dataset_release/monthly_hmm_derive.py",
+        "backend/services/dataset_release/monthly_node_probe_runner.py",
         "backend/services/dataset_release/monthly_immutable_deploy.py",
+        "backend/services/dataset_release/monthly_worker.py",
+        "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
         "backend/tests/dataset_release/test_monthly_local_validation.py",
-        "backend/services/dataset_release/monthly_file_identity.py",
-        "backend/tests/dataset_release/test_monthly_file_identity.py"
+        "backend/services/dataset_release/monthly_subprocess.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -77,7 +78,7 @@
       ],
       "matched_rules": [
         {
-          "file": "backend/services/dataset_release/monthly_candidate_finalizer.py",
+          "file": "backend/services/dataset_release/monthly_node_tools.py",
           "impact_modules": [
             "qe.core",
             "local_data",
@@ -88,7 +89,7 @@
           "rule_id": "qlib_monthly_dataset_release"
         },
         {
-          "file": "backend/services/dataset_release/monthly_local_validation.py",
+          "file": "backend/services/dataset_release/monthly_hmm_derive.py",
           "impact_modules": [
             "qe.core",
             "local_data",
@@ -99,18 +100,7 @@
           "rule_id": "qlib_monthly_dataset_release"
         },
         {
-          "file": "backend/services/dataset_release/monthly_official_adapters.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/monthly_worker.py",
+          "file": "backend/services/dataset_release/monthly_node_probe_runner.py",
           "impact_modules": [
             "qe.core",
             "local_data",
@@ -132,6 +122,28 @@
           "rule_id": "qlib_monthly_dataset_release"
         },
         {
+          "file": "backend/services/dataset_release/monthly_worker.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
           "file": "backend/tests/dataset_release/test_monthly_local_validation.py",
           "impact_modules": [
             "qe.core",
@@ -143,18 +155,7 @@
           "rule_id": "qlib_monthly_dataset_release"
         },
         {
-          "file": "backend/services/dataset_release/monthly_file_identity.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_monthly_file_identity.py",
+          "file": "backend/services/dataset_release/monthly_subprocess.py",
           "impact_modules": [
             "qe.core",
             "local_data",
@@ -169,56 +170,58 @@
         "critical"
       ],
       "suggested_scope": [
-        "backend/services/dataset_release/monthly_candidate_finalizer.py",
-        "backend/services/dataset_release/monthly_local_validation.py",
-        "backend/services/dataset_release/monthly_official_adapters.py",
-        "backend/services/dataset_release/monthly_worker.py",
+        "backend/services/dataset_release/monthly_node_tools.py",
+        "backend/services/dataset_release/monthly_hmm_derive.py",
+        "backend/services/dataset_release/monthly_node_probe_runner.py",
         "backend/services/dataset_release/monthly_immutable_deploy.py",
+        "backend/services/dataset_release/monthly_worker.py",
+        "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
         "backend/tests/dataset_release/test_monthly_local_validation.py",
-        "backend/services/dataset_release/monthly_file_identity.py",
-        "backend/tests/dataset_release/test_monthly_file_identity.py"
+        "backend/services/dataset_release/monthly_subprocess.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/services/dataset_release/monthly_candidate_finalizer.py",
-      "backend/services/dataset_release/monthly_local_validation.py",
-      "backend/services/dataset_release/monthly_official_adapters.py",
-      "backend/services/dataset_release/monthly_worker.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_hmm_derive.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
       "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
       "backend/tests/dataset_release/test_monthly_local_validation.py",
-      "backend/services/dataset_release/monthly_file_identity.py",
-      "backend/tests/dataset_release/test_monthly_file_identity.py"
+      "backend/services/dataset_release/monthly_subprocess.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/dataset_release/monthly_candidate_finalizer.py",
-      "backend/services/dataset_release/monthly_local_validation.py",
-      "backend/services/dataset_release/monthly_official_adapters.py",
-      "backend/services/dataset_release/monthly_worker.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_hmm_derive.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
       "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
       "backend/tests/dataset_release/test_monthly_local_validation.py",
-      "backend/services/dataset_release/monthly_file_identity.py",
-      "backend/tests/dataset_release/test_monthly_file_identity.py"
+      "backend/services/dataset_release/monthly_subprocess.py"
     ]
   },
-  "first_seen_at": "2026-10-09T16:22:49.297300Z",
+  "first_seen_at": "2026-10-09T17:27:35.011077Z",
   "fix_branch": null,
-  "fix_commit": "7674d189bbb0d0bc23f548b301c77e869a899326",
-  "fixed_at": "2026-10-09T16:51:05Z",
-  "github_issue_number": 5842,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5842",
-  "last_seen_at": "2026-10-09T16:22:49.297300Z",
+  "fix_commit": "2784c131983bf89bf101492df382565b1fde3352",
+  "fixed_at": "2026-10-09T17:46:56Z",
+  "github_issue_number": 5853,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5853",
+  "last_seen_at": "2026-10-09T17:27:35.011077Z",
   "module": "qlib_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5844",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5854",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_local_validation.py::test_local_validator_accepts_build_manifest_pinned_provenance -q",
+  "reproduce_command": "n/a",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -227,13 +230,14 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
-      "RED: manifest-pinned BUILD provenance was rejected as unknown by LOCAL_VALIDATE; GREEN: the same file and resume pass, its bytes stay unchanged, unpinned foreign provenance still fails.",
-      "Final targeted regression matrix: 81 passed, 1 skipped; local validation, candidate finalizer, official adapters, durable worker, remote deployment and shared file identity. These are code tests, not dataset acceptance or a historical source scan.",
-      "Fresh official worker wiring preflight PASS from task worktree; database_opened=false, operation_claimed=false. No candidate, profile, market data or runtime process changed.",
-      "Review1: reuse only code-owned writer hashes or actual byte hashes under unchanged dev/inode/size/mtime/ctime; never seed a cache from manifest claims. Review2 correction: conflicting hashes for one signature now fail; cache is bounded and cold/evicted keys rehash actual bytes; hardlink aliases share one physical read. Review3: provenance admission derives only from the already validated manifest, unknown entries, file drift, links, six-pool/PIT and alias identity remain fail-closed.",
-      "DESIGN-COMPLIANCE-001四项通过：只修复已确认的衔接与重复IO，不宣称月更数据已READY；不做静默回退；不修改模型、PIT或业务语义；不新增baseline、源历史校验或人工门禁，重启仍由用户执行。",
-      "Fresh official worker wiring preflight PASS; database_opened=false and operation_claimed=false; no service process control",
-      "Fresh official monthly worker preflight passed; database_opened=false, operation_claimed=false"
+      "RED：启动Git、节点probe及部署三个回归用例在原代码均失败；GREEN：统一有限子命令无窗口启动后均通过。",
+      "真实Windows无窗口fresh process执行正式月更worker --preflight，2.594秒正常退出、status=PASS，九月原operation未领取，database_opened=false、candidate/profile/runtime写入=false。",
+      "三轮审核：核对真实worker两次阻塞调用栈；核对全部月更Git/派生/probe/stream有限子命令；核对stdin所有权、stderr/退出码/超时与POSIX零flags兼容。未改变业务数据、模型、PIT、月份校验或发布门禁。",
+      "定向测试14项通过，包含真实无窗口Git fresh-process回归及派生/stream非零退出传播；相关composition/transport小矩阵9 passed、1 skipped。组合绑定修订后7个fix-point通过。Ruff、L0与git diff --check通过。",
+      "WSL已有rdagent-gpu环境fresh process验证POSIX creationflags=0及有限子命令正常退出。Windows worktree的.git文件不能被WSL Git解析，此错误仅属于测试命令路径，未修改Git配置；改用实际Python有限子命令验证POSIX兼容并通过。",
+      "DESIGN-COMPLIANCE-001逐项通过：真实程序阻断修复，不宣称九月candidate已就绪；退出码与错误保留；数据/模型/业务合同不变；未引入全历史校验、门禁或额外人工审批。",
+      "Windows CREATE_NO_WINDOW formal worker --preflight -> PASS in 2.594s; database_opened=false, operation_claimed=false",
+      "Windows CREATE_NO_WINDOW formal worker --preflight -> PASS 2.594s; database_opened=false, operation_claimed=false"
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
@@ -242,9 +246,9 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "passed",
-    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG1831/post-restart-verify.json",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG1834/post-restart-verify.json",
     "post_restart_receipt_summary": {
-      "bug_id": "BUG-1831",
+      "bug_id": "BUG-1834",
       "business_smoke_semantic": {
         "contract_id": "monthly_release_worker_supervision",
         "reason": null,
@@ -252,16 +256,16 @@
       },
       "catalog_sha256": "0345f8962587ad48e3a1fdf857a818f571db4739c6a9a62208bfa88785b7a071",
       "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
-      "expected_identity": "7674d189bbb0d0bc23f548b301c77e869a899326",
+      "expected_identity": "2784c131983bf89bf101492df382565b1fde3352",
       "expected_terminal_outcome_digest": null,
-      "generated_at": "2026-10-09T17:22:29.818291Z",
+      "generated_at": "2026-10-09T18:13:18.131491Z",
       "mode": "read_only",
-      "observed_identity": "7c526fa34f3fbc9cddab2bfcab9a731736ec0bd7",
+      "observed_identity": "2784c131983bf89bf101492df382565b1fde3352",
       "post_restart_effective_gate": "passed",
-      "probe_evidence_digest": "94463303d0ec06244360cb40db4cf24c0888bde835069e38118480312dfaa8f1",
-      "receipt_sha256": "9ed398c380a45b67e1d6452acf5969976d7901812a524fb2708b435a1ad78e0e",
+      "probe_evidence_digest": "559e493aac8ed21bee2c34ac5d03cc78243fbfd5af042d1c2d20cd51f7625bbd",
+      "receipt_sha256": "15d30fa15ba9651d81137405e80156cecd87bf58e7f96e30e89bad4ed92b4412",
       "response_content_persisted": false,
-      "runtime_identity_proof_digest": "753880d67682db94ef5a866234d1a54841448572717e5fb0943bc1126039fd73",
+      "runtime_identity_proof_digest": "0edd809137d2ac7ee7578f6af001a2e65e381ef6861684e241e4aaa05c509778",
       "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
       "target_id": "worker-scheduler"
     },
@@ -277,38 +281,40 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "source_merge_receipt": {
-    "bug_id": "BUG-1831",
+    "bug_id": "BUG-1834",
     "production_gates": {
       "production_backend_dependency_gate": "noop",
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "1a2deec6701f29ad",
-    "recorded_at": "2026-10-09T16:51:41.447585Z",
+    "receipt_id": "863c752ee9c11068",
+    "recorded_at": "2026-10-09T17:47:30.810163Z",
     "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
     "runtime_identity_match": "pending",
     "runtime_verification": "pending_user_restart",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "2013ce3187ff85e6f878024c52abb7a8461158fe",
-    "source_merge_commit": "7674d189bbb0d0bc23f548b301c77e869a899326",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5844",
+    "source_head_oid": "53b5ef59799f6eb8f0da7686b9d9955cb9b34b85",
+    "source_merge_commit": "2784c131983bf89bf101492df382565b1fde3352",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5854",
     "validation_evidence": [
-      "python -m nox -s l0 -> passed"
+      "python -m nox -s l0 -> passed",
+      "pytest backend/tests/dataset_release/test_monthly_node_probe_runner.py -q -> 14 passed"
     ],
-    "validation_evidence_digest": "3795de44c9bd37569bfe5f03fc970480732fcb54e21e94e76a12fc0664c1fc80"
+    "validation_evidence_digest": "fa7a4a45de1cff77dafa5fe6577aa7ddb2ddad3bc637138c94e55ca0be2b10a0"
   },
   "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
-  "title": "Monthly downstream validation rejects sealed provenance and repeatedly scans unchanged release bytes",
+  "title": "Windows supervised monthly worker hangs on console subprocess pipes before claiming operation",
   "trigger_condition": {
-    "fingerprint": "3bca7584bc53d247891e2513",
-    "source_event_id": "FE-20261009-3bca7584bc53"
+    "fingerprint": "ea6080412f9761cf505f4516",
+    "source_event_id": "FE-20261009-ea6080412f97"
   },
   "validation_evidence": [
     "python -m nox -s l0 -> passed",
-    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1831 --target worker-scheduler -> verified"
+    "pytest backend/tests/dataset_release/test_monthly_node_probe_runner.py -q -> 14 passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1834 --target worker-scheduler -> verified"
   ],
   "verification_budget": {
     "budget": "standard",
