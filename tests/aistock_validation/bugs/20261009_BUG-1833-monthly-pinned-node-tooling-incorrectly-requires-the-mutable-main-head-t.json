@@ -1,6 +1,7 @@
 {
   "actual": "无关main推进被误当作monthly tooling source commit changed。",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_worker_nodes.py",
     "backend/services/dataset_release/monthly_node_tools.py",
     "backend/tests/dataset_release/test_monthly_worker_nodes.py",
     "tests/aistock_validation/bugs/20261009_BUG-1833-monthly-pinned-node-tooling-incorrectly-requires-the-mutable-main-head-t.json"
@@ -101,7 +102,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_worker_nodes.py::test_tools_bundle_uses_git_bytes_not_dirty_source_or_dotenv -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -109,7 +110,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED: a real fixture Git commit remains valid but _bundle rejects it after main advances. GREEN: the pinned archive remains byte-identical after HEAD advances; unavailable commits still fail.",
+      "Bootstrap is now extracted from the same pinned Git archive and checked against its inventory hash, not inspect.getsource on a mutable working checkout. DEPLOY and consumer composition share one bounded process-local startup-commit publisher.",
+      "Three review rounds: no main-unchanged gate or dataset baseline added; no live/dirtied source used for remote bootstrap; missing/ambiguous function or drifted bootstrap bytes remain fail-closed. No market QA, model/PIT, training or business contract changed.",
+      "Fresh worker composition preflight PASS; database_opened=false, operation_claimed=false, network_access=false, runtime_action=false. DESIGN-COMPLIANCE-001 complete: source merge and real monthly/runtime acceptance are separate, no partial data delivery reported as READY.",
+      "Targeted node tooling, composition, runner and remote transport regression PASS; L0 and changed-file lint PASS. Existing fixtures only, no real node tools, candidate or profile written."
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

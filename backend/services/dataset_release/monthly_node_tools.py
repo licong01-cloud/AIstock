@@ -7,9 +7,9 @@ are involved. Preparation is lazy, at DEPLOY/probe execution, never preflight.
 from __future__ import annotations
 
 import base64
+import ast
 from dataclasses import dataclass
 import hashlib
-import inspect
 import io
 import json
 from pathlib import Path, PurePosixPath
@@ -172,16 +172,19 @@ def _install_node_tools(payload):
 
 def _bundle(source_root: Path, commit: str) -> tuple[dict, str]:
     def git(*args):
-        return subprocess.run(
-            ("git", "-C", str(source_root), *args),
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=180,
-        ).stdout
+        try:
+            return subprocess.run(
+                ("git", "-C", str(source_root), *args),
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=180,
+            ).stdout
+        except subprocess.CalledProcessError as error:
+            raise ValueError("monthly tooling pinned Git source is unavailable") from error
 
-    if git("rev-parse", "HEAD").decode().strip() != commit:
-        raise ValueError("monthly tooling source commit changed since worker composition")
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise ValueError("monthly tooling source commit is invalid")
     roots = set(git("ls-tree", "--name-only", commit).decode().splitlines())
     selected = sorted(roots & {"backend", "scripts", "config", "configs"})
     if not {"backend", "scripts"} <= set(selected):
@@ -220,6 +223,32 @@ def _bundle(source_root: Path, commit: str) -> tuple[dict, str]:
     return manifest, base64.b64encode(raw).decode("ascii")
 
 
+def _bootstrap(manifest: dict, encoded: str) -> str:
+    name = "backend/services/dataset_release/monthly_node_tools.py"
+    raw = base64.b64decode(encoded, validate=True)
+    if hashlib.sha256(raw).hexdigest() != manifest["archive_sha256"]:
+        raise ValueError("monthly tooling bootstrap archive identity differs")
+    rows = {row["path"]: row for row in manifest["files"]}
+    with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as handle:
+        member = handle.getmember(name)
+        if not member.isfile():
+            raise ValueError("monthly tooling bootstrap is not regular source")
+        content = handle.extractfile(member).read()
+    expected = rows.get(name)
+    if (
+        expected is None
+        or expected["size"] != len(content)
+        or expected["sha256"] != hashlib.sha256(content).hexdigest()
+    ):
+        raise ValueError("monthly tooling bootstrap identity differs")
+    source = content.decode("utf-8")
+    tree = ast.parse(source)
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_install_node_tools"]
+    if len(functions) != 1:
+        raise ValueError("monthly tooling frozen bootstrap is ambiguous")
+    return ast.get_source_segment(source, functions[0])
+
+
 @dataclass
 class MonthlyNodeTools:
     host: str
@@ -256,7 +285,7 @@ class MonthlyNodeTools:
             parent = (PurePosixPath(self.legacy_project_root).parent / ".aistock-monthly-tools").as_posix()
             payload = {"manifest": manifest, "archive": archive, "tools_parent": parent}
             bootstrap = (
-                inspect.getsource(_install_node_tools)
+                _bootstrap(manifest, archive)
                 + "\nimport json,sys\nprint(json.dumps(_install_node_tools(json.load(sys.stdin)),sort_keys=True,separators=(',',':')))\n"
             )
             remote = "exec " + shlex.quote(self.python_executable) + " -c " + shlex.quote(bootstrap)
