@@ -3,9 +3,8 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_repair_journal.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
-    "backend/services/tushare_sync_engine.py",
     "backend/tests/dataset_release/test_monthly_repair_journal.py",
-    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "tests/aistock_validation/bugs/20261009_BUG-1822-monthly-source-seal-rejects-completed-post-cutoff-suspend-date-windows.json"
   ],
   "assigned_agent": null,
@@ -17,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-09T03:58:49.977475Z",
-  "description": "SOURCE 准备耗时6487秒后被三条10月 suspend_d reconciled 事件误阻断；9月prepared suspend_limit 已PASS。",
+  "description": "SOURCE 准备耗时6487秒后被三条10月 suspend_d reconciled 事件误阻断；9月prepared suspend_limit 已PASS。只修 worker-scheduler 的独立账本范围识别；采集器整批日期约束已独立登记 BUG-1823（backend-main），不得通过本 BUG 的合入推断该约束运行态已生效。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -33,9 +32,7 @@
     "changed_files": [
       "backend/services/dataset_release/monthly_repair_journal.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/services/tushare_sync_engine.py",
-      "backend/tests/dataset_release/test_monthly_repair_journal.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/dataset_release/test_monthly_repair_journal.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -166,16 +163,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED: completed post-cutoff suspend range with real rows failed on both managed ledgers; GREEN: fixed-point tests passed.",
+      "Existing DEV readonly typed-ledger SQL regression: complete range resolves; missing/duplicate date, NULL quality, wrong scope/date/count/dataset/job and failed owner stay blocking; NULL aggregation gap detected RED and fixed GREEN.",
+      "Fresh Python readonly production ledger readback since attempt251 snapshot: remaining_overlap_count=0; query_elapsed_seconds=0.069; transaction_read_only=on; database_write=false; no candidate/profile/process writes.",
+      "Fresh official monthly worker --preflight PASS: adapter_version=14; adapter_contract_sha256=31f874d132cc5f8d77cd92683aad38b740426e7b41bbf15ef663139363709ee4; registry_sha256=0ee4f0170bb0419ddb7fdb1f965ae6f394676ada538459efd74d88dbbd277f28; database_opened=false; operation_claimed=false; candidate/profile/runtime writes=false.",
+      "Three source review rounds: registered scope and full-window ledger closure; PostgreSQL NULL-safe evidence and failed/unknown/cross-cutoff preservation; no physical source scan, one operation, no active/profile/DB/process writes. Companion BUG-1823 enforces all provider rows before BY_DATE writes and must be deployed together."
+    ],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },

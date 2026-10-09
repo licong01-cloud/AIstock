@@ -156,6 +156,57 @@ def test_evidenced_empty_future_suspend_does_not_invalidate_september_source() -
     ) == ()
 
 
+def _completed_future_suspend(connection: Connection, *, ledger='ingestion_jobs') -> tuple:
+    scope = _future_empty_suspend(connection, ledger=ledger)[7]
+    scope.update(start_date='2026-10-09', refresh_start_date='2026-10-09',
+                 end_date='2026-10-12', refresh_end_date='2026-10-12', inserted_rows=15)
+    scope['stats'].update(mode='incremental', inserted_rows=15, total_batches=4, success_batches=4)
+    return (ledger, 'closed-future-window', 'success' if ledger == 'ingestion_jobs' else 'reconciled',
+            'suspend_d', connection.now, None, connection.now, scope, True,
+            date(2026, 10, 9) if ledger == 'data_sync_attempts' else None)
+
+
+@pytest.mark.parametrize('ledger', ['ingestion_jobs', 'data_sync_attempts'])
+def test_completed_future_suspend_range_with_real_rows_does_not_invalidate_source(ledger) -> None:
+    connection = Connection()
+    connection.overlaps = [_completed_future_suspend(connection, ledger=ledger)]
+    assert ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30)).overlapping_repairs(
+        connection, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00',
+    ) == ()
+
+
+@pytest.mark.parametrize('case', [
+    'cutoff', 'unclosed', 'missing_proof', 'unknown_schedule', 'invalid_count',
+    'mismatched_bounds', 'wrong_target', 'missing_owner', 'failed_batch',
+])
+def test_completed_future_suspend_keeps_unknown_or_intersecting_scopes_blocking(case) -> None:
+    row = list(_completed_future_suspend(Connection(), ledger='data_sync_attempts'))
+    scope = row[7]
+    if case == 'cutoff':
+        scope['start_date'] = scope['refresh_start_date'] = '2026-09-30'
+    elif case == 'unclosed':
+        row[6] = None
+    elif case == 'missing_proof':
+        row[8] = False
+    elif case == 'unknown_schedule':
+        scope['schedule_dataset'] = '_suspend_d_custom'
+    elif case == 'invalid_count':
+        scope['inserted_rows'] = True
+    elif case == 'mismatched_bounds':
+        scope['refresh_end_date'] = '2026-10-13'
+    elif case == 'wrong_target':
+        row[9] = date(2026, 9, 30)
+    elif case == 'missing_owner':
+        row[7] = None
+    elif case == 'failed_batch':
+        scope['stats']['failed_batches'] = 1
+    connection = Connection()
+    connection.overlaps = [tuple(row)]
+    assert len(ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30)).overlapping_repairs(
+        connection, 'managed-writer-ledgers-v2:2026-10-01T00:00:00+00:00',
+    )) == 1
+
+
 REGISTERED_SUSPEND_SCOPES = (
     ('suspend_d', 'current_and_next_trading_day'),
     ('_suspend_d_tminus1_1730', 'next_trading_day'),
@@ -501,6 +552,54 @@ def test_actual_overlap_sql_in_readonly_dev(readonly_dev_connection, case: str, 
         rows = cursor.fetchall()
     assert len(rows) == 2
     assert all(journal._empty_future_suspend(row) is excluded for row in rows)
+
+
+@pytest.mark.parametrize('case', [
+    'complete', 'missing_date', 'duplicate_date', 'null_quality', 'wrong_scope',
+    'outside_window', 'wrong_count', 'other_dataset', 'failed_owner', 'wrong_job',
+])
+def test_completed_suspend_range_sql_in_readonly_dev(readonly_dev_connection, case) -> None:
+    scope = _completed_future_suspend(Connection())[7]
+    moment = '2026-10-09T02:54:40+00:00'
+    jobs = [dict(job_id='j', status='success', summary=scope, created_at=moment, finished_at=moment)]
+    targets, attempts = [], []
+    for index, day in enumerate(range(9, 13)):
+        targets.append(dict(target_id=f't{index}', dataset='suspend_d',
+                            target_date=f'2026-10-{day:02d}', target_scope={'query_mode': 'by_date'}))
+        attempts.append(dict(attempt_id=f'a{index}', target_id=f't{index}', job_id='j',
+                             status='reconciled', rows_written=15 if index == 0 else 0,
+                             rows_observed=15 if index == 0 else 0,
+                             context_json={'quality_status': 'ok' if index == 0 else 'empty_valid'},
+                             created_at=moment, finished_at=moment))
+    if case == 'missing_date':
+        attempts.pop()
+    elif case == 'duplicate_date':
+        attempts.append({**attempts[0], 'attempt_id': 'duplicate'})
+    elif case == 'null_quality':
+        attempts[1]['context_json'] = {}
+    elif case == 'wrong_scope':
+        targets[0]['target_scope'] = {'query_mode': 'by_code'}
+    elif case == 'outside_window':
+        targets[0]['target_date'] = '2026-09-30'
+    elif case == 'wrong_count':
+        scope['inserted_rows'] = scope['stats']['inserted_rows'] = 14
+    elif case == 'other_dataset':
+        targets[0]['dataset'] = 'adj_factor'
+    elif case == 'failed_owner':
+        jobs[0]['status'] = 'failed'
+    elif case == 'wrong_job':
+        attempts[0]['job_id'] = 'other'
+    fake = Connection()
+    journal = ManagedRepairImpactJournal(source_cutoff=date(2026, 9, 30))
+    journal.overlapping_repairs(fake, 'managed-writer-ledgers-v2:2026-10-09T02:00:10+00:00')
+    sql, params = fake.calls[0]
+    with readonly_dev_connection.cursor() as cursor:
+        cursor.execute('SHOW transaction_read_only')
+        assert cursor.fetchone()[0] == 'on'
+        cursor.execute(_ledger_cte_query(sql), (json.dumps(jobs), json.dumps(attempts), json.dumps(targets), *params))
+        rows = cursor.fetchall()
+    assert rows
+    assert all(journal._completed_future_suspend(row) is (case == 'complete') for row in rows)
 
 
 @pytest.mark.parametrize("case,blocked", [
