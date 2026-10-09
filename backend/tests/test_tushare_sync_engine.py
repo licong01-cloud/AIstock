@@ -428,6 +428,21 @@ def test_provider_contract_rejects_nullable_identity_columns_outside_primary_key
         )
 
 
+@pytest.mark.parametrize("wrong_row", [0, 10, 14])
+def test_by_date_validates_request_date_beyond_first_ten_rows(wrong_row) -> None:
+    rows = [{"ts_code": f"{index:06d}.SZ", "trade_date": "20261009", "suspend_type": "S"}
+            for index in range(15)]
+    rows[wrong_row]["trade_date"] = "20260930"
+    with pytest.raises(RuntimeError, match="provider_contract_error returned date outside request"):
+        TushareSyncEngine()._validate_rows_for_date(SUSPEND_D, rows, dt.date(2026, 10, 9))
+
+
+def test_by_date_accepts_full_same_date_batch() -> None:
+    rows = [{"ts_code": f"{index:06d}.SZ", "trade_date": "20261009", "suspend_type": "S"}
+            for index in range(15)]
+    TushareSyncEngine()._validate_rows_for_date(SUSPEND_D, rows, dt.date(2026, 10, 9))
+
+
 def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monkeypatch):
     calls = []
 
