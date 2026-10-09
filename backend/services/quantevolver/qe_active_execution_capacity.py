@@ -1931,6 +1931,30 @@ class QEExecutionReservationReconciler:
             )
 
         if inspection.status == "not_reserved":
+            if inspection.pid is not None or inspection.process_identity is not None:
+                raise QEWorkspaceSubmissionCoordinatorError(
+                    "not_reserved receipt must not describe an active process",
+                    reason_code="qe_workspace_submission_receipt_invalid",
+                    context={"reservation_id": reservation.get("reservation_id")},
+                )
+            if str(reservation.get("source_kind") or "") == "qe_evolution_loop":
+                spec = QEExecutionReservationSpec(
+                    node_id=node_id,
+                    source_kind="qe_evolution_loop",
+                    source_execution_id=str(reservation.get("source_execution_id") or ""),
+                    qe_task_id=task_id,
+                    qe_loop_id=loop_id,
+                    submission_intent_hash=str(reservation.get("submission_intent_hash") or ""),
+                )
+                released = self._repository.release_deleted_evolution_reservation(
+                    spec,
+                    expected_row_version=int(reservation.get("row_version") or 0),
+                    expected_fencing_token=int(reservation.get("fencing_token") or 0),
+                    post_grace_seconds=self._post_grace_seconds,
+                )
+                if released is not None:
+                    self._notify_terminal_release(released)
+                    return "terminal_released"
             if (
                 str(reservation.get("status") or "") == "reconciling"
                 and str(reservation.get("remote_status") or "") == "not_reserved"
@@ -2016,23 +2040,23 @@ class QEExecutionReservationReconciler:
             release_reason_code=release_reason_code,
         )
         if next_status in {"released", "failed", "cancelled"}:
-            from .qe_reconciliation_coordinator import (
-                QEReconciliationScope,
-                notify_qe_reconciliation,
-            )
-
-            wake_key = str(reservation.get("reservation_id") or "").strip()
-            notify_qe_reconciliation(
-                QEReconciliationScope.EXPERIMENT,
-                key=wake_key,
-                force=True,
-            )
-            notify_qe_reconciliation(
-                QEReconciliationScope.EVOLUTION,
-                key=wake_key,
-                force=True,
-            )
+            self._notify_terminal_release(reservation)
         return True
+
+    @staticmethod
+    def _notify_terminal_release(reservation: Mapping[str, Any]) -> None:
+        from .qe_reconciliation_coordinator import (
+            QEReconciliationScope,
+            notify_qe_reconciliation,
+        )
+
+        wake_key = str(reservation.get("reservation_id") or "").strip()
+        notify_qe_reconciliation(
+            QEReconciliationScope.EXPERIMENT, key=wake_key, force=True,
+        )
+        notify_qe_reconciliation(
+            QEReconciliationScope.EVOLUTION, key=wake_key, force=True,
+        )
 
     def _post_is_inside_grace_period(self, reservation: Mapping[str, Any]) -> bool:
         if str(reservation.get("remote_status") or "") != "post_pending":

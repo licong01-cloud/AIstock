@@ -265,6 +265,67 @@ def test_production_source_allowlist_preserves_exact_daily_and_minute_ordering()
     assert "to_jsonb(source_row)" not in daily.sql + minute.sql
 
 
+@pytest.mark.parametrize("query_id", ["margin_detail", "daily_basic", "kline_daily_raw", "kline_minute_raw"])
+def test_margin_publication_scope_is_independent_of_pit_stock_queries(dataset_profile, query_id):
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+
+    authority = MonthlyObservedSourceAuthority(
+        dataset_profile, None, progress=lambda _: None, month_start=date(2026, 9, 1),
+    )
+    pit = SimpleNamespace(spans=[SimpleNamespace(ts_code="000001.SZ")])
+    query = PRODUCTION_QUERY_SPECS[query_id]
+    requests = list(authority._partition_requests(query, date(2026, 9, 30), pit_snapshot=pit))
+    assert requests and all(params["start"] == date(2026, 9, 1) for _, params in requests)
+    if query_id == "margin_detail":
+        assert query.code_column is query.code_policy is None
+        assert "%(codes)s" not in query.sql
+        assert "provider_publication_scope_v1" in query.query_version
+        assert all("codes" not in params for _, params in requests)
+    else:
+        assert "%(codes)s" in query.sql
+        assert all(params["codes"] == ["000001.SZ"] for _, params in requests)
+    assert [span.ts_code for span in pit.spans] == ["000001.SZ"]
+
+
+def test_margin_publication_sql_in_existing_readonly_dev():
+    import os
+
+    if os.getenv("AISTOCK_MONTHLY_MARGIN_DEV_READBACK") != "1":
+        pytest.skip("explicit existing DEV read-only validation only")
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_margin_publication
+
+    target = {key: os.environ[f"TDX_DB_DEV_{env}"] for key, env in (
+        ("host", "HOST"), ("port", "PORT"), ("dbname", "NAME"), ("user", "USER"), ("password", "PASSWORD"),
+    )}
+    assert target["port"] == "5433" and "dev" in target["dbname"].lower()
+    query = PRODUCTION_QUERY_SPECS["margin_detail"]
+    day = date(2026, 9, 1)
+    provider = [dict(ts_code=code, trade_date=day.isoformat(), **dict.fromkeys(query.value_columns, 1.0))
+                for code in ("000001.SZ", "000002.SZ", "510050.SH")]
+    columns = "ts_code text, trade_date date," + ",".join(f"{name} numeric" for name in query.value_columns)
+    sql = (f"WITH provider_rows AS (SELECT * FROM jsonb_to_recordset(%(provider_rows)s::jsonb) AS fact({columns})) "
+           + query.sql.replace(query.table_identity, "provider_rows"))
+    with psycopg2.connect(**target, application_name="BUG-1818-readonly-DEV") as connection:
+        connection.set_session(readonly=True, autocommit=False)
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SHOW transaction_read_only")
+            assert cursor.fetchone()["transaction_read_only"] == "on"
+            cursor.execute(sql, dict(provider_rows=json.dumps(provider), codes=["000001.SZ"], start=day, end=day))
+            actual = [json.loads(row["row_payload"]) for row in cursor.fetchall()]
+    assert {row["ts_code"] for row in actual} == {row["ts_code"] for row in provider}
+    receipt = {"eligible_sources": {"margin_detail": ["tushare"]},
+               "eligible_quality_statuses": {"margin_detail": ["ok"]},
+               "rows": [{"dataset": "margin_detail", "trade_date": day.isoformat(), "sources": [{
+                   "data_source": "tushare", "status": "success", "error_present": False,
+                   "quality_status": "ok", "expected_rows": len(provider),
+               }]}]}
+    gate = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=day, rows=actual, receipt=receipt, gate=gate)
+    assert gate.status == "PASS"
+
+
 def test_dated_source_query_cannot_bypass_refresh_audit_contract() -> None:
     with pytest.raises(ValueError, match="refresh-audit dataset"):
         SourceQuerySpec(

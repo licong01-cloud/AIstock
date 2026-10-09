@@ -229,7 +229,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "11"
+    assert adapter.adapter_version == "14"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -241,7 +241,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
             "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
             "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
-            "managed_writer_scope_policy": "bounded_post_cutoff_go_raw_v1",
+            "managed_writer_scope_policy": "bounded_post_cutoff_completed_date_writers_v2",
             "component_preparation_dependency_digest": digest_named_fields(
                 "aistock_monthly_component_dependency_v1",
                 source.component_dependencies(),
@@ -438,6 +438,8 @@ def test_explicit_financing_deferral_only_changes_actual_tail_query_and_audit_en
     assert margin[0][0] == basic[0][0] == "2026-09-01_2026-09-30"
     assert margin[0][1]["end"] == date(2026, 9, 29)
     assert margin[0][1]["user_deferred_trade_date"] == DAY
+    assert "codes" not in margin[0][1]
+    assert basic[0][1]["codes"] == ["000001.SZ"]
     assert basic[0][1]["end"] == DAY
     checked = []
     ledger = SimpleNamespace(partition_digest=lambda *args: checked.append(args))

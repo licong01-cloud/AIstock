@@ -1,6 +1,6 @@
-# RD-Agent 因子研发辅助整合详细设计
+# 因子研发假设先行与独立经验检索详细设计（含 RD-Agent 参考整合）
 
-日期：2026-10-08；版本：1.2；级别：F2；状态：AIstock 问题包准备已实现并通过本地验收，源码合入以 PR/CI 为准，研究计算未启动。依据[蓝图 §20](factor_research_evolution_blueprint_20260908.md#rdagent-integration)与[方法论 §2.5](../analysis/factor_research_methodology.md#rdagent-assistance)。本文落实接口、映射、实现范围和验收，不复制或改变方法论 C-1～C-7。1.2 以 §6 的 AIstock 文件交接取代原 RD-ASSIST-01 原生生成器交付；§10/13 是当时的验收历史，不代表仍需修改 RD-Agent。
+初版日期：2026-10-08；修订日期：2026-10-09；版本：1.4；级别：F2；状态：§15–18 的工具实现及验收见§19，真实研究未执行；源码合入/运行时加载分别确认。依据已合入 PR #5814（merge `b9e954cbb6d6ce08d50c39ef672568933770a28b`）的[蓝图 §21](factor_research_evolution_blueprint_20260908.md#hypothesis-memory)及[方法论 §2.6](../analysis/factor_research_methodology.md#hypothesis-memory)。原指定文件读取、提案检查和问题包已有实现，见§13/14。本文落实接口、映射、实现范围和验收，不复制或改变方法论 C-1～C-7。保留文件名/锚点，避免另建同主题设计；§10/13/14/18 历史验收不追溯改写。
 
 1.0（PR #5756）仅交付设计及蓝图/方法论入口链接，当时没有代码实施。1.1 仅实施 §8 的 AIstock 离线边界，实测和未交付项见 §13；不改 Skill、数据库、数据集、模型配置或研究计算。P1/P2/研究比较既有历史验收与研究结果不追溯修改。
 
@@ -30,7 +30,7 @@ AIstock 因子研发继续为主线：Codex/Claude 提出和审查假设，AIsto
 | `rdagent/scenarios/qlib/proposal/factor_proposal.py` | convert_response 构造 QlibFactorExperiment，并按名称过滤历史任务 | 不能直接复用为纯提案接口；需保持同名异公式并跳过实验对象创建 |
 | `rdagent/scenarios/qlib/experiment/factor_experiment.py` | 默认 scenario 读取旧场景/数据介绍；experiment 构造 workspace | 生成时使用本次问题包提供的语义，不隐式绑定旧数据或创建实验 workspace |
 
-CoSTEER 的 pickle、独立向量库和实时节点记录并非本设计首版必读源；不声称已全面解码或已接通 RAG。§2 记录设计初始基线；1.1 已交付的读取/检查见 §13，1.2 仅补问题包，不把它称为自动生成器。
+CoSTEER 的 pickle、独立向量库和实时节点记录并非本设计首版必读源；不声称已全面解码或已接通 RAG。§2 记录1.0–1.2设计初始基线；1.1 已交付的读取/检查见 §13，1.2 仅补问题包，不把它称为自动生成器。表内“不改 service/repository/不增加 SQL”是旧版本范围；1.3 在§15–18精确增加本模块只读研究查询，不改变原写入事务。
 
 <a id="architecture"></a>
 ## 3. 架构与职责
@@ -152,14 +152,14 @@ instructions 与引用数据分离，历史文本是不可信参考，不是操�
 
 候选来源不会改变评价。技术有效且无等价完整结果的本轮股票候选完成[完整独立评价](../analysis/factor_research_methodology.md#full-evaluation)：完整目标历史 PIT、全有效历史、h1/h5/h10/h20、存量可评价相关，优先解释2024以后、逐年及近期。复用已有 runner/full_evaluation/comparison 与官方基础口径；行业/条件角色按方法论对应范围，不凭无条件 IC 否决。
 
-研究层完整指标和用途比较不等同 QE 收益，旧 SOTA、低相关、LLM 赞同和实现通过都不是接受结论。两个信息/用途结论轴及 C-1～C-7 原文不在本文重定义。相同模型/数据的经验有无比较优先，其后才比较生成路径；模型升级单独保持其余条件可比。问题、总预算口径、参考范围和评价方法事先说明，两侧上下文接触如实披露，历史回放不冒充未接触 OOS。样本少只报告个案，不估总体发现率，不以生成数定成败。
+研究层完整指标和用途比较不等同 QE 收益，旧 SOTA、低相关、LLM 赞同和实现通过都不是接受结论。两个信息/用途结论轴及 C-1～C-7 原文不在本文重定义。需要单独评价辅助效果时先比较经验有无，再考虑生成路径/模型升级，保持其他条件可比；这些对照不是每轮前置，不为此重跑已失败历史。问题、预算口径、参考范围和评价方法事先说明，两侧上下文接触如实披露，历史回放不冒充未接触 OOS。样本少只报告个案，不估总体发现率，不以生成数定成败。
 
 提案讨论沿用 progress/decision/request/correction 等 records；只有正式计算才使用现有 attempt/run 生命周期，不能把 LLM 格式重试冒充多个独立科学假设。记录实际公式/参数/方向尝试与已查看的范围，未知不补齐。紧凑 assistance 内容为 request_id、producer/model、实际来源引用/采用理由、候选到研究名称/脚本的映射及结果引用，不复制全库/完整对话。
 
 来源查询本身不登记研究事务。研究写入在当次获准 DEV/生产目标上通过原 writer 完成；已有 --target production 不是授权。普通记录重试复用原 record_id/请求；计算成功但登记失败按 attach 恢复，不能重算；不双写 RD-Agent KB。已完整评价且不支持的规格只留最小结果，不追加抢救、归档或连续变体；未来按新问题检索即可。
 
 <a id="implementation"></a>
-## 8. 实施方案与文件所有权
+## 8. 1.1–1.2 实施方案与文件所有权（保留，1.3见§17）
 
 | 工作包 | 因子窗口范围 | 结束条件 |
 |---|---|---|
@@ -302,3 +302,220 @@ PR #5765 已合入，source HEAD `2fbcb38ae4b9de121c7922c5fcb82ec1c881b63c`，me
 本地验证：新增函数前 RED ImportError；实现和审核修正后定向9项通过、Ruff通过、py_compile通过、L0 blocking=0、git diff --check通过。fresh-process 测试禁止导入DB、RD-Agent、模型SDK和backend.infra，覆盖准备、经验读取、检查三条离线分发。多轮顺序审核（未委派其他agent）：第一轮核对AIstock-only范围与生成/准备区别；第二轮核对原请求不变、选用经验/歧义、缺项与身份、无自动执行并修复重复findings与缺context状态；第三轮核对蓝图/方法论/详细设计、测试和真实文件交接结论一致。实际classifier为 targeted_ci_required，backend_sessions=[factor_research_backend]，dev_db_required=false，unexecuted_test_files=[]；完整所属计划由PR CI执行，不机械重跑评价。
 
 DESIGN-COMPLIANCE-001：①按用户批准的新分工完整交付问题包/检查，不把模板、概念公式或fixture冒充自动生成器/有效因子；②未知数据/模型/经验冲突可见，不静默修补；③不改变评价、PIT、记录、官方写入与其他业务，旧历史验收不改写；④无新增生产门禁、审批、资源限制或平台。catalog仍按backend-main默认分类（runtime_impact=backend，backend_restart_owner=user），不以CLI用途手工降级；本次CLI新进程可独立使用，不依赖后端重启，也不宣称常驻服务身份更新。production_ddl_gate、production_dml_gate、dependency_install、client_install均noop；数据写入、因子入库、正式指标刷新、QE实验、进程控制均未执行。
+
+<a id="memory-contract"></a>
+## 15. 1.3 独立经验检索与单一历史权威
+
+### 15.1 本次增补与非目标
+
+本节为1.3批准合同；1.4工具实施记录见§19，不将研究计划写成已运行事实。设计基线为蓝图合入后的 `b9e954cbb6d6ce08d50c39ef672568933770a28b`，实施基线为设计PR #5816 merge `261d7a23eee16b322378932b11a1dda39cd93b59`。原有两表记录/恢复、显式文件 experience、proposal-prepare/inspect、runner 与完整评价保持；增补研究库记录级查询、关系化更正呈现、紧凑经验字段映射和假设先行指导。实现不修改 RD-Agent、官方指标/评级/QE、研究 writer、schema 或数据集。
+
+“独立”指内容由 AIstock 研究记录积累并可独立检索，不是另外建历史库。首版不需要向量索引、embedding、后台同步、摘要服务、网页或模型 API；无需全量整理既有历史才能开始使用。数据库事实、模型解释和来源引用分开，未知项不自动补齐。下列逻辑字段放入已有 JSON，不扩数据库枚举，不改变原事务/幂等/恢复合同。
+
+### 15.2 最小内容模型与入库路径
+
+| 逻辑内容 | 已有落点及建议 JSON 内容 | 说明 |
+|---|---|---|
+| 当前假设 | `task.context_json.hypothesis_note`：`basis`、`statement`、`competing_explanation`、`observable_difference`、`falsifier`、`proxy_limitations` | basis 为文字说明事实/经验/文献/推测及未知；沿用 context_json 的 research_role、hypothesis_family、方向、期限和原评价引用，不造第二套参数 |
+| 一次经验结论 | 原 `result/decision` 的 `payload.experience_note`：`observation`、`interpretation`、`conditions`、`reason`、`next_evidence`、`source_refs` | conditions 声明实际数据/股票范围/期限/用途或引用原记录；无需复制指标矩阵。observed 与 inferred 不混写，不产生永久黑名单 |
+| 选择性外部参考 | 原 `progress/decision` 的同一 experience_note，source_refs 含来源路径/任务定位、选定短片段、已知时期及未知项 | RD-Agent/论文只作外部参考。没有实际本地评价就不填写或推断评价数值；可直接使用已有来源，不要求导入 |
+| 更正 | 原 `correction` + `related_record_id`，在 experience_note 描述更正范围与原因 | 原记录仍在；部分更正不抹掉其他观察，不要求链尾一定是唯一正确答案 |
+
+这些字段是建议内容，不是新强制 request schema。没有 note 的旧记录继续可检索，不补写旧记录满足模板；普通 result/decision 顺带记录经验即可，不为失败候选再建归档任务。模型不能直接调用新 writer：Codex 经审阅，用现有 `create/record --dry-run` 与获准目标提交，读回；生产写入必须有精确授权。读查询绝不顺带导入或生成摘要。
+
+新note的文字项为字符串，source_refs为定位对象数组，conditions为对象，可选research_role、hypothesis_family、input_fields、horizons、dataset_ref、universe_ref、evaluation_ref；数组/引用保持原已知值，未知省略或null。只从这些显式字段或明确关联的原尝试读取过滤依据，不从中文叙述猜成结构化事实；同条明确来源相互矛盾时报condition_conflict并保留值/定位，不任取一个作精确过滤。旧任意JSON不被新note格式拒绝写入，读取时只标缺项/不支持部分。
+
+现有 `repository._insert_record` 将原请求嵌入 `payload_json.request`；查询只读取顶层业务摘要及明确 note，不把嵌套 request 重复计入，不递归展开 research_result/候选值/日志/路径。同一外部片段可被不同研究引用，各次解释保留；展示可合并同一 source locator 的片段，但不能合并不同研究结论或同名异公式。定位不是新行情 hash，不新算历史内容身份。
+
+### 15.3 新的只读 CLI 合同
+
+新增独立命令，保留原 `list/show/context/experience/proposal-*` 参数及行为：
+
+```text
+# 1.4实现命令；仅查询显式数据库目标
+python scripts/factor_research.py memory-search --env-file <existing-env> --target dev|production --input <query.json> --format summary|json
+```
+
+只查询明确目标的现有两张研究表，沿用 `configure`、`ResearchRepository.cursor(write=False)` 的只读事务及 ResearchError/response；不使用会 bootstrap 或回写的 RD-Agent/candidate/catalog 服务。`--help` 在 configure 前返回，不连接数据库；旧 experience/proposal 三命令继续离线且无 DB 依赖。此命令的目标选择不是生产写入许可。
+
+请求 `schema_version=factor_research_memory_query_v1`：
+
+| 字段 | 精确语义 |
+|---|---|
+| query | `problem` 非空；`terms` 至少一个非空字面词；`factor_names/input_fields` 可选数组，沿用 experience 的名称/字段导航，不当正则/SQL |
+| filters | 可选 `research_role/hypothesis_family/horizons`，每键为非空字符串数组；已声明多个键取 AND，单键多个值取 OR；未设则不限。期限按记录原声明匹配，不根据字符串猜成熟日期 |
+| include_unknown | 默认 true；有 filters 而记录相应字段未知时仍可返回，但逐字段标 unknown，不能说满足过滤。false 只返回已知匹配项并披露被排除未知项数 |
+| limit / offset | 默认20/0，正整数/非负整数；仅分页，不是研发/资源门禁。明细引用保留，不声称当前页等于全部历史 |
+
+JSON解析、空词/非法分页等请求错误退出1且不查询。过滤值合法性复用现有 role/期限定义；hypothesis_family 为精确字符串而非新受控词表。SQL 参数化，LIKE 若采用则转义 `%/_`；不能拼接用户输入或让字段名控制 SQL 标识符。
+
+查询返回既有 `models.response` 包络；result 使用可被现有提案检查消费的 `factor_research_experience_v1`，沿用 query/entries/sources/matched_count/returned_count/next_offset/retrieval_status/match_status。query保留原四类查询项，并在新命令结果中带上实际filters/include_unknown，调用者将整个query原样填入experience_query，避免只绑定词项却丢失过滤条件。增加查询专属信息 `scope=research_database`、`unknown_filter_count`、`queried_at`、`related_entries`、`relations_complete`。新信息只描述查询，不覆盖原提案请求；不得把数据库查询输出传给旧 experience 当文件请求，直接作为 proposal 的 context 使用。
+
+source_ref 为 `{source_id: "aistock_research:<target>", locator: {task_id, record_id, revision}}`；任务投影条目的 record_id 为 null，revision 为实际 task revision。sources 描述目标别名、查询范围和读取状态，不含连接串、凭据或 env 内容。每 entry 保留原 observation、明确 basis、match_basis、缺项与原 source_refs；kind 为查询输出标签 `research_record`，不是新增数据库 record_type。每个记录条目另有related_refs、relations_complete及实际缺项原因；全局relations_complete仅是本页记录条目的汇总，不表示全库关系完整，任务投影的未检查关系记not_checked。DB 历史与外部引用均不是当前行情 authority。
+
+查询成功但零命中：available + no_match_in_read_scope，不写“全库无相关机制”。分页越界保留总匹配数。matched_count是文本命中且通过过滤策略的主条目数；unknown_filter_count是文本命中且无已知过滤冲突、但至少一项条件未知的条目数，include_unknown决定它们计入还是排除。连接/SQL失败退出1、ok=false、安全错误原因，不把失败伪装成空库；依赖方可继续原直接研究，不能静默称经验检索成功。截断摘要或关系不全时明确partial/原因/定位，不能由LLM猜出遗漏结论。
+
+请求示例仅说明查询，不授权重启示例所涉研究，也不是现在可执行的命令：
+
+```json
+{"schema_version":"factor_research_memory_query_v1",
+ "query":{"problem":"寻找被反转解释的旧研究及其更正","terms":["反转","reversal"],"factor_names":[],"input_fields":[]},
+ "filters":{"research_role":["predictive_increment"],"horizons":["10d","20d"]},
+ "include_unknown":true,"limit":20,"offset":0}
+```
+
+### 15.4 匹配、分页和更正关系
+
+匹配单位为任务投影或一条记录，不是整任务全部历史拼成一段。查询读取任务 title/objective/completed_summary、明确 context_json 字段，以及记录 summary/experience_note 和已有 assistance 来源摘要。记录时点条件只来自当条 payload、原请求所声明的上下文或明确关联尝试；不得用任务当前 context 给旧记录补造旧数据版本/方向。当前 task.factor_names 只作任务导航，不证明旧记录中的具体公式身份。note不存在时保留旧summary；note类型异常时保留可读内容并列invalid_note，不用整个payload字符串搜索来掩盖不支持的历史结构。
+
+首版优先在只读事务中分批读取上述紧凑投影、由 Python 复用 experience 的 casefold/空白归一字面匹配与排序；不 SELECT 全部 payload、不加载大指标/行情/代码矩阵。精确名称、明确输入字段、命中词数依次排序，最后按完整 locator 稳定排序；不按收益、接受标志或研究新旧优先。多个匹配词对同条只计一次该词，不靠重复嵌套 JSON 提高排序。不隐式调用 LLM 扩词；中文/英文同义词可由操作者显式写入 terms，返回原查询及匹配理由。
+
+filters 先排除已知不匹配；unknown 按 include_unknown 处理，不能因不填元数据永久找不到旧研究。文本匹配只说明相关线索，不推断经济机制相同或来源等价。内存只保留页所需候选及计数；读取范围/耗时如实报告。先量测现有紧凑研究元数据查询，再决定是否提出索引优化；本设计不申请 DDL，不提前建立新缓存或数据库。跨页有并发新记录时可能变化，queried_at 与 revision 说明观察时点，不冻结数据库、不承诺跨请求快照一致。
+
+命中任一记录时，额外在同一 task 内读取它的 correction 祖先/后代及被关联原记录，即使更正文本不命中关键词也展示；任务投影命中而非记录命中时只提供原 show 定位，不伪称已检查全部更正。多次更正/并行分支并列，不能按时间或最高 revision 挑一个“最终真相”。关系查询明确 same-task，检测异常环/断链/越界并标出，不能无限递归或忽略异常。返回 related_entries，主条目数与附带关联条目数分开，分页主条目不吞更正。
+
+关系读取与主条目使用同一只读一致性观察：沿原cursor，在首次SELECT前为这次查询设置REPEATABLE READ并保持READ ONLY，查询结束即释放，不改写入事务或整个连接池默认级别。结果说明观察时点，新 correction 在查询结束后出现属下一次读取范围。这是短数据库读取的一致性，不是数据集冻结或历史快照产品，不导出文件、不锁住业务写入、不创建持久状态；异常也须按原事务管理释放连接。
+
+正常情况下对当前页读取完整关系，长关系以原定位/截断标记输出并给 show 继续读取方法；截断不能展示一个被修正的旧结果却隐藏“存在未展示更正”。两项独立任务即使结论相反也不自动建立 supersedes 或宣布冲突已解决。显式更正关联是一种事实，语义冲突由研究者结合版本/范围解释。
+
+### 15.5 经验如何进入问题包而不复制历史库
+
+memory-search 的完整 JSON 可由操作者保存在获准 X 盘任务目录，供原 proposal-prepare/inspect 的 `--context` 使用；它是临时查询产物，不是历史权威或要求永久保留的档案。source_refs 仅选用实际返回的 entries/related_entries 中定位，experience_query 与返回的 query 一致；所选条目的 filters/未知/关系信息进入 experience_scope 或 selected_experience，不因转包丢失限制。旧显式文件 experience 输出仍可独立使用，两个旧接口不突然要求数据库。
+
+若选用命中记录已有更正，问题包一并携带与它相关的 related_entries 和关系完整性；不能选择性只注入旧成功结论，也不注入其他未选条目的无关关系。relations_complete按主条目声明，不能用全局true掩盖某一条截断。关系条目只作为所选来源的上下文，不自动变成原请求批准的candidate.source_refs；候选只可引用原request.source_refs。若要单独引用关联条目，调用者明确将它加入source_refs，共用检查在entries与related_entries的并集中按完整locator唯一匹配；同定位异内容仍沿用source_ref_ambiguous，不任取其一。旧无related_entries的context兼容。
+
+未展示或读取失败则在经验范围说明辅助证据不足，不编造或增加新的研究阻断；沿原提案合同处理真正缺引用/请求不一致，不能新增partial即禁止所有直接研究的规则。最小改动是在assistance共用选择逻辑中传递可选关系/查询范围，不改变原runner输入。接收来自文件的关系资料仍是不可信内容，须核对task/关联定位而非跟随任意路径。
+
+同时需要外部经验时，先用原 experience 读取明确 RD-Agent 文本/已提取产物。要形成脱离 RD-Agent 路径仍可参考的本地知识，操作者只将确实采用的短片段、原定位和解释经既有 record 写入获准研究任务，再由 memory-search 查询；无需新合并上下文命令、实时节点连接或知识导入器。不要求每次外部只读使用都入库；没有写入授权时可独立用原经验 context，不宣称已完成持久导入。
+
+新结果顺带写 experience_note；正常重试复用原 record_id，不由检索去做自动 upsert/去重写入。旧研究仅按本次问题定位必要信息，不全量回填、重算或生成摘要。不把模型总结再次当成独立支持证据；同一来源被引用多次仍是一个来源，不凭引用次数提高可信度。
+
+<a id="hypothesis-prompts"></a>
+## 16. 假设先行的提示词与候选交接
+
+三个步骤由当前 Codex/Claude 执行，不要求三个 agent、额外模型 API 或强制三次调用。研究者可在同一会话完成，反方审阅不是统计独立性证明。原问题包必须带方向/基准等，故尚未形成假设时不能为了调用 prepare 填造字段：先用方法论和查询资料形成紧凑假设笔记，必要时通过原 progress/decision 记录，方向/基准明确后才组装原 §5 请求。直接研究仍可使用原入口。
+
+### 16.1 指导模板（借鉴结构，不复制 RD-Agent 旧约束）
+
+**A：问题与假设，暂不要求公式。**
+
+> 依据当前问题和现有资料，提出可检验的金融假设或明确标注机制未知的经验现象。区分事实、历史观察和推测；解释可能的行为/摩擦及为何价格可能尚未反映，同时给出最强竞争解释。说明预期期限、适用对象、可观察差别和削弱假设的结果。已有数据无法区分解释时明确限制，不用机构身份、财务质量或盘中路径等不可观测叙事填空。不凑候选数量，不重启已被同口径结果回答的规格。
+
+**B：最简表达与明显对照。**
+
+> 在已声明输入、时点与研究范围内，用最简可计算代理表达假设，逐项说明数学操作的作用。给出简单基准、已核对的结构近邻及代理局限；区分新增来源信息、已知信息的新表示和替换改进。复杂操作仅在能说明用途时使用，不要求新字段、跨源乘积或窗口配额。保留未知、因果时点和缺失，不擅自改方向、期限、数据或评价范围；按原提案 schema 输出，不虚构已运行代码或指标。
+
+**C：反方审阅及结果后的解释。**
+
+> 实现前检查假设/代理是否一致，竞争解释是否可区分，是否只是简单反转、动量、规模、波动或流动性的再表达；不是要求所有候选必须中性化后有效。结果后先核对技术/样本口径，再按三种研究角色和两条结论轴解释完整评价，区分不支持、条件价值、证据不足和实现问题。不凭单周期、高相关、故事合理或 LLM 共识判价值；不事后挑窗口、翻方向来延续原结论。只记录必要经验和下一步，不为失败候选追加存档工程。
+
+### 16.2 实现映射与兼容
+
+模板的原则唯一来源是方法论2.6；文字指导在现有 assistance.py 的 instructions 组装中复用，不建 prompt 平台或远程配置。§16.1 A可在正式包之前由研究者直接使用；B/C随 prepare 的现有 instructions 供参考，保持 generation/model_call/execution_performed=false。金融论证不由正则/关键词或新分数自动判“通过”。
+
+原 proposal 的 hypothesis/falsifier/difference_from_baseline/timing 等字段容纳最终提案；额外思考摘要只放原研究 JSON note，不向严格 candidates/run schema 塞新字段，不强迫旧 proposal 补 note。未知数据导致 requires_revision 沿原合同处理，不新增“金融故事完整度” finding 或准入线。
+
+本版不改现有 skill/Claude command，因为它们已引用方法论；后续若实际入口证明有冲突，另列精确受控变更，不把 skill 全文再复制方法或模板。本轮不安装客户端。代码引用新设计、设计引用唯一方法，避免三份统计标准。
+
+<a id="implementation-plan-v13"></a>
+## 17. 具体任务规划、文件范围与验证
+
+### 17.1 一个实施增补，两个连续工作包
+
+不新设 P4/P5 或互锁阶段，不承诺耗满时长。实施授权后，优先完成本模块工具，再在独立获准研究任务中检验实际帮助；工具验收不需要发现 alpha 或等待 QE。
+
+| 顺序 | 任务/精确交付 | 复用、依赖与完成条件 |
+|---|---|---|
+| P0 同一实现任务 | memory-search、紧凑字段映射、分页及更正呈现，保留旧离线调用 | 复用两表/read-only cursor/response；已有DEV执行实际SQL合同验证，读取不产生写入，未知和异常不冒充完整 |
+| P1 同一实现任务 | 三步提示词、研究 JSON note 约定、查询结果到原问题包的关系/范围传递 | 复用 assistance/record；无需新表、writer或模型网关。离线 prepare 与真实查询 context 可对接，旧请求不变 |
+| P2 工具定向验证与交付 | 多轮代码审核修复、changed-files对应测试/DEV必要验证、PR/CI与获准合入 | 源码/客户端/运行时分别报告，不因CLI用途手动降级 runtime；后端重启如需由用户执行 |
+| P3 一次紧凑真实研究 | 从现有历史选择少量尚未回答且数据可支持的问题，记录实际采用的经验/竞争解释、实现和完整评价 | 不预定必须产出几个因子；不重复失败历史。不启动QE、不自动入正式库；有用途线索则提交批量QE候选交接 |
+
+P0–P3是执行顺序/优先级，不是额外研发阶段。P0/P1可一次代码PR交付；本次只完成设计，不登记实施完成、不启动P3。查询工具局部失败时仅该能力未完成，现有直接研究仍可继续。结束于：工具合同通过或明确实际问题；真实研究完整评价及结论已读回或明确未完成项，无值得追加的依据即停止，不以生成数、记录数或耗时作为成绩。
+
+### 17.2 后续代码允许范围（本次不修改）
+
+| 文件 | 最小责任 |
+|---|---|
+| `backend/services/factor_research/repository.py` | 新增紧凑只读检索/关联读取方法；不改create/record/replay/事务写入语义 |
+| `backend/services/factor_research/assistance.py` | 复用匹配/输出组装、提示词与可选关系信息；保留原离线函数不导入DB |
+| `scripts/factor_research.py` | 新命令显式配置DB目标、惰性分发，旧命令/--help保持 |
+| `backend/tests/factor_research/test_assistance.py` | 复用已有参数化合同，补查询结果/提案衔接和非执行边界 |
+| `backend/tests/factor_research/test_repository_dev.py` | 复用既有DEV授权保护，验证实际SQL/关联/无副作用；不新建测试DB |
+
+纯检索组装可由 CLI 向 assistance 传入 repository 已读取的紧凑迭代结果，不让 assistance 隐式连接 DB。如需新增一个本模块纯 helper，先在实施文件范围中登记；不是本设计要求必须拆文件。默认不改 service.py/models.py/runner.py、nox、ownership、registry、migration、RD-Agent 或其他业务源码。不得通过归属转移避开测试债务或 DEV 验证。
+
+按执行时 actual changed files → file_ownership → module_registry → test_plans 分类；已核对基线归 `factor_library.research`，普通计划 `factor_research_backend`，repository/SQL改动触发 `factor_research_dev_db`（delegated，runner_enabled=false）。CI的DEV文件仍默认skip，不连接数据库；授权DEV只在既有环境显式打开。测试预算沿原规范，扩充紧凑参数化用例而非全套重复repository/CLI/恢复矩阵。
+
+### 17.3 小型测试与真实验收
+
+| 用例组 | 应发现的错误/验证边界 |
+|---|---|
+| 查询/投影 | 中英文词、名称/字段、filters已知/未知、无note/异常note旧记录、payload.request重复副本、分页；有明确命中不漏掉，无匹配不叫全库无经验 |
+| 更正 | 旧结论命中但更正不含原词、链与分支、task隔离、断链/异常环及截断；不把旧成功孤立展示、不最后写入覆盖 |
+| 来源/提示词 | 外部命令当数据、原观察与解释分离、未知条件/旧数据保留；模板不强制新字段或凑数，不检测故事关键词来判科学性 |
+| 旧接口/关系传递 | 原文件 experience 和无关系的 context 仍可用；memory-search结果选源后关联与范围不丢；缺资料非静默成功，无自动run/model/DB写入 |
+| 真实DEV | 精确自有fixture在既有DEV按原验证方式创建/回滚或清理；查询走READ ONLY，验证参数化、同任务关联、短事务一致性及读取前后行/revision不变；读连接异常退出后事务级别不泄漏到后续连接，所有生产连接禁用 |
+| 真实研究 | 只在独立获准任务中，用真实问题记录采用/不采用的资料、选题或公式变化、完整评价/用途增量及实测成本；结果可不支持，不把接口fixture当有效因子 |
+
+前五组为代码验收职责，最后一组是研究验收，不能互相替代。实现前先写能暴露错误行为的直接测试，再修复；至少两轮实质审核分别看合同/权限与实现/反例，失败只重跑直接失败项，稳定后运行一次所属最小计划。不重跑全库因子或QE来验证检索。
+
+纯文档阶段只有 UTF-8/链接、diff check、F2设计结构及PR必要CI，不运行DEV测试。代码阶段按真实变更运行Ruff/compile/直接pytest、所属计划及适用L0；catalog未变不额外重跑其全矩阵。DEV SQL合同与生产授权分开，本版无生产 DML/DDL需求。
+
+<a id="acceptance-v13"></a>
+## 18. 1.3 设计验收、发布边界与剩余风险
+
+沿用F-001～F-008，F-004在1.2已由RD-Agent owner交接改为AIstock提案交接；不新增审批编号。下表只验收本轮设计覆盖，不宣称代码或研究通过。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-001 | §15.1/16 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#hypothesis-prompts | 用户批准设计先行 | 用户批准本轮仅设计；工具/研究另行实施 |
+| F-002 | §15.3–15.5 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#memory-contract | 用户批准设计先行 | 用户批准本轮仅设计；DB查询及更正待代码验证 |
+| F-003 | §16.1–16.2 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#hypothesis-prompts | 用户批准设计先行 | 用户批准本轮仅设计；旧合同兼容待实现证明 |
+| F-004 | §15.5/16.2 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#memory-contract | 用户批准设计先行 | 用户批准本轮仅设计；不修改或依赖RD-Agent生成程序 |
+| F-005 | §7/17.1/17.3 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#implementation-plan-v13 | 用户批准设计先行 | 用户批准本轮仅设计；完整评价未启动，QE/入库未执行 |
+| F-006 | §15.2/15.4–15.5 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#memory-contract | 用户批准设计先行 | 用户批准本轮仅设计；原两表/writer/恢复复用，不双写 |
+| F-007 | §17.2–17.3 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#implementation-plan-v13 | 用户批准设计先行 | 用户批准本轮仅设计；按实际变更实施DEV/定向代码验证 |
+| F-008 | §18 | artifact: docs/architecture/factor_research_rdagent_assistance_detailed_design_20261008.md#acceptance-v13 | 用户批准设计先行 | 用户批准本轮仅设计；源码/运行时/DB/研究分开 |
+
+本轮文档 `runtime_impact=none`、`backend_restart_required=false`；DEV/production DDL/DML、依赖/客户端安装、研究运行、数据导出/激活、进程控制均noop。用户授权设计提交/合入不授予未来代码或生产操作；worktree清理须相应授权。合入后同步干净主线，不自动启动研发计算。
+
+实现时由catalog按实际文件推导runtime，backend restart owner=user，不沿用文档none或手工降级。新CLI fresh-process与常驻backend加载身份分开；回退方式是停止使用新辅助入口，继续旧直接研究，不删除原记录或关闭业务服务。任何新增持久索引/DDL/跨owner需求另行分析，不顺带执行。
+
+剩余风险：旧记录元数据不足只能显式unknown，不能保证所有历史可语义发现；词项检索可能漏掉同义表述，先披露并积累真实漏检案例；紧凑投影扫描成本需实测，不承诺固定秒数；已接触历史和模型解释可能强化偏见，保留反例与research_feedback；三步提示词和检索可以改善研究组织，但不保证新增有效因子。既有无价值规格只留最小结论，不为缓解这些风险做全历史回填或证据工程。
+
+### 18.1 本轮顺序审核与修订记录
+
+本窗口顺序审核，不宣称另一个agent或客户端独立复核。第一轮按实际models/repository/assistance合同核对，区分尚未成型的假设与原严格提案请求，明确payload.request不重复检索、旧记录不能继承当前task条件。第二轮按反例修正更正关系跨分页/转包丢失风险、query过滤范围绑定和同定位歧义；第三轮核对未知过滤计数、关系只随所选来源注入、异常note/任务级未查关系的可见性及读事务不改变写入默认值。按蓝图1.9/方法2.6复核无统计口径或生产权限变化。
+
+DESIGN-COMPLIANCE-001逐条：①§15–18为完整设计范围，所有代码/真实研究明确未实施，不冒充功能完成；②读取错误、未知、局部关系和旧数据不伪装成功；③原PIT/四周期/单写指标/owner边界及历史验收保留；④没有新增金融故事评分、准入门禁、审批、平台或资源阈值。F2结构检查8项、32行（含历史矩阵）通过、warnings=0；当前设计矩阵为8行。最终HEAD的UTF-8/本地链接/diff检查和PR必要CI分别记录，不执行DEV测试或业务计算。
+
+<a id="implementation-v14"></a>
+## 19. 1.4 工具实施与验收（2026-10-09）
+
+本轮按用户实施/审核/提交合入授权完成P0/P1工具；P2源码交付以本PR最终CI与合入状态为准，P3真实研究仍未执行。§18是1.3文档阶段历史记录，其中none/noop不作为本次代码的运行时分类。没有新增研究、数据库schema、索引、模型API或writer。
+
+精确写入范围：§17.2五个既定文件，加本模块纯helper `backend/services/factor_research/memory.py` 和本文。helper在实施前登记，负责note投影/未知过滤/有界分页/关联组装；没有DB连接、行情、文件写入或模型调用。原create/record/replay写事务保持。新读取在同一READ ONLY/REPEATABLE READ事务内，按256条紧凑投影扫描；关系展示最多512条，超出明确partial及show续读定位，不是研究准入/资源门禁。
+
+### 19.1 顺序审核及修订
+
+本窗口顺序执行两轮实质审核，并在最终收口检查设计符合性，不宣称独立agent审核。第一轮核对合同/反例：原因和解释参与检索，JSON字段名不当命中，归一词项不重复计分；旧记录不继承task当前条件，矛盾标condition_conflict/unknown。第二轮核对权限/异常：同任务更正链与分支保留，循环/跨任务/截断可见；选源携带更正但不扩大candidate.source_refs；异常note保留summary并标记；完整query绑定filters/include_unknown。CLI无效请求在配置/连接前退出，旧三个离线命令和help保持无DB依赖。
+
+测试债务按完整primary owner计算，无归属转移。合并重复CLI调用和repository并发用例，原独立只读断言并入真实查询事务测试；不削弱因果时间、股票隔离、官方指标复用、唯一性、失败恢复或默认DEV禁写合同。当前production 4,843 SLOC、test 1,452 SLOC，29.98%，低于30%。
+
+### 19.2 验收矩阵
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-001 | assistance.prepare_proposal、原run入口不变 | pytest: backend/tests/factor_research/test_assistance.py::test_cli_fresh_process_no_database | 通过 | 无 |
+| F-002 | repository.memory_search/_memory_rows、memory.search_rows | pytest: backend/tests/factor_research/test_assistance.py::test_memory_unknown_conflict_literal_paging_and_old_context | 通过 | 无 |
+| F-003 | assistance.instructions三步指导、原严格proposal schema不变 | pytest: backend/tests/factor_research/test_assistance.py::test_memory_corrections_survive_proposal_selection | 通过 | 无 |
+| F-004 | assistance._selected_relations及原prepare/inspect | pytest: backend/tests/factor_research/test_assistance.py::test_prepare_preserves_request_and_selects_only_declared_experience | 通过 | 无 |
+| F-005 | §7/17.1研究边界；原runner未修改 | artifact: docs/analysis/factor_research_methodology.md | 用户批准设计先行 | 本轮仅工具实施，真实研究P3另行执行；不把fixture当完整因子评价 |
+| F-006 | repository._memory_component及原cursor；无新写入入口 | pytest: backend/tests/factor_research/test_repository_dev.py::test_memory_sql_corrections_snapshot_and_no_writes | 通过 | 无 |
+| F-007 | 精确pytest、DEV计划、Ruff/compile、L0、PR所属计划 | pytest: backend/tests/factor_research/test_repository_dev.py::test_concurrent_writes_are_idempotent_or_conflict | 通过 | 无 |
+| F-008 | CLI fresh process；catalog推导backend-main | artifact: docs/standards/aistock_runtime_targets_v1.yaml | 用户批准源码先行 | runtime_impact=backend，backend_restart_required=true，owner=user；未执行后端重启/激活 |
+
+RED两项失败确实暴露缺失memory入口及更正转包丢失；修复后直接assistance合同11 passed。真实DEV新增合同验证：只读前后记录/revision不变、并发新更正下一次才出现、异常后连接事务级别恢复、环/跨任务异常/关系截断；精确自有fixture用finally清理。所属DEV计划已执行（整理重复用例前9 passed），整理后的并发参数合同2 passed；最终提交绑定的DEV结果另列PR。Ruff/py_compile/diff通过；L0 blocking=0。没有重复全库因子评价、QE或数据检查。
+
+DESIGN-COMPLIANCE-001：①工具条款逐项实现并用实际DEV验证，不将P3研究/后端激活冒充完成；②连接失败不当空结果，unknown/冲突/关系不全明确，不选唯一“最新真相”；③原统计/数据/写事务/owner合同保持；④没有新增研究审批、金融评分准入、冻结/哈希或资源限制。production_ddl_gate=noop；production_dml_gate=noop；dependency gates=noop；dataset/official factor writes=noop；process_control=false。源码合入不等于后端已加载；CLI新进程可独立使用，常驻backend加载仍待用户重启与后续复验。worktree清理不由裸合入授权推导。

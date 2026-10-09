@@ -1094,6 +1094,26 @@ def test_hmm_offline_value_family_does_not_downgrade_mixed_online_scope() -> Non
     assert mixed["target_ids"] == ["backend-main"]
 
 
+def test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope() -> None:
+    rule = next(rule for rule in workflow._load_runtime_target_catalog()["source_role_rules"]
+                if rule["rule_id"] == "offline-advisory-fixed5-valuation")
+    files = [*rule["source_globs"], "backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py",
+             "docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md",
+             "tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json"]
+    offline = workflow._classify_runtime_impact(files)
+    assert offline["runtime_impact"] == "none"
+    assert offline["runtime_files"] == offline["target_ids"] == []
+    assert set(rule["source_globs"]) == {
+        "backend/services/advisory_model_first/generic_price_5td_valuation_v2.py",
+        "backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py",
+    }
+    for online in [*(path.replace("_v2.py", "_v3.py") for path in rule["source_globs"]),
+                   "backend/routers/advisory_model_first.py"]:
+        mixed = workflow._classify_runtime_impact([*files, online])
+        assert mixed["runtime_impact"] == "backend"
+        assert mixed["target_ids"] == ["backend-main"]
+
+
 @pytest.mark.parametrize("monthly", [True, False, "construction", "overlap_source"])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()

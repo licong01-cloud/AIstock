@@ -471,8 +471,9 @@ def _query(
     audit_non_null_values: Sequence[str] | None = None,
     code_column: str | None = None,
     code_policy: str | None = None,
+    default_pit_stock_filter: bool = True,
 ) -> SourceQuerySpec:
-    if code_column is None and keys and keys[0] == "ts_code":
+    if default_pit_stock_filter and code_column is None and keys and keys[0] == "ts_code":
         code_column = "ts_code"
         code_policy = "pit_stock_codes"
     required_columns = tuple(dict.fromkeys((*keys, *values, *required)))
@@ -501,6 +502,7 @@ def _query(
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
             + (":profile_required_from_v1" if code_policy == "profile_index_codes" else "")
+            + (":provider_publication_scope_v1" if not default_pit_stock_filter else "")
             + (":nonfinite_numeric_to_null_v1" if query_id in POSTGRES_NON_FINITE_TO_NULL_COLUMNS else "")
         ),
         audit_dataset=audit_dataset,
@@ -770,6 +772,10 @@ _QUERY_SPECS = (
         (Component.FACTOR_H5_STATIC,),
         ("ts_code", "trade_date"),
         values=_MARGIN_DETAIL_VALUES,
+        # Publication counts describe the complete provider domain, including
+        # securities outside executable PIT pools. Keep those facts; this does
+        # not change the independently frozen strategy stock pools.
+        default_pit_stock_filter=False,
         date_expression="source_row.trade_date",
         audit_dataset="margin_detail",
         audit_eligible_sources=("physical_audit_seed", "tushare"),

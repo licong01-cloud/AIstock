@@ -369,6 +369,24 @@ def test_reference_drift_is_not_silently_dropped(price_panel):
 def test_synthetic_two_fresh_processes_reproduce_without_reference_refit(price_panel, tmp_path):
     """Actual subprocesses on synthetic data, not the formal candidate experiment."""
     root = Path(__file__).resolve().parents[3]
+    env = {**os.environ, **{k: "1" for k in subject.THREADS}, "PYTHONPATH": str(root)}
+    # Freeze a cold process environment before running either child. Unrelated
+    # test collection may load the same native pools in a different order.
+    cold = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from backend.services.hmm_risk import rotation_l2_moneyflow_price_supervised as m; from sklearn.linear_model import Ridge; import json; print(json.dumps(m.numeric_environment()))",
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    price_panel = deepcopy(price_panel)
+    price_panel["numeric_environment"] = json.loads(cold.stdout)
+    price_panel = reseal(price_panel)
     path = tmp_path / "synthetic_input.json"
     write_once(path, price_panel)
     program = (
@@ -380,7 +398,6 @@ def test_synthetic_two_fresh_processes_reproduce_without_reference_refit(price_p
         "m.APPROVED_NUMERIC={k:b['numeric_environment'][k] for k in ('python','versions')}; "
         "write_once(Path(sys.argv[2]),m.run_process(b,process_index=int(sys.argv[3])))"
     )
-    env = {**os.environ, **{k: "1" for k in subject.THREADS}, "PYTHONPATH": str(root)}
     reports = []
     for index in (1, 2):
         output = tmp_path / f"synthetic_process_{index}.json"

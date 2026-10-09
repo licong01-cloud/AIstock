@@ -775,11 +775,12 @@ class TushareSyncEngine:
             )
         if spec.query_mode == QueryMode.BY_DATE:
             requested = _to_ymd(trade_date)
-            mismatched = [
-                row.get(spec.date_column)
-                for row in rows[:10]
-                if _to_ymd(_parse_ymd(row.get(spec.date_column)) or dt.date.min) != requested
-            ]
+            mismatched = []
+            for row in rows:
+                if _to_ymd(_parse_ymd(row.get(spec.date_column)) or dt.date.min) != requested:
+                    mismatched.append(row.get(spec.date_column))
+                    if len(mismatched) == 10:
+                        break
             if mismatched:
                 raise RuntimeError(
                     f"{spec.name} provider_contract_error returned date outside request "

@@ -1,0 +1,368 @@
+{
+  "actual": "SOURCE 准备耗时6487秒后被三条10月 suspend_d reconciled 事件误阻断；9月prepared suspend_limit 已PASS。",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_repair_journal.py",
+    "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/tests/dataset_release/test_monthly_repair_journal.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "tests/aistock_validation/bugs/20261009_BUG-1822-monthly-source-seal-rejects-completed-post-cutoff-suspend-date-windows.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1822",
+  "closed_at": "2026-10-09T05:44:19.348919Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-09T03:58:49.977475Z",
+  "description": "SOURCE 准备耗时6487秒后被三条10月 suspend_d reconciled 事件误阻断；9月prepared suspend_limit 已PASS。只修 worker-scheduler 的独立账本范围识别；采集器整批日期约束已独立登记 BUG-1823（backend-main），不得通过本 BUG 的合入推断该约束运行态已生效。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261009-c3e39469eb16",
+      "timestamp": "2026-10-09T03:58:49.977475Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "正式完成的、独立账本闭合且严格 post-cutoff 的 suspend BY_DATE 写入不阻断上月冻结；跨月或不可证范围继续阻断。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1822-monthly-source-seal-rejects-completed-post-cutoff-suspend-date-windows.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1822-monthly-source-seal-rejects-completed-post-cutoff-suspend-date-windows.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_repair_journal.py",
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/dataset_release/test_monthly_repair_journal.py",
+        "backend/tests/test_tushare_sync_engine.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_repair_journal.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_postgres_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_repair_journal.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_repair_journal.py",
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/dataset_release/test_monthly_repair_journal.py",
+        "backend/tests/test_tushare_sync_engine.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ]
+  },
+  "first_seen_at": "2026-10-09T03:58:49.977475Z",
+  "fix_branch": null,
+  "fix_commit": "a6b706f814181ffeb6691af167243ebf35d59f4e",
+  "fixed_at": "2026-10-09T04:21:25Z",
+  "github_issue_number": 5807,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5807",
+  "last_seen_at": "2026-10-09T03:58:49.977475Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5812",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "pytest backend/tests/dataset_release/test_monthly_repair_journal.py backend/tests/test_tushare_sync_engine.py",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "RED: completed post-cutoff suspend range with real rows failed on both managed ledgers; GREEN: fixed-point tests passed.",
+      "Existing DEV readonly typed-ledger SQL regression: complete range resolves; missing/duplicate date, NULL quality, wrong scope/date/count/dataset/job and failed owner stay blocking; NULL aggregation gap detected RED and fixed GREEN.",
+      "Fresh Python readonly production ledger readback since attempt251 snapshot: remaining_overlap_count=0; query_elapsed_seconds=0.069; transaction_read_only=on; database_write=false; no candidate/profile/process writes.",
+      "Fresh official monthly worker --preflight PASS: adapter_version=14; adapter_contract_sha256=31f874d132cc5f8d77cd92683aad38b740426e7b41bbf15ef663139363709ee4; registry_sha256=0ee4f0170bb0419ddb7fdb1f965ae6f394676ada538459efd74d88dbbd277f28; database_opened=false; operation_claimed=false; candidate/profile/runtime writes=false.",
+      "Three source review rounds: registered scope and full-window ledger closure; PostgreSQL NULL-safe evidence and failed/unknown/cross-cutoff preservation; no physical source scan, one operation, no active/profile/DB/process writes. Companion BUG-1823 enforces all provider rows before BY_DATE writes and must be deployed together."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1822\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1822",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6a0065bbb3700a774d95b575e13eb47dbcfa05a9715ecf2bd9bbbb6dfe92fa19",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "a6b706f814181ffeb6691af167243ebf35d59f4e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-09T05:43:45.388416Z",
+      "mode": "read_only",
+      "observed_identity": "0c7b12636d07729c87d881965d6c0b59b7097c4f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "175d684464097c974c58110f6e24beaea358eef3d995cadb7a6f4ab67ffd221f",
+      "receipt_sha256": "b84b73fc6e9ddfd0f2b0431d9e13dc558413ddebf41f828d0e87e5b7e0201579",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "829c7d353dcdf37208f550155e0fd2cc2ed69a47b2b87bde272714169e4a0687",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1822",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2af9e4163e1fbfcf",
+    "recorded_at": "2026-10-09T04:22:09.833046Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b047666aa53abbcb61f1026cb75fec8a729a3de0",
+    "source_merge_commit": "a6b706f814181ffeb6691af167243ebf35d59f4e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5812",
+    "validation_evidence": [
+      "validation-receipt: id=835e3d581f80e7bd commit=b047666aa53abbcb61f1026cb75fec8a729a3de0 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    ],
+    "validation_evidence_digest": "4eb9a52943cfcf3ec33ac0d922484061d2e953b28e0cbf754cf73974c9959d44"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "monthly source seal rejects completed post-cutoff suspend date windows",
+  "trigger_condition": {
+    "fingerprint": "c3e39469eb16b37fa99984c9",
+    "source_event_id": "FE-20261009-c3e39469eb16"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=835e3d581f80e7bd commit=b047666aa53abbcb61f1026cb75fec8a729a3de0 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "python -m nox -s l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
