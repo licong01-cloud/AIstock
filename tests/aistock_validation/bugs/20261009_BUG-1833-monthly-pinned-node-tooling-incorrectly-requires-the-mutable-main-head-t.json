@@ -1,0 +1,261 @@
+{
+  "actual": "无关main推进被误当作monthly tooling source commit changed。",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_worker_nodes.py",
+    "backend/services/dataset_release/monthly_node_tools.py",
+    "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+    "tests/aistock_validation/bugs/20261009_BUG-1833-monthly-pinned-node-tooling-incorrectly-requires-the-mutable-main-head-t.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1833",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-09T16:59:19.006939Z",
+  "description": "无关main推进被误当作monthly tooling source commit changed。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261009-0e2231ed8e13",
+      "timestamp": "2026-10-09T16:59:19.006939Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "发布启动时钉住的真实Git commit，即使main推进；无效commit仍失败，不读取工作区脏字节、不重启、不写数据。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1833-monthly-pinned-node-tooling-incorrectly-requires-the-mutable-main-head-t.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1833-monthly-pinned-node-tooling-incorrectly-requires-the-mutable-main-head-t.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_node_tools.py",
+        "backend/tests/dataset_release/test_monthly_worker_nodes.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_node_tools.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_node_tools.py",
+        "backend/tests/dataset_release/test_monthly_worker_nodes.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py"
+    ]
+  },
+  "first_seen_at": "2026-10-09T16:59:19.006939Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5849,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5849",
+  "last_seen_at": "2026-10-09T16:59:19.006939Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_worker_nodes.py::test_tools_bundle_uses_git_bytes_not_dirty_source_or_dotenv -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "RED: a real fixture Git commit remains valid but _bundle rejects it after main advances. GREEN: the pinned archive remains byte-identical after HEAD advances; unavailable commits still fail.",
+      "Bootstrap is now extracted from the same pinned Git archive and checked against its inventory hash, not inspect.getsource on a mutable working checkout. DEPLOY and consumer composition share one bounded process-local startup-commit publisher.",
+      "Three review rounds: no main-unchanged gate or dataset baseline added; no live/dirtied source used for remote bootstrap; missing/ambiguous function or drifted bootstrap bytes remain fail-closed. No market QA, model/PIT, training or business contract changed.",
+      "Fresh worker composition preflight PASS; database_opened=false, operation_claimed=false, network_access=false, runtime_action=false. DESIGN-COMPLIANCE-001 complete: source merge and real monthly/runtime acceptance are separate, no partial data delivery reported as READY.",
+      "Targeted node tooling, composition, runner and remote transport regression PASS; L0 and changed-file lint PASS. Existing fixtures only, no real node tools, candidate or profile written."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly pinned node tooling incorrectly requires the mutable main HEAD to remain unchanged",
+  "trigger_condition": {
+    "fingerprint": "0e2231ed8e133bdb2b6fb09d",
+    "source_event_id": "FE-20261009-0e2231ed8e13"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

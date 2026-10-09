@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import lru_cache
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -178,6 +179,7 @@ class MonthlyNodeRuntimeSettings:
             }
         )
 
+    @lru_cache(maxsize=16)
     def _node1_tools(self) -> MonthlyNodeTools:
         return MonthlyNodeTools(
             host=self.node1_host,
