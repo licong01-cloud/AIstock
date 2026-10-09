@@ -3,8 +3,10 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_worker.py",
     "backend/services/dataset_release/monthly_source_quality.py",
+    "backend/services/dataset_release/monthly_worker_runtime.py",
     "backend/tests/dataset_release/test_monthly_source_producer.py",
     "backend/tests/dataset_release/test_monthly_source_quality.py",
+    "backend/tests/dataset_release/test_monthly_worker_runtime.py",
     "tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json"
   ],
   "assigned_agent": null,
@@ -30,14 +32,24 @@
   ],
   "expected": "正式worker允许精确授权、源事实哈希钉住的有限值质量警告，保留ACCEPTED_WITH_WARNINGS并继续原任务；缺行/重复/NaN/未授权或漂移警告仍拒绝。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json",
+      "backend/services/dataset_release/monthly_source_quality.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/services/dataset_release/monthly_worker_runtime.py",
+      "backend/tests/dataset_release/test_monthly_source_producer.py",
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_worker.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json",
       "backend/services/dataset_release/monthly_source_quality.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/services/dataset_release/monthly_worker_runtime.py",
       "backend/tests/dataset_release/test_monthly_source_producer.py",
-      "backend/tests/dataset_release/test_monthly_source_quality.py"
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_worker.py",
@@ -125,6 +137,7 @@
   "first_seen_at": "2026-10-09T19:45:23.410882Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "SOURCE worker复用既有操作绑定的质量授权验证器，接受正式producer的三个可选quality字段并钉住授权文件字节；保留全部原物理完整性计数、缺失/重复/非法值拒绝规则。运行预检只公开已安装收据合同，不增加发布门禁。",
   "fixed_at": null,
   "github_issue_number": 5862,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5862",
@@ -137,19 +150,43 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest backend/tests/dataset_release/test_monthly_source_producer.py::test_authorized_quality_warning_closes_actual_source_producer_worker_boundary -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    {
+      "result": "PASS：旧代码在schema校验处复现；修复后真实producer边界通过，未允许缺失豁免",
+      "round": 1,
+      "scope": "producer-worker正式边界RED/GREEN、精确可选字段、操作/前驱/月度/源证据授权及内容pin闭合"
+    },
+    {
+      "result": "PASS：未授权/漂移/重复/非法值/真实缺失均拒绝；46条授权警告逐值匹配；撤销操作绑定立即拒绝；不查询数据库，不扫描全历史事实",
+      "round": 2,
+      "scope": "十二种负例、三个运行预检版本、本次attempt254九份保存的真实SOURCE收据离线读取"
+    },
+    {
+      "result": "PASS：普通无警告收据兼容；审批语义和月度业务检查范围未变；无HMM/QE业务、数据库、候选、profile或进程控制改动",
+      "round": 3,
+      "scope": "75项最终相关矩阵、changed-file Ruff、L0、diff check与边界复核"
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "python tmp/issue_workflow/BUG-1836/verify_saved_source_receipts.py -> PASS; 9 actual September gates; 46 exact authorized warnings; runtime contract loaded; write=false"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 import hashlib
 from pathlib import Path
@@ -25,10 +25,121 @@ from backend.services.dataset_release.monthly_unified import (
     SourceChange,
     MonthlyReleaseSourceBlocked,
 )
-from backend.services.dataset_release.monthly_worker import ProducerContext, RegisteredMonthlyPipeline
+from backend.services.dataset_release.monthly_worker import (
+    MonthlyProducerError, ProducerContext, RegisteredMonthlyPipeline,
+)
+from backend.services.dataset_release.canonical import canonical_json_bytes
 
 
 SHA = "a" * 64
+
+
+def _authorized_warning_pipeline(tmp_path, mutation=None):
+    from backend.tests.dataset_release.test_monthly_source_quality import acceptance
+    from backend.tests.dataset_release.test_monthly_unified_v2 import _request, _service, Pipeline
+    from backend.services.dataset_release.monthly_source_quality import accepted_parity_warning
+
+    control = tmp_path / "control"
+    control.mkdir()
+    service = _service(control, Pipeline())
+    operation_id = service.submit(_request(), principal="operator")["operation_id"]
+    value = acceptance(tmp_path)
+    value["operation_id"] = operation_id
+    value["predecessor_dataset_manifest_sha256"] = service.store.read_plan(operation_id)["predecessor"]["dataset_manifest_sha256"]
+    service.bind_source_quality_inputs(operation_id, inputs=value, principal="operator")
+    plan = service.store.read_plan(operation_id)
+    source = tmp_path / "inputs" / "source.json"
+    source.parent.mkdir()
+    source.write_bytes(b"{}\n")
+
+    class WarningAdapter(Adapter):
+        def read(self, connection, identity, context):
+            result = super().read(connection, identity, context)
+            authority = tmp_path / "quality-acceptance.json"
+            authority.write_bytes(canonical_json_bytes(plan["monthly_source_quality_inputs"]) + b"\n")
+            warning = accepted_parity_warning(plan["monthly_source_quality_inputs"],
+                symbol="688799.SH", trade_date=date(2026, 9, 14),
+                mismatches={"open": {"daily": 10.0, "minute": 11.0}})
+            return replace(result,
+                gates=tuple(replace(gate, quality_warning_refs=(warning,))
+                    if gate.gate == "minute_price" else gate for gate in result.gates),
+                input_artifacts=(*result.input_artifacts, SourceArtifact("quality-acceptance.json", authority)))
+
+    producer = AuditedMonthlySourceProducer("aistock.monthly.source", "2", tmp_path,
+        Connection, WarningAdapter(source, tmp_path),
+        snapshot_factory=lambda factory, *, cutoff: MonthlySnapshotCoordinator(factory,
+            repair_watermark_reader=lambda _: "repair-1", overlapping_repair_reader=lambda *_: ()))
+
+    class MutatingProducer:
+        producer_id, producer_version = producer.producer_id, producer.producer_version
+
+        def produce(self, context):
+            evidence = producer.produce(context)
+            if mutation == "unbound":
+                context.plan.pop("monthly_source_quality_inputs")
+                context.plan.pop("monthly_source_quality_inputs_ref")
+            if mutation == "unpinned":
+                evidence["input_artifacts"] = [item for item in evidence["input_artifacts"]
+                    if item["id"] != "quality-acceptance.json"]
+            ref = next(item for item in evidence["scope"]["source_gate_refs"] if item["id"].endswith("/minute_price.json"))
+            path = tmp_path / ref["id"]
+            import json
+            gate = json.loads(path.read_bytes())
+            if mutation == "partial":
+                gate.pop("quality_warning_count")
+            elif mutation == "count":
+                gate["quality_warning_count"] = True
+            elif mutation == "empty":
+                gate["quality_warning_count"], gate["quality_warning_refs"] = 0, []
+            elif mutation == "authority":
+                gate["quality_warning_refs"][0]["authority_sha256"] = "f" * 64
+            elif mutation == "values":
+                gate["quality_warning_refs"][0]["mismatches"]["open"]["minute"] = 12.0
+            elif mutation == "duplicate":
+                gate["quality_warning_refs"] *= 2
+                gate["quality_warning_count"] = 2
+                gate["expected_count"] = gate["observed_count"] = 2
+            elif mutation == "unknown":
+                gate["skip_missing"] = True
+            elif mutation == "gap":
+                gate["expected_count"], gate["unexplained_missing_count"] = 2, 1
+            elif mutation == "invalid":
+                gate["invalid_value_count"] = 1
+            elif mutation == "wrong_gate":
+                ref = next(item for item in evidence["scope"]["source_gate_refs"] if item["id"].endswith("/daily_price.json"))
+                path = tmp_path / ref["id"]
+                other = json.loads(path.read_bytes())
+                other.update({key: gate[key] for key in ("quality_status", "quality_warning_count", "quality_warning_refs")})
+                gate = other
+            payload = canonical_json_bytes(gate) + b"\n"
+            path.write_bytes(payload)
+            ref.update(sha256=hashlib.sha256(payload).hexdigest(), size=len(payload))
+            return evidence
+
+    pipeline = RegisteredMonthlyPipeline({stage: MutatingProducer() for stage in STAGES}, artifact_roots=(tmp_path,))
+    return pipeline, operation_id, plan
+
+
+def test_authorized_quality_warning_closes_actual_source_producer_worker_boundary(tmp_path):
+    pipeline, operation_id, plan = _authorized_warning_pipeline(tmp_path)
+    receipt = pipeline.run_stage(stage="SOURCE", operation_id=operation_id, attempt=1,
+        request={}, plan=plan, prior_receipts={})
+    assert receipt["status"] == "PASS"
+    assert receipt["counts"]["unexplained_gap_count"] == 0
+    import json
+    ref = next(item for item in receipt["output_refs"] if item["id"].endswith("/minute_price.json"))
+    gate = json.loads((tmp_path / ref["id"]).read_bytes())
+    assert (gate["quality_status"], gate["quality_warning_count"]) == ("ACCEPTED_WITH_WARNINGS", 1)
+    assert gate["quality_warning_refs"][0]["data_modified"] is False
+
+
+@pytest.mark.parametrize("mutation", ["partial", "count", "empty", "authority", "values",
+    "duplicate", "unknown", "gap", "invalid", "wrong_gate", "unbound", "unpinned"])
+def test_source_worker_warning_cannot_waive_physical_gaps_or_unapproved_drift(tmp_path, mutation):
+    pipeline, operation_id, plan = _authorized_warning_pipeline(tmp_path, mutation)
+    with pytest.raises(MonthlyProducerError):
+        pipeline.run_stage(stage="SOURCE", operation_id=operation_id, attempt=1,
+            request={}, plan=plan, prior_receipts={})
 
 
 @pytest.mark.parametrize("overlap", [False, True])

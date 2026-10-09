@@ -17,10 +17,54 @@ ACCEPTANCE_SCHEMA = 'aistock_monthly_source_quality_acceptance_v1'
 BINDING_SCHEMA = 'aistock_monthly_source_quality_binding_v1'
 REPORT_SCHEMA = 'aistock_monthly_source_quality_report_v1'
 WARNING_SCHEMA = 'aistock_monthly_source_quality_warning_v1'
+SOURCE_GATE_SCHEMA = 'aistock_monthly_source_gate_v2'
+SOURCE_GATE_QUALITY_FIELDS = frozenset({'quality_status', 'quality_warning_count', 'quality_warning_refs'})
 _REASONS = {
     'PROVIDER_VOLUME_PRECISION_VARIANCE': frozenset({'vol'}),
     'KNOWN_PROVIDER_PRICE_VARIANCE': frozenset({'open', 'high', 'low', 'close'}),
 }
+
+
+def source_gate_quality_contract() -> dict[str, Any]:
+    """Expose the installed receipt format, not a new publication gate."""
+    return {'source_gate_schema': SOURCE_GATE_SCHEMA, 'quality_warning_schema': WARNING_SCHEMA,
+            'quality_fields': sorted(SOURCE_GATE_QUALITY_FIELDS), 'missing_data_waived': False}
+
+
+def validate_source_gate_quality(
+    gate: Mapping[str, Any], plan: Mapping[str, Any], *, pinned_sha256s: set[str],
+) -> None:
+    """Close optional quality fields against the existing exact authorization.
+
+    Warning metadata describes observed finite facts only. It cannot alter
+    any physical-coverage count, typed absence or ordinary gate requirement.
+    """
+    present = set(gate) & SOURCE_GATE_QUALITY_FIELDS
+    if not present:
+        return
+    warnings = gate.get('quality_warning_refs')
+    count = gate.get('quality_warning_count')
+    if (present != SOURCE_GATE_QUALITY_FIELDS or gate.get('gate_id') != 'minute_price'
+            or gate.get('quality_status') != 'ACCEPTED_WITH_WARNINGS'
+            or not isinstance(warnings, list) or not warnings
+            or type(count) is not int or count != len(warnings)
+            or count > gate['observed_count']):
+        raise ValueError('quality gate status/count/scope differs')
+    acceptance = load_bound_source_quality(plan, operation_id=str(plan.get('operation_id') or ''))
+    if acceptance is None:
+        raise ValueError('quality gate lacks an operation-bound acceptance')
+    authority_sha256 = acceptance_file_sha256(acceptance)
+    if authority_sha256 not in pinned_sha256s:
+        raise ValueError('quality acceptance bytes are not pinned by SOURCE')
+    seen = set()
+    for warning in warnings:
+        validate_source_quality_warning(warning)
+        key = warning['symbol'], warning['trade_date']
+        if (key in seen or warning['authority_sha256'] != authority_sha256
+                or accepted_parity_warning(acceptance, symbol=key[0],
+                    trade_date=date.fromisoformat(key[1]), mismatches=warning['mismatches']) != warning):
+            raise ValueError('quality warning is duplicated or differs from accepted observations')
+        seen.add(key)
 
 
 def _keys(value: Any, expected: set[str], label: str) -> None:
