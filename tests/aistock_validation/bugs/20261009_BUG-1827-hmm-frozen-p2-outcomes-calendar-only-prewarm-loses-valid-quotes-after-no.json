@@ -9,6 +9,21 @@
     "tests/aistock_validation/bugs/20261009_BUG-1827-hmm-frozen-p2-outcomes-calendar-only-prewarm-loses-valid-quotes-after-no.json"
   ],
   "assigned_agent": null,
+  "author_review": {
+    "reviewer_type": "author_self_review",
+    "rounds": [
+      {
+        "finding": "内部报价承接载荷的畸形形状可能触发未分类的解包异常。",
+        "resolution": "补齐形状、PIT span、日期顺序、严格前置、停牌及有限正数检查，统一明确 source schema failure；新增六项边界测试通过。",
+        "round": 1
+      },
+      {
+        "blocking_findings": 0,
+        "checks": "核对默认消费者不变、真实报价条数而非交易日数、长期停牌、PIT 重新入池、源窗口下界、真实 NA、无未来数据、同源身份和临时输出隔离。",
+        "round": 2
+      }
+    ]
+  },
   "bug_id": "BUG-1827",
   "closed_at": null,
   "closure_requirements": [
@@ -18,49 +33,32 @@
   ],
   "created_at": "2026-10-09T07:16:03.066228Z",
   "description": "P2 只读取十个前置交易日，误将交易日数量等同于有效报价数量。600988.SH 在其中两个交易日正常停牌，导致 2026-04-02 的第十条前置收盘价被人工截掉，并使 801053.SI 的完整参考路径阻断；同一冻结文件和合法 PIT 区间已有真实报价，无需补数。",
-  "fix_summary": "仅在 P2 outcomes 显式启用逐股票严格前置报价承接：从同一冻结 Qlib 文件、同一当前 PIT span 读取最多十条有效报价；跳过已获 authority 的停牌和全字段 NA，部分非有限或损坏报价明确失败。不跨重新入池边界、不读当日或未来报价，不改变模型、C-010 coverage、特征或评估日期。其他消费者默认保持原行为。",
-  "author_review": {
-    "reviewer_type": "author_self_review",
-    "rounds": [
-      {
-        "round": 1,
-        "finding": "内部报价承接载荷的畸形形状可能触发未分类的解包异常。",
-        "resolution": "补齐形状、PIT span、日期顺序、严格前置、停牌及有限正数检查，统一明确 source schema failure；新增六项边界测试通过。"
-      },
-      {
-        "round": 2,
-        "blocking_findings": 0,
-        "checks": "核对默认消费者不变、真实报价条数而非交易日数、长期停牌、PIT 重新入池、源窗口下界、真实 NA、无未来数据、同源身份和临时输出隔离。"
-      }
-    ]
+  "design_compliance_001": {
+    "no_business_logic_drift": "模型、seed、阈值、特征、coverage、窗口、报价单位和收益公式不变，仅恢复同源真实历史报价。",
+    "no_silent_error": "真实历史不足保持 NA；损坏、未来、乱序及跨 PIT 承接明确失败，禁止默认值、补零或前填。",
+    "no_simplified_delivery": "原 131 行业、104 决策日、103 收益日和 20 维合同均保留；完整 P2 经济验收仍须后续执行。",
+    "no_unapproved_gate": "仅执行既有 source schema/PIT/identity/finite-value 校验，没有新增研究门禁、人工审批或资源门禁。"
   },
-  "red_green_evidence": [
-    "八项直接回归：修复前 8 failed，修复后 8 passed。",
-    "新增长期停牌及非法承接载荷矩阵：6 passed。"
-  ],
   "direct_file_only_validation": {
-    "status": "passed",
-    "dates": ["2026-04-01", "2026-04-02"],
-    "model_sha256": "37259b5e9ca2c6eee2845cf0f1f02932a8cfd6cf21ad29080d6570d274b8038d",
+    "database_calls": 0,
+    "dataset_writes": 0,
+    "dates": [
+      "2026-04-01",
+      "2026-04-02"
+    ],
+    "filter_calls": 0,
+    "fit_calls": 0,
     "frozen_source_identity_unchanged": true,
-    "symbol": "600988.SH",
-    "sector_code": "801053.SI",
+    "model_sha256": "37259b5e9ca2c6eee2845cf0f1f02932a8cfd6cf21ad29080d6570d274b8038d",
+    "network_calls": 0,
     "prev_close_10_source_date": "2026-03-17",
     "prev_close_10_yuan": 40.01000115288797,
+    "scope_note": "仅证明缺陷日期的真实文件边界修复；没有重跑完整冻结 P2 经济验收，不能据此宣称模型价值验收通过。",
+    "sector_code": "801053.SI",
     "sector_return": -0.031078255678999696,
+    "status": "passed",
     "strict_prior_price_context_sha256": "e2e5067bb6017deb330647c4b1618faecbe92d1378a0baf56be43871857993b6",
-    "fit_calls": 0,
-    "filter_calls": 0,
-    "database_calls": 0,
-    "network_calls": 0,
-    "dataset_writes": 0,
-    "scope_note": "仅证明缺陷日期的真实文件边界修复；没有重跑完整冻结 P2 经济验收，不能据此宣称模型价值验收通过。"
-  },
-  "design_compliance_001": {
-    "no_simplified_delivery": "原 131 行业、104 决策日、103 收益日和 20 维合同均保留；完整 P2 经济验收仍须后续执行。",
-    "no_silent_error": "真实历史不足保持 NA；损坏、未来、乱序及跨 PIT 承接明确失败，禁止默认值、补零或前填。",
-    "no_business_logic_drift": "模型、seed、阈值、特征、coverage、窗口、报价单位和收益公式不变，仅恢复同源真实历史报价。",
-    "no_unapproved_gate": "仅执行既有 source schema/PIT/identity/finite-value 校验，没有新增研究门禁、人工审批或资源门禁。"
+    "symbol": "600988.SH"
   },
   "events": [
     {
@@ -75,15 +73,24 @@
   ],
   "expected": "Use the last ten real valid strictly prior quotes inside the approved source and current PIT span. Normal suspension must not create an artificial warmup gap; genuine missing data or insufficient legal history remains explicit and fail closed.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/hmm_risk/frozen_l2_history_input.py",
+    "actual_changed_files": [
       "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/frozen_l2_history_input.py",
       "backend/services/hmm_risk/rotation_l1_input_bundle.py",
       "backend/tests/hmm_risk/test_frozen_l2_history_input.py",
-      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1827-hmm-frozen-p2-outcomes-calendar-only-prewarm-loses-valid-quotes-after-no.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/frozen_l2_history_input.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_frozen_l2_history_input.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1827-hmm-frozen-p2-outcomes-calendar-only-prewarm-loses-valid-quotes-after-no.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/frozen_l2_history_input.py",
@@ -163,6 +170,7 @@
   "first_seen_at": "2026-10-09T07:16:03.066228Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "仅在 P2 outcomes 显式启用逐股票严格前置报价承接：从同一冻结 Qlib 文件、同一当前 PIT span 读取最多十条有效报价；跳过已获 authority 的停牌和全字段 NA，部分非有限或损坏报价明确失败。不跨重新入池边界、不读当日或未来报价，不改变模型、C-010 coverage、特征或评估日期。其他消费者默认保持原行为。",
   "fixed_at": null,
   "github_issue_number": 5829,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5829",
@@ -174,6 +182,10 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "red_green_evidence": [
+    "八项直接回归：修复前 8 failed，修复后 8 passed。",
+    "新增长期停牌及非法承接载荷矩阵：6 passed。"
+  ],
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "Frozen file-only P2 outcomes from the original approved request at F:/Dev/AIstock_runtime/hmm_l2_frozen_history/20261009_20e75e4f6/P2/request.json",
   "required_verification": [
