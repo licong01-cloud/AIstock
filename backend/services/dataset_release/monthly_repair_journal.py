@@ -51,7 +51,36 @@ MANAGED_SOURCE_DATASETS = frozenset(
     }
 )
 
-MANAGED_WRITER_SCOPE_POLICY = 'bounded_post_cutoff_completed_date_writers_v2'
+MANAGED_WRITER_SCOPE_POLICY = 'bounded_post_cutoff_proven_date_writers_v3'
+
+
+def _proven_date_writer_scope_sql(owner: str, *, sync_target: bool = False) -> str:
+    """Bind the registered BY_DATE writer to its own immutable start log.
+
+    The engine validates *every* returned date before replacing that requested
+    date. Its start log binds the resolved bounds, not a current schedule or a
+    claimed row count. Always overwrite the reserved proof key: a caller's
+    summary is not proof. This certifies non-overlap, never data completeness.
+    """
+    if owner not in {'job', 'owner', 'owner_job'}:
+        raise ValueError('unknown managed date-writer SQL alias')
+    target_proof = """AND target.dataset='suspend_d'
+        AND target.target_scope='{"query_mode":"by_date"}'::jsonb""" if sync_target else ''
+    return f"""(COALESCE({owner}.summary::jsonb, '{{}}'::jsonb)
+        || jsonb_build_object('_monthly_bounded_date_writer', COALESCE(
+            {owner}.job_type='incremental'
+            AND {owner}.summary->>'dataset'='suspend_d'
+            AND {owner}.summary->>'mode'='incremental'
+            {target_proof}
+            AND (
+                SELECT COUNT(*)>0 AND BOOL_AND(upper(writer_log.level)='INFO'
+                    AND writer_log.message='start tushare suspend_d incremental '
+                        || ({owner}.summary->>'start_date') || ' -> '
+                        || ({owner}.summary->>'end_date'))
+                  FROM market.ingestion_logs AS writer_log
+                 WHERE writer_log.job_id={owner}.job_id
+                   AND writer_log.message LIKE 'start tushare %%'
+            ), FALSE)))"""
 
 
 def _completed_suspend_job_sql(owner: str) -> str:
@@ -123,6 +152,37 @@ class ManagedRepairImpactJournal:
             raise ValueError("managed repair journal dataset set is empty or invalid")
         if self.source_cutoff is not None and type(self.source_cutoff) is not date:
             raise ValueError("managed source cutoff must be an exact date")
+
+    def _bounded_future_suspend_date_writer(self, row: Sequence[object]) -> bool:
+        """Exclude only independently proven post-cutoff date replacements."""
+        if self.source_cutoff is None or len(row) != 10 or row[3] != 'suspend_d':
+            return False
+        ledger, _, status, _, _, _, _, scope, _, target = row
+        allowed_statuses = ({'running'} | TERMINAL_JOB_STATUSES) if ledger == 'ingestion_jobs' else (
+            {'started'} | TERMINAL_SYNC_STATUSES if ledger == 'data_sync_attempts' else set()
+        )
+        if status not in allowed_statuses or not isinstance(scope, Mapping):
+            return False
+        if scope.get('_monthly_bounded_date_writer') is not True:
+            return False
+        if scope.get('dataset') != 'suspend_d' or scope.get('mode') != 'incremental':
+            return False
+        if scope.get('actual_dataset') not in (None, 'suspend_d'):
+            return False
+        bounds = [scope.get(key) for key in ('start_date', 'end_date')]
+        if any(not isinstance(value, str) for value in bounds):
+            return False
+        try:
+            start, end = (date.fromisoformat(value) for value in bounds)
+        except ValueError:
+            return False
+        if bounds != [start.isoformat(), end.isoformat()] or not self.source_cutoff < start <= end:
+            return False
+        if any(key in scope and scope[key] != bounds[index] for index, key in enumerate(
+            ('refresh_start_date', 'refresh_end_date')
+        )):
+            return False
+        return target is None if ledger == 'ingestion_jobs' else type(target) is date and start <= target <= end
 
     def _bounded_future_tdx(self, row: Sequence[object]) -> bool:
         """Exclude only the bounded raw Go incremental producer, never a date claim alone.
@@ -283,7 +343,7 @@ class ManagedRepairImpactJournal:
             )
             row = cursor.fetchone()
             cursor.execute(
-                """
+                f"""
                 WITH active_ingestion AS (
                     SELECT 'ingestion_jobs'::text AS ledger_kind,
                            job_id::text AS ledger_identity,
@@ -294,7 +354,7 @@ class ManagedRepairImpactJournal:
                                NULLIF(summary->>'dataset', '')
                            ) AS dataset,
                            job.created_at,job.started_at,job.finished_at,
-                           job.summary AS writer_scope,
+                           {_proven_date_writer_scope_sql('job')} AS writer_scope,
                            FALSE AS empty_date_completion,NULL::date AS target_date
                       FROM market.ingestion_jobs AS job
                      WHERE job.status IS NULL
@@ -306,7 +366,7 @@ class ManagedRepairImpactJournal:
                            lower(attempt.status) AS status,
                            target.dataset,
                            attempt.created_at,attempt.started_at,attempt.finished_at,
-                           owner.summary AS writer_scope,
+                           {_proven_date_writer_scope_sql('owner', sync_target=True)} AS writer_scope,
                            FALSE AS empty_date_completion,target.target_date
                       FROM market.data_sync_attempts AS attempt
                       JOIN market.data_sync_targets AS target
@@ -363,7 +423,9 @@ class ManagedRepairImpactJournal:
             raise MonthlyRepairJournalError("database did not return a timezone-aware journal watermark")
         if len(active) >= 50:
             raise MonthlyRepairJournalError("managed active query reached its bound; scope is incomplete")
-        active = [item for item in active if not self._bounded_future_tdx(item)]
+        active = [item for item in active if not (
+            self._bounded_future_tdx(item) or self._bounded_future_suspend_date_writer(item)
+        )]
         if active:
             identities = [f"{item[0]}:{item[1]}" for item in active[:3]]
             raise MonthlyRepairJournalError(
@@ -397,7 +459,7 @@ class ManagedRepairImpactJournal:
                                NULLIF(summary->>'dataset', '')
                            ) AS dataset,
                            job.created_at,job.started_at,job.finished_at,
-                           job.summary AS writer_scope,
+                           {_proven_date_writer_scope_sql('job')} AS writer_scope,
                            {_completed_suspend_job_sql('job')} AS empty_date_completion,
                            NULL::date AS target_date
                       FROM market.ingestion_jobs AS job
@@ -408,7 +470,7 @@ class ManagedRepairImpactJournal:
                            lower(attempt.status) AS status,
                            target.dataset,
                            attempt.created_at,attempt.started_at,attempt.finished_at,
-                           owner_job.summary AS writer_scope,
+                           {_proven_date_writer_scope_sql('owner_job', sync_target=True)} AS writer_scope,
                            ({_completed_suspend_job_sql('owner_job')}
                             AND target.target_scope='{{"query_mode":"by_date"}}'::jsonb
                            ) AS empty_date_completion,target.target_date
@@ -459,7 +521,8 @@ class ManagedRepairImpactJournal:
                 raise MonthlyRepairJournalError("managed writer query returned an unknown dataset")
             if ledger_kind == "data_sync_attempts" and not dataset:
                 raise MonthlyRepairJournalError("managed sync writer lacks dataset identity")
-            if self._empty_future_suspend(row) or self._completed_future_suspend(row) or self._bounded_future_tdx(row):
+            if (self._empty_future_suspend(row) or self._completed_future_suspend(row)
+                    or self._bounded_future_tdx(row) or self._bounded_future_suspend_date_writer(row)):
                 continue
             result.append(
                 f"{ledger_kind}:{identity}:{dataset or 'unclassified'}:{str(status).lower()}"

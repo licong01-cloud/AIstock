@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .models import ResearchError, read_json
-from .runner import execute, validate_spec, write_json
+from .runner import execute, reuse_path, validate_spec, write_json
 
 
 class ResearchService:
@@ -83,13 +83,23 @@ class ResearchService:
                 or [item.get("factor_name") for item in candidates if isinstance(item, dict)] != expected_names
                 or len(candidates) != len(expected_names)):
             raise ResearchError("result_mismatch", "Result must contain every candidate in the recorded attempt")
-        for item in candidates:
+        for item, candidate_spec in zip(candidates, execution["spec"]["candidates"]):
             if not isinstance(item.get("metrics"), dict) or item.get("scope") != "research_candidate":
                 raise ResearchError("result_mismatch", "Missing candidate evaluation result")
             folder = expected.parent / item["factor_name"]
+            reused = candidate_spec.get("values_artifact")
+            if reused is not None and (
+                    item.get("values_origin") != "reused_reviewed_artifact"
+                    or item.get("reuse_basis") != candidate_spec["reuse_basis"]):
+                raise ResearchError("result_mismatch", "Reuse origin/basis differs from recorded attempt")
+            if reused is None and ("values_origin" in item or "reuse_basis" in item):
+                raise ResearchError("result_mismatch", "Undeclared reuse metadata")
             for field, filename in (("values", "values.h5"), ("source_script", "factor.py")):
                 path = Path(item.get(field, ""))
-                if path.is_symlink() or path.resolve() != (folder / filename).resolve() or not path.is_file():
+                target = reuse_path(reused) if field == "values" and reused is not None else folder / filename
+                if reused is not None and field == "values" and path != target:
+                    raise ResearchError("result_mismatch", "Reuse path differs from recorded attempt")
+                if path.is_symlink() or path.resolve() != target.resolve() or not path.is_file():
                     raise ResearchError("result_mismatch", "Candidate artifact missing or belongs to another attempt")
         comparison = result.get("research_comparison")
         expected_comparison = execution["spec"].get("comparison")

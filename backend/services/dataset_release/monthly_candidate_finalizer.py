@@ -30,6 +30,7 @@ from .monthly_incremental_baseline import (
 from .factor_materializer import FACTOR_H5_DATASETS
 from .monthly_official_adapters import StageWorkload
 from .monthly_worker import ProducerContext
+from .monthly_file_identity import file_sha256, remember_verified_file
 
 
 MONTHLY_BUILD_EVIDENCE_SCHEMA = "aistock_monthly_candidate_build_evidence_v1"
@@ -186,11 +187,7 @@ def _plain_file(root: Path, path: Path, *, label: str) -> Path:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return file_sha256(path)
 
 
 def _write_exclusive(path: Path, value: Mapping[str, Any]) -> Path:
@@ -537,6 +534,7 @@ class UnifiedMonthlyCandidateFinalizer:
                 "sha256": cached[key],
                 "size": before[2],
             }
+            remember_verified_file(path, cached[key], expected_signature=before)
         if any(signature(path) != expected for path, expected in writer_signatures.items()):
             raise MonthlyCandidateFinalizerError("native month writer output changed before manifest publication")
         deployment_content = hashlib.sha256(

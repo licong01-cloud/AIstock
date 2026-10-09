@@ -2658,11 +2658,128 @@ def test_suspend_sidecar_uses_only_full_day_rows_and_preserves_intraday_observat
     )
 
 
+@pytest.fixture
+def prior_quote_case(tmp_path: Path):
+    symbol = "600988.SH"
+    calendar = tuple(d.date() for d in pd.bdate_range("2026-03-17", "2026-04-02"))
+    root = tmp_path / "qlib"
+    feature_root = root / "features" / symbol.lower()
+    feature_root.mkdir(parents=True)
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.ones(len(calendar), dtype="<f4")
+        if field in {"open", "high", "low", "close", "prev_close", "up_limit_price", "down_limit_price"}:
+            values = np.arange(30, 30 + len(calendar), dtype="<f4")
+        elif field in {"limit_up", "limit_down"}:
+            values[:] = 0
+        np.concatenate((np.array([0.0], dtype="<f4"), values)).tofile(feature_root / f"{field}.day.bin")
+    suspension = frozenset((d, symbol) for d in (date(2026, 3, 19), date(2026, 3, 20)))
+    spans = {symbol: ((calendar[0], calendar[-1]),)}
+    return root, symbol, calendar, spans, suspension
+
+
+def _prior_quotes(case, *, spans=None, suspension=None):
+    root, _, calendar, original_spans, original_suspension = case
+    return subject._strict_prior_price_state(
+        root,
+        calendar=calendar,
+        spans=original_spans if spans is None else spans,
+        suspension_keys=original_suspension if suspension is None else suspension,
+        source_start=calendar[0],
+        window_start=calendar[-1],
+    )
+
+
+def test_prior_quote_context_counts_real_quotes_across_normal_suspension(prior_quote_case):
+    _, symbol, calendar, _, suspension = prior_quote_case
+    state = _prior_quotes(prior_quote_case)
+    span_start, quotes = state[symbol]
+    assert span_start == calendar[0]
+    assert [d for d, _ in quotes] == [d for d in calendar[:-1] if (d, symbol) not in suspension]
+    assert len(quotes) == 10
+    assert quotes[0] == (date(2026, 3, 17), 30.0)
+    assert all(d < calendar[-1] and np.isfinite(value) for d, value in quotes)
+
+
+def test_prior_quote_context_cannot_cross_a_pit_reentry(prior_quote_case):
+    _, symbol, calendar, _, _ = prior_quote_case
+    reentry = date(2026, 3, 23)
+    state = _prior_quotes(
+        prior_quote_case,
+        spans={symbol: ((calendar[0], date(2026, 3, 20)), (reentry, calendar[-1]))},
+    )
+    assert state[symbol][0] == reentry
+    assert len(state[symbol][1]) == 8
+    assert all(d >= reentry for d, _ in state[symbol][1])
+
+
+def test_prior_quote_context_preserves_true_history_shortage(prior_quote_case):
+    root, symbol, calendar, _, _ = prior_quote_case
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.fromfile(root / "features" / symbol.lower() / f"{field}.day.bin", dtype="<f4")
+        values[1] = np.nan
+        values.tofile(root / "features" / symbol.lower() / f"{field}.day.bin")
+    quotes = _prior_quotes(prior_quote_case)[symbol][1]
+    assert len(quotes) == 9
+    assert all(d != calendar[0] for d, _ in quotes)
+
+
+def test_prior_quote_context_reaches_real_history_after_a_long_suspension(prior_quote_case):
+    _, symbol, calendar, _, _ = prior_quote_case
+    suspended = frozenset((d, symbol) for d in calendar[1:-1])
+    assert _prior_quotes(prior_quote_case, suspension=suspended)[symbol][1] == ((calendar[0], 30.0),)
+
+
+@pytest.mark.parametrize(
+    "context",
+    (
+        (),
+        (date(2026, 1, 2), ((date(2026, 1, 16), 2.0),)),
+        (date(2026, 1, 2), ((date(2026, 1, 15), 2.0), (date(2026, 1, 14), 3.0))),
+        (date(2026, 1, 2), ((date(2026, 1, 14), np.inf),)),
+        (date(2026, 1, 2), ((date(2026, 1, 14), 2.0),)),
+    ),
+)
+def test_price_carry_rejects_malformed_future_unordered_nonfinite_or_suspended_context(context):
+    symbol = "600988.SH"
+    dates = tuple(d.date() for d in pd.bdate_range("2026-01-02", "2026-01-16"))
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._build_stock_fact_aggregates(
+            month_paths=(),
+            assets={},
+            calendar=dates,
+            spans={symbol: ((dates[0], dates[-1]),)},
+            adapter=None,
+            security=None,
+            provider_absence=None,
+            suspension_keys=frozenset({(date(2026, 1, 14), symbol)}),
+            contributor_eligibility={},
+            window_start=dates[-1],
+            window_end=dates[-1],
+            initial_price_state={symbol: context},
+        )
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+@pytest.mark.parametrize(("field", "bad_value"), (("close", np.inf), ("factor", 0.0)))
+def test_prior_quote_context_does_not_hide_invalid_source(prior_quote_case, field, bad_value):
+    root, symbol, _, _, _ = prior_quote_case
+    path = root / "features" / symbol.lower() / f"{field}.day.bin"
+    values = np.fromfile(path, dtype="<f4")
+    values[-2] = bad_value
+    values.tofile(path)
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        _prior_quotes(prior_quote_case)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+
+@pytest.mark.parametrize("with_price_context", (False, True))
 def test_full_day_suspension_precedes_missing_evidence_and_price_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    with_price_context: bool,
 ) -> None:
     dates = (date(2026, 1, 16), date(2026, 1, 19))
+    prior_dates = tuple(d.date() for d in pd.bdate_range(end="2026-01-15", periods=10))
     symbol = "688005.SH"
     source_rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
     for index, day in enumerate(dates):
@@ -2726,22 +2843,29 @@ def test_full_day_suspension_precedes_missing_evidence_and_price_history(
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
         assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
-        calendar=dates,
-        spans={symbol: ((dates[0], dates[-1]),)},
+        calendar=(*prior_dates, *dates),
+        spans={symbol: ((prior_dates[0], dates[-1]),)},
         adapter=Adapter(),
         security=Security(),
         provider_absence=ProviderAbsence(),
         suspension_keys=frozenset({(dates[0], symbol)}),
         contributor_eligibility={symbol: True},
+        window_start=dates[0],
+        window_end=dates[-1],
+        initial_price_state=(
+            {symbol: (prior_dates[0], tuple((d, 2.0 + i) for i, d in enumerate(prior_dates)))}
+            if with_price_context
+            else None
+        ),
     )
 
     suspended, resumed = captured
     assert suspended["is_suspended"] is True
     assert suspended["moneyflow_fact_status"] == "not_applicable_suspended"
     assert resumed["is_suspended"] is False
-    assert resumed["prev_close_yuan"] is None
-    assert resumed["prev_close_5_yuan"] is None
-    assert resumed["prev_close_10_yuan"] is None
+    assert resumed["prev_close_yuan"] == (1.0 if with_price_context else None)
+    assert resumed["prev_close_5_yuan"] == (7.0 if with_price_context else None)
+    assert resumed["prev_close_10_yuan"] == (2.0 if with_price_context else None)
 
 
 @pytest.mark.parametrize(

@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1828",
-  "closed_at": null,
+  "closed_at": "2026-10-09T15:41:55.875742Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-10-09T07:37:12.087263Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7424ba99669d0174072e522c84908507738b100a",
+  "fixed_at": "2026-10-09T08:03:14Z",
   "github_issue_number": 5830,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5830",
   "last_seen_at": "2026-10-09T07:37:12.087263Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5832",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -139,9 +140,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG1828/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1828",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0345f8962587ad48e3a1fdf857a818f571db4739c6a9a62208bfa88785b7a071",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "7424ba99669d0174072e522c84908507738b100a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-09T15:41:19.106020Z",
+      "mode": "read_only",
+      "observed_identity": "acb9aabdda019d111d79f11101f7105448362536",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "84e7ea1ac292cbefab3f63292cf4cbc786f83e67c80a89e2fe346796893c884f",
+      "receipt_sha256": "13d302080d47b4d46706bf14508f389a913f12192ee5f143a458754e369189a4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "54965922040dde0b170d92998372a4c703cb2907f4211f5907fb5f91572e9560",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -151,7 +175,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1828",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ed4250388b2c49c0",
+    "recorded_at": "2026-10-09T08:03:50.937129Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6953e5cfd1930083f4f524bb476bb84b6d393552",
+    "source_merge_commit": "7424ba99669d0174072e522c84908507738b100a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5832",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed"
+    ],
+    "validation_evidence_digest": "385417cfef66b1fd68b653e544555236d2f267ef0b9275fb15e9239dd1eafd5b"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -160,6 +205,10 @@
     "fingerprint": "b745c7c926b3d54eceb6db48",
     "source_event_id": "FE-20261009-b745c7c926b3"
   },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "canonical-root post-restart-verify BUG-1828 worker-scheduler expected7424 -> verified; identity ancestor match and exactly one supervised worker PASS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

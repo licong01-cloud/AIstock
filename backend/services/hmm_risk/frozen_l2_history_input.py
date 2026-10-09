@@ -355,11 +355,15 @@ def outcomes(request, bundle):
         require(old["input_identity"] == bundle["source_identity"], "risk outcome source changed")
         require(calendar == bundle["calendar"], "risk outcome calendar changed")
         plan = history.schedule(calendar)
-        # The unchanged C-010 stock-fact aggregator requires prev_close_10_yuan.
-        # Read real prior context; it is not an extra evaluation date or a fill.
-        context_start = date.fromisoformat(calendar[plan["positions"][plan["days"][0]] - 10])
+        # Normal suspension does not supply a quote. Carry ten real prior
+        # observations within each stock's PIT span, without changing C-010
+        # coverage or adding/shortening any evaluation date.
         assets, window, aggregates, identity = _bounded_l2_stock_facts(
-            source["frozen"], source["source"], start=context_start, end=history.END
+            source["frozen"],
+            source["source"],
+            start=history.START,
+            end=history.END,
+            prewarm_price_history=True,
         )
         require(
             identity["release_identity"] == old["input_identity"]["release_identity"], "risk outcome release changed"
