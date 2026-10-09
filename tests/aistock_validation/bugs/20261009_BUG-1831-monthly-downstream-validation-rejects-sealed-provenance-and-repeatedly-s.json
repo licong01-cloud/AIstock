@@ -1,6 +1,7 @@
 {
   "actual": "生产者与LOCAL_VALIDATE白名单不一致；下游多处独立_sha256重复读取完整release。",
   "allowed_write_scope": [
+    "backend/tests/dataset_release/test_monthly_preparation_source.py",
     "backend/services/dataset_release/monthly_candidate_finalizer.py",
     "backend/services/dataset_release/monthly_local_validation.py",
     "backend/services/dataset_release/monthly_official_adapters.py",
