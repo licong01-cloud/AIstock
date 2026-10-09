@@ -1,6 +1,7 @@
 {
   "actual": "worker存活但8分钟后仍卡在启动Git subprocess communicate，attempt253 PLANNED。",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_worker_nodes.py",
     "backend/services/dataset_release/monthly_node_tools.py",
     "backend/services/dataset_release/monthly_hmm_derive.py",
     "backend/services/dataset_release/monthly_node_probe_runner.py",
@@ -32,19 +33,32 @@
   "evidence_uris": [],
   "expected": "受监督无窗口worker完成只读组合预检并领取原operation；Git/节点/派生子命令不创建持有输出管道的console host；保持原超时、stderr和fail-closed语义。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261009_BUG-1834-windows-supervised-monthly-worker-hangs-on-console-subprocess-pipes-befo.json",
+      "backend/services/dataset_release/monthly_hmm_derive.py",
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_subprocess.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_subprocess.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/monthly_node_tools.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1834-windows-supervised-monthly-worker-hangs-on-console-subprocess-pipes-befo.json",
       "backend/services/dataset_release/monthly_hmm_derive.py",
-      "backend/services/dataset_release/monthly_node_probe_runner.py",
       "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
       "backend/services/dataset_release/monthly_worker.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
       "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
-      "backend/tests/dataset_release/test_monthly_local_validation.py"
+      "backend/services/dataset_release/monthly_subprocess.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_node_tools.py",
@@ -168,6 +182,7 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "backend/services/dataset_release/monthly_worker_nodes.py",
       "backend/services/dataset_release/monthly_node_tools.py",
       "backend/services/dataset_release/monthly_hmm_derive.py",
       "backend/services/dataset_release/monthly_node_probe_runner.py",
@@ -179,6 +194,7 @@
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/dataset_release/monthly_worker_nodes.py",
       "backend/services/dataset_release/monthly_node_tools.py",
       "backend/services/dataset_release/monthly_hmm_derive.py",
       "backend/services/dataset_release/monthly_node_probe_runner.py",
@@ -212,11 +228,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED：启动Git、节点probe及部署三个回归用例在原代码均失败；GREEN：统一有限子命令无窗口启动后均通过。",
+      "真实Windows无窗口fresh process执行正式月更worker --preflight，2.594秒正常退出、status=PASS，九月原operation未领取，database_opened=false、candidate/profile/runtime写入=false。",
+      "三轮审核：核对真实worker两次阻塞调用栈；核对全部月更Git/派生/probe/stream有限子命令；核对stdin所有权、stderr/退出码/超时与POSIX零flags兼容。未改变业务数据、模型、PIT、月份校验或发布门禁。",
+      "定向测试14项通过，包含真实无窗口Git fresh-process回归及派生/stream非零退出传播；相关composition/transport小矩阵9 passed、1 skipped。组合绑定修订后7个fix-point通过。Ruff、L0与git diff --check通过。",
+      "WSL已有rdagent-gpu环境fresh process验证POSIX creationflags=0及有限子命令正常退出。Windows worktree的.git文件不能被WSL Git解析，此错误仅属于测试命令路径，未修改Git配置；改用实际Python有限子命令验证POSIX兼容并通过。",
+      "DESIGN-COMPLIANCE-001逐项通过：真实程序阻断修复，不宣称九月candidate已就绪；退出码与错误保留；数据/模型/业务合同不变；未引入全历史校验、门禁或额外人工审批。",
+      "Windows CREATE_NO_WINDOW formal worker --preflight -> PASS in 2.594s; database_opened=false, operation_claimed=false"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

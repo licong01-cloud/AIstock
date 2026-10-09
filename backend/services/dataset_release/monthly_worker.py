@@ -32,6 +32,7 @@ from .monthly_unified import (
 )
 from .canonical import canonical_json_bytes
 from .monthly_file_identity import file_sha256
+from .monthly_subprocess import headless_process_options
 from .profile_contract import ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 
 
@@ -193,6 +194,7 @@ class SubprocessStageProducer:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **headless_process_options(),
         )
         (exchange / f"{context.stage.lower()}-stdout.log").write_text(
             completed.stdout[-1024 * 1024 :], encoding="utf-8"

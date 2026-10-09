@@ -13,6 +13,8 @@ import subprocess
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from .monthly_subprocess import headless_process_options
+
 from .canonical import canonical_json_bytes
 from .monthly_consumer_registry import monthly_controller_preflight_probes
 from .monthly_consumer_validation import (
@@ -120,6 +122,7 @@ def _run_subprocess(
         check=False,
         timeout=timeout_seconds,
         shell=False,
+        **headless_process_options(),
     )
 
 

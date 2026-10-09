@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .canonical import canonical_json_bytes, ensure_sha256
 from .monthly_file_identity import file_sha256
+from .monthly_subprocess import headless_process_options
 from .errors import CanonicalizationError
 from .monthly_official_adapters import (
     DeployExecution,
@@ -576,6 +577,7 @@ def _run_command(
         timeout=timeout_seconds,
         check=False,
         shell=False,
+        **headless_process_options(),
     )
 
 
@@ -593,6 +595,7 @@ def _stream_command(
             stdout=stdout,
             stderr=stderr,
             shell=False,
+            **headless_process_options(),
         )
         try:
             if process.stdin is None:  # pragma: no cover - subprocess contract
