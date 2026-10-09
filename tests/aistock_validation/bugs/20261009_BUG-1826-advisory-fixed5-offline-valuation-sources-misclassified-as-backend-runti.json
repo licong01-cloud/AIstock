@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1826",
-  "closed_at": null,
+  "closed_at": "2026-10-09T06:39:52Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -92,8 +92,8 @@
   },
   "first_seen_at": "2026-10-09T06:22:08.544936Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f81720ed8b8816a38838784d909406e712978099",
+  "fixed_at": "2026-10-09T06:39:52Z",
   "github_issue_number": 5822,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5822",
   "last_seen_at": "2026-10-09T06:22:08.544936Z",
@@ -101,6 +101,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5824",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -119,6 +120,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -128,7 +130,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1826",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "949882bddaa9f6fb",
+    "recorded_at": "2026-10-09T06:40:33.595146Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4fe50bc4b881e9854e5cd499220d32ccf600c48a",
+    "source_merge_commit": "f81720ed8b8816a38838784d909406e712978099",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5824",
+    "validation_evidence": [
+      "validation-receipt: id=b8080cf3cca7a5dd commit=4fe50bc4b881e9854e5cd499220d32ccf600c48a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q --no-cov` result=`2 passed`",
+      "validation-receipt: id=5fefba3544940475 commit=4fe50bc4b881e9854e5cd499220d32ccf600c48a kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed (0 blocking)`",
+      "validation-receipt: id=4af5aa800bbc8987 commit=4fe50bc4b881e9854e5cd499220d32ccf600c48a kind=ruff plan=direct status=passed command=`ruff check backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "194d8781493b17eb816ee9dddf74ce00dc9dc66aeaf0a4437e0bc1f05c52c53b"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -137,6 +162,11 @@
     "fingerprint": "90d5910d80f253b1b1412369",
     "source_event_id": "FE-20261009-90d5910d80f2"
   },
+  "validation_evidence": [
+    "validation-receipt: id=b8080cf3cca7a5dd commit=4fe50bc4b881e9854e5cd499220d32ccf600c48a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q --no-cov` result=`2 passed`",
+    "validation-receipt: id=5fefba3544940475 commit=4fe50bc4b881e9854e5cd499220d32ccf600c48a kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed (0 blocking)`",
+    "validation-receipt: id=4af5aa800bbc8987 commit=4fe50bc4b881e9854e5cd499220d32ccf600c48a kind=ruff plan=direct status=passed command=`ruff check backend/tests/scripts/test_aistock_issue_workflow_fast.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
