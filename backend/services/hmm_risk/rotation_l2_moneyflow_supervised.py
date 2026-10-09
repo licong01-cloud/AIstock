@@ -146,12 +146,20 @@ def feature_rows(bundle: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[
     parsed = validate_input(bundle)
     calendar = list(parsed["calendar"])
     train, pred = schedule(calendar)
-    rows = baseline.moneyflow_features_for_calendar(
+    rows = moneyflow_rank_rows(
         calendar=calendar,
         catalog=parsed["catalog_codes"],
         names=parsed["sector_names"],
         daily_rows=bundle["source"]["daily_aggregates"],
         decision_days=train + pred,
+    )
+    return rows, train, pred
+
+
+def moneyflow_rank_rows(*, calendar, catalog, names, daily_rows, decision_days) -> list[dict[str, Any]]:
+    """Original E0 rank kernel, independent of fit/evaluation date dispatch."""
+    rows = baseline.moneyflow_features_for_calendar(
+        calendar=calendar, catalog=catalog, names=names, daily_rows=daily_rows, decision_days=decision_days
     )
     by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -167,7 +175,7 @@ def feature_rows(bundle: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[
         for row in daily:
             row["x"] = [rank[row["sector_code"]] for rank in ranks] if row["availability"] == "available" else None
             row.pop("moneyflow_values")
-    return rows, train, pred
+    return rows
 
 
 def training_matrix(
@@ -269,11 +277,18 @@ LINEAR_TERMS = ("moneyflow_level_linear_term", "moneyflow_delta_linear_term")
 def predictions_from_parameters(
     rows: list[dict[str, Any]], parameters: Mapping[str, Any], *, term_names: tuple[str, ...] = LINEAR_TERMS
 ) -> list[dict[str, Any]]:
+    selected = [row for row in rows if PREDICTION_START <= date.fromisoformat(row["trade_date"]) <= PREDICTION_END]
+    return linear_predictions_for_rows(selected, parameters, term_names=term_names)
+
+
+def linear_predictions_for_rows(
+    rows: list[dict[str, Any]], parameters: Mapping[str, Any], *, term_names: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """Original fsum and state algebra; callers must validate their explicit contract."""
     beta, b = parameters["coefficients"], parameters["intercept"]
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        if PREDICTION_START <= date.fromisoformat(row["trade_date"]) <= PREDICTION_END:
-            groups[row["trade_date"]].append(row)
+        groups[row["trade_date"]].append(row)
     output = []
     for _, daily in sorted(groups.items()):
         raw: dict[str, float] = {}

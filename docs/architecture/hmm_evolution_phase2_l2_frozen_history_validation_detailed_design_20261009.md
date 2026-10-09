@@ -1,9 +1,9 @@
 # HMM Evolution Phase 2：冻结L2轮动与独立风险的新历史验证详细设计
 
-> 版本：v1.0；日期：2026-10-09；owner：HMM；tier：F2。
-> 状态：PROPOSED_PENDING_USER_APPROVAL_NOT_EXECUTION_READY。本轮用户批准按P0→P1→P2开始任务；新增窗口、固定参数推断及消费精确D1～D6尚未批准。本文件不产生tail读取、fit、生产或PR合入授权。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.83 §1.0/§1.12/§1.13。旧直接设计及精确合同不回写。
-> review base：e7f6eaf9e2e7cc2b1e1fcea36aaac94adffd2216；当前仅三份HMM文档，不改变模型、源码或运行态。
+> 版本：v1.1；日期：2026-10-09；owner：HMM；tier：F2。
+> 状态：APPROVED_BY_USER_SOURCE_IMPLEMENTED_PENDING_PR_DELIVERY。用户于2026-10-09批准文档合入及新P1/P2全部D1～D6；文档#5799已合入6119f8990b7b5e9a132181b45d682f4a8c422efc。授权固定参数新历史验证，不授权fit、生产采用、源码PR合入或cleanup。显式离线executor及直接测试已实施，最终提交门禁/CI另报；源码明确授权合入后，方按§6固定源码执行。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.84 §1.0/§1.12/§1.13。旧直接设计及精确合同不回写。
+> 文档审核base：e7f6eaf9e2e7cc2b1e1fcea36aaac94adffd2216；源码从同步后的origin/main c7f41c288开始。§6锁定15个HMM-owned文件，不改变冻结模型、批准公式或运行态。
 
 ## 1. Background、Goals与Non-Goals
 
@@ -34,7 +34,7 @@ P1官方申万L2指数收益与P2 C-010/A5股票聚合收益是不同估值对�
 | v15共享文件 | sector H5=`575ad57d52567857a028ff71809ea776894dce3f00421182ecf9ebdb4e3402f3`；index H5=`875c9560e10c9a6d13f30f5fbfb44bc9aba16a3ef39a41fe1acd4a91e4f4c5dd`；membership=`959fe44300aa3fcb0c82f730bada5803a51d2f3042597871629d4deb99b97ce5` |
 | quote authority | byte SHA=`c8a9e0b15b87a86ee91526fc4537aef11829e6a679f1e436cfdfed9ac5607cc4`；canonical=`796c0036b1b1aea5592eb6f3be48a84c9aab26a3ad1b120c33dc205fb06fff97` |
 
-其余source_file_hashes/security/provider-absence/股票amount集合与mapping pins直接从上述原封闭input校验继承，不重新命名行业ID、设计新的身份表或仅信任路径名。官方文本code为身份，共享稀疏整数ID仅作连接键。
+其余source_file_hashes/security/provider-absence与mapping pins直接从原封闭input校验继承；security/provider沿正式loader的canonical身份，不误当文件byte SHA。原股票amount集合hash仍属于旧输入，新窗口按同一冻结日线文件的实际PIT人口产生独立new_window_amount_set_sha256，不伪造新旧人口相同。不重新命名行业ID、设计新身份表或仅信任路径名；官方文本code为身份，共享稀疏整数ID仅作连接键。
 
 ### 2.3 P2资产身份与源隔离
 
@@ -49,13 +49,13 @@ P1官方申万L2指数收益与P2 C-010/A5股票聚合收益是不同估值对�
 
 原request.source_identity中另有producer/source-history字段；不得把其中源导出历史hash当本次qe_dataset_manifest文件hash。上表业务identity与byte hash均由原features及当前manifest metadata直接读回相符。实际所有component/inventory/security/provider/PIT pins按原正式binding逐项继承，不能只校验本表三个摘要。若当前文件不能闭合原正式identity，typed停止，不借v15数据或数据库补齐。
 
-本轮实时active profile仍为v15；P2推荐显式保留其已冻结的较新v17输入，避免把已训练风险模型静默重绑定到v15。该选择属于待批准D1，不激活v17，不要求QE切换数据。以后active前进也不改本次request。
+本轮实时active profile仍为v15；已批准P2 D1显式保留其冻结v17输入，避免把已训练风险模型静默重绑定到v15。不激活v17，不要求QE切换数据。以后active前进也不改本次request。
 
 ## 3. 日历、因果时序与独立性
 
 ### 3.1 日历核算（只读日期，非数值preflight）
 
-共享日历文件SHA=`ce017cfbf1d9dde630c0d7f39e33b767e95293acd5258104f80491239826207a`。拟固定`2026-04-01..2026-08-31`共104个交易日。
+共享日历文件SHA=`ce017cfbf1d9dde630c0d7f39e33b767e95293acd5258104f80491239826207a`。已批准固定`2026-04-01..2026-08-31`共104个交易日。
 
 P1预测104日，10D outcome完整的94个decision为`2026-04-01..2026-08-17`，其后10日只输出预测及右截尾状态，不新建cohort。首日25日特征源从`2026-02-25`至`2026-03-31`，所有t特征只使用≤prev_open(t)；完整估值到2026-08-31。
 
@@ -65,7 +65,7 @@ P2预测104日；消费收益为`2026-04-02..2026-08-31`共103日，收益t仅�
 
 ### 3.2 independence不靠改字段制造
 
-本窗口不在上述三模型的训练或原development区间内，但截至本文起草**使用历史尚未核实**：`independence_status=UNVERIFIED_USAGE_HISTORY`，不宣称untouched。执行授权前仅紧凑核对这些冻结模型/request/acceptance及直接相关候选选择记录是否使用该区间的outcome；metadata/feature preflight与用于选模型/窗口/规则的outcome访问分开，不全盘翻旧日志或建立新证据档案。
+本窗口不在上述三模型的训练或原development区间内。2026-10-09在读取新窗口数值前，紧凑核对§2所列三模型封闭回执、原request和直接选择设计：rank/return原prediction_end=2026-03-31、tail_forbidden_from=2026-04-01；risk原development_window结束于2026-03-31；三回执tail_accessed=false；#5791消费结果也仅截至2026-03-31、selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED。未发现这些当前候选使用新窗口outcome选择参数或规则，因此本包标`independence_status=HELD_OUT_FROM_CURRENT_CANDIDATE_SELECTION`，限定于当前三个候选，不宣称全项目untouched。metadata/feature preflight与用于选择的outcome访问分开，不全盘翻旧日志或建立证据档案。
 
 查无候选选择outcome使用且原封存边界闭合，才标`HELD_OUT_FROM_CURRENT_CANDIDATE_SELECTION`，同时保留跨既有研发使用的已知局限；不能声称已证明无人看过行情。若发现影响当前候选选择的使用或记录无法确定，独立确认保持`UNVERIFIED`/`CONTAMINATED`，先报告给用户；不得用同一结果判独立通过、自动换更有利窗口或通过新增人工门禁无限索证。是否继续作为明确的回顾性诊断须用户裁定，当前未自动授权。
 
@@ -79,7 +79,7 @@ P2按原股票/PIT/as-of聚合合同计算收益和20D输入，不能把官方�
 
 ## 4. Contracts P1：L2-FROZEN-ROTATION-HISTORY D1～D6
 
-以下六条全部为`PROPOSED_PENDING_USER_APPROVAL`。
+以下六条全部于2026-10-09获用户批准。源码已经实施，正式新窗口执行尚未运行；以下精确合同保持不变。
 
 | 决策 | 推荐一次性精确合同 |
 |---|---|
@@ -94,7 +94,7 @@ OBSERVED只是完整参考路径点估计，不是新promotion状态。若区间
 
 ## 5. Contracts P2：L2-FROZEN-RISK-HISTORY D1～D6
 
-以下六条全部为`PROPOSED_PENDING_USER_APPROVAL`。
+以下六条全部于2026-10-09获用户批准。源码已经实施，正式新窗口执行尚未运行；以下精确合同保持不变。
 
 | 决策 | 推荐一次性精确合同 |
 |---|---|
@@ -109,9 +109,27 @@ OBSERVED只是完整参考路径点估计，不是新promotion状态。若区间
 
 ## 6. Implementation Plan与allowed_write_scope
 
-当前文档阶段仅父蓝图、原轮动直接设计状态、本文三文件；ignored短计划不入库。精确合同批准并完成设计交付后，一个连续代码包依次完成P1→P2，不拆为reader/测试/API微阶段。新窗口纯离线CLI必须显式request和output，运行于固定、干净、已提交源码的独立validation树；parent各调用两个fresh process，同一新bundle只构造一次，不重复数据导出。
+当前一个连续代码包依次实现P1→P2，不拆为reader/测试/API微阶段，ignored短计划不入库。离线CLI显式request/hash/features/hash/output，运行于固定、干净、已提交源码的独立validation树；parent各调用两个fresh process，同一新bundle只构造一次。两child各写预测、回读后写ready；parent闭合两份ready/预测后才构造一个outcome视图，回读/ready及最终child结果向parent的request、HEAD、sealed/outcome身份闭合。无效输出目录不得写失败回执。
 
-现存`rotation_l2_moneyflow_supervised.py::predictions_from_parameters`、`rotation_l2_input.py`及`rotation_l2_reference_value.py`含旧日期/tail禁止边界，不能monkeypatch常量或删旧guard启动新窗口。未来实施限于HMM-owned纯函数/显式新合同dispatch/对应直接测试，保持旧默认和旧CLI拒绝tail；共享数学抽取后复用，不复制实现/兼容代理、不加入通用研究框架。P2沿`risk_l2.py`/`risk_l2_input.py`/`risk_l2_value_replay.py`的原数学和正式reader。具体文件scope在实施前按现有ownership模块映射锁定，不修改router、QE、Selection、Advisory、Paper、数据生产或CI/nox/test plan。
+现存`rotation_l2_moneyflow_supervised.py::predictions_from_parameters`、`rotation_l2_input.py`及`rotation_l2_reference_value.py`含旧日期/tail禁止边界，不能monkeypatch常量或删旧guard启动新窗口。实施限于HMM-owned纯函数/显式新合同dispatch/对应直接测试，保持旧默认和旧CLI拒绝tail；共享数学抽取后复用，不复制实现/兼容代理、不加入通用研究框架。P2沿实际存在的`risk_l2.py::prepare_file_inputs`、`formal_state_input.py::_l2_stock_facts`及`risk_l2_value_replay.py`的原数学和正式reader；v1.0引用的`risk_l2_input.py`并不存在，本次仅纠正文档定位。不修改router、QE、Selection、Advisory、Paper、数据生产或CI/nox/test plan。
+
+锁定allowed_write_scope共15文件：
+
+- backend/services/hmm_risk/formal_state_input.py
+- backend/services/hmm_risk/risk_l2.py
+- backend/services/hmm_risk/rotation_l2_moneyflow_price_supervised.py
+- backend/services/hmm_risk/rotation_l2_moneyflow_supervised.py
+- backend/services/hmm_risk/frozen_l2_history.py
+- backend/services/hmm_risk/frozen_l2_history_input.py
+- scripts/hmm_risk/rotation_l2_reference_value.py
+- scripts/hmm_risk/validate_frozen_l2_history.py
+- backend/tests/hmm_risk/test_frozen_l2_history.py
+- backend/tests/hmm_risk/test_frozen_l2_history_input.py
+- backend/tests/hmm_risk/test_validate_frozen_l2_history.py
+- backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py
+- 本详细设计、父蓝图及hmm_evolution_phase2_rotation_l2_complementary_information_detailed_design_20261008.md。
+
+旧fresh-process合成测试只修正预注册环境采集：运行前独立cold process捕获环境，避免无关测试收集造成线程池顺序不同；不从结果倒填期望，不改正式environment比较/版本/单线程合同。
 
 最多三轮作者审修，至少两轮，零阻断可提前结束。定向矩阵覆盖实际新行为；广域回归由现有CI承担，不为了新日期重跑旧训练或完整历史矩阵。源PR合入、cleanup、DDL/DML、依赖/激活/服务仍按各自授权，本设计不自动授予；后端重启始终用户所有。源码BUG另登记，修复不允许变模型合同。
 
@@ -126,7 +144,7 @@ OBSERVED只是完整参考路径点估计，不是新promotion状态。若区间
 | P2消费 | 三臂131固定预算、全/无warning、全不可用现金及真实coverage、一日延迟、R/X敞口相同、股票事实源、漂移成本、末日不平仓、合法NA块/资本耗尽与真实故障区别 |
 | 解读/无副作用 | P1/P2收益口径不可混用；旧已消费区间不冒充独立；区间跨零/少持仓/机会成本和短样本局限不隐藏；新结果不升级API/advisory、不修改旧资产/数据/环境变量/DB或用户进程 |
 
-当前仅文档F2/跨文档一致性/旧合同与历史保留/diff与scope验证。上述源码测试及新窗口file-only完整preflight尚未运行，不写成通过。新窗口数值和标签未读取，不以日历104计作data PASS。
+已运行合成直接矩阵及小段原封闭参数兼容验证：rank/return各131条旧日期预测完全相同，risk三条旧合法概率float64完全相同，均无fit；fresh-process导入hmm_risk/health及依赖链无数据库/网络调用。旧直接回归首次71通过/1失败，定位为线程池同集合不同加载顺序；独立node通过，修正测试cold环境后在混合risk收集下2项通过。最终HMM PR slice、registry/L0、静态及F2以提交报告为准。新窗口完整file-only preflight、数值、标签、效果均未执行，不把合成测试或日历104计作data PASS。
 
 ## 8. Design Acceptance Index
 
@@ -139,23 +157,24 @@ OBSERVED只是完整参考路径点估计，不是新promotion状态。若区间
 
 ### 8.1 Design Acceptance Matrix
 
-矩阵验收的是设计定义，不是实现、数值批准或业务通过；`DESIGN_REVIEW_VERIFIED`只表示相应定义经作者审核。所有新精确合同仍pending，实现路径列为未来scope，未存在的新行为不填implemented；真实旧结果路径只支撑P0及原参数依据。执行未完成项见下一表，不能把“无设计定义缺口”解释为功能完成。
+矩阵SOURCE_TEST_VERIFIED只表示源码与直接测试，不是正式新历史业务结果。原结果只支撑P0及原参数依据；正式新窗口执行另列，不能把源码或F2通过解释为经济验证通过。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §2.2/§4 D1；现有rotation_l2输入/参数reader | artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/input.json | DESIGN_REVIEW_VERIFIED | 无 |
-| F-002 | §3/§4 D2；未来显式history request | artifact: X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260928-r8-unified-moneyflow1-candidate/components/daily_bin_candidate/calendars/day.txt；未来因果/使用历史直接检查 | DESIGN_REVIEW_VERIFIED | 无 |
-| F-003 | §4 D3～D6；现有scripts/hmm_risk/rotation_l2_reference_value.py数学 | artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/reference_value_20261009_84278758c/run/acceptance.json；未来新窗口消费反例 | DESIGN_REVIEW_VERIFIED | 无 |
-| F-004 | §2.3/§5 D1～D2；现有risk_l2_input.py/risk_l2.py | artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/run/acceptance.json | DESIGN_REVIEW_VERIFIED | 无 |
-| F-005 | §5 D3～D6；现有risk_l2_value_replay.py | backend/tests/hmm_risk/test_risk_l2_value_replay.py；原数学直接合同，未来新日期反例另补 | DESIGN_REVIEW_VERIFIED | 无 |
-| F-006 | §1/§6/§9及父蓝图§1.13 | backend/tests/hmm_risk/test_rotation_l2_reference_value.py；原无副作用合同，未来新执行poison另补 | DESIGN_REVIEW_VERIFIED | 无 |
+| F-001 | frozen_l2_history_input.py::_rotation_source/prepare；frozen_l2_history.py::infer_rotation | backend/tests/hmm_risk/test_frozen_l2_history_input.py；原sealed参数兼容smoke | SOURCE_TEST_VERIFIED | 无 |
+| F-002 | frozen_l2_history.py::schedule/infer_rotation；validate_frozen_l2_history.py::run | backend/tests/hmm_risk/test_frozen_l2_history.py；backend/tests/hmm_risk/test_validate_frozen_l2_history.py | SOURCE_TEST_VERIFIED | 无 |
+| F-003 | frozen_l2_history.py::evaluate_rotation；rotation_l2_reference_value.py::cohort_reference_path | backend/tests/hmm_risk/test_frozen_l2_history.py；backend/tests/hmm_risk/test_rotation_l2_reference_value.py | SOURCE_TEST_VERIFIED | 无 |
+| F-004 | frozen_l2_history_input.py::prepare；risk_l2.py::predictions_from_parameters；formal_state_input.py::_bounded_l2_stock_facts | backend/tests/hmm_risk/test_frozen_l2_history.py；原risk参数兼容smoke | SOURCE_TEST_VERIFIED | 无 |
+| F-005 | frozen_l2_history.py::evaluate_risk；risk_l2_value_replay.py::replay | backend/tests/hmm_risk/test_frozen_l2_history.py；backend/tests/hmm_risk/test_risk_l2_value_replay.py | SOURCE_TEST_VERIFIED | 无 |
+| F-006 | frozen_l2_history.py::no_training_or_external_actions；validate_frozen_l2_history.py::main/run | backend/tests/hmm_risk/test_validate_frozen_l2_history.py；backend/tests/hmm_risk/test_frozen_l2_history_input.py；fresh-process import smoke | SOURCE_TEST_VERIFIED | 无 |
 
 | 实际执行维度 | 当前状态 |
 |---|---|
 | P0旧结果同步 | 已读回#5791结果及身份，无重跑；三文档状态同步，PR合入和精确清理另报 |
-| 新P1/P2数值批准 | PROPOSED_PENDING_USER_APPROVAL，不借F2 PASS制造授权 |
-| 新窗口独立性 | UNVERIFIED_USAGE_HISTORY，不宣称untouched |
-| 新源码/完整file-only preflight/固定参数推断 | NOT_IMPLEMENTED / NOT_RUN |
+| 新P1/P2数值批准 | APPROVED_BY_USER，2026-10-09明确批准全部D1～D6；文档#5799已合入 |
+| 新窗口独立性 | HELD_OUT_FROM_CURRENT_CANDIDATE_SELECTION，§3.2限定范围，不宣称全项目untouched |
+| 新源码 | SOURCE_IMPLEMENTED，直接反例/原推断兼容通过；最终PR门禁/CI另报，源码PR未合入 |
+| 新窗口完整file-only preflight/固定参数推断 | NOT_RUN，源码合入后固定merge独立validation树执行 |
 | 新窗口效果与消费价值 | NOT_RUN，无新tail outcome读取 |
 | DB/运行产品/场景采用 | NO_CHANGE，QE继续后置 |
 
@@ -163,11 +182,13 @@ OBSERVED只是完整参考路径点估计，不是新promotion状态。若区间
 
 设计阶段：完成P0真实同步、P1/P2一次性精确提案、两至三轮作者审修、F2和scope/diff，提交一个文档PR后交用户批准，不擅自消费新窗口。精确执行批准后：两包各一次固定输入/双process零fit，交付明确正/负/不确定/路径不足/执行失败终态即结束；或需要新模型/阈值/窗口、数据生产/跨owner或未授权生产动作时停止；或三轮审修后仍有阻断。任务不为了时长重跑、不自动开新候选。
 
-production_ddl_gate=noop；production_dml_gate=noop；frontend/backend_dependency_gate=noop；runtime_activation=noop；backend_restart_required=false；runtime/database/dataset/active_profile/process均无变化。运行记录文件普通落盘，不绑环境变量、源HEAD或重启；executor commit只记录实际来源。
+production_ddl_gate=noop；production_dml_gate=noop；frontend/backend_dependency_gate=noop；runtime_activation=noop；runtime/database/dataset/active_profile/process均无变化。共享后端源码的实际workflow分类为runtime_impact=backend、target_ids=[backend-main]、catalog_error=null，不降级为none；后台源版本生效与用户重启/读回分离。离线executor固定源码fresh process，不依赖后端重启。记录为普通文件，不靠环境变量或重启切换；HEAD闭合只保护正式计算来源，不用于激活记录。
 
 交接只包含两包原参数身份、新输入/预测hash、准确日期/目录/native/paired coverage、自然NA和实际源、价值/代价/区间及独立性局限。不保存不必要历史副本/截图账本。研究能力、前瞻确认、产品表面和QE净增益仍为独立状态，没有结果就如实写未执行。
 
 ## 10. 作者审修与DESIGN-COMPLIANCE-001
+
+以下前两段保留v1.0文档阶段审核事实；其“尚未完成/未来”等表述不是当前执行状态。当前状态以§7/§8及提交报告为准。
 
 第一轮作者审核（非独立第三方）核对封闭资产、新日历、自然停发和授权边界：区分P1 v15/官方指数与P2 v17/股票聚合；从risk原acceptance核实precision-lift为0.05而非L1的0.10，已修订；纠正自行写sigmoid可能改变原推断浮点顺序的问题，明确只恢复同版本推断对象并禁止fit。F2初检发现索引/矩阵标题及待批准状态混入“设计定义验收”表，已分离定义审核、数值批准与实际执行状态；不以改标签代报功能或合同批准。
 
@@ -180,10 +201,12 @@ production_ddl_gate=noop；production_dml_gate=noop；frontend/backend_dependenc
 | 禁止简化/占位交付 | P1四臂/四成本、P2三臂/代价及全部计划日期/131目录完整定义；合法不足保留，不用UI子集或旧development替代新验证，设计不冒充实现 |
 | 禁止静默错误 | 源/参数漂移、真缺数、非有限typed失败；正常停发/停牌/右截尾显式NA，持仓不可估值不补零/前填/拼NAV，未知不是neutral |
 | 禁止业务逻辑迁移 | 既有模型、参数、0.20 warning、原特征/目标/消费、生产默认及其他模块不变；仅显式提案新历史窗口与固定参数推断，原合同不回写 |
-| 禁止未经批准门禁/审批 | 所有新D1～D6仍pending；不增资源/记录/统计AND门，不以F2制造tail权限或生产采用；独立性未证不冒充确认，不无限索证 |
+| 禁止未经批准门禁/审批 | 新D1～D6有2026-10-09明确授权；不增资源/记录/统计AND门，不以F2制造生产采用；独立性仅限§3.2范围，不无限索证 |
+
+源码三轮作者审修（非独立第三方）：第一轮抽取共享数学并保留原guard，修复部分文件可见即误释放outcome及新窗口误记tail_accessed=false；第二轮闭合精确价格/钱流grid、canonical authority与byte身份、源读中变化、失败输出安全与原float64参数恢复；第三轮补父child ready/sealed/result向权威绑定及对应反例、特征准备与推断数值环境闭合，修正旧合成fixture的cold环境采集。没有修改D1～D6公式、模型或数值门禁；最终最小门禁/CI单独报告。正式新窗口未运行，不能预报通过。
 
 ## 11. Rollout / Rollback、Risks与Production Gates
 
-本轮是文档更新，发布一个PR，不加载运行配置或部署；如需修订，通过后续受审文档commit处理，不reset旧结果或改写已批准公式。未来新结果独立普通文件，不覆盖原acceptance/生产run；失败保留该次最终结论即可，无历史归档。没有数据/DB/服务动作可“回滚”。
+本轮交付一个HMM源码/直接测试/设计状态PR，待用户另行合入授权。不加载运行配置、不部署、不修改批准公式或旧acceptance/生产run。后续正式新结果为独立普通文件，失败保留该次最终结论即可，不历史归档。若源码需撤回，走受审后续commit，不reset用户修改；没有数据/DB/服务动作可“回滚”。
 
-风险：新窗口独立性未核实；短94个成熟decision不能保证窄区间；官方指数停发可能使P1完整持仓路径不足；P2股票聚合也可能有合法估值NA；不同源和收益定义不能横比。用准确分母/状态/区间呈现，不增加补数据工程、自然事件失败门或新候选搜索来制造成功。production_ddl_gate/production_dml_gate/dependency/runtime_activation/process_control均noop，后端重启权限=false。
+风险：独立性仅已核对当前候选选择，不能宣称全项目untouched；短94个成熟decision不能保证窄区间；官方指数停发可能使P1完整持仓路径不足；P2股票聚合也可能有合法估值NA；不同源和收益定义不能横比。用准确分母/状态/区间呈现，不增加补数据工程、自然事件失败门或新候选搜索来制造成功。production_ddl_gate/production_dml_gate/dependency/runtime_activation/process_control均noop，后端重启权限=false。
