@@ -63,9 +63,8 @@ def test_streaming_deploy_prepares_tools_before_any_node_request(monkeypatch):
     assert calls == ["prepare", ("new", "readback")]
 
 
-def _tools_payload(tmp_path, *, path="backend/services/example.py"):
+def _tools_payload(tmp_path, *, path="backend/services/example.py", raw=b"# committed source\n"):
     buffer = io.BytesIO()
-    raw = b"# committed source\n"
     with tarfile.open(fileobj=buffer, mode="w:") as archive:
         info = tarfile.TarInfo(path)
         info.size = len(raw)
@@ -165,8 +164,48 @@ def test_tools_bundle_uses_git_bytes_not_dirty_source_or_dotenv(tmp_path):
     assert set(row["path"] for row in manifest["files"]) == set(_REQUIRED)
     with tarfile.open(fileobj=io.BytesIO(base64.b64decode(encoded)), mode="r:") as archive:
         assert archive.extractfile(_REQUIRED[0]).read().strip() == b"committed"
-    with pytest.raises(ValueError, match="commit changed"):
+    # An unrelated merged change cannot invalidate a worker's pinned commit.
+    subprocess.run(("git", "-C", str(tmp_path), "add", "."), check=True, capture_output=True)
+    subprocess.run(
+        (
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main advances",
+        ),
+        check=True,
+        capture_output=True,
+    )
+    assert _bundle(tmp_path, commit) == (manifest, encoded)
+    with pytest.raises(ValueError, match="unavailable"):
         _bundle(tmp_path, "f" * 40)
+
+
+def test_bootstrap_is_taken_from_the_pinned_archive_not_live_source(tmp_path):
+    from backend.services.dataset_release.monthly_node_tools import _bootstrap
+
+    raw = b"def _install_node_tools(payload):\n    return 'frozen version'\n"
+    payload = _tools_payload(tmp_path, path="backend/services/dataset_release/monthly_node_tools.py", raw=raw)
+    code = _bootstrap(payload["manifest"], payload["archive"])
+    assert code == raw.decode().strip()
+    payload["manifest"]["files"][0]["sha256"] = "f" * 64
+    with pytest.raises(ValueError, match="bootstrap identity"):
+        _bootstrap(payload["manifest"], payload["archive"])
+
+
+def test_deploy_and_consumer_share_one_startup_commit_publisher():
+    nodes = _nodes()
+    assert nodes._node1_tools() is nodes._node1_tools()
+    # Equivalent composition inputs cannot independently capture different HEADs.
+    assert nodes._node1_tools() is _nodes()._node1_tools()
 
 
 def test_deploy_and_probe_use_same_published_identity_without_network_in_preflight(tmp_path, monkeypatch):
@@ -175,6 +214,7 @@ def test_deploy_and_probe_use_same_published_identity_without_network_in_preflig
     calls = []
     payload = _tools_payload(tmp_path)
     monkeypatch.setattr(tooling, "_bundle", lambda *args: (payload["manifest"], payload["archive"]))
+    monkeypatch.setattr(tooling, "_bootstrap", lambda *args: "def _install_node_tools(payload): return payload")
 
     def publish(command, **kwargs):
         value = json.loads(kwargs["input"])
