@@ -639,6 +639,7 @@ class ImmutableStreamingNodeTransport:
     timeout_seconds: int = 6 * 60 * 60
     command_runner: Callable[..., subprocess.CompletedProcess[bytes]] = _run_command
     stream_runner: Callable[..., subprocess.CompletedProcess[bytes]] = _stream_command
+    command_factory: Callable[[], tuple[str, ...]] | None = None
 
     def __post_init__(self) -> None:
         if self.node_id not in {"wsl2-5080", "rdagent-node1"}:
@@ -756,8 +757,9 @@ class ImmutableStreamingNodeTransport:
     ) -> NodeTransferReadback:
         request = self._request(context, candidate_root=candidate_root, files=files)
         payload = canonical_json_bytes(request) + b"\n"
+        prefix = self.command_factory() if self.command_factory is not None else self.command_prefix
         probe = self.command_runner(
-            (*self.command_prefix, "readback"),
+            (*prefix, "readback"),
             payload=payload,
             timeout_seconds=min(self.timeout_seconds, 30 * 60),
         )
@@ -770,7 +772,7 @@ class ImmutableStreamingNodeTransport:
             if observed["files"] or observed["bytes_transferred"] != 0:
                 raise MonthlyImmutableDeployError("absent node readback contains data")
             completed = self.stream_runner(
-                (*self.command_prefix, "deploy"),
+                (*prefix, "deploy"),
                 request=canonical_json_bytes(request),
                 files=files,
                 timeout_seconds=self.timeout_seconds,
@@ -778,7 +780,7 @@ class ImmutableStreamingNodeTransport:
             observed = self._result(completed, request=request, statuses={"PASS"})
         elif observed["status"] == "UNREGISTERED":
             registered = self.command_runner(
-                (*self.command_prefix, "register"),
+                (*prefix, "register"),
                 payload=payload,
                 timeout_seconds=min(self.timeout_seconds, 30 * 60),
             )

@@ -153,7 +153,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_worker_nodes.py::test_probe_prepares_code_lazily_not_during_runtime_preflight -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -161,7 +161,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED: node probe had no lazy committed-tools preparation hook; GREEN: deploy and probe prepare code only when run and share the pinned source identity, with preflight network/write count zero.",
+      "Final targeted code matrix: 53 passed, 2 skipped. Windows fixture tests cover exclusive publish, resume, source/archive drift, traversal, duplicate inventory, symlink archive rejection and Git-only bytes; no candidate, market database or service was operated.",
+      "Fresh official monthly worker composition preflight PASS with canonical dotenv; database_opened=false, operation_claimed=false, network_access=false, runtime_action=false. WSL Python bootstrap compiled and rejected linked POSIX parent without data writes; WSL pytest unavailable, no dependency installed.",
+      "三轮审核：1. 修正 frozen dataclass 接线为 replace，并验证 DEPLOY/probe 均惰性准备；2. 代码只取 Git 提交字节，排除 dotenv/测试/二进制产物，拒绝路径逃逸和 hash 漂移，不覆盖旧项目；3. 严格核对工具 schema/identity，Git 和 SSH 均有超时，不安装依赖，不切换 active，不产生新的源数据门禁。",
+      "DESIGN-COMPLIANCE-001：仅修复已确认节点工具缺失，不宣称数据已 READY；无静默旧路径回退；不修改模型/PIT/业务合同；源码合入、工具发布、运行身份及真实候选验收分别报告。"
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
