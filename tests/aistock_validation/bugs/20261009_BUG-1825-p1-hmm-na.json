@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-09T05:52:07.383304Z",
-  "description": "2026-04-02..2026-04-15连续9日各131个return=None，共1179项；前十日prev_close_10_yuan冷启动导致coverage失败，被错误当成合法NA；完整路径目前不可验收",
+  "description": "正式P2零fit验证的预测完整，但收益reader从评价首日冷启动，没有读取C-010聚合所需的十个真实前置收盘。2026-04-02..2026-04-15共9日/1179项收益因此误为NA，并非共享数据缺失、停牌或行业停发。仅修复HMM outcome读取边界；原模型、参数、PIT、coverage、评价窗口和数据集均保持不变。旧运行结果保留，不能宣称已完成完整经济验收。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,12 +28,18 @@
   ],
   "expected": "103个计划收益日不得因reader冷启动人为缺失；真实合法NA继续保留，源缺失/hash漂移fail closed；新旧模型参数完全不变",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261009_BUG-1825-p1-hmm-na.json",
       "backend/services/hmm_risk/frozen_l2_history_input.py",
       "backend/tests/hmm_risk/test_frozen_l2_history_input.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261009_BUG-1825-p1-hmm-na.json",
+      "backend/services/hmm_risk/frozen_l2_history_input.py",
+      "backend/tests/hmm_risk/test_frozen_l2_history_input.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/frozen_l2_history_input.py",
@@ -100,11 +106,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "fresh_process_evidence": [
+      "python - (BUG-1825 fresh-process router imports and pinned ten-session Qlib boundary smoke) -> passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

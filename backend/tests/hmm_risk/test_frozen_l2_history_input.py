@@ -3,13 +3,17 @@
 import copy
 import hashlib
 import json
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from backend.services.hmm_risk import frozen_l2_history as h
 from backend.services.hmm_risk import frozen_l2_history_input as source
 from backend.services.hmm_risk.formal_state_model import receipt
+from backend.tests.hmm_risk.test_rotation_l2_moneyflow_supervised import _calendar
 
 
 def test_request_hash_drift_stops_before_source_access(tmp_path, monkeypatch):
@@ -108,3 +112,84 @@ def test_risk_source_rejects_self_hashed_acceptance_drift_before_calendar(risk_s
     monkeypatch.setattr(source.reader, "_require_file", lambda *args: pytest.fail("must fail before calendar/source"))
     with pytest.raises(h.risk.FormalStateError, match="risk frozen model linkage differs"):
         source._risk_source(request)
+
+
+@pytest.fixture
+def risk_outcome_case(monkeypatch):
+    closed = {"2026-04-06", "2026-05-01", "2026-05-04", "2026-05-05", "2026-06-19"}
+    calendar = [d.isoformat() for d in _calendar()] + [
+        d.date().isoformat() for d in pd.bdate_range("2026-04-01", "2026-08-31") if d.date().isoformat() not in closed
+    ]
+    catalog = [f"801{i:03d}.SI" for i in range(131)]
+    identity = {"release_identity": {"manifest": "fixed-original-release"}}
+    original = {"frozen": {"catalog": catalog}, "source": {"candidate_root": "explicit-frozen-root"}}
+    monkeypatch.setattr(source, "_risk_source", lambda _: (original, {"input_identity": identity}, {}, calendar))
+    request = {"kind": "P2", "receipt_sha256": "a" * 64}
+    bundle = {
+        "request_sha256": request["receipt_sha256"],
+        "receipt_sha256": "b" * 64,
+        "catalog": catalog,
+        "calendar": calendar,
+        "source_identity": identity,
+    }
+    calls = []
+
+    def reader(frozen, binding, *, start, end):
+        assert frozen == original["frozen"] and binding == original["source"]
+        calls.append((start, end))
+        window = tuple(date.fromisoformat(d) for d in calendar if start.isoformat() <= d <= end.isoformat())
+        # The production stock-fact kernel needs ten strictly prior closes.
+        # A cold slice has no complete aggregate during its first ten days.
+        aggregates = [SimpleNamespace(trade_date=d, l1_code=c, l1_return=0.01) for d in window[10:] for c in catalog]
+        return {}, window, aggregates, identity
+
+    monkeypatch.setattr(source, "_bounded_l2_stock_facts", reader)
+    return request, bundle, calls, reader
+
+
+def test_risk_outcomes_use_real_ten_session_context_without_shortening_window(risk_outcome_case):
+    request, bundle, calls, _ = risk_outcome_case
+    result = source.outcomes(request, bundle)
+    first = bundle["calendar"].index(h.START.isoformat())
+    assert calls == [(date.fromisoformat(bundle["calendar"][first - 10]), h.END)]
+    assert list(result["event_returns"]) == h.schedule(bundle["calendar"])["days"]
+    assert len(result["returns"]) == 103
+    assert all(
+        set(rows) == set(bundle["catalog"]) and set(rows.values()) == {0.01}
+        for rows in result["event_returns"].values()
+    )
+
+
+def test_risk_outcome_warmup_does_not_fill_genuine_missing_held_return(risk_outcome_case, monkeypatch):
+    request, bundle, _, reader = risk_outcome_case
+    missing = (date(2026, 4, 2), bundle["catalog"][0])
+
+    def with_legal_na(*args, **kwargs):
+        assets, window, aggregates, identity = reader(*args, **kwargs)
+        aggregates = [a for a in aggregates if (a.trade_date, a.l1_code) != missing]
+        return assets, window, aggregates, identity
+
+    monkeypatch.setattr(source, "_bounded_l2_stock_facts", with_legal_na)
+    result = source.outcomes(request, bundle)
+    assert result["returns"][missing[0].isoformat()][missing[1]] is None
+    assert sum(v is None for rows in result["returns"].values() for v in rows.values()) == 1
+
+
+def test_risk_outcome_calendar_drift_fails_before_read(risk_outcome_case, monkeypatch):
+    request, bundle, _, _ = risk_outcome_case
+    bundle["calendar"] = bundle["calendar"][1:]
+    monkeypatch.setattr(source, "_bounded_l2_stock_facts", lambda *args, **kwargs: pytest.fail("must stop before read"))
+    with pytest.raises(h.risk.FormalStateError, match="risk outcome calendar changed"):
+        source.outcomes(request, bundle)
+
+
+def test_risk_outcome_warmup_does_not_accept_release_identity_drift(risk_outcome_case, monkeypatch):
+    request, bundle, _, reader = risk_outcome_case
+
+    def changed_release(*args, **kwargs):
+        assets, window, aggregates, _ = reader(*args, **kwargs)
+        return assets, window, aggregates, {"release_identity": {"manifest": "different-release"}}
+
+    monkeypatch.setattr(source, "_bounded_l2_stock_facts", changed_release)
+    with pytest.raises(h.risk.FormalStateError, match="risk outcome release changed"):
+        source.outcomes(request, bundle)
