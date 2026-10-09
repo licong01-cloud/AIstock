@@ -21,6 +21,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261009-f1e820fedc77",
       "timestamp": "2026-10-09T19:30:55.349928Z"
+    },
+    {
+      "action": "root_cause_and_red_green",
+      "actor": "codex",
+      "note": "真实MA-E50 seed42 2024-07-01 Top50评分精确RED复现最大权重0.16101694915254236；修复仅对最终越界目标执行有限比例封顶再分配，零权重不复活，不可满配保留现金，合法旧输出逐位相同。原持仓测试夹具补齐既有enable_sector_hmm=False和allow_latest_date_fallback关键字合同，生产持仓/HMM分支未改。",
+      "timestamp": "2026-10-09T20:01:34Z"
+    },
+    {
+      "action": "multi_round_code_design_review",
+      "actor": "codex",
+      "note": "两轮审核：数学预算/单股上界/循环至多移除N个候选，四加权方式和不可满配现金；兼容审核保留模型、因子、seed、股票池、TWAP、成本、温度、Borda、V2留存仓与min_weight既有处理。32合同测试通过；WSL真实Qlib fresh-process基类/V2同源最大5%、总95%。DESIGN-COMPLIANCE-001四项通过：完整修复、非有限/矛盾边界显式错误、无业务逻辑迁移、无新增审批门禁。l0和changed-files guardrail零阻断，ownership3/3，registry8 passed，Ruff/py_compile/diff-check通过；广泛qe_read_backend/深度QE覆盖交现有CI/Nightly，不冒称已执行。",
+      "timestamp": "2026-10-09T20:01:34Z"
     }
   ],
   "evidence_uris": [
@@ -106,7 +118,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_score_weighted_hold_thresh.py::test_score_weights_bound_real_mae50_borda_scores -q",
   "required_verification": [
     "l0",
     "qe_read_backend"
@@ -114,11 +126,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_0343c08e8437c77894e893f4e90efe0908677adb",
+    "fresh_process_evidence": [
+      "WSL Ubuntu rdagent-gpu isolated fresh Python loaded tracked ScoreWeightedTopkStrategy and inherited ScoreWeightedTopkStrategyV2; actual MA-E50 seed42 2024-07-01 Top50 scores produced max_weight=0.05 and total_weight=0.95 for both classes; source SHA256=b52c6a3614635067204d663d0b74b02cc2ed237900cc57fc5a8b29bd8b1cfc1b; qlib.init=false, experiment_start=false, DB_access=0, process_control=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
