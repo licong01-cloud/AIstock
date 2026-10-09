@@ -571,7 +571,7 @@ def _l2_stock_facts(
     return _bounded_l2_stock_facts(frozen, source, start=start, end=end)
 
 
-def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date):
+def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date, prewarm_price_history: bool = False):
     """Shared source kernel; public dispatchers retain their distinct frozen boundaries."""
     from backend.services.hmm_risk import rotation_l1_input_bundle as reader
     from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, fail
@@ -621,6 +621,18 @@ def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date):
         expected_release_cutoff=assets["release_cutoff"],
         expected_universe_key=assets["universe_key"],
         bounded=True,
+    )
+    price_context = (
+        reader._strict_prior_price_state(
+            assets["qlib_root"],
+            calendar=calendar_all,
+            spans=spans,
+            suspension_keys=suspension,
+            source_start=SOURCE_START,
+            window_start=start,
+        )
+        if prewarm_price_history
+        else None
     )
     initial = {}
     earlier = [day for day in calendar if day < start]
@@ -682,6 +694,7 @@ def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date):
             build_feature_domain_aggregates=False,
             day_rows_callback=collect,
             initial_circ_state=initial,
+            initial_price_state=price_context,
         )
     window = tuple(day for day in calendar if start <= day <= end)
     if set(structural) != {day.isoformat() for day in window}:
@@ -702,6 +715,13 @@ def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date):
         "structural_membership": structural,
         "domain_reasons": domain_reasons,
     }
+    if price_context is not None:
+        identity["strict_prior_price_context_sha256"] = canonical_sha256(
+            {
+                code: [span.isoformat(), [[day.isoformat(), value] for day, value in quotes]]
+                for code, (span, quotes) in sorted(price_context.items())
+            }
+        )
     if any((path.stat().st_size, path.stat().st_mtime_ns) != stamps[key] for key, path in assets["files"].items()):
         raise fail("effect source changed while read", reason="identity_mismatch")
     # Tuple keys are internal only and never passed to canonical JSON.

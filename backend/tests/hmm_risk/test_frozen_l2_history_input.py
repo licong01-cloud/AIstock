@@ -134,24 +134,23 @@ def risk_outcome_case(monkeypatch):
     }
     calls = []
 
-    def reader(frozen, binding, *, start, end):
+    def reader(frozen, binding, *, start, end, prewarm_price_history=False):
         assert frozen == original["frozen"] and binding == original["source"]
-        calls.append((start, end))
+        calls.append((start, end, prewarm_price_history))
         window = tuple(date.fromisoformat(d) for d in calendar if start.isoformat() <= d <= end.isoformat())
-        # The production stock-fact kernel needs ten strictly prior closes.
-        # A cold slice has no complete aggregate during its first ten days.
-        aggregates = [SimpleNamespace(trade_date=d, l1_code=c, l1_return=0.01) for d in window[10:] for c in catalog]
+        # Price context must count real quotes, not ten open calendar sessions.
+        complete = window if prewarm_price_history else window[10:]
+        aggregates = [SimpleNamespace(trade_date=d, l1_code=c, l1_return=0.01) for d in complete for c in catalog]
         return {}, window, aggregates, identity
 
     monkeypatch.setattr(source, "_bounded_l2_stock_facts", reader)
     return request, bundle, calls, reader
 
 
-def test_risk_outcomes_use_real_ten_session_context_without_shortening_window(risk_outcome_case):
+def test_risk_outcomes_require_real_quote_context_without_shortening_window(risk_outcome_case):
     request, bundle, calls, _ = risk_outcome_case
     result = source.outcomes(request, bundle)
-    first = bundle["calendar"].index(h.START.isoformat())
-    assert calls == [(date.fromisoformat(bundle["calendar"][first - 10]), h.END)]
+    assert calls == [(h.START, h.END, True)]
     assert list(result["event_returns"]) == h.schedule(bundle["calendar"])["days"]
     assert len(result["returns"]) == 103
     assert all(
