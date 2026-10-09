@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1822",
-  "closed_at": null,
+  "closed_at": "2026-10-09T05:44:19.348919Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -186,10 +186,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1822\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1822",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6a0065bbb3700a774d95b575e13eb47dbcfa05a9715ecf2bd9bbbb6dfe92fa19",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "a6b706f814181ffeb6691af167243ebf35d59f4e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-09T05:43:45.388416Z",
+      "mode": "read_only",
+      "observed_identity": "0c7b12636d07729c87d881965d6c0b59b7097c4f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "175d684464097c974c58110f6e24beaea358eef3d995cadb7a6f4ab67ffd221f",
+      "receipt_sha256": "b84b73fc6e9ddfd0f2b0431d9e13dc558413ddebf41f828d0e87e5b7e0201579",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "829c7d353dcdf37208f550155e0fd2cc2ed69a47b2b87bde272714169e4a0687",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -220,7 +242,7 @@
     ],
     "validation_evidence_digest": "4eb9a52943cfcf3ec33ac0d922484061d2e953b28e0cbf754cf73974c9959d44"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
