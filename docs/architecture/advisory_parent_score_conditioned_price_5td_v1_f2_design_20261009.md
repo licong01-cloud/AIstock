@@ -1,7 +1,7 @@
-# 两个新单Alpha包的父信号条件买价模型 F2 详细设计 v1.3
+# 两个新单Alpha包的父信号条件买价模型 F2 详细设计 v1.4
 
-> 日期：2026-10-09。唯一候选 `GP5-PARENT-SCORE-CONDITION-1`；目标合同 `RISK_MANAGED_ADVISORY`，研究用途 `EXPLORATORY_SCREEN / NAVIGATION_ONLY`。
-> 当前交付是完整详细设计及来源可产性核对，尚未实现新模型、读取新收益或执行 fit。设计、源码、输入、拟合、经济确认、生产启用各自分态。
+> 设计日期：2026-10-09；源码实施：2026-10-10。唯一候选 `GP5-PARENT-SCORE-CONDITION-1`；目标合同 `RISK_MANAGED_ADVISORY`，研究用途 `EXPLORATORY_SCREEN / NAVIGATION_ONLY`。
+> 当前六个离线Advisory源码模块与四个测试文件已实现，三轮审核修复及13项定向合同测试通过；PR/CI/合入另报。尚未执行真实输入准备、新收益读取或正式研究fit，未配置日频输出。设计、源码、输入、拟合、经济确认、生产启用各自分态。
 > 权威方向：[荐股蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) §6.3.4。上游Alpha/因子/seed训练由QE独占；本任务只学习Advisory五交易日价格价值，不重新验证QE包资格。
 
 ## Background / Summary / 业务目标及单一假设
@@ -21,7 +21,7 @@
 - 两包公开预测描述符均2,581,509行、5,108股票，声明2024-07-01..2026-08-31。`GET /prediction-store/pred/{run_id}?head=0`两者200，返回AIstock-owned F盘blob；前后SHA/size吻合。
 - 只读D分数/KEY投影已确认：2024-07-04..2025-09-30各305个D，每日全市场4790～4917个原评分。未读取新label/returns/QE label文件、未写SQL、未运行模型或提交QE任务。这只是输入覆盖，不是收益/泛化验收。
 - 原score唯一键/有限数值已读回；各包实际原Top50为15250项、按H日历成熟的train分数10700项。LSTM train-only center/IQR=0.2571457028388977/0.06164543330669403，TCN=0.36988355219364166/0.07484138011932373，均非退化；这是分数坐标可产，不证明Alpha或跨日期金融可比性。实现须按同一冻结窗口/原H规则重算并验证，不将本源观察误作已生成model encoding。
-- 全部实现条款为PLANNED，预计2个真实forest fit；截至本设计0fit。既有133研究fit＋1旧INDEX_BUILD仅作此前事实，不重置为独立实验数，也不因文档合入增加计数。
+- 六模块离线源码及13项定向合同测试已完成；公共源码、旧模型和生产绑定未改。真实305D prepare、一次2fit、四臂经济反馈仍PENDING，0新增真实研究fit；pytest小型合成forest仅验证维度/质量/float32 parity，不属于金融研究。既有133研究fit＋1旧INDEX_BUILD不增加、不重置成独立实验数。源码/单元测试通过不表示模型有盈利价值。
 
 | 来源 | 原包 / manifest SHA256 | run / 原预测 SHA256 |
 |---|---|---|
@@ -32,7 +32,7 @@
 
 ## Scope / Non-goals / 精确范围
 
-本轮设计交付只允许本文和蓝图的最新断点/§16.0更新。后续实现开始前scope必须与以下精确文件一致：
+设计交付#5834已完成。本次实施范围为以下十个源码/测试文件，以及本文验收矩阵和蓝图当前断点的状态更新；编辑前已登记此精确范围。经济假设、模型、人口、费用和判据均沿已批准v1.3，不扩大研究范围：
 
 - `backend/services/advisory_model_first/parent_score_price_5td_contracts_v1.py`
 - `backend/services/advisory_model_first/parent_score_price_5td_inputs_v1.py`
@@ -76,6 +76,8 @@
 内部 `roster_key=(package,manifest,run,D,T,instrument)`；`label_cluster=(D,T,instrument,valuation_policy_sha256)`。同簇行情/单位/标签相同，不按包重复查询；同簇出现在两包时各保留原名单/score，监督行的质量为1/该簇训练包数，总质量1，避免双包重叠虚增信息。各包score不同是合法条件输入，不要求分数相等；同簇已知金融值冲突必须明确错误，不平均或选更好值。
 
 一份批量只读快照覆盖原warmup至evaluation_end，不逐日重建工作区或重复查DB。不把旧P26只覆盖有限股票的快照当全新两包完整行情。SQL正常缺失、价格零占位、停牌/涨跌停/未知均显式保留，原KEY/日期完整；label unavailable行不进损失，但不从评价/覆盖分母删除。价格li/1000=CNY、volume_hand*100=shares，D复权锚固定，来源为现库非vintage。
+
+输入复杂度核对：本计划原两包各305D、每日最多50项，总名单最多30500行；先合并唯一stock/D，五会话价格路径最多152500行，不是全市场笛卡尔积。V2标签按包、每100个完整D分块，价格连接键为D/instrument（many-to-one）、参考连接键为D/T/instrument（one-to-one），最终包/KEY连接也为one-to-one，重复键立即失败而不膨胀行数。警告位置的循环仅遍历原D/两个包及上述有界块，不触发逐日SQL；编码与合并的金融快照只读一次，19会话前缀另为有界元数据读取。完整tick网格另按最多100000节点/128批次，经济评价只查询每个原KEY实际开盘g，不扫描价网格。
 
 ### 2. 固定5TD增量价值与估值/执行隔离
 
@@ -130,7 +132,7 @@
 | 5：交付或停止精确candidate | 多轮同窗口数据/因果、数学/数值、统计/业务、边界复审 | 最小定向测试/Ruff/L0/F2/精确HEAD CI后已有授权内PR合入清理；本轮不生产配置或重启 |
 | 6：有条件后续 | 有值得继续的经济信号才独立确认和角色消费者适配 | 不因源码合入自动激活，不复活旧负臂、不前置UI或自然20日等待 |
 
-实现必须提供显式配置窗口/文件URI/库/节点路径，不在任何公共函数硬编码本研究日期或磁盘。计划/源码/模型变更后重新绑定验证收据；未来范围追加先改本文，不顺手改公共模块。具体实现预计半日～两日，实际fit反馈应小时级；不按时长填充实验或开无界模型搜索。
+实现必须提供显式配置窗口/文件URI/库/节点路径，不在任何公共函数硬编码本研究日期或磁盘。本离线study plan只接受已批准的四个日期，防止误读sealed；纯输入/模型函数仍由plan/encoding传参，该校验不进入QE或其他实验。计划/源码/模型变更后重新绑定验证收据；未来范围追加先改本文，不顺手改公共模块。实际fit反馈应小时级；不按时长填充实验或开无界模型搜索。
 
 ## Verification Plan / 多轮审核及最小测试
 
@@ -156,19 +158,19 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-861 | 本文Summary/§3/§5 | artifact: 本文；target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py | DESIGN_SPECIFIED | approved_by_user: 本轮交付完整设计，源码/研究尚未实施，不表示有增量 |
-| F-862 | 本文§1/Current Progress；inputs | artifact: 两份原score SHA/305D只读可产性；target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py | SOURCE_SPIKE_COMPLETE_DESIGN_SPECIFIED | approved_by_user: 无新行情/label/fit；完整新两包population prepare尚未执行 |
-| F-863 | 本文§2；V2估值核/inputs | target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py；artifact: 本文 | DESIGN_SPECIFIED | approved_by_user: 新研究尚无监督/结算，估值不升级为成交 |
-| F-864 | 本文§1/§3；inputs/model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py；artifact: 本文 | DESIGN_SPECIFIED | approved_by_user: 输入隔离/尺度/support实际验证后才升级状态 |
-| F-865 | 本文§4；model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py；artifact: 本文 | DESIGN_SPECIFIED | approved_by_user: 0新fit/模型，旧19维不是新20/22维完成依据 |
-| F-866 | 本文§4；model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py；artifact: 本文 | DESIGN_SPECIFIED | approved_by_user: D价格集/预测功能尚未实现，不声明API/UI/盈利可用 |
-| F-867 | 本文§5；evaluation | target: backend/tests/advisory_model_first/test_parent_score_price_5td_evaluation_v1.py；artifact: 本文 | DESIGN_SPECIFIED | approved_by_user: 尚无新四臂结果、独立确认或NAV |
-| F-868 | 本文§5；pipeline/CLI | target: backend/tests/advisory_model_first/test_parent_score_price_5td_pipeline_v1.py；artifact: 本文 | DESIGN_SPECIFIED | approved_by_user: 2fit仅未来预算，当前未提交训练/研究run |
-| F-869 | 本文Scope/Implementation/Production Gates | artifact: 本文；独立分支scope及diff检查 | DESIGN_SPECIFIED_NO_RUNTIME_CHANGE | approved_by_user: 本轮两文档范围，所有生产/数据/服务操作NOOP |
+| F-861 | backend/services/advisory_model_first/parent_score_price_5td_contracts_v1.py；model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py | SOURCE_CONTRACT_TESTED | approved_by_user: 实施离线源码；真实研究未执行，不表示有增量 |
+| F-862 | backend/services/advisory_model_first/parent_score_price_5td_inputs_v1.py | artifact: 原score SHA/305D spike；target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py | SOURCE_CONTRACT_TESTED_REAL_PREPARE_PENDING | approved_by_user: 无新行情/label/真实fit；完整新人口尚未准备 |
+| F-863 | parent_score_price_5td_inputs_v1.py；V2核 | target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py | SOURCE_CONTRACT_TESTED | approved_by_user: 停牌/冷启动合成合同通过，无新真实结算，估值不升级为成交 |
+| F-864 | parent_score_price_5td_inputs_v1.py；model | target: backend/tests/advisory_model_first/test_parent_score_price_5td_inputs_v1.py | SOURCE_CONTRACT_TESTED | approved_by_user: train-only/poison/共同质量已验证；实际源切片待prepare |
+| F-865 | backend/services/advisory_model_first/parent_score_price_5td_model_v1.py | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py | SOURCE_CONTRACT_TESTED_REAL_FIT_PENDING | approved_by_user: 合成forest的20/22维及JSON parity通过，不是盈利模型或正式fit |
+| F-866 | parent_score_price_5td_model_v1.py：parent_score_price_set | target: backend/tests/advisory_model_first/test_parent_score_price_5td_model_v1.py | SOURCE_CONTRACT_TESTED | approved_by_user: Decimal完整价集/未知洞/空集已实现；API/UI/实盘权重不在本切片 |
+| F-867 | backend/services/advisory_model_first/parent_score_price_5td_evaluation_v1.py | target: backend/tests/advisory_model_first/test_parent_score_price_5td_evaluation_v1.py | SOURCE_CONTRACT_TESTED_ECONOMIC_PENDING | approved_by_user: 原D/费用/两包/不同分母/未知归因合成对账通过；尚无真实四臂/OOS/NAV |
+| F-868 | backend/services/advisory_model_first/parent_score_price_5td_pipeline_v1.py；CLI | target: backend/tests/advisory_model_first/test_parent_score_price_5td_pipeline_v1.py；CLI --help | SOURCE_CONTRACT_TESTED_REAL_RUN_PENDING | approved_by_user: QE忙/partial/两attempt/原子stage已测，未提交研究训练 |
+| F-869 | 本文Scope；六源码/四测试精确范围 | artifact: 本文；scope/AST/Ruff/diff检查 | SOURCE_CONTRACT_TESTED_NO_ACTIVATION | approved_by_user: 所有其他模块/生产/数据库/服务控制NOOP，真实研究另报 |
 
 ## Rollout / Rollback / Production Gates
 
-本轮先交付完整设计，不把PLANNED条款改成假测试PASS。后续源码审核通过可按已有明确授权提交/PR/合入/自身清理；不依赖UI/自然等待/两个旧缺口或再次审核QE包。新输入/模型/结果写请求指定的新F研究根，旧产物不覆盖；回滚只不再调用本离线candidate，原生产绑定/基线/数据库不变。
+设计#5834已交付，本轮离线源码合同已实现并定向测试通过，按已有明确授权提交/PR/合入/自身清理；真实prepare/fit/金融反馈不改成合成PASS。不依赖UI/自然等待/两个旧缺口或再次审核QE包。新输入/模型/结果写请求指定的新F研究根，旧产物不覆盖；回滚只不再调用本离线candidate，原生产绑定/基线/数据库不变。
 
 `production_ddl_gate=noop`、`production_dml_gate=noop`、`dependency_install=noop`、`runtime_activation=noop`、`backend_restart_required=false`、`client_reload=noop`。任何后端重启仍由用户执行；后续真正业务接入是独立设计与运行验收，本离线fit及源码合入不授权上线。
 
@@ -187,3 +189,11 @@
 DESIGN-COMPLIANCE-001逐项：本轮只完成完整设计/真实源spike、不冒称PLANNED代码/模型或收益完成；没有吞掉未知/不可产或假成功，日历warmup缺口有明确处理；旧策略包/基线/研究/政策不改写；没有新的包门禁、审批或历史固化项目，模型输入校验与已有两fit/QE资源边界照常。最终F2、diff、精确scope及PR HEAD CI分别读回；本三轮是同窗口自审，不冒称独立外部评审。
 
 三轮修订后设计核验：独立F2九项/九矩阵及蓝图148项/148矩阵均PASS、0warnings，`git diff --check`通过。原source/日历SHA前后不变；当前只是完整设计与可产坐标，0新监督/fit/盈利确认。提交与CI之后仍以最终HEAD读回为准，不复用旧HEAD检查。
+
+### 源码实施审核（2026-10-10）
+
+第一轮来源/业务：只复用已有只读source、D构造器、V2估值、stage/registry，独立20/22维而不放宽旧19维。首轮13项10通过/3失败，暖子集索引、Decimal字符串输入和成熟分母的测试预期已修，失败三nodeid重跑全部通过。
+
+第二轮数学/统计：四臂费用须逐行对账；同stock/D金融冲突、预测manifest/run混用、删除共同日期或半包重新归一均失败。UNKNOWN值不假报概率；mark-only与假设清算分别计量，两主比较同D同步块/Bonferroni/MDE不变。相关5项通过，未拿合成结果作金融证据。
+
+第三轮边界/交付：本study冻结四个批准窗口而不修改QE；训练金融解码前及fit后校验自身prepared stage，QE后观察变忙保留attempt且不假成功，partial不隐式重fit；非有限数学、未知价洞、月校准/分数漂移只读诊断明确。最终13定向、Ruff、10文件AST与CLI帮助通过。登记范围六源码/四测试/两文档；所有临时log/pytest/cache全X。正式研究fit计数仍133，真实prepare/收益/权重及激活均未完成。上述三轮均是同窗口自审，不冒称独立外部审核；最终main同步/CI/合入分别报。
