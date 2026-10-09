@@ -33,6 +33,9 @@ from .monthly_unified import (
 from .canonical import canonical_json_bytes
 from .monthly_file_identity import file_sha256
 from .monthly_subprocess import headless_process_options
+from .monthly_source_quality import (
+    SOURCE_GATE_QUALITY_FIELDS, SOURCE_GATE_SCHEMA, validate_source_gate_quality,
+)
 from .profile_contract import ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 
 
@@ -374,25 +377,16 @@ def _validate_semantics(
             raise MonthlyProducerError("source gate artifact coverage differs")
         observed_gates: set[str] = set()
         pinned_artifact_ids = {str(item["id"]) for item in (*input_refs, *output_refs)}
+        pinned_sha256s = {str(item["sha256"]) for item in (*input_refs, *output_refs)}
+        base_gate_fields = {
+            "schema_version", "gate_id", "snapshot_group_id", "expectation_contract_ref",
+            "readback_ref", "expected_count", "observed_count", "explained_missing_count",
+            "unexplained_missing_count", "duplicate_count", "invalid_value_count", "status", "exception_refs",
+        }
         for gate in gate_evidence:
             if (
-                set(gate)
-                != {
-                    "schema_version",
-                    "gate_id",
-                    "snapshot_group_id",
-                    "expectation_contract_ref",
-                    "readback_ref",
-                    "expected_count",
-                    "observed_count",
-                    "explained_missing_count",
-                    "unexplained_missing_count",
-                    "duplicate_count",
-                    "invalid_value_count",
-                    "status",
-                    "exception_refs",
-                }
-                or gate.get("schema_version") != "aistock_monthly_source_gate_v2"
+                set(gate) not in (base_gate_fields, base_gate_fields | SOURCE_GATE_QUALITY_FIELDS)
+                or gate.get("schema_version") != SOURCE_GATE_SCHEMA
             ):
                 raise MonthlyProducerError("source gate artifact schema differs")
             gate_id = str(gate.get("gate_id") or "")
@@ -423,6 +417,11 @@ def _validate_semantics(
                 or bool(gate["explained_missing_count"]) != bool(gate["exception_refs"])
             ):
                 raise MonthlyProducerError("source gate artifact did not close its domain")
+            try:
+                validate_source_gate_quality(gate, plan, pinned_sha256s=pinned_sha256s)
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                raise MonthlyProducerError("source gate quality-warning artifact is invalid",
+                    context={"gate_id": gate_id, "reason": str(exc)}) from exc
             observed_gates.add(gate_id)
         if observed_gates != set(SOURCE_GATES):
             raise MonthlyProducerError("source gate artifact identities differ")
