@@ -54,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "14"
+POSTGRES_SOURCE_ADAPTER_VERSION = "15"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -360,6 +360,7 @@ class PostgresMonthlySourceAdapter:
                 "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
                 "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
                 "managed_writer_scope_policy": MANAGED_WRITER_SCOPE_POLICY,
+                "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
             },
         )
 
@@ -381,12 +382,12 @@ class PostgresMonthlySourceAdapter:
         from .monthly_source_quality import load_bound_source_quality
         quality_acceptance = load_bound_source_quality(context.plan, operation_id=context.operation_id)
         from .monthly_repair_inputs import deferred_margin_authority
-        deferred_margin_sha = deferred_margin_authority(repair_inputs, target_cutoff=target_cutoff)
         if repair_inputs is not None:
             from .monthly_build_bridge import load_monthly_predecessor_prefix
             from .monthly_repair_inputs import validate_monthly_repair_inputs
             repair_prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
-            validate_monthly_repair_inputs(repair_inputs, predecessor=repair_prefix, target_cutoff=target_cutoff)
+            repair_inputs = validate_monthly_repair_inputs(repair_inputs, predecessor=repair_prefix, target_cutoff=target_cutoff)
+        deferred_margin_sha = deferred_margin_authority(repair_inputs, target_cutoff=target_cutoff)
         if self.profile.profile == CANONICAL_PROFILE_ID:
             self._require_pit_coverage(connection, target_cutoff)
 
@@ -648,6 +649,13 @@ class PostgresMonthlySourceAdapter:
             source_stage_ref=source_stage_ref,
         )
         bundle["monthly_repair_inputs"] = repair_inputs
+        repair_payload_ref = None
+        if repair_inputs is not None:
+            # Typed deferrals bind this exact canonical payload, not the outer
+            # controller receipt or bundle. CAS.put_json adds a newline; use
+            # the same no-newline bytes as deferred_margin_authority instead.
+            repair_payload_ref = self.cas.put_bytes(canonical_json_bytes(repair_inputs))
+            bundle["monthly_repair_payload_ref"] = repair_payload_ref.as_dict()
         if quality_acceptance is not None:
             bundle["source_quality_report"] = json.loads((input_root / "source-quality-report.json").read_bytes())
         _write_canonical_exclusive(bundle_path, bundle)
@@ -657,6 +665,8 @@ class PostgresMonthlySourceAdapter:
             artifact(bundle_path),
             *audit_artifacts,
         ]
+        if repair_payload_ref is not None:
+            artifacts.append(_cas_artifact(self.cas, repair_payload_ref))
 
         cas_refs = self._all_refs(frozen, source_stage_ref)
         artifacts.extend(_cas_artifact(self.cas, reference) for reference in cas_refs)
