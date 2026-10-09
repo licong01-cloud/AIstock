@@ -185,16 +185,38 @@ def training_matrix(
         raise fail("target variant must be an explicit boolean")
     parsed = validate_input(bundle)
     train, _ = schedule(list(parsed["calendar"]))
-    train_rows = [row for row in rows if date.fromisoformat(row["trade_date"]) in set(train)]
-    evaluated = baseline.evaluate_predictions_for_calendar(
+    return training_for_calendar(
         calendar=parsed["calendar"],
+        train=train,
+        rows=rows,
         sector_returns=bundle["source"]["sector_returns"],
         benchmark_close=bundle["source"]["benchmark_close"],
-        predictions=train_rows,
-        decision_start=TRAIN_START,
-        decision_end=TRAIN_END,
         outcome_end=TRAIN_OUTCOME_END,
-        report_blocks=(("train", TRAIN_START, TRAIN_END),),
+        raw_return_target=raw_return_target,
+    )
+
+
+def training_for_calendar(
+    *, calendar, train, rows, sector_returns, benchmark_close, outcome_end, raw_return_target: bool
+) -> dict[str, Any]:
+    """Same target/weight algebra; each caller authenticates its own date contract."""
+    if type(raw_return_target) is not bool or not train or list(train) != sorted(set(train)):
+        raise fail("explicit training date/target view differs")
+    positions = [calendar.index(day) for day in train]
+    if positions != list(range(positions[0], positions[-1] + 1)):
+        raise fail("training decisions are not consecutive open sessions")
+    if positions[-1] + baseline.HORIZON >= len(calendar) or calendar[positions[-1] + baseline.HORIZON] > outcome_end:
+        raise fail("training label is not mature at the supplied as-of")
+    train_rows = [row for row in rows if date.fromisoformat(row["trade_date"]) in set(train)]
+    evaluated = baseline.evaluate_predictions_for_calendar(
+        calendar=calendar,
+        sector_returns=sector_returns,
+        benchmark_close=benchmark_close,
+        predictions=train_rows,
+        decision_start=train[0],
+        decision_end=train[-1],
+        outcome_end=outcome_end,
+        report_blocks=(("train", train[0], train[-1]),),
     )
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in evaluated["evaluated_rows"]:
@@ -219,7 +241,7 @@ def training_matrix(
     return {
         "entries": entries,
         "usable_dates": len(groups),
-        "planned_dates": 126,
+        "planned_dates": len(train),
         "excluded_dates": [day.isoformat() for day in train if day.isoformat() not in groups],
         "training_sha256": canonical_sha256(entries),
     }
@@ -339,7 +361,6 @@ def numeric_environment() -> dict[str, Any]:
 
 
 def run_process(bundle: Mapping[str, Any], *, process_index: int, variant: Any = None) -> dict[str, Any]:
-    from sklearn.linear_model import Ridge
     from threadpoolctl import threadpool_limits
 
     if type(process_index) is not int or process_index not in (1, 2):
@@ -347,23 +368,8 @@ def run_process(bundle: Mapping[str, Any], *, process_index: int, variant: Any =
     api = variant or sys.modules[__name__]
     rows, _, _ = api.feature_rows(bundle)
     training = api.training_matrix(bundle, rows)
-    x, y, w = _arrays(training, feature_count=len(api.FEATURE_NAMES))
     with threadpool_limits(limits=1):
-        model = Ridge(alpha=0.01, fit_intercept=True, solver="svd", positive=False)
-        model.fit(x, y, sample_weight=w)
-        parameters = seal(
-            {
-                "contract_hash": api.MODEL_CONTRACT_HASH,
-                "training_sha256": training["training_sha256"],
-                "feature_names": list(api.FEATURE_NAMES),
-                "coefficients": [float(v) for v in model.coef_],
-                "intercept": float(model.intercept_),
-                "train_rows": len(training["entries"]),
-                "usable_train_dates": training["usable_dates"],
-            },
-            "parameter_sha256",
-        )
-        _validate_parameters(parameters, training, variant=api)
+        parameters = fit_parameters(training, variant=api)
         predictions = api.predictions_from_parameters(rows, parameters)
         environment = api.numeric_environment()
     return seal(
@@ -388,6 +394,32 @@ def run_process(bundle: Mapping[str, Any], *, process_index: int, variant: Any =
         },
         "report_sha256",
     )
+
+
+def fit_parameters(training: Mapping[str, Any], *, variant: Any = None) -> dict[str, Any]:
+    """One SVD fit, reused without changing the historical parameter carrier/hash."""
+    from sklearn.linear_model import Ridge
+    from threadpoolctl import threadpool_limits
+
+    api = variant or sys.modules[__name__]
+    x, y, w = _arrays(training, feature_count=len(api.FEATURE_NAMES))
+    with threadpool_limits(limits=1):
+        model = Ridge(alpha=0.01, fit_intercept=True, solver="svd", positive=False)
+        model.fit(x, y, sample_weight=w)
+        parameters = seal(
+            {
+                "contract_hash": api.MODEL_CONTRACT_HASH,
+                "training_sha256": training["training_sha256"],
+                "feature_names": list(api.FEATURE_NAMES),
+                "coefficients": [float(v) for v in model.coef_],
+                "intercept": float(model.intercept_),
+                "train_rows": len(training["entries"]),
+                "usable_train_dates": training["usable_dates"],
+            },
+            "parameter_sha256",
+        )
+        _validate_parameters(parameters, training, variant=api)
+    return parameters
 
 
 def read_evaluation_facts(bundle: Mapping[str, Any]) -> dict[str, Any]:
