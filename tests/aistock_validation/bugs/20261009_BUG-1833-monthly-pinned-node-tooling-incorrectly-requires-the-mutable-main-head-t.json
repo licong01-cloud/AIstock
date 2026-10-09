@@ -27,12 +27,20 @@
   "evidence_uris": [],
   "expected": "发布启动时钉住的真实Git commit，即使main推进；无效commit仍失败，不读取工作区脏字节、不重启、不写数据。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1833-monthly-pinned-node-tooling-incorrectly-requires-the-mutable-main-head-t.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_node_tools.py",
-      "backend/tests/dataset_release/test_monthly_worker_nodes.py"
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1833-monthly-pinned-node-tooling-incorrectly-requires-the-mutable-main-head-t.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_node_tools.py",
@@ -117,11 +125,15 @@
       "Fresh worker composition preflight PASS; database_opened=false, operation_claimed=false, network_access=false, runtime_action=false. DESIGN-COMPLIANCE-001 complete: source merge and real monthly/runtime acceptance are separate, no partial data delivery reported as READY.",
       "Targeted node tooling, composition, runner and remote transport regression PASS; L0 and changed-file lint PASS. Existing fixtures only, no real node tools, candidate or profile written."
     ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
