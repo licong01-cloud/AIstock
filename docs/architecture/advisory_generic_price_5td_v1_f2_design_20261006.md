@@ -2,6 +2,8 @@
 
 2026-10-06；离线SOURCE_VERIFIED，一次正式prepare/四fit/四臂cohort评估完成，当前candidate未显示增量、NOT_CONFIRMED。用户选择首版固定5交易日，10/20日后续扩展。新目标身份为 GENERIC_ENTRY_FIXED_5TD_V1，绝非将 VALUE_REVIEW_5_V1 五次有效复评改名；源码通过不代表经济确认、日频交付或角色激活完成。
 
+2026-10-09补充：用户授权BUG-1824修复历史评估中的正常停牌/跌停估值缺口。保留本文全部V1训练、标签、成交型完整样本及旧实验结论；新增§2.1独立V2估值诊断，不修改V1政策hash，不重新训练或预测，也不据此重新激活落选模型。V2验收和结果独立记录。
+
 ## Background / Goal
 
 原日频通用输入F1已通过#5461交付：股票/市场九字段独立于父score、LSTM/FUND腿、package和rank。M25原一次研究现累计99物理fit+1历史index；候选22.0222%低于新匹配对照29.7444%，停止该candidate，不用新的期限救活旧模型。M1日频/API #5445及BUG-1726依旧是工程辅线，不阻断新目标研发。
@@ -24,6 +26,8 @@ GP5的唯一新研究问题是：仅靠原候选的D日股票/市场信息及假
 - backend/tests/advisory_model_first/test_generic_price_5td_pipeline_v1.py
 - 本文与蓝图。
 
+BUG-1824用户授权的补充源码范围仅为 `generic_price_5td_valuation_v2.py`、`generic_price_5td_revaluation_v2.py`（均在本Advisory service目录）、既存 `test_generic_price_5td_labels_v1.py`、本文及BUG记录；本BUG不修改蓝图、旧V1函数/政策、任何QE/Selection/Paper/Execution代码或日频运行配置。
+
 允许只读调用既存 generic_daily_price_input_v1、非执行JSON树export/predict、价格tick与Advisory研究stage/registry工具；不得修改旧helper数学或构造虚假腿。消费者来源适配代码若确需新增，先在本文登记精确文件及接口，不临时扩大范围。
 
 不改QE、Selection、HMM、StrategyPackage、行业/基础数据、Execution/Paper、CI、公共工作流或AGENTS；不写DB/DDL/DML、不重建名单/股票池或profile、不安装依赖、不自动激活模型/角色、不读取新sealed/holdout、不控制服务和他人进程。只消费已有冻结输入或公开只读数据库行情。X任务临时、F新内容寻址正式产物，不覆盖旧plan/标签/模型。后端重启user-owned，纯离线切片无需重启。
@@ -45,6 +49,31 @@ GP5的唯一新研究问题是：仅靠原候选的D日股票/市场信息及假
 label_information_end=H，label_contract/policy_sha256必须进入标签、plan、bundle与预测结果。已知T停牌或T open>=up_limit保留ENTRY_NOT_EXECUTABLE；法规未知为UNKNOWN_TRADABILITY。H停牌、H close<=down_limit或法规未知为终点UNKNOWN，不能声称可结算净收益。T..H任何正常缺bar/价格/坐标、途中停牌使完整最低路径不可证明时，标签保留UNKNOWN_PATH；不前填或删除原候选，不利用后来数据填补。
 
 H超出来源截止为IMMATURE，不使用未来读取验证输入是否可推理。端点名义mark不等于真实成交；完整可观察路径和法规也不证明真实fill。成熟监督须H<=train_end；train标签缺失正常不fit该观测，但输出计数和原因可追溯，不能删除原研究/评估日期。使用真实actual-open作为一次历史观察，不把label路径作为D feature。
+
+### 2.1 V2：固定端点估值与成交状态分离（BUG-1824）
+
+本节补充估值诊断，不重定义§2的旧V1训练/成交型标签。2026-10-09发现两个新包118日Top5评估中的6/1个不完整批次均有行情，实际原因为途中已知停牌或H收盘跌停；旧完整样本均值不能冒称118日完整收益，也不能通过补值挽救旧模型结论。
+
+`build_generic_price_5td_valuation_v2(**packet)`先沿用V1完整身份、PIT、价格/日历/候选唯一性校验，原列逐项保留不变，再增加独立 `valuation_policy_sha256` 与估值/退出执行状态。T..H仍是5个原市场session，不压缩停牌日或延期择价。只有已显式验证停牌的bar可携带此前已知D锚close作为持仓估值观测，不造OHLC、交易量或成交；无法解释的缺bar、未知交易状态、真实价格/坐标缺失仍逐股UNKNOWN，矛盾仍拒绝。T已知无法买入保留原空槽现金0，不扣交易费；不能回选其它股票补槽。
+
+H已知close及坐标可给出市值估值，即使其收盘跌停；执行状态为 `EXIT_UNPROVEN_LIMIT_DOWN`，不是证明卖出或证明全天绝对无法卖出。H停牌为 `PENDING_EXIT_SUSPENDED`；正常H报价只表示 `NOMINAL_EXIT_ELIGIBLE_NOT_FILL_PROOF`。无实际fill证据时，`actual_fill_proven=false`、`realized_return_bps=null`。全日跌停也不假造延后卖出的价格。
+
+分别输出：仅名义买入成本后的 `mark_to_market_net_bps`，以及沿用buy=.95/sell=5.95bps的 `hypothetical_liquidation_net_bps`。后者是扣假设清算成本的比较估计，卖出费用不是实际已支付费用；两者均不是已实现利润或可投资NAV。原V1 UNKNOWN和政策hash不变，不能将估值AVAILABLE升级为原成交标签COMPLETE。
+
+`generic_price_5td_revaluation_v2`仅消费既存冻结研究的plan/calendar/原名单、D参考/坐标行情及完整模型预测收据；校验KEY/rank/group/package/model/policy/hash与原V1标签逐列parity。没有新的Selection、数据库查询/写入、预测、fit、profile激活或服务控制。输出独立绝对非C根的原子stage，禁止覆盖旧根或修改正在读取的来源；对所有原决策日生成同五槽估值对比，UNKNOWN与零候选日分别可见。
+
+新诊断明确 `outputs_seen_before_policy_revision=true`、`EXPLORATORY_SCREEN/NAVIGATION_ONLY`，不提供激活证据、独立OOS或收益确认；旧完整样本/Exit合同和训练身份保持原结论。此修复不能让不可证明的真实卖出收益变成完整，也不扩展到分钟执行策略。
+
+2026-10-09真实消费验证：只读源 `F:/Dev/AIstock_advisory_validation_runs/advcross_20261009_01`，新诊断根 `F:/Dev/AIstock_advisory_validation_runs/bug1824_fixed5_valuation_v2_20261009_attempt1/evaluated`。原决策区间2026-03-11～2026-08-28共118D、每包5900条Top50及590条Top5全部保留；固定5TD端点截止2026-09-04。V1标签逐列parity通过；0新fit、0新预测、0SQL、未覆盖原输入或结果。消费13个原模型/对照臂（包括既存 `candidate_transfer`、`matched_anchor`），产生26个包×模型对比，各为118个估值配对D。
+
+| 新包 | 旧V1成交型完整配对D | V2完整估值配对D | Top5可估值 / 已知无法买入空槽 | Top5 H跌停 / H停牌未证实卖出 | 原Top5五槽平均假设清算净收益 | 13臂相对Top5估值增量范围 |
+|---|---:|---:|---:|---:|---:|---:|
+| LSTM `pkg_cc7eccb6202e4816b9d7c7d6b748bd37` | 112/118 | 118/118 | 587 / 3 | 3 / 1 | +1.946966%/5TD cohort | -188.7775～-98.6758 bps/cohort |
+| TCN `pkg_8dbd396d27184de6aa5fe288011220f6` | 117/118 | 118/118 | 589 / 1 | 1 / 0 | +0.608872%/5TD cohort | -68.4452～-42.0728 bps/cohort |
+
+Top50层原29/18条UNKNOWN均补成独立可估值观测，未发现无法解释的行情缺失；旧UNKNOWN列仍原样保留。全Top50执行状态另保留LSTM 21个H跌停/4个H停牌、TCN 13个H跌停/4个H停牌，不能以完整估值冒称全部卖出。上述均值包含已知无法买入的零现金槽，仍用固定五槽分母；不是日收益、复利NAV、实盘已实现收益或独立确认。与旧112/117日完整样本均值使用不同测量合同，不改判旧研究；新完整轴上26个配对增量仍全负，停牌/跌停缺口不是这些价格模型无增量的主要解释。只读数据证据仍为 `CURRENT_DATABASE_NON_VINTAGE`，不升级为原生vintage。
+
+BUG-1824三轮本窗口自审分别覆盖估值/成交及费用分离、冻结消费身份与事后政策lineage、完整日期/五槽与停牌复权坐标。真实消费发现漏识别原两种人口迁移对照arm，已精确补齐四种既存arm，并拒绝未知arm、重复模型/arm及family不一致；不增加模型搜索。最终相关小矩阵一次43项PASS，Ruff、F2（11项/11矩阵行）PASS，changed-file L0无blocking，五文件ownership全部映射。此为多视角自审，不是独立外审。交付仍未合入：最新origin/main的公共runtime catalog尚未登记上述两个纯离线新文件，canonical finish将其分类为backend-main并缺少runbook/identity/business smoke；应交公共流水线owner纠正精确文件分类，不通过改名、BUG元数据降级或不相关重启绕过。本窗口未修改catalog、公共脚本或其它模块。
 
 ### 3. 九字段缺失与模型表示
 
@@ -104,6 +133,9 @@ generic_price_5td_pipeline_v1.py内只读适配calendar、原roster、带显式�
 | F-986 | 纯成本一次/全部合法tick/多段空集与unknown区分，不预测open/分钟fill |
 | F-987 | 四臂完整cohort/重叠依赖/干预与UNKNOWN分报、不伪NAV或跨包经济成功 |
 | F-988 | 事前范围、设计/源码/研究/效果/运行分报、用户重启/模块边界及多轮审核 |
+| F-989 | V2只补估值，旧V1列、政策、训练/模型/预测与结果不变 |
+| F-990 | 已验证停牌携带持仓mark、跌停成交未证明、真实缺失UNKNOWN、固定H不延长 |
+| F-991 | 冻结消费者身份一致、全原日期/五槽、费用与已实现利润分离、新根原子无覆盖 |
 
 ## Design Acceptance Matrix
 
@@ -119,6 +151,9 @@ generic_price_5td_pipeline_v1.py内只读适配calendar、原roster、带显式�
 | F-986 | generic_price_5td_inference_v1.py | test: backend/tests/advisory_model_first/test_generic_price_5td_models_v1.py::test_complete_tick_unknown_holes_no_fake_empty_or_fill；test_cost_once_hand_point_negative_net_and_partial_unknown_not_no_price | SOURCE_VERIFIED | none |
 | F-987 | generic_price_5td_pipeline_v1.py | test: backend/tests/advisory_model_first/test_generic_price_5td_pipeline_v1.py::test_complete_cohorts_no_compounding_unknown_dates_and_no_top6 | SOURCE_VERIFIED | none |
 | F-988 | §Scope/Implementation/Rollout | artifact: 10文件事前登记、三轮本窗口自审、29项一次稳定矩阵、元数据修订3定向PASS/Ruff/changed-file L0 0blocking | SOURCE_VERIFIED | none |
+| F-989 | generic_price_5td_valuation_v2.py | test: backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py::test_v2_known_valuation_never_upgrades_original_execution | SOURCE_VERIFIED | none |
+| F-990 | generic_price_5td_valuation_v2.py | test: backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py::test_v2_unexplained_gaps_are_not_carried_or_deleted | SOURCE_VERIFIED | none |
+| F-991 | generic_price_5td_revaluation_v2.py | test: backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py::test_v2_frozen_consumer_atomic_no_queries_no_fits_or_source_overwrite | SOURCE_VERIFIED | none |
 
 ## Risks / Rollout / Rollback / Production Gates
 
