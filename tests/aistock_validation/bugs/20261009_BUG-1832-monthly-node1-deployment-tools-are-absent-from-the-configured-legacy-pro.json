@@ -29,16 +29,26 @@
   "evidence_uris": [],
   "expected": "同一提交的代码工具以独立不可变目录发布；部署和只读probe使用相同路径/哈希；preflight不访问网络、不写节点。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1832-monthly-node1-deployment-tools-are-absent-from-the-configured-legacy-pro.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_node_tools.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/monthly_worker_nodes.py",
-      "backend/services/dataset_release/monthly_node_probe_runner.py",
       "backend/services/dataset_release/monthly_immutable_deploy.py",
-      "backend/tests/dataset_release/test_monthly_worker_nodes.py"
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_node_tools.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1832-monthly-node1-deployment-tools-are-absent-from-the-configured-legacy-pro.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_worker_nodes.py",
@@ -168,11 +178,15 @@
       "三轮审核：1. 修正 frozen dataclass 接线为 replace，并验证 DEPLOY/probe 均惰性准备；2. 代码只取 Git 提交字节，排除 dotenv/测试/二进制产物，拒绝路径逃逸和 hash 漂移，不覆盖旧项目；3. 严格核对工具 schema/identity，Git 和 SSH 均有超时，不安装依赖，不切换 active，不产生新的源数据门禁。",
       "DESIGN-COMPLIANCE-001：仅修复已确认节点工具缺失，不宣称数据已 READY；无静默旧路径回退；不修改模型/PIT/业务合同；源码合入、工具发布、运行身份及真实候选验收分别报告。"
     ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
