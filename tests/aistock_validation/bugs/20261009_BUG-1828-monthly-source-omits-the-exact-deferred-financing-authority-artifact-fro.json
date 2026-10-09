@@ -1,0 +1,271 @@
+{
+  "actual": "financial_moneyflow 的336条停牌解释已pin，唯1条融资cutoff暂缓引用未pin，最后封存失败，SOURCE耗时约6522秒。",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20261009_BUG-1828-monthly-source-omits-the-exact-deferred-financing-authority-artifact-fro.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1828",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-09T07:37:12.087263Z",
+  "description": "九月 operation dmr_63a313d97fd046a38d5a876265565014 attempt-252 的九项有效数据 gate 已PASS，唯一阻断是已验证 monthly_repair_inputs canonical payload 未作为独立真实字节资产pin。通过标准CAS.put_bytes冻结同一授权；不改变producer严格校验、数据、授权或状态。运行目录的月更worker探针已包括该adapter通配路径，但required_source_globs漏登精确路径；同步添加精确匹配及既有路由回归，不引入新探针/门禁。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261009-b745c7c926b3",
+      "timestamp": "2026-10-09T07:37:12.087263Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_release_control/monthly/dmr_63a313d97fd046a38d5a876265565014/source-inputs/attempt-252/frozen-source-bundle.json"
+  ],
+  "expected": "已验证的既有 repair payload 通过标准 CAS canonical JSON 冻结，全部 exception/warning/change authority 在 returned input_artifacts 中按真实字节SHA闭合。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261009_BUG-1828-monthly-source-omits-the-exact-deferred-financing-authority-artifact-fro.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261009_BUG-1828-monthly-source-omits-the-exact-deferred-financing-authority-artifact-fro.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_postgres_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_postgres_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+    ]
+  },
+  "first_seen_at": "2026-10-09T07:37:12.087263Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5830,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5830",
+  "last_seen_at": "2026-10-09T07:37:12.087263Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py::test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "RED: actual adapter read set reached strict SOURCE verifier and reproduced source exception authority is not pinned: financial_moneyflow; GREEN: canonical payload byte pin passes and removing it still fails.",
+      "Five direct cases PASS: exact cutoff deferral, repair without deferral, absent repairs, wrong date and wrong predecessor; invalid bindings fail before freeze or monthly output creation.",
+      "Related final small matrix: 171 passed across PostgreSQL source, strict SOURCE producer, component preparation and worker runtime; lint passed.",
+      "Readonly attempt252 September metadata probe: 1218 artifacts / 53649087 bytes / 9 effective gates PASS; sole missing authority d30474348d7ba38d29280360fa640790ce2fc057819736cbfe04794920aabfd7; existing binding matches plan and frozen bundle; exact 4810 canonical bytes close all projected provenance references. No SOURCE seal created or data/profile/DB/runtime writes.",
+      "Fresh official worker wiring preflight PASS: adapter_version=15; source_contract=eccb074670321211f24cb49f501f6366d470d63c17bb2d9c15da65bdf906d8d9; registry=00cb85855655f9e22205e4dc26dd800bbc792c9839995f6fd3d95ecea6ddaf85; database_opened=false; operation_claimed=false; candidate/profile/runtime writes=false.",
+      "Catalog route RED reproduced missing required_source_globs match for this single adapter. GREEN: five existing process-route cases PASS after exact target/route/required entries; canonical supervised monthly worker probes unchanged.",
+      "CI review fix: run37901718613 had 400 workflow tests PASS and one test-budget ratio failure 0.3000419917342586>0.30. Deduplicated three route fixture branches into one source-path parameter branch, retaining all five scenarios/assertions. Targeted budget node and five route cases GREEN; threshold and ownership unchanged.",
+      "Review round 1: producer still requires each gate/change/warning authority by real byte SHA; only validated bound payload is materialized, normalized once, no new authorization or exception. Review round 2: CAS put_bytes matches canonical no-newline digest; absence/no-deferral/invalid-date/invalid-predecessor and removed-pin cases covered; no provider access or fact mutation. Review round 3: all actual attempt252 metadata refs reviewed, sole missing pin closed in proposed read-set; January-to-August history never re-audited; runtime catalog exactness, source version, shared preparation scope and no activation/DB/process/experiment effects verified. DESIGN-COMPLIANCE-001: no partial success claim, no silent fallback, no business changes, no added gates."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "monthly SOURCE omits the exact deferred financing authority artifact from provenance pins",
+  "trigger_condition": {
+    "fingerprint": "b745c7c926b3d54eceb6db48",
+    "source_event_id": "FE-20261009-b745c7c926b3"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
