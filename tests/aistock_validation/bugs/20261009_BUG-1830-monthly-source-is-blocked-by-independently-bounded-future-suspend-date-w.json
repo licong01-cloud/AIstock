@@ -27,12 +27,20 @@
   "evidence_uris": [],
   "expected": "精确绑定正式BY_DATE producer与严格post-cutoff范围的suspend_d writer不阻断本月；缺证明、跨cutoff、任意数据集和历史修订仍阻断。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1830-monthly-source-is-blocked-by-independently-bounded-future-suspend-date-w.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_repair_journal.py",
-      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1830-monthly-source-is-blocked-by-independently-bounded-future-suspend-date-w.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_repair_journal.py",
@@ -118,11 +126,15 @@
       "Review1: the only eligible producer is registered suspend_d BY_DATE incremental; actual engine validates all rows before exact-date DELETE/upsert; suspend_d has no PIT post-sync hook. Unknown/history/on-cutoff writers stay fail-closed. Review2 correction: immutable log must agree with resolved bounds and cannot coexist with a conflicting start range; SQL always overrides a claimed reserved proof key; sync owner and BY_DATE target independently bound. Review3: native UUID job_id equality avoids cast-induced log-table scans; source policy digest changes and adapter assertion updated; original authorization, target-month QA, repair provenance and quality acceptance unchanged.",
       "DESIGN-COMPLIANCE-001: complete fix of observed journal scope defect, not claim of monthly candidate readiness; no silent fallback/default data, no business/model changes, no new gate or approval. Existing backend_restart_owner=user remains respected. Ruff, git diff --check and l0 PASS."
     ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
