@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_repair_journal.py",
     "backend/tests/dataset_release/test_monthly_repair_journal.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "tests/aistock_validation/bugs/20261009_BUG-1830-monthly-source-is-blocked-by-independently-bounded-future-suspend-date-w.json"
   ],
   "assigned_agent": null,
@@ -14,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-09T15:47:32.136810Z",
-  "description": "FAILED SOURCE attempt253: ingestion_jobs:6c116fcd-92d0-4975-a0a2-981a3d4330e9; scope2026-10-09..12; current backend PID131704 created23:34:58, job created23:34:50.",
+  "description": "原9月operation attempt253因严格post-cutoff停牌逐日writer误阻断。用同job不可变Tushare起始日志、原始日期范围和sync target证明实际写入不触及9月；不从当前配置推断、不改库或状态、不豁免当月数据。同步更新现有adapter policy digest断言，第三个测试文件仅此一行合同同步。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -101,7 +102,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_repair_journal.py::test_proven_future_suspend_writer_does_not_block_month_at_start_or_seal -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -109,7 +110,15 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED: two initial_watermark cases reproduce source freeze rejection for formally proven post-cutoff suspend_d; GREEN: both start and seal exclude those writers without setting success/READY or writing DB.",
+      "Final related matrix 306 passed: repair journal (including existing DEV read-only CTE queries), PostgreSQL source adapter, all-row request-date validation and suspend exact-day replacement. New 12-case DEV SQL matrix proves both ledger paths; missing/mismatched/conflicting log, wrong job type, unknown owner, wrong target scope/date, spoofed proof and history writer remain blocking.",
+      "Real production metadata READ ONLY probe PASS: exact original 6c116fcd-92d0-4975-a0a2-981a3d4330e9 start log independently binds2026-10-09..12; initial watermark closes and overlap_count=0. No data rows scanned, no ledger or market writes. Native job_id comparison retains existing idx_ingestion_logs_job_ts index.",
+      "Fresh official worker wiring preflight PASS: source adapter15; source contract4dd75efcd994d635681879bee1b88f5357a1252f3ecedbe475e64be6540d4bd3; registry602a28af65bd7f84e7ee75429e865ff4e745d25786058dbed4ab25931a6e6770; database_opened=false, operation_claimed=false, candidate/profile/runtime writes=false.",
+      "Review1: the only eligible producer is registered suspend_d BY_DATE incremental; actual engine validates all rows before exact-date DELETE/upsert; suspend_d has no PIT post-sync hook. Unknown/history/on-cutoff writers stay fail-closed. Review2 correction: immutable log must agree with resolved bounds and cannot coexist with a conflicting start range; SQL always overrides a claimed reserved proof key; sync owner and BY_DATE target independently bound. Review3: native UUID job_id equality avoids cast-induced log-table scans; source policy digest changes and adapter assertion updated; original authorization, target-month QA, repair provenance and quality acceptance unchanged.",
+      "DESIGN-COMPLIANCE-001: complete fix of observed journal scope defect, not claim of monthly candidate readiness; no silent fallback/default data, no business/model changes, no new gate or approval. Existing backend_restart_owner=user remains respected. Ruff, git diff --check and l0 PASS."
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

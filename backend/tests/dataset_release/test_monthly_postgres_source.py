@@ -337,7 +337,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
             "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
             "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
-            "managed_writer_scope_policy": "bounded_post_cutoff_completed_date_writers_v2",
+            "managed_writer_scope_policy": "bounded_post_cutoff_proven_date_writers_v3",
             "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
             "component_preparation_dependency_digest": digest_named_fields(
                 "aistock_monthly_component_dependency_v1",
