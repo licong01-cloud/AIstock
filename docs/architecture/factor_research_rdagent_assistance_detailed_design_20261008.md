@@ -1,6 +1,6 @@
 # 因子研发假设先行与独立经验检索详细设计（含 RD-Agent 参考整合）
 
-初版日期：2026-10-08；修订日期：2026-10-09；版本：1.3；级别：F2；状态：本轮仅交付详细设计，§15–18 增补能力未实施。依据已合入 PR #5814（merge `b9e954cbb6d6ce08d50c39ef672568933770a28b`）的[蓝图 §21](factor_research_evolution_blueprint_20260908.md#hypothesis-memory)及[方法论 §2.6](../analysis/factor_research_methodology.md#hypothesis-memory)。原指定文件读取、提案检查和问题包已有实现，见§13/14；不代表数据库经验查询/提示词增强已完成，更不代表研究有效。本文落实接口、映射、实现范围和验收，不复制或改变方法论 C-1～C-7。保留文件名/锚点，避免另建同主题设计；§10/13/14 历史验收不追溯改写。
+初版日期：2026-10-08；修订日期：2026-10-09；版本：1.4；级别：F2；状态：§15–18 的工具实现及验收见§19，真实研究未执行；源码合入/运行时加载分别确认。依据已合入 PR #5814（merge `b9e954cbb6d6ce08d50c39ef672568933770a28b`）的[蓝图 §21](factor_research_evolution_blueprint_20260908.md#hypothesis-memory)及[方法论 §2.6](../analysis/factor_research_methodology.md#hypothesis-memory)。原指定文件读取、提案检查和问题包已有实现，见§13/14。本文落实接口、映射、实现范围和验收，不复制或改变方法论 C-1～C-7。保留文件名/锚点，避免另建同主题设计；§10/13/14/18 历史验收不追溯改写。
 
 1.0（PR #5756）仅交付设计及蓝图/方法论入口链接，当时没有代码实施。1.1 仅实施 §8 的 AIstock 离线边界，实测和未交付项见 §13；不改 Skill、数据库、数据集、模型配置或研究计算。P1/P2/研究比较既有历史验收与研究结果不追溯修改。
 
@@ -308,7 +308,7 @@ DESIGN-COMPLIANCE-001：①按用户批准的新分工完整交付问题包/检�
 
 ### 15.1 本次增补与非目标
 
-本节以下均为待实施合同，不是当前 CLI 帮助或运行事实。基线为蓝图合入后的 `b9e954cbb6d6ce08d50c39ef672568933770a28b`。已存在：两表记录/恢复、显式文件 experience、proposal-prepare/inspect、runner 与完整评价；待增加：研究库记录级查询、关系化更正呈现、紧凑经验字段映射和假设先行指导。实现不修改 RD-Agent、官方指标/评级/QE、研究 writer、schema 或数据集。
+本节为1.3批准合同；1.4工具实施记录见§19，不将研究计划写成已运行事实。设计基线为蓝图合入后的 `b9e954cbb6d6ce08d50c39ef672568933770a28b`，实施基线为设计PR #5816 merge `261d7a23eee16b322378932b11a1dda39cd93b59`。原有两表记录/恢复、显式文件 experience、proposal-prepare/inspect、runner 与完整评价保持；增补研究库记录级查询、关系化更正呈现、紧凑经验字段映射和假设先行指导。实现不修改 RD-Agent、官方指标/评级/QE、研究 writer、schema 或数据集。
 
 “独立”指内容由 AIstock 研究记录积累并可独立检索，不是另外建历史库。首版不需要向量索引、embedding、后台同步、摘要服务、网页或模型 API；无需全量整理既有历史才能开始使用。数据库事实、模型解释和来源引用分开，未知项不自动补齐。下列逻辑字段放入已有 JSON，不扩数据库枚举，不改变原事务/幂等/恢复合同。
 
@@ -332,7 +332,7 @@ DESIGN-COMPLIANCE-001：①按用户批准的新分工完整交付问题包/检�
 新增独立命令，保留原 `list/show/context/experience/proposal-*` 参数及行为：
 
 ```text
-# 设计中的命令，代码实施后才可运行
+# 1.4实现命令；仅查询显式数据库目标
 python scripts/factor_research.py memory-search --env-file <existing-env> --target dev|production --input <query.json> --format summary|json
 ```
 
@@ -489,3 +489,33 @@ P0–P3是执行顺序/优先级，不是额外研发阶段。P0/P1可一次代�
 本窗口顺序审核，不宣称另一个agent或客户端独立复核。第一轮按实际models/repository/assistance合同核对，区分尚未成型的假设与原严格提案请求，明确payload.request不重复检索、旧记录不能继承当前task条件。第二轮按反例修正更正关系跨分页/转包丢失风险、query过滤范围绑定和同定位歧义；第三轮核对未知过滤计数、关系只随所选来源注入、异常note/任务级未查关系的可见性及读事务不改变写入默认值。按蓝图1.9/方法2.6复核无统计口径或生产权限变化。
 
 DESIGN-COMPLIANCE-001逐条：①§15–18为完整设计范围，所有代码/真实研究明确未实施，不冒充功能完成；②读取错误、未知、局部关系和旧数据不伪装成功；③原PIT/四周期/单写指标/owner边界及历史验收保留；④没有新增金融故事评分、准入门禁、审批、平台或资源阈值。F2结构检查8项、32行（含历史矩阵）通过、warnings=0；当前设计矩阵为8行。最终HEAD的UTF-8/本地链接/diff检查和PR必要CI分别记录，不执行DEV测试或业务计算。
+
+<a id="implementation-v14"></a>
+## 19. 1.4 工具实施与验收（2026-10-09）
+
+本轮按用户实施/审核/提交合入授权完成P0/P1工具；P2源码交付以本PR最终CI与合入状态为准，P3真实研究仍未执行。§18是1.3文档阶段历史记录，其中none/noop不作为本次代码的运行时分类。没有新增研究、数据库schema、索引、模型API或writer。
+
+精确写入范围：§17.2五个既定文件，加本模块纯helper `backend/services/factor_research/memory.py` 和本文。helper在实施前登记，负责note投影/未知过滤/有界分页/关联组装；没有DB连接、行情、文件写入或模型调用。原create/record/replay写事务保持。新读取在同一READ ONLY/REPEATABLE READ事务内，按256条紧凑投影扫描；关系展示最多512条，超出明确partial及show续读定位，不是研究准入/资源门禁。
+
+### 19.1 顺序审核及修订
+
+本窗口顺序执行两轮实质审核，并在最终收口检查设计符合性，不宣称独立agent审核。第一轮核对合同/反例：原因和解释参与检索，JSON字段名不当命中，归一词项不重复计分；旧记录不继承task当前条件，矛盾标condition_conflict/unknown。第二轮核对权限/异常：同任务更正链与分支保留，循环/跨任务/截断可见；选源携带更正但不扩大candidate.source_refs；异常note保留summary并标记；完整query绑定filters/include_unknown。CLI无效请求在配置/连接前退出，旧三个离线命令和help保持无DB依赖。
+
+测试债务按完整primary owner计算，无归属转移。合并重复CLI调用和repository并发用例，原独立只读断言并入真实查询事务测试；不削弱因果时间、股票隔离、官方指标复用、唯一性、失败恢复或默认DEV禁写合同。当前production 4,843 SLOC、test 1,452 SLOC，29.98%，低于30%。
+
+### 19.2 验收矩阵
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-001 | assistance.prepare_proposal、原run入口不变 | pytest: backend/tests/factor_research/test_assistance.py::test_cli_fresh_process_no_database | 通过 | 无 |
+| F-002 | repository.memory_search/_memory_rows、memory.search_rows | pytest: backend/tests/factor_research/test_assistance.py::test_memory_unknown_conflict_literal_paging_and_old_context | 通过 | 无 |
+| F-003 | assistance.instructions三步指导、原严格proposal schema不变 | pytest: backend/tests/factor_research/test_assistance.py::test_memory_corrections_survive_proposal_selection | 通过 | 无 |
+| F-004 | assistance._selected_relations及原prepare/inspect | pytest: backend/tests/factor_research/test_assistance.py::test_prepare_preserves_request_and_selects_only_declared_experience | 通过 | 无 |
+| F-005 | §7/17.1研究边界；原runner未修改 | artifact: docs/analysis/factor_research_methodology.md | 用户批准设计先行 | 本轮仅工具实施，真实研究P3另行执行；不把fixture当完整因子评价 |
+| F-006 | repository._memory_component及原cursor；无新写入入口 | pytest: backend/tests/factor_research/test_repository_dev.py::test_memory_sql_corrections_snapshot_and_no_writes | 通过 | 无 |
+| F-007 | 精确pytest、DEV计划、Ruff/compile、L0、PR所属计划 | pytest: backend/tests/factor_research/test_repository_dev.py::test_concurrent_writes_are_idempotent_or_conflict | 通过 | 无 |
+| F-008 | CLI fresh process；catalog推导backend-main | artifact: docs/standards/aistock_runtime_targets_v1.yaml | 用户批准源码先行 | runtime_impact=backend，backend_restart_required=true，owner=user；未执行后端重启/激活 |
+
+RED两项失败确实暴露缺失memory入口及更正转包丢失；修复后直接assistance合同11 passed。真实DEV新增合同验证：只读前后记录/revision不变、并发新更正下一次才出现、异常后连接事务级别恢复、环/跨任务异常/关系截断；精确自有fixture用finally清理。所属DEV计划已执行（整理重复用例前9 passed），整理后的并发参数合同2 passed；最终提交绑定的DEV结果另列PR。Ruff/py_compile/diff通过；L0 blocking=0。没有重复全库因子评价、QE或数据检查。
+
+DESIGN-COMPLIANCE-001：①工具条款逐项实现并用实际DEV验证，不将P3研究/后端激活冒充完成；②连接失败不当空结果，unknown/冲突/关系不全明确，不选唯一“最新真相”；③原统计/数据/写事务/owner合同保持；④没有新增研究审批、金融评分准入、冻结/哈希或资源限制。production_ddl_gate=noop；production_dml_gate=noop；dependency gates=noop；dataset/official factor writes=noop；process_control=false。源码合入不等于后端已加载；CLI新进程可独立使用，常驻backend加载仍待用户重启与后续复验。worktree清理不由裸合入授权推导。
