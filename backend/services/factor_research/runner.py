@@ -18,6 +18,20 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CANDIDATE_SUBPROCESS = Path(__file__).with_name("candidate_subprocess.py")
 
 
+def reuse_path(value):
+    """Resolve an explicitly reviewed value artifact without executing its producer."""
+    if not isinstance(value, str) or not value.strip():
+        raise ResearchError("invalid_request", "values_artifact must be a file path")
+    raw = Path(value).expanduser().absolute()
+    path = raw.resolve()
+    if (raw != path or any(p.is_symlink() for p in (raw, *raw.parents))
+            or not path.is_file() or path.suffix not in {".h5", ".parquet"}):
+        raise ResearchError("input_missing", "Reuse requires a regular, non-redirected H5/Parquet file")
+    if any((parent / ".git").exists() for parent in path.parents):
+        raise ResearchError("invalid_request", "Reuse values must be repository-external")
+    return path
+
+
 def validate_spec(value):
     spec = json_object(value)
     allowed = {"task_id", "record_id", "attempt_id", "expected_revision", "universe_key", "method_version",
@@ -66,14 +80,23 @@ def validate_spec(value):
         raise ResearchError("invalid_request", "candidates must be a non-empty list")
     names = []
     for item in candidates:
-        if not isinstance(item, dict) or set(item) != {"factor_name", "script"}:
-            raise ResearchError("invalid_request", "Each candidate requires factor_name and script")
+        if not isinstance(item, dict) or set(item) not in (
+                {"factor_name", "script"}, {"factor_name", "script", "values_artifact", "reuse_basis"}):
+            raise ResearchError("invalid_request", "Candidate requires factor_name/script and optionally values_artifact/reuse_basis together")
         if not isinstance(item["factor_name"], str) or not re.fullmatch(r"[a-z][a-z0-9_]{2,80}", item["factor_name"]):
             raise ResearchError("invalid_request", "Invalid factor name")
         script = Path(item["script"]).expanduser().resolve()
         if not script.is_file():
             raise ResearchError("input_missing", "Candidate script not found")
         item["script"] = str(script)
+        if "values_artifact" in item:
+            if not isinstance(item["reuse_basis"], str) or not item["reuse_basis"].strip():
+                raise ResearchError("invalid_request", "reuse_basis must describe reviewed input/formula compatibility")
+            path = reuse_path(item["values_artifact"])
+            if any(path.is_relative_to(root) for root in (
+                    output, Path(spec["data_dir"]), Path(spec["qlib_bin_path"]))):
+                raise ResearchError("invalid_request", "Reuse values must be outside input data and attempt output")
+            item["values_artifact"] = str(path)
         names.append(item["factor_name"])
     if len(names) != len(set(names)):
         raise ResearchError("invalid_request", "Candidate names must be unique within an attempt")
@@ -204,19 +227,22 @@ def execute(spec, output, *, prepare=None, compute=None):
         folder.mkdir()
         script = folder / "factor.py"
         shutil.copyfile(candidate["script"], script)
-        result_path = folder / "values.h5"
-        command = [sys.executable, str(CANDIDATE_SUBPROCESS), "--script", str(script),
-                   "--data-dir", spec["data_dir"],
-                   "--output", str(result_path), "--start-date", spec["read_start"],
-                   "--end-date", spec["read_end"], "--instruments-file", str(instruments_path)]
-        # Logs belong only to this attempt; no capture of huge subprocess output in RAM.
-        with (folder / "stdout.log").open("x", encoding="utf-8") as stdout, (
-                folder / "stderr.log").open("x", encoding="utf-8") as stderr:
-            completed = subprocess.run(command, cwd=folder, stdout=stdout, stderr=stderr,
-                                       timeout=spec["timeout_seconds"], check=False)
-        if completed.returncode:
-            raise ResearchError("candidate_execution_failed", "Reviewed script returned non-zero",
-                                returncode=completed.returncode, artifact=str(folder))
+        if "values_artifact" in candidate:
+            result_path = reuse_path(candidate["values_artifact"])
+        else:
+            result_path = folder / "values.h5"
+            command = [sys.executable, str(CANDIDATE_SUBPROCESS), "--script", str(script),
+                       "--data-dir", spec["data_dir"],
+                       "--output", str(result_path), "--start-date", spec["read_start"],
+                       "--end-date", spec["read_end"], "--instruments-file", str(instruments_path)]
+            # Logs belong only to this attempt; no capture of huge subprocess output in RAM.
+            with (folder / "stdout.log").open("x", encoding="utf-8") as stdout, (
+                    folder / "stderr.log").open("x", encoding="utf-8") as stderr:
+                completed = subprocess.run(command, cwd=folder, stdout=stdout, stderr=stderr,
+                                           timeout=spec["timeout_seconds"], check=False)
+            if completed.returncode:
+                raise ResearchError("candidate_execution_failed", "Reviewed script returned non-zero",
+                                    returncode=completed.returncode, artifact=str(folder))
         frame = load_values(result_path, name)
         import pandas as pd
         dates = frame.index.get_level_values("datetime")
@@ -258,6 +284,8 @@ def execute(spec, output, *, prepare=None, compute=None):
                       "nonfinite_values_as_null": nonfinite_count,
                       "policy": "ieee_nonfinite_to_json_null_no_zero_fill_or_row_removal",
                   }}
+        if "values_artifact" in candidate:
+            result.update(values_origin="reused_reviewed_artifact", reuse_basis=candidate["reuse_basis"])
         if spec.get("full_evaluation") is not None:
             finite = selected.loc[selected[name].notna()]
             result["actual_factor_value_range"] = (

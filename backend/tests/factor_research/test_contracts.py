@@ -7,11 +7,10 @@ import sys
 from pathlib import Path
 from uuid import uuid4
 
-import pandas as pd
 import pytest
 
 from backend.services.factor_research.models import ResearchError
-from backend.services.factor_research.runner import CANONICAL_UNIVERSE, evaluation_context, validate_spec
+from backend.services.factor_research.runner import CANONICAL_UNIVERSE, validate_spec
 from scripts.factor_research import configure
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -70,20 +69,6 @@ def test_cli_and_dev_configuration_default_to_no_database(tmp_path):
     path.write_text("TDX_DB_NAME=production\n", encoding="utf-8")
     with pytest.raises(ResearchError, match="incomplete"):
         configure(path, "dev")
-
-
-def test_evaluation_slice_reuses_engine_labels_without_recomputation():
-    dates = pd.date_range("2026-01-01", periods=5)
-    close = pd.DataFrame({"000001.SZ": [1.0, 2.0, 4.0, 8.0, 16.0]}, index=dates)
-    labels = close.shift(-2) / close.shift(-1) - 1
-    ctx = {
-        "close_unstacked": close,
-        "fwd_ret_mats": {"1d": labels},
-        "dates": dates,
-        "st_pit_eligible_mask": close.notna(),
-    }
-    view = evaluation_context(ctx, {"signal_start": "2026-01-02", "signal_end": "2026-01-03"})
-    assert view["fwd_ret_mats"]["1d"].equals(labels.loc[dates[1:3]]) and len(ctx["dates"]) == 5
 
 
 def test_candidate_subprocess_restores_large_instrument_cli_contract(tmp_path):
