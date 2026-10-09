@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_postgres_source.py",
     "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "tests/aistock_validation/bugs/20261009_BUG-1828-monthly-source-omits-the-exact-deferred-financing-authority-artifact-fro.json"
   ],
   "assigned_agent": null,
@@ -14,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-09T07:37:12.087263Z",
-  "description": "financial_moneyflow 的336条停牌解释已pin，唯1条融资cutoff暂缓引用未pin，最后封存失败，SOURCE耗时约6522秒。",
+  "description": "九月 operation dmr_63a313d97fd046a38d5a876265565014 attempt-252 的九项有效数据 gate 已PASS，唯一阻断是已验证 monthly_repair_inputs canonical payload 未作为独立真实字节资产pin。通过标准CAS.put_bytes冻结同一授权；不改变producer严格校验、数据、授权或状态。运行目录的月更worker探针已包括该adapter通配路径，但required_source_globs漏登精确路径；同步添加精确匹配及既有路由回归，不引入新探针/门禁。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -95,7 +97,7 @@
   "github_issue_number": 5830,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5830",
   "last_seen_at": "2026-10-09T07:37:12.087263Z",
-  "module": "local_data",
+  "module": "qlib_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -103,7 +105,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py::test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -111,9 +113,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED: actual adapter read set reached strict SOURCE verifier and reproduced source exception authority is not pinned: financial_moneyflow; GREEN: canonical payload byte pin passes and removing it still fails.",
+      "Five direct cases PASS: exact cutoff deferral, repair without deferral, absent repairs, wrong date and wrong predecessor; invalid bindings fail before freeze or monthly output creation.",
+      "Related final small matrix: 171 passed across PostgreSQL source, strict SOURCE producer, component preparation and worker runtime; lint passed.",
+      "Readonly attempt252 September metadata probe: 1218 artifacts / 53649087 bytes / 9 effective gates PASS; sole missing authority d30474348d7ba38d29280360fa640790ce2fc057819736cbfe04794920aabfd7; existing binding matches plan and frozen bundle; exact 4810 canonical bytes close all projected provenance references. No SOURCE seal created or data/profile/DB/runtime writes.",
+      "Fresh official worker wiring preflight PASS: adapter_version=15; source_contract=eccb074670321211f24cb49f501f6366d470d63c17bb2d9c15da65bdf906d8d9; registry=00cb85855655f9e22205e4dc26dd800bbc792c9839995f6fd3d95ecea6ddaf85; database_opened=false; operation_claimed=false; candidate/profile/runtime writes=false.",
+      "Catalog route RED reproduced missing required_source_globs match for this single adapter. GREEN: five existing process-route cases PASS after exact target/route/required entries; canonical supervised monthly worker probes unchanged.",
+      "Review round 1: producer still requires each gate/change/warning authority by real byte SHA; only validated bound payload is materialized, normalized once, no new authorization or exception. Review round 2: CAS put_bytes matches canonical no-newline digest; absence/no-deferral/invalid-date/invalid-predecessor and removed-pin cases covered; no provider access or fact mutation. Review round 3: all actual attempt252 metadata refs reviewed, sole missing pin closed in proposed read-set; January-to-August history never re-audited; runtime catalog exactness, source version, shared preparation scope and no activation/DB/process/experiment effects verified. DESIGN-COMPLIANCE-001: no partial success claim, no silent fallback, no business changes, no added gates."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "worker_scheduler",
