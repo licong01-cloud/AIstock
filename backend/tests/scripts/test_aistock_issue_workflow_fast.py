@@ -1114,7 +1114,7 @@ def test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope() -> 
         assert mixed["target_ids"] == ["backend-main"]
 
 
-@pytest.mark.parametrize("monthly", [True, False, "construction", "overlap_source"])
+@pytest.mark.parametrize("monthly", [True, False, "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py"])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
@@ -1128,10 +1128,8 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
         "backend/services/dataset_release/monthly_worker_nodes.py",
         "backend/services/dataset_release/monthly_worker_runtime.py",
     ]
-    if monthly == "construction":
-        monthly_sources = ["backend/services/dataset_release/monthly_construction_facts.py"]
-    if monthly == "overlap_source":
-        monthly_sources = ["backend/services/dataset_release/source_authority.py"]
+    if isinstance(monthly, str):
+        monthly_sources = [f"backend/services/dataset_release/{monthly}"]
 
     selected, error = workflow._select_runtime_probe_route(
         target, runtime_files=monthly_sources if monthly else ["backend/services/dataset_release/build_stage.py"],
