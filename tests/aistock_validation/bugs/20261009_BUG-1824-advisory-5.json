@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1824",
-  "closed_at": null,
+  "closed_at": "2026-10-09T07:06:18Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -121,8 +121,8 @@
   },
   "first_seen_at": "2026-10-09T05:36:43.703587Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cc10d3ebefcf4157327652ab3c283f9914810be2",
+  "fixed_at": "2026-10-09T07:06:18Z",
   "github_issue_number": 5819,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5819",
   "last_seen_at": "2026-10-09T05:36:43.703587Z",
@@ -130,6 +130,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5826",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -149,6 +150,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -158,7 +160,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1824",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "93760e674b951ac0",
+    "recorded_at": "2026-10-09T07:07:02.941383Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3ae9a0db9bd50f638b986fc624f8fbd0e63db219",
+    "source_merge_commit": "cc10d3ebefcf4157327652ab3c283f9914810be2",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5826",
+    "validation_evidence": [
+      "validation-receipt: id=6506882f8ad28040 commit=3ae9a0db9bd50f638b986fc624f8fbd0e63db219 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py -q --basetemp=X:/AIstock_temp/advcp_20261009/pytest_bug1824_head_2 -o cache_dir=X:/AIstock_temp/advcp_20261009/pytest_bug1824` result=`passed 43 tests, source unchanged by metadata-only commit`",
+      "validation-receipt: id=1dc3e8b371698152 commit=3ae9a0db9bd50f638b986fc624f8fbd0e63db219 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/advisory_model_first/generic_price_5td_valuation_v2.py backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py` result=`passed`",
+      "validation-receipt: id=342e00baf5e23aec commit=3ae9a0db9bd50f638b986fc624f8fbd0e63db219 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv --envdir X:/AIstock_temp/advcp_20261009/nox_bug1824 -- backend/services/advisory_model_first/generic_price_5td_valuation_v2.py backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json` result=`passed 0 blocking`"
+    ],
+    "validation_evidence_digest": "29e6025ae1a4ab07a83a2e735e167bfeba10a1a528732c439455233162b7697e"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "advisory.model_first"
   ],
@@ -167,6 +192,11 @@
     "fingerprint": "22ddbbe5e46906691eb8048d",
     "source_event_id": "FE-20261009-22ddbbe5e469"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6506882f8ad28040 commit=3ae9a0db9bd50f638b986fc624f8fbd0e63db219 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py -q --basetemp=X:/AIstock_temp/advcp_20261009/pytest_bug1824_head_2 -o cache_dir=X:/AIstock_temp/advcp_20261009/pytest_bug1824` result=`passed 43 tests, source unchanged by metadata-only commit`",
+    "validation-receipt: id=1dc3e8b371698152 commit=3ae9a0db9bd50f638b986fc624f8fbd0e63db219 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/advisory_model_first/generic_price_5td_valuation_v2.py backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py` result=`passed`",
+    "validation-receipt: id=342e00baf5e23aec commit=3ae9a0db9bd50f638b986fc624f8fbd0e63db219 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv --envdir X:/AIstock_temp/advcp_20261009/nox_bug1824 -- backend/services/advisory_model_first/generic_price_5td_valuation_v2.py backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json` result=`passed 0 blocking`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
