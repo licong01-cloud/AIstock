@@ -26,6 +26,7 @@ from .monthly_node_probe_runner import (
 )
 from .monthly_runtime import MonthlyRuntimeConfigurationError, MonthlyRuntimeSettings
 from .monthly_node_tools import MonthlyNodeTools
+from .monthly_subprocess import run_headless
 
 
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -186,6 +187,7 @@ class MonthlyNodeRuntimeSettings:
             legacy_project_root=self.node1_project_root,
             python_executable=self.node1_python,
             source_root=Path(__file__).resolve().parents[3],
+            executor=run_headless,
         )
 
     def consumer_executor(

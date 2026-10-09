@@ -20,6 +20,7 @@ import tarfile
 from typing import Callable
 
 from .canonical import canonical_json_bytes
+from .monthly_subprocess import headless_process_options, run_headless
 
 _REQUIRED = (
     "backend/services/dataset_release/monthly_remote_deploy.py",
@@ -176,9 +177,11 @@ def _bundle(source_root: Path, commit: str) -> tuple[dict, str]:
             return subprocess.run(
                 ("git", "-C", str(source_root), *args),
                 check=True,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=180,
+                **headless_process_options(),
             ).stdout
         except subprocess.CalledProcessError as error:
             raise ValueError("monthly tooling pinned Git source is unavailable") from error
@@ -255,7 +258,7 @@ class MonthlyNodeTools:
     legacy_project_root: str
     python_executable: str
     source_root: Path
-    executor: Callable = subprocess.run
+    executor: Callable = run_headless
     _receipt: dict | None = None
 
     def __post_init__(self):
@@ -269,9 +272,11 @@ class MonthlyNodeTools:
             subprocess.run(
                 ("git", "-C", str(self.source_root), "rev-parse", "HEAD"),
                 check=True,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=30,
+                **headless_process_options(),
             )
             .stdout.decode()
             .strip()

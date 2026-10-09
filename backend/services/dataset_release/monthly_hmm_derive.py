@@ -28,6 +28,7 @@ from .monthly_official_adapters import (
     StageWorkload,
 )
 from .monthly_worker import ProducerContext
+from .monthly_subprocess import headless_process_options
 
 
 SHARED_HMM_COEFFICIENT_SCHEMA = "aistock_shared_hmm_coefficients_v1"
@@ -247,6 +248,7 @@ class LocalPythonHMMCoefficientProcess:
             stderr=subprocess.PIPE,
             timeout=self.timeout_seconds,
             check=False,
+            **headless_process_options(),
         )
         if completed.returncode != 0:
             error = completed.stderr.decode("utf-8", errors="replace")[-4000:]
@@ -308,6 +310,7 @@ class WSLPythonHMMCoefficientProcess:
             stderr=subprocess.PIPE,
             timeout=self.timeout_seconds,
             check=False,
+            **headless_process_options(),
         )
         if completed.returncode != 0:
             error = completed.stderr.decode("utf-8", errors="replace")[-4000:]
