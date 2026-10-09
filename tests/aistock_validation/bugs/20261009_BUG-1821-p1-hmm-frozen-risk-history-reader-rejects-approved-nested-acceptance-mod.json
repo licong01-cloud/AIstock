@@ -91,8 +91,8 @@
   },
   "first_seen_at": "2026-10-09T03:58:36.921483Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0c7b12636d07729c87d881965d6c0b59b7097c4f",
+  "fixed_at": "2026-10-09T05:26:11Z",
   "github_issue_number": 5806,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5806",
   "last_seen_at": "2026-10-09T03:58:36.921483Z",
@@ -100,6 +100,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5810",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,6 +131,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -141,7 +143,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1821",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8494527f72525338",
+    "recorded_at": "2026-10-09T05:26:52.207315Z",
+    "runtime_contract_digest": "3bd1771dfd27621c8836771a2cfbcd66dff00fa4e1dfffefff11e16650a92cef",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c46b28c540ccf0c766a037f6e777094629874d96",
+    "source_merge_commit": "0c7b12636d07729c87d881965d6c0b59b7097c4f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5810",
+    "validation_evidence": [
+      "validation-receipt: id=6663d1f142a9df8d commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history.py backend/tests/hmm_risk/test_validate_frozen_l2_history.py` result=`passed: 24 passed; final HEAD c46b28c540ccf0c766a037f6e777094629874d96`",
+      "validation-receipt: id=3540a253ee621adb commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: 0 blocking; final HEAD c46b28c540ccf0c766a037f6e777094629874d96`",
+      "validation-receipt: id=5c06d7d2382355b6 commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 passed/14 mapped; final HEAD c46b28c540ccf0c766a037f6e777094629874d96`",
+      "validation-receipt: id=f39dbb01dcc8e785 commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history_input.py` result=`passed`",
+      "validation-receipt: id=bc8ebe1a58784ae4 commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history_input.py` result=`passed`",
+      "validation-receipt: id=3bd524ba240946da commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "dad5084fb5df7ac42363ec20c1b2e96c3745c8a25fe5be9a119da9b66cb44c82"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -150,6 +178,14 @@
     "fingerprint": "8814f0e524631b37af34e65a",
     "source_event_id": "FE-20261009-8814f0e52463"
   },
+  "validation_evidence": [
+    "validation-receipt: id=6663d1f142a9df8d commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history.py backend/tests/hmm_risk/test_validate_frozen_l2_history.py` result=`passed: 24 passed; final HEAD c46b28c540ccf0c766a037f6e777094629874d96`",
+    "validation-receipt: id=3540a253ee621adb commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: 0 blocking; final HEAD c46b28c540ccf0c766a037f6e777094629874d96`",
+    "validation-receipt: id=5c06d7d2382355b6 commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 passed/14 mapped; final HEAD c46b28c540ccf0c766a037f6e777094629874d96`",
+    "validation-receipt: id=f39dbb01dcc8e785 commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history_input.py` result=`passed`",
+    "validation-receipt: id=bc8ebe1a58784ae4 commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/frozen_l2_history_input.py backend/tests/hmm_risk/test_frozen_l2_history_input.py` result=`passed`",
+    "validation-receipt: id=3bd524ba240946da commit=c46b28c540ccf0c766a037f6e777094629874d96 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
