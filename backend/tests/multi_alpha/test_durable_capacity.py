@@ -11,6 +11,7 @@ from typing import Any, Iterator, Mapping
 
 import psycopg2
 import pytest
+from dotenv import dotenv_values
 from psycopg2.extensions import parse_dsn
 from psycopg2.extras import RealDictCursor
 
@@ -131,6 +132,101 @@ def _reservation_row(spec: QEExecutionReservationSpec, **overrides: Any) -> dict
     }
     row.update(overrides)
     return row
+
+
+@pytest.mark.parametrize("case", ["orphan", "live_source", "live_lease", "stale_version",
+                                 "stale_fence", "post_pending", "terminal"])
+def test_deleted_evolution_reservation_recovery_on_existing_dev(case: str) -> None:
+    """Opt-in real SQL boundary check; all fixture writes roll back in existing DEV."""
+    if os.getenv("AISTOCK_QE_ORPHAN_DEV_VERIFY") != "1":
+        pytest.skip("explicit existing DEV verification not requested")
+    cfg = dotenv_values("F:/Dev/AIstock/.env")
+    credentials = {
+        "host": cfg["TDX_DB_DEV_HOST"], "port": int(cfg["TDX_DB_DEV_PORT"]),
+        "dbname": cfg["TDX_DB_DEV_NAME"], "user": cfg["TDX_DB_DEV_USER"],
+        "password": cfg["TDX_DB_DEV_PASSWORD"],
+    }
+    assert credentials["port"] == 5433 and "dev" in credentials["dbname"].lower()
+    task_id = "qe_bug1820_rollback_fixture"
+    spec = QEExecutionReservationSpec("rdagent-node1", "qe_evolution_loop",
+                                      f"{task_id}_Loop1", task_id, "Loop1", "a" * 64)
+    neighbor = QEExecutionReservationSpec("rdagent-node1", "qe_evolution_loop",
+                                          f"{task_id}_Loop2", task_id, "Loop2", "b" * 64)
+    conn = psycopg2.connect(**credentials, connect_timeout=5)
+
+    @contextmanager
+    def provider() -> Iterator[Any]:
+        yield conn  # Commit deliberately owned by the rollback-only test.
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = 5000")
+            cur.execute("SET LOCAL lock_timeout = 5000")
+            cur.execute(
+                "INSERT INTO infra.qe_execution_reservation "
+                "(reservation_id,node_id,source_kind,source_execution_id,qe_task_id,qe_loop_id,"
+                "submission_intent_hash,status,remote_status,owner_id,lease_expires_at,"
+                "fencing_token,row_version,reserved_at,created_at,updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,'reconciling','not_reserved','dev_fixture',"
+                "clock_timestamp()-interval '1 minute',1,1,clock_timestamp(),"
+                "clock_timestamp(),clock_timestamp()-interval '1 minute')",
+                (spec.reservation_id, spec.node_id, spec.source_kind, spec.source_execution_id,
+                 spec.qe_task_id, spec.qe_loop_id, spec.submission_intent_hash),
+            )
+            cur.execute(
+                "INSERT INTO infra.qe_execution_reservation "
+                "(reservation_id,node_id,source_kind,source_execution_id,qe_task_id,qe_loop_id,"
+                "submission_intent_hash,status,remote_status,release_reason_code,owner_id,"
+                "lease_expires_at,fencing_token,row_version,reserved_at,heartbeat_at,released_at,"
+                "created_at,updated_at) "
+                "SELECT %s,node_id,source_kind,%s,qe_task_id,%s,%s,'running','running',"
+                "NULL,owner_id,clock_timestamp()+interval '1 minute',fencing_token,row_version,"
+                "reserved_at,heartbeat_at,NULL,created_at,updated_at "
+                "FROM infra.qe_execution_reservation WHERE reservation_id=%s",
+                (neighbor.reservation_id, neighbor.source_execution_id, neighbor.qe_loop_id,
+                 neighbor.submission_intent_hash, spec.reservation_id),
+            )
+            if case == "live_source":
+                cur.execute("INSERT INTO qe_evolution_tasks(task_id,task_name) VALUES (%s,%s)",
+                            (task_id, "BUG-1820 rollback-only fixture"))
+            elif case == "live_lease":
+                cur.execute("UPDATE infra.qe_execution_reservation SET lease_expires_at="
+                            "clock_timestamp()+interval '1 minute' WHERE reservation_id=%s",
+                            (spec.reservation_id,))
+            elif case == "post_pending":
+                cur.execute("UPDATE infra.qe_execution_reservation SET remote_status='post_pending',"
+                            "updated_at=clock_timestamp() WHERE reservation_id=%s", (spec.reservation_id,))
+            elif case == "terminal":
+                cur.execute("UPDATE infra.qe_execution_reservation SET status='released',"
+                            "release_reason_code='already_released',released_at=clock_timestamp(),"
+                            "lease_expires_at=NULL WHERE reservation_id=%s", (spec.reservation_id,))
+        repository = QEExecutionReservationRepository(provider)
+        result = repository.release_deleted_evolution_reservation(
+            spec, expected_row_version=2 if case == "stale_version" else 1,
+            expected_fencing_token=2 if case == "stale_fence" else 1, post_grace_seconds=15,
+        )
+        if case == "orphan":
+            assert result and result["status"] == "released"
+            assert result["release_reason_code"] == "qe_execution_source_deleted"
+            assert result["fencing_token"] == result["row_version"] == 2
+            assert result["lease_expires_at"] is None
+            assert repository.release_deleted_evolution_reservation(
+                spec, expected_row_version=2, expected_fencing_token=2, post_grace_seconds=15,
+            ) is None  # Terminal identity is preserved, not re-released or deleted.
+        else:
+            assert result is None
+        with conn.cursor() as cur:
+            cur.execute("SELECT status,row_version,fencing_token FROM infra.qe_execution_reservation "
+                        "WHERE reservation_id=%s", (neighbor.reservation_id,))
+            assert cur.fetchone() == ("running", 1, 1)
+    finally:
+        conn.rollback()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM infra.qe_execution_reservation WHERE reservation_id=ANY(%s)",
+                        ([spec.reservation_id, neighbor.reservation_id],))
+            assert cur.fetchone()[0] == 0
+        conn.rollback()
+        conn.close()
 
 
 def test_evolution_loop_source_claim_casts_jsonb_before_capacity_marker_match() -> None:

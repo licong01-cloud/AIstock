@@ -10,12 +10,14 @@ import pytest
 from backend.services.quantevolver.qe_active_execution_capacity import (
     MAX_RESTART_SAFE_LEASE_SECONDS,
     QEActiveExecutionCapacityService,
+    QEExecutionReservationReconciler,
     QEWorkspaceSubmissionCoordinator,
     QEWorkspaceSubmissionPayload,
     QEWorkspaceSubmissionCoordinatorError,
     QEWorkspaceSubmissionSource,
     submission_intent_hash_for_source,
 )
+from backend.services.quantevolver.qe_workspace_client import QEWorkspaceSubmissionInspection
 from backend.services.quantevolver.qe_execution_reservation import (
     QEExecutionCapacityObservation,
     QEExecutionReservationAcquireResult,
@@ -29,6 +31,68 @@ from backend.services.multi_alpha.durable_execution_adapter import (
     DurableSubmissionIntent,
     QEWorkspacePredBacktestAdapter,
 )
+
+
+@pytest.mark.parametrize("released,remote_status,pid", [(True, "not_reserved", None),
+                                                       (False, "not_reserved", None),
+                                                       (False, "running", None),
+                                                       (False, "unreachable", None),
+                                                       (False, "not_reserved", 123)])
+def test_reconciler_rechecks_deleted_source_even_when_not_reserved_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch, released: bool, remote_status: str, pid: int | None,
+) -> None:
+    row = _reservation_row(replace(_spec(), source_kind="qe_evolution_loop"),
+                           status="reconciling", remote_status="not_reserved")
+    repository = Mock()
+    repository.release_deleted_evolution_reservation.return_value = row if released else None
+    reconciler = QEExecutionReservationReconciler(repository=repository, owner_id="reconciler")
+
+    class Client:
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *_: Any) -> None:
+            pass
+
+        async def inspect_loop_submission(self, task_id: str, loop_id: str, **_: Any) -> Any:
+            if remote_status == "unreachable":
+                raise ConnectionError("node receipt unavailable")
+            return QEWorkspaceSubmissionInspection(
+                "qe_submission_receipt_v1", task_id, loop_id, remote_status,
+                submission_intent_hash="a" * 64 if remote_status != "not_reserved" else None,
+                pid=pid,
+            )
+
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_execution_capacity.QEWorkspaceClient.for_node",
+        lambda _: Client(),
+    )
+    notify = Mock()
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_reconciliation_coordinator.notify_qe_reconciliation",
+        notify,
+    )
+    if remote_status == "running":
+        row.update(status="running", remote_status="running", submission_intent_hash="a" * 64)
+    if remote_status == "unreachable":
+        with pytest.raises(ConnectionError):
+            asyncio.run(reconciler._reconcile_one(row))
+        repository.release_deleted_evolution_reservation.assert_not_called()
+        return
+    if pid is not None:
+        with pytest.raises(QEWorkspaceSubmissionCoordinatorError) as exc:
+            asyncio.run(reconciler._reconcile_one(row))
+        assert exc.value.reason_code == "qe_workspace_submission_receipt_invalid"
+        repository.release_deleted_evolution_reservation.assert_not_called()
+        return
+    result = asyncio.run(reconciler._reconcile_one(row))
+    assert result == ("terminal_released" if released else None)
+    assert repository.release_deleted_evolution_reservation.call_count == (
+        1 if remote_status == "not_reserved" else 0
+    )
+    repository.claim_reservation_for_source.assert_not_called()
+    repository.transition_execution_reservation.assert_not_called()
+    assert notify.call_count == (2 if released else 0)
 
 
 @pytest.mark.parametrize("eligible,incompatible,capacity", [(1, 0, 4), (1, 1, 1), (0, 0, 1)])
