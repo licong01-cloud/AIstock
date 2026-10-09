@@ -207,6 +207,12 @@ def test_compute_local_reads_backtest_cache_without_snapshot_or_pipeline(monkeyp
     assert calls["prepare"][1:] == ("2018-08-01", "2026-04-30")
     assert calls["metrics_factor"][0] == "Alpha_Test"
     assert calls["saved"][1] == "2026-04-30"
+    # Signatures above accept neither holding_periods nor research output flags.
+    # Official persistence remains the default flat four-horizon/H20 contract.
+    assert not any(
+        field in calls["saved"][0]["metrics"][0]
+        for field in ("horizon_metrics", "horizon_support", "common_horizon_support", "rank_ic_60d")
+    )
     assert result["pipeline_summary"]["output_path"].endswith("rdagent_assets\\factor_values\\single") or (
         result["pipeline_summary"]["output_path"].endswith("rdagent_assets/factor_values/single")
     )
