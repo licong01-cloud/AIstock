@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "任意位置的请求外日期均在写入之前按既有provider_contract_error失败，正常同日完整批次通过。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1823-by-date-provider-validation-skips-out-of-request-dates-after-row-ten.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1823-by-date-provider-validation-skips-out-of-request-dates-after-row-ten.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
@@ -112,18 +118,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "fresh_process_evidence": [
       "RED: out-of-request date at rows 11 and 15 accepted by old code; GREEN: exact failed nodeids passed; final related matrix 83 passed, Ruff/compile/diff-check/L0 PASS.",
       "Fresh Python process imported tracked TushareSyncEngine: valid 15-row batch PASS, row15 wrong date REJECTED before persistence; database_opened=false; network_access=false; runtime_action=false.",
       "Three review rounds: complete batch dates rather than first10; existing provider_contract_error and bounded 10-sample error unchanged; _sync_by_date validates before replace/upsert, no new dataset/strategy/whole-history checks or DDL/DML. Companion BUG-1822 binds completed date-scoped writer facts."
     ],
-    "inference_basis": "planned_scope",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
