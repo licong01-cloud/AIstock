@@ -66,12 +66,14 @@ def parser():
     salvage_correlate.add_argument("--input", type=Path, required=True)
     salvage_correlate.add_argument("--artifact-root", type=Path, required=True)
     salvage_correlate.add_argument("--format", choices=("summary", "json"), default="summary")
-    for command in ("create", "list", "show", "record", "context", "run", "attach", "quality"):
+    for command in ("create", "list", "show", "record", "context", "run", "attach", "quality", "memory-search"):
         item = sub.add_parser(command)
         item.add_argument("--env-file", type=Path, required=True)
         item.add_argument("--target", choices=("dev", "production"), required=True,
                           help="Explicit connection target, not production-write authorization")
         item.add_argument("--format", choices=("summary", "json"), default="summary")
+        if command == "memory-search":
+            item.add_argument("--input", type=Path, required=True)
         if command in {"create", "record", "run", "attach"}:
             item.add_argument("--input", type=Path, required=True)
             item.add_argument("--dry-run", action="store_true", help="Show requested action without database/file writes")
@@ -135,6 +137,13 @@ def dispatch(args):
 
         summary = run_salvage_reference_correlation(read_json(args.input), args.artifact_root)
         return response(result=summary)
+    if args.command == "memory-search":
+        from backend.services.factor_research.memory import validate_query
+        payload = read_json(args.input)
+        validate_query(payload)  # Reject invalid requests before configuration or DB access.
+        configure(args.env_file, args.target)
+        from backend.services.factor_research.repository import ResearchRepository
+        return response(result=ResearchRepository().memory_search(payload, target=args.target))
     target = configure(args.env_file, args.target)
     payload = read_json(args.input) if hasattr(args, "input") else None
     if getattr(args, "dry_run", False):

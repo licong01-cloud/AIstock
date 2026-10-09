@@ -254,6 +254,55 @@ def _checks(findings):
     return finding, required
 
 
+def _research_locator_valid(ref):
+    if not isinstance(ref, dict) or ref.get("source_id") not in {"aistock_research:dev", "aistock_research:production"}:
+        return False
+    loc = ref.get("locator")
+    if not isinstance(loc, dict) or set(loc) != {"task_id", "record_id", "revision"}:
+        return False
+    try:
+        identifier(loc["task_id"], "task_id")
+        if loc["record_id"] is not None:
+            identifier(loc["record_id"], "record_id")
+    except ResearchError:
+        return False
+    return type(loc["revision"]) is int and loc["revision"] > 0
+
+
+def _selected_relations(selected, pool, finding):
+    """Carry corrections as context, not automatically authorized proposal citations."""
+    related, complete = {}, []
+    for entry in selected:
+        if "related_refs" not in entry:  # Old explicit-file contexts remain compatible.
+            continue
+        own = entry.get("source_ref", {})
+        locator = own.get("locator", {})
+        if not _research_locator_valid(own):
+            finding("invalid_source_ref", "context.source_ref")
+            continue
+        refs = entry["related_refs"]
+        state = entry.get("relations_complete", "not_checked")
+        complete.append(state)
+        if not isinstance(refs, list):
+            finding("invalid_source_ref", "context.related_refs")
+            continue
+        for ref in refs:
+            if (not _research_locator_valid(ref) or ref.get("source_id") != own.get("source_id")
+                    or not isinstance(ref.get("locator"), dict)
+                    or ref["locator"].get("task_id") != locator.get("task_id")
+                    or not ref["locator"].get("record_id")):
+                finding("invalid_source_ref", "context.related_refs")
+                continue
+            matches = [e for e in pool if isinstance(e, dict) and e.get("source_ref") == ref]
+            if not matches:
+                finding("source_not_in_context", "context.related_refs")
+            elif len({_key(e) for e in matches}) != 1:
+                finding("source_ref_ambiguous", _key(ref))
+            else:
+                related[_key(ref)] = matches[0]
+    return [e for _, e in sorted(related.items())], (all(s is True for s in complete) if complete else "not_checked")
+
+
 def _inspect_request(request, context):
     """Shared request contract for preparation and inspection; no proposal is fabricated."""
     _require(request.get("schema_version") == "factor_research_proposal_request_v1", "Unknown proposal request schema")
@@ -328,15 +377,23 @@ def _inspect_request(request, context):
         else:
             if request.get("experience_query") != evidence.get("query"):
                 finding("experience_query_mismatch", "context.query")
-            scope = {key: evidence.get(key) for key in ("retrieval_status", "sources", "matched_count", "returned_count", "next_offset", "scope")}
+            scope = {key: evidence.get(key) for key in ("retrieval_status", "sources", "matched_count", "returned_count", "next_offset", "scope",
+                                                       "query", "unknown_filter_count", "queried_at")}
+            related = evidence.get("related_entries", [])
+            if not isinstance(related, list):
+                finding("invalid_source_ref", "context.related_entries")
+                related = []
+            pool = evidence["entries"] + related
             for ref_key in sorted(allowed_refs):
-                matches = [e for e in evidence["entries"] if isinstance(e, dict) and _key(e.get("source_ref")) == ref_key]
+                matches = [e for e in pool if isinstance(e, dict) and _key(e.get("source_ref")) == ref_key]
                 if not matches:
                     finding("source_not_in_context", "request.source_refs")
                 elif len({_key(e) for e in matches}) != 1:
                     finding("source_ref_ambiguous", ref_key)
                 else:
                     selected.append(matches[0])
+            if "related_entries" in evidence:
+                scope["related_entries"], scope["relations_complete"] = _selected_relations(selected, pool, finding)
     elif request.get("experience_query") is not None or not request.get("unused_source_reasons"):
         finding("unused_experience_reason_required", "request")
     if request.get("missing_information"):
@@ -362,6 +419,9 @@ def prepare_proposal(request, context=None, *, producer="codex"):
             "Generate a proposal JSON, not an experiment. This pack grants no permission to access market data, install dependencies, run code or write databases. Save proposals only at a separately authorized task path.",
             "Preserve unknowns as missing_information. Do not invent source evidence, metrics or model identity.",
             "Return the proposal to proposal-inspect with the separately saved original request and experience context. No automatic execution or admission follows.",
+            "A 假设先行：形成正式请求前先区分事实、观察与推测，提出金融机制或标明机制未知的现象、竞争解释、可观察差别和反例。资料不足明确限制；不凑数量，不为调用本工具伪造方向或基准。",
+            "B 最简代理：在已声明输入与时点内解释每个操作，给出明显基准、已核对近邻及代理局限。区分新来源信息、表示变化、替换改进；不要求跨源乘积、新字段或窗口配额，不虚构执行结果。",
+            "C 反方审阅：实现前检查假设与代理、竞争解释及简单风格的再表达；不要求所有角色残差有效。结果后先核对样本与技术口径，再按三类角色、两条结论轴解释完整四周期评价。不凭单周期、高相关、故事或LLM共识判价值，不事后翻方向挑窗口；无价值规格只记必要结论，不追加存档工程。",
         ],
         output_contract=dict(
             schema_version="factor_research_proposal_v1",

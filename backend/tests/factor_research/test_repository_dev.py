@@ -48,26 +48,19 @@ def test_create_and_response_loss_are_idempotent(repo):
         repo.create(req)
 
 
-def test_concurrent_same_request_one_write(repo):
+@pytest.mark.parametrize("same_request", [True, False])
+def test_concurrent_writes_are_idempotent_or_conflict(repo, same_request):
     req, _ = create(repo)
-    record = update(req["task_id"])
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(repo.record, [record, record]))
-    assert sum(result["applied"] for result in results) == 1
-    assert sum(result["replayed"] for result in results) == 1
-    assert repo.show(req["task_id"])["task"]["revision"] == 2
-
-
-def test_concurrent_different_updates_do_not_overwrite(repo):
-    req, _ = create(repo)
+    first = update(req["task_id"])
     def write(record):
         try:
             return repo.record(record)["applied"]
         except ResearchError as exc:
             return exc.code
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(write, [update(req["task_id"]), update(req["task_id"])]))
-    assert results.count(True) == 1 and results.count("revision_conflict") == 1
+        results = list(pool.map(write, [first, first if same_request else update(req["task_id"])]))
+    assert results.count(True) == 1 and results.count(False if same_request else "revision_conflict") == 1
+    assert repo.show(req["task_id"])["task"]["revision"] == 2
 
 
 def test_record_failure_rolls_back_task_projection(repo, monkeypatch):
@@ -108,10 +101,74 @@ def test_discovery_correction_and_same_task_relation(repo):
     assert repo.show(req["task_id"], before_revision=2)["records"][0]["record_type"] == "created"
 
 
-def test_read_cursor_is_enforced_readonly(repo):
-    with repo.cursor() as cur:
-        cur.execute("SHOW transaction_read_only")
-        assert cur.fetchone()["transaction_read_only"] == "on"
+def test_memory_sql_corrections_snapshot_and_no_writes(repo, monkeypatch):
+    req, _ = create(repo)
+    task, token, ids = req["task_id"], "memory_%_" + str(uuid4()), []
+    query = dict(schema_version="factor_research_memory_query_v1", query=dict(problem="DEV contract", terms=[token]),
+                 filters={"horizons": ["20d"]})
+    try:
+        first = update(task, summary=token, payload={"experience_note": {"conditions": {"horizons": ["20d"]}}},
+                       task_update={"context_json": {"horizons": ["1d"]}})
+        # The original request explicitly disagrees; old rows must not inherit current task state either.
+        repo.record(first)
+        ids.append(first["record_id"])
+        for rev in (2, 3):
+            correction = update(task, rev, record_type="correction", related_record_id=ids[0], summary="更正而非关键词")
+            repo.record(correction)
+            ids.append(correction["record_id"])
+        before = repo.show(task)
+        result = repo.memory_search(query, target="dev")
+        assert result["matched_count"] == 1 and result["unknown_filter_count"] == 1
+        assert result["relations_complete"] is True and len(result["related_entries"]) == 2
+        assert "condition_conflict:horizons" in result["entries"][0]["missing_information"]
+        assert {e["source_ref"]["locator"]["record_id"] for e in result["related_entries"]} == set(ids[1:])
+        assert repo.show(task) == before
+        with repo.cursor() as cur:
+            rows, reasons = repo._memory_component(cur, task, ids[0], max_records=1)
+            assert len(rows) == 1 and "relations_truncated_use_show" in reasons
+        original = repo._memory_component
+        def concurrent_correction(cur, task_id, record_id):
+            cur.execute("SHOW transaction_isolation")
+            assert cur.fetchone()["transaction_isolation"] == "repeatable read"
+            cur.execute("SHOW transaction_read_only")
+            assert cur.fetchone()["transaction_read_only"] == "on"
+            new = update(task, 4, record_type="correction", related_record_id=ids[0])
+            repo.record(new)
+            ids.append(new["record_id"])
+            return original(cur, task_id, record_id)
+        with monkeypatch.context() as patch:
+            patch.setattr(repo, "_memory_component", concurrent_correction)
+            assert len(repo.memory_search(query, target="dev")["related_entries"]) == 2
+        assert len(repo.memory_search(query, target="dev")["related_entries"]) == 3
+        def fail(*args, **kwargs):
+            raise RuntimeError("injected read failure")
+        with monkeypatch.context() as patch:
+            patch.setattr(repo, "_memory_component", fail)
+            with pytest.raises(RuntimeError, match="injected"):
+                repo.memory_search(query, target="dev")
+        with repo.cursor() as cur:
+            cur.execute("SHOW transaction_isolation")
+            assert cur.fetchone()["transaction_isolation"] == "read committed"
+        assert repo.show(task)["task"]["revision"] == 5
+        with repo.cursor(write=True) as cur:
+            cur.execute("UPDATE public.factor_research_records SET related_record_id=%s WHERE record_id=%s", (ids[1], ids[0]))
+        assert "relation_cycle" in repo.memory_search(query, target="dev")["entries"][0]["relation_reasons"]
+        other, _ = create(repo)
+        try:
+            with repo.cursor(write=True) as cur:
+                cur.execute("UPDATE public.factor_research_records SET related_record_id=%s WHERE record_id=%s", (other["record_id"], ids[0]))
+            isolated = repo.memory_search(query, target="dev")
+            assert "cross_task_relation" in isolated["entries"][0]["relation_reasons"]
+            assert all(e["source_ref"]["locator"]["task_id"] == task for e in isolated["related_entries"])
+        finally:
+            with repo.cursor(write=True) as cur:
+                cur.execute("UPDATE public.factor_research_records SET related_record_id=NULL WHERE record_id=%s", (ids[0],))
+                cur.execute("DELETE FROM public.factor_research_records WHERE task_id=%s", (other["task_id"],))
+                cur.execute("DELETE FROM public.factor_research_tasks WHERE task_id=%s", (other["task_id"],))
+    finally:
+        with repo.cursor(write=True) as cur:
+            cur.execute("DELETE FROM public.factor_research_records WHERE task_id=%s", (task,))
+            cur.execute("DELETE FROM public.factor_research_tasks WHERE task_id=%s", (task,))
 
 
 def test_computed_result_recovers_on_real_dev_without_reexecution(repo, monkeypatch, tmp_path):

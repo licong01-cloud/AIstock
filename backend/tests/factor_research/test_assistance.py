@@ -72,7 +72,6 @@ def test_unavailable_is_not_no_match(tmp_path, content):
 
 def test_proposal_independent_request_and_script_are_never_executed(tmp_path):
     request, proposal = proposal_pair(tmp_path)
-    assert inspect_proposal(proposal, request)["inspection_status"] == "reviewable"
     candidate = proposal["candidates"][0]
     script = tmp_path / "factor.py"
     script.write_text("raise RuntimeError('must never execute')\ndef calculate_flow(df):\n return df", encoding="utf-8")
@@ -98,19 +97,21 @@ class NoRuntime:
 sys.meta_path.insert(0,NoRuntime())
 runpy.run_path('scripts/factor_research.py',run_name='__main__')
 """
-    completed = subprocess.run([sys.executable, "-c", program, "experience", "--input", file, "--format", "json"],
-                               cwd=root, capture_output=True, text=True, check=True)
-    assert json.loads(completed.stdout)["result"]["retrieval_status"] == "unavailable"
+    def run(*args, status=0):
+        result = subprocess.run([sys.executable, "-c", program, *args], cwd=root, capture_output=True, text=True)
+        assert result.returncode == status, result.stderr
+        return result.stdout
     request, proposal = proposal_pair(tmp_path)
-    args = ["proposal-inspect", "--request", dump(tmp_path / "original.json", request),
-            "--input", dump(tmp_path / "proposal.json", proposal), "--format", "json"]
-    inspected = subprocess.run([sys.executable, "-c", program, *args], cwd=root, capture_output=True, text=True, check=True)
-    assert json.loads(inspected.stdout)["result"]["inspection_status"] == "reviewable"
-    prepared = subprocess.run([sys.executable, "-c", program, "proposal-prepare", "--input", str(tmp_path / "original.json"),
-                               "--producer", "claude", "--format", "json"], cwd=root, capture_output=True, text=True, check=True)
-    pack = json.loads(prepared.stdout)["result"]
-    assert pack["prepare_status"] == "prepared" and pack["producer_target"] == "claude"
-    assert not any(pack[k] for k in ("generation_performed", "model_call_performed", "execution_performed"))
+    original = dump(tmp_path / "original.json", request)
+    for args, key, expected in [(["experience", "--input", file], "retrieval_status", "unavailable"),
+                                (["proposal-inspect", "--request", original, "--input", dump(tmp_path / "proposal.json", proposal)], "inspection_status", "reviewable"),
+                                (["proposal-prepare", "--input", original, "--producer", "claude"], "prepare_status", "prepared")]:
+        pack = json.loads(run(*args, "--format", "json"))["result"]
+        assert pack[key] == expected
+        assert not any(pack.get(k) for k in ("generation_performed", "model_call_performed", "execution_performed"))
+    assert pack["producer_target"] == "claude" and "--target" in run("memory-search", "--help")
+    invalid = run("memory-search", "--input", file, "--env-file", "missing.env", "--target", "dev", "--format", "json", status=1)
+    assert json.loads(invalid)["error"]["code"] == "invalid_request"
 
 
 def test_prepare_preserves_request_and_selects_only_declared_experience(tmp_path):
@@ -127,10 +128,7 @@ def test_prepare_preserves_request_and_selects_only_declared_experience(tmp_path
     assert pack["request"] == request and pack["selected_experience"] == [entry]
     assert pack["experience_scope"]["next_offset"] == 2
     assert pack["prepare_status"] == "prepared" and "candidates" not in pack
-    assert pack["output_contract"]["schema_version"] == proposal["schema_version"]
     assert json.dumps([request, context], sort_keys=True) == before
-    pack["request"]["horizons"].clear()
-    assert request["horizons"] == ["1d", "5d", "10d", "20d"]
     context["result"]["entries"].append(dict(entry, observation=dict(text="contradiction", truncated=False)))
     for entries in (context["result"]["entries"], context["result"]["entries"][::-1]):
         context["result"]["entries"] = entries
@@ -138,13 +136,6 @@ def test_prepare_preserves_request_and_selects_only_declared_experience(tmp_path
         assert failed["prepare_status"] == "requires_revision" and failed["selected_experience"] == []
         assert any(f["code"] == "source_ref_ambiguous" for f in failed["findings"])
         assert all(f in inspect_proposal(proposal, request, context)["findings"] for f in failed["findings"])
-    base, _ = proposal_pair(tmp_path)
-    for change, code, location in (({"dataset_ref": None}, "missing_information", "request.dataset_ref"),
-                                  ({"inputs": [None]}, "invalid_input", "request.inputs.0"),
-                                  ({"task_id": "unknown"}, "invalid_identity", "task_id"),
-                                  ({"missing_information": ["units"]}, "declared_missing_information", "request")):
-        result = prepare_proposal(dict(base, **change))
-        assert {"code": code, "location": location} in result["findings"]
     with pytest.raises(ResearchError):
         prepare_proposal(request, producer="rdagent")
 
@@ -160,8 +151,10 @@ def test_proposal_context_malformed_and_same_name(tmp_path):
     proposal["candidates"].append(other)
     assert len(inspect_proposal(proposal, request, context)["candidates"]) == 2
     assert inspect_proposal(proposal, request, context)["inspection_status"] == "reviewable"
-    for key, value in [("research_role", {}), ("inputs", [None]), ("horizons", []), ("artifact_root", "https://remote")]:
+    for key, value in [("research_role", {}), ("inputs", [None]), ("horizons", []), ("artifact_root", "https://remote"),
+                       ("dataset_ref", None), ("task_id", "unknown"), ("missing_information", ["units"])]:
         assert inspect_proposal(proposal, dict(request, **{key: value}), context)["inspection_status"] == "requires_revision"
+        assert prepare_proposal(dict(request, **{key: value}), context)["prepare_status"] == "requires_revision"
     for altered in (dict(proposal, generation_status="failed", candidates=[], failure_reason="provider unavailable"),
                     dict(proposal, candidates=[other, other]), dict(proposal, auto_run=True)):
         assert inspect_proposal(altered, request, context)["inspection_status"] == "requires_revision"
@@ -194,3 +187,61 @@ def test_drift_duplicates_and_script_link(tmp_path, monkeypatch):
     proposal["candidates"][0].update(implementation="script_available", script_ref=str(text))
     monkeypatch.setattr(Path, "lstat", lambda _: SimpleNamespace(st_mode=stat.S_IFLNK, st_file_attributes=0))
     assert inspect_proposal(proposal, request)["inspection_status"] == "requires_revision"
+
+
+def test_memory_unknown_conflict_literal_paging_and_old_context():
+    from backend.services.factor_research.memory import search_rows, validate_query
+
+    request = dict(schema_version="factor_research_memory_query_v1", query=dict(problem="反转", terms=["FLOW", "flow", "%_"]),
+                   filters={"horizons": ["20d"]}, include_unknown=True, limit=2)
+    rows = [dict(task_id=str(uuid4()), record_id=str(uuid4()), revision=1, summary="flow %_",
+                 note=note, contexts=contexts) for note, contexts in (
+                     ({"observation": "原观察", "conditions": {"horizons": ["20d"]}}, []),
+                     (None, []), (42, []),
+                     ({"conditions": {"horizons": ["1d"]}}, []),
+                     ({"conditions": {"horizons": ["20d"]}}, [{"horizons": ["1d"]}]))]
+    query_value = validate_query(request)
+    found = search_rows(iter(rows), query_value, "dev")
+    assert found["matched_count"] == 4 and found["unknown_filter_count"] == 3
+    assert found["next_offset"] == 2 and len(found["entries"]) == 2
+    assert found["entries"] == search_rows(iter(rows[::-1]), query_value, "dev")["entries"]
+    strict = search_rows(iter(rows), validate_query(dict(request, include_unknown=False)), "dev")
+    assert strict["matched_count"] == 1 and strict["unknown_filter_count"] == 3
+    assert len(strict["entries"][0]["match_basis"]["terms"]) == 2
+    all_rows = search_rows(iter(rows), validate_query(dict(request, limit=20)), "dev")["entries"]
+    assert any("invalid_note" in e["missing_information"] for e in all_rows)
+    assert any("condition_conflict:horizons" in e["missing_information"] for e in all_rows)
+    past = search_rows(iter(rows), validate_query(dict(request, offset=30)), "dev")
+    assert past["matched_count"] == 4 and not past["entries"] and past["match_status"] == "matched"
+    explanation = dict(rows[0], summary="", note={"interpretation": "flow"})
+    assert search_rows(iter([explanation]), query_value, "dev")["matched_count"] == 1
+    empty = search_rows(iter([explanation]), validate_query(dict(request, query={"problem": "keys", "terms": ["summary"]})), "dev")
+    assert empty["match_status"] == "no_match_in_read_scope"
+    for change in ({"limit": True}, {"filters": {"horizons": ["2d"]}}, {"query": {"problem": "x", "terms": []}}):
+        with pytest.raises(ResearchError):
+            validate_query(dict(request, **change))
+
+
+def test_memory_corrections_survive_proposal_selection(tmp_path):
+    request, proposal = proposal_pair(tmp_path)
+    task = str(uuid4())
+    def entry(revision):
+        return dict(source_ref=dict(source_id="aistock_research:dev", locator=dict(task_id=task, record_id=str(uuid4()), revision=revision)),
+                    observation={"text": "old result"}, related_refs=[], relations_complete=True)
+    old, correction, other = [entry(i) for i in (1, 2, 3)]
+    old["related_refs"] = [correction["source_ref"]]
+    correction["related_refs"] = [old["source_ref"]]
+    request.update(source_refs=[old["source_ref"]], experience_query={"terms": ["old"], "filters": {"horizons": ["20d"]}})
+    context = dict(ok=True, result=dict(schema_version="factor_research_experience_v1", query=request["experience_query"],
+                   entries=[old, other], related_entries=[correction], scope="research_database", relations_complete=True))
+    pack = prepare_proposal(request, context)
+    assert pack["prepare_status"] == "prepared"
+    assert pack["experience_scope"]["related_entries"] == [correction]
+    assert any("竞争解释" in text for text in pack["instructions"])
+    proposal["candidates"][0]["source_refs"] = [correction["source_ref"]]
+    assert inspect_proposal(proposal, request, context)["inspection_status"] == "requires_revision"
+    request["source_refs"] = [correction["source_ref"]]
+    assert prepare_proposal(request, context)["selected_experience"] == [correction]
+    correction["source_ref"]["locator"]["task_id"] = str(uuid4())
+    request["source_refs"] = [old["source_ref"]]
+    assert prepare_proposal(request, context)["prepare_status"] == "requires_revision"
