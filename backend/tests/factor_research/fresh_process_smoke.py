@@ -13,7 +13,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from backend.services.factor_research.runner import (  # noqa: E402
-    CANONICAL_UNIVERSE, execute, validate_spec,
+    CANONICAL_UNIVERSE, evaluation_context, execute, validate_spec,
 )
 from backend.tests.factor_research.fixtures.trend_pullback import calculate  # noqa: E402
 
@@ -40,7 +40,7 @@ class FreshProcessTests(unittest.TestCase):
         pd.testing.assert_frame_equal(isolated, whole.loc[isolated.index])
 
     def test_subprocess_shared_metric_oracle(self):
-        from backend.services.quantevolver.qe_eval_v2_metric_engine import compute_single_factor_metrics
+        from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
         with tempfile.TemporaryDirectory(prefix="factor-research-") as directory:
             root = Path(directory)
             data = root / "data"
@@ -55,34 +55,40 @@ class FreshProcessTests(unittest.TestCase):
                    "candidates": [{"factor_name": "m_p1_trend_pullback_case",
                                    "script": str(Path(__file__).parent / "fixtures" / "trend_pullback.py")}]}
             spec, output = validate_spec(raw)
-            context = {"close_unstacked": self.close,
-                       "fwd_ret_mats": {p: self.close.shift(-n) / self.close.shift(-1) - 1
-                                        for p, n in (("1d", 2), ("5d", 6), ("10d", 11), ("20d", 21))},
-                       "dates": self.dates, "st_pit_eligible_mask": self.close.notna(),
-                       "data_start": raw["read_start"], "data_end": raw["read_end"],
-                       "calc_batch_id": str(uuid4()), "suspended_pairs": set(), "universe_metadata": {},
-                       "coverage_semantics": "test_only"}
-            def oracle(name, frame, ctx):
-                self.assertTrue(ctx["fwd_ret_mats"]["1d"].equals(context["fwd_ret_mats"]["1d"].loc[ctx["dates"]]))
-                actual = compute_single_factor_metrics(name, frame, ctx)
-                return actual
-            result = execute(spec, output, prepare=lambda **kwargs: context, compute=oracle)
-            self.assertEqual(result["status"], "computed")
-            self.assertEqual(len(result["candidates"]), 1)
+            calls = []
+            def prepare(**kwargs):
+                calls.append(kwargs)
+                with patch.object(engine, "read_close_prices", return_value=self.close.stack().to_frame("close")), patch.object(engine, "read_trading_calendar", return_value=self.dates):
+                    return engine.prepare_shared_context(**{**kwargs, "load_suspend_d": False, "load_st_pit_mask": False})
+            def oracle(name, frame, ctx, **kwargs):
+                self.assertTrue(evaluation_context(ctx, raw)["label_calendar"].equals(self.dates))
+                return engine.compute_single_factor_metrics(name, frame, ctx, **kwargs)
+            result = execute(spec, output, prepare=prepare, compute=oracle)
             self.assertEqual(result["candidates"][0]["signal_rows"], 41 * 12)
             self.assertEqual(result["candidates"][0]["nan_rows"], 60 * 12)
             source = Path(result["candidates"][0]["values"])
-            for suffix in (".h5", ".parquet"):
+            for suffix, periods in ((".h5", None), (".parquet", [1, 5, 10, 20, 40, 60, 120, 240]), (".h5", None)):
                 if suffix == ".parquet":
                     source = root / "existing.parquet"
                     pd.read_hdf(result["candidates"][0]["values"], key="data").to_parquet(source)
                 before = (source.read_bytes(), source.stat().st_mtime_ns)
                 raw["attempt_id"] = str(uuid4())
+                raw["holding_periods"] = periods
                 raw["candidates"][0].update(values_artifact=str(source), reuse_basis="same fixture inputs/formula")
                 spec, output = validate_spec(raw)
                 with patch("backend.services.factor_research.runner.subprocess.run", side_effect=AssertionError("must not regenerate")):
-                    reused = execute(spec, output, prepare=lambda **kwargs: context, compute=oracle)
-                self.assertEqual(reused["candidates"][0]["metrics"]["metrics"], result["candidates"][0]["metrics"]["metrics"])
+                    reused = execute(spec, output, prepare=prepare, compute=oracle)["candidates"][0]
+                if periods is None:
+                    self.assertNotIn("holding_periods", calls[-1])
+                    self.assertNotIn("prediction_evaluation", reused)
+                    self.assertEqual(reused["metrics"]["metrics"], result["candidates"][0]["metrics"]["metrics"])
+                else:
+                    report = reused["prediction_evaluation"]
+                    self.assertEqual(calls[-1]["holding_periods"], periods)
+                    self.assertEqual(set(report["holding_periods"]), {f"{h}d" for h in periods})
+                    support = report["windows"]["full"]["horizon_support"]
+                    self.assertEqual([support[f"{h}d"]["n_mature_days"] for h in (1, 40, 60, 120, 240)], [41, 39, 19, 0, 0])
+                    self.assertIsNone(report["windows"]["full"]["horizon_metrics"]["240d"]["rank_ic_mean"])
                 self.assertEqual((source.read_bytes(), source.stat().st_mtime_ns), before)
                 self.assertFalse((output / raw["candidates"][0]["factor_name"] / "values.h5").exists())
 
