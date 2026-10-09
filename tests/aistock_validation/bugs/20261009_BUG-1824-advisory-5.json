@@ -30,15 +30,25 @@
   ],
   "expected": "已验证停牌保留持仓与D锚估值；H跌停给出市值收益并明确成交未证明；缺少真实数据仍UNKNOWN；原成交V1结果和hash不变；V2消费者输出全原日期及支持度。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py",
+      "backend/services/advisory_model_first/generic_price_5td_valuation_v2.py",
+      "backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py",
+      "docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md",
+      "tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json"
+    ],
     "added_files": [
       "backend/services/advisory_model_first/generic_price_5td_valuation_v2.py",
       "backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py"
     ],
     "changed_files": [
+      "backend/services/advisory_model_first/generic_price_5td_revaluation_v2.py",
+      "backend/services/advisory_model_first/generic_price_5td_valuation_v2.py",
       "backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py",
-      "docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md"
+      "docs/architecture/advisory_generic_price_5td_v1_f2_design_20261006.md",
+      "tests/aistock_validation/bugs/20261009_BUG-1824-advisory-5.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/advisory_model_first/test_generic_price_5td_labels_v1.py",
@@ -133,16 +143,18 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "backend-main"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
