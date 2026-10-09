@@ -239,3 +239,7 @@ gross累计B/R/X=-4.8919842869032726%/-2.770300430158512%/-2.57143254320511%；M
 2026-10-10只读风险原run 88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26，真实API/无mock browser首日2024-07-01、零报警2024-08-01、末日2026-03-31通过；131下载、前后默认20及自定义≤30显示、非法31拒绝、全部/隐藏报警有效。全row hash仍cd31fa9b2dbe2d72f2b4d17438113f35b2db994d5cc3d5698ac8af26636c9f95；research capability保持，当前surface=NOT_AVAILABLE/forward=NOT_STARTED/advisory=NOT_AVAILABLE，服务正式记录识别pending。未新导入这次新窗口预测，不借旧记录使新run可用，不新增环境变量或为记录重启。
 
 runtime identity=2784c131983bf89bf101492df382565b1fde3352，Git祖先核验已包含373a90423；不同于最新main不等于BUG-1827未加载。#5838 close-sync/Issue #5829及精确清理各自等待真实工作流结论与具体授权，不用页面成功代替aftercare。本次文档同步和核验database_write=false、dataset_write=false、active_profile_write=false、fits=0、runtime_action=false。
+
+### 12.4 下一业务包已结束，不回写本设计的原零fit合同
+
+2026-10-10用户委托模型合同内的唯一月度rolling-return，由独立设计`hmm_evolution_phase2_l2_risk_value_and_rotation_next_detailed_design_20261010.md` v1.2承载，已完成一次双process10/10 fits与16/16合成参照路径。总体IC=-0.058852283288、coverage通过；相对无排序收益/回撤点估计未观察到优势，所有20paired区间跨零，终态BELOW_BINDING_MBE。本设计原P1/P2继续0fit、原十二条D1～D6和原结果保持，不把下一合成估值替代本P1官方指数路径或冒称独立forward。下一结果/source/hash详见该设计§13，PR交付及风险正式surface登记独立。

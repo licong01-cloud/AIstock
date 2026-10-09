@@ -1,8 +1,8 @@
 # HMM Phase 2：风险价值交付核验与唯一下一轮动候选详细设计
 
-> 版本：v1.1；日期：2026-10-10；owner：HMM；tier：F2。
-> 状态：风险既有产品只读复验完成、正式surface记录识别PENDING；L2-ROLLING-RETURN-D1～D6为APPROVED_BY_DELEGATED_MODEL_CONTRACT_AUTHORITY_PENDING_IMPLEMENTATION。用户本轮明确授权本窗口按蓝图确定新模型合同并直接执行20小时任务；下列数值由本窗口冻结，不冒称用户曾逐项批准。这不是实施/实验通过。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.86 §1.0/§1.13/§1.14。原冻结历史详细设计§4/§5 D1～D6、旧模型及结果不回写。
+> 版本：v1.2；日期：2026-10-10；owner：HMM；tier：F2。
+> 状态：源码及一次正式双fresh-process10/10 fits完成、bitwise一致；研究效果BELOW_BINDING_MBE，未观察到排序参照消费优势。风险既有产品只读复验完成、正式surface记录识别PENDING。D1～D6数值由用户本轮委托权限内冻结，不冒称用户曾逐项批准；源码PR/生产采用另列，执行完成不等于模型有效。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.87 §1.0/§1.13/§1.14。原冻结历史详细设计§4/§5 D1～D6、旧模型及结果不回写。
 > 当前任务审核base：a1084f2c7a5272285ab186bfe6f31efb8823d713；最终交付前安全同步最新main。所有原实验/生产权限仅对各自目标有效；离线正式执行绑定本轮已审核、测试通过的干净immutable源码commit，不把未合入源码称为merge或运行态生效。
 
 ## 1. Background、Goals与Non-Goals
@@ -130,7 +130,7 @@ Ridge(alpha=0.01,fit_intercept=True,solver="svd",positive=False)
 
 同一child顺序处理五个月：每月只接收≤as-of的feature/成熟训练view；全期评价outcome不能作为fit/早停/选择输入。训练阶段可读的当月已成熟历史标签与完整后验评价视图明确分开，后面月份可使用当时已成熟的前面预测期标签，这是批准提案内的prequential训练，不伪称一组永远不变的holdout。两process封闭全部月度参数/预测并向parent request/readback闭合后，parent才读取完整评价视图。代码BUG另登记独立scope，不在失败处理里自动重训/调参。只保必要五份参数、输入pins、预测、compact结果，不新增证据平台/日志账本/研究env开关。
 
-当前合同已由本轮委托冻结，源码已完成两轮作者审修与相关125 passed/1 skipped最小矩阵；第二轮子进程外部动作保护的补充直接测试独立验证，正式10fit尚未执行。后续允许一次正式离线实验，不写store/DB/数据集、不启动用户服务。任何新PR合入、cleanup、DDL/DML、依赖、runtime activation仍核对具体授权；后端重启由用户执行，记录或离线回放不提出重启要求。
+当前合同已由本轮委托冻结，源码已完成两轮作者审修及第三轮收敛、相关125 passed/1 skipped最小矩阵和补充直接测试；正式10fit已完成，结果见§13。本批到此结束，不追加fit，不写store/DB/数据集、不启动用户服务。任何新PR合入、cleanup、DDL/DML、依赖、runtime activation仍核对具体授权；后端重启由用户执行，记录或离线回放不提出重启要求。
 
 ## 9. Implementation Plan、真实Allowed APIs与Scope
 
@@ -174,16 +174,16 @@ Ridge(alpha=0.01,fit_intercept=True,solver="svd",positive=False)
 
 ### 10.3 Design Acceptance Matrix
 
-以下当前只验设计定义与已列验证方法，不代表实现或正式实验验收。六个设计项定义可完整审核，没有省略/获豁免的定义项；全部D1～D6已按用户委托模型合同权限冻结，新源码/10fit未执行、既有risk正式surface记录识别pending。计划测试命令只定义验证方法，不冒称已经运行。
+六项定义、源码实现及本次正式离线实验均已按完整合同执行；效果低于MBE是研究结果，不是删掉测试/行业后的成功。风险项验收对象是既有产品只读核验，当前surface登记仍pending，不宣称新产品采用。下表实际代码/命令/§13结果均可定位，不把synthetic测试作为正式模型结果。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §2；既有risk_l2_prediction.py/RiskL2Panel/product_validation_store | artifact: F:/Dev/AIstock_runtime/hmm_l2_frozen_history/20261009_373a90423/P2/run/acceptance.json；§2.2本轮真实API/no-mock读回 | DESIGN_DEFINITION_REVIEW_VERIFIED | 无 |
-| F-002 | §3/§4；原正式reader/纯特征核 | 计划：python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k identity；§10.1身份/NA/双估值反例 | DESIGN_DEFINITION_REVIEW_VERIFIED | 无 |
-| F-003 | §5；计划rotation_l2_rolling_return.py | artifact: F:/Dev/AIstock_runtime/hmm_l2_frozen_history/20261009_20e75e4f6/P1/features.json的冻结calendar；计划pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k causal | DESIGN_DEFINITION_REVIEW_VERIFIED | 无 |
-| F-004 | §6；原cohort纯数学 | 计划：python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k reference；§10.1共同人口/cohort/成本反例 | DESIGN_DEFINITION_REVIEW_VERIFIED | 无 |
-| F-005 | §7；原指标与HAC定义 | 计划：python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k evaluation；§10.1分母/NA/停止反例 | DESIGN_DEFINITION_REVIEW_VERIFIED | 无 |
-| F-006 | §8/§9；计划显式CLI/已有门禁 | 计划：python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k no_side_effect；本轮F2/diff/scope | DESIGN_DEFINITION_REVIEW_VERIFIED | 无 |
+| F-001 | §2；既有risk_l2_prediction.py/RiskL2Panel/product_validation_store | artifact: F:/Dev/AIstock_runtime/hmm_l2_frozen_history/20261009_373a90423/P2/run/acceptance.json；§2.2本轮真实API/no-mock读回 | VERIFIED_EXISTING_PRODUCT_READONLY_CHECK | 无 |
+| F-002 | §3/§4；rotation_l2_rolling_return.prepare_inputs/正式reader | python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py；§13 file-only preflight及input hash | VERIFIED_IMPLEMENTATION_FORMAL_EXPERIMENT | 无 |
+| F-003 | §5；rotation_l2_rolling_return.run_process/verify_processes | python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k causal；§13正式10/10及两process bitwise | VERIFIED_IMPLEMENTATION_FORMAL_EXPERIMENT | 无 |
+| F-004 | §6；rotation_l2_rolling_return.close_processes/原cohort纯数学 | python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k reference；§13四臂四成本/20配对完整 | VERIFIED_IMPLEMENTATION_FORMAL_EXPERIMENT | 无 |
+| F-005 | §7；原指标/HAC及overall-only gate | python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k evaluation；§13完整分母/NA/BELOW_BINDING_MBE | VERIFIED_IMPLEMENTATION_FORMAL_EXPERIMENT | 无 |
+| F-006 | §8/§9；run_rotation_l2_rolling_return CLI | python -m pytest backend/tests/hmm_risk/test_rotation_l2_rolling_return.py -k cli；fresh-process DB/network poison import；§13 source/budget/readback | VERIFIED_IMPLEMENTATION_FORMAL_EXPERIMENT | 无 |
 
 ## 11. DESIGN-COMPLIANCE-001、Rollout / Rollback与Production Gates
 
@@ -198,7 +198,7 @@ Ridge(alpha=0.01,fit_intercept=True,solver="svd",positive=False)
 
 v1.0文档阶段的两轮作者审修（非独立第三方）已完成并保留：当时D1～D6待批准，四份F2结构验收及9项scope/历史/合同/身份检查通过，包括原P1/P2十二条D1～D6逐字不变、11行历史verified与旧版本历史不变。v1.1按用户本轮委托权限冻结合同；两轮源码作者审修完成：修正固定控制/原P2 lineage、delta原生人口、父级failure隔离、数字环境版本、合法资本耗尽、月诊断非AND门与子进程DB/network/旧fit保护。相关125 passed/1 skipped、L0 blocking=0、module registry8 passed、四文档F2与fresh-process路由/依赖import均实际通过；最终源码HEAD和正式10fit仍须独立绑定，不沿用文档PASS或旧receipt冒充实验通过。实际runtime分类为backend、target_ids=[backend-main]、catalog_error=null；分类不意味着离线实验需要重启，也不意味着本轮生产加载已经生效。
 
-本轮production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop、runtime_activation=noop、backend_restart_permission=false；database_write=false、dataset_write=false、active_profile_write=false、fits=0、QE_action=false、process_control=false。正式风险store登记pending与模型研究并行，不为记录索要或执行服务重启。
+本轮production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop、runtime_activation=noop、backend_restart_permission=false；database_write=false、dataset_write=false、active_profile_write=false、正式fits=10/10、QE_action=false、用户process_control=false。CLI只管理本次自建研究child，不控制用户服务。正式风险store登记pending与模型研究独立，不为记录索要或执行服务重启。
 
 第三轮收敛审核包含真实file-only准备的零fit finding：`fixed.REFERENCE_PINS`是旧return模型所用的rank-target对照pins，并非return模型自身身份；改为复用既有`rotation_l2_reference_value.RETURN_PINS`，仍由正式reader核验acceptance、两个child、模型/参数/预测/输入/结果全链。真实旧模型读回PASS、固定参数SHA不变，直接反例PASS。首次准备失败只留下独立failure，0fit/无数据缺口；这是本轮未交付实现的消费校验修正，不改旧main模型或数据集、不降低hash校验、不增加正式fit预算。
 
@@ -207,3 +207,30 @@ v1.0文档阶段的两轮作者审修（非独立第三方）已完成并保留�
 本次20小时长任务在以下任一情况结束：完整源码经至少两轮作者审修及必要门禁后，一次双fresh-process10fit及四臂四成本/五组paired得出诚实终态；第三轮仍有阻断；真实基础数据缺口需要data owner；需要未获授权生产/跨owner动作；达到2026-10-10 23:33:48 Asia/Shanghai。20小时是上限而非必须持续占用，完成即早停，不等待/重跑凑时间。
 
 交接只含风险完整路径及代价、当前surface pending、该唯一模型的效果/价值/NA/归因局限、源码/PR/实验真实状态和下一步。不得改变原P1/P2历史或独立性；fit完成、F2或PR不能被称为“已找到有效模型”。窗口已被研发选择消费，任何结果保持研究/prequential属性，不冒称新forward确认。
+
+## 13. 正式结果与本批终态（2026-10-10，未自动生产采用）
+
+固定executor commit=`9be6f36ae841ccf7b834e77ff0329442fdd8d54c`；独立validation worktree为`F:/Dev/AIstock_worktrees/validation-hmm-l2-rolling-return-20261010-91dc49a0`（目录初始标识不代替实际HEAD）。正式request canonical=`8ccf268723a2bb8d84c72d647fb88c7222ec8ba8122622e9eb85923a246e254b`，input canonical=`5272571953d5977b25b4cafaf6e233ee4c7294346e26692a943c791f970671ed`；输出`F:/Dev/AIstock_runtime/hmm_rotation_l2/rolling_return_20261010_9be6f36a/run/acceptance.json`，canonical=`e9cf55619953ee156b51cb5d974387462d6c72760f0c582c90e69d9e503b66e6`、预测=`8e64337aa6276522a787ba6fae30a8f57096bdb4a27679ea075e280d5cbc8ce7`。
+
+一次正式file-only preflight通过；两fresh process各5fit，共10 started/10 completed/0 failed，业务参数/预测bitwise一致、parent独立正常方程/预测读回通过。131目录、104预测日/13,624行、94成熟评价日；每月126个usable train日期，样本数依次16,380/16,368/16,260/16,134/15,996，未移窗补日。三排序臂native/common的IC一致：共同人口为124～130行业，各日coverage均通过；合法不可报价与10日右截尾显式保留，没有自然停牌/停发的全行业AND阻断。
+
+| 排序臂 | 总体94日Rank IC | HAC95% | 官方10D trending−fading spread | 效果终态 |
+|---|---|---|---|---|
+| monthly_return | -0.058852283288 | [-0.251426374,0.133721807] | -0.008052767701 | BELOW_BINDING_MBE |
+| frozen_return | -0.017935037645 | [-0.146888081,0.111018006] | -0.004134410369 | BELOW_BINDING_MBE |
+| delta | -0.009647517044 | [-0.122006702,0.102711668] | +0.001491531217 | BELOW_BINDING_MBE |
+
+monthly分月IC为+0.185050028/+0.090979631/+0.076989847/-0.453339445/-0.204161648，仅诊断；不挑前三月、剔除七月或翻转分数。符号/系数变化不是单独的机制时变证据。此次未通过原因是总体效果点估计低于既有量级，不是数据缺口、资源门或显著性AND门；区间跨零不等于已证明所有模型无效。
+
+下表为`GROSS_SYNTHETIC_L2_REFERENCE`预算消费累计百分比及MDD幅度（正数）%，不是个股可成交净收益：
+
+| 臂 | 0bp累计 / MDD | 5bp累计 / MDD | 10bp累计 / MDD | 20bp累计 / MDD |
+|---|---|---|---|---|
+| monthly_return | -9.85017 / 21.84549 | -10.69312 / 22.03229 | -11.52818 / 22.32356 | -13.17488 / 22.95598 |
+| frozen_return | -10.35490 / 17.65763 | -11.19243 / 18.07673 | -12.02213 / 18.49370 | -13.65827 / 19.32130 |
+| delta | -7.54449 / 15.03315 | -8.40818 / 15.46582 | -9.26378 / 15.89630 | -10.95102 / 16.75071 |
+| no_order | -5.32936 / 17.30081 | -6.21601 / 17.73778 | -7.09434 / 18.17245 | -8.82633 / 19.03494 |
+
+16/16路径104/104日完整，合法持仓估值NA=0；20/20 full-window配对HAC区间均跨零。零成本monthly相对no_order累计少4.520810533个百分点且MDD幅度大4.544688808个百分点；相对frozen_return累计多0.504729798个百分点，但MDD大4.187864395个百分点；相对delta收益与MDD均更差。monthly−no_order日差HAC95%=[-0.003200711,0.002383828]，monthly−frozen=[-0.003133609,0.003368378]。因此本批是BELOW_BINDING_MBE／未观察到排序消费整体优势，统计增量仍INCONCLUSIVE；不是“旧参数一更新就获得可靠价值”。
+
+本批目标已达到诚实终态，20小时为上限，可提前结束。结果不支持采用本候选，不自动第二候选/调参/扩大预算或改变原默认；风险旧独立模型及参考回撤改善结论保持。后续先完成本PR源码交付与明确目标的普通risk记录识别，再提出一个信息内容/目标对齐方面的完整可检验假设，而非继续围绕同四特征搜索窗口或只增强合法性审计。模型合同按用户委托可由本窗口冻结，但本次一次性实验已经结束；QE后置由QE窗口执行。
