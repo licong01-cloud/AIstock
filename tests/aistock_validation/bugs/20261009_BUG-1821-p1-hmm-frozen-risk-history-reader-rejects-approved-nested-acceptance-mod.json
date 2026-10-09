@@ -14,7 +14,19 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-09T03:58:36.921483Z",
-  "description": "File-only prepare exits KeyError model_sha256; no new features or outcome produced; fits=0.",
+  "description": "PR #5804 合入后，已批准 P2 零fit历史验证在读取封闭风险 acceptance 时失败；正式生成器将模型 carrier 写在 model 字段，新 consumer 误读顶层 model_sha256。未构造新窗口输入、未读取新 outcome，模型与所有批准合同不变。",
+  "root_cause": "frozen_l2_history_input._risk_source 对 risk_l2.finalize 的真实 acceptance schema 使用了错误的字段层级。",
+  "resolution": "按原 schema 读取嵌套 model，并与固定 sealed payload 的完整模型 carrier、sealed prediction 身份、feature/input identity 和原参数 hash 闭合；不接受顶层 alias，不修改或重建任何原模型资产。",
+  "design_compliance_review": {
+    "no_simplified_delivery": "保留原 20D、131目录、固定模型/PIT/source/calendar 合同；修复 reader，不替换参数或特征。",
+    "no_silent_error": "缺失/错误类型/参数漂移/sealed identity 漂移均在访问 stock source 前 typed fail closed；无 alias fallback。",
+    "no_business_logic_drift": "模型、scaler、训练/验证窗口、seed、阈值及新 P1/P2 D1-D6 均不变；P1 已完成结果不重跑。",
+    "no_unapproved_gate": "仅正确执行已批准资产身份闭合，不新增统计、资源、人工审批或记录重启门禁。"
+  },
+  "review_rounds": [
+    "第一轮：以正式 acceptance 的嵌套 model 格式复现旧 reader 的 KeyError；RED 2 passed/5 failed，修复后 GREEN 7 passed。",
+    "第二轮：核对原 risk_l2.finalize 的 model carrier 构造、完整参数/source linkage、反例不得被顶层 alias 救回；仅 HMM reader/对应测试/BUG metadata 修改。"
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -100,6 +112,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "fresh_process_evidence": [],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",

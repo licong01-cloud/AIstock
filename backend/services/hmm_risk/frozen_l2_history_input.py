@@ -172,11 +172,20 @@ def _risk_source(request):
     sealed = _asset(request["risk_sealed_path"], pins["sealed_hash"])
     features = _asset(request["risk_features_path"], pins["features_hash"])
     acceptance = _asset(request["risk_acceptance_path"], pins["acceptance_hash"])
+    # risk_l2.finalize stores the original sealed metadata under `model`,
+    # not a top-level model_sha256 alias. Bind that complete carrier to the
+    # pinned sealed payload; never accept a replacement digest alone.
+    accepted_model = acceptance.get("model")
+    expected_model = {k: v for k, v in sealed.items() if k not in {"predictions", "receipt_sha256"}}
     require(
-        sealed["feature_sha256"] == features["receipt_sha256"]
-        and sealed["model_sha256"] == pins["model_hash"]
+        isinstance(accepted_model, dict)
+        and accepted_model == expected_model
+        and acceptance.get("sealed_prediction_sha256") == pins["sealed_hash"]
+        and sealed.get("feature_sha256") == features["receipt_sha256"]
+        and sealed.get("input_identity") == features.get("input_identity")
+        and sealed.get("model_sha256") == pins["model_hash"]
         and canonical_sha256(sealed["parameters"]) == pins["model_hash"]
-        and acceptance["model_sha256"] == pins["model_hash"],
+        and accepted_model.get("model_sha256") == pins["model_hash"],
         "risk frozen model linkage differs",
     )
     require(
