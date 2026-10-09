@@ -184,13 +184,17 @@ def replay_path(
     *,
     cost_bps: int,
 ) -> list[dict[str, Any]]:
+    require(all(date.fromisoformat(d) < date(2026, 4, 1) for d in days), "tail date forbidden")
+    return cohort_reference_path(days, decisions, groups, quotes, cost_bps=cost_bps)
+
+
+def cohort_reference_path(days, decisions, groups, quotes, *, cost_bps):
     """Ten isolated sleeves; legitimate held NA makes cash proceeds unknowable, never reset."""
     require(cost_bps in COSTS and type(cost_bps) is int, "unapproved cost")
     require(
         list(days) == sorted(set(days)) and list(decisions) == list(days[: len(decisions)]), "calendar order differs"
     )
     require(len(days) == len(decisions) + HOLD_DAYS and set(groups) == set(decisions), "maturity ledger differs")
-    require(all(date.fromisoformat(d) < date(2026, 4, 1) for d in days), "tail date forbidden")
     c = cost_bps / 10000
     sleeves = [{"cash": 0.1, "assets": {}, "exit_index": None, "unknown": False} for _ in range(HOLD_DAYS)]
     path, previous_nav = [], 1.0

@@ -564,12 +564,19 @@ def _l2_stock_facts(
     Only daily-basic is read before the lookback window to recover real strict
     predecessors. No forward-fill, same-day substitution or A5 refit occurs.
     """
-    from backend.services.hmm_risk import rotation_l1_input_bundle as reader
-    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, END, fail
-    from backend.services.hmm_risk.formal_state_executor import validate_output_location
+    from backend.services.hmm_risk.formal_state_effect import END, fail
 
     if not SOURCE_START <= start <= end <= END:
         raise fail("effect source window exceeds its approved boundary")
+    return _bounded_l2_stock_facts(frozen, source, start=start, end=end)
+
+
+def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date):
+    """Shared source kernel; public dispatchers retain their distinct frozen boundaries."""
+    from backend.services.hmm_risk import rotation_l1_input_bundle as reader
+    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, fail
+    from backend.services.hmm_risk.formal_state_executor import validate_output_location
+
     assets = reader.load_rotation_l1_direct_v2_source_assets(
         Path(source["candidate_root"]),
         security_identity_manifest=Path(source["security_identity_manifest"]),
@@ -577,6 +584,7 @@ def _l2_stock_facts(
         data_window_end=end,
         frozen_release_binding=frozen_release_binding(),
     )
+    stamps = {key: (path.stat().st_size, path.stat().st_mtime_ns) for key, path in assets["files"].items()}
     if assets["inventory"]["qlib"]["calendar_sha256"] != CALENDAR_SHA:
         raise fail("effect calendar file changed", reason="identity_mismatch")
     calendar_all = tuple(reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt"))
@@ -694,6 +702,8 @@ def _l2_stock_facts(
         "structural_membership": structural,
         "domain_reasons": domain_reasons,
     }
+    if any((path.stat().st_size, path.stat().st_mtime_ns) != stamps[key] for key, path in assets["files"].items()):
+        raise fail("effect source changed while read", reason="identity_mismatch")
     # Tuple keys are internal only and never passed to canonical JSON.
     return assets, window, aggregates["L2"], identity
 

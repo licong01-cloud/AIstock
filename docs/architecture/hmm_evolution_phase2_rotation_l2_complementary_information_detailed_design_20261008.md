@@ -1,7 +1,7 @@
 # HMM Evolution Phase 2：L2互补信息与风险实用价值连续任务详细设计
 
-> 版本：v1.6；日期：2026-10-09；owner：HMM；tier：F2。
-> 状态：APPROVED_BY_USER_FORMAL_EXPERIMENTS_COMPLETED_RANK_PRODUCTION_RESEARCH_VERIFIED_VALUE_UNPROVEN。原§3～§10及§15/§16 D1～D6精确公式、模型、输入、特征、窗口、参数和效果规则不变。rank正式2/2 fits、30,392行DEV/生产writer/独立回读及用户重启后的真实API/无mock UI已完成，surface=AVAILABLE_EXPERIMENTAL、advisory=NOT_AVAILABLE；BUG-1807 close-sync #5754已合入/关闭。#5781 return-target正式2/2 fits也已结束，IC=0.0247737、spread=+0.00038245，无可信增量、只文件交付。§16源码#5791已合入，正式双process零fit参考回放已完成：16/16路径完整、20个全期paired区间跨零；结果见§16.3，不推导生产采用或独立确认。后续新窗口验证见另页待批准设计，不重复本页模型或回放。
+> 版本：v1.7；日期：2026-10-09；owner：HMM；tier：F2。
+> 状态：APPROVED_BY_USER_FORMAL_EXPERIMENTS_COMPLETED_RANK_PRODUCTION_RESEARCH_VERIFIED_VALUE_UNPROVEN。原§3～§10及§15/§16 D1～D6精确公式、模型、输入、特征、窗口、参数和效果规则不变。rank正式2/2 fits、30,392行DEV/生产writer/独立回读及用户重启后的真实API/无mock UI已完成，surface=AVAILABLE_EXPERIMENTAL、advisory=NOT_AVAILABLE；BUG-1807 close-sync #5754已合入/关闭。#5781 return-target正式2/2 fits也已结束，IC=0.0247737、spread=+0.00038245，无可信增量、只文件交付。§16源码#5791已合入，正式双process零fit参考回放已完成：16/16路径完整、20个全期paired区间跨零；结果见§16.3，不推导生产采用或独立确认。后续新窗口验证见另页已批准设计，尚未正式执行，不重复本页模型或回放。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.83。只展开申万L2预测及风险实用价值，不重建旧实验链。
 > 初始review base：067ee3505df98caf958350793475285b2b3b73a8。实际授权和各执行状态独立报告；已有两份消费与两特征Ridge均不再运行。
 
@@ -440,4 +440,4 @@ return毛收益相对no_order高1.293014个百分点、MDD较小2.373108个百�
 
 结论为已消费development中的`REFERENCE_VALUE_INCONCLUSIVE`（结论说明，不覆盖原receipt执行状态）；点估计值得新的独立历史检验，但不是稳定经济增量、真实股票净收益或QE有效证明。`selection_basis=RETROSPECTIVE_DEVELOPMENT_SELECTED`、`qe_net_value_status=UNASSESSED`；原0.02研究规则、rank生产surface、return文件交付及风险原政策保持。
 
-下一步与P0结果同步合为一个连续业务设计：`hmm_evolution_phase2_l2_frozen_history_validation_detailed_design_20261009.md`。P1固定原两模型参数/delta及同一消费规则验证新历史；P2固定原20D风险模型/即时warning独立报告价值。新窗口/推断/消费精确合同尚待批准，未消费独立性尚未核实，不把该提案计作执行完成；本页旧合同和成果不再运行，也不归档旧证据。自然停发导致持仓引用不可估值时诚实报告路径不足，不提前按未来停发删除行业或补价格。
+下一步与P0结果同步合为一个连续业务设计：`hmm_evolution_phase2_l2_frozen_history_validation_detailed_design_20261009.md`。P1固定原两模型参数/delta及同一消费规则验证新历史；P2固定原20D风险模型/即时warning独立报告价值。2026-10-09用户已批准新P1/P2全部D1～D6，文档#5799已合入；紧凑核对后限定新窗口未用于当前三个候选选择，不宣称全项目untouched。离线源码及直接测试已实施，最终PR门禁/CI另报，正式新窗口数值结果未运行；本页旧合同和成果不再运行，也不归档旧证据。自然停发导致持仓引用不可估值时诚实报告路径不足，不提前按未来停发删除行业或补价格。

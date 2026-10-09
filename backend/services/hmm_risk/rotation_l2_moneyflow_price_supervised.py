@@ -258,8 +258,12 @@ def feature_rows(bundle: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[
     parsed = validate_input(bundle)
     rows, train, prediction = ridge.feature_rows(_old_bundle(bundle))
     calendar = parsed["calendar"]
+    return add_price_features(rows, calendar, bundle["price_features"]), train, prediction
+
+
+def add_price_features(rows, calendar, view):
+    """Original E0→E_plus feature algebra without a new population or estimator."""
     positions = {d.isoformat(): i for i, d in enumerate(calendar)}
-    view = bundle["price_features"]
     quotes = {(r["trade_date"], r["sector_code"]): r for r in view["sector_returns"]}
     close = {r["trade_date"]: r["close"] for r in view["benchmark_close"]}
     groups = defaultdict(list)
@@ -322,7 +326,7 @@ def feature_rows(bundle: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[
         for row in daily:
             if row["sector_code"] in m:
                 row["x"] = [*row["x"], m[row["sector_code"]], d[row["sector_code"]]]
-    return rows, train, prediction
+    return rows
 
 
 def training_matrix(bundle: Mapping[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
