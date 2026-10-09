@@ -21,6 +21,7 @@ import tempfile
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 from .canonical import canonical_json_bytes, ensure_sha256
+from .monthly_file_identity import file_sha256
 from .errors import CanonicalizationError
 from .monthly_official_adapters import (
     DeployExecution,
@@ -90,11 +91,7 @@ def _is_link(path: Path) -> bool:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return file_sha256(path)
 
 
 def _write_exclusive(path: Path, value: Mapping[str, object]) -> None:
