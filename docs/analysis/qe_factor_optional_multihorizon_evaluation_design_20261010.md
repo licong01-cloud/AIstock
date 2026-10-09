@@ -95,6 +95,8 @@ PIT 与停牌掩码沿用既有信号日样本语义；长周期标签仅是两�
 
 测试落位调整后新增 QE 合同模块 24 passed，原两份顶层旧测试没有源码变更。F1：7/7 通过；Ruff、py_compile、diff-check 通过；nox l0 与 guardrail_changed_files 通过，实际五文件 ownership mapped=5、unmapped=0、ambiguous=0。先前 F1 指出旧测试文件未被 PR 精选计划收录，已通过把本功能新增测试放入同一 QE owner 下实际执行的测试目录解除；未修改或放宽流水线。
 
+第四轮 CI 复审：首轮 CI（run 37973504935，HEAD a8e93bde）729 passed、1 skipped，唯一失败为原官方 dispatch 测试没有隔离 active dataset profile，预期的夹具路径被真实激活路径替换。仅在该 QE 测试内参数化隔离 active/legacy 两态并保留路径、日期、workers、batch_size 原断言，新增 active 不回退 legacy 断言；未改任何生产默认路径、参数或 CI。
+
 ## 风险与失败模式
 
 长周期标签尾部无法成熟是日期限制，不是缺失数据补齐任务；缺价和成熟分开报告。长周期使矩阵/排名计算增加，显式研究任务承担，普通 QE 和官方默认不增加该计算。研究成员必须保留共享上下文的日历与期限映射，不能重新生成标签或调用官方 writer。完整日历研究分支与旧兼容分支的区别必须明确，不能宣称改写了旧历史结果。

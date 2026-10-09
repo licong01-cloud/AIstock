@@ -4,6 +4,7 @@ import builtins
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from backend.services.quantevolver import factor_official_evaluation_service as svc
 from backend.services.quantevolver.factor_official_evaluation_service import (
@@ -87,13 +88,25 @@ def test_official_constructor_uses_offline_single_loader(monkeypatch):
     assert not hasattr(service, "_pipeline")
 
 
-def test_compute_forwards_to_official_full_compute_dispatch(monkeypatch):
+@pytest.mark.parametrize("active_profile", [False, True])
+def test_compute_forwards_to_official_full_compute_dispatch(monkeypatch, active_profile):
     captured = {}
+    fixture_paths = {"factor_data_dir": "/mnt/f/factor_data", "qlib_data_path": "/mnt/f/qlib_bin"}
+
+    def _active_binding(*, node_id):
+        captured["binding_node_id"] = node_id
+        return dict(fixture_paths, generation="test_profile") if active_profile else None
+
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
+        _active_binding,
+    )
 
     class _FakeComposer:
         def _fetch_workspace_config(self, node_id=None):
+            assert not active_profile, "active profile must not fall back to legacy workspace configuration"
             captured["config_node_id"] = node_id
-            return {"factor_data_dir": "/mnt/f/factor_data", "qlib_data_path": "/mnt/f/qlib_bin"}
+            return fixture_paths
 
     class _FakeFullComputeDispatch:
         def __init__(self, dispatch_service=None):
@@ -145,6 +158,9 @@ def test_compute_forwards_to_official_full_compute_dispatch(monkeypatch):
     assert captured["submit"]["end_date"] == "2026-04-30"
     assert captured["submit"]["workers"] == 4
     assert captured["submit"]["batch_size"] == 16
+    assert captured["binding_node_id"] == captured["submit"]["node_id"]
+    assert result["active_profile_generation"] == ("test_profile" if active_profile else None)
+    assert ("config_node_id" in captured) is not active_profile
 
 
 
