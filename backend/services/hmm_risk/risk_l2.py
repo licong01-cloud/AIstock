@@ -334,35 +334,7 @@ def fit_predict(panel: Mapping[str, Any]) -> dict[str, Any]:
         "classes": model.classes_.tolist(),
         "iterations": model.n_iter_.tolist(),
     }
-    predictions = []
-    inactive_changed = 0
-    for day in plan["dev"]:
-        for code in codes:
-            source = panel["rows"][day][code]
-            value = source["features"]
-            probability = None
-            if value is not None:
-                raw = np.asarray(value, dtype=np.float64)
-                inactive_changed += int(np.any(raw[~active] != mean[~active]))
-                z = (raw[active] - mean[active]) / scale[active]
-                if not np.isfinite(z).all():
-                    raise fail("development transform is not finite", "prediction_failed")
-                probability = float(model.predict_proba(z.reshape(1, -1))[0, 1])
-                if not math.isfinite(probability) or not 0 <= probability <= 1:
-                    raise fail("class=1 probability invalid", "prediction_failed")
-            predictions.append(
-                {
-                    "trade_date": day,
-                    "as_of_date": plan["as_of"][day],
-                    "sector_code": code,
-                    "probability": probability,
-                    "warning": probability >= 0.20 if probability is not None else None,
-                    "availability": "available" if value is not None else "unavailable",
-                    "reason_code": source["reason_code"] if value is None else None,
-                    "structural_eligible": value is not None,
-                    "volatility_Nd": value[ALL_CORE_FEATURES.index("volatility_Nd")] if value is not None else None,
-                }
-            )
+    predictions, inactive_changed = predictions_from_parameters(panel["rows"], plan["dev"], codes, parameters)
     return receipt(
         {
             "schema_version": VERSION + "_sealed",
@@ -382,6 +354,64 @@ def fit_predict(panel: Mapping[str, Any]) -> dict[str, Any]:
             "tail_accessed": False,
         }
     )
+
+
+def predictions_from_parameters(rows, days, codes, parameters):
+    """Restore only the approved sklearn inference state; never estimate anything."""
+    mean = np.asarray(parameters["mean"], dtype=np.float64)
+    scale = np.asarray(parameters["scale"], dtype=np.float64)
+    if any(type(v) is not bool for v in parameters["active"]):
+        raise fail("active mask is not boolean", "identity_mismatch")
+    active = np.asarray(parameters["active"], dtype=bool)
+    coef = np.asarray(parameters["coef"], dtype=np.float64)
+    intercept = np.asarray(parameters["intercept"], dtype=np.float64)
+    if (
+        mean.shape != (20,)
+        or scale.shape != (20,)
+        or active.shape != (20,)
+        or not active.any()
+        or coef.shape != (1, int(active.sum()))
+        or intercept.shape != (1,)
+        or parameters["classes"] != [0, 1]
+        or (scale[active] <= 0).any()
+        or (scale[~active] != 0).any()
+        or not all(np.isfinite(v).all() for v in (mean, scale, coef, intercept))
+    ):
+        raise fail("frozen logistic/scaler shape or values differ", "identity_mismatch")
+    model = LogisticRegression(**PARAMS)
+    model.coef_, model.intercept_ = coef, intercept
+    model.classes_ = np.asarray(parameters["classes"], dtype=np.int64)
+    model.n_features_in_ = int(active.sum())
+    model.n_iter_ = np.asarray(parameters["iterations"], dtype=np.int32)
+    predictions, inactive_changed = [], 0
+    for day in days:
+        for code in codes:
+            source = rows[day][code]
+            value = source["features"]
+            probability = None
+            if value is not None:
+                raw = np.asarray(value, dtype=np.float64)
+                inactive_changed += int(np.any(raw[~active] != mean[~active]))
+                z = (raw[active] - mean[active]) / scale[active]
+                if not np.isfinite(z).all():
+                    raise fail("development transform is not finite", "prediction_failed")
+                probability = float(model.predict_proba(z.reshape(1, -1))[0, 1])
+                if not math.isfinite(probability) or not 0 <= probability <= 1:
+                    raise fail("class=1 probability invalid", "prediction_failed")
+            predictions.append(
+                {
+                    "trade_date": day,
+                    "as_of_date": source["as_of_date"],
+                    "sector_code": code,
+                    "probability": probability,
+                    "warning": probability >= 0.20 if probability is not None else None,
+                    "availability": "available" if value is not None else "unavailable",
+                    "reason_code": source["reason_code"] if value is None else None,
+                    "structural_eligible": value is not None,
+                    "volatility_Nd": value[ALL_CORE_FEATURES.index("volatility_Nd")] if value is not None else None,
+                }
+            )
+    return predictions, inactive_changed
 
 
 def _counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
