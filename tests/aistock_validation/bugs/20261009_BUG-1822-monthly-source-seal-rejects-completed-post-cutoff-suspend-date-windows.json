@@ -28,13 +28,22 @@
   "evidence_uris": [],
   "expected": "正式完成的、独立账本闭合且严格 post-cutoff 的 suspend BY_DATE 写入不阻断上月冻结；跨月或不可证范围继续阻断。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1822-monthly-source-seal-rejects-completed-post-cutoff-suspend-date-windows.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_repair_journal.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_monthly_repair_journal.py"
+      "backend/services/dataset_release/monthly_repair_journal.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_repair_journal.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1822-monthly-source-seal-rejects-completed-post-cutoff-suspend-date-windows.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_repair_journal.py",
@@ -170,11 +179,15 @@
       "Fresh official monthly worker --preflight PASS: adapter_version=14; adapter_contract_sha256=31f874d132cc5f8d77cd92683aad38b740426e7b41bbf15ef663139363709ee4; registry_sha256=0ee4f0170bb0419ddb7fdb1f965ae6f394676ada538459efd74d88dbbd277f28; database_opened=false; operation_claimed=false; candidate/profile/runtime writes=false.",
       "Three source review rounds: registered scope and full-window ledger closure; PostgreSQL NULL-safe evidence and failed/unknown/cross-cutoff preservation; no physical source scan, one operation, no active/profile/DB/process writes. Companion BUG-1823 enforces all provider rows before BY_DATE writes and must be deployed together."
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
