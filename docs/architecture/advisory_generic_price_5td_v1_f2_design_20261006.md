@@ -73,7 +73,7 @@ H已知close及坐标可给出市值估值，即使其收盘跌停；执行状�
 
 Top50层原29/18条UNKNOWN均补成独立可估值观测，未发现无法解释的行情缺失；旧UNKNOWN列仍原样保留。全Top50执行状态另保留LSTM 21个H跌停/4个H停牌、TCN 13个H跌停/4个H停牌，不能以完整估值冒称全部卖出。上述均值包含已知无法买入的零现金槽，仍用固定五槽分母；不是日收益、复利NAV、实盘已实现收益或独立确认。与旧112/117日完整样本均值使用不同测量合同，不改判旧研究；新完整轴上26个配对增量仍全负，停牌/跌停缺口不是这些价格模型无增量的主要解释。只读数据证据仍为 `CURRENT_DATABASE_NON_VINTAGE`，不升级为原生vintage。
 
-BUG-1824三轮本窗口自审分别覆盖估值/成交及费用分离、冻结消费身份与事后政策lineage、完整日期/五槽与停牌复权坐标。真实消费发现漏识别原两种人口迁移对照arm，已精确补齐四种既存arm，并拒绝未知arm、重复模型/arm及family不一致；不增加模型搜索。最终相关小矩阵一次43项PASS，Ruff、F2（11项/11矩阵行）PASS，changed-file L0无blocking，五文件ownership全部映射。此为多视角自审，不是独立外审。交付仍未合入：最新origin/main的公共runtime catalog尚未登记上述两个纯离线新文件，canonical finish将其分类为backend-main并缺少runbook/identity/business smoke；应交公共流水线owner纠正精确文件分类，不通过改名、BUG元数据降级或不相关重启绕过。本窗口未修改catalog、公共脚本或其它模块。
+BUG-1824三轮本窗口自审分别覆盖估值/成交及费用分离、冻结消费身份与事后政策lineage、完整日期/五槽与停牌复权坐标。真实消费发现漏识别原两种人口迁移对照arm，已精确补齐四种既存arm，并拒绝未知arm、重复模型/arm及family不一致；不增加模型搜索。最终相关小矩阵一次43项PASS，Ruff、F2（11项/11矩阵行）PASS，changed-file L0无blocking，五文件ownership全部映射。此为多视角自审，不是独立外审。此前公共runtime catalog未登记两个纯离线文件，canonical finish曾误分类为backend-main；该阻断由流水线BUG-1826 / #5824精确修复。2026-10-09本任务安全同步最新origin/main后，四个业务源码/测试/设计文件与旧验证版本逐文件无漂移，canonical finish恢复ready_for_pr、closure_ready=true；继续绑定最终HEAD的验证与交付，不需要后端重启、客户端热重载、数据库或角色激活。本窗口未修改catalog、公共脚本或其它模块，经济结论与旧证据等级不变。
 
 ### 3. 九字段缺失与模型表示
 
