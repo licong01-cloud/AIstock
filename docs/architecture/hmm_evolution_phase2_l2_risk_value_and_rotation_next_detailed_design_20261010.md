@@ -200,6 +200,8 @@ v1.0文档阶段的两轮作者审修（非独立第三方）已完成并保留�
 
 本轮production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop、runtime_activation=noop、backend_restart_permission=false；database_write=false、dataset_write=false、active_profile_write=false、fits=0、QE_action=false、process_control=false。正式风险store登记pending与模型研究并行，不为记录索要或执行服务重启。
 
+第三轮收敛审核包含真实file-only准备的零fit finding：`fixed.REFERENCE_PINS`是旧return模型所用的rank-target对照pins，并非return模型自身身份；改为复用既有`rotation_l2_reference_value.RETURN_PINS`，仍由正式reader核验acceptance、两个child、模型/参数/预测/输入/结果全链。真实旧模型读回PASS、固定参数SHA不变，直接反例PASS。首次准备失败只留下独立failure，0fit/无数据缺口；这是本轮未交付实现的消费校验修正，不改旧main模型或数据集、不降低hash校验、不增加正式fit预算。
+
 ## 12. 明确终止条件与交接
 
 本次20小时长任务在以下任一情况结束：完整源码经至少两轮作者审修及必要门禁后，一次双fresh-process10fit及四臂四成本/五组paired得出诚实终态；第三轮仍有阻断；真实基础数据缺口需要data owner；需要未获授权生产/跨owner动作；达到2026-10-10 23:33:48 Asia/Shanghai。20小时是上限而非必须持续占用，完成即早停，不等待/重跑凑时间。

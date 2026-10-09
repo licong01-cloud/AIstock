@@ -365,6 +365,19 @@ def _source(request):
     return source, assets, manifest, files, mapping, quote, [date.fromisoformat(d) for d in strings]
 
 
+def _fixed_control(path):
+    from scripts.hmm_risk.rotation_l2_reference_value import RETURN_PINS
+
+    # fixed.REFERENCE_PINS authenticates its older rank-target control, not
+    # the fixed return model itself. Use the established return-model pins.
+    controls, _ = price._reference(Path(path), variant=fixed, pins=RETURN_PINS)
+    require(
+        controls["acceptance_sha256"] == FIXED_ACCEPTANCE_SHA and controls["model_hash"] == FIXED_MODEL_SHA,
+        "frozen return control differs",
+    )
+    return controls["parameters"]
+
+
 def prepare_inputs(request, *, source_commit):
     import pandas as pd
     from backend.services.hmm_risk import frozen_l2_history_input as carrier
@@ -434,11 +447,7 @@ def prepare_inputs(request, *, source_commit):
     by_day = defaultdict(list)
     for row in rows:
         by_day[row["trade_date"]].append(row)
-    controls, _ = price._reference(Path(request["fixed_acceptance_path"]), variant=fixed, pins=fixed.REFERENCE_PINS)
-    require(
-        controls["acceptance_sha256"] == FIXED_ACCEPTANCE_SHA and controls["model_hash"] == FIXED_MODEL_SHA,
-        "frozen return control differs",
-    )
+    controls = _fixed_control(request["fixed_acceptance_path"])
     months = [
         {
             "schedule": m,
@@ -468,7 +477,7 @@ def prepare_inputs(request, *, source_commit):
                 "amount_window_sha256": amount_hash,
                 "component_pins": manifest["components"],
             },
-            "fixed_parameters": controls["parameters"],
+            "fixed_parameters": controls,
             "numeric_environment": numeric_environment(),
             "request_sha256": request["receipt_sha256"],
             "source_commit": source_commit,

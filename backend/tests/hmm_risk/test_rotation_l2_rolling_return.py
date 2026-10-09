@@ -445,6 +445,26 @@ def test_cli_durable_typed_failure_and_collision_are_separate(tmp_path, monkeypa
         assert list(output.iterdir()) == [existing] and existing.read_bytes() == b"original"
 
 
+def test_fixed_control_uses_own_return_model_pins(monkeypatch, tmp_path):
+    from scripts.hmm_risk.rotation_l2_reference_value import RETURN_PINS
+
+    seen = []
+
+    def reader(path, *, variant, pins):
+        assert path == tmp_path / "acceptance.json" and variant is subject.fixed
+        assert pins == RETURN_PINS and pins != subject.fixed.REFERENCE_PINS
+        seen.append(True)
+        return {
+            "acceptance_sha256": subject.FIXED_ACCEPTANCE_SHA,
+            "model_hash": subject.FIXED_MODEL_SHA,
+            "parameters": {"verified_fixture": True},
+        }, {}
+
+    monkeypatch.setattr(subject.price, "_reference", reader)
+    assert subject._fixed_control(tmp_path / "acceptance.json") == {"verified_fixture": True}
+    assert seen == [True]
+
+
 def test_cli_child_fit_only_external_actions_poisoned(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from sklearn.linear_model import Ridge
