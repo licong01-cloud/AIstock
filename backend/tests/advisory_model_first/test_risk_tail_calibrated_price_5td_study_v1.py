@@ -1,6 +1,9 @@
 """Atomic stages, fit accounting, immutable cohorts and unknown attribution."""
 from datetime import datetime, timezone
 import json
+import os
+import sys
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -143,6 +146,24 @@ def test_c_drive_and_non_frozen_implementation_are_rejected(tmp_path, synthetic_
         pipeline.preregister_risk_tail_study_v1(plan=plan, output_root="C:/Temp/forbidden")
     with pytest.raises(ValueError, match="implementation"):
         pipeline.preregister_risk_tail_study_v1(plan=plan.model_copy(update={"implementation_sha256": "0"*64}), output_root=tmp_path)
+
+
+def test_entrypoints_restore_process_temp_on_success_and_failure(tmp_path, synthetic_study, monkeypatch):
+    plan, _, _ = synthetic_study
+    keys = ("TEMP", "TMP", "TMPDIR", "JOBLIB_TEMP_FOLDER")
+    before = ({n: os.environ.get(n) for n in keys}, tempfile.tempdir, sys.dont_write_bytecode)
+    observed = []
+    actual = pipeline._checked
+    def checked(p, output_root):
+        observed.append((tempfile.gettempdir(), sys.dont_write_bytecode))
+        return actual(p, output_root)
+    monkeypatch.setattr(pipeline, "_checked", checked)
+    pipeline.preregister_risk_tail_study_v1(plan=plan, output_root=tmp_path)
+    pipeline.prepare_risk_tail_study_v1(plan=plan, output_root=tmp_path)
+    with pytest.raises(ValueError, match="implementation"):
+        pipeline.preregister_risk_tail_study_v1(plan=plan.model_copy(update={"implementation_sha256": "0"*64}), output_root=tmp_path)
+    assert all(str(v).replace("\\", "/").lower().startswith(("x:/", "/mnt/x/")) and b for v, b in observed)
+    assert before == ({n: os.environ.get(n) for n in keys}, tempfile.tempdir, sys.dont_write_bytecode)
 
 
 @pytest.mark.parametrize("busy_after", [False, True])

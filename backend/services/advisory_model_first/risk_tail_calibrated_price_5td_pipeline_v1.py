@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+from functools import wraps
 from pathlib import Path
 import sys
 import tempfile
@@ -43,14 +44,7 @@ def _checked(plan, output_root):
     root, source = node_path(output_root)/plan.experiment_id, node_path(plan.source_prepared.artifact_uri)
     if root == source or root.is_relative_to(source.parent) or source.is_relative_to(root):
         raise ValueError("new risk artifacts cannot overwrite or enter the original source store")
-    temporary = node_path(plan.temporary_root_uri)
-    if not (str(temporary).replace("\\", "/").lower().startswith(("x:/", "/mnt/x/"))):
-        raise ValueError("risk study temporary files must use the explicitly named X drive")
-    for name in ("TEMP", "TMP", "TMPDIR", "JOBLIB_TEMP_FOLDER"):
-        os.environ[name] = str(temporary)
-    temporary.mkdir(parents=True, exist_ok=True)
-    tempfile.tempdir = str(temporary)
-    sys.dont_write_bytecode = True
+    _temporary_root(plan)
     checked_source(plan)
     if plan.exact_retry_of is not None:
         previous = node_path(plan.exact_retry_of)
@@ -61,6 +55,37 @@ def _checked(plan, output_root):
         if old.attempt_id == plan.attempt_id or old.economic_contract_sha256 != plan.economic_contract_sha256:
             raise ValueError("exact technical retry needs a new identity and unchanged economic contract")
     return plan, root
+
+
+def _temporary_root(plan):
+    temporary = node_path(plan.temporary_root_uri)
+    if not str(temporary).replace("\\", "/").lower().startswith(("x:/", "/mnt/x/")):
+        raise ValueError("risk study temporary files must use the explicitly named X drive")
+    return temporary
+
+
+def _x_temporary_files(operation):
+    """Offline operation scope; never leak environment changes into other consumers."""
+    @wraps(operation)
+    def scoped(**kwargs):
+        plan = RiskTailStudyPlanV1.model_validate(kwargs["plan"])
+        temporary = _temporary_root(plan)
+        keys = ("TEMP", "TMP", "TMPDIR", "JOBLIB_TEMP_FOLDER")
+        prior = {n: os.environ.get(n) for n in keys}
+        prior_temp, prior_bytecode = tempfile.tempdir, sys.dont_write_bytecode
+        temporary.mkdir(parents=True, exist_ok=True)
+        try:
+            os.environ.update({n: str(temporary) for n in keys})
+            tempfile.tempdir, sys.dont_write_bytecode = str(temporary), True
+            return operation(**kwargs)
+        finally:
+            for n, value in prior.items():
+                if value is None:
+                    os.environ.pop(n, None)
+                else:
+                    os.environ[n] = value
+            tempfile.tempdir, sys.dont_write_bytecode = prior_temp, prior_bytecode
+    return scoped
 
 
 def _stage(plan, root, until):
@@ -98,6 +123,7 @@ def _publish(plan, root, stage, parent, artifacts, *, generated=0, evaluated=0, 
     return target
 
 
+@_x_temporary_files
 def preregister_risk_tail_study_v1(*, plan, output_root):
     plan, root = _checked(plan, output_root)
     if (root/"preregistered").exists():
@@ -110,6 +136,7 @@ def preregister_risk_tail_study_v1(*, plan, output_root):
             economic_contract_sha256=plan.economic_contract_sha256, deployable=False))})
 
 
+@_x_temporary_files
 def prepare_risk_tail_study_v1(*, plan, output_root):
     plan, root = _checked(plan, output_root)
     initial = _stage(plan, root, "preregistered")
@@ -143,6 +170,7 @@ def _components(plan, root, prepared):
     return core, header
 
 
+@_x_temporary_files
 def train_risk_tail_study_v1(*, plan, output_root, qe_idle_probe):
     plan, root = _checked(plan, output_root)
     prepared = _stage(plan, root, "prepared")
@@ -230,6 +258,7 @@ def _validated_bundle(plan, root, prepared):
     return bundle
 
 
+@_x_temporary_files
 def evaluate_risk_tail_study_v1(*, plan, output_root):
     from backend.services.advisory_model_first.risk_tail_calibrated_price_5td_evaluation_v1 import evaluate_risk_tail_cohorts_v1
     plan, root = _checked(plan, output_root)
