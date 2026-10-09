@@ -2,6 +2,7 @@
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from uuid import uuid4
 
@@ -61,17 +62,29 @@ class FreshProcessTests(unittest.TestCase):
                        "data_start": raw["read_start"], "data_end": raw["read_end"],
                        "calc_batch_id": str(uuid4()), "suspended_pairs": set(), "universe_metadata": {},
                        "coverage_semantics": "test_only"}
-            captured = []
             def oracle(name, frame, ctx):
+                self.assertTrue(ctx["fwd_ret_mats"]["1d"].equals(context["fwd_ret_mats"]["1d"].loc[ctx["dates"]]))
                 actual = compute_single_factor_metrics(name, frame, ctx)
-                captured.append(actual)
                 return actual
             result = execute(spec, output, prepare=lambda **kwargs: context, compute=oracle)
             self.assertEqual(result["status"], "computed")
             self.assertEqual(len(result["candidates"]), 1)
-            self.assertEqual(result["candidates"][0]["metrics"], captured[0])
             self.assertEqual(result["candidates"][0]["signal_rows"], 41 * 12)
             self.assertEqual(result["candidates"][0]["nan_rows"], 60 * 12)
+            source = Path(result["candidates"][0]["values"])
+            for suffix in (".h5", ".parquet"):
+                if suffix == ".parquet":
+                    source = root / "existing.parquet"
+                    pd.read_hdf(result["candidates"][0]["values"], key="data").to_parquet(source)
+                before = (source.read_bytes(), source.stat().st_mtime_ns)
+                raw["attempt_id"] = str(uuid4())
+                raw["candidates"][0].update(values_artifact=str(source), reuse_basis="same fixture inputs/formula")
+                spec, output = validate_spec(raw)
+                with patch("backend.services.factor_research.runner.subprocess.run", side_effect=AssertionError("must not regenerate")):
+                    reused = execute(spec, output, prepare=lambda **kwargs: context, compute=oracle)
+                self.assertEqual(reused["candidates"][0]["metrics"]["metrics"], result["candidates"][0]["metrics"]["metrics"])
+                self.assertEqual((source.read_bytes(), source.stat().st_mtime_ns), before)
+                self.assertFalse((output / raw["candidates"][0]["factor_name"] / "values.h5").exists())
 
 
 if __name__ == "__main__":

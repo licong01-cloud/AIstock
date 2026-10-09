@@ -1,5 +1,6 @@
 """Compact recovery contracts: exact identity, immutable results and attach-only resume."""
 
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -26,7 +27,7 @@ class Repository:
         return {"applied": True, "revision": 2, "result": value}
 
 
-def recovered(tmp_path):
+def recovered(tmp_path, reuse=False):
     task_id, attempt_id = str(uuid4()), str(uuid4())
     spec = {
         "task_id": task_id,
@@ -60,6 +61,9 @@ def recovered(tmp_path):
         "expected_revision": 2,
         "result_path": str(tmp_path / "result.json"),
     }
+    if reuse:
+        spec["candidates"][0].update(values_artifact=str(folder / "values.h5"), reuse_basis="reviewed")
+        result["candidates"][0].update(values_origin="reused_reviewed_artifact", reuse_basis="reviewed")
     return spec, result, value
 
 
@@ -86,11 +90,17 @@ def test_attach_fails_closed_on_incomplete_or_foreign_identity(tmp_path, mode, m
     assert repo.records == []
 
 
-def test_exact_result_attaches_once(tmp_path):
-    spec, result, value = recovered(tmp_path)
+@pytest.mark.parametrize("reuse", [False, True])
+def test_exact_result_attaches_once(tmp_path, reuse):
+    spec, result, value = recovered(tmp_path, reuse)
     write_json(tmp_path / "result.json", result)
     repo = Repository(tmp_path, spec)
     assert ResearchService(repo).attach(value)["applied"] and len(repo.records) == 1
+    if reuse:
+        result["candidates"][0]["reuse_basis"] = "different"
+        (tmp_path / "result.json").write_text(json.dumps(result), encoding="utf-8")
+        with pytest.raises(ResearchError, match="Reuse"):
+            ResearchService(repo).attach(value)
 
 
 def test_computed_result_survives_record_failure_without_reexecution(tmp_path, monkeypatch):
