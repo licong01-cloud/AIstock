@@ -33,21 +33,21 @@
   "expected": "正式worker允许精确授权、源事实哈希钉住的有限值质量警告，保留ACCEPTED_WITH_WARNINGS并继续原任务；缺行/重复/NaN/未授权或漂移警告仍拒绝。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json",
       "backend/services/dataset_release/monthly_source_quality.py",
       "backend/services/dataset_release/monthly_worker.py",
       "backend/services/dataset_release/monthly_worker_runtime.py",
       "backend/tests/dataset_release/test_monthly_source_producer.py",
-      "backend/tests/dataset_release/test_monthly_worker_runtime.py"
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json",
       "backend/services/dataset_release/monthly_source_quality.py",
       "backend/services/dataset_release/monthly_worker.py",
       "backend/services/dataset_release/monthly_worker_runtime.py",
       "backend/tests/dataset_release/test_monthly_source_producer.py",
-      "backend/tests/dataset_release/test_monthly_worker_runtime.py"
+      "backend/tests/dataset_release/test_monthly_worker_runtime.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -136,9 +136,9 @@
   },
   "first_seen_at": "2026-10-09T19:45:23.410882Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "2a8441d42c1f8915d43e3864930354f00ce4c1f8",
   "fix_summary": "SOURCE worker复用既有操作绑定的质量授权验证器，接受正式producer的三个可选quality字段并钉住授权文件字节；保留全部原物理完整性计数、缺失/重复/非法值拒绝规则。运行预检只公开已安装收据合同，不增加发布门禁。",
-  "fixed_at": null,
+  "fixed_at": "2026-10-09T20:03:40Z",
   "github_issue_number": 5862,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5862",
   "last_seen_at": "2026-10-09T19:45:23.410882Z",
@@ -146,6 +146,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5863",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -185,6 +186,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -196,7 +198,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1836",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6fb0c63f20ec5efa",
+    "recorded_at": "2026-10-09T20:04:15.270192Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e8d2f5184a95328c56bcadec906c378094ef0219",
+    "source_merge_commit": "2a8441d42c1f8915d43e3864930354f00ce4c1f8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5863",
+    "validation_evidence": [
+      "pytest backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_monthly_source_quality.py backend/tests/dataset_release/test_monthly_worker_runtime.py backend/tests/dataset_release/test_monthly_worker.py -q -> 75 passed",
+      "python -m nox -s l0 -- backend/services/dataset_release/monthly_source_quality.py backend/services/dataset_release/monthly_worker.py backend/services/dataset_release/monthly_worker_runtime.py backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_monthly_worker_runtime.py tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json -> passed"
+    ],
+    "validation_evidence_digest": "f76e130d19f659aeb51e631431ffa13db9f0e75b3c5afdba3510d8eb17121440"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -205,6 +229,10 @@
     "fingerprint": "d057b8c9dd00dfb200b48ead",
     "source_event_id": "FE-20261009-d057b8c9dd00"
   },
+  "validation_evidence": [
+    "pytest backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_monthly_source_quality.py backend/tests/dataset_release/test_monthly_worker_runtime.py backend/tests/dataset_release/test_monthly_worker.py -q -> 75 passed",
+    "python -m nox -s l0 -- backend/services/dataset_release/monthly_source_quality.py backend/services/dataset_release/monthly_worker.py backend/services/dataset_release/monthly_worker_runtime.py backend/tests/dataset_release/test_monthly_source_producer.py backend/tests/dataset_release/test_monthly_worker_runtime.py tests/aistock_validation/bugs/20261009_BUG-1836-monthly-source-worker-rejects-authorized-quality-warning-gate-receipts.json -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
