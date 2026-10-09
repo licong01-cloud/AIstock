@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1831",
-  "closed_at": null,
+  "closed_at": "2026-10-09T17:28:25.672387Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -33,27 +33,29 @@
   "expected": "生产者钉住的provenance可通过；文件漂移仍拒绝；同一物理文件和hardlink在未变化时只读取一次，正式writer已有hash可复用。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261009_BUG-1831-monthly-downstream-validation-rejects-sealed-provenance-and-repeatedly-s.json",
       "backend/services/dataset_release/monthly_candidate_finalizer.py",
+      "backend/services/dataset_release/monthly_file_identity.py",
       "backend/services/dataset_release/monthly_immutable_deploy.py",
       "backend/services/dataset_release/monthly_local_validation.py",
       "backend/services/dataset_release/monthly_official_adapters.py",
       "backend/services/dataset_release/monthly_worker.py",
       "backend/tests/dataset_release/test_monthly_local_validation.py",
-      "backend/services/dataset_release/monthly_file_identity.py"
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1831-monthly-downstream-validation-rejects-sealed-provenance-and-repeatedly-s.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_file_identity.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261009_BUG-1831-monthly-downstream-validation-rejects-sealed-provenance-and-repeatedly-s.json",
       "backend/services/dataset_release/monthly_candidate_finalizer.py",
+      "backend/services/dataset_release/monthly_file_identity.py",
       "backend/services/dataset_release/monthly_immutable_deploy.py",
       "backend/services/dataset_release/monthly_local_validation.py",
       "backend/services/dataset_release/monthly_official_adapters.py",
       "backend/services/dataset_release/monthly_worker.py",
       "backend/tests/dataset_release/test_monthly_local_validation.py",
-      "backend/services/dataset_release/monthly_file_identity.py"
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1831-monthly-downstream-validation-rejects-sealed-provenance-and-repeatedly-s.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -202,8 +204,8 @@
   },
   "first_seen_at": "2026-10-09T16:22:49.297300Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7674d189bbb0d0bc23f548b301c77e869a899326",
+  "fixed_at": "2026-10-09T16:51:05Z",
   "github_issue_number": 5842,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5842",
   "last_seen_at": "2026-10-09T16:22:49.297300Z",
@@ -211,6 +213,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5844",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -238,9 +241,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG1831/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1831",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0345f8962587ad48e3a1fdf857a818f571db4739c6a9a62208bfa88785b7a071",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "7674d189bbb0d0bc23f548b301c77e869a899326",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-09T17:22:29.818291Z",
+      "mode": "read_only",
+      "observed_identity": "7c526fa34f3fbc9cddab2bfcab9a731736ec0bd7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "94463303d0ec06244360cb40db4cf24c0888bde835069e38118480312dfaa8f1",
+      "receipt_sha256": "9ed398c380a45b67e1d6452acf5969976d7901812a524fb2708b435a1ad78e0e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "753880d67682db94ef5a866234d1a54841448572717e5fb0943bc1126039fd73",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -250,7 +276,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1831",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1a2deec6701f29ad",
+    "recorded_at": "2026-10-09T16:51:41.447585Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2013ce3187ff85e6f878024c52abb7a8461158fe",
+    "source_merge_commit": "7674d189bbb0d0bc23f548b301c77e869a899326",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5844",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3795de44c9bd37569bfe5f03fc970480732fcb54e21e94e76a12fc0664c1fc80"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -259,6 +306,10 @@
     "fingerprint": "3bca7584bc53d247891e2513",
     "source_event_id": "FE-20261009-3bca7584bc53"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1831 --target worker-scheduler -> verified"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
