@@ -351,17 +351,24 @@ def outcomes(request, bundle):
         }
         _stable_files(files, stamps)
     else:
-        source, old, _, _ = _risk_source(request)
+        source, old, _, calendar = _risk_source(request)
         require(old["input_identity"] == bundle["source_identity"], "risk outcome source changed")
+        require(calendar == bundle["calendar"], "risk outcome calendar changed")
+        plan = history.schedule(calendar)
+        # The unchanged C-010 stock-fact aggregator requires prev_close_10_yuan.
+        # Read real prior context; it is not an extra evaluation date or a fill.
+        context_start = date.fromisoformat(calendar[plan["positions"][plan["days"][0]] - 10])
         assets, window, aggregates, identity = _bounded_l2_stock_facts(
-            source["frozen"], source["source"], start=history.START, end=history.END
+            source["frozen"], source["source"], start=context_start, end=history.END
         )
         require(
             identity["release_identity"] == old["input_identity"]["release_identity"], "risk outcome release changed"
         )
-        returns = {d.isoformat(): {c: None for c in bundle["catalog"]} for d in window}
+        returns = {d: {c: None for c in bundle["catalog"]} for d in plan["days"]}
         for a in aggregates:
-            returns[a.trade_date.isoformat()][a.l1_code] = float(a.l1_return)
+            day = a.trade_date.isoformat()
+            if day in returns:
+                returns[day][a.l1_code] = float(a.l1_return)
         result = {
             "returns": {d: v for d, v in returns.items() if d > history.START.isoformat()},
             "event_returns": returns,
