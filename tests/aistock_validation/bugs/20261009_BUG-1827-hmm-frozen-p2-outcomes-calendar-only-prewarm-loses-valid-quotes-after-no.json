@@ -197,7 +197,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "fresh_process_evidence": [
-      "python - (BUG-1827 fresh-process router and HMM dependency imports under fit/database/network poison) -> passed"
+      "python - (BUG-1827 fresh-process router and HMM dependency imports under fit/database/network poison) -> passed",
+      "C:/Users/lc999/miniconda3/python.exe fresh-process imports backend.routers.hmm_risk, backend.routers.health and all three changed HMM dependencies under history.no_training_or_external_actions -> passed at HEAD 7fb33b7eb48d818a45b7bae3b368f671a4383753; fit/database/network/runtime actions=0"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
