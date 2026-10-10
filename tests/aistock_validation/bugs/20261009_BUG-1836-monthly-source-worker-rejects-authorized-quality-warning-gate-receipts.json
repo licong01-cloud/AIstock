@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1836",
-  "closed_at": null,
+  "closed_at": "2026-10-10T00:41:45.424674Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -185,10 +185,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1836/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1836",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0345f8962587ad48e3a1fdf857a818f571db4739c6a9a62208bfa88785b7a071",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "2a8441d42c1f8915d43e3864930354f00ce4c1f8",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-10T00:40:05.468816Z",
+      "mode": "read_only",
+      "observed_identity": "2a8441d42c1f8915d43e3864930354f00ce4c1f8",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e16c191c81192835fedf0dc55e7cc759ee075d442d23b512c40a89aec84d8e6c",
+      "receipt_sha256": "61840058b19331d9284abc0e01cdee083884d764388b60ec09d034895005fd5a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "36ce43719db5dace4226a7171dd83f02fa5d23645f68193fed18496fe36b57c5",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -220,7 +242,7 @@
     ],
     "validation_evidence_digest": "f76e130d19f659aeb51e631431ffa13db9f0e75b3c5afdba3510d8eb17121440"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
