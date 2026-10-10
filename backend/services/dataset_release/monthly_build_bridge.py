@@ -566,9 +566,16 @@ def compile_initial_monthly_build(
 
     fingerprints = monthly_build_fingerprints(profile)
     source_predicted = frozen.source_cas_usage.get("predicted_remaining_new_bytes")
-    if type(source_predicted) is not int or source_predicted < 0:
+    if "predicted_remaining_new_bytes" not in frozen.source_cas_usage or (
+        source_predicted is not None and (type(source_predicted) is not int or source_predicted < 0)
+    ):
         raise MonthlyBuildBridgeError("frozen source byte estimate is invalid")
-    predicted = max(source_predicted, CANDIDATE_OUTPUT_PREDICTED_BYTES)
+    # A sealed/reused SOURCE can legitimately have no remaining CAS estimate.
+    # Keep that unknown value intact; output planning already has its own bound.
+    predicted = (
+        CANDIDATE_OUTPUT_PREDICTED_BYTES if source_predicted is None
+        else max(source_predicted, CANDIDATE_OUTPUT_PREDICTED_BYTES)
+    )
     build_inputs = {
         "schema_version": BUILD_INPUTS_SCHEMA_VERSION,
         "profile": profile.profile,

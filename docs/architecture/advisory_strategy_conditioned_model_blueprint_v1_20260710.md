@@ -1,9 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.96
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v4.97
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-10
 
-> 当前接续：BUG-1824 #5826/#5827及跨包验证#5828已合入/自身清理。172旧经济单元有156配对，7/8包有结果，仍无确认的Advisory盈利模型；22旧角色输入/65旧Top25来源格未测不阻新研发。两新单Alpha包父分数条件5TD设计#5834、源码#5847（merge=b68eae59dee1eaebe33dd685e7c030917ae78029、最终HEAD CI37962302377 SUCCESS）及反馈#5852均已合入及自身清理。run `advgp5parentscore_48e050329b8e910166e52d4c`已完整prepare/一次两fit/四臂反馈：305D30500原项，evaluation 86D8600项/860原Top5保留，81成熟D810槽完整配对。base/rule/matched/candidate均值128.3898/121.6306/56.4980/61.7587bps；candidate减base−66.6311、减matched+5.2607/同时区间跨零，仅11次已结算差异。候选未达标并停止，不调旧阈值或选包救结果；累计135实际研究fit＋1旧index，0经济确认/启用。[训练内尾风险校准F2](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)设计#5856已合入；本轮六源码/三最小测试已完整实现、多轮复审修复及29直接合同通过，源码提交/CI/合入按最终HEAD另报。真实prepare/fit/校准/经济结果尚未执行；下一步是新身份一次研究，非重复开发或旧负补证。仅检验共享新底座上的诚实风险校准，不追加父score或同族loss/seed搜索。QE包直接消费不加资格门、不重复上游实验，UI/旧负补证后置；完整历史结果见[父分数设计](advisory_parent_score_conditioned_price_5td_v1_f2_design_20261009.md)，当前唯一顺序见§16.0。
+> 当前接续：[训练内尾风险校准F2](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)设计#5856、源码#5859已合入/自身清理，源码最终HEAD6bfcb317/CI37980700792 SUCCESS/merge31b39d273。唯一run `advgp5riskcal_9a5e6df7597130d6e5cf747e`已完整预登记/prepare、一次共享WSL RF.fit＋一次标量校准估计、四臂经济评价；累计136实际研究fit＋1旧index，仍0经济确认/启用。原305D30500项/两包/Top5不变，81成熟D810槽完整配对，base/rule/raw/cal五槽均值128.3898/121.6306/25.6433/23.4417bps。CAL538/600已知残差估得delta＋103.8920bps；candidate减base−104.9481、减raw−2.2016，同时区间均跨零。55已结算校准干预/30D真实存在，但提高TAKE胜率没有补偿错失盈利；按合同停止此candidate，不改800bps/delta算法/窗口/包继续搜索。正式研究是完整真实执行，仍仅EXPLORATORY_SCREEN/NAVIGATION_ONLY，不是confirmation或生产完成。下一项为不同经济学习问题的详细设计，非重跑本研究、继续父score或同族loss/seed搜索。QE包直接消费，不加资格门/重复上游实验；UI、旧负补证/归档和额外审批均后置，唯一当前顺序见§16.0。
+
+> 前序事实保留：BUG-1824 #5826/#5827及跨包验证#5828已合入/自身清理；172旧经济单元有156配对、7/8包有结果，22旧角色输入/65旧Top25来源格未测不阻新研发。父分数5TD设计#5834、源码#5847及反馈#5852已交付；run `advgp5parentscore_48e050329b8e910166e52d4c`四臂128.3898/121.6306/56.4980/61.7587bps，candidate减base−66.6311、减matched＋5.2607且同时区间跨零，仅11差异槽/6D。该历史检查点累计135fit，精确候选已停止，旧结果不升级或混作本轮matched控制。完整历史见[父分数设计](advisory_parent_score_conditioned_price_5td_v1_f2_design_20261009.md)。
 
 > 最近人口迁移研究（历史事实）：P25～P28设计、输入、源码及唯一人口迁移研究已完整执行；#5782内核及#5786研究入口/评价均已合入并自身清理。study `advgp5popstudy_ba41efc67d1a5b373b36bc75`在既存WSL完成2fit/合计5.446秒，前后QE六路径均0，累计133实际研究fit＋1旧INDEX_BUILD。三包各86D/10320原行/10214唯一预测簇/1290原Top5保留。锚candidate−base为−69.1166bps（80配对）、−matched为−28.8833（81配对）；另外两包也为负，STOP_THIS_CANDIDATE。P29不启动、0独立/盈利确认及生产激活；不复fit或调阈值/支持救结果，不补旧失败证据。原P26全部305D/36600行、legacy/NON_VINTAGE限制保留，0QE或其他模块修改、DB/服务操作，无需重启。
 
@@ -298,6 +300,7 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 | GP5资金流条件买价（2026-10-08） | run `advgp5moneyflow_e2ba3dbb6cad73b5b726acdd`；源码#5744 merge `b6745ddd539654a44b8438b92c41c2537cbfde68` | 开发305D/6100候选；3684成熟train/193D；评价86D/1720候选及430原Top5 episode；80共同完整成熟5TD组 | prepare0.578秒；2新fit及训练发表4.953秒；首次评价0.453秒；累计131实际fit+1旧INDEX_BUILD；NO_FIT计量修正新增fit=0 | 共同组base/rule/GP5/资金均值135.3458/132.8314/59.1348/44.9299bps；减base−90.4159bps；减GP5另用81配对−14.0295bps、CI95 [−43.7728,7.4473]；已结算TAKE胜率47.4359%/base52.7228% | `NEGATIVE_STOP_THIS_CANDIDATE`；资金缺失和成熟panel内生缺口保留，base CI=null；组均值不是NAV，0独立OOS/激活，不为本候选补证或同族调参 |
 | 固定5TD剩余净价值Exit（2026-10-08） | run `advexit5_6134993163be362f7e0bebc7`；源码#5697 OPEN Draft | 305D/6100决策、1525原Top5 episode；240评价组/238完整/2 UNKNOWN | 四折固定Ridge、4fit；本检查点121fit+1旧INDEX_BUILD；oracle另列0-fit | base/model/oracle组均值114.2579/70.5342/350.1849bps；模型增量−43.7236、CI95 [−89.9113,4.0278]；oracle理论增量+235.9270bps | `EXPLORATORY/NAVIGATION_ONLY`；理论空间高不等于可学习，703干预episode/222组仍未兑现；持仓路径及价格条件后续候选也未确认，见§16.0历史状态 |
 | 两新单Alpha父分数条件5TD（2026-10-10） | run `advgp5parentscore_48e050329b8e910166e52d4c`；设计#5834/源码#5847已合入清理 | 305D30500原项/28119簇；evaluation86D8600项/860原Top5保留、81成熟D810槽完整比较 | 既存WSL两物理fit，开始前/结束后QE六路径全0；累计135研究fit+1旧index | base/rule/matched/candidate=128.3898/121.6306/56.4980/61.7587bps；candidate−base/−matched=−66.6311/+5.2607，两同时区间跨零；仅11已结算差异/6D | `NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE`；无盈利确认/激活，只停自身。风险高估是下一设计导航，不是调旧800bps或回选包的依据 |
+| 训练内尾风险校准5TD（2026-10-10） | run `advgp5riskcal_9a5e6df7597130d6e5cf747e`；设计#5856/源码#5859已合入清理 | 同原305D30500项；base可用13660行，CAL538/600残差/原质量0.896667；evaluation86D/860原Top5、81成熟D810槽 | 1共享WSL RF.fit＋1标量校准估计，前后fresh QE六GET均三0；累计136研究fit+1旧index，0oracle/QE提交 | delta+103.8920bps/raw等效696.1080；base/rule/raw/cal=128.3898/121.6306/25.6433/23.4417；减base/raw=−104.9481/−2.2016，两同时区间跨零，cal干预55槽/30D | `NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE`；胜率61.9048%不替代经济价值；不调参/择包/补证/激活，旧来源与未知不升级。只否定精确候选，下一步设计不同经济学习问题 |
 
 ### 1.4 方向一致性复核
 
@@ -790,15 +793,17 @@ H-CONTEXT-VALUE-1设计由#5383合入，五源码叶/14定向测试、857/304共
 6. **评价经济价值而非少买。** 完整固定五槽对照原Top5和事前简单规则，报告净收益、风险、真实干预、避免亏损、错失盈利与UNKNOWN空槽贡献。重叠五日组均值不冒充资金NAV；无增量或证据不足停止精确candidate，不新增强制拒买，不回选旧matched或调整门槛。允许不推荐是业务能力，不是效果证明。
 7. **成功后才扩大交付。** 值得继续的candidate才进入未消费历史确认与必要日频recipe/binding/API适配；历史验证不等待自然20日。自然前向、独立历史确认和开发导航分报。旧OPEN_DISTRIBUTION仅作辅助，Exit、HMM、复杂模型及UI后置；失败模型补证/归档、自动更新平台和额外审批均不进入该顺序。
 
-#### 6.3.5 当前单一候选：训练内时序尾风险校准
+#### 6.3.5 已完成单一候选：训练内时序尾风险校准（精确停止）
 
-落实§6.3.4的是[独立F2详细设计](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)，唯一假设`GP5-RISK-TAIL-CALIBRATION-1`。它检验晚期训练段的风险分位残差修正能否改善原Top5净价值，不声称增加Alpha或证明Exit可学；旧父分数候选阴性不改写。
+本阶段按§6.3.4及[独立F2详细设计](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)完成唯一假设`GP5-RISK-TAIL-CALIBRATION-1`的真实检验。晚期训练段的风险分位残差修正未改善总体原Top5净价值；精确候选已停止，不声称增加Alpha或证明Exit可学，旧父分数阴性不改写。
 
-同一既存两包305D/原Top50输入只读复用，原Top5和固定规则仍为经济基线；新共享20D core只一次RF.fit，未校准臂与校准臂共享树、均值/盈利概率、人口、成本和原800bps约束。末60个训练成熟D（2025-02-25..05-23，H≤05-30）只用于一个全局q0.9风险残差delta；底座信息截止提前至02-24，STRUCTURE/ESTIMATION依日历固定切分和实际H purge，不复用已经见过校准标签的旧权重。原evaluation仍06-03..09-30，86D/860原槽、末5D未成熟保留。完整坐标由日期/键元数据推得，不表示真实监督/校准已可用。
+同一既存两包305D/原Top50输入只读复用，原Top5和固定规则仍为经济基线；新共享20D core只一次RF.fit，未校准臂与校准臂共享树、均值/盈利概率、人口、成本和原800bps约束。末60训练成熟D（2025-02-25..05-23，H≤05-30）用于一个全局q0.9残差delta；底座截止02-24，STRUCTURE/ESTIMATION依日历固定切分及实际H purge，不复用见过CAL标签的旧权重。真实base可用6387/7273监督行；CAL原600槽/60D中538槽/59D有残差，已知原质量0.8966666667，缺口不补0/重新均分。原evaluation仍06-03..09-30，86D/860原Top5槽，末5D/50槽IMMATURE保留，81成熟D/810槽完整配对。
 
 delta可以为正、负或零，但不得根据evaluation改符号、长度、算法或风险门槛；未知残差保留原质量/名单，不能填0或自动退回旧模型。全局经验校准只估计观察分布的边际偏移，不保证每股票/价格节点90%条件coverage，不把价网格当真实成交监督。原收益增量与已知/UNKNOWN现金归因才是经济评价；coverage改善不替代盈利。source/政策/base模型/CAL名单和角色绑定在新run，旧输入/模型/结果不覆盖。
 
-本设计为`RISK_MANAGED_ADVISORY / EXPLORATORY_SCREEN / NAVIGATION_ONLY`，计划1次实际RF fit＋1次明确记账的标量校准估计，0oracle/QE任务。独立设计#5856已合入；六源码/三合同测试本轮已实现，本文及该设计只更新相应状态，精确十一文件。prepare仅base金融，CAL只原Top5，评价先预测后读取成熟收益，末五日保留IMMATURE；source/原CAL权重/core/card/bundle都强绑定，已完成core恢复不重新fit。29直接合成合同通过、多轮复审修复，不等于真实监督可用、校准可产或经济有效。无DB写/数据激活/其他模块/生产拒买、配置或服务控制；累计135研究fit不变。下一研究拟合前后fresh检查QE，无源码交付等待实盘/重启步骤。
+本设计为`RISK_MANAGED_ADVISORY / EXPLORATORY_SCREEN / NAVIGATION_ONLY`，已完成1次实际RF.fit＋1次明确记账标量估计，0oracle/QE任务。#5856设计、#5859源码/最终CI已合入清理；源码29直接合同＋1原失败回归通过，真实run `advgp5riskcal_9a5e6df7597130d6e5cf747e`各阶段已原子完成。prepare仅base金融、CAL只原Top5，评价先预测后成熟收益，source/权重/core/card/bundle均绑定，sealed/父score不读。前后fresh QE六GET均三0、累计136研究fit；本结果PR仅本文/设计两文档，无DB写/数据激活/其它模块/生产拒买或服务操作，无需重启。
+
+delta=+103.892045bps/raw等效截止696.107955，四臂五槽均值128.389817/121.630581/25.643278/23.441678bps。candidate减base−104.948139、减raw−2.201600，同步块同时区间分别[−255.905024,23.957783]/[−24.108725,18.452754]；对raw55已结算干预/30D不是恒等，但避亏14.638921少于错失盈利16.840521。788已知成熟Top5风险超q90频率5.3299%→3.2995%、收益概率Brier不变0.25987017；提高TAKE胜率或更少买均不是净增量。只能否定此固定信息/底座/全局平移合同，不能全局否定风险学习或QE包Alpha。下一步回到§6.3.4设计不同、可归因的原槽经济学习问题，不追加全局平移/同族参数搜索或旧负补证。
 
 ### 6.4 训练资源边界
 
@@ -1800,8 +1805,8 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-270 | §6.3.4/12.5；§16.0 P27；population model/pipeline/CLI | target: backend/tests/advisory_model_first/test_generic_population_price_5td_pipeline_v1.py；artifact: 人口迁移详细设计真实结果 | REGISTERED_TWO_FITS_COMPLETED | approved_by_user: 既存WSL两fit/5.446秒，累计133研究fit+1index；只有人口不同，不夸大收益完成 |
 | F-271 | §5.4/6.3.4/12.5；§16.0 P28/P29；population evaluation | target: backend/tests/advisory_model_first/test_generic_population_price_5td_evaluation_v1.py；artifact: 人口迁移详细设计真实结果 | FOUR_ARM_EVALUATION_COMPLETE_CANDIDATE_NEGATIVE | approved_by_user: 86D三包/10320原行保留，配对/UNKNOWN对账，经济负；P29不启动、0独立确认/启用 |
 | F-272 | §0/1.4/6.12/16.0；父信号5TD六源码/四测试；历史population源码 | artifact: docs/architecture/advisory_parent_score_conditioned_price_5td_v1_f2_design_20261009.md；target: backend/tests/advisory_model_first/test_parent_score_price_5td_pipeline_v1.py；源码#5847 | REAL_NAVIGATION_COMPLETED_NEGATIVE_NO_ACTIVATION | approved_by_user: 305D30500原项/两真实fit/81成熟D四臂已完成，candidate未达标只停止自身；累计135fit、不重审包资格，不改其它模块/DB/服务或启用失败模型 |
-| F-273 | §6.3.5/16.0；risk_tail inputs/model；新校准F2 Contracts §2/3/4 | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_model_v1.py | SOURCE_LOCAL_VERIFIED_NO_RESEARCH_FIT | approved_by_user: 六源码/三测试已实现；真实监督与一次fit/校准估计下一阶段，累计仍135 |
-| F-274 | §6.3.5/14/16.0；risk_tail pipeline/evaluation/CLI；独立校准F2的九项合同 | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_study_v1.py | SOURCE_LOCAL_VERIFIED_NO_ECONOMIC_RESULT | approved_by_user: 十一文件、多轮复审/29直接合同；最终源码PR/CI另报，不改其他模块/DB/服务或升级证据 |
+| F-273 | §6.3.5/16.0；risk_tail inputs/model；校准F2 Contracts §2/3/4及Research Result | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_model_v1.py | REAL_ONE_FIT_AND_CALIBRATION_COMPLETED | approved_by_user: #5859已合入/清理；13660监督、1共享fit＋1标量估计，538/600残差；累计136，非136独立假设 |
+| F-274 | §6.3.5/14/16.0；risk_tail pipeline/evaluation/CLI；独立F2九项合同 | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_study_v1.py | REAL_EXPLORATORY_COMPLETED_NEGATIVE_STOP | approved_by_user: 81D/810成熟槽双增量负、55cal干预/30D、已知/UNKNOWN归因闭合；源码与真实研究分报，0确认/激活/其他模块/DB/服务操作 |
 
 ## 12. Verification Plan
 
@@ -2088,19 +2093,22 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 ## 16. 当前下一步
 
-### 16.0 当前唯一任务队列与真实断点（2026-10-10 训练内尾风险校准）
+### 16.0 当前唯一任务队列与真实断点（2026-10-10 风险校准已结束）
 
-本次唯一新假设[两新单Alpha父分数条件5TD买价](advisory_parent_score_conditioned_price_5td_v1_f2_design_20261009.md)已结束，未达到双增量目标；不能再列为待prepare/fit。设计#5834、源码#5847及最终HEAD CI均完成且自身清理。真实run `advgp5parentscore_48e050329b8e910166e52d4c`保持305D30500原项/28119簇，WSL只2fit，前后QE六列表全0；evaluation原86D8600项/860 Top5和5个末端未成熟D均保留，81成熟D/810原槽完整四臂比较。累计135真实研究fit+1旧index，0sealed金融/其他模块或DB写/服务控制/生产启用。
+父分数5TD前序候选已结束（见下方历史结果），随后唯一[训练内风险校准F2](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)也完成真实检验并精确停止，不能再列待prepare/fit。设计#5856、源码#5859/最终HEAD CI均已交付清理。run `advgp5riskcal_9a5e6df7597130d6e5cf747e`原305D30500项不变，1共享WSL RF.fit＋1标量校准估计，前后fresh QE六GET均三0；原evaluation86D8600项/860 Top5，81成熟D/810槽配对、末5D/50原槽IMMATURE保留。累计136实际研究fit+1旧index，0sealed金融/QE提交/其他模块或DB写/服务控制/生产启用。
 
 | 当前顺序 | 具体任务 | 当前状态 / 边界 |
 |---|---|---|
-| 1 | 当前研究的停止与机制导航 | COMPLETED：候选减base−66.6311bps，减matched+5.2607/同时CI跨零、仅11动作/6D。已知拒买净贡献−59.0166、UNKNOWN−7.6145分账；两包不能择优挑一个报成功。停止本candidate，不重跑/救阈值/补证 |
-| 2 | 独立风险校准完整详细设计 | COMPLETED / #5856_MERGED：[新F2](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)固定60训练D残差delta，新共享20D底座不消费CAL标签；三段元数据坐标完整，真实监督尚未验证；风险/双增量/原槽/费用/800bps不变 |
-| 3 | 新校准源码实现与独立交付 | SOURCE_IMPLEMENTED_LOCAL_VERIFIED：六源码/三最小合同测试全部实现、多轮自审修复、29直接合同通过；Ruff/L0/F2及最终HEAD CI/合入分别读回。旧parent trainer/score尺度不改，零其它模块/DB/服务操作；源码交付不是研究结果 |
-| 4 | 单候选一次完整研究 | NEXT / NOT_STARTED：源码交付后，新身份只读既存prepared，1次共享RF fit＋1次标量校准估计；不读sealed/重训QE/加包门槛，fit前后fresh公开QE；原86D/五槽/两包/四臂和已知/UNKNOWN现金归因完整，失败只停此candidate |
-| 5 | 真有增量才独立确认/业务接入 | NOT_STARTED：不拿点估计/历史估值冒称OOS、真实成交/NAV或激活；后端重启继续用户所有，UI和旧负补证不阻主线 |
+| 已完成1 | 两个精确候选均停止 | 父分数研究减base/raw−66.6311/+5.2607、风险校准减base/raw−104.9481/−2.2016bps，均未达总体双增量；不重跑、择包、救阈值或补证 |
+| 已完成2 | 风险校准设计/源码独立交付 | #5856/#5859已合入并自身清理；四轮本地自审、29新合同＋1失败回归、Ruff/L0/F2及CI37980700792通过，无其它模块修改 |
+| 已完成3 | 新身份一次完整真实研究 | prepare13660监督、原CAL600槽/538残差，RF1＋标量估计1，原86D/五槽/两包/四臂完整；已知/UNKNOWN归因闭合、sealed不读，无第二candidate或refit |
+| 1 / 下一研发项 | 不同原槽经济学习问题的详细设计 | DESIGN_ONLY_NOT_STARTED：按§6.3.4冻结一个新primary estimand、可观察信息/匹配控制与动作映射；解释收益头和尾风险分别如何减少净漏盈，而不是再调全局delta/损失函数/seed。现有校准底座不作为已有效模型回选 |
+| 2 / 新设计确定后 | 一个新候选的完整实现/研究 | NOT_STARTED：先多轮设计/源码审核，再一次预登记完整四臂；沿用已交付QE包/公开消费者边界，不扩Program池、不重复上游实验；禁止把本研究负向当技术失败重试 |
+| 3 / 新候选有增量后 | 独立确认/必要日频消费者接入 | 当前cal候选NOT_OPENED：新candidate达标才另立未消费窗口/MDE/干预支持合同；不拿点值/估值冒称OOS、成交/NAV或启用。后端重启用户所有，UI/旧负补证不阻主线 |
 
-本次base/rule/matched/candidate五槽成本后5TD cohort均值为128.3898/121.6306/56.4980/61.7587bps；候选对base同时95%区间[−181.7213,32.0872]、对matched[−0.9845,13.1909]，MDE80为148.1909/9.8941bps。TAKE胜率虽由baseline50.5562%提高为candidate54.7085%，错过盈利175.8892大于避亏116.8726，不能宣称改善收益。302仅风险拒买节点中实际路径超过800bps频率7.9470%，只是现有输出零fit/SQL诊断，不是方向确认/后验阈值来源。仍无已确认盈利Advisory模型，但此窗口原两包baseline均正（LSTM110.4656、TCN146.3140bps），不足以归罪于QE无Alpha或断言所有价格学习不可行。
+风险校准本轮四臂均值128.3898/121.6306/25.6433/23.4417bps，delta+103.8920/raw等效696.1080；对base/raw同时95%区间[−255.9050,23.9578]/[−24.1087,18.4528]、MDE80=194.8608/28.6600。TAKE84/胜率61.9048%仍不能抵偿总体已知漏盈利238.3762大于避亏137.5962；已知净−100.7799/UNKNOWN−4.1682分列。相对raw55干预/30D净−2.2016，其中TCN局部+10.2828、LSTM−14.6860，不择包升级。完整结果/身份见新设计Research Result，0confirmation/启用，不再为该候选补证。
+
+前序父分数研究的base/rule/matched/candidate为128.3898/121.6306/56.4980/61.7587bps，对base/matched同时95%区间[−181.7213,32.0872]/[−0.9845,13.1909]、MDE80=148.1909/9.8941。TAKE胜率54.7085%及302仅风险拒买节点的风险高估线索只导航了本次新假设，不能在校准阴性后继续拿该线索放宽旧800bps。两个研究底座训练截止不同，不能跨run拼接matched或归因训练窗收益差；原两包baseline仍正（LSTM110.4656、TCN146.3140），不足以归罪于QE无Alpha或全局否定价格学习。
 
 跨包冻结模型复查#5828已合入/自身清理，172单元/7包有结果，没有确认盈利模型；22角色输入/65旧Top25来源不足仍未测，但不排队为其补旧证据。BUG-1824另以V2估值合同处理已知停牌/跌停，不修改旧模型/实验；两包118D原Top5估值均为正而13原Entry臂仍负，支持新问题需要检验，不支持放宽旧模型合同或判QE全部无Alpha。
 

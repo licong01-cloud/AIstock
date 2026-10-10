@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import date
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -248,10 +249,15 @@ def test_resolution_processor_uses_shared_build_fingerprints() -> None:
 
 
 @pytest.mark.parametrize("source_action", ["REUSE", "INCREMENTAL"])
+@pytest.mark.parametrize("source_estimate", [
+    None, 0, 123, bridge_module.CANDIDATE_OUTPUT_PREDICTED_BYTES + 123,
+    -1, True, 1.5, "123", "missing",
+])
 def test_initial_bridge_compiles_sealed_source_without_database_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     source_action: str,
+    source_estimate: object,
 ) -> None:
     digest = "a" * 64
     source_stage_ref = CASRef(digest, 7, f"cas/sha256/aa/{digest}")
@@ -283,7 +289,9 @@ def test_initial_bridge_compiles_sealed_source_without_database_read(
         pit_snapshot_ref=generic_ref,
         provider_receipt_refs=(),
         artifact_ready_derived_source_receipt_refs=(),
-        source_cas_usage={"predicted_remaining_new_bytes": 123},
+        source_cas_usage=(
+            {} if source_estimate == "missing" else {"predicted_remaining_new_bytes": source_estimate}
+        ),
         partitions=(partition,),
     )
     component_refs = {component.value: generic_ref for component in Component}
@@ -337,7 +345,7 @@ def test_initial_bridge_compiles_sealed_source_without_database_read(
         start_date=__import__("datetime").date(2018, 8, 1),
     )
 
-    compiled = bridge_module.compile_initial_monthly_build(
+    compile_build = partial(bridge_module.compile_initial_monthly_build,
         context_plan={
             "target_cutoff": "2026-09-30",
             "release_id": "qe_hmm_full_v2_20260930",
@@ -372,6 +380,11 @@ def test_initial_bridge_compiles_sealed_source_without_database_read(
         cas=_CAS(),
         artifact_roots=(tmp_path,),
     )
+    if source_estimate is not None and (type(source_estimate) is not int or source_estimate < 0):
+        with pytest.raises(MonthlyBuildBridgeError, match="source byte estimate is invalid"):
+            compile_build()
+        return
+    compiled = compile_build()
 
     assert compiled.source_bundle_sha256 == bundle_sha
     assert compiled.physical_plan["database_read_performed"] is False
@@ -385,5 +398,11 @@ def test_initial_bridge_compiles_sealed_source_without_database_read(
     assert inputs["business_validation_scope"] == {
         "mode": "month_delta", "start": "2026-09-01", "end": "2026-09-30",
     }
-    assert compiled.physical_plan["build_inputs"]["predicted_new_bytes"] > 123
+    assert inputs["predicted_new_bytes"] == (
+        bridge_module.CANDIDATE_OUTPUT_PREDICTED_BYTES if source_estimate is None else
+        max(source_estimate, bridge_module.CANDIDATE_OUTPUT_PREDICTED_BYTES)
+    )
+    assert frozen.source_cas_usage == (
+        {} if source_estimate == "missing" else {"predicted_remaining_new_bytes": source_estimate}
+    )
     assert json.loads(bundle_path.read_text(encoding="utf-8")) == bundle
