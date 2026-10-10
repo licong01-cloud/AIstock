@@ -201,6 +201,8 @@ targets:
           - backend/services/dataset_release/monthly_worker_nodes.py
           - backend/services/dataset_release/monthly_worker_runtime.py
         required_source_globs:
+          # This shared reader is loaded by the current supervised monthly worker.
+          - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_postgres_source.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
@@ -224,7 +226,6 @@ targets:
       - route_id: dataset_release_worker_heartbeat
         source_globs:
           - backend/services/dataset_release/a_share_limit_rule.py
-          - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/artifact_ready_source.py
           - backend/services/dataset_release/build_processor.py
           - backend/services/dataset_release/build_stage.py

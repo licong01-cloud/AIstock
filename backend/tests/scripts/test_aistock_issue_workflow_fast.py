@@ -1114,7 +1114,10 @@ def test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope() -> 
         assert mixed["target_ids"] == ["backend-main"]
 
 
-@pytest.mark.parametrize("monthly", [True, False, "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py"])
+@pytest.mark.parametrize("monthly", [
+    True, False, "monthly_construction_facts.py", "source_authority.py",
+    "monthly_postgres_source.py", "artifact_ready_build_source.py",
+])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
