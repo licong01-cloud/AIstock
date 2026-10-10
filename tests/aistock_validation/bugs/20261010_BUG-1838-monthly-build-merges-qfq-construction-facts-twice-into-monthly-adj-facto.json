@@ -28,12 +28,18 @@
   ],
   "expected": "月度系列只从常规已验证分区读取；construction只贡献常规分区范围以外的真实锚点。保持SOURCE同快照因子一致性校验与普通分区真实重复fail-closed。恢复同一operation，不重新SOURCE或全历史校验。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/artifact_ready_build_source.py",
+      "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+      "tests/aistock_validation/bugs/20261010_BUG-1838-monthly-build-merges-qfq-construction-facts-twice-into-monthly-adj-facto.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/artifact_ready_build_source.py",
-      "backend/tests/dataset_release/test_artifact_ready_build_source.py"
+      "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+      "tests/aistock_validation/bugs/20261010_BUG-1838-monthly-build-merges-qfq-construction-facts-twice-into-monthly-adj-facto.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/artifact_ready_build_source.py",
@@ -110,19 +116,19 @@
   ],
   "review_rounds": [
     {
+      "result": "PASS；新增回归在旧代码6 failed/3 passed，修复后11项通过。SOURCE既有不同max、真实重复、缺少历史代码锚点负例仍拒绝；外部排序不加入任意去重逻辑。",
       "round": 1,
-      "scope": "SOURCE生产者与BUILD消费者边界、常规序列和构建锚点语义",
-      "result": "PASS；新增回归在旧代码6 failed/3 passed，修复后11项通过。SOURCE既有不同max、真实重复、缺少历史代码锚点负例仍拒绝；外部排序不加入任意去重逻辑。"
+      "scope": "SOURCE生产者与BUILD消费者边界、常规序列和构建锚点语义"
     },
     {
+      "result": "PASS；day/minute/factor三读取器各输出107745个唯一九月因子键，row digest均为c6f8c3d09d58783b4bffdd1ac4f6273473db468a86362cfa1a9fac55b897b2c5；完整九月daily纯变换输出103128行/21交易日，未合成价格，memory full_frames_materialized=0；仅使用已封存九月输入及原精确构建锚点，不查库。增加drain/early-close两个流关闭负边界测试。",
       "round": 2,
-      "scope": "真实封存数据fresh-process读取、bounded过滤与流关闭",
-      "result": "PASS；day/minute/factor三读取器各输出107745个唯一九月因子键，row digest均为c6f8c3d09d58783b4bffdd1ac4f6273473db468a86362cfa1a9fac55b897b2c5；完整九月daily纯变换输出103128行/21交易日，未合成价格，memory full_frames_materialized=0；仅使用已封存九月输入及原精确构建锚点，不查库。增加drain/early-close两个流关闭负边界测试。"
+      "scope": "真实封存数据fresh-process读取、bounded过滤与流关闭"
     },
     {
+      "result": "PASS；AIstock-CI最终4文件44项通过，Ruff通过。实现仅按已封存分区日期范围投影锚点，保持O(分区数)元数据及流式行处理，不扫描历史源序列、不做全量业务QA。源码修复不等于候选READY；数据库、active/profile、HMM/QE业务、训练和进程控制均不变，无新增门禁。",
       "round": 3,
-      "scope": "最终相关小矩阵、scope、性能与四项设计符合性",
-      "result": "PASS；AIstock-CI最终4文件44项通过，Ruff通过。实现仅按已封存分区日期范围投影锚点，保持O(分区数)元数据及流式行处理，不扫描历史源序列、不做全量业务QA。源码修复不等于候选READY；数据库、active/profile、HMM/QE业务、训练和进程控制均不变，无新增门禁。"
+      "scope": "最终相关小矩阵、scope、性能与四项设计符合性"
     }
   ],
   "risk_area": "bug",
@@ -132,11 +138,15 @@
       "AIstock fresh-process 正式 ArtifactReadyBuildSource + external_merge_ordered_rows 读取原attempt255真实CAS：day/minute/factor各107745唯一九月因子行，三个row digest一致；CAS、QFQ及PIT正式构造通过；database_read/write、candidate_write、profile_write、runtime_action=false",
       "AIstock fresh-process 正式 CanonicalStockTransformer 对封存九月输入只读变换：103128行、21交易日、synthesized_stock_days=0、full_frames_materialized=0；保留5365个真实构建锚点，不查询DB、不写候选、不启动训练实验"
     ],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
