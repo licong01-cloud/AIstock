@@ -15,6 +15,7 @@ from enum import Enum
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -1664,9 +1665,17 @@ class MonthlyReleaseService:
     ) -> tuple[Callable[[], None], Callable[[Mapping[str, Any]], None]]:
         # Diagnostic state only. It cannot seal a checkpoint, authorize reuse,
         # or participate in release identity. Never infer totals/ETA from I/O.
+        component_counts = {
+            "instrument_count", "completed_instruments", "total_instruments", "completed_feature_files",
+            "physical_rows_read", "indexed_tail_requests", "inherited_rows_serialized",
+            "inherited_bytes_copied", "month_rows_written",
+        }
+        component_rates = {"component_elapsed_seconds", "instruments_per_second"}
+        component_metrics = component_counts | component_rates
         observation: dict[str, Any] = {
             "phase": stage, "query_id": None, "partition_key": None,
             "rows_validated": None, "rows_sealed": None, "partitions_sealed": None,
+            "dataset": None, "frequency": None, **dict.fromkeys(component_metrics),
         }
         last_write: float | None = None
         started_at = time.monotonic()
@@ -1710,7 +1719,13 @@ class MonthlyReleaseService:
 
         def progress(value: Mapping[str, Any]) -> None:
             nonlocal last_write
-            if not isinstance(value, Mapping) or set(value) - observation.keys():
+            if not isinstance(value, Mapping):
+                raise MonthlyReleaseError("stage progress fields differ")
+            value = dict(value)
+            if "elapsed_seconds" in value:
+                # The writer's duration is not the whole stage's clock.
+                value["component_elapsed_seconds"] = value.pop("elapsed_seconds")
+            if set(value) - observation.keys():
                 raise MonthlyReleaseError("stage progress fields differ")
             for field, item in value.items():
                 if field in {"rows_validated", "rows_sealed", "partitions_sealed"}:
@@ -1718,10 +1733,23 @@ class MonthlyReleaseService:
                         observation[field] is not None and item < observation[field]
                     ):
                         raise MonthlyReleaseError("stage progress counts are invalid")
+                elif field in component_counts:
+                    if type(item) is not int or item < 0:
+                        raise MonthlyReleaseError("stage progress counts are invalid")
+                elif field in component_rates:
+                    if type(item) not in (int, float) or not math.isfinite(item) or item < 0:
+                        raise MonthlyReleaseError("stage progress rate is invalid")
                 elif (item is None and field == "phase") or (
                     item is not None and (not isinstance(item, str) or not item or len(item) > 512)
                 ):
                     raise MonthlyReleaseError("stage progress label is invalid")
+            new_dataset = "dataset" in value and value["dataset"] != observation["dataset"]
+            new_frequency = "frequency" in value and value["frequency"] != observation["frequency"]
+            if new_dataset or new_frequency:
+                observation.update(dict.fromkeys(component_metrics))
+                if new_dataset:
+                    observation["frequency"] = None
+                last_write = None
             if value.get("phase", observation["phase"]) != observation["phase"]:
                 last_write = None  # Flush phase boundaries even for a short stage.
             observation.update(value)

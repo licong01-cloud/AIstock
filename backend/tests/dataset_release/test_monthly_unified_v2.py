@@ -587,7 +587,9 @@ def test_source_progress_is_throttled_attempt_bound_and_not_readiness(tmp_path, 
         checkpoint()
 
 
-@pytest.mark.parametrize("payload", [{"rows_validated": -1}, {"rows_validated": True}, {"outcomes_read": True}])
+@pytest.mark.parametrize("payload", [{"rows_validated": -1}, {"rows_validated": True}, {"outcomes_read": True},
+    {"completed_instruments": -1}, {"instrument_count": True}, {"instruments_per_second": float("nan")},
+    {"elapsed_seconds": float("inf")}, {"elapsed_seconds": True}])
 def test_source_progress_rejects_invalid_observation(tmp_path, payload):
     service = _service(tmp_path, Pipeline())
     operation = service.submit(_request())["operation_id"]
@@ -595,6 +597,34 @@ def test_source_progress_rejects_invalid_observation(tmp_path, payload):
     _, progress = service._stage_control(operation, attempt=1, stage="SOURCE")
     with pytest.raises(MonthlyReleaseError, match="progress"):
         progress(payload)
+
+
+def test_build_progress_accepts_real_component_events_without_readiness(tmp_path):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="BUILD", status="BUILDING")
+    _, progress = service._stage_control(operation, attempt=1, stage="BUILD")
+    events = [
+        {"phase": "BUILD_NATIVE_QLIB_APPEND", "dataset": "daily_bin", "instrument_count": 4927},
+        {"phase": "BUILD_NATIVE_QLIB_APPEND", "frequency": "day", "completed_instruments": 4927,
+         "total_instruments": 4927, "completed_feature_files": 59124, "elapsed_seconds": 2.0,
+         "instruments_per_second": 2463.5},
+        {"phase": "BUILD_NATIVE_QLIB_APPEND_DONE", "dataset": "daily_bin", "instrument_count": 4927},
+    ]
+    for event in events:
+        progress(event)
+    state = service.status(operation)
+    assert state["stage_progress"]["completed_feature_files"] == 59124
+    assert state["stage_progress"]["component_elapsed_seconds"] == 2.0
+    progress({"phase": "BUILD_NATIVE_QLIB_APPEND", "dataset": "minute_bin", "instrument_count": 4915})
+    assert service.status(operation)["stage_progress"]["completed_instruments"] is None
+    progress({"phase": "FACTOR_MONTH_APPEND", "dataset": "daily_pv", "inherited_rows_serialized": 0,
+              "inherited_bytes_copied": 123, "month_rows_written": 103128})
+    progress({"phase": "FACTOR_ROLLING_SEED", "dataset": "moneyflow", "physical_rows_read": 19,
+              "indexed_tail_requests": 1})
+    assert service.status(operation)["stage_progress"]["month_rows_written"] is None
+    assert service.status(operation)["status"] == "BUILDING"
+    assert not any(service.status(operation)["checkpoints"].values())
 
 
 def test_registered_source_control_is_wired_through_real_service(tmp_path):
