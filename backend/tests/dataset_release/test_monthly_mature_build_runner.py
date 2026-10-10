@@ -193,14 +193,28 @@ def test_native_month_dispatch_rejects_unbound_inputs_before_writing(tmp_path, f
 
 
 def test_native_month_dispatch_reports_actual_write_progress(tmp_path):
+    from backend.tests.dataset_release.test_monthly_unified_v2 import _request, _service, Pipeline
+
     runner, context, staging, compiled, operation, _, _ = _native_month_fixture(tmp_path)
+    (tmp_path / "durable").mkdir()
+    service = _service(tmp_path / "durable", Pipeline())
+    operation_id = service.submit(_request())["operation_id"]
+    service.store.update_state(operation_id, attempt=1, current_stage="BUILD", status="BUILDING")
+    checkpoint, durable_progress = service._stage_control(operation_id, attempt=1, stage="BUILD")
     events = []
-    context = replace(context, progress=events.append)
+
+    def progress(event):
+        durable_progress(event)
+        events.append(event)
+
+    context = replace(context, progress=progress, checkpoint=checkpoint)
     runner._append_inherited_month(context=context, staging_root=staging, compiled=compiled, operation=operation)
     actual = [event for event in events if "completed_feature_files" in event]
     assert actual[-1]["completed_instruments"] == actual[-1]["total_instruments"] == 1
     assert actual[-1]["completed_feature_files"] == 12
     assert actual[-1]["instruments_per_second"] > 0
+    assert service.status(operation_id)["stage_progress"]["completed_feature_files"] == 12
+    assert not any(service.status(operation_id)["checkpoints"].values())
 
 
 def test_native_month_dispatch_does_not_seal_success_when_input_changes(tmp_path, monkeypatch):
