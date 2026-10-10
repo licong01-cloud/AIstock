@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-10T14:27:19.736615Z",
-  "description": "ExternalOrderedRowsError cross-partition ordered key is duplicated or regressed at daily bin adj_factor merge",
+  "description": "九月月更 attempt256 的 SOURCE 已闭合，但 BUILD 把常规 adj_factor 月度序列与同快照 QFQ construction 锚点无区分合并。真实九月分区107745行、construction10258行，4893个重叠键和值完全相同，冲突0；5365个历史锚点仍需保留。通用读取器仅让 construction 贡献常规序列分区范围外的锚点，SOURCE 原有同快照一致性校验、CAS验证及普通重复键拒绝均保留。不修数据库、不改候选/profile、不新增全历史校验或门禁。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -108,12 +108,33 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    {
+      "round": 1,
+      "scope": "SOURCE生产者与BUILD消费者边界、常规序列和构建锚点语义",
+      "result": "PASS；新增回归在旧代码6 failed/3 passed，修复后11项通过。SOURCE既有不同max、真实重复、缺少历史代码锚点负例仍拒绝；外部排序不加入任意去重逻辑。"
+    },
+    {
+      "round": 2,
+      "scope": "真实封存数据fresh-process读取、bounded过滤与流关闭",
+      "result": "PASS；day/minute/factor三读取器各输出107745个唯一九月因子键，row digest均为c6f8c3d09d58783b4bffdd1ac4f6273473db468a86362cfa1a9fac55b897b2c5；完整九月daily纯变换输出103128行/21交易日，未合成价格，memory full_frames_materialized=0；仅使用已封存九月输入及原精确构建锚点，不查库。增加drain/early-close两个流关闭负边界测试。"
+    },
+    {
+      "round": 3,
+      "scope": "最终相关小矩阵、scope、性能与四项设计符合性",
+      "result": "PASS；AIstock-CI最终4文件44项通过，Ruff通过。实现仅按已封存分区日期范围投影锚点，保持O(分区数)元数据及流式行处理，不扫描历史源序列、不做全量业务QA。源码修复不等于候选READY；数据库、active/profile、HMM/QE业务、训练和进程控制均不变，无新增门禁。"
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "AIstock fresh-process 正式 ArtifactReadyBuildSource + external_merge_ordered_rows 读取原attempt255真实CAS：day/minute/factor各107745唯一九月因子行，三个row digest一致；CAS、QFQ及PIT正式构造通过；database_read/write、candidate_write、profile_write、runtime_action=false",
+      "AIstock fresh-process 正式 CanonicalStockTransformer 对封存九月输入只读变换：103128行、21交易日、synthesized_stock_days=0、full_frames_materialized=0；保留5365个真实构建锚点，不查询DB、不写候选、不启动训练实验"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "worker_scheduler",
