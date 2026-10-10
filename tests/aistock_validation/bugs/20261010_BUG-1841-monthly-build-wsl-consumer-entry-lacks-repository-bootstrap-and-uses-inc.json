@@ -1,0 +1,314 @@
+{
+  "actual": "WSL child returncode1 before dataset access; subsequent incompatible hardcoded staging contract confirmed in source.",
+  "allowed_write_scope": [
+    "scripts/dataset_release_candidate_consumer_smoke.py",
+    "backend/services/dataset_release/monthly_supervised_build.py",
+    "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+    "backend/tests/dataset_release/test_monthly_supervised_build.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20261010_BUG-1841-monthly-build-wsl-consumer-entry-lacks-repository-bootstrap-and-uses-inc.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1841",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-10T20:49:42.450186Z",
+  "description": "WSL child returncode1 before dataset access; subsequent incompatible hardcoded staging contract confirmed in source.",
+  "design_compliance_review": [
+    "无未批准简化或fallback：正式QE/HMM读取与resource/semantic双receipt合同不变。",
+    "实现范围与需求逐项一致：仅data-owned consumer入口、月更父子目录绑定、测试、精确运行态路由和BUG。",
+    "实际验证而非mock-only：WSL读取本轮已生成真实文件，九月index 21行、日线1行、分钟240行、指数12行均PASS。",
+    "完成边界真实：源码合入不等于READY；仍需用户重启后正式BUILD/VALIDATE/三端候选交付，绝不手改状态。"
+  ],
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261010-f7aa2e275cef",
+      "timestamp": "2026-10-10T20:49:42.450186Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_release_control/attempt_runs/dmr_63a313d97fd046a38d5a876265565014-build-258/build-consumer-smoke/logs/stderr.000001.log"
+  ],
+  "expected": "Fresh WSL child imports data modules and reads precisely fenced formal monthly staging; rejects wrong operation/candidate/attempt and siblings.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261010_BUG-1841-monthly-build-wsl-consumer-entry-lacks-repository-bootstrap-and-uses-inc.json",
+      "backend/services/dataset_release/monthly_supervised_build.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+      "backend/tests/dataset_release/test_monthly_supervised_build.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/dataset_release_candidate_consumer_smoke.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261010_BUG-1841-monthly-build-wsl-consumer-entry-lacks-repository-bootstrap-and-uses-inc.json",
+      "backend/services/dataset_release/monthly_supervised_build.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+      "backend/tests/dataset_release/test_monthly_supervised_build.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/dataset_release_candidate_consumer_smoke.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/dataset_release_candidate_consumer_smoke.py",
+        "backend/services/dataset_release/monthly_supervised_build.py",
+        "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+        "backend/tests/dataset_release/test_monthly_supervised_build.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/dataset_release_candidate_consumer_smoke.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_supervised_build.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_supervised_build.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "scripts/dataset_release_candidate_consumer_smoke.py",
+        "backend/services/dataset_release/monthly_supervised_build.py",
+        "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+        "backend/tests/dataset_release/test_monthly_supervised_build.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "backend/services/dataset_release/monthly_supervised_build.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+      "backend/tests/dataset_release/test_monthly_supervised_build.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "backend/services/dataset_release/monthly_supervised_build.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+      "backend/tests/dataset_release/test_monthly_supervised_build.py"
+    ]
+  },
+  "first_seen_at": "2026-10-10T20:49:42.450186Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5884,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5884",
+  "last_seen_at": "2026-10-10T20:49:42.450186Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    "第1轮：检查实际stderr、父子调用及正式staging生成器，RED三例均复现；bootstrap和显式monthly candidate参数后GREEN。",
+    "第2轮：路径边界、operation/attempt/fence/candidate漂移、旧版CLI、create-once与脱敏异常审核；身份未放宽，兄弟目录/跨attempt拒绝。",
+    "第3轮：真实WSL读取与Windows隔离进程通过；52项定向测试PASS，精确runtime probe路由覆盖父模块及子入口，未操作服务、DB、active profile、SOURCE255或发布状态。"
+  ],
+  "risk_area": "bug",
+  "root_cause": "正式WSL脚本按绝对文件路径执行时sys.path只有scripts，未建立repo bootstrap；此外子CLI硬编码旧staging/attempt/fence布局，而月更正式producer实际为staging/.candidate.operation.attempt-fence.building。父子接口未执行真实fresh-process集成验收，只用mock回执漏掉了两处不兼容。",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Windows AIstock-CI python -I从仓库外工作目录启动正式consumer CLI，未依赖PYTHONPATH；回归通过。",
+      "WSL Ubuntu rdagent-gpu python -I读取attempt258真实日线、240根分钟线、12指数及CSI300九月冻结收益PASS；诊断control root独立，不写正式operation/checkpoint或candidate。结果X:/AIstock_dataset_release_control/bug1841-wsl-readonly-20261011/attempt_runs/dmr_63a313d97fd046a38d5a876265565014-build-258/build-consumer-smoke/semantic_result.json，文件SHA256=7ab499452cd3fd23371070ae8088ccb0b90e943f4ababa593b657beab6e1ca6a。"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "monthly BUILD WSL consumer entry lacks repository bootstrap and uses incompatible staging fence",
+  "trigger_condition": {
+    "fingerprint": "f7aa2e275cef47c001595615",
+    "source_event_id": "FE-20261010-f7aa2e275cef"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
