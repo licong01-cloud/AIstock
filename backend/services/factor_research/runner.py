@@ -37,7 +37,7 @@ def validate_spec(value):
     allowed = {"task_id", "record_id", "attempt_id", "expected_revision", "universe_key", "method_version",
                "read_start", "signal_start", "signal_end", "read_end", "cutoff", "instruments",
                "data_dir", "qlib_bin_path", "artifact_root", "candidates", "timeout_seconds", "comparison",
-               "full_evaluation"}
+               "full_evaluation", "holding_periods"}
     if set(spec) - allowed:
         raise ResearchError("invalid_request", f"Unknown run fields: {sorted(set(spec) - allowed)}")
     for key in ("task_id", "record_id", "attempt_id"):
@@ -48,6 +48,12 @@ def validate_spec(value):
         raise ResearchError("unsupported_authority", "Use the existing canonical v2 read-only source; no PIT bootstrap")
     if not isinstance(spec.get("method_version"), str) or not spec["method_version"]:
         raise ResearchError("invalid_request", "method_version is required")
+    periods = spec.get("holding_periods")
+    if periods is not None:
+        if (not isinstance(periods, list) or not periods
+                or any(type(day) is not int or day not in (1, 5, 10, 20, 40, 60, 120, 240) for day in periods)):
+            raise ResearchError("invalid_request", "holding_periods requires a non-empty list of supported integer days")
+        spec["holding_periods"] = sorted(set(periods))
     try:
         dates = [date.fromisoformat(spec[k]) for k in (
             "read_start", "signal_start", "signal_end", "read_end", "cutoff")]
@@ -106,6 +112,9 @@ def validate_spec(value):
         spec["comparison"] = validate_comparison_spec(
             spec["comparison"], candidate_names=set(names), repo_root=REPO_ROOT,
         )
+        requested = spec.get("holding_periods") or [1, 5, 10, 20]
+        if spec["comparison"]["horizon"] not in {f"{day}d" for day in requested}:
+            raise ResearchError("invalid_comparison", "comparison horizon must be included in run holding_periods")
         comparison_start = min(item["start"] for item in spec["comparison"]["fit_windows"])
         comparison_end = max(item["end"] for item in spec["comparison"]["evaluation_windows"])
         if comparison_start < spec["signal_start"] or comparison_end > spec["signal_end"]:
@@ -195,12 +204,33 @@ def evaluation_context(ctx, spec):
     if selected.empty:
         raise ResearchError("evaluation_empty", "No signal dates available")
     view = dict(ctx)
-    view["label_calendar"] = pd.DatetimeIndex(dates)
+    view["label_calendar"] = pd.DatetimeIndex(ctx.get("label_calendar", dates)).copy()
     for key in ("close_unstacked", "st_pit_eligible_mask"):
         view[key] = ctx[key].loc[selected]
     view["fwd_ret_mats"] = {key: value.loc[selected] for key, value in ctx["fwd_ret_mats"].items()}
     view.update(dates=selected, data_start=str(selected[0].date()), data_end=str(selected[-1].date()))
     return view
+
+
+def prediction_evaluation(metrics, ctx):
+    """Expose the engine's per-horizon evidence, not a holding-path backtest."""
+    calendar = ctx["label_calendar"]
+    return {
+        "scope": "research_prediction_only",
+        "holding_periods": dict(ctx["holding_periods"]),
+        "label_calendar_range": {"start": str(calendar[0].date()), "end": str(calendar[-1].date())},
+        "windows": {
+            name: {key: row[key] for key in ("horizon_metrics", "horizon_support", "common_horizon_support")
+                   if key in row}
+            for name, row in metrics["metrics"].items()
+        },
+        "reports": metrics.get("reports", []),
+        "interpretation": {
+            "sample_policy": "independent_per_horizon_common_support_is_descriptive_only",
+            "legacy_top_metrics": "1d_group_statistics_not_requested_horizon_portfolio_results",
+            "long_horizon_portfolio_returns_and_sharpe": "not_computed",
+        },
+    }
 
 
 def execute(spec, output, *, prepare=None, compute=None):
@@ -250,9 +280,12 @@ def execute(spec, output, *, prepare=None, compute=None):
         if not symbols.issubset(spec["instruments"]) or dates.min() < pd.Timestamp(spec["read_start"]) or dates.max() > pd.Timestamp(spec["read_end"]):
             raise ResearchError("candidate_scope_mismatch", "Candidate contains undeclared symbols or dates")
         if ctx is None:
+            period_kwargs = ({"holding_periods": spec["holding_periods"]}
+                             if spec.get("holding_periods") is not None else {})
             ctx = prepare(qlib_bin_path=Path(spec["qlib_bin_path"]), start_date=spec["read_start"],
                           end_date=spec["read_end"], instrument_hint=set(spec["instruments"]),
-                          load_suspend_d=True, load_st_pit_mask=True, universe_key=spec["universe_key"])
+                          load_suspend_d=True, load_st_pit_mask=True, universe_key=spec["universe_key"],
+                          **period_kwargs)
             ctx = evaluation_context(ctx, spec)
         selected = frame.loc[(dates >= pd.Timestamp(spec["signal_start"])) &
                              (dates <= pd.Timestamp(spec["signal_end"]))]
@@ -273,7 +306,8 @@ def execute(spec, output, *, prepare=None, compute=None):
                 compute=compute,
             )
         else:
-            raw_metrics = compute(name, selected, ctx)
+            metric_kwargs = {"include_horizon_metrics": True} if spec.get("holding_periods") is not None else {}
+            raw_metrics = compute(name, selected, ctx, **metric_kwargs)
         metrics, nonfinite_count = _normalize_computed_metrics(raw_metrics)
         result = {"factor_name": name, "scope": "research_candidate", "metrics": metrics,
                   "rows": len(frame), "nan_rows": int(frame[name].isna().sum()),
@@ -284,6 +318,8 @@ def execute(spec, output, *, prepare=None, compute=None):
                       "nonfinite_values_as_null": nonfinite_count,
                       "policy": "ieee_nonfinite_to_json_null_no_zero_fill_or_row_removal",
                   }}
+        if spec.get("holding_periods") is not None:
+            result["prediction_evaluation"] = prediction_evaluation(metrics, ctx)
         if "values_artifact" in candidate:
             result.update(values_origin="reused_reviewed_artifact", reuse_basis=candidate["reuse_basis"])
         if spec.get("full_evaluation") is not None:
