@@ -56,7 +56,7 @@ def validate_comparison_spec(value: object, *, candidate_names: set[str], repo_r
         raise ResearchError("invalid_comparison", f"Unknown comparison fields: {sorted(set(spec) - allowed)}")
     if spec.get("research_role") not in ROLES:
         raise ResearchError("invalid_comparison", "Unknown research_role")
-    if spec.get("horizon") not in {"1d", "5d", "10d", "20d"}:
+    if spec.get("horizon") not in {"1d", "5d", "10d", "20d", "40d", "60d", "120d", "240d"}:
         raise ResearchError("invalid_comparison", "horizon must use the shared label names")
     baseline = spec.get("baseline")
     candidate = spec.get("candidate")
@@ -712,6 +712,13 @@ def _compute_window_result(*, spec: dict, fit_window: dict, evaluation_window: d
 
 def compute_comparison(spec: dict, signals: dict[str, pd.DataFrame], ctx: dict, run_spec: dict) -> dict:
     """Compute predeclared B versus B+F/replacement/interaction windows."""
+    from backend.services.quantevolver.qe_eval_v2_metric_engine import HOLDING_PERIODS
+
+    periods = ctx.get("holding_periods", HOLDING_PERIODS)
+    shift_n = periods.get(spec["horizon"])
+    if (type(shift_n) is not int or shift_n < 2 or spec["horizon"] not in ctx["fwd_ret_mats"]
+            or ("holding_periods" in ctx and "label_calendar" not in ctx)):
+        raise ResearchError("comparison_unavailable", "Requested horizon requires engine mapping, labels and original label_calendar")
     calendar = pd.DatetimeIndex(ctx["close_unstacked"].index)
     price_calendar = pd.DatetimeIndex(ctx.get("label_calendar", calendar))
     instruments = ctx["close_unstacked"].columns
@@ -744,9 +751,6 @@ def compute_comparison(spec: dict, signals: dict[str, pd.DataFrame], ctx: dict, 
     last_price_position = _last_available_price_position(price_calendar, spec["knowledge_cutoff"])
     if last_price_position < 0:
         raise ResearchError("comparison_unavailable", "No close price is available by the knowledge cutoff")
-    from backend.services.quantevolver.qe_eval_v2_metric_engine import HOLDING_PERIODS
-
-    shift_n = HOLDING_PERIODS[spec["horizon"]]
     mature_rows = _mature_dates(calendar, last_price_position, shift_n, price_calendar)
     returns = returns.where(mature_rows, axis=0)
     model_inputs = list(dict.fromkeys([*spec["baseline"], spec["candidate"],
