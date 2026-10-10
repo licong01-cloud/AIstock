@@ -1,6 +1,6 @@
 # Advisory 原Top5正负收益分解买价 GP5 F2详细设计
 
-> 2026-10-10；v1.0；假设 `GP5-ORIGINAL-SLOT-HURDLE-VALUE-1`。本次仅完整设计交付，源码/预登记/prepare/实际fit/经济确认/运行启用均未开始。现有累计136实际研究fit＋1旧INDEX_BUILD不变；本候选计划6fit不是本次新增6fit。
+> 2026-10-11；v1.1；假设 `GP5-ORIGINAL-SLOT-HURDLE-VALUE-1`。设计已由#5875合入；本版实施六源码叶和三直接测试叶、多轮本窗口自审修复。真实预登记/prepare/实际研究fit/经济确认/运行启用均未开始，当前HEAD CI/合入以交付收据读回。现有累计136实际研究fit＋1旧INDEX_BUILD不变；合成fixture和planned六fit不计新增研究fit。
 > 父级：[蓝图§6.3.4/6.3.6/16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)。唯一目标是可盈利、风险可解释的日频买价建议，不是预测开盘落点、最佳分钟或上游选股Alpha。
 
 ## Background / Goal
@@ -15,7 +15,7 @@
 
 ## Scope / Non-goals
 
-设计PR仅本文与蓝图。源码随后从最新origin/main另建独立树，事前固定以下11文件；前9项在本设计交付时不存在，不报源码完成：
+设计PR仅本文与蓝图；源码实施从最新origin/main另建独立树，沿用事前固定以下11文件。本版前9项已实现，源码合同通过不等于研究效果或产品激活：
 
 - `backend/services/advisory_model_first/original_slot_hurdle_price_5td_contracts_v1.py`
 - `backend/services/advisory_model_first/original_slot_hurdle_price_5td_inputs_v1.py`
@@ -50,7 +50,7 @@
 
 训练目标人口事前固定为上述完整名单中 `rank<=5` 的原槽位；每包D不足5项时保留真实空槽，不造候选。Top6..50只作完整原人口/可查询输出，不进入任何模型监督或预处理统计、不补位。`roster_key=(package,manifest,run,D,T,instrument)`；`cluster=(D,T,instrument,valuation_policy_sha256)`。同簇在两包原Top5出现时监督质量总和1，同D股票字段/g/估值应相同，矛盾不能平均。原两包名单仍分别保留，训练簇可聚合一次并绑定所有来源键；价格函数不输入package、rank、raw score或腿。
 
-共同输入域要求至少一个六类股票字段已知；全股票字段未知的原项保留typed UNKNOWN，两个新臂均不训练该监督、均不伪造输入。其余缺失保留原因/掩码，训练期median与missing flags只表达模型编码。金融不可估值、未成熟、入场不可执行的原项不进损失，仍保留原名单/数量与经济状态。样本资格不按未来盈利、动作或评价结果筛选。
+共同输入域要求至少一个六类股票字段已知；全股票字段未知的原项保留typed UNKNOWN，两个新臂均不训练该监督、均不伪造输入。其余缺失保留原因/掩码，训练期median与missing flags只表达模型编码。金融不可估值、未成熟、入场不可执行的原项不进损失，仍保留原名单/数量与经济状态。所有已知原Top5监督均使用，查询support不删除训练价位尾部标签；样本资格不按未来盈利、动作或评价结果筛选。没有观测训练价或正/负类时prepare保留原输入并标PREPARED_NO_FIT，不造常数模型。
 
 ### 2. 三个时钟、投影与固定估值
 
@@ -60,7 +60,7 @@
 2. T：紧邻D的真实原市场session；研究只在实际T开盘的名义D锚价格点代入条件函数，不获取T市场/板块/盘中上下文。一个股D只有一个真实观察价，不将网格当多条独立监督。
 3. H：T+4原市场session收盘，五交易日含T；训练必须H≤train_end，评价必须H≤evaluation_end。停牌不压缩、H后不延期择价；最后五个evaluation D原槽保留IMMATURE，不能解码越界财务值。
 
-prepare先Arrow投影完整身份/原D字段，再仅投影原Top5且H≤train_end的训练金融列；不把整份金融表读入再删未来。H先按原calendar/D→T→T+4推导，字段label_information_end必须与之精确一致，不能以未知/被毒化的金融标签元数据选择较早训练行。评价先冻结模型/输入查询与预测SHA，再只解码当前原Top5中成熟收益；完整Top50其他未来金融列不解码。文件全字节校验不是金融值解码，原calendar未来日期metadata不等于未来收益。
+prepare先Arrow投影完整身份/原D字段，再仅投影原Top5且H≤train_end的训练金融列；不把整份金融表读入再删未来。H先按原calendar/D→T→T+4推导，字段label_information_end必须与之精确一致，不能以未知/被毒化的金融标签元数据选择较早训练行。投影入口自身拒绝sealed/越界、非Top5金融或未成熟读取；成熟evaluation金融投影须引用本run已完成trained及forecasts/trained原子预测链，不以调用顺序口头声称冻结。完整Top50其他未来金融列不解码。文件全字节校验不是金融值解码，原calendar未来日期metadata不等于未来收益。
 
 沿用V2：正常已验证停牌可携带此前已知D锚close作估值，不造OHLC/fill；H跌停/停牌与mark/退出执行状态分别报告。无解释缺bar/坐标/交易状态仍UNKNOWN。`actual_fill_proven=false`、`realized_return_bps=null`；假设清算净估值不是实盘收益、可投资NAV或成交因果效应。
 
@@ -112,7 +112,7 @@ Beta有界于(0,1)，不会像无界Gamma负损失分布产生超过100%本金�
 
 gap支持仅来自上述Top5训练时钟内真实已观测g：2.5～97.5%边界、100bps桶、≥30唯一stock/D且≥5个D，按已有固定规则保留洞/上界不含。不用evaluation/收益选择支持，不因新模型没交易调窄/调宽；这是价函数有限观测范围而非策略包资格门。两个臂使用同支持。六股票字段全未知、价/坐标未知、支持域外分别typed UNKNOWN，不能伪装成AVOID。
 
-D日合法low/high/reference/tick为显式同D锚坐标输入；全合法Decimal tick枚举，不取百分位端点替代完整集合、不桥接未知洞；最多100000单股/500000批次节点，分块128。计算每个已知节点U>0为 `ACCEPTABLE_VALUE_PREDICTED`，U≤0为AVOID，未知为UNKNOWN；U>0已蕴含expected_net>0。总体EMPTY_LEGAL_GRID、NO_ACCEPTABLE_PRICE、UNKNOWN_PARTIAL_OR_NO_ACCEPTABLE与全UNKNOWN分开。概率未校准、尾损为模型估计的标识随节点/集合发布。
+D日合法low/high/reference/tick为显式同D锚坐标输入；全合法Decimal tick枚举，不取百分位端点替代完整集合、不桥接未知洞；最多100000单股/500000批次节点，分块128。计算每个已知节点U>0为 `ACCEPTABLE_VALUE_PREDICTED`，U≤0为AVOID，未知为UNKNOWN；U>0已蕴含expected_net>0。总体EMPTY_LEGAL_GRID、NO_ACCEPTABLE_PRICE、UNKNOWN_PARTIAL_OR_NO_ACCEPTABLE与全UNKNOWN分开。合法网格已知而D reference未知时保留全tick/逐节点UNKNOWN；legal bound/tick本身未知则UNKNOWN/complete_grid=false、tick_count=null，不伪装EMPTY_LEGAL_GRID或用默认坐标补齐。概率未校准、尾损为模型估计的标识随节点/集合发布。
 
 正式输出只是条件关联性价格建议，不是任意挂单/成交因果收益；不使用未来T低高或复权桥给D原价保证。实际开盘±8%支持外为UNKNOWN，支持内也不按涨跌幅必然判定好坏。多段/空集合法，不要求开盘覆盖率或输出5只。source包ID/index_pool只作元数据；相同D股票特征/名义价输出跨包相同，数学通用不等于新包盈利验证。
 
@@ -142,7 +142,7 @@ D日合法low/high/reference/tick为显式同D锚坐标输入；全合法Decimal
 
 `public_qe_observation_v1(api_base, get=...)`六只读GET覆盖single/custom_evo/multi_alpha的running/pending。每个统计组件开始前/完成后各读取fresh≤60s观测，只有三类都0才开启下一fit；真实短fit共至多12份有界观测，不持续高频轮询。非fit的设计/prepare/只读回放不等QE idle。QE途中出现活动即暂停后续尚未fit的组件并记录RESOURCE_OVERLAP_DETECTED，不停止QE；公开只读快照不是跨窗口原子锁，不能据前后0声称提供绝对无竞态保证。未开启组件按状态保存，不能声称整块互斥。超过30min每半小时进度检查，发现真实BUG在自身范围修复/多轮审核，不能暗中改统计合同。
 
-沿用 `read_stage / publish_stage` 原子链，已有允许stage仅preregistered/prepared/trained/evaluated，不虚构SOURCE或fit_attempt stage。来源refs写preregistered；每个统计组件在自身`fits/<arm>_<component>/trained`原子发布非执行权重，组件attempt/journal位于该命名子根、与trained目录分开。完整研究trained仅引用全部六个已完成组件manifest/hash及模型JSON；evaluated接续trained。先记STARTED再拟合，各组件COMPLETED独立可读；已完成同身份不会再fit。崩溃STARTED/FAILED没有可用模型时显式报告待技术恢复，不隐式retry或填常数；技术恢复另记同合同重试身份/额外实际fit，不能把负经济结果当技术失败。完整bundle所有六个组件可验证才COMPLETE，不用partial冒充完成。X tempfile scope退出成功/异常均恢复环境，避免再次污染共享调用进程。
+沿用 `read_stage / publish_stage` 原子链，已有允许stage仅preregistered/prepared/trained/evaluated，不虚构SOURCE或fit_attempt stage。来源refs写preregistered；每个统计组件在自身`fits/<arm>_<component>/trained`原子发布非执行权重，组件attempt/journal位于该命名子根、与trained目录分开。完整研究trained仅引用全部六个已完成组件manifest/hash及模型JSON；evaluated接续trained。先记STARTED再拟合，各组件COMPLETED独立可读；已完成同身份不会再fit。崩溃STARTED/FAILED没有可用模型时显式报告待技术恢复，不隐式retry或填常数；技术恢复另记同合同重试身份/额外实际fit，receipt分别报告本attempt六fit与此前technical lineage额外attempt，不能把负经济结果当技术失败。完整bundle所有六个组件可验证才COMPLETE，不用partial冒充完成。X tempfile scope退出成功/异常均恢复环境，避免再次污染共享调用进程。
 
 API/backend只消费AIstock-owned新artifact manifest，不以worker内部WSL脚本或个人路径作运行数据接口。本次cli仅离线研究，没有后台任务、生产开关或服务重启。
 
@@ -150,8 +150,8 @@ API/backend只消费AIstock-owned新artifact manifest，不以worker内部WSL脚
 
 | 顺序 | 交付 | 当前状态与完成条件 |
 |---|---|---|
-| 1 | 本详细设计＋蓝图/至少三轮审核 | 本次设计交付；0源码/金融评价/fit，不把方法spike称收益验证 |
-| 2 | 精确六源码叶＋三测试 | NOT_STARTED；输入/数学/恢复/范围多轮修复、最小直接合同/Ruff/L0/F2/最终HEAD CI，再合入 |
+| 1 | 本详细设计＋蓝图/至少三轮审核 | COMPLETE_DESIGN_MERGED #5875；该历史设计阶段0源码/金融评价/fit，不把方法spike称收益验证 |
+| 2 | 精确六源码叶＋三测试 | SOURCE_IMPLEMENTED_CONTRACT_VERIFIED；输入/数学/恢复/范围多轮自审和修复，直接合成合同与WSL源码数学通过；Ruff/L0/F2/当前HEAD CI及合入按最终收据，不声称研究成功 |
 | 3 | 新身份完整预登记/prepare | NOT_STARTED；原名单/Top5监督/时间投影/模型和支持身份、原限制只读读回，不补基础数据 |
 | 4 | 唯一六fit研究＋完整四臂 | NOT_STARTED；fresh QE互斥、6组件实际记账、原D经济归因/区间/MDE，按事前路由决定停止或确认设计 |
 | 5 | 独立确认/必要日频接入 | NOT_OPENED；只有新候选值得继续才设计未消费窗口与consumer范围；不等自然20日、不以前端阻断 |
@@ -180,19 +180,31 @@ API/backend只消费AIstock-owned新artifact manifest，不以worker内部WSL脚
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-880 | Background；Contracts §3/6 | artifact: docs/architecture/advisory_original_slot_hurdle_price_5td_v1_f2_design_20261010.md | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: 本次完整详细设计，新对象不改变生产或旧实验 |
-| F-881 | Contracts §1/4 | target: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_inputs_v1.py；原prepared manifest引用 | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: source人口身份已明确，Top5金融和预处理验证属于后续源码/prepare，不声称已执行 |
-| F-882 | Contracts §2/3 | target: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_inputs_v1.py | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: 仅现库non-vintage证据，不伪造原捕获或fill |
-| F-883 | Contracts §4/7 | target: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_model_v1.py | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: 六fit仅预算，本次0fit；真实可拟合性/精度待源码研究 |
-| F-884 | Contracts §3/4/5；Verification | target: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_model_v1.py；合成数学spike8项PASS | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: 数学/依赖核对不等于校准、收益或价格集合源码完成 |
-| F-885 | Contracts §6 | target: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: 未来真实四臂/统计/支持，当前0新金融评价 |
-| F-886 | Contracts §7 | target: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: 实际新study/registry/fit journal尚未创建，累计136保持 |
-| F-887 | Scope；Contracts §7；Production Gates | artifact: docs/architecture/advisory_original_slot_hurdle_price_5td_v1_f2_design_20261010.md | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: 文档两文件，本次无业务源码/DB/运行操作 |
-| F-888 | Implementation；Verification；Risks | artifact: docs/architecture/advisory_original_slot_hurdle_price_5td_v1_f2_design_20261010.md | DESIGN_READY_IMPLEMENTATION_NOT_STARTED | approved_by_user: 设计可合入不等于模型值得继续或日频业务完成 |
+| F-880 | backend/services/advisory_model_first/original_slot_hurdle_price_5td_contracts_v1.py；evaluation_v1 | test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: 本轮源码交付，新终值对象不改变生产或旧实验 |
+| F-881 | backend/services/advisory_model_first/original_slot_hurdle_price_5td_inputs_v1.py | test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_inputs_v1.py；model跨包测试 | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: 合成原名单/Top5/簇质量与编码通过，真实prepare尚未执行 |
+| F-882 | backend/services/advisory_model_first/original_slot_hurdle_price_5td_inputs_v1.py；pipeline_v1 | test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_inputs_v1.py；study冻结预测/IMMATURE | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: future poison、实际H purge和冻结链通过；non-vintage不升级，不伪造fill |
+| F-883 | backend/services/advisory_model_first/original_slot_hurdle_price_5td_model_v1.py | test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_model_v1.py | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: 合成六头/零原子/JSON-native parity验证不是研究fit，真实拟合性待下一阶段 |
+| F-884 | backend/services/advisory_model_first/original_slot_hurdle_price_5td_model_v1.py；evaluation_v1 | test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_model_v1.py；WSL新源码数学6项PASS | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: 数学/完整tick/未知与数值错误源码通过，未确认条件概率或收益 |
+| F-885 | backend/services/advisory_model_first/original_slot_hurdle_price_5td_evaluation_v1.py | test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: 四臂/空槽/UNKNOWN分账/同步统计/干预支持仅合成合同，0真实新金融评价 |
+| F-886 | backend/services/advisory_model_first/original_slot_hurdle_price_5td_pipeline_v1.py；cli_v1 | test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: stage/QE观察/六组件恢复/technical计数通过；正式registry未登记、累计研究136保持 |
+| F-887 | 精确11文件Scope；pipeline X scope；CLI离线边界 | git scope/diff；test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: Advisory六源码/三测试/两文档；0其他模块、DB写、服务/启用操作 |
+| F-888 | Implementation；源码自审记录；Production Gates | test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py；command: python scripts/aistock_feature_workflow.py validate --design docs/architecture/advisory_original_slot_hurdle_price_5td_v1_f2_design_20261010.md --tier F2；当前HEAD CI收据分态 | PASS_SOURCE_CONTRACTS_VERIFIED | approved_by_user: 完整源码合同交付，研究/独立确认/消费者接入不属于本次已完成状态 |
 
 ## Rollout / Rollback / Production Gates
 
-设计/源码/正式研究分阶段交付，所有修改按既有授权多轮审核后PR/必需检查/合入/自身安全清理；不得用合入状态替代业务结论。当前无代码、模型或生产开关，不需要后端重启/客户端reload/DDL/DML/安装，均NOOP；原策略包/Program/shadow配置不变。新的价格模型只有真实增量后才另设计消费者适配，后端重启仍用户所有。
+设计/源码/正式研究分阶段交付，所有修改按既有授权多轮审核后PR/必需检查/合入；清理另按精确对象授权，不得用合入状态替代业务结论。当前新增离线研究源码，未挂API/Program/binding、未创建正式模型或生产开关，不需要后端重启/客户端reload/DDL/DML/安装，均NOOP；原策略包/Program/shadow配置不变。新的价格模型只有真实增量后才另设计消费者适配，后端重启仍用户所有。
+
+## Source Review / 本次源码审核（2026-10-11）
+
+第一轮本窗口输入/时钟审核：修复投影函数自身的sealed/原Top5/实际H限制，evaluation收益读取须绑定本run真实冻结预测链；原Top50全键保留，查询support只约束输出，不筛已知Top5训练标签。训练函数也检查原Top5和calendar先导T/H，不接受外部调用传入非训练日期。未来金融值及伪早label时间毒化均由投影隔离，原值不解码。
+
+第二轮数学/缺失审核：符号两类/三类映射、Gamma原生预测与JSONparity、Beta解析gradient/有界精度/尾损积分、数值错误与complete Decimal grid通过。WSL现有numpy2.2.5/scipy1.15.3/sklearn1.7.2直接导入新源码，6项纯数学PASS，gradient最大误差7.66e-10、tail误差4.55e-13bps，0fit/optimizer/金融读取；Windows已有pytest环境numpy2.3.3/scipy1.16.3/sklearn1.8.0仅跑合成fixture，不冒充WSL真实训练。无训练观测/类、D锚/网格坐标未知分别可见，不填旧模型或常数。
+
+第三轮stage/经济/交付审核：六组件各前后fresh QE观察、活动前0开始/途中暂停且留已完成组件、异常无隐式retry、exact resume零新fit、technical lineage额外计数与X环境异常还原通过；金融投影晚于原子预测stage。四臂完整五槽、UNKNOWN机会成本、无候选真实现金槽、IMMATURE与已知不可执行均保留，干预不足不能标值得确认，净/U及同步块与归因闭合。删除重测旧公共QE helper/旧stock编码的重复测试，集中保留新消费/合同测试，不移动ownership。
+
+复杂度逐项人工审核：inputs的domain合并、pipeline的gap合并与finance合并均以完整ROSTER_KEY、one_to_one约束，原Top50≤30500、Top5≤3050；没有全市场×日期笛卡尔积。预处理/监督唯一簇一次聚合，gap支持按桶，价格网格128分块且100000/500000节点上限；统计固定2000×5D blocks。L0三处ALGO-COMPLEXITY-001为提示已逐项核对，0blocking，扫描器和ownership不修改。整模块旧测试债务基线35.41%超过既定30%，按真实owner完整审计保留；本次不能在精确11文件范围中冒称已清除旧债务或改变上限，最终比例另见收据。
+
+以上均为本窗口多轮多视角自审，不称独立审核。最终直接矩阵27/27 PASS、Ruff/九文件无bytecode compile通过；F-888证据引用格式缺口已修正，不改任何业务条款。DESIGN-COMPLIANCE-001逐项：完整计划源码而非占位交付；失败/未知/partial及资源快照竞态可见；原名单/5TD/费用/旧policy与模块边界保持，新U单独身份；未私加包资格、审批或旧负实验固化前置。真实预登记、prepare、6fit/四臂、经济确认及接入仍为后续任务，当前研究累计136不变。最终当前HEAD直接测试/F2/Ruff/L0/CI与合入收据分开报告，不将合成fit或stage测试登记当正式研究。
 
 ## Risks / Failure Modes
 
