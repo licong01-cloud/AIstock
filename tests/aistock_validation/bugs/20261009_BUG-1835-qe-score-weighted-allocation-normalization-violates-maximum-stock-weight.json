@@ -1,0 +1,265 @@
+{
+  "actual": "真实Borda Top50及极端softmax在有限次clip后归一仍越界。",
+  "allowed_write_scope": [
+    "scripts/score_weighted_strategy.py",
+    "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+    "tests/aistock_validation/bugs/20261009_BUG-1835-qe-score-weighted-allocation-normalization-violates-maximum-stock-weight.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1835",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-09T19:30:55.349944Z",
+  "description": "真实Borda Top50及极端softmax在有限次clip后归一仍越界。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261009-f1e820fedc77",
+      "timestamp": "2026-10-09T19:30:55.349928Z"
+    },
+    {
+      "action": "root_cause_and_red_green",
+      "actor": "codex",
+      "note": "真实MA-E50 seed42 2024-07-01 Top50评分精确RED复现最大权重0.16101694915254236；修复仅对最终越界目标执行有限比例封顶再分配，零权重不复活，不可满配保留现金，合法旧输出逐位相同。原持仓测试夹具补齐既有enable_sector_hmm=False和allow_latest_date_fallback关键字合同，生产持仓/HMM分支未改。",
+      "timestamp": "2026-10-09T20:01:34Z"
+    },
+    {
+      "action": "multi_round_code_design_review",
+      "actor": "codex",
+      "note": "两轮审核：数学预算/单股上界/循环至多移除N个候选，四加权方式和不可满配现金；兼容审核保留模型、因子、seed、股票池、TWAP、成本、温度、Borda、V2留存仓与min_weight既有处理。32合同测试通过；WSL真实Qlib fresh-process基类/V2同源最大5%、总95%。DESIGN-COMPLIANCE-001四项通过：完整修复、非有限/矛盾边界显式错误、无业务逻辑迁移、无新增审批门禁。l0和changed-files guardrail零阻断，ownership3/3，registry8 passed，Ruff/py_compile/diff-check通过；广泛qe_read_backend/深度QE覆盖交现有CI/Nightly，不冒称已执行。",
+      "timestamp": "2026-10-09T20:01:34Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_worktrees/qe-multi-alpha-weight-validation-20261009/tmp/handoff/qe_multi_alpha_weights_20261009/portfolio_translation_audit.json"
+  ],
+  "expected": "对有限合法scores，目标权重非负且有限，单股不突破max_weight，总资金不超过max_position_ratio；可行时保持预算，无法满配则保留现金。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "scripts/score_weighted_strategy.py",
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "scripts/score_weighted_strategy.py",
+        "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.sector_risk_overlay"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/score_weighted_strategy.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_score_weighted_base_strategy"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_score_weighted_hold_thresh.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.sector_risk_overlay"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_score_weighted_base_strategy"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/score_weighted_strategy.py",
+        "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/score_weighted_strategy.py",
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/score_weighted_strategy.py",
+      "backend/tests/quantevolver/test_score_weighted_hold_thresh.py"
+    ]
+  },
+  "first_seen_at": "2026-10-09T19:30:55.349944Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5860,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5860",
+  "last_seen_at": "2026-10-09T19:30:55.349944Z",
+  "module": "qe.core",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_score_weighted_hold_thresh.py::test_score_weights_bound_real_mae50_borda_scores -q",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_0343c08e8437c77894e893f4e90efe0908677adb",
+    "fresh_process_evidence": [
+      "WSL Ubuntu rdagent-gpu isolated fresh Python loaded tracked ScoreWeightedTopkStrategy and inherited ScoreWeightedTopkStrategyV2; actual MA-E50 seed42 2024-07-01 Top50 scores produced max_weight=0.05 and total_weight=0.95 for both classes; source SHA256=b52c6a3614635067204d663d0b74b02cc2ed237900cc57fc5a8b29bd8b1cfc1b; qlib.init=false, experiment_start=false, DB_access=0, process_control=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe.core"
+  ],
+  "title": "QE score-weighted allocation normalization violates maximum stock weight on Borda scores",
+  "trigger_condition": {
+    "fingerprint": "f1e820fedc77f735c89d5f74",
+    "source_event_id": "FE-20261009-f1e820fedc77"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.core",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.core",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

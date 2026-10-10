@@ -569,6 +569,12 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             return np.array([])
 
         s = scores.copy().astype(float)
+        if not np.isfinite(s).all():
+            raise ValueError("Score-weighted allocation requires finite scores")
+        bounds = (self.min_weight, self.max_weight, self.max_position_ratio)
+        if (not np.isfinite(bounds).all() or not 0 <= self.min_weight <= self.max_weight
+                or self.max_position_ratio < 0):
+            raise ValueError("Score-weighted allocation requires finite, nonnegative consistent bounds")
 
         # clip 极端值
         if self.score_clip_quantile > 0:
@@ -591,6 +597,8 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
             weights = exp_s / exp_s.sum()
         else:
             raise ValueError(f"Unknown weight_method: {self.weight_method}")
+        if not np.isfinite(weights).all():
+            raise ValueError("Score-weighted allocation requires finite weights")
 
         # 迭代 clip 到 [min_weight, max_weight]
         for _ in range(10):
@@ -616,6 +624,30 @@ class ScoreWeightedTopkStrategy(TopkDropoutStrategy):
         total = weights.sum()
         if total > 0:
             weights = weights / total * self.max_position_ratio
+        if not np.isfinite(weights).all():
+            raise ValueError("Score-weighted allocation requires finite weights")
+
+        # 最终资金权重才是上界合同；不能再次归一化已封顶的权重。
+        # 已满足合同的旧结果原样保留，仅纠正归一化造成的越界。
+        if (weights > self.max_weight).any():
+            bounded = np.zeros(len(weights))
+            free = np.asarray(weights > 0)
+            remaining = min(self.max_position_ratio, free.sum() * self.max_weight)
+            while free.any() and remaining > 0:
+                indices = np.flatnonzero(free)
+                proposed = np.asarray(weights[free] / weights[free].sum() * remaining)
+                over = proposed > self.max_weight
+                if not over.any():
+                    bounded[indices] = proposed
+                    break
+                capped = indices[over]
+                bounded[capped] = self.max_weight
+                free[capped] = False
+                remaining = max(0.0, remaining - len(capped) * self.max_weight)
+            # 正评分不足以满配时保留现金，禁止复活零权重或改成等权。
+            weights = bounded
+            if weights.sum() > self.max_position_ratio:
+                weights *= self.max_position_ratio / weights.sum()
 
         return weights
 
