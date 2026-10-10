@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1835",
-  "closed_at": null,
+  "closed_at": "2026-10-10T14:22:17.638907Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -141,10 +141,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1835\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1835",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_success",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0345f8962587ad48e3a1fdf857a818f571db4739c6a9a62208bfa88785b7a071",
+      "contract_digest": "049ada266a3d6f5fd23155114a66aa3ac5c76012f00d09a15585041fc6ac11c8",
+      "expected_identity": "234eddeb0ff383b6c98265947603d3ba3d5dd436",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-10T14:18:37.440686Z",
+      "mode": "read_only",
+      "observed_identity": "35e722d7fdb02067efa8a773c5cea2d4ab1796b5",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "73e9f434137fca082388f2fefa4854cdeff6a5e0a47a57a993688d8ecc241376",
+      "receipt_sha256": "4af45598ed7395cb346a0725c0d7831addd490030a99a5ebd26d69e570c6efc3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d0c437e4ab4d489340977a0b79c3d5ec0f6296105a2674560ed714393f56b686",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -180,7 +202,7 @@
     ],
     "validation_evidence_digest": "4f1c4e5953521b1e396a1184bbc10c90e8d51b9a5ca61026173a76c629ec9f33"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.core"
   ],
@@ -195,7 +217,8 @@
     "validation-receipt: id=503dc550a6b1902b commit=8beb5a145885cc2ad1b1b92d034b887f7830dc64 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed, ownership 3/3, blocking 0`",
     "validation-receipt: id=626ac75ccfecdec5 commit=8beb5a145885cc2ad1b1b92d034b887f7830dc64 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed, ownership 14/14`",
     "validation-receipt: id=33a0f862a16f5e97 commit=8beb5a145885cc2ad1b1b92d034b887f7830dc64 kind=ruff plan=direct status=passed command=`python -m ruff check scripts/score_weighted_strategy.py backend/tests/quantevolver/test_score_weighted_hold_thresh.py and python -m py_compile` result=`passed`",
-    "validation-receipt: id=0c22d2b1da84a807 commit=8beb5a145885cc2ad1b1b92d034b887f7830dc64 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=0c22d2b1da84a807 commit=8beb5a145885cc2ad1b1b92d034b887f7830dc64 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "post-restart-verify backend-main verified: observed=35e722d7fdb02067efa8a773c5cea2d4ab1796b5, health/identity/business smoke 3/3 passed, probe digest=73e9f434137fca082388f2fefa4854cdeff6a5e0a47a57a993688d8ecc241376, process_control_performed=false"
   ],
   "verification_budget": {
     "budget": "standard",
