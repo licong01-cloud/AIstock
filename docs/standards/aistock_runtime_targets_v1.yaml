@@ -125,6 +125,7 @@ targets:
       - backend/services/dataset_release/monthly_repair_journal.py
       - backend/services/dataset_release/monthly_postgres_source.py
       - backend/services/dataset_release/monthly_*.py
+      - backend/services/dataset_release/monthly_unified.py
       - backend/services/dataset_release/monthly_frozen_source_audit.py
       - backend/services/dataset_release/candidate_consumer_smoke.py
       - backend/services/dataset_release/qlib_bounded_update.py
@@ -184,6 +185,7 @@ targets:
           - backend/routers/monthly_dataset_releases.py
           - backend/services/dataset_release/api_models.py
           - backend/services/dataset_release/monthly_*.py
+          - backend/services/dataset_release/monthly_unified.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
           - backend/services/dataset_release/monthly_construction_facts.py
           - backend/services/dataset_release/candidate_consumer_smoke.py
@@ -203,6 +205,7 @@ targets:
         required_source_globs:
           # This shared reader is loaded by the current supervised monthly worker.
           - backend/services/dataset_release/artifact_ready_build_source.py
+          - backend/services/dataset_release/monthly_unified.py
           - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_postgres_source.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
