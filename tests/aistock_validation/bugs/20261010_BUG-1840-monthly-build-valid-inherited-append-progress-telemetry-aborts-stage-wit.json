@@ -29,9 +29,24 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261010_BUG-1840-monthly-build-valid-inherited-append-progress-telemetry-aborts-stage-wit.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261010_BUG-1840-monthly-build-valid-inherited-append-progress-telemetry-aborts-stage-wit.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -64,25 +79,45 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    {
+      "result": "原服务拒绝正式 BUILD payload；修复后10项定向回归通过，真实原生writer与durable service串联完成12个feature文件。未知outcomes字段、负数、bool和非有限速率仍拒绝。",
+      "round": 1,
+      "scope": "真实 producer/consumer 接口与 RED→GREEN"
+    },
+    {
+      "result": "审查Qlib追加、factor预热/追加、SOURCE封存/准备全部直接回调字段；增加完整既有观测词汇，不修改producer。组件切换清空局部计数，component_elapsed_seconds不冒充stage elapsed；SOURCE单调计数保持原样。",
+      "round": 2,
+      "scope": "全部后续已登记进度回调与计数边界"
+    },
+    {
+      "result": "89项关联回归通过、2项原有跳过；新增路由场景RED后7项GREEN。只增加monthly_unified精确路径，旧generic worker路由不变。仅修复进度接口，不简化交付、不吞数据错误、不改业务或新增门禁；progress不能生成checkpoint或READY，保留attempt/cancel约束。原SOURCE可复用；不扫描历史QA，不手改状态，不写DB/profile，不启动训练实验或控制进程。",
+      "round": 3,
+      "scope": "四项设计符合性、运行态路由和发布安全"
+    }
+  ],
   "risk_area": "bug",
   "root_cause": "原生 Qlib writer 已输出 dataset/frequency/实际文件数和速率，但 durable _stage_control 只允许 SOURCE 六字段，真实 BUILD 进度事件被当成数据错误终止。monthly_unified.py 也未成为现有月更进程探针路由的必需源；补齐精确路由，保留用户重启及正式进程身份验收。",
-  "review_rounds": [
-    {"round": 1, "scope": "真实 producer/consumer 接口与 RED→GREEN", "result": "原服务拒绝正式 BUILD payload；修复后10项定向回归通过，真实原生writer与durable service串联完成12个feature文件。未知outcomes字段、负数、bool和非有限速率仍拒绝。"},
-    {"round": 2, "scope": "全部后续已登记进度回调与计数边界", "result": "审查Qlib追加、factor预热/追加、SOURCE封存/准备全部直接回调字段；增加完整既有观测词汇，不修改producer。组件切换清空局部计数，component_elapsed_seconds不冒充stage elapsed；SOURCE单调计数保持原样。"},
-    {"round": 3, "scope": "四项设计符合性、运行态路由和发布安全", "result": "89项关联回归通过、2项原有跳过；新增路由场景RED后7项GREEN。只增加monthly_unified精确路径，旧generic worker路由不变。仅修复进度接口，不简化交付、不吞数据错误、不改业务或新增门禁；progress不能生成checkpoint或READY，保留attempt/cancel约束。原SOURCE可复用；不扫描历史QA，不手改状态，不写DB/profile，不启动训练实验或控制进程。"}
-  ],
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["AIstock-CI fresh-process pytest：正式MonthlyReleaseService._stage_control串联原生append writer，1只fixture股票/12个真实bin文件成功；仅X盘临时测试输出，真实operation、DB、candidate、profile和runtime未写入"],
+    "fresh_process_evidence": [
+      "AIstock-CI fresh-process pytest：正式MonthlyReleaseService._stage_control串联原生append writer，1只fixture股票/12个真实bin文件成功；仅X盘临时测试输出，真实operation、DB、candidate、profile和runtime未写入"
+    ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
