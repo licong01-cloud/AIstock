@@ -1,6 +1,10 @@
 {
   "actual": "原九月月更 operation dmr_63a313d97fd046a38d5a876265565014 attempt255 的 SOURCE 已通过。BUILD 在 compile_initial_monthly_build -> load_source_stage_receipt -> _sealed_partition_from_stage 报 SourceAuditIncomplete: source content partition contract differs。需基于真实封存回执复现并闭合通用 source partition producer/reader 合同；不改数据、不增加全历史校验、不改 HMM/QE、不建新操作、不激活 profile。源码修复后 RED/GREEN、多轮审核、CI合入；用户负责后端重启，原 operation 恢复。",
   "allowed_write_scope": [
+    "backend/services/dataset_release/source_authority.py",
+    "backend/services/dataset_release/monthly_build_bridge.py",
+    "backend/tests/dataset_release/test_source_authority.py",
+    "backend/tests/dataset_release/test_monthly_build_bridge.py",
     "tests/aistock_validation/bugs/20261010_BUG-1837-monthly-build-rejects-sealed-pit-code-batch-source-membership-digest.json"
   ],
   "assigned_agent": null,
@@ -12,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-10T02:20:53.493231Z",
-  "description": "原九月月更 operation dmr_63a313d97fd046a38d5a876265565014 attempt255 的 SOURCE 已通过。BUILD 在 compile_initial_monthly_build -> load_source_stage_receipt -> _sealed_partition_from_stage 报 SourceAuditIncomplete: source content partition contract differs。需基于真实封存回执复现并闭合通用 source partition producer/reader 合同；不改数据、不增加全历史校验、不改 HMM/QE、不建新操作、不激活 profile。源码修复后 RED/GREEN、多轮审核、CI合入；用户负责后端重启，原 operation 恢复。",
+  "description": "原九月月更 attempt255 的 SOURCE 已通过，BUILD 拒绝正式 moneyflow_ts 历史来源代码摘要，原因是旧读取器仅允许分钟分区携带该摘要。真实封存图复验继续发现：全部分区复用时，source_cas_usage.predicted_remaining_new_bytes 正式为 null，BUILD 错误地强制要求整数。两处均属于同一 SOURCE→BUILD 读取边界的生产者/消费者合同漂移。保留原事实、原摘要和原 null；只闭合正式读取合同，不新增校验、门禁或全历史重导。用户负责后端重启，继续原 operation。 ",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -21,8 +25,12 @@
       "timestamp": "2026-10-10T02:20:53.493231Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2/monthly/dmr_63a313d97fd046a38d5a876265565014/state.json",
+    "X:/AIstock_dataset_release_control/monthly/dmr_63a313d97fd046a38d5a876265565014/source/attempt-255/source-audit.json",
+    "X:/AIstock_dataset_release_control/monthly/dmr_63a313d97fd046a38d5a876265565014/source-inputs/attempt-255/frozen-source-bundle.json"
+  ],
+  "expected": "正式 moneyflow_ts 历史来源代码摘要可随共享 SOURCE 分区进入 BUILD；分钟摘要仍必需，其他查询不得夹带摘要，非法 SHA、content/reuse 漂移及原字段/schema/hash 校验继续 fail closed。合法未知 CAS 预测保留 null，输出规划沿用既有候选上界；负数、布尔、文本及缺少预测字段仍拒绝。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,7 +43,12 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/dataset_release/source_authority.py",
+      "backend/services/dataset_release/monthly_build_bridge.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "backend/tests/dataset_release/test_monthly_build_bridge.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -54,7 +67,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_source_authority.py::test_stage_reads_producer_code_membership_contract -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -62,17 +75,38 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "python tmp/issue_workflow/BUG-1837/verify_saved_source_stage.py -> PASS; 正式 attempt255 SOURCE 图 1034 个分区、107528 条资金流事实、正式 BUILD 编译通过；数据库访问、候选/profile 写入、运行态动作均 false"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": ["worker-scheduler"]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "root_cause": "MonthlyObservedSourceAuthority 已生成通用 moneyflow 历史证券来源身份摘要，而 _sealed_partition_from_stage 的旧双向条件只承认分钟摘要；compile_initial_monthly_build 同时误拒绝正式 nullable 的复用 SOURCE 容量预测。",
+  "review_rounds": [
+    {
+      "round": 1,
+      "scope": "生产者→读取器真实分区边界，共享 302132.SZ→300114.SZ 权威和旧格式兼容",
+      "result": "PASS；原缺陷 RED，8 个参数化正负例 GREEN；分钟摘要仍必需，其他查询夹带摘要、非法 SHA、content/reuse 漂移和 payload 漂移均拒绝。"
+    },
+    {
+      "round": 2,
+      "scope": "真实封存 SOURCE 图及 BUILD 编译入口、nullable 预测口径和安全边界",
+      "result": "PASS；提前发现并修复第二处合同不一致；18 个规划参数例通过，1034 个真实分区正式加载及完整编译通过。保留原 null 和原内容 SHA，不重新查询数据库、不重导历史、不放宽数据合同。"
+    },
+    {
+      "round": 3,
+      "scope": "最终关联小矩阵、changed-file lint、L0、diff/scope 和四项设计合规复核",
+      "result": "PASS；AIstock-CI 最终关联矩阵 67 passed、1 skipped（需显式 DEV 授权配置的只读 SQL 条件测试），Ruff/L0/diff check 通过；四项设计合规已逐项复核，源码合同修复完整，候选交付仍未冒称完成。无 HMM/QE/策略/数据/profile/DDL/DML/依赖/进程控制改动。"
+    }
+  ],
   "severity": "P1",
   "status": "open",
   "suspected_modules": [

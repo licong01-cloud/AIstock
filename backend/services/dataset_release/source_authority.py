@@ -4342,7 +4342,14 @@ def _sealed_partition_from_stage(
             )
         )
         or non_null_value_columns != query.non_null_value_columns
-        or (query.code_policy == "pit_minute_code_batch") != (code_membership_digest is not None)
+        # Monthly moneyflow also pins the shared historical source-code set.
+        # Legacy moneyflow may omit it; minute buckets must still carry it.
+        or (query.code_policy == "pit_minute_code_batch" and code_membership_digest is None)
+        or (
+            code_membership_digest is not None
+            and query.code_policy != "pit_minute_code_batch"
+            and query.query_id != "moneyflow_ts"
+        )
     ):
         raise SourceAuditIncomplete("source content partition contract differs")
     reuse = reuse_by_identity.get(identity)
