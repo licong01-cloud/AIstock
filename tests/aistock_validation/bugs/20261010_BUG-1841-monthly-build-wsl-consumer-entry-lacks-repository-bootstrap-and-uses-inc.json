@@ -40,25 +40,25 @@
   "expected": "Fresh WSL child imports data modules and reads precisely fenced formal monthly staging; rejects wrong operation/candidate/attempt and siblings.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261010_BUG-1841-monthly-build-wsl-consumer-entry-lacks-repository-bootstrap-and-uses-inc.json",
       "backend/services/dataset_release/monthly_supervised_build.py",
       "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
       "backend/tests/dataset_release/test_monthly_supervised_build.py",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
-      "scripts/dataset_release_candidate_consumer_smoke.py"
+      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "tests/aistock_validation/bugs/20261010_BUG-1841-monthly-build-wsl-consumer-entry-lacks-repository-bootstrap-and-uses-inc.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261010_BUG-1841-monthly-build-wsl-consumer-entry-lacks-repository-bootstrap-and-uses-inc.json",
       "backend/services/dataset_release/monthly_supervised_build.py",
       "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
       "backend/tests/dataset_release/test_monthly_supervised_build.py",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
-      "scripts/dataset_release_candidate_consumer_smoke.py"
+      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "tests/aistock_validation/bugs/20261010_BUG-1841-monthly-build-wsl-consumer-entry-lacks-repository-bootstrap-and-uses-inc.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -147,8 +147,8 @@
   },
   "first_seen_at": "2026-10-10T20:49:42.450186Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1b09f0174285b524693f15e8ba2b6ebad6881306",
+  "fixed_at": "2026-10-10T21:02:02Z",
   "github_issue_number": 5884,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5884",
   "last_seen_at": "2026-10-10T20:49:42.450186Z",
@@ -156,6 +156,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5885",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -185,6 +186,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -196,7 +198,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1841",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b4807a61c67f6707",
+    "recorded_at": "2026-10-10T21:02:45.987488Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "23c3f734a72cccd1f80c9566b86b48214d1f31ae",
+    "source_merge_commit": "1b09f0174285b524693f15e8ba2b6ebad6881306",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5885",
+    "validation_evidence": [
+      "pytest backend/tests/dataset_release/test_candidate_consumer_smoke_script.py backend/tests/dataset_release/test_monthly_supervised_build.py backend/tests/dataset_release/test_candidate_consumer_smoke.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_release_sources_select_their_own_process_probe -q -> passed (52)",
+      "nox -s l0 -> passed",
+      "nox -s guardrail_changed_files -- --changed-only -> passed",
+      "ruff check noxfile.py scripts/dataset_release_candidate_consumer_smoke.py backend/services/dataset_release/monthly_supervised_build.py backend/tests/dataset_release/test_candidate_consumer_smoke_script.py backend/tests/dataset_release/test_monthly_supervised_build.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+      "git diff --check -> passed",
+      "nox -s validation_catalog_integrity -> passed"
+    ],
+    "validation_evidence_digest": "24b324497373db39ebcbc1f16d9830995a8f60254f4026514eaa5ba640dddb8b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -205,6 +233,14 @@
     "fingerprint": "f7aa2e275cef47c001595615",
     "source_event_id": "FE-20261010-f7aa2e275cef"
   },
+  "validation_evidence": [
+    "pytest backend/tests/dataset_release/test_candidate_consumer_smoke_script.py backend/tests/dataset_release/test_monthly_supervised_build.py backend/tests/dataset_release/test_candidate_consumer_smoke.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_release_sources_select_their_own_process_probe -q -> passed (52)",
+    "nox -s l0 -> passed",
+    "nox -s guardrail_changed_files -- --changed-only -> passed",
+    "ruff check noxfile.py scripts/dataset_release_candidate_consumer_smoke.py backend/services/dataset_release/monthly_supervised_build.py backend/tests/dataset_release/test_candidate_consumer_smoke_script.py backend/tests/dataset_release/test_monthly_supervised_build.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+    "git diff --check -> passed",
+    "nox -s validation_catalog_integrity -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
