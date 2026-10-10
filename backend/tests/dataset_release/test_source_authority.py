@@ -97,6 +97,70 @@ def test_raw_source_sealer_keeps_row_identity_and_emits_exact_month_leaves(tmp_p
         )
 
 
+@pytest.mark.parametrize("query_id,mutation,error", [
+    ("moneyflow_ts", None, None),
+    ("moneyflow_ts", "legacy", None),
+    ("kline_minute_raw", None, None),
+    ("kline_minute_raw", "missing", "partition contract differs"),
+    ("daily_basic", "unexpected", "partition contract differs"),
+    ("moneyflow_ts", "malformed", "source_code_membership_digest"),
+    ("moneyflow_ts", "reuse_drift", "content/reuse partition differs"),
+    ("moneyflow_ts", "payload_drift", "partition contract differs"),
+])
+def test_stage_reads_producer_code_membership_contract(tmp_path, dataset_profile, query_id, mutation, error):
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+    from backend.services.dataset_release.source_authority import SourceTableSchema, _sealed_partition_from_stage
+
+    ControlStore.initialize(tmp_path)
+    cas = CASStore(tmp_path)
+    authority = MonthlyObservedSourceAuthority(
+        dataset_profile, cas, progress=lambda _: None, month_start=date(2024, 8, 1),
+        sector_source_policy="classification_published_snapshot_v1",
+    )
+    query = PRODUCTION_QUERY_SPECS[query_id]
+    key, params = next(authority._partition_requests(
+        query, date(2024, 8, 31),
+        pit_snapshot=SimpleNamespace(spans=[SimpleNamespace(ts_code="302132.SZ")]),
+    ))
+    payload = {"ts_code": params["codes"][0], **{field: 1000 for field in query.value_columns}}
+    if query_id == "kline_minute_raw":
+        payload.update(trade_time="2024-08-13 09:31:00", freq="1min",
+                       volume_shares_source="tushare_stk_mins", volume_shares_sha256="a" * 64)
+    else:
+        payload["trade_date"] = "2024-08-13"
+    if query_id == "moneyflow_ts":
+        assert payload["ts_code"] == "300114.SZ"  # 正式共享历史证券身份，而非 HMM 私有映射。
+    session = SimpleNamespace(stream=lambda *_args, **_kwargs: iter([{
+        "row_key": json.dumps([payload[field] for field in query.key_columns]),
+        "row_payload": json.dumps(payload),
+    }]))
+    sealed = authority._seal_query_partition(
+        session, query=query, partition_key=key, params=params, tokens=(),
+        table_schema=SourceTableSchema(query.table_identity, query.required_columns),
+    )
+    raw, reuse = sealed.as_build_input(), sealed.as_reuse_input()
+    if mutation in {"legacy", "missing"}:
+        raw["source_code_membership_digest"] = reuse["source_code_membership_digest"] = None
+    elif mutation in {"unexpected", "malformed"}:
+        raw["source_code_membership_digest"] = reuse["source_code_membership_digest"] = (
+            "a" * 64 if mutation == "unexpected" else "invalid"
+        )
+    elif mutation == "reuse_drift":
+        reuse["source_code_membership_digest"] = "b" * 64
+    elif mutation == "payload_drift":
+        raw["source_payload_columns"] = reuse["source_payload_columns"] = ["ts_code", "trade_date"]
+    if error:
+        with pytest.raises(SourceAuditIncomplete, match=error):
+            _sealed_partition_from_stage(cas, raw, {sealed.spec.identity: reuse})
+    else:
+        loaded = _sealed_partition_from_stage(cas, raw, {sealed.spec.identity: reuse})
+        assert loaded.as_build_input() == raw
+        assert loaded.rows_ref == sealed.rows_ref
+        assert loaded.source_partition_params_digest == sealed.source_partition_params_digest
+
+
 @pytest.mark.parametrize("mismatch", [False, True])
 def test_validated_text_keys_avoid_reencoding_without_weakening_identity(monkeypatch, mismatch):
     from backend.services.dataset_release import source_authority as source
