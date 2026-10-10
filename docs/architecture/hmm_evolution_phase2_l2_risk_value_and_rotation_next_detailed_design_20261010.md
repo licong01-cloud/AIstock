@@ -1,8 +1,8 @@
 # HMM Phase 2：风险价值交付核验与唯一下一轮动候选详细设计
 
-> 版本：v1.2；日期：2026-10-10；owner：HMM；tier：F2。
-> 状态：源码及一次正式双fresh-process10/10 fits完成、bitwise一致；研究效果BELOW_BINDING_MBE，未观察到排序参照消费优势。风险既有产品只读复验完成、正式surface记录识别PENDING。D1～D6数值由用户本轮委托权限内冻结，不冒称用户曾逐项批准；源码PR/生产采用另列，执行完成不等于模型有效。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.87 §1.0/§1.13/§1.14。原冻结历史详细设计§4/§5 D1～D6、旧模型及结果不回写。
+> 版本：v1.3；日期：2026-10-10；owner：HMM；tier：F2。
+> 状态：源码及一次正式双fresh-process10/10 fits完成、bitwise一致；研究效果BELOW_BINDING_MBE，未观察到排序参照消费优势。后续既有风险产品原记录已合法登记，同进程真实API/无mock UI确认surface=AVAILABLE_EXPERIMENTAL，forward/advisory未升级。D1～D6数值由用户本轮委托权限内冻结，不冒称用户曾逐项批准；源码PR/生产采用另列，执行完成不等于模型有效。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.88 §1.0/§1.13/§1.14。原冻结历史详细设计§4/§5 D1～D6、旧模型及结果不回写。
 > 当前任务审核base：a1084f2c7a5272285ab186bfe6f31efb8823d713；最终交付前安全同步最新main。所有原实验/生产权限仅对各自目标有效；离线正式执行绑定本轮已审核、测试通过的干净immutable源码commit，不把未合入源码称为merge或运行态生效。
 
 ## 1. Background、Goals与Non-Goals
@@ -33,7 +33,7 @@ P2 gross R−X累计少0.198867887个百分点、MDD改善1.727103116个百分�
 
 2026-10-10已有服务上的无mock浏览器验证：2024-07-01、2024-08-01（0报警）、2026-03-31均读回131行业；默认前10/后10及自定义30有效、31显式拒绝，完整下载131。全部/显示/隐藏报警与API一致，不将未知概率排为低风险。页面显式标“研究输出，未完成前瞻确认”，forward=NOT_STARTED、advisory=NOT_AVAILABLE。
 
-当前research_surface_status=NOT_AVAILABLE，与历史AVAILABLE_EXPERIMENTAL验收分开；正式验证记录未被当前服务识别，不能仅凭历史文件或这次页面成功改绿。`product_validation_store.receipt_path/find_receipt`按稳定run/row hash寻址，不按HEAD或环境变量。普通结果登记只写既有版本化文件store、下次请求可读，不应控制服务；如需登记，先确定实际服务账号的明确store root及适用完整receipt，不猜当前Codex profile就是后端账号，不覆盖记录、不新增API/平台。当前没有执行登记写入，pending不阻挡下一候选设计。
+首次只读复验时research_surface_status=NOT_AVAILABLE，与历史验收分开；当时没有明确服务目标，未猜路径或登记。后续消费任务已按§14确认服务账户、匹配既有完整receipt并原样登记，同进程真实API/无mock UI确认当前surface=AVAILABLE_EXPERIMENTAL。`product_validation_store.receipt_path/find_receipt`始终按稳定run/row hash寻址，不按HEAD或环境变量。仅写既有文件store，未覆盖记录或预测，未新增API/平台、配置、模型激活或后端重启；forward/advisory保持原状态。
 
 BUG-1827已合入373a90423，运行identity2784c131经祖先检查包含该修复；正式close-sync与精确源树清理仍独立。新冻结历史P2结果不自动替换这份原run的产品summary/行/hash。
 
@@ -130,7 +130,7 @@ Ridge(alpha=0.01,fit_intercept=True,solver="svd",positive=False)
 
 同一child顺序处理五个月：每月只接收≤as-of的feature/成熟训练view；全期评价outcome不能作为fit/早停/选择输入。训练阶段可读的当月已成熟历史标签与完整后验评价视图明确分开，后面月份可使用当时已成熟的前面预测期标签，这是批准提案内的prequential训练，不伪称一组永远不变的holdout。两process封闭全部月度参数/预测并向parent request/readback闭合后，parent才读取完整评价视图。代码BUG另登记独立scope，不在失败处理里自动重训/调参。只保必要五份参数、输入pins、预测、compact结果，不新增证据平台/日志账本/研究env开关。
 
-当前合同已由本轮委托冻结，源码已完成两轮作者审修及第三轮收敛、相关125 passed/1 skipped最小矩阵和补充直接测试；正式10fit已完成，结果见§13。本批到此结束，不追加fit，不写store/DB/数据集、不启动用户服务。任何新PR合入、cleanup、DDL/DML、依赖、runtime activation仍核对具体授权；后端重启由用户执行，记录或离线回放不提出重启要求。
+当前合同已由本轮委托冻结，源码已完成两轮作者审修及第三轮收敛、相关125 passed/1 skipped最小矩阵和补充直接测试；正式10fit已完成，结果见§13。模型批次到此结束，当时未写store/DB/数据集或启动用户服务；随后用户要求的既有风险普通记录与产品核验见§14，未追加fit或激活新模型。任何新PR合入、cleanup、DDL/DML、依赖、runtime activation仍核对具体授权；后端重启由用户执行，记录或离线回放不提出重启要求。
 
 ## 9. Implementation Plan、真实Allowed APIs与Scope
 
@@ -141,7 +141,7 @@ Ridge(alpha=0.01,fit_intercept=True,solver="svd",positive=False)
 - `rotation_l2.py::evaluate_predictions_for_calendar`：显式日期的原10D outcome/指标；不是无参数latest reader。
 - `formal_state_input.py::_bounded_l2_stock_facts(..., prewarm_price_history=True)`：原PIT/C-010股票事实预热；不复制该实现，不改其旧合同。
 - `rotation_l2_reference_value.py::cohort_reference_path`：cohort数学复用；原官方收益guard保持，新合成源必须明确版本dispatch，不能换个字典静默通过。
-- `product_validation_store.py::find_receipt/register_receipt`：只用于已授权既有产品结果登记，不加入新研究平台；本轮不写入。
+- `product_validation_store.py::find_receipt/register_receipt`：只用于既有产品结果登记，不加入新研究平台；原10-fit阶段未写入，后续§14使用已合入CLI原样登记既有receipt。
 
 现存`training_matrix`和`run_process`带旧固定日期/version guard，不能把新月份伪装成旧bundle调用。实现时抽取同一原正常方程/训练数学的显式date-view内核、让旧入口保留原guard并复用；不复制整段train/新开平行writer。新CLI是唯一预注册contract，不开放任意窗口/参数网格。
 
@@ -198,7 +198,7 @@ Ridge(alpha=0.01,fit_intercept=True,solver="svd",positive=False)
 
 v1.0文档阶段的两轮作者审修（非独立第三方）已完成并保留：当时D1～D6待批准，四份F2结构验收及9项scope/历史/合同/身份检查通过，包括原P1/P2十二条D1～D6逐字不变、11行历史verified与旧版本历史不变。v1.1按用户本轮委托权限冻结合同；两轮源码作者审修完成：修正固定控制/原P2 lineage、delta原生人口、父级failure隔离、数字环境版本、合法资本耗尽、月诊断非AND门与子进程DB/network/旧fit保护。相关125 passed/1 skipped、L0 blocking=0、module registry8 passed、四文档F2与fresh-process路由/依赖import均实际通过；最终源码HEAD和正式10fit仍须独立绑定，不沿用文档PASS或旧receipt冒充实验通过。实际runtime分类为backend、target_ids=[backend-main]、catalog_error=null；分类不意味着离线实验需要重启，也不意味着本轮生产加载已经生效。
 
-本轮production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop、runtime_activation=noop、backend_restart_permission=false；database_write=false、dataset_write=false、active_profile_write=false、正式fits=10/10、QE_action=false、用户process_control=false。CLI只管理本次自建研究child，不控制用户服务。正式风险store登记pending与模型研究独立，不为记录索要或执行服务重启。
+10-fit研究阶段production_ddl_gate=noop、production_dml_gate=noop、dependency_gates=noop、runtime_activation=noop、backend_restart_permission=false；database_write=false、dataset_write=false、active_profile_write=false、正式fits=10/10、QE_action=false、用户process_control=false。CLI只管理本次自建研究child，不控制用户服务；当时风险store登记pending。随后§14只登记原正式结果文件并由同一服务进程动态识别，未新增fit/DB写入、环境配置、模型激活或重启，不回写研究阶段事实。
 
 第三轮收敛审核包含真实file-only准备的零fit finding：`fixed.REFERENCE_PINS`是旧return模型所用的rank-target对照pins，并非return模型自身身份；改为复用既有`rotation_l2_reference_value.RETURN_PINS`，仍由正式reader核验acceptance、两个child、模型/参数/预测/输入/结果全链。真实旧模型读回PASS、固定参数SHA不变，直接反例PASS。首次准备失败只留下独立failure，0fit/无数据缺口；这是本轮未交付实现的消费校验修正，不改旧main模型或数据集、不降低hash校验、不增加正式fit预算。
 
@@ -233,4 +233,16 @@ monthly分月IC为+0.185050028/+0.090979631/+0.076989847/-0.453339445/-0.2041616
 
 16/16路径104/104日完整，合法持仓估值NA=0；20/20 full-window配对HAC区间均跨零。零成本monthly相对no_order累计少4.520810533个百分点且MDD幅度大4.544688808个百分点；相对frozen_return累计多0.504729798个百分点，但MDD大4.187864395个百分点；相对delta收益与MDD均更差。monthly−no_order日差HAC95%=[-0.003200711,0.002383828]，monthly−frozen=[-0.003133609,0.003368378]。因此本批是BELOW_BINDING_MBE／未观察到排序消费整体优势，统计增量仍INCONCLUSIVE；不是“旧参数一更新就获得可靠价值”。
 
-本批目标已达到诚实终态，20小时为上限，可提前结束。结果不支持采用本候选，不自动第二候选/调参/扩大预算或改变原默认；风险旧独立模型及参考回撤改善结论保持。后续先完成本PR源码交付与明确目标的普通risk记录识别，再提出一个信息内容/目标对齐方面的完整可检验假设，而非继续围绕同四特征搜索窗口或只增强合法性审计。模型合同按用户委托可由本窗口冻结，但本次一次性实验已经结束；QE后置由QE窗口执行。
+本批目标已达到诚实终态，20小时为上限，可提前结束。结果不支持采用本候选，不自动第二候选/调参/扩大预算或改变原默认；风险旧独立模型及参考回撤改善结论保持。后续普通risk记录与消费识别已按§14闭合，源码PR交付仍独立；下一研究须提出一个信息内容/目标对齐方面的完整可检验假设，而非继续围绕同四特征搜索窗口或只增强合法性审计。模型合同按用户委托可由本窗口冻结，但本次一次性实验已经结束；QE后置由QE窗口执行。
+
+## 14. 后续既有风险消费闭环与价值复核（零新fit）
+
+用户随后要求执行建议方案。本步复用已合入reader、唯一登记CLI和既有产品，不新增源码或设计阶段。独立validation树绑定35e722d7fdb02067efa8a773c5cea2d4ab1796b5；backend-main实际PID=146844、运行SHA同值。Win32进程owner/profile只读核验为lc999 / C:/Users/lc999，避免把Codex profile当成服务账户。
+
+原正式文件`F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/product/product_validation.json`的canonical identity为6c55e644c59ab8cfd53f920382d43179aae8c15da05a0aa927f5b8b471c59e2b，与原产品设计一致。当前三日API独立row hash匹配首日2024-07-01、零报警2024-08-01、末日2026-03-31，各131行业；既有Playwright live/no-mock测试实际1 passed。随后用`register_product_validation.py --receipt <原文件> --store-root C:/Users/lc999/.aistock/hmm/product_validation`原样登记，在稳定run/完整row hash目录形成唯一validation.json；read_receipt逐字段确认与原文件相同，不生成新PASS或重写原验证时间。
+
+登记前后同一PID，API立即返回surface=AVAILABLE_EXPERIMENTAL；当前真实无mock Chromium再次验证三日、默认20/自定义30/非法31拒绝、131全量下载和全部/显示/隐藏报警。首日43报警、显示10/隐藏33；零报警日0；末日10/显示10/隐藏0。capability仍RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED、forward=NOT_STARTED、advisory=NOT_AVAILABLE。没有数据库/数据集写入、重新导入预测、训练/过滤、配置/环境变量修改、模型激活或用户进程控制；只是既有结果文件普通登记，不能把它算成新增模型经济价值。
+
+原P2 acceptance b0271ff977d5eee671c5c87ea02fabd8fac48e87c0d6bb313e508ef8955635bf再次file-only核验，未重跑回放或读取新的outcome数据面。已有103/103日GROSS_SYNTHETIC_L2_REFERENCE中，R相对B gross累计收益高2.121683857个百分点、MDD幅度小7.124191892个百分点；R相对同敞口X收益少0.198867887个百分点、MDD幅度小1.727103116个百分点。0/5/10/20bp预算成本下，R−X收益差为−0.198867887/−0.332422774/−0.464856588/−0.726388756个百分点，MDD改善为1.727103116/1.694225219/1.661457156/1.596249424个百分点。旧回放自身tail_accessed=true及限定独立性保留，不改成development未消费或独立forward；本步没有新增tail评估。
+
+这支持有限的参考风险减少迹象，并揭示上涨机会成本和更高换手，不是股票级可成交净收益、自动advisory或QE效果。仅原55,544行历史产品当前表面闭合；新103日价值报告没有自动写入DB/API或替换原run。两轮作者状态复审核对服务/业务identity、原receipt保持与同进程显示，再复核成本、旧历史及所有模型公式不变；全局规范/CI/其他模块零改动。后续不再把此普通记录任务列为模型研发前置。

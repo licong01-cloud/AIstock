@@ -236,9 +236,9 @@ gross累计B/R/X=-4.8919842869032726%/-2.770300430158512%/-2.57143254320511%；M
 
 ### 12.3 当前产品与aftercare独立状态
 
-2026-10-10只读风险原run 88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26，真实API/无mock browser首日2024-07-01、零报警2024-08-01、末日2026-03-31通过；131下载、前后默认20及自定义≤30显示、非法31拒绝、全部/隐藏报警有效。全row hash仍cd31fa9b2dbe2d72f2b4d17438113f35b2db994d5cc3d5698ac8af26636c9f95；research capability保持，当前surface=NOT_AVAILABLE/forward=NOT_STARTED/advisory=NOT_AVAILABLE，服务正式记录识别pending。未新导入这次新窗口预测，不借旧记录使新run可用，不新增环境变量或为记录重启。
+2026-10-10风险原run 88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26，真实API/无mock browser首日2024-07-01、零报警2024-08-01、末日2026-03-31通过；131下载、默认20/自定义30/非法31拒绝、全部/隐藏报警有效。全row hash仍cd31fa9b2dbe2d72f2b4d17438113f35b2db994d5cc3d5698ac8af26636c9f95。首次只读复验当时surface=NOT_AVAILABLE，随后用户要求推进消费闭环；确认实际服务账户并原样登记既有正式receipt后，同一PID动态读回surface=AVAILABLE_EXPERIMENTAL，forward=NOT_STARTED/advisory=NOT_AVAILABLE。过程见下一业务设计§14。未新导入这次新窗口预测，不借旧记录使新run可用，不新增环境变量或为记录重启。
 
-runtime identity=2784c131983bf89bf101492df382565b1fde3352，Git祖先核验已包含373a90423；不同于最新main不等于BUG-1827未加载。#5838 close-sync/Issue #5829及精确清理各自等待真实工作流结论与具体授权，不用页面成功代替aftercare。本次文档同步和核验database_write=false、dataset_write=false、active_profile_write=false、fits=0、runtime_action=false。
+首次只读runtime identity=2784c131983bf89bf101492df382565b1fde3352，Git祖先核验已包含373a90423；后续消费闭环实际运行SHA=35e722d7fdb02067efa8a773c5cea2d4ab1796b5，不因不同于最新main就误报修复未加载。#5838 close-sync/Issue #5829及精确清理各自等待真实工作流结论与具体授权，不用页面成功代替aftercare。本次普通结果文件登记与源码/数据库状态分开，database_write=false、dataset_write=false、active_profile_write=false、fits=0、配置/模型激活/用户process_control=false。
 
 ### 12.4 下一业务包已结束，不回写本设计的原零fit合同
 
