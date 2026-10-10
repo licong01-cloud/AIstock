@@ -169,9 +169,9 @@
   },
   "first_seen_at": "2026-10-09T07:16:03.066228Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "373a904237383b7e699e089a57e71ad4400dadac",
   "fix_summary": "仅在 P2 outcomes 显式启用逐股票严格前置报价承接：从同一冻结 Qlib 文件、同一当前 PIT span 读取最多十条有效报价；跳过已获 authority 的停牌和全字段 NA，部分非有限或损坏报价明确失败。不跨重新入池边界、不读当日或未来报价，不改变模型、C-010 coverage、特征或评估日期。其他消费者默认保持原行为。",
-  "fixed_at": null,
+  "fixed_at": "2026-10-09T15:52:06Z",
   "github_issue_number": 5829,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5829",
   "last_seen_at": "2026-10-09T07:16:03.066228Z",
@@ -179,6 +179,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5831",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -206,6 +207,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -217,7 +219,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1827",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1233997862ac4b60",
+    "recorded_at": "2026-10-09T15:54:06.399992Z",
+    "runtime_contract_digest": "3bd1771dfd27621c8836771a2cfbcd66dff00fa4e1dfffefff11e16650a92cef",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1096f4fb375082a780f71e361d31eefa5ae1231b",
+    "source_merge_commit": "373a904237383b7e699e089a57e71ad4400dadac",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5831",
+    "validation_evidence": [
+      "Source PR #5831 final HEAD 1096f4fb375082a780f71e361d31eefa5ae1231b CI verdict SUCCESS; 148 targeted tests and registry 8 passed; fresh-process router/HMM import passed; source merge 373a904237383b7e699e089a57e71ad4400dadac; backend-main user restart still pending"
+    ],
+    "validation_evidence_digest": "78abc5573e3fcbf8a41882aa3cd910296a5b37fc064da186e4d8083ddcda67e0"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -226,6 +249,9 @@
     "fingerprint": "80f14770ea712bb925765d24",
     "source_event_id": "FE-20261009-80f14770ea71"
   },
+  "validation_evidence": [
+    "Source PR #5831 final HEAD 1096f4fb375082a780f71e361d31eefa5ae1231b CI verdict SUCCESS; 148 targeted tests and registry 8 passed; fresh-process router/HMM import passed; source merge 373a904237383b7e699e089a57e71ad4400dadac; backend-main user restart still pending"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
