@@ -1,6 +1,6 @@
 # HMM Phase 2：L2经济风险与信息增强轮动一次性研究
 
-> v1.0，2026-10-11；HMM owner；F2。用户授权按既有蓝图方向规划并执行10小时长任务，并已委托蓝图范围内新模型合同；本文件冻结本次精确数值，不声称用户逐条另行批准。父蓝图为 `hmm_evolution_and_risk_management_system_design_20260716.md` §1.0、§1.12～1.13；旧PR #5866尚未合入，不将其源码当main。状态：CONTRACT_FROZEN_SOURCE_PENDING；源码合入、生产动作及cleanup分开授权。
+> v1.1，2026-10-11；HMM owner；F2。用户授权按既有蓝图方向规划并执行10小时长任务，并已委托蓝图范围内新模型合同；本文件冻结本次精确数值，不声称用户逐条另行批准。父蓝图为 `hmm_evolution_and_risk_management_system_design_20260716.md` §1.0、§1.12～1.13；旧PR #5866尚未合入，不将其源码当main。状态：FORMAL_EXECUTED_TERMINAL_NO_PROMOTION_PENDING_PR；源码合入、生产动作及cleanup分开授权。
 
 ## 1. Background、Goals与Non-Goals
 
@@ -67,12 +67,12 @@ F-001同源L2/20D/PIT身份；F-002成本敏感动作分数；F-003五个月因�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | backend/services/hmm_risk/l2_economic_candidates.py:prepare | backend/tests/hmm_risk/test_l2_economic_candidates.py；真实pinned源0-fit preflight | PENDING | 最终门禁待运行 |
-| F-002 | backend/services/hmm_risk/l2_economic_candidates.py:fit_risk/risk_predict | backend/tests/hmm_risk/test_l2_economic_candidates.py | PENDING | 正式执行待运行 |
-| F-003 | backend/services/hmm_risk/l2_economic_candidates.py:fit_rotation/tree_predict | backend/tests/hmm_risk/test_l2_economic_candidates.py | PENDING | 正式执行待运行 |
-| F-004 | backend/services/hmm_risk/l2_economic_candidates.py:evaluate | backend/tests/hmm_risk/test_l2_economic_candidates.py | PENDING | 正式执行待运行 |
-| F-005 | scripts/hmm_risk/run_l2_economic_candidates.py | backend/tests/hmm_risk/test_l2_economic_candidates.py | PENDING | 正式执行待运行 |
-| F-006 | scripts/hmm_risk/run_l2_economic_candidates.py；§7 | git diff --check；F2；ownership/module计划 | PENDING | 最终门禁待运行 |
+| F-001 | backend/services/hmm_risk/l2_economic_candidates.py:prepare | backend/tests/hmm_risk/test_l2_economic_candidates.py；artifact:F:/Dev/AIstock_runtime/hmm_l2_economic/20261011/prepared_2877f4be1.json | PASS | none |
+| F-002 | backend/services/hmm_risk/l2_economic_candidates.py:fit_risk/risk_predict | backend/tests/hmm_risk/test_l2_economic_candidates.py；artifact:F:/Dev/AIstock_runtime/hmm_l2_economic/20261011/risk-close/acceptance.json | PASS | none |
+| F-003 | backend/services/hmm_risk/l2_economic_candidates.py:fit_rotation/tree_predict | backend/tests/hmm_risk/test_l2_economic_candidates.py；artifact:F:/Dev/AIstock_runtime/hmm_l2_economic/20261011/rotation-run/acceptance.json | PASS | none |
+| F-004 | backend/services/hmm_risk/l2_economic_candidates.py:evaluate | backend/tests/hmm_risk/test_l2_economic_candidates.py；§12正式结果 | PASS | none |
+| F-005 | scripts/hmm_risk/run_l2_economic_candidates.py | backend/tests/hmm_risk/test_l2_economic_candidates.py；§12双process/零fit读回 | PASS | none |
+| F-006 | scripts/hmm_risk/run_l2_economic_candidates.py；§7 | python -m nox -s l0；python -m nox -s validation_module_registry_l0；backend/tests/hmm_risk/test_l2_economic_candidates.py | PASS | none |
 
 ## 9. DESIGN-COMPLIANCE-001与Review
 
@@ -88,6 +88,29 @@ F-001同源L2/20D/PIT身份；F-002成本敏感动作分数；F-003五个月因�
 
 成本权重及固定动作阈值可能只增加报警、牺牲收益，并不保证经济改善；20维浅树也可能过拟合已消费历史。两种候选不是已证明能力。不能用本次开发期改善宣称独立确认或QE净收益。没有效果时停止，不切换阈值/窗口/标签/seed。
 
-当前实现及26项直接测试已完成，Ruff通过；真实输入只读preflight已通过，风险74,144个成熟train样本/591日，五个月轮动train样本分别16,361/16,349/16,241/16,130/15,996。该preflight为0 fits，正式12 fits尚未启动。
+当前实现及27项直接测试已完成，Ruff通过；真实输入只读preflight已通过，风险74,144个成熟train样本/591日，五个月轮动train样本分别16,361/16,349/16,241/16,130/15,996。正式12/12 fits已完成，完整执行不代表模型有价值；结果见§12。
 
-源码作者第一轮复审修复：prepared自hash不能代替source authority，parent须从固定pin重新派生再比对；新风险reference复用arm_day但独立动作schema；固定return对照复用现有linear_predictions_for_rows，禁止复制数学。第二轮复审修复：float32溢出fail closed、训练ledger逐项读回、NA/资本耗尽全臂共同块与原生/共同人口指标分开。最终门禁与正式结果后续填入，不把未运行事项写PASS。
+源码作者第一轮复审修复：prepared自hash不能代替source authority，parent须从固定pin重新派生再比对；新风险reference复用arm_day但独立动作schema；固定return对照复用现有linear_predictions_for_rows，禁止复制数学。第二轮复审修复：float32溢出fail closed、训练ledger逐项读回、NA/资本耗尽全臂共同块与原生/共同人口指标分开。正式风险fit后发现parent标签函数日期类型错误，单node先RED后GREEN；第三轮集中复审确认只修父评估，不改训练/模型/阈值，新增显式close模式恢复原两封存process，数据库/network/fit poison下完成零fit闭合。保留原failure，不写成首次运行成功。
+
+## 12. 正式结果与终态（2026-10-11）
+
+风险拟合源码=e013d318094265b5303c9c949169f715689780fd，父评估修复/轮动拟合源码=2877f4be1ab3117c9527071341980649cd115747。风险acceptance=`1eb6c97882ed33a08ea92e7116c838da945699726d7b888ccb5174cc43619be5`，model=`9161238647b0f08e0e3c866046fe7eb1a01bd43fe76326886db1ef822a4037f6`；轮动acceptance=`cda61f0e8baa1caaef5a3ac71811e188eaf24a507bd913adcc0faf36943f8440`，model=`bdbbcd1c808e0d2f4ff71fdf46030cf257fcfa0887b037a3db33842327c90288`。文件分别为§8列出的risk-close/rotation-run acceptance；风险原失败文件及两sealed模型保持不变。
+
+风险2 fits、轮动10 fits，共12，双process bitwise一致、parent零fit恢复一致。风险close追加fits=0，拟合与评估commit分开记录；没有调参、重新过滤HMM、数据生产、DB写入、profile切换、产品激活、服务控制或新增tail访问。所有新历史都标已消费开发期，不制造独立确认。
+
+| 2026-04..08指标 | 新候选 | 原固定对照/参照 |
+|---|---:|---:|
+| risk TP / FP / FN | 1694 / 2061 / 1132 | 1735 / 2142 / 1091 |
+| risk precision / recall | 0.451132 / 0.599434 | 0.447511 / 0.613942 |
+| risk相对各自同敞口gross累计增量 | -0.370911个百分点 | -0.198868个百分点 |
+| risk相对各自同敞口MDD改善 | +1.897361个百分点 | +1.727103个百分点 |
+| rotation Rank IC（94成熟日） | -0.045364 | fixed return -0.017935；delta -0.009648 |
+| rotation spread（官方10D outcome） | -0.015906 | fixed return -0.004134；delta +0.001492 |
+| rotation PIT synthetic gross累计收益 | -16.948848% | fixed return -10.354896%；无排序 -5.329355% |
+| rotation PIT synthetic MDD | 31.677306% | fixed return 17.657629%；无排序 17.300805% |
+
+risk新策略直接相对原策略gross累计-0.398970个百分点，MDD恶化0.037415个百分点；0/5/10/20bp下相对原策略累计差为-0.398970/-0.417721/-0.436279/-0.472815个百分点。其误报未来均值收益+5.066997%、漏报均值回撤-9.892690%，未实现损失/机会成本共同改善。103/103新参考日完整，所有paired HAC区间跨零；旧development只411/423 paired日、7块，保持全期不足，不拼NAV。
+
+rotation 104/104 coverage合格，94/94成熟IC有效；IC95% HAC区间[-0.188561,+0.097834]，native/common人口指标一致。16/16成本×策略synthetic参考路径完整，candidate对三个对照的paired HAC均跨零；0/5/10/20bp累计收益为-16.948848/-17.726705/-18.497258/-20.016724%。该结果不支持升为新默认，也不证明全部20D/非线性模型不可能有效。
+
+本轮终态：risk=ECONOMIC_VECTOR_REPORTED_NOT_PROMOTED；rotation=BELOW_BINDING_MBE；advisory=NOT_AVAILABLE、forward=NOT_STARTED。不是正常停牌/目录缺项或统计显著性硬门阻断：源闭合和覆盖已通过，点估计和参考经济结果本身不支持本候选。按§6终止，不追加第二套参数、扩大搜索或生产交付；旧模型和成果保留。下一轮若继续，应重新明确待检验的经济机制/信息增量，不以“增加维度/更换模型即有效”或合法性审查代替价值假设。
