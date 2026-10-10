@@ -32,9 +32,22 @@
   ],
   "expected": "正式 moneyflow_ts 历史来源代码摘要可随共享 SOURCE 分区进入 BUILD；分钟摘要仍必需，其他查询不得夹带摘要，非法 SHA、content/reuse 漂移及原字段/schema/hash 校验继续 fail closed。合法未知 CAS 预测保留 null，输出规划沿用既有候选上界；负数、布尔、文本及缺少预测字段仍拒绝。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_build_bridge.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_build_bridge.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261010_BUG-1837-monthly-build-rejects-sealed-pit-code-batch-source-membership-digest.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/dataset_release/monthly_build_bridge.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_build_bridge.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261010_BUG-1837-monthly-build-rejects-sealed-pit-code-batch-source-membership-digest.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -72,41 +85,45 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    {
+      "result": "PASS；原缺陷 RED，8 个参数化正负例 GREEN；分钟摘要仍必需，其他查询夹带摘要、非法 SHA、content/reuse 漂移和 payload 漂移均拒绝。",
+      "round": 1,
+      "scope": "生产者→读取器真实分区边界，共享 302132.SZ→300114.SZ 权威和旧格式兼容"
+    },
+    {
+      "result": "PASS；提前发现并修复第二处合同不一致；18 个规划参数例通过，1034 个真实分区正式加载及完整编译通过。保留原 null 和原内容 SHA，不重新查询数据库、不重导历史、不放宽数据合同。",
+      "round": 2,
+      "scope": "真实封存 SOURCE 图及 BUILD 编译入口、nullable 预测口径和安全边界"
+    },
+    {
+      "result": "PASS；AIstock-CI 最终关联矩阵 67 passed、1 skipped（需显式 DEV 授权配置的只读 SQL 条件测试），Ruff/L0/diff check 通过；四项设计合规已逐项复核，源码合同修复完整，候选交付仍未冒称完成。无 HMM/QE/策略/数据/profile/DDL/DML/依赖/进程控制改动。",
+      "round": 3,
+      "scope": "最终关联小矩阵、changed-file lint、L0、diff/scope 和四项设计合规复核"
+    }
+  ],
   "risk_area": "bug",
+  "root_cause": "MonthlyObservedSourceAuthority 已生成通用 moneyflow 历史证券来源身份摘要，而 _sealed_partition_from_stage 的旧双向条件只承认分钟摘要；compile_initial_monthly_build 同时误拒绝正式 nullable 的复用 SOURCE 容量预测。",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
-      "python tmp/issue_workflow/BUG-1837/verify_saved_source_stage.py -> PASS; 正式 attempt255 SOURCE 图 1034 个分区、107528 条资金流事实、正式 BUILD 编译通过；数据库访问、候选/profile 写入、运行态动作均 false"
+      "python tmp/issue_workflow/BUG-1837/verify_saved_source_stage.py -> PASS; 正式 attempt255 SOURCE 图 1034 个分区、107528 条资金流事实、正式 BUILD 编译通过；数据库访问、候选/profile 写入、运行态动作均 false",
+      "python tmp/issue_workflow/BUG-1837/verify_saved_source_stage.py -> PASS; 1034 actual sealed September partitions, 107528 moneyflow facts, formal BUILD compile; all physical components INCREMENTAL; database/candidate/profile/runtime writes=false"
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
-  "root_cause": "MonthlyObservedSourceAuthority 已生成通用 moneyflow 历史证券来源身份摘要，而 _sealed_partition_from_stage 的旧双向条件只承认分钟摘要；compile_initial_monthly_build 同时误拒绝正式 nullable 的复用 SOURCE 容量预测。",
-  "review_rounds": [
-    {
-      "round": 1,
-      "scope": "生产者→读取器真实分区边界，共享 302132.SZ→300114.SZ 权威和旧格式兼容",
-      "result": "PASS；原缺陷 RED，8 个参数化正负例 GREEN；分钟摘要仍必需，其他查询夹带摘要、非法 SHA、content/reuse 漂移和 payload 漂移均拒绝。"
-    },
-    {
-      "round": 2,
-      "scope": "真实封存 SOURCE 图及 BUILD 编译入口、nullable 预测口径和安全边界",
-      "result": "PASS；提前发现并修复第二处合同不一致；18 个规划参数例通过，1034 个真实分区正式加载及完整编译通过。保留原 null 和原内容 SHA，不重新查询数据库、不重导历史、不放宽数据合同。"
-    },
-    {
-      "round": 3,
-      "scope": "最终关联小矩阵、changed-file lint、L0、diff/scope 和四项设计合规复核",
-      "result": "PASS；AIstock-CI 最终关联矩阵 67 passed、1 skipped（需显式 DEV 授权配置的只读 SQL 条件测试），Ruff/L0/diff check 通过；四项设计合规已逐项复核，源码合同修复完整，候选交付仍未冒称完成。无 HMM/QE/策略/数据/profile/DDL/DML/依赖/进程控制改动。"
-    }
-  ],
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
