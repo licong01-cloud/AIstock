@@ -316,3 +316,39 @@ def test_two_children_must_match_before_outcome_access(monkeypatch):
     ]
     with pytest.raises(m.rotation.RotationL2Error, match="bitwise"):
         cli.close({}, children, "head", "risk")
+
+
+def test_risk_evaluation_uses_original_string_calendar_contract(monkeypatch):
+    days = [(date(2026, 4, 1) + timedelta(days=i)).isoformat() for i in range(12)]
+    codes = ["801783.SI"]
+    candidate = [
+        {
+            "trade_date": d,
+            "as_of_date": (date.fromisoformat(d) - timedelta(days=1)).isoformat(),
+            "sector_code": codes[0],
+            "availability": "available",
+            "reason_code": None,
+            "risk_action_score": 0.1,
+            "warning": False,
+        }
+        for d in days
+    ]
+    old = [{**r, "probability": r["risk_action_score"]} for r in candidate]
+    values = {d: {codes[0]: 0.01} for d in days}
+    base = {"feature_sha256": m.PINS["base_features"][1], "returns": {d: values[d] for d in days[1:]}}
+    new = {"feature_sha256": m.PINS["new_features"][1], "returns": base["returns"], "event_returns": values}
+    monkeypatch.setattr(m, "readback", lambda *a: None)
+    monkeypatch.setattr(m, "load_sources", lambda *a: {"base_outcomes": base, "new_outcomes": new})
+    monkeypatch.setattr(m.risk, "predictions_from_parameters", lambda *a: (old, 0))
+    bundle = {
+        "catalog": codes,
+        "calendar": days,
+        "risk_windows": [days, days],
+        "rows": {},
+        "request": {},
+        "original_risk_parameters": {},
+    }
+    assert (
+        m.evaluate(bundle, {"candidate": "risk", "predictions": candidate})["effect_status"]
+        == "ECONOMIC_VECTOR_REPORTED_NOT_PROMOTED"
+    )

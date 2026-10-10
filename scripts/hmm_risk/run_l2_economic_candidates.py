@@ -7,11 +7,13 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from backend.services.hmm_risk import l2_economic_candidates as model  # noqa: E402
+from backend.services.hmm_risk.frozen_l2_history import no_training_or_external_actions  # noqa: E402
 from backend.services.hmm_risk import rotation_l2_moneyflow_supervised as hashes  # noqa: E402
 from backend.services.hmm_risk.formal_state_executor import (  # noqa: E402
     THREAD_VARIABLES,
@@ -41,7 +43,9 @@ def environment() -> dict:
     }
 
 
-def close(bundle: dict, children: list[dict], source: str, candidate: str) -> dict:
+def close(
+    bundle: dict, children: list[dict], source: str, candidate: str, *, evaluator_source: str | None = None
+) -> dict:
     model.validate_input(bundle)
     for number, child in enumerate(children, 1):
         hashes.verify(child, "process_sha256")
@@ -68,6 +72,8 @@ def close(bundle: dict, children: list[dict], source: str, candidate: str) -> di
             "candidate": candidate,
             "contract": model.CONTRACT,
             "source_commit": source,
+            "evaluation_source_commit": evaluator_source or source,
+            "fits_added_by_closure": 0,
             "input_sha256": bundle["input_sha256"],
             "model_sha256": children[0]["sealed"]["model_sha256"],
             "prediction_sha256": children[0]["sealed"]["prediction_sha256"],
@@ -90,13 +96,15 @@ def close(bundle: dict, children: list[dict], source: str, candidate: str) -> di
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("prepare", "run", "child"))
+    parser.add_argument("mode", choices=("prepare", "run", "child", "close"))
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--candidate", choices=("risk", "rotation"))
     parser.add_argument("--process-index", type=int)
     parser.add_argument("--input-sha256")
     parser.add_argument("--source-commit")
+    parser.add_argument("--child-one", type=Path)
+    parser.add_argument("--child-two", type=Path)
     args = parser.parse_args(argv)
     output = validate_output_location(args.output)
     progress = {"started_fits": 0, "completed_fits": 0}
@@ -135,6 +143,35 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             print(f"sealed={output}; completed_fits={progress['completed_fits']}", flush=True)
+        elif args.mode == "close":
+            model.require(
+                args.candidate and args.source_commit and args.child_one and args.child_two,
+                "close requires explicit candidate, fitting source and two sealed children",
+            )
+            subprocess.check_call(["git", "-C", str(ROOT), "merge-base", "--is-ancestor", args.source_commit, source])
+            bundle = read_json(args.request)
+            model.validate_input(bundle)
+            model.require(bundle["source_commit"] == args.source_commit, "closure fitting source differs")
+            authority = model.prepare(bundle["request"], args.source_commit)
+            model.require(
+                authority["input_sha256"] == bundle["input_sha256"], "closure prepared/source authority differs"
+            )
+            del authority
+            children = [model.reference._sealed_file(p) for p in (args.child_one, args.child_two)]
+            with (
+                no_training_or_external_actions(),
+                patch.object(
+                    model.GradientBoostingRegressor,
+                    "fit",
+                    side_effect=RuntimeError("zero-fit closure forbids training"),
+                ),
+            ):
+                result = close(bundle, children, args.source_commit, args.candidate, evaluator_source=source)
+            write_once(output, result)
+            print(
+                f"{result['result']['effect_status']}; additional_fits=0; original_fits={result['completed_fits']}; output={output}",
+                flush=True,
+            )
         else:
             model.require(args.candidate is not None, "run requires explicit candidate")
             bundle = read_json(args.request)

@@ -800,9 +800,7 @@ def evaluate(bundle: Mapping, sealed: Mapping) -> dict:
             candidate = [r for r in sealed["predictions"] if r["trade_date"] in set(window)]
             original = [r for r in old if r["trade_date"] in set(window)]
             event_returns = outcome["returns"] if outcome is base else outcome["event_returns"]
-            labels = risk.drawdown_outcomes(
-                bundle["calendar"], window, codes, event_returns, date.fromisoformat(window[-1])
-            )
+            labels = risk.drawdown_outcomes(bundle["calendar"], window, codes, event_returns, window[-1])
             result.append(
                 {
                     "start": window[0],
