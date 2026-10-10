@@ -1,8 +1,8 @@
 # HMM Evolution Phase 2：冻结L2轮动与独立风险的新历史验证详细设计
 
-> 版本：v1.1；日期：2026-10-09；owner：HMM；tier：F2。
-> 状态：APPROVED_BY_USER_SOURCE_IMPLEMENTED_PENDING_PR_DELIVERY。用户于2026-10-09批准文档合入及新P1/P2全部D1～D6；文档#5799已合入6119f8990b7b5e9a132181b45d682f4a8c422efc。授权固定参数新历史验证，不授权fit、生产采用、源码PR合入或cleanup。显式离线executor及直接测试已实施，最终提交门禁/CI另报；源码明确授权合入后，方按§6固定源码执行。
-> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.84 §1.0/§1.12/§1.13。旧直接设计及精确合同不回写。
+> 版本：v1.2；日期：2026-10-10；owner：HMM；tier：F2。
+> 状态：APPROVED_BY_USER_FORMAL_FROZEN_HISTORY_COMPLETED_WITH_DISTINCT_TERMINALS。用户于2026-10-09批准全部原P1/P2 D1～D6，文档#5799合入6119f8990b7b5e9a132181b45d682f4a8c422efc，离线源码与BUG-1827修复已合入并完成正式双fresh-process零fit验证。P1为INSUFFICIENT_REFERENCE_PATH，P2为REFERENCE_RISK_REDUCTION_OBSERVED，详见§12；无新生产采用或fit。原授权不自动扩展为新合同、生产写入或cleanup。
+> 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.85 §1.0/§1.12～§1.14。旧直接设计与本文D1～D6精确合同不回写。
 > 文档审核base：e7f6eaf9e2e7cc2b1e1fcea36aaac94adffd2216；源码从同步后的origin/main c7f41c288开始。§6锁定15个HMM-owned文件，不改变冻结模型、批准公式或运行态。
 
 ## 1. Background、Goals与Non-Goals
@@ -21,7 +21,7 @@ P0同步已结束的#5791四臂参考结果：完整16条路径、return相对�
 
 P1官方申万L2指数收益与P2 C-010/A5股票聚合收益是不同估值对象。每个包内部所有臂共享同一冻结源、日历和预测资格；两包不拼源、不横比绝对收益、不互借outcome。原风险20D不得用当前四维轮动输入代替。
 
-### 2.2 P1资产身份（当前可读，不读取新窗口数值）
+### 2.2 P1资产身份（原准备阶段只读身份，正式结果见§12）
 
 | 对象 | 固定路径/身份 |
 |---|---|
@@ -49,7 +49,7 @@ P1官方申万L2指数收益与P2 C-010/A5股票聚合收益是不同估值对�
 
 原request.source_identity中另有producer/source-history字段；不得把其中源导出历史hash当本次qe_dataset_manifest文件hash。上表业务identity与byte hash均由原features及当前manifest metadata直接读回相符。实际所有component/inventory/security/provider/PIT pins按原正式binding逐项继承，不能只校验本表三个摘要。若当前文件不能闭合原正式identity，typed停止，不借v15数据或数据库补齐。
 
-本轮实时active profile仍为v15；已批准P2 D1显式保留其冻结v17输入，避免把已训练风险模型静默重绑定到v15。不激活v17，不要求QE切换数据。以后active前进也不改本次request。
+原准备/执行时active profile为v15；已批准P2 D1显式保留其冻结v17输入，避免把已训练风险模型静默重绑定到v15。不激活v17，不要求QE切换数据。以后active前进也不改该次request，本次状态同步不切换或推断最新active profile。
 
 ## 3. 日历、因果时序与独立性
 
@@ -79,7 +79,7 @@ P2按原股票/PIT/as-of聚合合同计算收益和20D输入，不能把官方�
 
 ## 4. Contracts P1：L2-FROZEN-ROTATION-HISTORY D1～D6
 
-以下六条全部于2026-10-09获用户批准。源码已经实施，正式新窗口执行尚未运行；以下精确合同保持不变。
+以下六条全部于2026-10-09获用户批准，源码及正式新窗口执行均已完成；以下精确合同保持不变，终态见§12。
 
 | 决策 | 推荐一次性精确合同 |
 |---|---|
@@ -94,7 +94,7 @@ OBSERVED只是完整参考路径点估计，不是新promotion状态。若区间
 
 ## 5. Contracts P2：L2-FROZEN-RISK-HISTORY D1～D6
 
-以下六条全部于2026-10-09获用户批准。源码已经实施，正式新窗口执行尚未运行；以下精确合同保持不变。
+以下六条全部于2026-10-09获用户批准，源码及正式新窗口执行均已完成；以下精确合同保持不变，终态见§12。
 
 | 决策 | 推荐一次性精确合同 |
 |---|---|
@@ -144,7 +144,7 @@ OBSERVED只是完整参考路径点估计，不是新promotion状态。若区间
 | P2消费 | 三臂131固定预算、全/无warning、全不可用现金及真实coverage、一日延迟、R/X敞口相同、股票事实源、漂移成本、末日不平仓、合法NA块/资本耗尽与真实故障区别 |
 | 解读/无副作用 | P1/P2收益口径不可混用；旧已消费区间不冒充独立；区间跨零/少持仓/机会成本和短样本局限不隐藏；新结果不升级API/advisory、不修改旧资产/数据/环境变量/DB或用户进程 |
 
-已运行合成直接矩阵及小段原封闭参数兼容验证：rank/return各131条旧日期预测完全相同，risk三条旧合法概率float64完全相同，均无fit；fresh-process导入hmm_risk/health及依赖链无数据库/网络调用。旧直接回归首次71通过/1失败，定位为线程池同集合不同加载顺序；独立node通过，修正测试cold环境后在混合risk收集下2项通过。最终HMM PR slice、registry/L0、静态及F2以提交报告为准。新窗口完整file-only preflight、数值、标签、效果均未执行，不把合成测试或日历104计作data PASS。
+原源码阶段运行合成直接矩阵及小段封闭参数兼容验证：rank/return各131条旧日期预测完全相同，risk三条旧合法概率float64完全相同，均无fit；fresh-process导入hmm_risk/health及依赖链无数据库/网络调用。旧直接回归首次71通过/1失败，定位为线程池同集合不同加载顺序；独立node通过，修正测试cold环境后在混合risk收集下2项通过。最终HMM PR slice、registry/L0、静态及F2以对应提交报告为准。源码阶段的合成测试/日历104没有被计作data PASS；后续正式完整输入、固定推断及效果终态现已完成，见§12。
 
 ## 8. Design Acceptance Index
 
@@ -172,10 +172,10 @@ OBSERVED只是完整参考路径点估计，不是新promotion状态。若区间
 |---|---|
 | P0旧结果同步 | 已读回#5791结果及身份，无重跑；三文档状态同步，PR合入和精确清理另报 |
 | 新P1/P2数值批准 | APPROVED_BY_USER，2026-10-09明确批准全部D1～D6；文档#5799已合入 |
-| 新窗口独立性 | HELD_OUT_FROM_CURRENT_CANDIDATE_SELECTION，§3.2限定范围，不宣称全项目untouched |
-| 新源码 | SOURCE_IMPLEMENTED，直接反例/原推断兼容通过；最终PR门禁/CI另报，源码PR未合入 |
-| 新窗口完整file-only preflight/固定参数推断 | NOT_RUN，源码合入后固定merge独立validation树执行 |
-| 新窗口效果与消费价值 | NOT_RUN，无新tail outcome读取 |
+| 新窗口独立性 | 当次读取前HELD_OUT_FROM_CURRENT_CANDIDATE_SELECTION，§3.2限定范围；本窗口现已消费，不能用于下一候选的未消费独立确认 |
+| 新源码 | SOURCE_MERGED；P1固定20e75e4f6，P2/BUG-1827修复固定373a90423；具体合入/CI与close-sync分开 |
+| 新窗口完整file-only preflight/固定参数推断 | COMPLETED，两包各双fresh-process业务payload bitwise一致、0 fits/refilter，模型/参数不变 |
+| 新窗口效果与消费价值 | COMPLETED：P1路径不足/native IC弱；P2同敞口参考风险减少及机会成本，net UNASSESSED/forward false，详见§12 |
 | DB/运行产品/场景采用 | NO_CHANGE，QE继续后置 |
 
 ## 9. 停止条件、production gates与结果交接
@@ -203,10 +203,43 @@ production_ddl_gate=noop；production_dml_gate=noop；frontend/backend_dependenc
 | 禁止业务逻辑迁移 | 既有模型、参数、0.20 warning、原特征/目标/消费、生产默认及其他模块不变；仅显式提案新历史窗口与固定参数推断，原合同不回写 |
 | 禁止未经批准门禁/审批 | 新D1～D6有2026-10-09明确授权；不增资源/记录/统计AND门，不以F2制造生产采用；独立性仅限§3.2范围，不无限索证 |
 
-源码三轮作者审修（非独立第三方）：第一轮抽取共享数学并保留原guard，修复部分文件可见即误释放outcome及新窗口误记tail_accessed=false；第二轮闭合精确价格/钱流grid、canonical authority与byte身份、源读中变化、失败输出安全与原float64参数恢复；第三轮补父child ready/sealed/result向权威绑定及对应反例、特征准备与推断数值环境闭合，修正旧合成fixture的cold环境采集。没有修改D1～D6公式、模型或数值门禁；最终最小门禁/CI单独报告。正式新窗口未运行，不能预报通过。
+源码三轮作者审修（非独立第三方）：第一轮抽取共享数学并保留原guard，修复部分文件可见即误释放outcome及新窗口误记tail_accessed=false；第二轮闭合精确价格/钱流grid、canonical authority与byte身份、源读中变化、失败输出安全与原float64参数恢复；第三轮补父child ready/sealed/result向权威绑定及对应反例、特征准备与推断数值环境闭合，修正旧合成fixture的cold环境采集。没有修改D1～D6公式、模型或数值门禁；当时尚未正式运行的状态保留为源码阶段事实，当前结果以§12为准。
 
 ## 11. Rollout / Rollback、Risks与Production Gates
 
-本轮交付一个HMM源码/直接测试/设计状态PR，待用户另行合入授权。不加载运行配置、不部署、不修改批准公式或旧acceptance/生产run。后续正式新结果为独立普通文件，失败保留该次最终结论即可，不历史归档。若源码需撤回，走受审后续commit，不reset用户修改；没有数据/DB/服务动作可“回滚”。
+原源码包及后续BUG-1827修复已经授权合入，正式新历史已交付独立普通文件；本次只读核对及文档同步不重跑、不部署、不修改批准公式或旧acceptance/生产run，不历史归档。若后续需撤回源码，走受审commit，不reset用户修改；本次没有数据/DB/服务动作可“回滚”。
 
 风险：独立性仅已核对当前候选选择，不能宣称全项目untouched；短94个成熟decision不能保证窄区间；官方指数停发可能使P1完整持仓路径不足；P2股票聚合也可能有合法估值NA；不同源和收益定义不能横比。用准确分母/状态/区间呈现，不增加补数据工程、自然事件失败门或新候选搜索来制造成功。production_ddl_gate/production_dml_gate/dependency/runtime_activation/process_control均noop，后端重启权限=false。
+
+## 12. 正式终态与当前只读状态同步（2026-10-10）
+
+本节只引用完成结果；两份acceptance canonical identity经正式verify_receipt再次核对，不重训/重推断/重回放，D1～D6表行逐字保持。原独立性结论只对应当次冻结模型选择；这一窗口现已消费，未来候选须标回顾性选择，不恢复为untouched。
+
+| 包 | 固定源码与最终结果 | 真实终态/边界 |
+|---|---|---|
+| P1轮动 | 20e75e4f6b6e16a5cf4fbafca0396e4a2d2c9881；artifact: F:/Dev/AIstock_runtime/hmm_l2_frozen_history/20261009_20e75e4f6/P1/run/acceptance.json；canonical=f2b33ded57413a356175bedc9a61a377f78e2290fa462574b0c494986fa6a2fa | 双process bitwise一致/0 fits；INSUFFICIENT_REFERENCE_PATH，104估值日19完整/85合法不可估值，完整累计与MDD=null；94成熟日native指标仍完整报告 |
+| P2风险 | #5831 merge 373a904237383b7e699e089a57e71ad4400dadac；artifact: F:/Dev/AIstock_runtime/hmm_l2_frozen_history/20261009_373a90423/P2/run/acceptance.json；canonical=b0271ff977d5eee671c5c87ea02fabd8fac48e87c0d6bb313e508ef8955635bf | 双process bitwise一致/0 fits；REFERENCE_RISK_REDUCTION_OBSERVED，131×104=13,624预测，131×103=13,493收益，103/103 paired日、合法估值NA=0；net UNASSESSED，forward false |
+
+### 12.1 轮动：排序弱与自然估值不足是两个问题
+
+delta/rank/return native mean daily Rank IC=-0.009647517044231129/-0.021665396134209106/-0.017935037644554376；真实trending−fading spread=+0.001491531217322065/-0.004413157336986191/-0.004134410368894199。IC的HAC95%分别[-0.122006702,0.102711668]/[-0.137479860,0.094149068]/[-0.146888081,0.111018006]。负点估计与宽区间不证明全部模型类别无效；旧development资格不回写，也不能只修估值就宣称预测有效。
+
+19个完整估值日为2026-04-01..2026-04-28；之后六个行业合法停发，使所有四臂的既有持仓出现不可估值。不用未来停发删行业，不前填/补零/复制L1，不把不同股票收益对象静默塞进本P1官方指数回放。若下一候选采用PIT股票参考估值，必须明示新消费/源合同并批准，不能改写这份终态。
+
+### 12.2 风险：同敞口参照、机会成本与原模型身份
+
+原model=37259b5e9ca2c6eee2845cf0f1f02932a8cfd6cf21ad29080d6570d274b8038d、20D/scaler/p≥0.20/即时warning与B/R/X预算均不变。BUG-1827仅修复正常停牌时“前10个开市日”不等于“10条有效前置报价”的边界，读取同PIT span内有界真实旧报价，不补价、不扩大模型窗、不改变概率；600988.SH/801053.SI相关2026-04-02收益按原正式证券身份解析，不创自有alias。
+
+gross累计B/R/X=-4.8919842869032726%/-2.770300430158512%/-2.57143254320511%；MDD=-18.09965106426602%/-10.975459171859336%/-12.702562287932395%。R/X平均敞口同为0.6866523382494626，R−X累计收益-0.19886788695340218个百分点、MDD改善1.7271031160730588个百分点；相对B的改善不能全部归因于报警择时，因为R少持仓。
+
+0/5/10/20bp下R−X累计差=-0.198867887/-0.332422774/-0.464856588/-0.726388756个百分点，MDD改善=1.727103116/1.694225219/1.661457156/1.596249424个百分点，均标ILLUSTRATIVE_BUDGET_COST_NOT_EXECUTION_NET。precision=0.44751096208408564、base=0.22949488387201558、lift=0.21801607821207006、recall=0.6139419674451522；这是事件识别与参考消费迹象，不等于QE/荐股净收益或自动advisory采用。
+
+### 12.3 当前产品与aftercare独立状态
+
+2026-10-10风险原run 88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26，真实API/无mock browser首日2024-07-01、零报警2024-08-01、末日2026-03-31通过；131下载、默认20/自定义30/非法31拒绝、全部/隐藏报警有效。全row hash仍cd31fa9b2dbe2d72f2b4d17438113f35b2db994d5cc3d5698ac8af26636c9f95。首次只读复验当时surface=NOT_AVAILABLE，随后用户要求推进消费闭环；确认实际服务账户并原样登记既有正式receipt后，同一PID动态读回surface=AVAILABLE_EXPERIMENTAL，forward=NOT_STARTED/advisory=NOT_AVAILABLE。过程见下一业务设计§14。未新导入这次新窗口预测，不借旧记录使新run可用，不新增环境变量或为记录重启。
+
+首次只读runtime identity=2784c131983bf89bf101492df382565b1fde3352，Git祖先核验已包含373a90423；后续消费闭环实际运行SHA=35e722d7fdb02067efa8a773c5cea2d4ab1796b5，不因不同于最新main就误报修复未加载。#5838 close-sync/Issue #5829及精确清理各自等待真实工作流结论与具体授权，不用页面成功代替aftercare。本次普通结果文件登记与源码/数据库状态分开，database_write=false、dataset_write=false、active_profile_write=false、fits=0、配置/模型激活/用户process_control=false。
+
+### 12.4 下一业务包已结束，不回写本设计的原零fit合同
+
+2026-10-10用户委托模型合同内的唯一月度rolling-return，由独立设计`hmm_evolution_phase2_l2_risk_value_and_rotation_next_detailed_design_20261010.md` v1.2承载，已完成一次双process10/10 fits与16/16合成参照路径。总体IC=-0.058852283288、coverage通过；相对无排序收益/回撤点估计未观察到优势，所有20paired区间跨零，终态BELOW_BINDING_MBE。本设计原P1/P2继续0fit、原十二条D1～D6和原结果保持，不把下一合成估值替代本P1官方指数路径或冒称独立forward。下一结果/source/hash详见该设计§13，PR交付及风险正式surface登记独立。

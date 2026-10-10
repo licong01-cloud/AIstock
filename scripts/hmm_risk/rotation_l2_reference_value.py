@@ -188,9 +188,13 @@ def replay_path(
     return cohort_reference_path(days, decisions, groups, quotes, cost_bps=cost_bps)
 
 
-def cohort_reference_path(days, decisions, groups, quotes, *, cost_bps):
+def cohort_reference_path(days, decisions, groups, quotes, *, cost_bps, valuation_basis="OFFICIAL_L2_INDEX_REFERENCE"):
     """Ten isolated sleeves; legitimate held NA makes cash proceeds unknowable, never reset."""
     require(cost_bps in COSTS and type(cost_bps) is int, "unapproved cost")
+    require(
+        valuation_basis in ("OFFICIAL_L2_INDEX_REFERENCE", "GROSS_SYNTHETIC_L2_REFERENCE"),
+        "unknown reference valuation basis",
+    )
     require(
         list(days) == sorted(set(days)) and list(decisions) == list(days[: len(decisions)]), "calendar order differs"
     )
@@ -247,7 +251,14 @@ def cohort_reference_path(days, decisions, groups, quotes, *, cost_bps):
         cash = math.fsum(s["cash"] for s in sleeves) if known else None
         nav = cash + assets if known else None
         if known:
-            require(_number(nav) and nav > 0, "nonfinite/nonpositive reference wealth", "quote_invalid")
+            require(_number(nav) and nav >= 0, "nonfinite/negative reference wealth", "quote_invalid")
+            if nav == 0:
+                require(
+                    valuation_basis == "GROSS_SYNTHETIC_L2_REFERENCE",
+                    "nonfinite/nonpositive reference wealth",
+                    "quote_invalid",
+                )
+                nav = None  # Capital depletion is an incomplete reference, not a divided-by-zero success.
         daily_return = nav / previous_nav - 1 if nav is not None and previous_nav is not None else None
         path.append(
             {
@@ -255,14 +266,20 @@ def cohort_reference_path(days, decisions, groups, quotes, *, cost_bps):
                 "nav": nav,
                 "daily_return": daily_return,
                 "cash": cash,
-                "exposure": assets / nav if known else None,
+                "exposure": assets / nav if nav is not None else None,
                 "buy_notional": buy if known else None,
                 "sell_notional": sell if known else None,
                 "cost": fees if known else None,
                 "entry_count": len(entry_codes),
                 "entry_cohort": index % HOLD_DAYS if index < len(decisions) else None,
                 "legal_held_quote_na": legal_na,
-                "valuation_status": "AVAILABLE" if known else "LEGAL_HELD_QUOTE_NA_PATH_UNAVAILABLE",
+                "valuation_status": (
+                    "AVAILABLE"
+                    if nav is not None
+                    else "REFERENCE_CAPITAL_DEPLETED"
+                    if known
+                    else "LEGAL_HELD_QUOTE_NA_PATH_UNAVAILABLE"
+                ),
             }
         )
         previous_nav = nav
@@ -296,9 +313,14 @@ def _summary(path: Sequence[Mapping[str, Any]], *, initial_nav: float | None = N
 
 
 def summarize(path: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    return summarize_for_blocks(path, blocks=ridge.BLOCKS)
+
+
+def summarize_for_blocks(path: Sequence[Mapping[str, Any]], *, blocks) -> dict[str, Any]:
+    """Same path arithmetic, with an authenticated caller's explicit report blocks."""
     result = _summary(path, initial_nav=1.0)
     result["blocks"] = {}
-    for name, first, last in ridge.BLOCKS:
+    for name, first, last in blocks:
         rows = [r for r in path if first.isoformat() <= r["trade_date"] <= last.isoformat()]
         before = [r for r in path if r["trade_date"] < first.isoformat()]
         start_nav = before[-1]["nav"] if before else 1.0
@@ -328,6 +350,11 @@ def summarize(path: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def paired(
     days: Sequence[str], first: Sequence[Mapping[str, Any]], second: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
+    return paired_for_blocks(days, first, second, blocks=ridge.BLOCKS)
+
+
+def paired_for_blocks(days, first, second, *, blocks) -> dict[str, Any]:
+    """Do not compress missing sessions or re-tune the historical HAC lag."""
     require(
         [r["trade_date"] for r in first] == list(days) == [r["trade_date"] for r in second], "paired calendar differs"
     )
@@ -352,7 +379,7 @@ def paired(
         else None,
         "blocks": {
             n: baseline._newey_west(calendar, {d: v for d, v in diffs.items() if lo <= d <= hi}, lag=9)
-            for n, lo, hi in ridge.BLOCKS
+            for n, lo, hi in blocks
         },
     }
 
