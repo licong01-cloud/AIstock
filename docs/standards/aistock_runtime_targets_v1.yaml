@@ -126,6 +126,7 @@ targets:
       - backend/services/dataset_release/monthly_postgres_source.py
       - backend/services/dataset_release/monthly_*.py
       - backend/services/dataset_release/monthly_unified.py
+      - backend/services/dataset_release/monthly_supervised_build.py
       - backend/services/dataset_release/monthly_frozen_source_audit.py
       - backend/services/dataset_release/candidate_consumer_smoke.py
       - backend/services/dataset_release/qlib_bounded_update.py
@@ -168,6 +169,7 @@ targets:
       - scripts/**/*scheduler*.py
       - scripts/dataset_release_worker.py
       - scripts/dataset_release_source_stage.py
+      - scripts/dataset_release_candidate_consumer_smoke.py
       - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
     probe_origins: [http://127.0.0.1:8001, http://localhost:8001]
     operator_runbook_ref: bug_record.runtime_contract.operator_runbook_ref
@@ -186,6 +188,8 @@ targets:
           - backend/services/dataset_release/api_models.py
           - backend/services/dataset_release/monthly_*.py
           - backend/services/dataset_release/monthly_unified.py
+          - backend/services/dataset_release/monthly_supervised_build.py
+          - scripts/dataset_release_candidate_consumer_smoke.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
           - backend/services/dataset_release/monthly_construction_facts.py
           - backend/services/dataset_release/candidate_consumer_smoke.py
@@ -206,6 +210,8 @@ targets:
           # This shared reader is loaded by the current supervised monthly worker.
           - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/monthly_unified.py
+          - backend/services/dataset_release/monthly_supervised_build.py
+          - scripts/dataset_release_candidate_consumer_smoke.py
           - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_postgres_source.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py

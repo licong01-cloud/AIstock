@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import make_dataclass
+from dataclasses import make_dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -108,7 +108,7 @@ def _receipt(execution_id: str, timeout: int) -> dict[str, object]:
 
 class _Supervisor:
     def __init__(self, root: Path, *, semantic: dict[str, object] | None = None) -> None:
-        self.attempt_id = "dmr_" + "1" * 32 + "-attempt-2"
+        self.attempt_id = "dmr_" + "1" * 32 + "-build"
         self.fence = 2
         self.control_root = root
         heartbeat_root = root / "heartbeats"
@@ -217,7 +217,8 @@ def test_consumer_smoke_separates_semantic_and_resource_receipts(
     scripts = project / "scripts"
     scripts.mkdir(parents=True)
     (scripts / "dataset_release_candidate_consumer_smoke.py").write_text("pass", encoding="utf-8")
-    staging = tmp_path / ".staging" / "candidate.building"
+    context = replace(_context(), plan={**_context().plan, "candidate_root": str(tmp_path / "monthly-candidate")})
+    staging = tmp_path / ".staging" / f".monthly-candidate.{context.operation_id}.attempt-2.building"
     staging.parent.mkdir()
     staging.mkdir()
     control = tmp_path / "control"
@@ -233,7 +234,7 @@ def test_consumer_smoke_separates_semantic_and_resource_receipts(
     )
 
     result = smoke.execute(
-        context=_context(),
+        context=context,
         staging_root=staging,
         prepare_result={"consumer_smoke_instrument": "000001.SZ"},
         release_digest="c" * 64,
@@ -241,9 +242,17 @@ def test_consumer_smoke_separates_semantic_and_resource_receipts(
 
     command, kwargs = supervisor.calls[0]
     assert "dataset_release_candidate_consumer_smoke.py" in command[2]
+    assert "--monthly-candidate-name monthly-candidate" in command[2]
     assert kwargs["environment_scope"] == "validation"
     assert result.semantic_receipt == semantic
     assert result.resource_receipt["execution_id"] == "build-consumer-smoke"
+
+    wrong = tmp_path / ".staging" / "unrelated.building"
+    wrong.mkdir()
+    with pytest.raises(MonthlySupervisedBuildError, match="staging identity"):
+        smoke.execute(context=context, staging_root=wrong,
+                      prepare_result={"consumer_smoke_instrument": "000001.SZ"}, release_digest="c" * 64)
+    assert len(supervisor.calls) == 1
 
 
 def test_supervised_receipt_fails_closed_on_resource_checkpoint(tmp_path: Path) -> None:

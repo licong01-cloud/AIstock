@@ -271,7 +271,16 @@ class SupervisedMonthlyConsumerSmoke:
             raise MonthlySupervisedBuildError(
                 "consumer smoke staging root escapes candidate root"
             ) from exc
-        if not staging_relative_path.startswith(".staging/"):
+        target = Path(str(context.plan.get("candidate_root") or ""))
+        if (
+            not target.is_absolute()
+            or target.parent.resolve(strict=True) != candidate_root
+            or self.supervisor.attempt_id != f"{context.operation_id}-build"
+            or self.supervisor.fence != context.attempt
+            or staging_relative_path != (
+                f".staging/.{target.name}.{context.operation_id}.attempt-{context.attempt}.building"
+            )
+        ):
             raise MonthlySupervisedBuildError(
                 "consumer smoke staging identity is non-canonical"
             )
@@ -310,6 +319,8 @@ class SupervisedMonthlyConsumerSmoke:
             release_digest,
             "--staging-relative-path",
             staging_relative_path,
+            "--monthly-candidate-name",
+            target.name,
             "--execution-id",
             execution_id,
             "--max-h5-rows",
