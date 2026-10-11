@@ -254,6 +254,20 @@ def test_consumer_smoke_separates_semantic_and_resource_receipts(
                       prepare_result={"consumer_smoke_instrument": "000001.SZ"}, release_digest="c" * 64)
     assert len(supervisor.calls) == 1
 
+    lease = {
+        "schema_version": "aistock_monthly_retained_materialization_lease_v1",
+        "operation_id": context.operation_id, "candidate_name": "monthly-candidate",
+        "execution_attempt": 3, "materialization_attempt": 2,
+        "release_digest": "c" * 64, "data_binding_digest": "d" * 64,
+    }
+    (staging / ".monthly-materialization-lease.json").write_text(json.dumps(lease), encoding="utf-8")
+    supervisor.fence = 3
+    smoke.execute(context=replace(context, attempt=3), staging_root=staging,
+                  prepare_result={"consumer_smoke_instrument": "000001.SZ"}, release_digest="c" * 64)
+    command, _ = supervisor.calls[-1]
+    assert "--monthly-materialization-attempt 2" in command[2]
+    assert "--attempt-fence 3" in command[2]
+
 
 def test_supervised_receipt_fails_closed_on_resource_checkpoint(tmp_path: Path) -> None:
     project = tmp_path / "project"

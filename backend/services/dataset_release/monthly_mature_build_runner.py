@@ -16,6 +16,7 @@ from .canonical import digest_named_fields, ensure_sha256, normalize_root_relati
 from .cas_store import CASRef, CASStore
 from .errors import CanonicalizationError
 from .monthly_build_bridge import CompiledMonthlyBuild, load_monthly_predecessor_prefix
+from .monthly_build_resume import MonthlyBuildResume
 from .monthly_legacy_prefix import append_legacy_qlib_month, is_monthly_provider_instrument
 from .monthly_build_executor import PhysicalBuildResult
 from .monthly_worker import ProducerContext
@@ -160,6 +161,10 @@ class MatureMonthlyPhysicalBuildRunner:
             "cas": self.cas,
             "plan": physical_plan,
         }
+        resume = MonthlyBuildResume(
+            context=context, compiled=compiled, release_root=candidate_root,
+            staging_root=staging_root, cas=self.cas,
+        )
 
         if self.execution_scope_factory is not None:
             scope = self.execution_scope_factory(context)
@@ -173,8 +178,13 @@ class MatureMonthlyPhysicalBuildRunner:
                 )
             )
         with scope as tools:
-            prepare = run_build_stage(BuildStageInvocation(stage="prepare", prerequisites={}, **common))
+            prepare = resume.get("prepare")
+            if prepare is None:
+                prepare = run_build_stage(BuildStageInvocation(stage="prepare", prerequisites={}, **common))
+                prepare_ref = self._seal_stage(prepare, expected="prepare")
+                resume.save("prepare", prepare_ref, roots=(".month-inputs", "index_context", "factor_bundle"))
             prepare_ref = self._seal_stage(prepare, expected="prepare")
+            resume.write_lease(release_digest)
             operations = prepare.get("qlib_dump_operations")
             if not isinstance(operations, list) or any(not isinstance(item, Mapping) for item in operations):
                 raise MonthlyMatureBuildError("prepare Qlib operation set is invalid")
@@ -184,7 +194,12 @@ class MatureMonthlyPhysicalBuildRunner:
                 operation_id = str(operation.get("operation_id") or "")
                 if not operation_id or operation_id in dump_refs:
                     raise MonthlyMatureBuildError("Qlib operation identity is empty or duplicated")
+                receipt = resume.get(f"qlib_dump_{operation_id}")
+                if receipt is not None:
+                    dump_refs[operation_id] = self.cas.verify(self.cas.put_json(dict(receipt)))
+                    continue
                 if operation.get("mode") == "inherited_month":
+                    resume.preserve_incomplete_writer(str(operation["dataset"]))
                     receipt = self._append_inherited_month(
                         context=context, staging_root=staging_root,
                         compiled=compiled, operation=operation,
@@ -196,18 +211,23 @@ class MatureMonthlyPhysicalBuildRunner:
                         operation=operation,
                     )
                 dump_refs[operation_id] = self.cas.verify(self.cas.put_json(dict(receipt)))
+                resume.save(f"qlib_dump_{operation_id}", dump_refs[operation_id], roots=(f"{operation_id}_bin",))
 
             finalize_prerequisites = {
                 "prepare": prepare_ref.sha256,
                 **{f"qlib_dump_{name}": reference.sha256 for name, reference in sorted(dump_refs.items())},
             }
-            finalized = run_build_stage(
-                BuildStageInvocation(
-                    stage="finalize-bins",
-                    prerequisites=finalize_prerequisites,
-                    **common,
+            finalized = resume.get("finalize-bins")
+            if finalized is None:
+                finalized = run_build_stage(
+                    BuildStageInvocation(
+                        stage="finalize-bins",
+                        prerequisites=finalize_prerequisites,
+                        **common,
+                    )
                 )
-            )
+                finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
+                resume.save("finalize-bins", finalized_ref, roots=("daily_bin", "minute_bin", "index_context", "factor_bundle"))
             finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             smoke = tools.consumer_smoke.execute(
                 context=context,
@@ -230,6 +250,7 @@ class MatureMonthlyPhysicalBuildRunner:
             )
         )
         validated_ref = self._seal_stage(validated, expected="validate")
+        resume.begin_finalization()
         return self.finalizer.execute(
             context=context,
             staging_root=staging_root,

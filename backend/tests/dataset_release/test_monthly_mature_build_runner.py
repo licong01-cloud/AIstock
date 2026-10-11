@@ -336,6 +336,123 @@ def test_runner_executes_mature_stages_in_order(
     assert result.manifest_path == staging / "qe_dataset_manifest.json"
 
 
+def test_completed_exports_survive_smoke_failure_across_fresh_runner(tmp_path, monkeypatch):
+    """A downstream program error is not permission to regenerate good data."""
+    context = replace(_context(), plan={**_context().plan, "candidate_root": str(tmp_path / "september")})
+    staging = tmp_path / ".staging" / f".september.{context.operation_id}.attempt-2.building"
+    staging.parent.mkdir()
+    calls = []
+
+    def run(invocation):
+        calls.append(invocation.stage)
+        value = {"schema_version": "dataset_release_build_stage_result_v1", "stage": invocation.stage, "status": "PASS"}
+        if invocation.stage == "prepare":
+            staging.mkdir()
+            (staging / "index_context").mkdir()
+            (staging / "index_context/index_daily.h5").write_bytes(b"frozen-index")
+            value["qlib_dump_operations"] = [{"operation_id": "daily"}, {"operation_id": "minute"}]
+        return value
+
+    class Writer(_Writer):
+        def execute(self, *, context, staging_root, operation):
+            result = super().execute(context=context, staging_root=staging_root, operation=operation)
+            folder = staging_root / f"{operation['operation_id']}_bin"
+            folder.mkdir()
+            (folder / "data.bin").write_bytes(b"accurate")
+            return result
+
+    class BrokenSmoke:
+        def execute(self, **_kwargs):
+            raise RuntimeError("consumer program error")
+
+    monkeypatch.setattr(runner_module, "run_build_stage", run)
+    writer = Writer()
+    runner = MatureMonthlyPhysicalBuildRunner(
+        profile=SimpleNamespace(candidate_root=tmp_path, stage_timeouts_seconds={"full_build": 3600}),
+        cas=_cas(tmp_path), project_root=tmp_path, finalizer=_Finalizer(),
+        qlib_writer=writer, consumer_smoke=BrokenSmoke(),
+    )
+    with pytest.raises(RuntimeError, match="consumer program"):
+        runner.execute(context=context, staging_root=staging, compiled=_compiled())
+    minute = staging / "minute_bin/data.bin"
+    signature = minute.stat()
+    retry = replace(runner, consumer_smoke=_Smoke())
+    retry.execute(context=replace(context, attempt=3), staging_root=staging, compiled=_compiled())
+    assert writer.operations == ["daily", "minute"]
+    assert calls == ["prepare", "finalize-bins", "validate"]
+    assert minute.read_bytes() == b"accurate"
+    assert minute.stat().st_mtime_ns == signature.st_mtime_ns
+
+
+def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, monkeypatch):
+    from backend.services.dataset_release.monthly_build_resume import retained_staging_root
+
+    runner, context, initial, compiled, operation, _, provider = _native_month_fixture(tmp_path)
+    context = replace(context, plan={**context.plan, "candidate_root": str(tmp_path / "september")})
+    staging = initial.parent / f".september.{context.operation_id}.attempt-2.building"
+    initial.rename(staging)
+    def run(invocation):
+        value = {"schema_version": "dataset_release_build_stage_result_v1", "stage": invocation.stage, "status": "PASS"}
+        if invocation.stage == "prepare":
+            value["qlib_dump_operations"] = [operation]
+        return value
+    class BrokenSmoke:
+        def execute(self, **kwargs):
+            raise RuntimeError("downstream reader broke")
+    monkeypatch.setattr(runner_module, "run_build_stage", run)
+    runner = replace(runner, consumer_smoke=BrokenSmoke())
+    with pytest.raises(RuntimeError, match="downstream reader"):
+        runner.execute(context=context, staging_root=staging, compiled=compiled)
+    target = staging / "daily_bin/qlib/features/000001.sz/close.day.bin"
+    before = target.stat()
+    monkeypatch.setattr(runner_module, "append_legacy_qlib_month", lambda *a, **k: pytest.fail("re-exported valid bins"))
+    monkeypatch.setattr(runner_module, "run_build_stage", lambda invocation: {
+        "schema_version": "dataset_release_build_stage_result_v1", "stage": invocation.stage, "status": "PASS",
+    } if invocation.stage == "validate" else pytest.fail("repeated completed stage"))
+    retry = replace(context, attempt=3)
+    selected = retained_staging_root(retry, compiled, tmp_path, tmp_path / "new-stage")
+    replace(runner, consumer_smoke=_Smoke()).execute(context=retry, staging_root=selected, compiled=compiled)
+    assert struct.unpack("<fff", target.read_bytes()) == (0, 10, 12)
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+    assert struct.unpack("<ff", (provider / "features/000001.sz/close.day.bin").read_bytes()) == (0, 10)
+
+
+def test_partial_minute_failure_never_reexports_completed_daily(tmp_path, monkeypatch):
+    context = replace(_context(), plan={**_context().plan, "candidate_root": str(tmp_path / "september")})
+    staging = tmp_path / ".staging" / f".september.{context.operation_id}.attempt-2.building"
+    staging.parent.mkdir()
+    calls = []
+    def run(invocation):
+        value = {"schema_version": "dataset_release_build_stage_result_v1", "stage": invocation.stage, "status": "PASS"}
+        if invocation.stage == "prepare":
+            staging.mkdir()
+            value["qlib_dump_operations"] = [
+                {"operation_id": name, "dataset": f"{name}_bin", "mode": "inherited_month"}
+                for name in ("daily", "minute")]
+        return value
+    def write(self, *, context, staging_root, compiled, operation):
+        calls.append(operation["operation_id"])
+        folder = staging_root / operation["dataset"]
+        folder.mkdir()
+        (folder / "data.bin").write_bytes(b"partial" if len(calls) == 2 else b"accurate")
+        if len(calls) == 2:
+            raise RuntimeError("minute interrupted")
+        return {"status": "PASS"}
+    monkeypatch.setattr(runner_module, "run_build_stage", run)
+    monkeypatch.setattr(MatureMonthlyPhysicalBuildRunner, "_append_inherited_month", write)
+    runner = MatureMonthlyPhysicalBuildRunner(
+        profile=SimpleNamespace(candidate_root=tmp_path, stage_timeouts_seconds={"full_build": 3600}),
+        cas=_cas(tmp_path), project_root=tmp_path, finalizer=_Finalizer(),
+        qlib_writer=_Writer(), consumer_smoke=_Smoke())
+    with pytest.raises(RuntimeError, match="minute interrupted"):
+        runner.execute(context=context, staging_root=staging, compiled=_compiled())
+    before = (staging / "daily_bin/data.bin").stat()
+    runner.execute(context=replace(context, attempt=3), staging_root=staging, compiled=_compiled())
+    assert calls == ["daily", "minute", "minute"]
+    assert (staging / "daily_bin/data.bin").stat().st_mtime_ns == before.st_mtime_ns
+    assert (staging.parent / f".unfinished.{context.operation_id}.minute_bin.before-3/data.bin").read_bytes() == b"partial"
+
+
 def test_runner_creates_attempt_bound_execution_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -16,6 +16,7 @@ from typing import Mapping, Protocol, Sequence
 
 from .cas_store import CASStore
 from .monthly_build_bridge import CompiledMonthlyBuild, compile_initial_monthly_build
+from .monthly_build_resume import retained_staging_root
 from .monthly_official_adapters import (
     BuildExecution,
     StageWorkload,
@@ -154,9 +155,6 @@ class SealedMonthlyBuildExecutor:
             f".{target.name}.{context.operation_id}.attempt-{context.attempt}.building"
         )
         _require_plain_chain(staging, stop=release_root)
-        if staging.exists():
-            raise MonthlyBuildExecutorError("monthly candidate staging already exists")
-
         compiled = compile_initial_monthly_build(
             context_plan=context.plan,
             source_receipt=source_receipt,
@@ -164,6 +162,10 @@ class SealedMonthlyBuildExecutor:
             cas=self.cas,
             artifact_roots=self.artifact_roots,
         )
+        default_staging = staging
+        staging = retained_staging_root(context, compiled, release_root, default_staging)
+        if staging == default_staging and staging.exists():
+            raise MonthlyBuildExecutorError("monthly candidate staging already exists")
         result = self.runner.execute(
             context=context,
             staging_root=staging,

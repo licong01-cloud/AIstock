@@ -24,6 +24,7 @@ from backend.services.dataset_release.candidate_consumer_smoke import (  # noqa:
     run_candidate_consumer_smoke,
 )
 from backend.services.dataset_release.index_contract import DOMESTIC_INDEX_DEFINITIONS  # noqa: E402
+from backend.services.dataset_release.monthly_build_resume import materialization_attempt  # noqa: E402
 from backend.services.dataset_release.resource_gate import ChildResourceCheckpoint  # noqa: E402
 
 
@@ -45,6 +46,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--release-digest", required=True)
     parser.add_argument("--staging-relative-path", required=True)
     parser.add_argument("--monthly-candidate-name")
+    parser.add_argument("--monthly-materialization-attempt", type=int)
     parser.add_argument("--execution-id", required=True)
     parser.add_argument("--max-h5-rows", required=True, type=int)
     parser.add_argument("--stage-timeout-seconds", required=True, type=int)
@@ -121,6 +123,9 @@ def _run(args: argparse.Namespace) -> int:
     candidate_root = _plain_existing_root(Path(args.candidate_root))
     expected_relative = f".staging/{args.attempt_id}/{args.attempt_fence}"
     monthly_name = getattr(args, "monthly_candidate_name", None)
+    retained_attempt = getattr(args, "monthly_materialization_attempt", None)
+    if retained_attempt is not None and monthly_name is None:
+        raise ValueError("retained staging requires a monthly identity")
     if monthly_name is not None:
         if (
             re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", monthly_name) is None
@@ -130,11 +135,21 @@ def _run(args: argparse.Namespace) -> int:
             or args.execution_id != "build-consumer-smoke"
         ):
             raise ValueError("staging monthly identity differs")
-        expected_relative = f".staging/.{monthly_name}.{args.run_id}.attempt-{args.attempt_fence}.building"
+        origin = args.attempt_fence if retained_attempt is None else retained_attempt
+        if type(origin) is not int or not 0 < origin <= args.attempt_fence:
+            raise ValueError("staging materialization identity differs")
+        expected_relative = f".staging/.{monthly_name}.{args.run_id}.attempt-{origin}.building"
     expected_staging = candidate_root / expected_relative
     if args.staging_relative_path.replace("\\", "/") != expected_relative:
         raise ValueError("staging relative identity differs")
     staging = _assert_exact_path(str(expected_staging), expected_staging, must_exist=True)
+    if retained_attempt is not None:
+        actual_origin = materialization_attempt(
+            staging, operation_id=args.run_id, execution_attempt=args.attempt_fence,
+            candidate_name=monthly_name, release_digest=args.release_digest,
+        )
+        if actual_origin != retained_attempt:
+            raise ValueError("staging materialization lease differs")
     daily = _assert_exact_path(
         args.daily_provider_uri,
         staging / "daily_bin" / "qlib",
