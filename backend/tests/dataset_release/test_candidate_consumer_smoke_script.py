@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -29,10 +31,23 @@ def test_consumer_path_binding_rejects_sibling_or_escape(tmp_path: Path) -> None
         script._assert_exact_path(str(sibling), expected, must_exist=True)
 
 
-def test_consumer_run_uses_attempt_fenced_staging_not_release_id(monkeypatch, tmp_path: Path) -> None:
+def test_consumer_cli_bootstraps_repository_in_isolated_fresh_process(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-I", str(Path(script.__file__).resolve()), "--help"],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--daily-provider-uri" in result.stdout
+
+
+@pytest.mark.parametrize("monthly", [False, True])
+def test_consumer_run_uses_attempt_fenced_staging_not_release_id(monkeypatch, tmp_path: Path, monthly: bool) -> None:
     candidate = tmp_path / "candidate"
     control = tmp_path / "control"
-    staging = candidate / ".staging" / "attempt-1" / "7"
+    run_id = "dmr_" + "1" * 32 if monthly else "run-1"
+    attempt_id = f"{run_id}-build" if monthly else "attempt-1"
+    relative = f".staging/.monthly-candidate.{run_id}.attempt-7.building" if monthly else ".staging/attempt-1/7"
+    staging = candidate / relative
     daily = staging / "daily_bin" / "qlib"
     minute = staging / "minute_bin" / "qlib"
     index_h5 = staging / "index_context" / "index_daily.h5"
@@ -40,7 +55,7 @@ def test_consumer_run_uses_attempt_fenced_staging_not_release_id(monkeypatch, tm
     minute.mkdir(parents=True)
     index_h5.parent.mkdir(parents=True)
     index_h5.write_bytes(b"index")
-    result = control / "attempt_runs" / "attempt-1-7" / "build-consumer-smoke" / "semantic_result.json"
+    result = control / "attempt_runs" / f"{attempt_id}-7" / "build-consumer-smoke" / "semantic_result.json"
     result.parent.mkdir(parents=True)
     observed: dict[str, object] = {}
 
@@ -69,12 +84,13 @@ def test_consumer_run_uses_attempt_fenced_staging_not_release_id(monkeypatch, tm
         cutoff="2026-07-31",
         stock_instrument="000001.SZ",
         profile="qe_hmm_full_v1",
-        run_id="run-1",
-        attempt_id="attempt-1",
+        run_id=run_id,
+        attempt_id=attempt_id,
         attempt_fence=7,
         release_id="release-different-from-attempt",
         release_digest="a" * 64,
-        staging_relative_path=".staging/attempt-1/7",
+        staging_relative_path=relative,
+        monthly_candidate_name="monthly-candidate" if monthly else None,
         execution_id="build-consumer-smoke",
         max_h5_rows=100,
         stage_timeout_seconds=43200,
@@ -83,7 +99,18 @@ def test_consumer_run_uses_attempt_fenced_staging_not_release_id(monkeypatch, tm
 
     assert script._run(args) == 0
     assert result.exists()
-    assert observed["spec"].staging_relative_path == ".staging/attempt-1/7"
+    assert observed["spec"].staging_relative_path == relative
+
+    if monthly:
+        for field, value in (
+            ("attempt_fence", 8), ("attempt_id", "attempt-1"),
+            ("run_id", "dmr_" + "2" * 32),
+            ("monthly_candidate_name", "../monthly-candidate"),
+            ("monthly_candidate_name", "other-candidate"),
+        ):
+            drift = Namespace(**{**vars(args), field: value})
+            with pytest.raises(ValueError, match="staging .*identity"):
+                script._run(drift)
 
     bad = Namespace(
         **{
