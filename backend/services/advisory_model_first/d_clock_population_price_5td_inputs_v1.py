@@ -268,8 +268,9 @@ def construct_mark_targets_v1(*, plan, roster, calendar, daily, cutoff, legacy):
                 prices=pp, references=rr, source_context=context, cutoff=cutoff)
             if legacy:
                 lp = pp.loc[pp.trade_date.gt(pp[KEY[0]])].copy()
+                legacy_context = dict(context, prices_sha256=hashlib.sha256(parquet_bytes(lp)).hexdigest())
                 old, _ = build_generic_price_5td_valuation_v2(candidates=block, decision_dates=chosen,
-                    calendar=calendar, prices=lp, references=rr, source_context=context)
+                    calendar=calendar, prices=lp, references=rr, source_context=legacy_context)
                 labels["legacy_valuation_status"] = old.valuation_status.to_numpy()
                 labels["legacy_valuation_policy_sha256"] = old.valuation_policy_sha256.to_numpy()
                 labels["observed_gap_bps"] = old.observed_gap_bps.to_numpy()

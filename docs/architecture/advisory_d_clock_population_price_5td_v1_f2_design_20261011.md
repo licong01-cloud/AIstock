@@ -1,7 +1,7 @@
 # Advisory D时钟人口对齐的五交易日价格价值 F2 详细设计 v1.1
 
 > 初始日期：2026-10-11；源码修订：2026-10-12。唯一假设 `GP5-D-CLOCK-POPULATION-ALIGNMENT-1`；`objective_contract=RISK_MANAGED_ADVISORY`、`study_type=EXPLORATORY_SCREEN`、`decision_use=NAVIGATION_ONLY`。
-> 当前交付为完整独立离线源码及直接合同验收：六source/三test已实施，三轮本窗口自审修复后22项直接测试PASS，源码提交/必需CI/合入按实际交付记录。真实prepare、两臂实际研究fit、经济比较、确认与启用均未执行；Advisory仍148实际研究fit＋1旧INDEX_BUILD（非QE或全项目总数）。合成fixture fit不计研究。此前已停止的市场条件、原槽hurdle、父分数、风险校准及人口迁移不复活。
+> 当前交付为完整独立离线源码及直接合同验收：六source/三test已实施，四轮本窗口自审修复后23项直接测试PASS，源码提交/必需CI/合入按实际交付记录。真实prepare、两臂实际研究fit、经济比较、确认与启用均未执行；Advisory仍148实际研究fit＋1旧INDEX_BUILD（非QE或全项目总数）。合成fixture fit不计研究。此前已停止的市场条件、原槽hurdle、父分数、风险校准及人口迁移不复活。
 > 权威主线：[荐股蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) §6.3.4；本设计只负责价格价值，不研发QE Alpha、分钟执行、卖出择时、资金仓位或UI。
 
 ## Background / Goal / 单一经济问题
@@ -122,8 +122,8 @@ prepare首先冻结训练金融切片/D编码与原名单；evaluation仅生成�
 ## Implementation Plan / 按业务顺序的实施方案
 
 1. 已完成：本F2＋蓝图三轮设计自审和canonical验收；设计PR #5894合入，未运行旧runner或增加研究fit。
-2. 已完成源码直接验收：独立mark核、只读共享快照/共同D编码/两人口账本、18维诚实森林与纯价格函数、四stage/四臂账本/CLI完整实施，不改旧V2。22项最小合同通过，但合成目标并不证明真实目标完备。
-3. 当前交付：三轮源码自审修复、精确测试、真实owner预算与F2逐条核对；正常必需CI通过后提交合入，不用ownership转移/扩分母/私加门禁。源码通过不等于经济通过。
+2. 已完成源码直接验收：独立mark核、只读共享快照/共同D编码/两人口账本、18维诚实森林与纯价格函数、四stage/四臂账本/CLI完整实施，不改旧V2。23项最小合同通过，但合成目标并不证明真实目标完备。
+3. 当前交付：四轮源码自审修复、精确测试、真实owner预算与F2逐条核对；正常必需CI通过后提交合入，不用ownership转移/扩分母/私加门禁。源码通过不等于经济通过。
 4. 下一步：固定已审核源码/新plan顺序preregister→只读prepare→对照可识别性→至多两fit→先D分布冻结再evaluate；人口相同或任一诚实池空则0fit。一次结果决定停止或确认，不按长任务时长追加模型。
 5. 条件后续：仅值得继续的新candidate才设计必要日频consumer与独立确认；当前无API/UI/生产binding、不要求后端重启。
 
@@ -143,7 +143,7 @@ prepare首先冻结训练金融切片/D编码与原名单；evaluation仅生成�
 
 ## Design Acceptance Matrix
 
-本次 `SOURCE_LOCAL_PASS`表示以下完整离线源码与直接合同通过，不代表真实研究/盈利确认/生产启用。22直接项、9 AST编译、精确scope/源码hash记录于 `X:/AIstock_temp/advisory_d_clock_population_price_20261012/{pytest-source-metrics.json,source_local_delivery.json}`；收据为本地交付证据，不代替正式研究产物。提交和必需CI合入按最终HEAD另报。
+本次 `SOURCE_LOCAL_PASS`表示以下完整离线源码与直接合同通过，不代表真实研究/盈利确认/生产启用。最终23直接项、9 AST编译、精确scope/源码hash记录于 `X:/AIstock_temp/advisory_d_clock_population_price_20261012/{pytest-source-metrics-v2.json,source_local_delivery_v2.json}`，并按最终HEAD绑定validation收据；早先22项收据仅为修订前版本。收据为本地交付证据，不代替正式研究产物。提交和必需CI合入按最终HEAD另报。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -155,11 +155,11 @@ prepare首先冻结训练金融切片/D编码与原名单；evaluation仅生成�
 | F-904 | query_d_clock_population_nodes_v1/d_clock_population_price_set_v1 | backend/tests/advisory_model_first/test_d_clock_population_price_5td_model_v1.py | SOURCE_LOCAL_PASS | 无 |
 | F-905 | d_clock_population_price_5td_pipeline_v1.py/cli_v1.py | backend/tests/advisory_model_first/test_d_clock_population_price_5td_study_v1.py；本文§5复杂度复核 | SOURCE_LOCAL_PASS | 无 |
 | F-906 | d_clock_population_price_5td_evaluation_v1.py | backend/tests/advisory_model_first/test_d_clock_population_price_5td_study_v1.py | SOURCE_LOCAL_PASS | 无 |
-| F-907 | 本文Scope/Implementation/下文交付状态 | validation-receipt: source_local_delivery.json、canonical F2 validate、精确11文件diff --check | SOURCE_LOCAL_PASS | 无 |
+| F-907 | 本文Scope/Implementation/下文交付状态 | validation-receipt: source_local_delivery_v2.json、canonical F2 validate、精确11文件diff --check | SOURCE_LOCAL_PASS | 无 |
 
 ## Risks / Rollout / Rollback / Production Gates
 
-- 无新增信息的采样对齐可能无价值，标价可测性仍是未来缺失选择，不声称消除所有selection bias/MNAR。对原Top5的迁移可能恶化；两包共享风格/股票，不是独立重复证据。参数/成本/风险不能结果后调整。新源码测试仅写必要业务合同，不重复fixture/实现快照。最终九文件stage后的真实advisory.model_first全owner生产130775/测试46162 SLOC、35.30%、超额6930（历史35.39%/6973）；旧债未清，无ownership转移/分母padding，不以局部比率或CI绿冒充全owner清债。
+- 无新增信息的采样对齐可能无价值，标价可测性仍是未来缺失选择，不声称消除所有selection bias/MNAR。对原Top5的迁移可能恶化；两包共享风格/股票，不是独立重复证据。参数/成本/风险不能结果后调整。新源码测试仅写必要业务合同，不重复fixture/实现快照。最终九文件stage后的真实advisory.model_first全owner生产130776/测试46179 SLOC、35.31%、超额6947（历史35.39%/6973）；旧债未清，无ownership转移/分母padding，不以局部比率或CI绿冒充全owner清债。
 - D-only不吸收T新闻，即使低价数学更有利也不等于值得抄底；大gap节点误差/收益须透明。开盘价条件模型与本D模型都可研究但不能相互声称已完成。用户所需“异常低开不买”的能力仍需合法新信息/独立Entry Guard合同，本版不静默代替。
 - 成对标价分布、q90风险和概率并不保证经济收益；P_D不是实际价格条件概率、点估计不是LCB。正常停牌标价不是可退出，不能据此缩小安全测试、伪造成交或激活。
 - 完整离线源码与设计分态交付；source_merged、inputs_ready、fit_complete、economic_result、confirmation、runtime_activation分别报告。生产绑定保持不变；负候选停止无需回滚现有荐股。
@@ -182,3 +182,5 @@ prepare首先冻结训练金融切片/D编码与原名单；evaluation仅生成�
 源码第二轮：修复实际price packet/calendar digest未比对、train角色之外缺日期/H双投影、IMMATURE仍解析目标、未知入场误作现金的风险；完善0fit/partial STARTED原子记账、固定gap诊断、同D两包完整分母和未知缺口CI=null，针对修改点重验。
 
 源码第三轮：完整parent days/名册/source/D/T/H/候选数对照；matched legacy policy已知hash冲突显式拒绝，估计簇KEY与hash/午夜时钟核对；无质量叶不填全球分布，去重簇趋势/干预不按包倍增。最终22项唯一直接测试PASS、0重跑项，3.482秒；九Python AST与Ruff、scope/hash通过。Guardrail九文件0blocking/6个P2复杂度warning，精确上界/键/分批/资源已在§5回应，未改公共规则。源码三轮同为本窗口自审，正式SQL/研究fit仍0；source提交/必需CI合入、真实inputs/economic/confirmation/runtime分别按实际后续记录，不由F2 PASS预写。
+
+源码第四轮接口组装复核：旧V2收到不含D日的实际价格切片，其source digest必须绑定这个切片而非新mark核含D日packet；原位修正摘要，没有改两臂监督/价格/经济规则。新增两包真实纯核组装合同，连同原22项共23项PASS，pytest指标3.939秒/0重复项；Ruff/AST/scope新收据及最终HEAD重新绑定，旧CI不作新HEAD证明。正式SQL/研究fit仍0，必需CI按新HEAD新run。

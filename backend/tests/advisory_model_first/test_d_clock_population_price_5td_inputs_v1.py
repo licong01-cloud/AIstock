@@ -132,6 +132,25 @@ def test_identical_post_purge_populations_have_zero_fit_contract():
     assert encoding["physical_fit_count"] == 0
 
 
+def test_two_package_target_packets_bind_actual_mark_and_legacy_slices(monkeypatch):
+    from backend.services.advisory_model_first import d_clock_population_price_5td_inputs_v1 as inputs
+    packet = mark_packet()
+    roster = pd.concat([packet['candidates'].assign(package_id=p) for p in ('a', 'b')], ignore_index=True)
+    daily = packet['prices'].drop(columns=['decision_as_of_trade_date', 'd_anchor_factor']).rename(
+        columns={name: 'raw_'+name+'_cny' for name in ('open', 'high', 'low', 'close')}).assign(adj_factor=1.)
+    original, observed = inputs.build_generic_price_5td_valuation_v2, []
+    def bound_legacy(**kwargs):
+        assert kwargs['source_context']['prices_sha256'] == hashlib.sha256(parquet_bytes(kwargs['prices'])).hexdigest()
+        assert kwargs['prices'].trade_date.gt(kwargs['prices'][KEY[0]]).all()
+        observed.append(kwargs['source_context']['prices_sha256'])
+        return original(**kwargs)
+    monkeypatch.setattr(inputs, 'build_generic_price_5td_valuation_v2', bound_legacy)
+    labels = inputs.construct_mark_targets_v1(plan=SimpleNamespace(sources=[SimpleNamespace(package_id=p) for p in ('a', 'b')]),
+        roster=roster, calendar=packet['calendar'], daily=daily, cutoff=packet['cutoff'], legacy=True)
+    assert len(observed) == len(labels) == 2 and labels.mark_label_status.eq('AVAILABLE').all()
+    assert labels.legacy_valuation_status.eq('AVAILABLE').all() and labels.terminal_mark_ratio.eq(1.05).all()
+
+
 def test_parent_projection_never_decodes_finance_and_known_hash_change_is_rejected(tmp_path):
     import json
     from backend.services.advisory_model_first.d_clock_population_price_5td_inputs_v1 import verified_parent_rosters_v1
