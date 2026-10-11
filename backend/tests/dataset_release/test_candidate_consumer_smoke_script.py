@@ -112,6 +112,22 @@ def test_consumer_run_uses_attempt_fenced_staging_not_release_id(monkeypatch, tm
             with pytest.raises(ValueError, match="staging .*identity"):
                 script._run(drift)
 
+        lease = staging / ".monthly-materialization-lease.json"
+        lease.write_text(json.dumps({
+            "schema_version": "aistock_monthly_retained_materialization_lease_v1",
+            "operation_id": run_id, "candidate_name": "monthly-candidate",
+            "execution_attempt": 8, "materialization_attempt": 7,
+            "release_digest": args.release_digest, "data_binding_digest": "b" * 64,
+        }), encoding="utf-8")
+        retry_result = control / "attempt_runs" / f"{attempt_id}-8" / "build-consumer-smoke/semantic_result.json"
+        retry_result.parent.mkdir(parents=True)
+        retained = Namespace(**{**vars(args), "attempt_fence": 8,
+            "monthly_materialization_attempt": 7, "result_path": str(retry_result)})
+        assert script._run(retained) == 0
+        assert observed["spec"].attempt_fence == 8
+        assert observed["spec"].staging_relative_path == relative
+        assert retry_result.exists()
+
     bad = Namespace(
         **{
             **vars(args),

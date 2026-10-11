@@ -1,6 +1,7 @@
 {
   "actual": "Only full BUILD success checkpoint is reused; any later consumer error repeats prepare and native daily/minute/factor work.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/services/dataset_release/monthly_build_executor.py",
     "backend/services/dataset_release/monthly_mature_build_runner.py",
     "backend/services/dataset_release/monthly_supervised_build.py",
@@ -23,6 +24,12 @@
   ],
   "created_at": "2026-10-11T03:02:08.541164Z",
   "description": "Only full BUILD success checkpoint is reused; any later consumer error repeats prepare and native daily/minute/factor work.",
+  "design_compliance_review": [
+    "没有将source完成报告为运行态已生效：当前259运行旧代码，不修改或中断；新worker加载及正式复验仍由后续重启验收闭合。",
+    "错误显式抛出，文件漂移不会伪成功或静默重新导出；实际native Bin值及mtime不变有回归证据。",
+    "只改变数据准备断点与物化路径绑定；不改变PIT、模型、股票池、数据值或公司行动语义。",
+    "不增加历史业务全量校验、数据激活或服务审批；resume仅核对既有收据和stat身份。旧无journal成果保留，不能以缺日志为由重导。"
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -36,21 +43,39 @@
   ],
   "expected": "Correct completed exports survive downstream failures and retry reuses bytes with no repeat materialization; stale/partial/drifted assets are preserved and never silently adopted.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261011_BUG-1842-monthly-build-loses-completed-native-exports-after-downstream-program-fa.json",
+      "backend/services/dataset_release/monthly_build_executor.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_supervised_build.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
+      "backend/tests/dataset_release/test_monthly_build_executor.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_supervised_build.py",
+      "noxfile.py",
+      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_build_resume.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261011_BUG-1842-monthly-build-loses-completed-native-exports-after-downstream-program-fa.json",
       "backend/services/dataset_release/monthly_build_executor.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_supervised_build.py",
-      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py",
       "backend/tests/dataset_release/test_monthly_build_executor.py",
       "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
       "backend/tests/dataset_release/test_monthly_supervised_build.py",
-      "backend/tests/dataset_release/test_candidate_consumer_smoke_script.py"
+      "noxfile.py",
+      "scripts/dataset_release_candidate_consumer_smoke.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_build_executor.py",
@@ -239,20 +264,47 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "repair_summary": "按同一operation、SOURCE、前驱、截止日及action plan持久化子阶段CAS收据和文件stat身份。重试保留物化原目录、使用当前执行fence，仅重跑未完成步骤。完成的真实Bin不重新导出；partial writer和packaging移至精确staging兄弟保留目录，不删除。旧worker无journal的已完成成果禁止静默重导，不伪造恢复证明。",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    {
+      "focus": "RED→GREEN：smoke程序故障后独立runner复用prepare、day、minute、finalize输出",
+      "result": "PASS",
+      "round": 1
+    },
+    {
+      "focus": "源身份漂移、未完成分钟writer、旧worker成果、packaging重试与路径边界",
+      "result": "修正并PASS；不删除正确文件，不因非数据问题重导",
+      "round": 2
+    },
+    {
+      "focus": "当前执行fence与原物化attempt分离、Windows隔离fresh-process、真实native Bin及executor原子发布",
+      "result": "PASS；62个定向测试、ruff、L0及diff-check通过",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
+  "root_cause": "BUILD仅有整阶段成功checkpoint；prepare、daily/minute native writer及finalize-bins成功结果没有跨进程子阶段日志。新attempt创建新staging，使后续consumer程序故障错误触发重复物化。",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "AIstock-CI python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py::test_fresh_process_recovers_completed_export_without_any_writer -q -> PASS；两个独立python -I进程从磁盘恢复同一CAS收据、原staging及真实文件，未调用writer，mtime保持不变。",
+      "AIstock-CI python -m pytest backend/tests/dataset_release/test_candidate_consumer_smoke_script.py -q -> PASS（包含仓库外隔离启动与当前fence/原物化attempt读取）。"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -261,6 +313,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion": "仅增加noxfile.py中qlib_data_backend既有测试清单的一行，执行新增resume定向测试；不改变工作流门禁、服务或业务合同。",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
@@ -271,6 +324,12 @@
     "fingerprint": "131d66a93e2721b765c24d39",
     "source_event_id": "FE-20261011-131d66a93e27"
   },
+  "validation_evidence": [
+    "pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_build_executor.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_supervised_build.py backend/tests/dataset_release/test_candidate_consumer_smoke_script.py -q -> 62 passed",
+    "ruff check actual changed Python files -> passed",
+    "nox -s l0 -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

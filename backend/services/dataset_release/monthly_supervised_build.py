@@ -24,6 +24,7 @@ from .candidate_consumer_smoke import (
 from .canonical import digest_named_fields
 from .daily_minute_materializer import QlibDumpToolchain, build_qlib_dump_command
 from .monthly_mature_build_runner import MonthlyConsumerSmokeResult
+from .monthly_build_resume import materialization_attempt
 from .monthly_worker import ProducerContext
 from .profile import DatasetProfile
 from .resource_supervisor import WslSupervisedOptions
@@ -272,13 +273,23 @@ class SupervisedMonthlyConsumerSmoke:
                 "consumer smoke staging root escapes candidate root"
             ) from exc
         target = Path(str(context.plan.get("candidate_root") or ""))
+        origin_attempt = context.attempt
+        expected_current = f".staging/.{target.name}.{context.operation_id}.attempt-{context.attempt}.building"
+        if staging_relative_path != expected_current:
+            try:
+                origin_attempt = materialization_attempt(
+                    staging_root, operation_id=context.operation_id, execution_attempt=context.attempt,
+                    candidate_name=target.name, release_digest=release_digest,
+                )
+            except (OSError, ValueError, RuntimeError) as exc:
+                raise MonthlySupervisedBuildError("consumer smoke staging identity is unbound") from exc
         if (
             not target.is_absolute()
             or target.parent.resolve(strict=True) != candidate_root
             or self.supervisor.attempt_id != f"{context.operation_id}-build"
             or self.supervisor.fence != context.attempt
             or staging_relative_path != (
-                f".staging/.{target.name}.{context.operation_id}.attempt-{context.attempt}.building"
+                f".staging/.{target.name}.{context.operation_id}.attempt-{origin_attempt}.building"
             )
         ):
             raise MonthlySupervisedBuildError(
@@ -334,6 +345,8 @@ class SupervisedMonthlyConsumerSmoke:
             "--candidate-root",
             _windows_to_wsl(candidate_root),
         )
+        if origin_attempt != context.attempt:
+            values += ("--monthly-materialization-attempt", str(origin_attempt))
         command = [
             "bash",
             "-lc",
