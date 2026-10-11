@@ -1,6 +1,6 @@
 # Advisory 原Top5正负收益分解买价 GP5 F2详细设计
 
-> 2026-10-11；v1.1；假设 `GP5-ORIGINAL-SLOT-HURDLE-VALUE-1`。设计已由#5875合入；本版实施六源码叶和三直接测试叶、多轮本窗口自审修复。真实预登记/prepare/实际研究fit/经济确认/运行启用均未开始，当前HEAD CI/合入以交付收据读回。现有累计136实际研究fit＋1旧INDEX_BUILD不变；合成fixture和planned六fit不计新增研究fit。
+> 2026-10-11；v1.2；假设 `GP5-ORIGINAL-SLOT-HURDLE-VALUE-1`。设计#5875及SOURCE #5876/HEAD72497c11/CI38072652839已交付；真实预登记/prepare/6实际fit/四臂完成，NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE精确停止。累计142研究fit＋1旧INDEX_BUILD，0确认/启用。下方SOURCE审核及“研究未开始”为对应历史时点，当前以本页/Research Result为准；不改旧模型/参数或复fit救结果。
 > 父级：[蓝图§6.3.4/6.3.6/16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)。唯一目标是可盈利、风险可解释的日频买价建议，不是预测开盘落点、最佳分钟或上游选股Alpha。
 
 ## Background / Goal
@@ -206,7 +206,19 @@ API/backend只消费AIstock-owned新artifact manifest，不以worker内部WSL脚
 
 以上均为本窗口多轮多视角自审，不称独立审核。最终直接矩阵27/27 PASS、Ruff/九文件无bytecode compile通过；F-888证据引用格式缺口已修正，不改任何业务条款。DESIGN-COMPLIANCE-001逐项：完整计划源码而非占位交付；失败/未知/partial及资源快照竞态可见；原名单/5TD/费用/旧policy与模块边界保持，新U单独身份；未私加包资格、审批或旧负实验固化前置。真实预登记、prepare、6fit/四臂、经济确认及接入仍为后续任务，当前研究累计136不变。最终当前HEAD直接测试/F2/Ruff/L0/CI与合入收据分开报告，不将合成fit或stage测试登记当正式研究。
 
-## Risks / Failure Modes
+## Research Result / 真实研究结果（2026-10-11）
+
+run `advgp5hurdle_e9d7d26034dad2030a0fe359`，source `0b031b710d269eeb423554c7d77d1b5993095f00`；plan SHA `e9d7d26034dad2030a0fe35962e74ffa1b5a0411a54b6c8bcdf1e7cc66516e98`，economic SHA `1266039ffe3c5c6b2ff27db833be7138e106c1169f3efc09ce598e6a533a944a`。评价artifact `F:/Dev/AIstock_model_artifacts/advisory_original_slot_hurdle_price_5td_v1_20261011/advgp5hurdle_e9d7d26034dad2030a0fe359/evaluated/evaluation.json` SHA `afdf3ea8a412e7b423aecb3384ed45a925d781ba978d52b9d127b8a4fe4e71d6`，stage SHA `f46a30157759a60e1bfe641f99279f25aa87b2d0beda6f4f6cf1a7660dac658a`；结果不覆盖、不追加补证。
+
+原305D/30500 Top50/610包D保持，train214D2140原Top5；evaluation86D860槽/81成熟D810槽，末5D/50槽IMMATURE保留。恰6实际fit=4sklearn+2Beta、6STARTED/6COMPLETE/0retry，12份前后fresh QE观察均三0；累计136+6=142研究fit，不是142独立假设。模型及预测原子冻结后解码评价金融，sealed/父score不读。当前库NON_VINTAGE与历史池UNKNOWN不升级。
+
+四臂base/rule/matched/candidate五槽net均值128.389817/121.630581/120.811468/121.287553bps，TAKE809/798/796/790，胜率50.5562/50.5013/50.3769/50.2532%；U均值121.260766/114.539435/113.720322/114.196407。candidate−base net/U=−7.102264/−7.064359，candidate−matched=+0.476084/+0.476084；同时95%区间[−23.140145,4.051110]/[−1.605113,2.859411]，MDE80=19.172306/3.023461。干预仅5唯一stockD/4D/4.9383%，POSITIVE5/NONPOSITIVE0，低于事前支持；97.5309% TAKE说明并非过度保守，而是近恒等。已知避亏+1.149051、漏盈−0.672966=+0.476084，UNKNOWN cash−7.578349，闭合对base−7.102264；13未知成熟槽源于事前价格支持/坐标，不是数据回补或放宽支持理由。
+
+两个包baseline110.465588/146.314046bps为正，candidate−base−8.136345/−6.068184，candidate−matched+0.635064/+0.317105；不择包激活或归罪QE无Alpha。概率未校准（candidate Brier0.254267 vs matched0.253234），重叠组均值非NAV/实际成交/独立OOS。结论NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE，停止此candidate；0confirmation/consumer/生产启用、数据库写或服务操作。
+
+原名单/身份、独立算术、四臂810槽及已知/UNKNOWN闭合三个本窗口自审视角PASS，不称独立外部审核。前述SOURCE矩阵仍是历史合同验证，原“尚未研究”已由本节接续；下一项为独立市场条件设计/实施，不复活本negative模型。
+
+## Risks / Failure Modes（设计时判断，保留）
 
 原Top5训练更对齐但独立信息量更少；高容量搜索不允许，正则可能使输出接近恒定，需用真实干预识别恒等陷阱。原9D/g信息未必可学，新的正负分解也可能失败；没有新增信息不能保证改善。Beta全局精度和Gamma均值都是模型近似，不是条件校准或严格风险保证。终值尾损不覆盖途中极端波动，风险读回必须显式，不用U的好看结果称全风险优越。
 
