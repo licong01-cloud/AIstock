@@ -1,4 +1,4 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.00
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.01
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-11
@@ -1826,7 +1826,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-273 | §6.3.5/16.0；risk_tail inputs/model；校准F2 Contracts §2/3/4及Research Result | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_model_v1.py | REAL_ONE_FIT_AND_CALIBRATION_COMPLETED | approved_by_user: #5859已合入/清理；13660监督、1共享fit＋1标量估计，538/600残差；累计136，非136独立假设 |
 | F-274 | §6.3.5/14/16.0；risk_tail pipeline/evaluation/CLI；独立F2九项合同 | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_study_v1.py | REAL_EXPLORATORY_COMPLETED_NEGATIVE_STOP | approved_by_user: 81D/810成熟槽双增量负、55cal干预/30D、已知/UNKNOWN归因闭合；源码与真实研究分报，0确认/激活/其他模块/DB/服务操作 |
 | F-275 | §6.3.4/6.3.6/16.0；原Top5分解F2九项及六源码/三测试 | artifact: docs/architecture/advisory_original_slot_hurdle_price_5td_v1_f2_design_20261010.md；test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py | COMPLETE_RESEARCH_NEGATIVE_OR_UNRESOLVED_CANDIDATE_STOPPED | approved_by_user: SOURCE #5876/CI38072652839已合入；正式6fit/四臂完成、累计142，双区间跨零/干预不足，不冒称收益/启用，新终值风险非旧合同升级，0其它模块/DB/服务 |
-| F-276 | §6.3.7/16.0；市场开盘F2九项验收 | artifact: docs/architecture/advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md；test: backend/tests/advisory_model_first/test_market_open_hurdle_price_5td_study_v1.py | SOURCE_IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_NOT_STARTED | approved_by_user: 设计/SOURCE本地合同通过，16直接项及九项F2，0新研究fit/生产/提交合入，D不提前使用T，名义同开盘估值不称成交 |
+| F-276 | §6.3.7/16.0；市场开盘F2九项验收 | artifact: docs/architecture/advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md；test: backend/tests/advisory_model_first/test_market_open_hurdle_price_5td_study_v1.py | SOURCE_IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_NOT_STARTED | approved_by_user: 设计/SOURCE本地合同通过，已本地提交并同步main，16直接项及九项F2，0新研究fit/生产，PR/合入另分态，D不提前使用T，名义同开盘估值不称成交 |
 
 ## 12. Verification Plan
 
@@ -2121,7 +2121,7 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 |---|---|---|
 | 已完成1 | 父分数、风险校准和原Top5 hurdle精确停止 | 真实结果保留，不重fit/择包/放宽支持/救阈值/补证；136只是风险校准历史检查点，当前142 |
 | 已完成2 | 原Top5 hurdle SOURCE及唯一正式研究 | #5875/#5876、27直接合同/WSL数学/CI38072652839与真实6fit/81成熟D四臂完成，源码成功非经济成功 |
-| 1 / 当前唯一研发 | 市场开盘条件F2及完整SOURCE | SOURCE_IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_NOT_STARTED：独立CLOCK、22/25D同监督/三头、readonly D.close/T.open、原子情景/预测/四臂；原D-only产品/policy不变，三轮本窗口自审修复/16直接项/Ruff/L0/双环境通过，研究0/未提交合入 |
+| 1 / 当前唯一研发 | 市场开盘条件F2及完整SOURCE | SOURCE_IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_NOT_STARTED：独立CLOCK、22/25D同监督/三头、readonly D.close/T.open、原子情景/预测/四臂；原D-only产品/policy不变，三轮本窗口自审修复/16直接项/Ruff/L0/双环境通过，已本地提交同步main，研究0/PR及合入另分态 |
 | 2 / SOURCE验证完成后 | 唯一新identity预登记/prepare、六fit四臂 | NOT_STARTED：旧开发窗仅NAVIGATION_ONLY，每组件fresh QE与fit记账，T市场条件非D已知；同开盘估值非可执行，不等自然数据或并行重做QE |
 | 3 / 新candidate值得继续后 | 未消费确认/合法时钟/必要日频consumer | NOT_OPENED：另立MDE/独立窗口及具体consumer，不能由同开盘观察后估值推成同开盘执行；仅Advisory，UI/旧负补证后置，重启用户所有 |
 

@@ -1,6 +1,6 @@
 # Advisory 市场开盘条件的原Top5买价 GP5 F2详细设计
 
-> 2026-10-11；v1.1；唯一假设 `GP5-MARKET-OPEN-CONDITION-1`。已实施精确六SOURCE叶/三直接测试，三轮本窗口自审修复，16直接合同/Ruff/L0/Windows及WSL数学通过；用户授权设计及实施，未提交/PR/合入；本轮不提交研究fit、不改变实盘日频荐股或生产配置。累计142实际研究fit＋1旧INDEX_BUILD，0经济确认/启用；新研究预算6，不计为已经执行。
+> 2026-10-11；v1.2；唯一假设 `GP5-MARKET-OPEN-CONDITION-1`。已实施精确六SOURCE叶/三直接测试，三轮本窗口自审修复，16直接合同/Ruff/L0/Windows及WSL数学通过；源码已本地提交并安全同步最新main，当前PR/CI/合入及研究另分态。用户接续批准下一步唯一六fit四臂研究，当前尚未启动，不改变实盘日频荐股或生产配置。累计142实际研究fit＋1旧INDEX_BUILD，0经济确认/启用；新研究预算6，不计为已经执行。
 > 父级：[蓝图§6.3.4/6.3.7/16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)。本候选是条件价格估值研究，不是上游Alpha、开盘价预测或分钟执行策略。
 
 ## Background / Goal
@@ -85,7 +85,7 @@ registry计EXPLORATORY_SCREEN/RISK_MANAGED_ADVISORY/NAVIGATION_ONLY、2配置/1c
 1. 三轮本窗口设计自审（经济/时钟；数学/真实接口；范围/全蓝图状态）→F2结构验证，再开始源码。
 2. contracts/input原Top5与D/T投影；新model固定25/22矩阵及同一Gamma/Beta数学；pipeline/CLI原子准备/拟合/先预测后金融；四臂评价。
 3. 三轮源码自审修复；只运行新直接矩阵及精确原失败回归，Ruff/无bytecode compile、diff/scope。没有委托独立审核，不称自审为独立审查；跨模块长回归留CI/Nightly，不以UI当模型收益。
-4. F2验收索引逐项有代码/直接合同证据，未完成保持gap；源码可研究不等于正式研究已开始。用户本轮只批准设计/实施，提交/PR/合入状态另报；后端重启用户所有。
+4. F2验收索引逐项有代码/直接合同证据，未完成保持gap；源码可研究不等于正式研究已开始。用户先批准设计/实施、随后批准下一步源码交付及唯一六fit研究，提交/PR/合入状态另报；后端重启用户所有。
 5. 源码完整验证后下一项才是唯一六fit研究；若有继续价值另立未消费历史确认/MDE及合法时钟consumer，sealed金融只留独立确认，0自动生产激活。
 
 ## Design Acceptance Index
@@ -142,8 +142,10 @@ registry计EXPLORATORY_SCREEN/RISK_MANAGED_ADVISORY/NAVIGATION_ONLY、2配置/1c
 
 第三轮stage/经济/恢复：六组件前后12资源快照、重入0新组件、QE中途出现只暂停自己、STARTED不完整无隐式重fit、四臂/五槽/IMMATURE和收益读取顺序通过。加强收益读取失败后的恢复，发现Parquet字符串缺失NaN/None表示变化会误判输入SHA，修复为只规范未知表示，不补源值/取消身份校验；定点回归通过，已冻结market情景不重读现库。synthetic mocked head显式绑定其新capture encoding，不放松真实模型身份校验。
 
-最终16/16直接合同、Ruff0、L0 changed-only12文件0finding/0blocking，Windows/WSL六叶完整SHA一致且九Python文件无bytecode compile、25/22矩阵/共享数学通过。源码仍未提交，证据绑定base HEAD28b7700e和changed-file内容digest，不是PR最终HEAD CI。当前origin/main相关Advisory源码/两旧文档未改，但全仓由其它窗口推进；发布前需同步及重新绑定最终commit收据。
+上一轮16/16直接合同、Ruff0及工作区changed-only收据，Windows/WSL六叶完整SHA一致且九Python文件无bytecode compile、25/22矩阵/共享数学通过。该旧证据绑定base HEAD28b7700e和changed-file内容digest，不是PR最终HEAD CI。接续本轮本地提交152bc76dd并合并最新origin/main，无相关Advisory冲突；重新验证16/16、0跳过/失败（12.28秒）及F2九项。已提交源码的L0按精确12文件显式扫描，不把干净工作树的0文件changed-only结果冒充源码验证。
+
+显式L0为12文件、3个ALGO-COMPLEXITY-001/P2/warn、0blocking：inputs join仅305个唯一D/T右键，many_to_one及原Top5左人口不变；pipeline两金融/价格合并使用完整ROSTER_KEY和one_to_one、最多3050原Top5，不存在笛卡尔扩张。完整tick128分块且有总量界。三处已逐项人工审核，保留warning，不修改scanner或归属。最终PR版本以commit-bound source_delivery收据和GitHub当前必需检查为准。
 
 真实owner完整预算用canonical审计引擎、全tracked加精确九candidate代码路径（无index修改）计算：旧advisory.model_first 35.45%/超6992 SLOC；新含候选35.39%/超6973，既定30%不改。新增生产1135/测试322 SLOC，增量28.37%；全owner旧债未清除，不转归属/虚增分母/删旧有价值测试，也不称全模块预算PASS。当前只是SOURCE本地合同完成，PR/CI/合入条件与研究有效性分别未完成。
 
-本轮三视角均为本窗口自审，不称独立审核。0正式研究fit/经济确认/激活/QE任务/数据库写/服务控制；下一项是源码交付后唯一六fit四臂研究，不收集旧negative额外证据。
+本轮三视角均为本窗口自审，不称独立审核。当前0正式研究fit/经济确认/激活/QE任务/数据库写/服务控制；下一项是干净固定源码提交上的唯一六fit四臂研究，不收集旧negative额外证据。源码合入、完整owner历史债务、探索性结果与运行激活分别报告；不得把旧预算未清除改判为PASS或冒称模型有效。
