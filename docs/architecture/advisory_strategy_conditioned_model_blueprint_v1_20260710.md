@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.01
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.02
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-11
 
-> 当前接续：[市场开盘条件买价F2](advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md)：用户批准设计与实施，唯一GP5-MARKET-OPEN-CONDITION-1。D只发布f(X_D,g,m)，m是明确市场开盘假设，不是D已知未来；T开盘后历史代入只估值，不声称能按同一开盘成交、不改D-only产品或研发分钟执行。新matched22D/candidate25D、同目标/成本/原Top5，预算六fit但当前研究0。原槽hurdle #5876已合入并完成唯一六fit/四臂，净双增量−7.1023/+0.4761bps、区间跨零且干预不足，精确停止；当前累计142实际研究fit＋1旧index、0经济确认/启用。旧负候选不补证/放宽支持/救阈值，不修改QE/其它模块/DB/服务，唯一队列见§16.0。
+> 当前真实断点：[市场开盘条件买价F2](advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md)：SOURCE #5888/CI38107005625已合入5347c4a1758bb6f381a9831d00b1cc0a6a3d701a，唯一run advgp5marketopen_b32183acb63705038aeb617a六fit/四臂已结束，净双增量−6.495253/＋0.607011bps、同时区间跨0且13/10独立干预不足，精确候选停止。D只发布f(X_D,g,m)，m是市场开盘假设而非D已知未来；T观测后同开盘估值不称成交、NAV或生产启用，原D-only产品不变。当前累计148实际研究fit＋1旧index、0经济确认/启用；市场214训练/85评价开盘D完整，不是数据缺数或全不买。当前候选与此前原槽hurdle等阴性不补证/放宽支持/择包/救阈值。后续回到§6.3.4经济学习问题及样本结构，唯一队列见§16.0；不修改QE/其它模块/DB/服务。
 
 > 前一真实研究已结束：[训练内尾风险校准F2](advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md)设计#5856、源码#5859和结果#5868已合入/自身清理。run `advgp5riskcal_9a5e6df7597130d6e5cf747e`一次共享RF.fit＋一次标量估计，81成熟D810原槽完整配对；base/rule/raw/cal五槽均值128.3898/121.6306/25.6433/23.4417bps，candidate减base/raw−104.9481/−2.2016且同时区间均跨零。CAL538/600残差delta＋103.8920bps，55校准干预/30D真实存在但错失盈利仍超避亏；精确候选停止，不改800/delta/窗口/包继续搜索或把旧core回选为有效模型。原305D30500项/两包完整，源码CI37980700792/结果CI38012098009 SUCCESS不等于confirmation或启用，完整历史见§6.3.5与该设计。
 
@@ -815,11 +815,15 @@ delta=+103.892045bps/raw等效截止696.107955，四臂五槽均值128.389817/12
 
 候选TAKE790/810，非過度保守；仅5唯一stockD/4D/4.9383%已知干预，POSITIVE5/NONPOSITIVE0，支持不足。已知避亏+1.149051/漏盈−0.672966=+0.476084，UNKNOWN现金−7.578349，闭合对base−7.102264；13未知成熟槽源于事前价格支持/坐标，不是要修数据库或放宽支持的理由。两个包baseline110.4656/146.3140bps均正，candidate减base−8.1363/−6.0682，不能择包或归罪QE全无Alpha。精确NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE停止，0确认/生产/消费者接入；组均值非NAV/实际成交。完整身份/结果见该F2 Research Result，不为旧负补证或复fit。
 
-#### 6.3.7 当前单一新设计：市场共同开盘与个股相对开盘条件
+#### 6.3.7 已完成单一候选：市场共同开盘与个股相对开盘条件（精确停止）
 
 [GP5-MARKET-OPEN-CONDITION-1 F2](advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md)仅问相同股票gap g能否因市场共同开盘m不同而具有不同5TD价值，不再把既有资金/分钟/估值/板块字段换名。D冻结九字段与f(X_D,g,m)，m在D只是假设；只读market.index_daily投影D.close/T.open，T.close/high/low或H不得作特征。新CLOCK=D_CLOSE_FUNCTION_WITH_T_OPEN_MARKET_CONDITION；T开盘观测后同开盘估值不是可执行收益，不能冒称D已知预测。原D-only实盘/API/Program/policy不变，无盘中服务/订单/执行，未来合法时钟consumer另立范围。
 
-原两包/原Top5/固定5TD/费用/终值U保持，matched22D、candidate25D（m/100、g*m/10000、abs(g-m)/100），同三头/监督/编码/支持，六fit预算但本轮研究0、累计142不变。市场缺失保留名单，两臂共同已知监督；支持洞/缺m UNKNOWN，不前填、matched兜底、删D或添加QE包资格。train来源先冻结；evaluation情景/全部预测原子保存后才读收益，exact resume不重新查询现库。两日schema/COUNT只读spike只证明可产，不证明全305D或收益。完整SOURCE/研究/独立确认分态，UI和旧负补证不前置。
+原两包/原Top5/固定5TD/费用/终值U保持，matched22D、candidate25D（m/100、g*m/10000、abs(g-m)/100），同三头/监督/编码/支持，唯一六实际fit/0retry已经执行，累计148。SOURCE #5888/CI38107005625已合入；run `advgp5marketopen_b32183acb63705038aeb617a`保留原305D/30500Top50/610包D、214trainD2140槽；评价86D860槽/81成熟D810槽/5D50IMMATURE不删。train214D及评价可见T的85D市场开盘完整，合计4只读SELECT；不能仍拿两日spike替代该真实完整开发读取。市场缺失保留名单，两臂共同监督/支持；股票价域UNKNOWN不放宽、不matched兜底、不加QE资格。train先冻结，evaluation情景/预测先保存再读收益，sealed金融0；十二QE前后观察均三0，0其它模块/DB写/服务控制。
+
+四臂五槽净均值base/rule/matched/candidate=128.389817/121.630581/121.287553/121.894564bps。对base净−6.495253/U−5.468785、同时95%区间[−26.975030,7.049283]；对matched净＋0.607011/U＋1.595574、区间[−5.913787,7.366952]，MDE80=23.903243/9.157436。实际干预base13stockD/9D/11.1111%、matched10/7D/8.6420%，均数量不足且NONPOSITIVE0；TAKE782/810=96.5432%并非整体过保守。已知避亏4.383019−漏盈3.299923=＋1.083096，UNKNOWN−7.578349，闭合对base−6.495253；成熟13未知槽源于股票支持/情景，不是市场数据需要修补。终值尾损均值降低1.026468bps仍不抵偿净损失。LSTM对matched＋6.325824，TCN−5.111802，不择包升级；两个包正baseline不等于该下游模型有效或未来收益保证。
+
+`NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE`精确停止、0确认/消费者/生产；SOURCE合入、经济阴性和未启用分别报告。此后不续本条件块同族交互/loss/阈值，回到§6.3.4重新论证不同经济学习问题与代表性，未自动承诺下一模型。重叠五日均值非每日收益/NAV，当前NON_VINTAGE/native UNPROVEN/历史池UNKNOWN不升级；完整当前身份见F2 Research Result，UI/旧负补证不前置。
 
 ### 6.4 训练资源边界
 
@@ -1669,7 +1673,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-273 | §6.3.5单一训练内风险校准新假设：STRUCTURE/ESTIMATION/CAL诚实分段、base仅一次20D新fit、一个冻结delta，原800bps/收益头/原Top5不改；不以旧权重或evaluation校准 |
 | F-274 | 新风险校准的来源SHA/名单/政策/角色/base绑定、原CAL簇质量/UNKNOWN、完整tick价集/四臂经济与QE互斥；经验coverage非条件保证，设计/源码/研究/确认/激活分态 |
 | F-275 | §6.3.6原Top5正负收益分解新合同：终值尾损与路径风险分离、同语义matched/candidate、原五槽/净增量、计划六fit与跨包数学；不改旧候选、QE包资格或生产policy，设计/实施/真实研究分态 |
-| F-276 | §6.3.7/16.0市场开盘条件：独立CLOCK/D不知T、22/25D同合同、只读D.close/T.open、完整原槽/UNKNOWN、先预测后收益；原D-only产品不改，新预算6fit未执行 |
+| F-276 | §6.3.7/16.0市场开盘条件：独立CLOCK/D不知T、22/25D同合同、只读D.close/T.open、完整原槽/UNKNOWN、先预测后收益；原D-only产品不改，实际6fit/四臂负向或未决后精确停止，不择包或声称经济确认 |
 
 ## 11. Design Acceptance Matrix
 
@@ -1826,7 +1830,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-273 | §6.3.5/16.0；risk_tail inputs/model；校准F2 Contracts §2/3/4及Research Result | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_model_v1.py | REAL_ONE_FIT_AND_CALIBRATION_COMPLETED | approved_by_user: #5859已合入/清理；13660监督、1共享fit＋1标量估计，538/600残差；累计136，非136独立假设 |
 | F-274 | §6.3.5/14/16.0；risk_tail pipeline/evaluation/CLI；独立F2九项合同 | artifact: docs/architecture/advisory_risk_tail_calibrated_price_5td_v1_f2_design_20261010.md；target: backend/tests/advisory_model_first/test_risk_tail_calibrated_price_5td_study_v1.py | REAL_EXPLORATORY_COMPLETED_NEGATIVE_STOP | approved_by_user: 81D/810成熟槽双增量负、55cal干预/30D、已知/UNKNOWN归因闭合；源码与真实研究分报，0确认/激活/其他模块/DB/服务操作 |
 | F-275 | §6.3.4/6.3.6/16.0；原Top5分解F2九项及六源码/三测试 | artifact: docs/architecture/advisory_original_slot_hurdle_price_5td_v1_f2_design_20261010.md；test: backend/tests/advisory_model_first/test_original_slot_hurdle_price_5td_study_v1.py | COMPLETE_RESEARCH_NEGATIVE_OR_UNRESOLVED_CANDIDATE_STOPPED | approved_by_user: SOURCE #5876/CI38072652839已合入；正式6fit/四臂完成、累计142，双区间跨零/干预不足，不冒称收益/启用，新终值风险非旧合同升级，0其它模块/DB/服务 |
-| F-276 | §6.3.7/16.0；市场开盘F2九项验收 | artifact: docs/architecture/advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md；test: backend/tests/advisory_model_first/test_market_open_hurdle_price_5td_study_v1.py | SOURCE_IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_NOT_STARTED | approved_by_user: 设计/SOURCE本地合同通过，已本地提交并同步main，16直接项及九项F2，0新研究fit/生产，PR/合入另分态，D不提前使用T，名义同开盘估值不称成交 |
+| F-276 | §6.3.7/16.0；市场开盘F2九项验收 | artifact: docs/architecture/advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md；test: backend/tests/advisory_model_first/test_market_open_hurdle_price_5td_study_v1.py | COMPLETE_RESEARCH_NEGATIVE_OR_UNRESOLVED_CANDIDATE_STOPPED | approved_by_user: SOURCE #5888/CI38107005625已合入，16直接/9F2和唯一6fit四臂完成，累计148，双区间跨0/干预不足，0确认/生产，不择包，D不提前使用T，名义估值不称成交 |
 
 ## 12. Verification Plan
 
@@ -2113,17 +2117,18 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 ## 16. 当前下一步
 
-### 16.0 当前唯一任务队列与真实断点（2026-10-11 市场开盘条件设计及实施）
+### 16.0 当前唯一任务队列与真实断点（2026-10-11 市场开盘条件研究结束）
 
-父分数、风险校准与原槽hurdle均已真实检验并精确停止，不能再列待prepare/fit。最新run `advgp5hurdle_e9d7d26034dad2030a0fe359`完整六fit/四臂结束：双净增量−7.1023/+0.4761bps、区间跨零、5stockD/4D干预不足，0确认/启用。当前142实际研究fit+1旧index，新市场条件仅设计/SOURCE任务，研究0；不读sealed金融，不改QE/其它模块或服务。
+父分数、风险校准、原槽hurdle及市场开盘条件均已真实检验并精确停止，不能再列待prepare/fit。最新run `advgp5marketopen_b32183acb63705038aeb617a`唯一六fit/四臂结束：对base−6.495253、对matched＋0.607011bps，双区间跨0且13/10stockD干预不足，0确认/启用。当前148实际研究fit+1旧index，SOURCE #5888已合入；市场数据完整，不再修数据库或等待实盘、做UI/旧负补证。下一项先论证新的经济学习问题/人口，不能把当前负candidate继续派生。
 
 | 当前顺序 | 具体任务 | 当前状态 / 边界 |
 |---|---|---|
-| 已完成1 | 父分数、风险校准和原Top5 hurdle精确停止 | 真实结果保留，不重fit/择包/放宽支持/救阈值/补证；136只是风险校准历史检查点，当前142 |
+| 已完成1 | 父分数、风险校准和原Top5 hurdle精确停止 | 真实结果保留，不重fit/择包/放宽支持/救阈值/补证；136/142只是各历史检查点，当前148 |
 | 已完成2 | 原Top5 hurdle SOURCE及唯一正式研究 | #5875/#5876、27直接合同/WSL数学/CI38072652839与真实6fit/81成熟D四臂完成，源码成功非经济成功 |
-| 1 / 当前唯一研发 | 市场开盘条件F2及完整SOURCE | SOURCE_IMPLEMENTED_LOCAL_VERIFIED_RESEARCH_NOT_STARTED：独立CLOCK、22/25D同监督/三头、readonly D.close/T.open、原子情景/预测/四臂；原D-only产品/policy不变，三轮本窗口自审修复/16直接项/Ruff/L0/双环境通过，已本地提交同步main，研究0/PR及合入另分态 |
-| 2 / SOURCE验证完成后 | 唯一新identity预登记/prepare、六fit四臂 | NOT_STARTED：旧开发窗仅NAVIGATION_ONLY，每组件fresh QE与fit记账，T市场条件非D已知；同开盘估值非可执行，不等自然数据或并行重做QE |
-| 3 / 新candidate值得继续后 | 未消费确认/合法时钟/必要日频consumer | NOT_OPENED：另立MDE/独立窗口及具体consumer，不能由同开盘观察后估值推成同开盘执行；仅Advisory，UI/旧负补证后置，重启用户所有 |
+| 已完成3 | 市场开盘条件完整SOURCE及唯一正式研究 | #5888/CI38107005625、16直接及9F2通过，唯一6fit/81D四臂完整；NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE精确停止，0确认/生产，原D-only产品/policy不变 |
+| 1 / 下一唯一研发 | 按§6.3.4论证不同经济学习问题/代表性，再形成单一详细设计 | NOT_STARTED：明确与已负人口迁移/日频信息/market条件的真实区别和合法时钟，不仅换loss或追加字段；先确定可用已交付包人口/目标/对照/预算，禁止重做QE或复活本candidate |
+| 2 / 新设计批准后 | 必要Advisory源码及一次匹配人口/目标研究 | NOT_OPENED：新identity、同费用/原槽/未知保留、拟合资源及试验次数如实登记，历史验证不等自然数据、不读sealed |
+| 3 / 真正新candidate值得继续后 | 未消费确认及必要日频consumer | NOT_OPENED：不能由同开盘观察后估值推成同开盘执行，不回选本负candidate；仅Advisory，UI/旧负补证后置，重启用户所有 |
 
 新规格见§6.3.7/F2，旧hurdle真实结果见§6.3.6/原F2 Research Result。没有确认的Advisory盈利型Entry/Exit仍是当前事实，两包正baseline不是未来收益保证；最多一条模型主线及必要正确性辅线，不按时长凑实验。
 
