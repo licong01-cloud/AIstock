@@ -1,12 +1,10 @@
 {
   "actual": "attempt260 在 retained_staging_root 抛 explicit receipt adoption required，无可用接管接口",
   "allowed_write_scope": [
-    "backend/services/dataset_release/monthly_build_resume.py",
-    "backend/tests/dataset_release/test_monthly_build_resume.py",
     "backend/services/dataset_release/monthly_legacy_adoption.py",
-    "scripts/adopt_monthly_completed_exports.py",
-    "backend/tests/dataset_release/test_monthly_legacy_adoption.py",
-    "tests/aistock_validation/bugs/20261012_BUG-1853-worker.json"
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "tests/aistock_validation/bugs/20261012_BUG-1853-worker.json",
+    "docs/standards/aistock_runtime_targets_v1.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1853",
@@ -26,26 +24,23 @@
       "timestamp": "2026-10-12T19:04:29.893006Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "BUG-1853 role: CLI-only receipt-adoption helper is not imported by API, supervisor, monthly registry or worker. Exact offline role registered in runtime catalog; not a blanket exemption. Normal backend API still owns resume/validation/publication."
+  ],
   "expected": "精确接管已完成导出，重新执行当前 attempt 消费验证，不重写数据文件",
   "file_scope_contract": {
     "added_files": [
-      "backend/services/dataset_release/monthly_legacy_adoption.py",
-      "scripts/adopt_monthly_completed_exports.py",
-      "backend/tests/dataset_release/test_monthly_legacy_adoption.py"
+      "backend/services/dataset_release/monthly_legacy_adoption.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/monthly_build_resume.py",
-      "backend/tests/dataset_release/test_monthly_build_resume.py"
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "actual_changed_files",
     "ownership": {
       "changed_files": [
-        "backend/services/dataset_release/monthly_build_resume.py",
-        "backend/tests/dataset_release/test_monthly_build_resume.py",
         "backend/services/dataset_release/monthly_legacy_adoption.py",
-        "scripts/adopt_monthly_completed_exports.py",
-        "backend/tests/dataset_release/test_monthly_legacy_adoption.py"
+        "backend/tests/dataset_release/test_monthly_build_resume.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -55,17 +50,6 @@
         "scripts"
       ],
       "matched_rules": [
-        {
-          "file": "backend/services/dataset_release/monthly_build_resume.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
         {
           "file": "backend/tests/dataset_release/test_monthly_build_resume.py",
           "impact_modules": [
@@ -87,24 +71,6 @@
           "primary_module": "qlib_data",
           "risk_level": "critical",
           "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "scripts/adopt_monthly_completed_exports.py",
-          "impact_modules": [],
-          "primary_module": "scripts",
-          "risk_level": "medium",
-          "rule_id": "scripts_default"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_monthly_legacy_adoption.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
         }
       ],
       "risk_levels": [
@@ -112,28 +78,21 @@
         "medium"
       ],
       "suggested_scope": [
-        "backend/services/dataset_release/monthly_build_resume.py",
-        "backend/tests/dataset_release/test_monthly_build_resume.py",
         "backend/services/dataset_release/monthly_legacy_adoption.py",
-        "scripts/adopt_monthly_completed_exports.py",
-        "backend/tests/dataset_release/test_monthly_legacy_adoption.py"
+        "backend/tests/dataset_release/test_monthly_build_resume.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/services/dataset_release/monthly_build_resume.py",
-      "backend/tests/dataset_release/test_monthly_build_resume.py",
       "backend/services/dataset_release/monthly_legacy_adoption.py",
-      "scripts/adopt_monthly_completed_exports.py",
-      "backend/tests/dataset_release/test_monthly_legacy_adoption.py"
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/dataset_release/monthly_build_resume.py",
-      "backend/tests/dataset_release/test_monthly_build_resume.py",
       "backend/services/dataset_release/monthly_legacy_adoption.py",
-      "scripts/adopt_monthly_completed_exports.py",
-      "backend/tests/dataset_release/test_monthly_legacy_adoption.py"
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
     ]
   },
   "first_seen_at": "2026-10-12T19:04:29.893006Z",
@@ -159,9 +118,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -q -> 27 passed; atomic journal flush regression -> passed; two isolated processes recover the same original exports without invoking writers.",
+      "AIstock python -m backend.services.dataset_release.monthly_legacy_adoption --operation-id dmr_63a313d97fd046a38d5a876265565014 --state-root F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2 --control-root X:/AIstock_dataset_release_control --artifact-root F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2 --artifact-root X:/AIstock_dataset_release_control --prepare-ref e6012c16ade44872e0451c39503736d7c86e21c560e1080126658d9f8f1761bd --finalize-ref 3fce854637e6e929660130e5d3e4cd90bd348eace189d492baf0c2c2a190bf57 -> real dry-run PASS: 125269 files, 118104 month-written features, 7128 unchanged hardlinked inherited features; no export/database/profile writes."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "worker_scheduler",
