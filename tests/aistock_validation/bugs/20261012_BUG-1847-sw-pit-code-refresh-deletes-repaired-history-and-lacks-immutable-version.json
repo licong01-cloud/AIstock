@@ -14,14 +14,14 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1847",
-  "closed_at": null,
+  "closed_at": "2026-10-12T18:47:35.837838Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-12T16:59:33.037946Z",
-  "description": "BUG-1843历史行业修复后，sw_index_member删除式按行业刷新可再次抹掉未被上游完整返回的历史。改为显式Y/N分页读取、非删除式投影、不可变来源日志和分类版本隔离的历史保存。保留用户接受的12只股票43个上市初期缺口，不伪造事实或provider absence；生产写入等待精确migration授权。",
+  "description": "BUG-1843历史行业修复后，sw_index_member删除式按行业刷新可再次抹掉未被上游完整返回的历史。改为显式Y/N分页读取、非删除式投影、不可变来源日志和分类版本隔离的历史保存。保留用户接受的12只股票43个上市初期缺口，不伪造事实或provider absence；生产迁移和历史入库已按单独授权提交并读回通过，日更运行态等待用户重启和复验。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,7 +31,9 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-public-history-dev-20261013-v1/public_history_final_validation.json"
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-public-history-dev-20261013-v1/public_history_final_validation.json",
+    "X:/AIstock_dataset_candidates/database_backups/sw-pit-history-20261013-v1/backup_manifest.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-production-history-20261013-v1/production_readback.json"
   ],
   "expected": "History and original source facts survive partial daily refresh; explicit Y/N provider history with version-qualified immutable retention and controlled DEV import.",
   "file_scope_contract": {
@@ -205,8 +207,8 @@
   },
   "first_seen_at": "2026-10-12T16:59:33.037946Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "65799458edf2331c6e5ffe96679f42a5fc2e9794",
+  "fixed_at": "2026-10-12T18:16:10Z",
   "github_issue_number": 5910,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5910",
   "history_preservation_validation": {
@@ -223,19 +225,29 @@
     "dev_final_validation_sha256": "72065cdcfffbe1d216a4022feeef0a7b7ac15d109afa975dffa4e6aeb606cc2d",
     "graph_frozen_input_ready": false,
     "import_receipt_sha256": "bd532c6cdd735c4cda654e9a0e84daac0b5beb337955c43188337bb413054d05",
-    "production_apply": "not_performed",
-    "production_authorization": "pending_exact_target_and_migration",
-    "production_database_write": false,
+    "production_always_enabled_trigger_count": 7,
+    "production_apply": "single_atomic_commit_passed",
+    "production_authorization": "user_authorized_exact_prior_presented_target_migration_and_import",
+    "production_authorization_receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-production-history-20261013-v1/production_authorization.json",
+    "production_compatibility_rows_changed": 0,
+    "production_database_write": true,
     "production_import_sql": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-history-preservation-20261013-v2/import_sw_industry_history.sql",
     "production_import_sql_sha256": "9741c82023aab1d41a2d98cbf45e5e510bf29d83603bb9ec355532ff40e02063",
     "production_migration": "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
     "production_migration_sha256": "d44bfb462707bc07fec80964b40bc7a421c7467d6df4085e81219a719ea4a307",
-    "production_readback": "readonly_original_member_and_classify_hashes_unchanged",
+    "production_readback": "fresh_readonly_exact_DEV_payload_hash_match_20_coverage_groups_PASS_original_member_classify_unchanged",
+    "production_readback_sha256": "29b42c1290509337f8504cd4e4d7a4dc2304342b14596477ea126912e9380ec8",
+    "production_table_row_counts": {
+      "sw_industry_classification_history_v1": 10911,
+      "sw_industry_source_fact_v1": 39405,
+      "sw_industry_taxonomy_history_v1": 870
+    },
     "production_tables": [
       "market.sw_industry_source_fact_v1",
       "market.sw_industry_taxonomy_history_v1",
       "market.sw_industry_classification_history_v1"
     ],
+    "production_target": "aistock:5432",
     "profile_write": false,
     "related_bug": "BUG-1843",
     "resolved_interval_rows": 10911,
@@ -271,8 +283,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5913",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "verified",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -286,7 +299,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/schedules",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "fresh_process_evidence": [
       "AIstock-CI python -m pytest backend/tests/test_sw_industry_history_store.py backend/tests/test_tushare_sync_engine.py -q -x -> 106 passed",
       "AIstock python X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-history-preservation-20261013-v2/validate_dev_preservation.py -> 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS; simulation rolled back",
@@ -299,9 +312,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1847/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1847",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "a42c9f9609b9f744c24a5ecec53099cd440d200ea347df54ffed91eca162b903",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "65799458edf2331c6e5ffe96679f42a5fc2e9794",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-12T18:47:15.967066Z",
+      "mode": "read_only",
+      "observed_identity": "b30fc0c5679cef150112af3cda8f3c9b532c3311",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8c63482fea7ba3672425f0d4cb45a7f74f16263d6a9def23b96ec72729111363",
+      "receipt_sha256": "7a078a157ee4c15f173e8fa926bced456b638e31d3e3f241faa407ac9cd05974",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f4b20cb5d265209ba2d2e79ee9b2f1cefc4123448a04ef8aaa06c7c7eab2bcfb",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -311,7 +347,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1847",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7ffb4de136d7e78c",
+    "recorded_at": "2026-10-12T18:16:51.577708Z",
+    "runtime_contract_digest": "45403263cfbe8bc20c80734be0b27f062a68fbbf69d39b4f91d8e423fa2d2649",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f2a4a5a40f7f531ff58ce95d697be2e68767f958",
+    "source_merge_commit": "65799458edf2331c6e5ffe96679f42a5fc2e9794",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5913",
+    "validation_evidence": [
+      "PR #5913 exact head f2a4a5a40f7f531ff58ce95d697be2e68767f958 CI verdict SUCCESS; three recorded reviews PASS; DEV backup restore twice PASS; DEV preservation 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS"
+    ],
+    "validation_evidence_digest": "75b3009c8f1de857e99028b9652d2e8c42bbbf2ab5fa55a3aed67c5f9c4bd344"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -320,6 +377,11 @@
     "fingerprint": "47381952b63e5c7f0903b605",
     "source_event_id": "FE-20261012-47381952b63e"
   },
+  "validation_evidence": [
+    "PR #5913 exact head f2a4a5a40f7f531ff58ce95d697be2e68767f958 CI verdict SUCCESS; three recorded reviews PASS; DEV backup restore twice PASS; DEV preservation 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS",
+    "Production aistock:5432 authorized exact migration/import committed; independent readonly readback 29b42c1290509337f8504cd4e4d7a4dc2304342b14596477ea126912e9380ec8 PASS: 32980 source / 870 taxonomy / 10911 intervals exact DEV matches, 7 ALWAYS triggers, 20 groups PASS, compatibility and profile unchanged; runtime restart pending user",
+    "Runtime b30fc0c5679cef150112af3cda8f3c9b532c3311 contains source merge; health, identity and formal local_data_freshness overview semantic passed; production history exact DEV readback and seven ALWAYS triggers verified"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
