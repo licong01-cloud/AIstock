@@ -203,7 +203,9 @@ def test_native_context_reads_existing_dev_postgres_without_legacy_account():
     from backend.services.simulation_runtime.successor_repository import LocalSimSuccessorRepository
     from backend.services.strategy_package.repository import StrategyPackageRepository
 
-    load_dotenv(Path(r"F:\Dev\AIstock\.env"))
+    configured_env = os.getenv("AISTOCK_ENV_FILE")
+    if configured_env:
+        load_dotenv(Path(configured_env))
     required = ("HOST", "USER", "PASSWORD", "NAME")
     assert all(os.getenv("TDX_DB_DEV_" + key) for key in required), "DEV connection locations must be configured"
     assert os.getenv("TDX_DB_DEV_NAME") != os.getenv("TDX_DB_NAME"), "DEV must be distinct from production"
