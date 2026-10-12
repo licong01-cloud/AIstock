@@ -4,6 +4,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -172,6 +174,94 @@ def test_post_fit_busy_retains_component_and_partial_attempt_cannot_refit(tmp_pa
     assert not (prepared.parent/"trained").exists()
     with pytest.raises(ValueError, match="never implicitly refit"):
         study.train_cross_package_consensus_study_v1(plan=plan, output_root=root, qe_idle_probe=lambda: pytest.fail("QE control"))
+
+
+def capacity_observation():
+    return dict(captured_at=datetime.now(timezone.utc).isoformat(),
+        observed_monotonic_ns=time.monotonic_ns(), observer_pid=os.getpid(), sampling_elapsed_seconds=1,
+        host=dict(logical_processors=32, cpu_busy_pct=30, available_memory_gib=32),
+        node=dict(logical_processors=28, cpu_busy_pct=10, available_memory_gib=32),
+        output_free_gib=100, scratch_free_gib=100, scratch_root="/mnt/x/AIstock_temp")
+
+
+@pytest.mark.parametrize("qe_state", ["busy", "unknown"])
+def test_capacity_mode_allows_qe_activity_without_faking_counts_or_refitting(tmp_path, monkeypatch, qe_state):
+    plan = CrossPackageConsensusStudyPlanV1.model_validate(dict(parent_plan(tmp_path).model_dump(), qe_fit_policy="CAPACITY_CHECKED_CONCURRENT"))
+    root = tmp_path/"new"
+    study.preregister_cross_package_consensus_study_v1(plan=plan, output_root=root)
+    prepared = study.prepare_cross_package_consensus_study_v1(plan=plan, output_root=root)
+    monkeypatch.setattr(study, "_node", lambda p: dict(fixture=True))
+    calls = []
+    def capacity():
+        calls.append(1)
+        return capacity_observation()
+    def qe():
+        if qe_state == "unknown":
+            raise RuntimeError("public QE telemetry unavailable")
+        return observation(busy=True)
+    trained = study.train_cross_package_consensus_study_v1(plan=plan, output_root=root, qe_idle_probe=qe, resource_probe=capacity)
+    assert len(calls) == 4 and json.loads((trained/"receipt.json").read_bytes())["physical_fit_count"] == 2
+    events = [json.loads(line) for line in (prepared.parent/"fit_journal.jsonl").read_text().splitlines()]
+    observations = [e["qe_observation"] for e in events if "qe_observation" in e]
+    assert len(observations) == 4
+    if qe_state == "busy":
+        assert all(any(e["active_counts"].values()) for e in observations)
+    else:
+        assert all(e["status"] == "UNKNOWN_QE_TELEMETRY" and "active_counts" not in e for e in observations)
+    assert study.train_cross_package_consensus_study_v1(plan=plan, output_root=root,
+        qe_idle_probe=lambda: pytest.fail("completed run cannot refit"), resource_probe=lambda: pytest.fail("no new fit")) == trained
+
+
+@pytest.mark.parametrize("when", ["before", "after"])
+def test_capacity_shortage_stops_only_new_fit_and_preserves_completed_component(tmp_path, monkeypatch, when):
+    plan = CrossPackageConsensusStudyPlanV1.model_validate(dict(parent_plan(tmp_path).model_dump(), qe_fit_policy="CAPACITY_CHECKED_CONCURRENT"))
+    root = tmp_path/"new"
+    study.preregister_cross_package_consensus_study_v1(plan=plan, output_root=root)
+    prepared = study.prepare_cross_package_consensus_study_v1(plan=plan, output_root=root)
+    monkeypatch.setattr(study, "_node", lambda p: dict(fixture=True))
+    call = 0
+    def capacity():
+        nonlocal call
+        call += 1
+        value = capacity_observation()
+        if when == "before" or call == 2:
+            value["host"]["available_memory_gib"] = 1
+        return value
+    with pytest.raises(ValueError, match="insufficient|FIT_RESOURCE_UNAVAILABLE_POST_FIT"):
+        study.train_cross_package_consensus_study_v1(plan=plan, output_root=root,
+            qe_idle_probe=lambda: observation(busy=True), resource_probe=capacity)
+    assert (prepared.parent/"fit_attempt.json").exists() == (when == "after")
+    assert (prepared.parent/"fits"/ARMS[0]/"trained"/"model.json").exists() == (when == "after")
+    assert not (prepared.parent/"trained").exists()
+
+
+@pytest.mark.parametrize("invalid", ["stale", "naive", "cpu", "bool", "missing", "scratch"])
+def test_capacity_unknown_or_insufficient_accounting_never_defaults_to_available(invalid):
+    value = capacity_observation()
+    if invalid == "stale":
+        value["observed_monotonic_ns"] -= 61_000_000_000
+    elif invalid == "naive":
+        value["captured_at"] = datetime.now().isoformat()
+    elif invalid == "cpu":
+        value["node"]["cpu_busy_pct"] = 99
+    elif invalid == "bool":
+        value["host"]["available_memory_gib"] = True
+    elif invalid == "missing":
+        del value["host"]
+    else:
+        value["scratch_root"] = "/mnt/c/temp"
+    with pytest.raises(ValueError):
+        study.validate_consensus_fit_resources_v1(value)
+
+
+def test_capacity_freshness_uses_same_process_monotonic_time_not_wall_clock_steps():
+    from datetime import timedelta
+    value = capacity_observation()
+    value["captured_at"] = (datetime.now(timezone.utc)+timedelta(seconds=2)).isoformat()
+    assert study.validate_consensus_fit_resources_v1(value) == value
+    value["observer_pid"] += 1
+    with pytest.raises(ValueError, match="stale"):
+        study.validate_consensus_fit_resources_v1(value)
 
 
 def test_hole_in_original_panel_cannot_be_compressed_into_confidence():
