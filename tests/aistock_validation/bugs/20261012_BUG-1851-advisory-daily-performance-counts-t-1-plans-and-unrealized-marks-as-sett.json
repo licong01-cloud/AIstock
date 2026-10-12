@@ -170,7 +170,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_5a46150a7e9541d2a8887541781c9dfc/returns",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest loaded task worktree source: original future-exit/open-mark regression failed before the fix (win_rate=1.0), then passed after the fix. Related small matrix first 14 passed/1 failed; failed API node passed after exact repository-call fixes. Direct reporting-clock, target-day execution/no fallback, fees, five-session, PIT cutoff and comparison cases passed; no user backend process control.",
+      "Fresh task-source DEV read-only transaction verified all four market-reader SQL statements and settlement SQL schema (no DEV business sample). Production read-only four-program business comparison passed in approximately 0.772 seconds; legacy single has five future exits excluded. No DDL/DML, training, profile change or user process control."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
