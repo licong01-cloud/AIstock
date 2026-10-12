@@ -1,6 +1,6 @@
 # Advisory 跨策略包冻结排名共识买价 GP5 F2详细设计
 
-> 2026-10-12；v1.1；假设 `GP5-CROSS-PACKAGE-CONSENSUS-1`；设计#5898已合入；当前 `SOURCE_LOCAL_PASS`，四轮同窗口源码自审修复；初矩阵16/16及修复点两项验证覆盖现行17合同及既有WSL 19/20维零fit叶parity通过，正常CI/PR交付另报；RESEARCH_NOT_STARTED / ECONOMIC_NOT_CONFIRMED。累计150真实研究fit不变，fixture不计研究。
+> 2026-10-12；v1.2；假设 `GP5-CROSS-PACKAGE-CONSENSUS-1`；设计#5898及完整SOURCE #5908已合入，CI38231206990 SUCCESS；四轮源码自审、原16矩阵＋两修复点/现行17合同及WSL19/20维零fitparity通过。用户最新授权按真实容量与QE并行；本次仅局部资源策略调整，经济假设不变，资源修改验证/新真实研究另报。RESEARCH_NOT_STARTED / ECONOMIC_NOT_CONFIRMED；累计150真实研究fit不变，fixture不计研究。
 > 父级：[蓝图§6.3.4/6.3.9/16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)。`EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY`，设计不能作为盈利、独立确认或生产激活证据。
 
 ## Background / Goal
@@ -110,7 +110,7 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 
 单次最多**两实际fit/两trial**，内部256棵树/2000统计bootstrap不作额外模型fit。当前累计150，只有新STARTED实际发生才加账；fixture不是研究，0fit不可识别不是成功训练。STARTED/COMPLETE按组件记录，部分成功模型/日志保留，不自动补fit或覆盖父研究。完全同plan已完成stage幂等复用；技术exact retry新identity但经济合同不改，不能以retry复活已完成负候选。
 
-仅WSL既有环境、2线程、进程<8GiB/每fit30分钟；fit前后fresh公开QE single/custom_evo/multi-alpha running/pending六GET，busy/unknown只暂停新fit、不控制QE。快照不是原子公共锁，不承诺避免外部任务在读取后启动；观察到QE新任务不继续下一个fit并保留完成组件。prepare/纯回放在资源允许时可并行，研究>30min只每1800秒检查，不持续监控。
+仅WSL既有环境、2线程、CPU-only、不占GPU、进程<8GiB/每fit30分钟。按用户2026-10-12新授权，plan显式`CAPACITY_CHECKED_CONCURRENT`：拟合前后在真实节点只读测量Windows host及WSL CPU/空闲内存、F正式输出和X临时空间；各需至少4空闲逻辑核、8GiB可用内存，正式输出空闲16GiB、临时空闲2GiB。采样窗口及同一实际进程monotonic新鲜度<=60秒，UTC起止真实记录仅审计，不因WSL墙钟回拨误判、也不修改系统时间。不因QE有running/pending阻断；六GET仍如实记录，未知记录UNKNOWN而非伪造0，不替代资源检查。资源不可测/不足只暂停自身下一fit，后置问题保留已完成组件、不隐式重fit；不控制QE/任何服务。保留旧`QE_EXCLUSIVE`请求兼容，但本次新研究不等待QE空闲。容量快照不是原子锁，不保证其它任务随后启动不产生争用；只限制本任务2线程，不重设其它任务环境。prepare/纯回放资源允许即可并行；>30min真实研究只每1800秒检查。
 
 原名单最多30500行/610包D；上下文按(D,package)完整有界聚合再stock/D一对一映射，O(N)，不做两包名单笛卡尔join。source/pair/每D名单digest只生成一次再用短引用映射，不把完整对方50行重复复制到每股/每tick。共同入榜重复先检验同簇一致再去重；unique训练簇<=21400，森林128/深6；映射最多860原五槽，统计2000 bootstrap只操作原D序列。Arrow列/日期批投影、已有四stage内容hash一次，禁止每个交易日重建工作区/反复SQL；本次预计0新SQL。资源实测缺失保持not_recorded，不宣称设计预算已实测通过。
 
@@ -133,7 +133,7 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 1. 已完成设计：纯名册可产性、旧路线查重、F2/蓝图一致更新、三轮同窗口设计自审、canonical验收，设计PR #5898已合入；实际研究fit0。
 2. 当前完整SOURCE：latestmain独立八文件，原stage只读/对称context/共同unique监督/19与20维forest/价格核、薄四stage/完整四臂均已实现。复用纯核，不变更旧消费者/其它模块，不重复搭平台。
 3. 已完成四轮源码自审修复，初矩阵16/16（13.85秒）及受影响两项（10.26秒）覆盖现行17合同；既有WSL sklearn1.7.2用原生Tree.apply与新JSON walker比较19/20维各128树/4边界行，0fit通过；源码交付另按Ruff/AST/scope/真实owner预算/DAI与正常CI报告。合成fit不证明真实效果，既有测试债务保持warning，不转ownership或虚增分母。
-4. 下一唯一研究：固定干净producer、新plan预登记→0SQL准备→可识别/两实际fit→两D分布冻结→四臂结算。2026-10-12 16:45公开QE快照有custom_evo1在途，本研究尚未开始；实际fit前后重新只读检查资源，忙碌时仅暂停自身真实fit，不等待UI/档案或修改QE。阴性即精确停，不追加信息块/新包/网格搜索。
+4. 下一唯一研究：完成本叶容量策略审核验证后，固定干净producer、新plan预登记→0SQL准备→可识别/两实际fit→两D分布冻结→四臂结算。14:57/14:59UTC只读实测Windows32核/空闲47.57GiB/CPU26～40%，WSL28核/空闲56.44GiB/CPU<1%，支持2线程并行；开始fit前后重新实测，不等QE空闲、UI/档案或修改QE。阴性即精确停，不追加信息块/新包/网格搜索。
 5. 实际进度/研究结果回写，不为阴性建consumer/UI或独立确认；探索正且值得继续才设计未消费确认/日频adapter。本次无运行态激活、无需重启。
 
 ## Verification Plan / Design Acceptance Index
@@ -146,7 +146,7 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 | F-911 | 共同人口/原18median/新目标/固定诚实切点和H purge、未来poison与不可识别0fit |
 | F-912 | 两固定forest/19与20JSON叶parity/同叶质量/无估计质量UNKNOWN；不改旧18walker |
 | F-913 | D先冻结/价仅代数/费用一次/原800完整tick、非T条件概率/低开识别/实际fill |
-| F-914 | 四stage/QE只读观察/实际fit日志/0SQL/资源界限/partial不自动refit，X/F边界 |
+| F-914 | 四stage/QE真实只读观察/容量充足并行、实际host/node探测/实际fit日志/0SQL/资源界限/partial不自动refit，X/F边界 |
 | F-915 | 原五槽双包/完整D与null/双端点区间/MDE/干预/known-unknown机会成本及精确停止 |
 | F-916 | 只Advisory八文件/多轮审核/设计SOURCE经济确认运行分态，无跨模块/生产动作 |
 
@@ -162,7 +162,7 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 | F-911 | build_consensus_training_encoding_v1/prepare_consensus_inputs_v1/train_cross_package_consensus_model_v1 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_inputs_v1.py：purge/held poison；model_study：zero fit | SOURCE_LOCAL_PASS | 无 |
 | F-912 | consensus_forest_leaf_ids_v1/train_cross_package_consensus_model_v1/validate_consensus_fit_v1 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：19/20/serialization/new-coordinate empty leaf；本文WSL零fit Tree.apply parity | SOURCE_LOCAL_PASS | 无 |
 | F-913 | freeze_consensus_distribution_v1/query_cross_package_consensus_price_nodes_v1/cross_package_consensus_price_set_v1 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：完整Decimal/空/UNKNOWN/reference tamper及独立逐样本费用/风险/概率复算 | SOURCE_LOCAL_PASS | 无 |
-| F-914 | cross_package_consensus_price_5td_study_v1.py四stage/main及STARTED/COMPLETE日志 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：four stages/partial busy/zero fit/idempotence | SOURCE_LOCAL_PASS | 无 |
+| F-914 | cross_package_consensus_price_5td_study_v1.py四stage/main、容量策略及STARTED/COMPLETE日志 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：原four stages/partial/zero fit/idempotence；新容量delta13/13及实际host/node probe通过 | SOURCE_LOCAL_PASS | 无；真实经济研究另报 |
 | F-915 | evaluate_consensus_cohorts_v1/paired_consensus_statistics_v1/原槽归因 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：opportunity/unknown cash/slots/panel hole | SOURCE_LOCAL_PASS | 无 |
 | F-916 | 本文Scope/下文源码交付复审；主蓝图当前队列 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；精确八文件/canonical feature validate/diff/scope | SOURCE_LOCAL_PASS | 无 |
 
@@ -177,6 +177,8 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 ## Risks / DESIGN-COMPLIANCE-001
 
 ### 完整源码四轮同窗口审核与验证
+
+2026-10-12用户授权后的容量策略局部调整：三轮同窗口复核资源模式与旧独占兼容、WinCIM未知值不能变0、WSL墙钟回拨时同进程monotonic新鲜度和后置组件保留。最终13定向PASS（8.42秒）、changed Ruff通过；实际WSL与Windows host读回CAPACITY_AVAILABLE，0fit/0金融/DB/服务控制。该调整只改变调度、原模型/label/成本/窗口/pair不变；源码级可交付不等于新研究或收益确认。
 
 第一轮，输入/序列化：修复缺原包D错误原因、Arrow叶索引np.int64 JSON读回、遗漏导入、行尾归一化以及validator遗留18维检查；直接在新增第20列构造合法无估计质量叶，证明UNKNOWN而不是全局fallback。第二轮，经济/成本：完整原五槽机会成本闭合，UNKNOWN空槽单列、内生null不压缩；零fit不请求worker/读评价，QE后置忙碌保留已完成组件/不隐式重fit；文件descriptor复用避免同输入重复全量hash，128批次及按冻结叶缓存价格law，不逐tick重排标价样本。第三轮，时钟/范围/实际节点：检查原H元数据与calendar相邻五会话一致、reference和D/T日期/hash读回、evaluation金融按列/D区间投影，改价不改叶；独立逐样本数学复算与WSL1.7.2零fit Tree.apply parity通过。第四轮，真实公共依赖复核发现HTTP/非JSON会抛RuntimeError，补其后置捕获并保留成功组件；busy和未知RuntimeError两个修复点验证通过。四轮均本窗口自审，不冒称外部/agent审核。
 

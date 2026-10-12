@@ -30,6 +30,8 @@ PACKAGES = {
 }
 CONTEXT_COLUMNS = (*RANK_COLUMNS, "context_availability", "context_sha256", "context_pair_sha256",
     "strongest_rank_fraction", "consensus_rank_fraction")
+FIT_CAPACITY = MappingProxyType(dict(min_idle_logical_processors=4, min_available_memory_gib=8,
+    min_output_free_gib=16, min_scratch_free_gib=2, snapshot_max_age_seconds=60, fit_threads=2))
 
 
 class CrossPackageConsensusStudyPlanV1(BaseModel):
@@ -55,6 +57,7 @@ class CrossPackageConsensusStudyPlanV1(BaseModel):
     node_python_uri: str = Field(min_length=1)
     qe_api_base: str = Field(min_length=1)
     library_versions: dict[str, str]
+    qe_fit_policy: Literal["QE_EXCLUSIVE", "CAPACITY_CHECKED_CONCURRENT"] = "QE_EXCLUSIVE"
     attempt_id: str = Field(default="exact_attempt_v1", pattern=r"^[a-z0-9_]+$")
     exact_retry_of: str | None = None
     study_type: Literal["EXPLORATORY_SCREEN"] = "EXPLORATORY_SCREEN"
@@ -88,7 +91,7 @@ class CrossPackageConsensusStudyPlanV1(BaseModel):
         body = self.model_dump(mode="json")
         body["sources"] = sorted(body["sources"], key=lambda s: s["package_id"])
         return sha(dict(plan=body, hypothesis="GP5-CROSS-PACKAGE-CONSENSUS-1",
-                        schema_sha256=SCHEMA_SHA256, physical_fit_budget=2))
+                        schema_sha256=SCHEMA_SHA256, physical_fit_budget=2, fit_capacity_budget=dict(FIT_CAPACITY)))
 
     @property
     def experiment_id(self):

@@ -5,12 +5,16 @@ import json
 from pathlib import Path
 
 import math
+import os
+import shutil
+import subprocess
+import time
 import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 
 from backend.services.advisory_model_first.cross_package_consensus_price_5td_contracts_v1 import (
-    ARMS, CONTEXT_COLUMNS, FEATURES, KEY, MARK_POLICY, MARK_POLICY_SHA256, PARAMETERS, SCHEMA_SHA256, SOURCE_COLUMNS, STATISTICS,
+    ARMS, CONTEXT_COLUMNS, FEATURES, FIT_CAPACITY, KEY, MARK_POLICY, MARK_POLICY_SHA256, PARAMETERS, SCHEMA_SHA256, SOURCE_COLUMNS, STATISTICS,
     CrossPackageConsensusStudyPlanV1, node_path,
 )
 from backend.services.advisory_model_first.economic_entry_pipeline import _json_bytes, publish_stage, read_stage
@@ -142,7 +146,98 @@ def _freeze_evaluation_distributions(plan, root, models, prepared):
     return pd.concat(frozen, ignore_index=True)
 
 
-def train_cross_package_consensus_study_v1(*, plan, output_root, qe_idle_probe):
+def observe_consensus_fit_resources_v1(*, output_root):
+    """Read the actual WSL node and Windows host; never alter QE or any process."""
+    scratch = Path(os.environ.get("TMPDIR", ""))
+    executable = shutil.which("powershell.exe")
+    if (os.name != "posix" or not scratch.is_absolute() or not scratch.is_dir()
+            or not str(scratch.resolve()).startswith("/mnt/x/") or executable is None):
+        raise ValueError("WSL host resource probe and explicit X scratch are required")
+    captured = datetime.now(timezone.utc)
+    began = time.monotonic()
+    def ticks():
+        values = list(map(int, Path("/proc/stat").read_text().splitlines()[0].split()[1:9]))
+        return sum(values), sum(values[3:5])
+    samples = []
+    for _ in range(3):
+        total, idle = ticks()
+        time.sleep(1)
+        total2, idle2 = ticks()
+        if total2 <= total or not 0 <= idle2-idle <= total2-total:
+            raise ValueError("WSL CPU accounting is unknown")
+        samples.append(100*(1-(idle2-idle)/(total2-total)))
+    memory = {line.split(":", 1)[0]: line.split(":", 1)[1].split()[0]
+              for line in Path("/proc/meminfo").read_text().splitlines()}
+    script = ("$ErrorActionPreference='Stop'; $o=Get-CimInstance Win32_OperatingSystem; $c=Get-CimInstance Win32_ComputerSystem; "
+              "$p=Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | Where-Object Name -eq '_Total'; "
+              "if ($null -eq $p.PercentProcessorTime -or $null -eq $c.NumberOfLogicalProcessors "
+              "-or $null -eq $o.FreePhysicalMemory) { throw 'Unknown host capacity' }; "
+              "@{logical_processors=[int]$c.NumberOfLogicalProcessors; cpu_busy_pct=[double]$p.PercentProcessorTime; "
+              "available_memory_gib=[double]$o.FreePhysicalMemory/1MB} | ConvertTo-Json -Compress")
+    env = dict(os.environ, TMP=str(scratch), TEMP=str(scratch))
+    env["WSLENV"] = ":".join([v for v in env.get("WSLENV", "").split(":") if v.split("/")[0] not in ("TMP", "TEMP")]
+                             + ["TMP/p", "TEMP/p"])
+    try:
+        host = json.loads(subprocess.run([executable, "-NoProfile", "-NonInteractive", "-Command", script],
+            cwd=scratch, env=env, capture_output=True, text=True, timeout=20, check=True).stdout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        raise ValueError("Windows host capacity could not be observed") from exc
+    try:
+        available = int(memory["MemAvailable"])/1024**2
+    except (KeyError, ValueError) as exc:
+        raise ValueError("WSL memory capacity could not be observed") from exc
+    return dict(captured_at=datetime.now(timezone.utc).isoformat(), sampling_started_at=captured.isoformat(),
+        observed_monotonic_ns=time.monotonic_ns(), observer_pid=os.getpid(), sampling_elapsed_seconds=time.monotonic()-began, host=host,
+        node=dict(logical_processors=len(os.sched_getaffinity(0)), cpu_busy_pct=max(samples),
+                  available_memory_gib=available),
+        output_free_gib=shutil.disk_usage(node_path(output_root)).free/1024**3,
+        scratch_free_gib=shutil.disk_usage(scratch).free/1024**3, scratch_root=str(scratch.resolve()))
+
+
+def validate_consensus_fit_resources_v1(observation):
+    """Capacity is the scheduling condition; nonzero QE counts are not a veto."""
+    if not isinstance(observation, dict):
+        raise ValueError("fit resource observation is unknown")
+    try:
+        captured = datetime.fromisoformat(observation.get("captured_at", ""))
+        def number(value):
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                raise ValueError("fit resource accounting is unknown")
+            return value
+        stamp, observer = observation["observed_monotonic_ns"], observation["observer_pid"]
+        age = (time.monotonic_ns()-stamp)/1e9 if type(stamp) is int else -1
+        if (captured.tzinfo is None or type(observer) is not int or observer != os.getpid()
+                or not 0 <= age <= FIT_CAPACITY["snapshot_max_age_seconds"]
+                or number(observation["sampling_elapsed_seconds"]) > FIT_CAPACITY["snapshot_max_age_seconds"]):
+            raise ValueError("fit resource observation is stale")
+        for scope in ("host", "node"):
+            block = observation[scope]
+            cores = block["logical_processors"]
+            busy = number(block["cpu_busy_pct"])
+            if (type(cores) is not int or cores < 1 or busy > 100
+                    or cores*(1-busy/100) < FIT_CAPACITY["min_idle_logical_processors"]
+                    or number(block["available_memory_gib"]) < FIT_CAPACITY["min_available_memory_gib"]):
+                raise ValueError("fit resource capacity is insufficient")
+        if (number(observation["output_free_gib"]) < FIT_CAPACITY["min_output_free_gib"]
+                or number(observation["scratch_free_gib"]) < FIT_CAPACITY["min_scratch_free_gib"]
+                or not str(observation["scratch_root"]).startswith("/mnt/x/")):
+            raise ValueError("fit output/X scratch capacity is insufficient")
+    except (KeyError, TypeError) as exc:
+        raise ValueError("fit resource observation is incomplete") from exc
+    return observation
+
+
+def _fit_observation(plan, qe_idle_probe, resource_probe, *, before):
+    if plan.qe_fit_policy == "QE_EXCLUSIVE":
+        return _qe(qe_idle_probe, require_idle=before), None
+    try:
+        qe = _qe(qe_idle_probe, require_idle=False)
+    except (ValueError, OSError, RuntimeError) as exc:
+        qe = dict(status="UNKNOWN_QE_TELEMETRY", error_type=type(exc).__name__)
+    return qe, validate_consensus_fit_resources_v1(resource_probe())
+
+
+def train_cross_package_consensus_study_v1(*, plan, output_root, qe_idle_probe, resource_probe=None):
     from backend.services.advisory_model_first.cross_package_consensus_price_5td_model_v1 import consensus_model_payload_v1, train_cross_package_consensus_model_v1
     plan, root = _checked(plan, output_root)
     prepared = _stage(plan, root, "prepared")
@@ -159,6 +254,7 @@ def train_cross_package_consensus_study_v1(*, plan, output_root, qe_idle_probe):
     if (root/"fit_attempt.json").exists():
         raise ValueError("partial STARTED attempt retained; never implicitly refit")
     node, models, count, claimed = _node(plan), {}, 0, False
+    resource_probe = resource_probe or (lambda: observe_consensus_fit_resources_v1(output_root=root))
     after_error = None
     try:
         for arm in ARMS:
@@ -172,14 +268,15 @@ def train_cross_package_consensus_study_v1(*, plan, output_root, qe_idle_probe):
                 nonlocal count, claimed
                 if name != arm or count >= 2:
                     raise ValueError("consensus physical fit arm/ordinal differs")
-                observation = _qe(qe_idle_probe, require_idle=True)
+                observation, resources = _fit_observation(plan, qe_idle_probe, resource_probe, before=True)
                 if not claimed:
                     _exclusive_json(root/"fit_attempt.json", dict(status="STARTED", plan_sha256=plan.plan_sha256,
                         node=node, physical_fit_budget=2, captured_at=datetime.now(timezone.utc).isoformat()))
                     claimed = True
                 count += 1
                 attempt = root/"fits"/arm/"attempt.json"
-                event = dict(kind="PHYSICAL_FIT_STARTED", arm=arm, ordinal=count, qe_observation=observation)
+                event = dict(kind="PHYSICAL_FIT_STARTED", arm=arm, ordinal=count, qe_observation=observation,
+                             qe_fit_policy=plan.qe_fit_policy, resource_observation=resources)
                 _exclusive_json(attempt, event)
                 _journal(root, event)
                 _register(plan, root, "fit_started_"+str(count), generated=count, evidence=attempt)
@@ -188,13 +285,16 @@ def train_cross_package_consensus_study_v1(*, plan, output_root, qe_idle_probe):
                 if name != arm:
                     raise ValueError("post-fit arm differs")
                 try:
-                    observation = _qe(qe_idle_probe, require_idle=False)
-                    _journal(root, dict(kind="POST_FIT_QE_OBSERVATION", arm=arm, ordinal=count, qe_observation=observation))
-                    if any(observation["active_counts"].values()):
+                    observation, resources = _fit_observation(plan, qe_idle_probe, resource_probe, before=False)
+                    _journal(root, dict(kind="POST_FIT_QE_OBSERVATION", arm=arm, ordinal=count, qe_observation=observation,
+                                        qe_fit_policy=plan.qe_fit_policy, resource_observation=resources))
+                    if plan.qe_fit_policy == "QE_EXCLUSIVE" and any(observation["active_counts"].values()):
                         after_error = "QE became active: retain completed component, no next fit"
                 except (ValueError, OSError, RuntimeError) as exc:
-                    after_error = f"UNKNOWN_POST_FIT_QE_OBSERVATION:{type(exc).__name__}"
-                    _journal(root, dict(kind="POST_FIT_QE_UNKNOWN", arm=arm, ordinal=count, error_type=type(exc).__name__))
+                    prefix = "FIT_RESOURCE_UNAVAILABLE_POST_FIT" if plan.qe_fit_policy == "CAPACITY_CHECKED_CONCURRENT" else "UNKNOWN_POST_FIT_QE_OBSERVATION"
+                    after_error = f"{prefix}:{type(exc).__name__}"
+                    event_kind = "POST_FIT_RESOURCE_UNAVAILABLE" if plan.qe_fit_policy == "CAPACITY_CHECKED_CONCURRENT" else "POST_FIT_QE_UNKNOWN"
+                    _journal(root, dict(kind=event_kind, arm=arm, ordinal=count, error_type=type(exc).__name__))
 
             model = train_cross_package_consensus_model_v1(rows=rows, encoding=encoding, arm=arm,
                 plan_sha256=plan.plan_sha256, before_fit=before_fit, after_fit=after_fit)
@@ -213,7 +313,8 @@ def train_cross_package_consensus_study_v1(*, plan, output_root, qe_idle_probe):
     return _publish(plan, root, "trained", prepared["stage_sha256"], {
         "models.json": _json_bytes(models), "d_distributions.parquet": parquet_bytes(distributions),
         "receipt.json": _json_bytes(dict(status="TWO_FITS_D_DISTRIBUTIONS_FROZEN_NO_ACTIVATION", physical_fit_count=count,
-            public_unique_D_keys=len(distributions)//2, evaluation_targets_constructed=False, node=node, deployable=False))}, generated=count)
+            public_unique_D_keys=len(distributions)//2, evaluation_targets_constructed=False, node=node,
+            qe_fit_policy=plan.qe_fit_policy, deployable=False))}, generated=count)
 
 
 def evaluate_cross_package_consensus_study_v1(*, plan, output_root):
