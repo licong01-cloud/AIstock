@@ -28,12 +28,18 @@
   ],
   "expected": "Validation supplies a file handle with bounded Python input memory and preserves restore validation failures.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_dr_snapshot_prod_db.py",
+      "scripts/dr_snapshot_prod_db.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1846-dr-snapshot-validation-loads-entire-production-dump-into-python-memory-b.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_dr_snapshot_prod_db.py",
       "scripts/dr_snapshot_prod_db.py",
-      "backend/tests/scripts/test_dr_snapshot_prod_db.py"
+      "tests/aistock_validation/bugs/20261012_BUG-1846-dr-snapshot-validation-loads-entire-production-dump-into-python-memory-b.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/dr_snapshot_prod_db.py",
@@ -108,10 +114,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
