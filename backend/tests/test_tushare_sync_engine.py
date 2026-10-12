@@ -1036,7 +1036,10 @@ def test_replace_code_batch_rolls_back_when_insert_fails(monkeypatch):
 def _patch_by_code_loop(engine, monkeypatch, conn, codes, payload):
     monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
     monkeypatch.setattr(engine, "_fetch_code_list", lambda _conn, _spec: codes)
-    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: payload)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: (
+        [r for r in payload if r.get("is_new") == params["is_new"]]
+        if spec.name == "sw_index_member" else payload
+    ))
     monkeypatch.setattr(engine, "_log", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine, "_record_by_code_audit", lambda *args, **kwargs: None)
@@ -1126,6 +1129,16 @@ def test_sw_refresh_explicitly_requests_current_and_historical_members(monkeypat
     assert result.ok
     assert [r["is_new"] for r in requests] == ["Y", "N"]
     assert conn.commits == 1
+
+
+def test_sw_provider_ignoring_history_flag_cannot_change_local_facts(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _patch_by_code_loop(engine, monkeypatch, conn, ["801767.SI"], [])
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: [_member_row("000406.SZ")])
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+    assert not result.ok and result.inserted_rows == 0
+    assert not any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
 
 
 def test_sw_failed_source_append_rolls_back_before_projection_write(monkeypatch):

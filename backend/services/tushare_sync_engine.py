@@ -1832,7 +1832,10 @@ class TushareSyncEngine:
                             # current memberships without deleting missing history.
                             rows = []
                             for is_new in ("Y", "N"):
-                                rows.extend(self._fetch_from_tushare(spec, {**params, "is_new": is_new}))
+                                returned = self._fetch_from_tushare(spec, {**params, "is_new": is_new})
+                                if any(row.get("is_new") != is_new for row in returned):
+                                    raise RuntimeError("SW provider ignored requested current/history identity; local facts preserved")
+                                rows.extend(returned)
                             if not rows and self._count_code_rows(conn, spec, code_val) > 0:
                                 raise RuntimeError("SW history refresh returned no rows; local facts preserved")
                         else:

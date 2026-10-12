@@ -251,6 +251,11 @@
         "result": "passed",
         "round": 2,
         "scope": "现有DEV真实SQL、重复导入、部分响应、修订谱系、13类禁止修改、7个ALWAYS触发器；20组消费者有效日期覆盖"
+      },
+      {
+        "result": "passed",
+        "round": 3,
+        "scope": "上游忽略Y/N请求时必须在任何写入前失败；新增请求身份回归，复验7项BY_CODE调用路径测试；CI继续执行完整相关矩阵"
       }
     ],
     "root_cause": "SW_INDEX_MEMBER.replace_by_code plus DELETE WHERE l2_code erased absent historical records; nonempty partial responses were not protected",
