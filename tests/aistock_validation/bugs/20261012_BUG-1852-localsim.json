@@ -9,7 +9,8 @@
     "backend/services/strategy_package/backtest_contract.py",
     "backend/services/strategy_package/runtime.py",
     "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
-    "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py"
+    "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+    "backend/services/paper_trading_v2/day_runner.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1852",
@@ -44,7 +45,8 @@
       "backend/services/strategy_package/backtest_contract.py",
       "backend/services/strategy_package/runtime.py",
       "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py"
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "backend/services/paper_trading_v2/day_runner.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -381,6 +383,21 @@
         "现有DEV事务原生账户真实SQL读取通过，旧账户零行，数据已回滚"
       ],
       "result": "本地审核通过，待CI相关回归"
+    },
+    {
+      "round": 4,
+      "scope": "CI Paper v2 兼容性",
+      "findings": [
+        "目标引擎重新解析配置时将风控结果误认为配置",
+        "日策略partial bootstrap缺少top-k提前失败",
+        "已materialize的variant被重复应用造成hash冲突"
+      ],
+      "fixes": [
+        "只解析冻结selection字段，排除执行审计结果",
+        "partial配置沿用原有完整化阶段，原生profile仍严格校验",
+        "day runner向共享引擎传原始manifest，validated variant应用一次"
+      ],
+      "validation": "19项CI失败用例加原生合同：33 passed / 1 DEV opt-in skipped；后续CI重新验证完整相关会话"
     }
   ],
   "design_compliance_review": [
@@ -491,5 +508,16 @@
     "changed_file_ruff": "passed",
     "git_diff_check": "passed",
     "l0": "passed"
-  }
+  },
+  "scope_expansion_history": [
+    {
+      "reason": "CI failure: TargetPositionEngine now consumes frozen runtime config. Paper day runner must pass the original manifest so the validated variant is applied exactly once.",
+      "added_paths": [
+        "backend/services/paper_trading_v2/day_runner.py"
+      ]
+    }
+  ],
+  "fresh_process_evidence": [
+    "CI失败后独立pytest进程复测全部19项失败节点及原生合同：33 passed, 1 guarded DEV skipped。DEV真实事务验证此前单独通过并回滚。"
+  ]
 }

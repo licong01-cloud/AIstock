@@ -140,10 +140,12 @@ def test_native_current_day_source_is_realtime_even_with_old_causal_cursor():
     assert source is MinuteDataSource.TDX_REALTIME
 
 
-def test_frozen_profile_projection_is_consumed_by_real_target_engine():
+@pytest.mark.parametrize("execution_audit", [{}, {"risk_policy": {"profile": {"enabled": False}, "excluded_count": 0, "excluded": []}}])
+def test_frozen_profile_projection_is_consumed_by_real_target_engine(execution_audit):
     _repo, manifest, profile, _account, _scope, release, _binding = _bundle()
     config = release.release_config_json["metadata"]["selection_runtime_config"]
     assert config == selection_config_from_localsim_profile(profile)
+    config = {**config, **execution_audit}
     contract = build_backtest_runtime_contract(manifest, config)
     assert contract["portfolio_strategy"]["params"]["topk"] == 2
     assert contract["portfolio_strategy"]["params"]["n_drop"] == 0
