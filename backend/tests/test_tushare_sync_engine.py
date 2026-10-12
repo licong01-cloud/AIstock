@@ -50,6 +50,13 @@ class _FakeCursor:
     def fetchone(self):
         return self._conn.fetchone_value
 
+    @property
+    def description(self):
+        return []
+
+    def fetchall(self):
+        return []
+
 
 class _FakeConn:
     def __init__(self):
@@ -956,8 +963,8 @@ def _member_row(ts_code, l2_code="801767.SI", in_date="19960628", out_date=None)
         "l1_name": "能源",
         "l2_code": l2_code,
         "l2_name": "数字媒体",
-        "l3_code": "",
-        "l3_name": "",
+        "l3_code": "851767.SI",
+        "l3_name": "测试三级行业",
         "ts_code": ts_code,
         "name": "测试股",
         "in_date": in_date,
@@ -973,8 +980,9 @@ def _stub_execute_values(monkeypatch):
     monkeypatch.setattr(sync_engine.pgx, "execute_values", _record)
 
 
-def test_sw_index_member_spec_enables_replace_by_code():
-    assert SW_INDEX_MEMBER.replace_by_code is True
+def test_sw_index_member_spec_preserves_history_and_paginates():
+    assert SW_INDEX_MEMBER.replace_by_code is False
+    assert SW_INDEX_MEMBER.fetch_params["limit"] == 2000
     assert SW_DAILY.replace_by_code is False
 
 
@@ -993,14 +1001,15 @@ def test_replace_code_batch_deletes_then_inserts_in_single_transaction(monkeypat
     _stub_execute_values(monkeypatch)
     rows = [_member_row("000406.SZ"), _member_row("000817.SZ", in_date="19980528")]
 
-    inserted = engine._replace_code_batch(conn, SW_INDEX_MEMBER, "801767.SI", rows)
+    spec = replace(SW_INDEX_MEMBER, name="example_member", target_table="market.example_member", replace_by_code=True)
+    inserted = engine._replace_code_batch(conn, spec, "801767.SI", rows)
 
     assert inserted == 2
     assert conn.executed[0] == (
-        "DELETE FROM market.sw_index_member WHERE l2_code = %s",
+        "DELETE FROM market.example_member WHERE l2_code = %s",
         ("801767.SI",),
     )
-    assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert any("INSERT INTO market.example_member" in sql for sql, _ in conn.executed)
     assert conn.commits == 1
     assert conn.rollbacks == 0
     assert conn.autocommit is True
@@ -1016,7 +1025,8 @@ def test_replace_code_batch_rolls_back_when_insert_fails(monkeypatch):
     monkeypatch.setattr(engine, "_upsert_batch", _boom)
 
     with pytest.raises(RuntimeError, match="insert failed"):
-        engine._replace_code_batch(conn, SW_INDEX_MEMBER, "801767.SI", [_member_row("000406.SZ")])
+        spec = replace(SW_INDEX_MEMBER, name="example_member", target_table="market.example_member", replace_by_code=True)
+        engine._replace_code_batch(conn, spec, "801767.SI", [_member_row("000406.SZ")])
 
     assert conn.commits == 0
     assert conn.rollbacks == 1
@@ -1034,7 +1044,7 @@ def _patch_by_code_loop(engine, monkeypatch, conn, codes, payload):
     _stub_execute_values(monkeypatch)
 
 
-def test_by_code_batched_mirrors_payload_and_takes_down_missing_rows(monkeypatch):
+def test_by_code_batched_preserves_history_without_delete(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
     _patch_by_code_loop(
@@ -1046,11 +1056,9 @@ def test_by_code_batched_mirrors_payload_and_takes_down_missing_rows(monkeypatch
     assert result.success_batches == 1
     assert result.failed_batches == 0
     assert result.inserted_rows == 1
-    assert (
-        "DELETE FROM market.sw_index_member WHERE l2_code = %s",
-        ("801767.SI",),
-    ) in conn.executed
+    assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
     assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert any("INSERT INTO market.sw_industry_source_fact_v1" in sql for sql, _ in conn.executed)
 
 
 def test_by_code_batched_refuses_to_mirror_empty_payload(monkeypatch):
@@ -1098,6 +1106,39 @@ def test_by_code_batched_keeps_upsert_when_replace_by_code_disabled(monkeypatch)
     assert result.failed_batches == 0
     assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
     assert any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+def test_sw_replacement_is_rejected_even_if_spec_is_misconfigured():
+    with pytest.raises(RuntimeError, match="destructive replacement"):
+        TushareSyncEngine()._replace_code_batch(_FakeConn(), SW_INDEX_MEMBER, "801767.SI", [])
+
+
+def test_sw_refresh_explicitly_requests_current_and_historical_members(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    _patch_by_code_loop(engine, monkeypatch, conn, ["801767.SI"], [])
+    requests = []
+    def fetch(spec, params):
+        requests.append(params)
+        return [_member_row("000406.SZ")] if params["is_new"] == "Y" else []
+    monkeypatch.setattr(engine, "_fetch_from_tushare", fetch)
+    result = engine._sync_by_code_batched(SW_INDEX_MEMBER, None, None, uuid.uuid4())
+    assert result.ok
+    assert [r["is_new"] for r in requests] == ["Y", "N"]
+    assert conn.commits == 1
+
+
+def test_sw_failed_source_append_rolls_back_before_projection_write(monkeypatch):
+    import backend.services.sw_industry_history_store as history
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    def boom(*args):
+        raise RuntimeError("source append failed")
+    monkeypatch.setattr(history, "append_source_facts", boom)
+    with pytest.raises(RuntimeError, match="source append failed"):
+        engine._upsert_batch(conn, SW_INDEX_MEMBER, [_member_row("000406.SZ")])
+    assert conn.rollbacks == 1 and conn.commits == 0 and conn.autocommit
+    assert not any("INSERT INTO market.sw_index_member" in sql for sql, _ in conn.executed)
 
 
 # ---------------------------------------------------------------------------
@@ -1293,7 +1334,7 @@ def test_by_code_batched_warns_on_empty_upsert_with_local_history(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
     conn.fetchone_value = (124,)  # sw_daily has local history for this code
-    spec = replace(SW_INDEX_MEMBER, replace_by_code=False)
+    spec = SW_DAILY
     logs = []
     monkeypatch.setattr(sync_engine, "get_conn", lambda: conn)
     monkeypatch.setattr(engine, "_fetch_code_list", lambda _conn, _spec: ["801217.SI"])
