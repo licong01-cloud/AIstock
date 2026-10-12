@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -453,6 +454,8 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
     input_refs = report.get("input_refs") if isinstance(report.get("input_refs"), dict) else {}
     return {
         "schema_version": report.get("schema_version"),
+        "head_commit": report.get("head_commit"),
+        "run_id": report.get("run_id"),
         "workflow_gate": report.get("workflow_gate"),
         "llm_gate": report.get("llm_gate"),
         "execution_mode": report.get("execution_mode"),
@@ -519,6 +522,8 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
         "allowed_plan_count": len(queue.get("allowed_plan_keys") or []),
         "artifact": str(output) if output else None,
     }
+    if report.get("error"):
+        compact["error"] = report["error"]
     if as_json:
         print(json.dumps(compact, ensure_ascii=False, sort_keys=True))
         return
@@ -644,6 +649,8 @@ def main(argv: list[str] | None = None) -> int:
                 "production_backend_dependency_gate": "noop",
             },
         }
+    report["head_commit"] = args.head_commit
+    report["run_id"] = os.environ.get("GITHUB_RUN_ID")
     _write_json(output, public_scheduler_report(report))
     _write_text(markdown_output, render_markdown(report))
     _print_compact(report, as_json=args.json, output=output)

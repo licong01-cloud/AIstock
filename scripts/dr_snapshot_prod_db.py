@@ -215,7 +215,7 @@ def validate_dump(plan: SnapshotPlan) -> dict[str, object]:
     # streaming via stdin is simpler and avoids round-tripping the file.
     list_cmd = ["docker", "exec", "-i", plan.container, "pg_restore", "--list"]
     with plan.target_path.open("rb") as fh:
-        proc = subprocess.run(list_cmd, input=fh.read(), capture_output=True, check=True)
+        proc = subprocess.run(list_cmd, stdin=fh, capture_output=True, check=True)
     listing = proc.stdout.decode("utf-8", errors="replace")
     table_lines = [line for line in listing.splitlines() if "TABLE DATA" in line]
     if not table_lines:
