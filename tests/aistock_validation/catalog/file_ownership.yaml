@@ -3,6 +3,7 @@ rules:
   - rule_id: local_data_tdx_go
     priority: 120
     include:
+      - tdx-api-main/*.go
       - tdx-api-main/**/*.go
       - tdx-api-main/go.mod
       - tdx-api-main/go.sum

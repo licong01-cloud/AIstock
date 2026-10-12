@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import nightly_adaptive_scheduler as scheduler
 
 
@@ -346,6 +348,13 @@ def test_nightly_execution_plan_uses_catalog_and_deduplicates_sessions() -> None
     assert plan["session_positional_args"]["l0"] == ["backend/services/simulation_runtime/ops.py"]
 
 
+@pytest.mark.parametrize("name", ["client", "client_bj_code", "dial", "manage", "pagination", "pagination_test", "web/server"])
+def test_nightly_tdx_go_root_and_nested_sources_have_owned_plans(name: str) -> None:
+    path = f"tdx-api-main/{name}.go"
+    plan = scheduler.build_nightly_execution_plan([path])
+    assert "data_sync_autonomy_backend" in plan["selected_sessions"]
+
+
 def test_nightly_execution_plan_retries_only_failed_sessions_plus_new_impact() -> None:
     plan = scheduler.build_nightly_execution_plan(
         ["frontend/src/app/watchlist/page.tsx"],
@@ -567,12 +576,8 @@ def test_nightly_fails_closed_for_invalid_pr_only_replacement(monkeypatch) -> No
         },
     )
 
-    try:
+    with pytest.raises(ValueError, match="Nightly replacement plan is invalid"):
         scheduler.build_nightly_execution_plan(["scripts/example.py"])
-    except ValueError as exc:
-        assert "Nightly replacement plan is invalid" in str(exc)
-    else:
-        raise AssertionError("Nightly must fail closed when a PR-only plan lacks a valid replacement")
 
 
 def test_nightly_execution_plan_fails_closed_for_unmapped_code(monkeypatch) -> None:
@@ -582,12 +587,8 @@ def test_nightly_execution_plan_fails_closed_for_unmapped_code(monkeypatch) -> N
         lambda _paths: {"ownership": {"unmatched_files": ["backend/unknown_runtime.py"]}},
     )
 
-    try:
+    with pytest.raises(ValueError, match="unmapped executable code"):
         scheduler.build_nightly_execution_plan(["backend/unknown_runtime.py"])
-    except ValueError as exc:
-        assert "unmapped executable code" in str(exc)
-    else:
-        raise AssertionError("Nightly must fail closed for unmapped executable code")
 
 
 def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
