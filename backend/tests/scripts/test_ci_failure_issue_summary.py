@@ -342,63 +342,19 @@ def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: py
     assert artifact_payload["schema_version"] == "aistock_ci_failure_summary_v1"
 
 
-def test_nightly_cli_discovers_failed_session_results_from_sibling_artifact(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    validation_root = tmp_path / "tmp" / "validation"
-    status_path = validation_root / "nightly_failure_issue" / "nightly-status.json"
-    session_results_path = validation_root / "nightly_l3" / "session-results.json"
-    output_path = validation_root / "nightly_failure_issue" / "summary.json"
-    status_path.parent.mkdir(parents=True)
-    session_results_path.parent.mkdir(parents=True)
-    status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                },
-                "run_id": "9001",
-            }
-        ),
-        encoding="utf-8",
-    )
-    session_results_path.write_text(
-        json.dumps(
-            [
-                {"session": "paper_v2_l3", "result": "success"},
-                {"session": "advisory_historical_range_backend", "result": "failure"},
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--output",
-            str(output_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
-
-    capsys.readouterr()
-    artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert artifact_payload["nightly_failed_sessions"] == ["advisory_historical_range_backend"]
-    assert artifact_payload["failed_jobs"][0]["nox_session"] == "advisory_historical_range_backend"
-    assert artifact_payload["suspected_modules"] == ["advisory.historical_range"]
-
-
-def test_nightly_cli_does_not_query_its_own_in_progress_actions_run(
+@pytest.mark.parametrize("source,head,run_id,expected", [
+    ("sessions", "a" * 40, "9001", None),
+    ("plan", "a" * 40, "9001", "plan_generation_failed"),
+    ("plan_with_dr_failure", "a" * 40, "9001", "plan_generation_failed"),
+    ("plan", "b" * 40, "9001", "invalid_plan_diagnostic"),
+    ("plan", "a" * 40, "8999", "invalid_plan_diagnostic"),
+    ("bad_json", "a" * 40, "9001", "invalid_plan_diagnostic"),
+])
+def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    source, head, run_id, expected,
 ) -> None:
     validation_root = tmp_path / "tmp" / "validation"
     status_path = validation_root / "nightly_failure_issue" / "nightly-status.json"
@@ -407,13 +363,21 @@ def test_nightly_cli_does_not_query_its_own_in_progress_actions_run(
     status_path.parent.mkdir(parents=True)
     session_results_path.parent.mkdir(parents=True)
     status_path.write_text(
-        json.dumps({"statuses": {"nightlyL3": "failure"}, "run_id": "9001"}),
+        json.dumps({"statuses": {"nightlyL3": "failure", **({"drValidate": "failure"} if source == "plan_with_dr_failure" else {})},
+                    "run_id": "9001", "commit": "a" * 40}),
         encoding="utf-8",
     )
-    session_results_path.write_text(
-        json.dumps([{"session": "advisory_historical_range_backend", "result": "failure"}]),
-        encoding="utf-8",
-    )
+    if source == "sessions":
+        session_results_path.write_text(json.dumps([
+            {"session": "paper_v2_l3", "result": "success"},
+            {"session": "advisory_historical_range_backend", "result": "failure"},
+        ]), encoding="utf-8")
+    else:
+        diagnostic = {"schema_version": "aistock_public_scheduler_status_v1", "workflow_gate": "blocked",
+                      "head_commit": head, "run_id": run_id,
+                      "error": "unmapped executable code: tdx-api-main/client.go GITHUB_TOKEN=synthetic-secret"}
+        session_results_path.with_name("scheduler-status.json").write_text(
+            "not json" if source == "bad_json" else json.dumps(diagnostic), encoding="utf-8")
     monkeypatch.setattr(
         summary,
         "summarize_actions_run",
@@ -435,6 +399,19 @@ def test_nightly_cli_does_not_query_its_own_in_progress_actions_run(
 
     capsys.readouterr()
     payload = json.loads(output_path.read_text(encoding="utf-8"))
+    if expected:
+        assert payload["nightly_failed_sessions"] == []
+        issue = summary.build_github_issue_payloads(payload)[0]
+        assert expected in issue["title"]
+        assert "synthetic-secret" not in issue["body"]
+        assert ("tdx-api-main/client.go" in issue["body"]) == (expected == "plan_generation_failed")
+        if source == "plan_with_dr_failure":
+            assert payload["nightly_failed_stages"] == ["dr_validate", "nightly_l3"]
+            assert "dr_validate: `failure`" in issue["body"]
+    else:
+        assert payload["nightly_failed_sessions"] == ["advisory_historical_range_backend"]
+        assert payload["failed_jobs"][0]["nox_session"] == "advisory_historical_range_backend"
+        assert payload["suspected_modules"] == ["advisory.historical_range"]
     assert payload["nightly_detail_enrichment"] == {
         "source": "local_completed_job_and_session_receipts",
         "workflow_gate": "not_required",
