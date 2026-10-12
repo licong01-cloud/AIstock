@@ -418,6 +418,7 @@ jobs:
             --changed-files-file $changedFile `
             --head-commit "${env:GITHUB_SHA}" `
             --plan-selection-output "$outDir/execution-plan.json" `
+            --output "$outDir/scheduler-status.json" `
             --fail-on-blocked `
             @watermarkArgs `
             @extraArgs
