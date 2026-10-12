@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from types import MappingProxyType
 from datetime import UTC, date, datetime, time as wall_time, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from types import SimpleNamespace
 from typing import Any, Callable, Mapping
 from uuid import uuid4
@@ -15722,6 +15722,52 @@ def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_termi
     assert repo.get_simulation_daily_run(run_id).run_payload_json["local_sim_economic_generation"] == 3
     terminal_fill_ids = [row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)]
     assert len(terminal_fill_ids) == len(set(terminal_fill_ids))
+    fills_by_id = {row["fill_id"]: row for row in paper_repo.list_fills_for_run(run_id)}
+    fees_by_order: dict[str, Decimal] = {}
+    amounts_by_order: dict[str, Decimal] = {}
+    for entry in paper_repo.cash_entries[run_id]:
+        order_id = fills_by_id[entry.fill_id]["order_id"]
+        fees_by_order[order_id] = fees_by_order.get(order_id, Decimal(0)) + entry.fee
+        amounts_by_order[order_id] = amounts_by_order.get(order_id, Decimal(0)) + entry.notional
+    for order in paper_repo.list_orders_for_run(run_id):
+        rate = Decimal("0.000095") if order.side == OrderSide.BUY else Decimal("0.000595")
+        assert fees_by_order[order.order_id] == max(
+            Decimal("5"), (amounts_by_order[order.order_id] * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ), "Minute restarts must retain the parent order's already charged fee"
+
+
+@pytest.mark.parametrize("damage", [
+    "missing_cash", "duplicate_fill", "missing_fill", "wrong_order", "wrong_run",
+    "wrong_portfolio", "wrong_side", "wrong_symbol", "wrong_notional", "negative_fee", "nan_fee",
+])
+def test_localsim_fee_restore_rejects_incomplete_or_conflicting_cash_prefix(damage: str) -> None:
+    row = dict(fill_id="fill_1", order_id="order_1", run_id="run_1", cash_run_id="run_1",
+               portfolio_id="portfolio_1", symbol="000001.SZ", cash_symbol="000001.SZ",
+               side="BUY", cash_side="BUY", quantity=100, price=10,
+               notional=Decimal("1000"), fee=Decimal("5"))
+    rows = [row]
+    if damage == "missing_cash":
+        row["cash_run_id"] = None
+    elif damage == "duplicate_fill":
+        rows.append(dict(row))
+    elif damage == "missing_fill":
+        rows.clear()
+    else:
+        field, value = {
+            "wrong_order": ("order_id", "other_order"), "wrong_run": ("cash_run_id", "other_run"),
+            "wrong_portfolio": ("portfolio_id", "other_portfolio"), "wrong_side": ("cash_side", "SELL"),
+            "wrong_symbol": ("cash_symbol", "000002.SZ"), "wrong_notional": ("notional", Decimal("1001")),
+            "negative_fee": ("fee", Decimal("-1")), "nan_fee": ("fee", Decimal("NaN")),
+        }[damage]
+        row[field] = value
+    order = SimpleNamespace(order_id="order_1", portfolio_id="portfolio_1", symbol="000001.SZ",
+                            side=OrderSide.BUY, filled_quantity=100)
+    with pytest.raises(DataUnavailableError) as exc:
+        ProductionSimulationLifecycleScheduler._local_sim_order_fee_history(
+            run_id="run_1", orders=(order,),
+            paper_repository=SimpleNamespace(list_order_fee_facts_for_run=lambda run_id: rows),
+        )
+    assert exc.value.context["reason_code"] == "LOCALSIM_ORDER_FEE_HISTORY_INVALID"
 
 
 def test_scheduler_localsim_durable_active_run_continues_when_broker_called_is_false() -> None:

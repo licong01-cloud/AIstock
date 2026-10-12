@@ -294,7 +294,10 @@ class LocalSimBackend(BrokerBackend):
             self._runtime_run_id = run_id
             self._runtime_binding_id = binding_id
 
-    def restore_execution_state(self, *, order: Order, state: LocalSimExecutionStateV1) -> OrderHandle:
+    def restore_execution_state(
+        self, *, order: Order, state: LocalSimExecutionStateV1,
+        cumulative_notional: Decimal | None = None, charged_fee: Decimal | None = None,
+    ) -> OrderHandle:
         """Restore one order without replaying already applied bars."""
         self._ensure_alive()
         with self._lock:
@@ -367,6 +370,30 @@ class LocalSimBackend(BrokerBackend):
                     "LocalSim durable state was restored more than once",
                     context={"reason_code": "LOCALSIM_RESTORE_DUPLICATE_INTENT", "state_id": state.state_id},
                 )
+            history_required = (
+                order.filled_quantity > 0
+                and not state.is_terminal
+                and self._historical_terminalization_plan_id is None
+            )
+            if (
+                (cumulative_notional is None) != (charged_fee is None)
+                or (history_required and cumulative_notional is None)
+            ):
+                raise BrokerSubmitError(
+                    "LocalSim filled order continuation requires actual order fee history",
+                    context={"reason_code": "LOCALSIM_RESTORE_ORDER_FEE_HISTORY_MISSING", "order_id": order.order_id},
+                )
+            if cumulative_notional is not None and charged_fee is not None:
+                try:
+                    self._ledger.restore_order_fee_state(
+                        order_id=order.order_id, symbol=order.symbol, side=order.side,
+                        cumulative_notional=cumulative_notional, charged_fee=charged_fee,
+                    )
+                except ValueError as exc:
+                    raise BrokerSubmitError(
+                        "LocalSim order fee history is invalid or conflicting",
+                        context={"reason_code": "LOCALSIM_RESTORE_ORDER_FEE_HISTORY_INVALID", "order_id": order.order_id},
+                    ) from exc
             handle = OrderHandle(
                 handle_id=f"lsh_{state.state_id[-32:]}",
                 backend_id=self.backend_id,
