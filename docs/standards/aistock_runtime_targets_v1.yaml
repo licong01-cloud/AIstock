@@ -21,6 +21,8 @@ non_runtime_source_paths:
   - backend/services/announcements/title_classifier.py
   - backend/services/dataset_release/direct_monthly.py
   - backend/services/dataset_release/daily_basic_history_repair.py
+  # Explicit offline receipt adoption; API/worker do not import this CLI helper.
+  - backend/services/dataset_release/monthly_legacy_adoption.py
   # CLI-only canonical PIT evidence/preparation: no server/worker entrypoint.
   - backend/services/dataset_release/canonical_pit_candidate_bundle.py
   - backend/services/dataset_release/canonical_pit_w8_attestation.py
