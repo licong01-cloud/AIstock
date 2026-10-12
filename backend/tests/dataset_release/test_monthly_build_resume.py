@@ -48,6 +48,48 @@ def test_fresh_resume_keeps_exact_bytes_and_reuses_original_staging(tmp_path):
         candidate_name="release", release_digest="d" * 64) == 2
 
 
+def test_interrupted_history_commit_keeps_price_exports_and_finishes_without_writers(tmp_path, monkeypatch):
+    import copy
+    from backend.services.dataset_release.monthly_industry_history import recover_history_commit
+    from backend.services.dataset_release.monthly_build_resume import _atomic, _signature
+    context, compiled, root, cas, journal = _fixture(tmp_path)
+    factor = root / "factor_bundle"
+    factor.mkdir()
+    names = ("sector_data.h5", "static_factors.parquet", "factor_checkpoint.json")
+    for name in names:
+        (factor / name).write_bytes(b"original")
+    journal.save("prepare", cas.put_json({"status": "PASS"}), roots=("factor_bundle",))
+    scratch = root.parent / f".{root.name}.industry-history-{'e' * 64}"
+    scratch.mkdir()
+    proposed, files = copy.deepcopy(journal.record), {}
+    proposed["steps"]["industry-history"] = cas.put_json({"projection_sha256": "e" * 64}).as_dict()
+    for name in names:
+        path = scratch / name
+        path.write_bytes(b"repaired")
+        files[name] = {"scratch_relative_path": path.relative_to(root.parent).as_posix(),
+                       "target_signature": _signature(path), "original_signature": _signature(factor / name)}
+        proposed["files"][f"factor_bundle/{name}"] = _signature(path)
+    pending = root.parent / f".{root.name}.industry-history-commit.json"
+    _atomic(pending, {"binding_digest": journal.record["binding_digest"], "projection_sha256": "e" * 64,
+                      "record": proposed, "files": files})
+    original_rename = Path.rename
+    def interrupted(path, target):
+        if path.parent == scratch and path.name == "static_factors.parquet":
+            raise OSError("interrupted after preserving the original")
+        return original_rename(path, target)
+    monkeypatch.setattr(Path, "rename", interrupted)
+    with pytest.raises(OSError, match="interrupted"):
+        recover_history_commit(root=root, journal=journal.path, record=journal.record, expected_projection="e" * 64)
+    monkeypatch.setattr(Path, "rename", original_rename)
+    recovered = recover_history_commit(root=root, journal=journal.path, record=journal.record, expected_projection="e" * 64)
+    assert recovered == proposed
+    assert (root / "daily_bin/close.bin").read_bytes() == b"accurate"
+    for name in names:
+        assert (factor / name).read_bytes() == b"repaired"
+        assert (scratch / (name + ".before")).read_bytes() == b"original"
+    assert recover_history_commit(root=root, journal=journal.path, record=recovered, expected_projection="e" * 64) == proposed
+
+
 def test_fresh_process_recovers_completed_export_without_any_writer(tmp_path):
     repo = str(Path(__file__).resolve().parents[3])
     script = """
