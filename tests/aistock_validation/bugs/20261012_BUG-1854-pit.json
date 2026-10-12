@@ -12,6 +12,7 @@
     "backend/tests/dataset_release/test_monthly_sector_mapping.py",
     "backend/tests/dataset_release/test_monthly_build_resume.py",
     "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
     "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "backend/services/dataset_release/monthly_industry_history.py",
     "tests/aistock_validation/bugs/20261012_BUG-1854-pit.json"
