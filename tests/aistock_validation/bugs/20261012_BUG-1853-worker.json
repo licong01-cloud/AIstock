@@ -29,14 +29,22 @@
   ],
   "expected": "精确接管已完成导出，重新执行当前 attempt 消费验证，不重写数据文件",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_legacy_adoption.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261012_BUG-1853-worker.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_legacy_adoption.py"
     ],
     "changed_files": [
+      "backend/services/dataset_release/monthly_legacy_adoption.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261012_BUG-1853-worker.json"
     ],
-    "changed_files_source": "actual_changed_files",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_legacy_adoption.py",
@@ -118,21 +126,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -q -> 27 passed; atomic journal flush regression -> passed; two isolated processes recover the same original exports without invoking writers.",
-      "AIstock python -m backend.services.dataset_release.monthly_legacy_adoption --operation-id dmr_63a313d97fd046a38d5a876265565014 --state-root F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2 --control-root X:/AIstock_dataset_release_control --artifact-root F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2 --artifact-root X:/AIstock_dataset_release_control --prepare-ref e6012c16ade44872e0451c39503736d7c86e21c560e1080126658d9f8f1761bd --finalize-ref 3fce854637e6e929660130e5d3e4cd90bd348eace189d492baf0c2c2a190bf57 -> real dry-run PASS: 125269 files, 118104 month-written features, 7128 unchanged hardlinked inherited features; no export/database/profile writes."
-    ],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "worker-scheduler",
-    "target_ids": [
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "worker-scheduler"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
