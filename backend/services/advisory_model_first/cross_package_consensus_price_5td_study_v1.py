@@ -192,7 +192,7 @@ def train_cross_package_consensus_study_v1(*, plan, output_root, qe_idle_probe):
                     _journal(root, dict(kind="POST_FIT_QE_OBSERVATION", arm=arm, ordinal=count, qe_observation=observation))
                     if any(observation["active_counts"].values()):
                         after_error = "QE became active: retain completed component, no next fit"
-                except (ValueError, OSError) as exc:
+                except (ValueError, OSError, RuntimeError) as exc:
                     after_error = f"UNKNOWN_POST_FIT_QE_OBSERVATION:{type(exc).__name__}"
                     _journal(root, dict(kind="POST_FIT_QE_UNKNOWN", arm=arm, ordinal=count, error_type=type(exc).__name__))
 

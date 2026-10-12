@@ -153,15 +153,21 @@ def test_four_stages_readonly_prepare_and_original_slot_accounting(tmp_path, mon
     assert set(result["primary"]["pairs"]) == {ARMS[1], "baseline"}
 
 
-def test_post_fit_busy_retains_component_and_partial_attempt_cannot_refit(tmp_path, monkeypatch):
+@pytest.mark.parametrize("post_condition", ["busy", "runtime_error"])
+def test_post_fit_busy_retains_component_and_partial_attempt_cannot_refit(tmp_path, monkeypatch, post_condition):
     plan = parent_plan(tmp_path)
     root = tmp_path/"new"
     study.preregister_cross_package_consensus_study_v1(plan=plan, output_root=root)
     prepared = study.prepare_cross_package_consensus_study_v1(plan=plan, output_root=root)
     monkeypatch.setattr(study, "_node", lambda p: dict(fixture=True))
-    probes = iter([observation(), observation(busy=True)])
-    with pytest.raises(ValueError, match="retain completed"):
-        study.train_cross_package_consensus_study_v1(plan=plan, output_root=root, qe_idle_probe=lambda: next(probes))
+    probes = iter([observation(), observation(busy=True) if post_condition == "busy" else RuntimeError("public GET failed")])
+    def probe():
+        item = next(probes)
+        if isinstance(item, Exception):
+            raise item
+        return item
+    with pytest.raises(ValueError, match="retain completed|UNKNOWN_POST_FIT"):
+        study.train_cross_package_consensus_study_v1(plan=plan, output_root=root, qe_idle_probe=probe)
     assert (prepared.parent/"fits"/ARMS[0]/"trained"/"model.json").is_file()
     assert not (prepared.parent/"trained").exists()
     with pytest.raises(ValueError, match="never implicitly refit"):
