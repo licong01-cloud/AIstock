@@ -299,7 +299,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/schedules",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "fresh_process_evidence": [
       "AIstock-CI python -m pytest backend/tests/test_sw_industry_history_store.py backend/tests/test_tushare_sync_engine.py -q -x -> 106 passed",
       "AIstock python X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-history-preservation-20261013-v2/validate_dev_preservation.py -> 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS; simulation rolled back",
