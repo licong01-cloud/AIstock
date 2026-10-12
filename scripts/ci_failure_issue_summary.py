@@ -1410,10 +1410,30 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
             group["errors"].append(str(row["error"]).strip())
     failed_stages = _nightly_failed_keys(_nightly_statuses_from_payload(payload))
     if not groups and failed_stages == ["nightly_l3"]:
+        kind, error = "missing_session_receipt", "Nightly L3 failed without a durable session result"
+        plan_status = payload.get("nightly_plan_status")
+        if plan_status is not None:
+            bound = (
+                isinstance(plan_status, dict)
+                and plan_status.get("schema_version") == "aistock_public_scheduler_status_v1"
+                and re.fullmatch(r"[0-9a-f]{40}", str(payload.get("commit") or "")) is not None
+                and plan_status.get("head_commit") == payload["commit"]
+                and bool(payload.get("run_id"))
+                and str(plan_status.get("run_id") or "") == str(payload["run_id"])
+            )
+            if not bound:
+                kind, error = "invalid_plan_diagnostic", "Nightly scheduler diagnostic artifact is not bound to this run/head"
+            elif plan_status.get("workflow_gate") == "blocked" and isinstance(plan_status.get("error"), str) and plan_status["error"].strip():
+                root = str(Path(__file__).resolve().parents[1])
+                if root not in sys.path:
+                    sys.path.insert(0, root)
+                from backend.infra.deepseek_config import redact_secret_text
+
+                kind, error = "plan_generation_failed", redact_secret_text(plan_status["error"])[:2000]
         groups["validation.runner"] = {
             "sessions": [],
-            "failure_kinds": ["missing_session_receipt"],
-            "errors": ["Nightly L3 failed without a durable session result"],
+            "failure_kinds": [kind],
+            "errors": [error],
         }
     normalized_groups: list[dict[str, Any]] = []
     for module, details in sorted(groups.items()):
@@ -1740,7 +1760,7 @@ def summarize_nightly_status(
         )
     )
     failed_sessions = _failed_nightly_sessions(payload)
-    failure_groups = _nightly_failure_groups(payload)
+    failure_groups = _nightly_failure_groups({**payload, "commit": effective_commit, "run_id": effective_run_id})
     job = _nightly_job_from_statuses(
         statuses,
         run_url=effective_run_url,
@@ -2398,6 +2418,12 @@ def main(argv: list[str] | None = None) -> int:
             session_results = json.loads(session_results_path.read_text(encoding="utf-8-sig"))
             if isinstance(session_results, (list, dict)):
                 payload["nightly_session_results"] = session_results
+        plan_status_path = session_results_path.with_name("scheduler-status.json")
+        if plan_status_path.is_file():
+            try:
+                payload["nightly_plan_status"] = json.loads(plan_status_path.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                payload["nightly_plan_status"] = {}
         summary = summarize_nightly_status(
             payload,
             repo=args.repo,

@@ -245,11 +245,15 @@ def test_nightly_adaptive_scheduler_public_artifact_keeps_llm_consumption_eviden
     assert payload["llm_gate"] == "ready"
 
 
-def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("changed_file,needle", [
+    ("docs/handoff/notes.md", "429"), ("unowned/path.py", "unmapped executable code"),
+])
+def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatch, tmp_path: Path, capsys, changed_file, needle) -> None:
     def fake_build(*args, **kwargs):
         raise scheduler.llm_provider_adapter.ProviderAdapterError("deepseek_api inference failed status=429")
 
     monkeypatch.setattr(scheduler.llm_provider_adapter, "build_nightly_scheduler_advice", fake_build)
+    monkeypatch.setenv("GITHUB_RUN_ID", "9001")
 
     output = tmp_path / "scheduler.json"
     exit_code = scheduler.main(
@@ -260,6 +264,8 @@ def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatc
             "fresh",
             "--invoke-llm",
             "--fail-on-llm-error",
+            "--json", "--head-commit", "a" * 40,
+            "--changed-file", changed_file,
             "--output",
             str(output),
         ]
@@ -270,7 +276,10 @@ def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatc
     assert payload["workflow_gate"] == "blocked"
     assert payload["llm_gate"] == "degraded"
     assert payload["llm_invoked"] is False
-    assert "429" in payload["error"]
+    assert needle in payload["error"]
+    assert payload["head_commit"] == "a" * 40
+    assert payload["run_id"] == "9001"
+    assert needle in json.loads(capsys.readouterr().out)["error"]
 
 
 def test_nightly_adaptive_scheduler_includes_code_intelligence_refs_in_public_artifact(
@@ -681,6 +690,7 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "No prior scheduled Nightly run with a durable session receipt is available" in workflow
     assert 'if ($env:FULL_NIGHTLY_RUN -eq "true")' in workflow
     assert "--plan-selection-output" in workflow
+    assert '--output "$outDir/scheduler-status.json"' in workflow
     assert "--fail-on-blocked" in workflow
     assert 'git cat-file -e "$watermark^{commit}"' in workflow
     assert "Receipt-bound scheduled Nightly watermark is unavailable locally" in workflow
