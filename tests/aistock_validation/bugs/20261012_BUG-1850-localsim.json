@@ -1,6 +1,7 @@
 {
   "actual": "Fresh per-tick ledgers lose _order_fee_state and charge each subsequent fill independently.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/services/trading_core/ledger.py",
     "backend/services/simulation_execution/localsim/runtime.py",
     "backend/services/simulation_runtime/scheduler.py",
@@ -26,6 +27,11 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261012-78c5ed11078e",
       "timestamp": "2026-10-12T17:52:02.804253Z"
+    },
+    {
+      "action": "scope_expanded_for_direct_fee_test_ci_coverage",
+      "actor": "codex",
+      "note": "Added noxfile.py before editing: paper_v2_backend omitted the directly changed ledger tests; include the existing test file in CI."
     }
   ],
   "evidence_uris": [],
@@ -39,7 +45,8 @@
       "backend/services/paper_trading_v2/repository.py",
       "backend/tests/trading_core/test_ledger.py",
       "backend/tests/simulation_execution/test_localsim_runtime.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "noxfile.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -195,17 +202,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded tracked task-worktree source; final direct invariant matrix 29 passed. Existing DEV readonly SQL query passed with 96 rows. Production readonly history reconstruction passed all 15 runs / 1368 parent orders. No production process control."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "database_readback_ref": "not_required",
+    "runtime_identity_match": "pending"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -333,5 +347,80 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "monthly_fee_audit": {
+    "period_start": "2026-09-14",
+    "period_end": "2026-10-12",
+    "ledger_scope_id": "paper_b26d2312d986441f8497f7484c05f0ec",
+    "trading_days": 15,
+    "parent_orders_with_fills": 1364,
+    "fills": 4237,
+    "fills_triggering_minimum": 22,
+    "parent_orders_affected": 20,
+    "buy_floor_fills": 21,
+    "sell_floor_fills": 1,
+    "parent_orders_requiring_model_minimum": 0,
+    "actual_fees_yuan": "495535.44",
+    "cumulative_parent_model_fees_yuan": "495487.67",
+    "minimum_floor_extra_yuan": "47.58",
+    "per_fill_rounding_difference_yuan": "0.19",
+    "total_fee_difference_yuan": "47.77",
+    "all_fills_match_per_fill_formula": true,
+    "history_rewritten": false,
+    "rate_model": {
+      "BUY": "0.000095",
+      "SELL": "0.000595",
+      "minimum_yuan": "5"
+    },
+    "sell_fee_note": "SELL is a combined cost rate; this audit does not identify it as pure commission."
+  },
+  "validation_evidence": [
+    "Before fix: two direct reproductions failed; resumed small parent order charged 15.00 instead of 5.00.",
+    "Final direct invariant matrix: 29 passed, covering restored fees, malformed history, buy/sell, streaming resume, EOD valuation and projection recovery.",
+    "Existing DEV readonly repository query: 96 joined facts; field contract and empty scope passed. No DDL/DML.",
+    "Monthly production readonly reconstruction: all 15 runs and 1368 parent orders passed quantity, identity and fill/cash notional closure. No data mutation.",
+    "Changed-file Ruff and git diff --check passed."
+  ],
+  "review_rounds": [
+    {
+      "round": 1,
+      "result": "fixed_then_passed",
+      "focus": "Exact monthly ledger formula and resumed small-order reproducer",
+      "change": "Restore parent notional and actual charged fee; reject active filled-order restore without fee history."
+    },
+    {
+      "round": 2,
+      "result": "fixed_then_passed",
+      "focus": "Committed history closure, duplicate/missing/conflicting facts, historical charge handling, CI test coverage",
+      "change": "Validate fill/cash identities, money and filled quantity; reject duplicate order identities; include changed ledger tests in existing CI session."
+    },
+    {
+      "round": 3,
+      "result": "passed",
+      "focus": "Direct final invariant matrix and real readonly DB readback",
+      "evidence": "29 direct cases passed; existing DEV query 96 rows; all monthly production 15 runs / 1368 orders reconstruct without mutation."
+    }
+  ],
+  "design_compliance_review": [
+    {
+      "item": 1,
+      "result": "passed",
+      "evidence": "Persistent implementation spans production and in-memory repository, scheduler restore, broker and ledger; real monthly SQL readback and direct resume regression pass."
+    },
+    {
+      "item": 2,
+      "result": "passed",
+      "evidence": "Missing, duplicated or conflicting fee history raises typed errors; no zero-fee fallback."
+    },
+    {
+      "item": 3,
+      "result": "passed",
+      "evidence": "Existing fee rates, TWAP policy, lot/volume limits and past cash/position records remain unchanged; only restoration of already-approved per-order fee semantics."
+    },
+    {
+      "item": 4,
+      "result": "passed",
+      "evidence": "Existing workflow and CI plans used; no new approval or runtime service control."
+    }
+  ]
 }

@@ -20,7 +20,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from enum import Enum
 from typing import Any, Mapping, Protocol
 import psycopg2.extras
@@ -14498,6 +14498,9 @@ class SimulationLifecycleScheduler:
                 },
             )
         binder(plan=plan, as_of_time=scheduler_time(as_of_time))
+        fee_history = self._local_sim_order_fee_history(
+            run_id=run.run_id, orders=persisted_orders, paper_repository=paper_repository,
+        )
         for intent in plan.intents:
             intent_id = intent.intent_id
             state = by_intent[intent_id]
@@ -14513,8 +14516,73 @@ class SimulationLifecycleScheduler:
                         "binding_id": binding.binding_id,
                     },
                 )
-            restorer(order=orders[intent_id], state=state)
+            order = orders[intent_id]
+            notional, fee = fee_history[order.order_id]
+            restorer(
+                order=order, state=state,
+                cumulative_notional=notional if order.filled_quantity else None,
+                charged_fee=fee if order.filled_quantity else None,
+            )
         return states
+
+    @staticmethod
+    def _local_sim_order_fee_history(
+        *, run_id: str, orders: tuple[Any, ...], paper_repository: Any,
+    ) -> dict[str, tuple[Decimal, Decimal]]:
+        """Rebuild only fee accumulators from the already committed cash prefix."""
+        reader = getattr(paper_repository, "list_order_fee_facts_for_run", None)
+        if not callable(reader):
+            raise RuntimeConfigInvalidError(
+                "LocalSim repository cannot read actual order fee history",
+                context={"reason_code": "LOCALSIM_ORDER_FEE_HISTORY_READER_MISSING", "run_id": run_id},
+            )
+        by_order = {order.order_id: order for order in orders}
+        if len(by_order) != len(orders):
+            raise DataUnavailableError(
+                "LocalSim fee history requires unique parent order identities",
+                context={"reason_code": "LOCALSIM_ORDER_FEE_HISTORY_INVALID", "run_id": run_id},
+            )
+        quantities = {order_id: 0 for order_id in by_order}
+        history = {order_id: (Decimal(0), Decimal(0)) for order_id in by_order}
+        seen: set[str] = set()
+        try:
+            for row in reader(run_id):
+                order_id = row["order_id"]
+                order = by_order.get(order_id)
+                fill_id = row["fill_id"]
+                if (
+                    order is None or not fill_id or fill_id in seen
+                    or row["run_id"] != run_id or row["cash_run_id"] != run_id
+                    or row["portfolio_id"] != order.portfolio_id
+                    or row["symbol"] != order.symbol or row["cash_symbol"] != order.symbol
+                    or row["side"] != order.side.value or row["cash_side"] != order.side.value
+                ):
+                    raise ValueError("fill/cash identity is missing, duplicated or conflicting")
+                quantity = row["quantity"]
+                price = Decimal(str(row["price"]))
+                notional = Decimal(str(row["notional"]))
+                fee = Decimal(str(row["fee"]))
+                if (
+                    isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0
+                    or not price.is_finite() or price <= 0
+                    or not notional.is_finite() or notional <= 0
+                    or not fee.is_finite() or fee < 0
+                    or notional != (quantity * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    or fee != fee.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                ):
+                    raise ValueError("fill/cash money or quantity is invalid")
+                seen.add(fill_id)
+                quantities[order_id] += quantity
+                old_notional, old_fee = history[order_id]
+                history[order_id] = old_notional + notional, old_fee + fee
+            if any(quantities[order.order_id] != order.filled_quantity for order in orders):
+                raise ValueError("fee history quantity does not close over persisted orders")
+        except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            raise DataUnavailableError(
+                "LocalSim committed order fee history is incomplete or conflicting",
+                context={"reason_code": "LOCALSIM_ORDER_FEE_HISTORY_INVALID", "run_id": run_id, "detail": str(exc)},
+            ) from exc
+        return history
 
     def _submit_execution_plan_with_timeout(
         self,

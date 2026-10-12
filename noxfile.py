@@ -1009,6 +1009,7 @@ def paper_v2_backend(session: nox.Session) -> None:
         "backend/tests/selection_center",
         "backend/tests/strategy_package",
         "backend/tests/trading_core/test_execution_algo_capabilities.py",
+        "backend/tests/trading_core/test_ledger.py",
         "backend/tests/trading_core/test_minute_execution.py",
         "backend/tests/trading_core/test_v25_1_small_cap_contract.py",
         "backend/tests/trading_core/test_v25_execution_contract.py",
