@@ -345,6 +345,7 @@ def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: py
 @pytest.mark.parametrize("source,head,run_id,expected", [
     ("sessions", "a" * 40, "9001", None),
     ("plan", "a" * 40, "9001", "plan_generation_failed"),
+    ("plan_with_dr_failure", "a" * 40, "9001", "plan_generation_failed"),
     ("plan", "b" * 40, "9001", "invalid_plan_diagnostic"),
     ("plan", "a" * 40, "8999", "invalid_plan_diagnostic"),
     ("bad_json", "a" * 40, "9001", "invalid_plan_diagnostic"),
@@ -362,7 +363,8 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
     status_path.parent.mkdir(parents=True)
     session_results_path.parent.mkdir(parents=True)
     status_path.write_text(
-        json.dumps({"statuses": {"nightlyL3": "failure"}, "run_id": "9001", "commit": "a" * 40}),
+        json.dumps({"statuses": {"nightlyL3": "failure", **({"drValidate": "failure"} if source == "plan_with_dr_failure" else {})},
+                    "run_id": "9001", "commit": "a" * 40}),
         encoding="utf-8",
     )
     if source == "sessions":
@@ -403,6 +405,9 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
         assert expected in issue["title"]
         assert "synthetic-secret" not in issue["body"]
         assert ("tdx-api-main/client.go" in issue["body"]) == (expected == "plan_generation_failed")
+        if source == "plan_with_dr_failure":
+            assert payload["nightly_failed_stages"] == ["dr_validate", "nightly_l3"]
+            assert "dr_validate: `failure`" in issue["body"]
     else:
         assert payload["nightly_failed_sessions"] == ["advisory_historical_range_backend"]
         assert payload["failed_jobs"][0]["nox_session"] == "advisory_historical_range_backend"

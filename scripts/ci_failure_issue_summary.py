@@ -1409,7 +1409,7 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if str(row.get("error") or "").strip():
             group["errors"].append(str(row["error"]).strip())
     failed_stages = _nightly_failed_keys(_nightly_statuses_from_payload(payload))
-    if not groups and failed_stages == ["nightly_l3"]:
+    if not groups and "nightly_l3" in failed_stages and (failed_stages == ["nightly_l3"] or "nightly_plan_status" in payload):
         kind, error = "missing_session_receipt", "Nightly L3 failed without a durable session result"
         plan_status = payload.get("nightly_plan_status")
         if plan_status is not None:
@@ -1419,6 +1419,7 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 and re.fullmatch(r"[0-9a-f]{40}", str(payload.get("commit") or "")) is not None
                 and plan_status.get("head_commit") == payload["commit"]
                 and bool(payload.get("run_id"))
+                and str(payload["run_id"]).isdigit()
                 and str(plan_status.get("run_id") or "") == str(payload["run_id"])
             )
             if not bound:
