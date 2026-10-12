@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from datetime import date
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from ..services.hmm_training_service import HMMTrainingService
 from ..db.pg_pool import get_conn
@@ -85,6 +86,13 @@ class CronUpdateRequest(BaseModel):
     cron_enabled: bool = False
 
 
+class CoefficientExtensionRequest(BaseModel):
+    snapshot_id: str
+    signal_presets: List[str]
+    coefficient_start: date
+    enabled: StrictBool = True
+
+
 class RollingTrainingPreviewRequest(BaseModel):
     as_of_date: Optional[date] = None
     train_window_years: float = 3.0
@@ -134,6 +142,7 @@ class DailyCoefficientJobResponse(BaseModel):
 # Helper: convert DB row values to strings for Pydantic serialization
 # ---------------------------------------------------------------------------
 
+
 def _stringify_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Convert datetime / non-string values to strings for Pydantic models."""
     out = dict(row)
@@ -155,6 +164,7 @@ def _http_error(exc: Exception) -> HTTPException:
 # ---------------------------------------------------------------------------
 # 超参版本 CRUD
 # ---------------------------------------------------------------------------
+
 
 @router.post("/configs", response_model=ConfigResponse, summary="创建超参版本")
 def create_config(req: ConfigCreateRequest):
@@ -183,6 +193,7 @@ def delete_config(config_id: str):
 # ---------------------------------------------------------------------------
 # 训练任务
 # ---------------------------------------------------------------------------
+
 
 @router.post(
     "/configs/{config_id}/trigger-training",
@@ -252,6 +263,7 @@ def list_jobs(config_id: str):
 # ---------------------------------------------------------------------------
 # 快照
 # ---------------------------------------------------------------------------
+
 
 @router.get(
     "/configs/{config_id}/snapshots",
@@ -380,6 +392,7 @@ def delete_snapshot(snapshot_id: str):
 # 滚动训练计划
 # ---------------------------------------------------------------------------
 
+
 @router.put("/configs/{config_id}/cron", summary="更新滚动训练计划")
 def update_cron(config_id: str, req: CronUpdateRequest):
     try:
@@ -393,6 +406,7 @@ def update_cron(config_id: str, req: CronUpdateRequest):
 # 辅助端点
 # ---------------------------------------------------------------------------
 
+
 @router.get("/snapshots/{snapshot_id}/model-path", summary="解析模型文件路径")
 def get_model_path(snapshot_id: str):
     path = service.resolve_model_path(snapshot_id)
@@ -404,13 +418,34 @@ def get_model_path(snapshot_id: str):
 # Keep main.py unchanged while exposing the independent research API beside
 # the existing /hmm-training prefix.  Rebinding happens only after every
 # training route above has been registered on the original router.
+@router.post("/configs/{config_id}/coefficient-extension")
+def configure_coefficient_extension(config_id: str, req: CoefficientExtensionRequest):
+    try:
+        return service.configure_coefficient_extension(
+            config_id,
+            snapshot_id=req.snapshot_id,
+            signal_presets=req.signal_presets,
+            coefficient_start=req.coefficient_start.isoformat(),
+            enabled=req.enabled,
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/configs/{config_id}/coefficient-extension")
+def get_coefficient_extension(config_id: str):
+    try:
+        return service.get_coefficient_extension(config_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
 _training_router = router
 from . import hmm_evolution as _hmm_evolution  # noqa: E402
 
 router = APIRouter()
 router.include_router(_training_router)
 router.include_router(_hmm_evolution.router)
-
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +488,23 @@ async def rolling_training_tick() -> None:
             logger.exception("滚动训练异常: config=%s", config_id)
 
 
+async def coefficient_extension_tick() -> None:
+    """Nonblocking release reconciliation, independent of rolling training."""
+    try:
+        results = await asyncio.to_thread(HMMTrainingService().reconcile_coefficient_extensions)
+        for result in results:
+            if result.get("status") in {"FAILED", "BLOCKED"}:
+                logger.error(
+                    "HMM 自动延伸未完成: config=%s job=%s status=%s reason=%s",
+                    result.get("config_id"),
+                    result.get("job_id"),
+                    result.get("status"),
+                    result.get("reason_code") or result.get("error_message"),
+                )
+    except Exception:
+        logger.exception("HMM 自动延伸调度失败")
+
+
 def init_hmm_scheduler() -> None:
     """Initialize APScheduler and add rolling_training_tick as a periodic job."""
     global _scheduler
@@ -466,6 +518,15 @@ def init_hmm_scheduler() -> None:
             minutes=1,
             id="hmm_rolling_training_tick",
             replace_existing=True,
+        )
+        _scheduler.add_job(
+            coefficient_extension_tick,
+            "interval",
+            minutes=1,
+            id="hmm_coefficient_extension_tick",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
         )
         _scheduler.start()
         logger.info("HMM 滚动训练调度器已启动（每分钟检查）")
