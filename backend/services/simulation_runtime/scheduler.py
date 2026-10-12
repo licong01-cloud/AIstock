@@ -445,6 +445,7 @@ class ProductionSimulationRunContextProvider:
         position_loader: Callable[[str, date], dict[str, PositionLot]] | None = None,
         price_loader: Callable[[list[str], date], dict[str, float]] | None = None,
         paper_repository_factory: Callable[[], Any] | None = None,
+        localsim_repository_factory: Callable[[], Any] | None = None,
         qmt_repository_factory: Callable[[], Any] | None = None,
         qmt_client_factory: Callable[[], Any] | None = None,
         qmt_calendar_provider_factory: Callable[[], Any] | None = None,
@@ -464,6 +465,7 @@ class ProductionSimulationRunContextProvider:
         self._position_loader = position_loader
         self._price_loader = price_loader or _default_price_loader
         self._paper_repository_factory = paper_repository_factory or _default_paper_repository_factory
+        self._localsim_repository_factory = localsim_repository_factory
         self._qmt_repository_factory = qmt_repository_factory or _default_qmt_repository_factory
         self._qmt_client_factory = qmt_client_factory or _default_qmt_client_factory
         self._qmt_calendar_provider_factory = qmt_calendar_provider_factory or _default_qmt_calendar_provider
@@ -714,7 +716,25 @@ class ProductionSimulationRunContextProvider:
             trade_date=trade_date,
         )
         try:
-            portfolio = paper_repository.get_portfolio(portfolio_id)
+            from .localsim_native_context import is_native_account_binding, load_native_account_context
+
+            if is_native_account_binding(binding):
+                from .successor_repository import LocalSimSuccessorRepository
+
+                successor_repository = (
+                    self._localsim_repository_factory()
+                    if self._localsim_repository_factory is not None
+                    else LocalSimSuccessorRepository()
+                )
+                portfolio = load_native_account_context(
+                    binding=binding,
+                    release=runtime_release,
+                    repository=successor_repository,
+                    manifest_loader=self._package_manifest_loader,
+                )
+                portfolio_id = portfolio.ledger_scope_id
+            else:
+                portfolio = paper_repository.get_portfolio(portfolio_id)
             positions = (
                 self._load_positions_with_injected_loader(binding.strategy_id, trade_date)
                 if self._position_loader is not None
@@ -816,6 +836,9 @@ class ProductionSimulationRunContextProvider:
             portfolio_id=portfolio_id,
             manifest=manifest,
             execution_policy_payload=effective_execution_policy_payload,
+            top_k=getattr(getattr(portfolio, "profile", None), "daily_strategy", None).top_k
+            if getattr(portfolio, "profile", None) is not None
+            else None,
             local_broker=local_broker,
             paper_repository=paper_repository,
             cash=cash,
@@ -824,6 +847,9 @@ class ProductionSimulationRunContextProvider:
             context_diagnostics={
                 "manifest_identity": manifest_identity_diagnostics,
                 "localsim_tplus1_settlement": settlement_diagnostics,
+                "localsim_state_authority": "simulation_account_v1"
+                if getattr(portfolio, "profile", None) is not None
+                else "paper_v2_portfolio",
                 "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
                 "target_equity_basis": target_equity_context,
             },
@@ -1489,6 +1515,7 @@ class ProductionSimulationRunContextProvider:
             )
         try:
             from backend.services.simulation_execution.localsim import LocalSimBackend
+            from .localsim_native_context import LocalSimNativeAccountContext, fee_model_from_localsim_profile
 
             data_source = self._resolve_local_sim_market_data_source(
                 portfolio=portfolio,
@@ -1505,6 +1532,9 @@ class ProductionSimulationRunContextProvider:
                 execution_policy=execution_policy,
                 package_id=binding.package_id,
                 scheduler_as_of_time=as_of_time,
+                fee_model=fee_model_from_localsim_profile(portfolio.profile)
+                if isinstance(portfolio, LocalSimNativeAccountContext)
+                else None,
             )
         except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
@@ -1531,7 +1561,14 @@ class ProductionSimulationRunContextProvider:
         data_source = getattr(portfolio, "data_source", MinuteDataSource.DB_HISTORICAL)
         if not isinstance(data_source, MinuteDataSource):
             data_source = MinuteDataSource(str(data_source))
-        current_trade_date = scheduler_time(as_of_time).date() if as_of_time is not None else date.today()
+        from .localsim_native_context import LocalSimNativeAccountContext
+
+        # Replay's as_of_time is a causal cursor, not today's source authority.
+        current_trade_date = (
+            date.today()
+            if isinstance(portfolio, LocalSimNativeAccountContext)
+            else scheduler_time(as_of_time).date() if as_of_time is not None else date.today()
+        )
         if trade_date == current_trade_date:
             return MinuteDataSource.TDX_REALTIME
         return data_source

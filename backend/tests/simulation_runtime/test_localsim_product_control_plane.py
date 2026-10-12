@@ -71,7 +71,11 @@ class _Authority:
             profile_version_id="lsrpv_001",
             config_sha256="b" * 64,
             daily_strategy_profile_version_id="lsdaily_001",
-            config_json={"schema_version": "localsim_runtime_profile_config_v1", "daily_strategy": {"top_k": 20}},
+            config_json={
+                "schema_version": "localsim_runtime_profile_config_v1",
+                "daily_strategy": {"strategy_id": "score_weighted_topk_v2", "strategy_version": "v2", "top_k": 20},
+                "hmm": {"enabled": False}, "risk_policy": {"enabled": False}, "fee_policy": {},
+            },
         )
         return SimpleNamespace(
             package_id=package_id,

@@ -574,6 +574,15 @@ class LocalSimControlPlaneService:
         created_reason: str | None,
     ) -> tuple[StrategyRuntimeRelease, SimulationReleaseBinding]:
         staging = InMemorySimulationRuntimeRepository()
+        if "localsim_runtime_profile_config" in release_metadata:
+            from .localsim_native_context import selection_config_from_localsim_profile
+            from .localsim_runtime_profile import LocalSimRuntimeProfileConfigV1
+
+            profile = LocalSimRuntimeProfileConfigV1.model_validate(release_metadata["localsim_runtime_profile_config"])
+            release_metadata = {
+                **release_metadata,
+                "selection_runtime_config": selection_config_from_localsim_profile(profile, manifest_sha256=account.manifest_sha256),
+            }
         service = StrategyRuntimeReleaseService(
             repository=staging,
             package_lifecycle_reader=self.package_lifecycle_reader,
