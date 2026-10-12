@@ -3,9 +3,16 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_postgres_source.py",
     "backend/services/dataset_release/monthly_sector_mapping.py",
-    "backend/services/dataset_release/monthly_legacy_factor.py",
+    "backend/services/dataset_release/monthly_build_resume.py",
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/services/dataset_release/build_stage.py",
+    "backend/routers/monthly_dataset_releases.py",
     "backend/services/dataset_release/monthly_shared_components.py",
     "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "backend/services/dataset_release/monthly_industry_history.py",
     "tests/aistock_validation/bugs/20261012_BUG-1854-pit.json"
   ],
@@ -30,17 +37,42 @@
   "evidence_uris": [],
   "expected": "同一候选H5/Parquet行业身份来自真实版本化PIT，不修改既存候选，不重复行情导出",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261012_BUG-1854-pit.json",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_sector_mapping.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/services/dataset_release/monthly_industry_history.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_industry_history.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261012_BUG-1854-pit.json",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_sector_mapping.py",
-      "backend/services/dataset_release/monthly_legacy_factor.py",
       "backend/services/dataset_release/monthly_shared_components.py",
-      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/services/dataset_release/monthly_industry_history.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_postgres_source.py",
@@ -178,11 +210,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "fresh AIstock Python import: SOURCE=16; MonthlyReleaseService.bind_industry_history; authenticated industry-history router -> passed; services_started=0; database_write=false"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

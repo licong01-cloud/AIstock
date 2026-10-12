@@ -288,6 +288,95 @@ def _request(*, key: str = "monthly-202609") -> MonthlyReleaseRequest:
     )
 
 
+@pytest.mark.parametrize("drift", [None, "base_plan", "binding", "source_receipt"])
+def test_history_supplement_keeps_sealed_source_across_producer_upgrade(tmp_path, drift):
+    from backend.services.dataset_release.monthly_unified import _digest
+    pipeline = Pipeline(fail_once_at="BUILD")
+    producer = {"version": "old"}
+    pipeline.stage_identity = lambda stage: _digest({"stage": stage, "version": producer["version"]})
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "FAILED"
+    source = service.store.read_checkpoint(operation_id, "SOURCE")
+    plan = service.store.read_plan(operation_id)
+    binding = {"base_plan_digest": _digest(plan), "source_receipt_canonical_sha256": source["canonical_sha256"]}
+    reference = {"sha256": hashlib.sha256(canonical_json_bytes(binding) + b"\n").hexdigest()}
+    proposed = {**plan, "monthly_industry_history": binding, "monthly_industry_history_ref": reference}
+    if drift == "base_plan":
+        proposed["generation"] = "different"
+    elif drift == "binding":
+        binding["source_receipt_canonical_sha256"] = "a" * 64
+    elif drift == "source_receipt":
+        binding["source_receipt_canonical_sha256"] = "a" * 64
+        reference["sha256"] = hashlib.sha256(canonical_json_bytes(binding) + b"\n").hexdigest()
+    service.store.replace_plan(operation_id, proposed)
+    producer["version"] = "new"
+    service.resume(operation_id)
+    if drift is None:
+        assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+        assert pipeline.calls.count("SOURCE") == 1
+    else:
+        with pytest.raises(MonthlyReleaseConflict):
+            service.run(operation_id)
+        assert pipeline.calls.count("SOURCE") == 1
+
+
+@pytest.mark.parametrize("case", ["ok", "source_unsealed", "active_drift", "read_failure"])
+def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_path, monkeypatch, case):
+    from types import SimpleNamespace
+    from backend.services.dataset_release import monthly_industry_history as history_module
+    from backend.services.dataset_release import monthly_legacy_prefix, monthly_sector_mapping
+
+    class SourcePipeline(Pipeline):
+        def run_stage(self, **kwargs):
+            value = dict(super().run_stage(**kwargs))
+            if kwargs["stage"] == "SOURCE":
+                value["input_refs"] = [{"id": "source-inputs/attempt-1/frozen-source-bundle.json", "sha256": HEX, "size": 1}]
+                value["canonical_sha256"] = monthly_subject._digest({key: item for key, item in value.items() if key != "canonical_sha256"})
+            return value
+
+    service = _service(tmp_path, SourcePipeline(fail_once_at="SOURCE" if case == "source_unsealed" else "BUILD"))
+    operation = service.submit(_request())["operation_id"]
+    assert service.run(operation)["status"] == "FAILED"
+    source_before = service.store.read_checkpoint(operation, "SOURCE")
+    calls = []
+    class Connection:
+        def set_session(self, **kwargs):
+            calls.append(kwargs)
+        def rollback(self):
+            calls.append("rollback")
+        def close(self):
+            calls.append("close")
+    def capture(connection, **kwargs):
+        assert isinstance(connection, Connection)
+        if case == "read_failure":
+            raise ValueError("authority is unavailable")
+        payload = {"existing_authority": True}
+        return SimpleNamespace(payload=payload, sha256=monthly_subject._digest(payload))
+    monkeypatch.setattr(history_module, "capture_industry_history", capture)
+    monkeypatch.setattr(history_module.IndustryHistoryProjection, "read", lambda value: value)
+    monkeypatch.setattr(monthly_legacy_prefix, "load_legacy_prefix", lambda *args, **kwargs: object())
+    monkeypatch.setattr(monthly_sector_mapping, "load_predecessor_sector_mapping", lambda prefix: {"code_map": {}})
+    if case == "active_drift":
+        service.active_profile.write_bytes(service.active_profile.read_bytes() + b" ")
+    if case in {"source_unsealed", "active_drift"}:
+        with pytest.raises(MonthlyReleaseConflict):
+            service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection)
+        assert not calls
+    elif case == "read_failure":
+        with pytest.raises(ValueError, match="authority is unavailable"):
+            service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection)
+        assert calls[-2:] == ["rollback", "close"]
+    else:
+        value = service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection)
+        assert calls == [{"readonly": True, "isolation_level": "REPEATABLE READ", "autocommit": False}, "rollback", "close"]
+        assert service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection) == value
+        assert len(calls) == 3
+        binding = service.store.read_plan(operation)["monthly_industry_history"]
+        assert binding["database_write"] is False and binding["activation_authorized"] is False
+    assert service.store.read_checkpoint(operation, "SOURCE") == source_before
+
+
 def _adoptable_successor(
     tmp_path: Path, service: MonthlyReleaseService
 ) -> dict[str, Any]:

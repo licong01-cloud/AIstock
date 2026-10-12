@@ -1295,6 +1295,17 @@ def _validate_native_month(
             repair_inputs=invocation.build_inputs.get("monthly_repair_inputs") if component == "factor" else None)
         ledger.chunk(f"native-month-writer-QA-{component}")
     output_pins = {}
+    history_ref = factor_receipt.get("industry_history_projection_ref")
+    expected_history = invocation.plan.get("industry_history_projection_sha256")
+    if expected_history is not None or history_ref is not None:
+        from .monthly_industry_history import IndustryHistoryProjection
+        proof = invocation.cas.get_json_bounded(history_ref, max_bytes=16 * 1024 * 1024)
+        projection = IndustryHistoryProjection.read(proof["projection"])
+        if projection.sha256 != expected_history or proof.get("status") != "PASS" or proof.get("database_write") is not False:
+            raise CandidateBuildStageError("industry repair was not verified against frozen authority")
+        sector_entries = [entry for entry in factor_receipt["files"] if entry["relative_path"] == "sector_data.h5"]
+        if len(sector_entries) != 1 or proof.get("sector_row_count") != sector_entries[0]["inherited_rows"] + sector_entries[0]["month_rows"]:
+            raise CandidateBuildStageError("industry repair row count differs from physical factor tail")
     for report in reports.values():
         for path, pin in report["verified_output_files"].items():
             if path in output_pins:
@@ -1307,6 +1318,7 @@ def _validate_native_month(
         "source_bundle_sha256": common["source_bundle_sha256"], "pit_spans_sha256": pit.spans_sha256,
         "verified_output_files": output_pins, "publication_allowed": False, "safety": dict(_ZERO_SAFETY),
         "physical_month_ranges": reports["factor"]["physical_month_ranges"],
+        **({"industry_history_projection_ref": history_ref} if history_ref is not None else {}),
     })
     validation_ref = invocation.cas.put_json({
         "schema_version": "aistock_monthly_native_candidate_validation_v1", "status": "PASS",
