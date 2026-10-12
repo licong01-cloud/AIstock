@@ -225,29 +225,29 @@
     "dev_final_validation_sha256": "72065cdcfffbe1d216a4022feeef0a7b7ac15d109afa975dffa4e6aeb606cc2d",
     "graph_frozen_input_ready": false,
     "import_receipt_sha256": "bd532c6cdd735c4cda654e9a0e84daac0b5beb337955c43188337bb413054d05",
+    "production_always_enabled_trigger_count": 7,
     "production_apply": "single_atomic_commit_passed",
     "production_authorization": "user_authorized_exact_prior_presented_target_migration_and_import",
     "production_authorization_receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-production-history-20261013-v1/production_authorization.json",
+    "production_compatibility_rows_changed": 0,
     "production_database_write": true,
-    "production_target": "aistock:5432",
     "production_import_sql": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-history-preservation-20261013-v2/import_sw_industry_history.sql",
     "production_import_sql_sha256": "9741c82023aab1d41a2d98cbf45e5e510bf29d83603bb9ec355532ff40e02063",
     "production_migration": "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
     "production_migration_sha256": "d44bfb462707bc07fec80964b40bc7a421c7467d6df4085e81219a719ea4a307",
     "production_readback": "fresh_readonly_exact_DEV_payload_hash_match_20_coverage_groups_PASS_original_member_classify_unchanged",
     "production_readback_sha256": "29b42c1290509337f8504cd4e4d7a4dc2304342b14596477ea126912e9380ec8",
-    "production_always_enabled_trigger_count": 7,
-    "production_compatibility_rows_changed": 0,
     "production_table_row_counts": {
+      "sw_industry_classification_history_v1": 10911,
       "sw_industry_source_fact_v1": 39405,
-      "sw_industry_taxonomy_history_v1": 870,
-      "sw_industry_classification_history_v1": 10911
+      "sw_industry_taxonomy_history_v1": 870
     },
     "production_tables": [
       "market.sw_industry_source_fact_v1",
       "market.sw_industry_taxonomy_history_v1",
       "market.sw_industry_classification_history_v1"
     ],
+    "production_target": "aistock:5432",
     "profile_write": false,
     "related_bug": "BUG-1843",
     "resolved_interval_rows": 10911,
@@ -285,7 +285,7 @@
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5913",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "verified",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -356,7 +356,8 @@
     "source_event_id": "FE-20261012-47381952b63e"
   },
   "validation_evidence": [
-    "PR #5913 exact head f2a4a5a40f7f531ff58ce95d697be2e68767f958 CI verdict SUCCESS; three recorded reviews PASS; DEV backup restore twice PASS; DEV preservation 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS"
+    "PR #5913 exact head f2a4a5a40f7f531ff58ce95d697be2e68767f958 CI verdict SUCCESS; three recorded reviews PASS; DEV backup restore twice PASS; DEV preservation 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS",
+    "Production aistock:5432 authorized exact migration/import committed; independent readonly readback 29b42c1290509337f8504cd4e4d7a4dc2304342b14596477ea126912e9380ec8 PASS: 32980 source / 870 taxonomy / 10911 intervals exact DEV matches, 7 ALWAYS triggers, 20 groups PASS, compatibility and profile unchanged; runtime restart pending user"
   ],
   "verification_budget": {
     "budget": "standard",
