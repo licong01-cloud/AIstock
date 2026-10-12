@@ -1,0 +1,426 @@
+{
+  "actual": "Fresh per-tick ledgers lose _order_fee_state and charge each subsequent fill independently.",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "backend/services/trading_core/ledger.py",
+    "backend/services/simulation_execution/localsim/runtime.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/trading_core/test_ledger.py",
+    "backend/tests/simulation_execution/test_localsim_runtime.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20261012_BUG-1850-localsim.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1850",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-12T17:52:02.804275Z",
+  "description": "Fresh per-tick ledgers lose _order_fee_state and charge each subsequent fill independently.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261012-78c5ed11078e",
+      "timestamp": "2026-10-12T17:52:02.804253Z"
+    },
+    {
+      "action": "scope_expanded_for_direct_fee_test_ci_coverage",
+      "actor": "codex",
+      "note": "Added noxfile.py before editing: paper_v2_backend omitted the directly changed ledger tests; include the existing test file in CI."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Restore cumulative parent-order fee state from exact run fill/cash facts before resumed execution; charge only the incremental cumulative fee without changing cash or replaying fills.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/trading_core/ledger.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/tests/trading_core/test_ledger.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "noxfile.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/trading_core/ledger.py",
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/services/paper_trading_v2/repository.py",
+        "backend/tests/trading_core/test_ledger.py",
+        "backend/tests/simulation_execution/test_localsim_runtime.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "selection_center",
+        "strategy_package",
+        "simulation.layer_foundation"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/trading_core/ledger.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/simulation_execution/localsim/runtime.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/paper_trading_v2/repository.py",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "backend/tests/trading_core/test_ledger.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_trading_core_remaining_tests"
+        },
+        {
+          "file": "backend/tests/simulation_execution/test_localsim_runtime.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/trading_core/ledger.py",
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/services/paper_trading_v2/repository.py",
+        "backend/tests/trading_core/test_ledger.py",
+        "backend/tests/simulation_execution/test_localsim_runtime.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/trading_core/ledger.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/tests/trading_core/test_ledger.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/trading_core/ledger.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/tests/trading_core/test_ledger.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ]
+  },
+  "first_seen_at": "2026-10-12T17:52:02.804275Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5915,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5915",
+  "last_seen_at": "2026-10-12T17:52:02.804275Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "Compare 2026-09-14..2026-10-12 cash ledger against per-fill and per-order fee formulas; restart LocalSIM between small TWAP fills.",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "simulation_core_l2",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh pytest process loaded tracked task-worktree source; final direct invariant matrix 29 passed. Existing DEV readonly SQL query passed with 96 rows. Production readonly history reconstruction passed all 15 runs / 1368 parent orders. No production process control."
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "database_readback_ref": "not_required",
+    "runtime_identity_match": "pending"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM分钟恢复遗漏累计手续费导致拆单重复触发最低收费",
+  "trigger_condition": {
+    "fingerprint": "78c5ed11078e3166fe277e1d",
+    "source_event_id": "FE-20261012-78c5ed11078e"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "platform_api",
+        "simulation_core",
+        "paper_v2"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "simulation_core_l2",
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "platform_api",
+          "simulation_core",
+          "paper_v2"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "simulation_core_l2",
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "monthly_fee_audit": {
+    "period_start": "2026-09-14",
+    "period_end": "2026-10-12",
+    "ledger_scope_id": "paper_b26d2312d986441f8497f7484c05f0ec",
+    "trading_days": 15,
+    "parent_orders_with_fills": 1364,
+    "fills": 4237,
+    "fills_triggering_minimum": 22,
+    "parent_orders_affected": 20,
+    "buy_floor_fills": 21,
+    "sell_floor_fills": 1,
+    "parent_orders_requiring_model_minimum": 0,
+    "actual_fees_yuan": "495535.44",
+    "cumulative_parent_model_fees_yuan": "495487.67",
+    "minimum_floor_extra_yuan": "47.58",
+    "per_fill_rounding_difference_yuan": "0.19",
+    "total_fee_difference_yuan": "47.77",
+    "all_fills_match_per_fill_formula": true,
+    "history_rewritten": false,
+    "rate_model": {
+      "BUY": "0.000095",
+      "SELL": "0.000595",
+      "minimum_yuan": "5"
+    },
+    "sell_fee_note": "SELL is a combined cost rate; this audit does not identify it as pure commission."
+  },
+  "validation_evidence": [
+    "Before fix: two direct reproductions failed; resumed small parent order charged 15.00 instead of 5.00.",
+    "Final direct invariant matrix: 29 passed, covering restored fees, malformed history, buy/sell, streaming resume, EOD valuation and projection recovery.",
+    "Existing DEV readonly repository query: 96 joined facts; field contract and empty scope passed. No DDL/DML.",
+    "Monthly production readonly reconstruction: all 15 runs and 1368 parent orders passed quantity, identity and fill/cash notional closure. No data mutation.",
+    "Changed-file Ruff and git diff --check passed."
+  ],
+  "review_rounds": [
+    {
+      "round": 1,
+      "result": "fixed_then_passed",
+      "focus": "Exact monthly ledger formula and resumed small-order reproducer",
+      "change": "Restore parent notional and actual charged fee; reject active filled-order restore without fee history."
+    },
+    {
+      "round": 2,
+      "result": "fixed_then_passed",
+      "focus": "Committed history closure, duplicate/missing/conflicting facts, historical charge handling, CI test coverage",
+      "change": "Validate fill/cash identities, money and filled quantity; reject duplicate order identities; include changed ledger tests in existing CI session."
+    },
+    {
+      "round": 3,
+      "result": "passed",
+      "focus": "Direct final invariant matrix and real readonly DB readback",
+      "evidence": "29 direct cases passed; existing DEV query 96 rows; all monthly production 15 runs / 1368 orders reconstruct without mutation."
+    }
+  ],
+  "design_compliance_review": [
+    {
+      "item": 1,
+      "result": "passed",
+      "evidence": "Persistent implementation spans production and in-memory repository, scheduler restore, broker and ledger; real monthly SQL readback and direct resume regression pass."
+    },
+    {
+      "item": 2,
+      "result": "passed",
+      "evidence": "Missing, duplicated or conflicting fee history raises typed errors; no zero-fee fallback."
+    },
+    {
+      "item": 3,
+      "result": "passed",
+      "evidence": "Existing fee rates, TWAP policy, lot/volume limits and past cash/position records remain unchanged; only restoration of already-approved per-order fee semantics."
+    },
+    {
+      "item": 4,
+      "result": "passed",
+      "evidence": "Existing workflow and CI plans used; no new approval or runtime service control."
+    }
+  ]
+}
