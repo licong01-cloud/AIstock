@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from scripts import dr_snapshot_prod_db as snapshot
 
@@ -71,7 +74,8 @@ def test_custom_format_pg_dump_does_not_use_parallel_jobs(monkeypatch, tmp_path:
     assert not any(arg.startswith("--jobs=") for arg in calls[0])
 
 
-def test_validate_dump_streams_local_file_to_pg_restore(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("result", ["valid", "empty", "restore_failed"])
+def test_validate_dump_streams_local_file_to_pg_restore(monkeypatch, tmp_path: Path, result: str) -> None:
     dump_path = tmp_path / "aistock_pg_20260603.dump"
     dump_path.write_bytes(b"x" * snapshot.MIN_EXPECTED_DUMP_BYTES)
     plan = snapshot.SnapshotPlan(
@@ -83,29 +87,38 @@ def test_validate_dump_streams_local_file_to_pg_restore(monkeypatch, tmp_path: P
         is_permanent=False,
         snapshot_date=dt.date(2026, 6, 3),
     )
-    subprocess_calls: list[tuple[list[str], bytes | None]] = []
+    subprocess_calls: list[tuple[list[str], Path]] = []
+    streams = []
 
     def _forbid_bare_restore(*args, **kwargs):  # noqa: ANN002, ANN003
         raise AssertionError("validate_dump should stream the dump file directly to pg_restore")
 
     class _Proc:
-        stdout = b"; table data\n123; 0 0 TABLE DATA public example postgres\n"
+        stdout = b"123; 0 0 TABLE DATA public example postgres\n" if result == "valid" else b""
 
-    def _fake_subprocess_run(cmd, *, input=None, capture_output=False, check=False):  # noqa: ANN001
-        subprocess_calls.append((list(cmd), input))
+    def _fake_subprocess_run(cmd, *, stdin, capture_output=False, check=False):  # noqa: ANN001
+        assert not stdin.closed
+        streams.append(stdin)
+        subprocess_calls.append((list(cmd), Path(stdin.name)))
         assert capture_output is True
         assert check is True
+        if result == "restore_failed":
+            raise subprocess.CalledProcessError(1, cmd)
         return _Proc()
 
     monkeypatch.setattr(snapshot, "run", _forbid_bare_restore)
     monkeypatch.setattr(snapshot.subprocess, "run", _fake_subprocess_run)
 
-    summary = snapshot.validate_dump(plan)
-
-    assert summary["table_data_entries"] == 1
+    if result == "valid":
+        assert snapshot.validate_dump(plan)["table_data_entries"] == 1
+    else:
+        error = SystemExit if result == "empty" else subprocess.CalledProcessError
+        with pytest.raises(error):
+            snapshot.validate_dump(plan)
+    assert streams[0].closed
     assert subprocess_calls == [
         (
             ["docker", "exec", "-i", "timescaledb", "pg_restore", "--list"],
-            b"x" * snapshot.MIN_EXPECTED_DUMP_BYTES,
+            dump_path,
         )
     ]
