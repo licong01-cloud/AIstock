@@ -445,7 +445,7 @@ class LocalSimPersistenceCoordinator:
             )
         )
         needs_recovery = failed_projection_recovery or (
-            run.status == type(run.status).INTRADAY_RUNNING and valuation_pending
+            run.status in {type(run.status).INTRADAY_RUNNING, type(run.status).FAILED_TERMINAL} and valuation_pending
         )
         if not needs_recovery:
             return None
@@ -470,6 +470,9 @@ class LocalSimPersistenceCoordinator:
         )
         paper_repository = self._paper_repository_for(binding=binding, run=run, context=context)
         if valuation_pending:
+            binder = getattr(context.local_broker, "bind_execution_plan", None)
+            if callable(binder):
+                binder(plan=plan, as_of_time=self._normalize_time(as_of_time))
             self._readback_pending_economic_generation(
                 binding=binding,
                 run=run,
@@ -958,6 +961,7 @@ class LocalSimPersistenceCoordinator:
                 "execution_state_count": len(states),
                 "active_state_count": len(active_states),
                 "residual_state_count": len(residual_states),
+                "market_residual_state_count": len(contract["market_residual_states"]),
                 "failed_terminal_state_count": len(failed_terminal_states),
             },
             "economic_hash": economic_hash,
@@ -1151,6 +1155,7 @@ class LocalSimPersistenceCoordinator:
         run: Any,
         execution: Any,
         context: Any,
+        valuation_refresh: bool = False,
     ) -> LocalSimPersistenceResult | None:
         if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM or execution.status != "SUBMITTED":
             return None
@@ -1188,7 +1193,9 @@ class LocalSimPersistenceCoordinator:
                             "plan_id": execution.execution_plan.plan_id,
                         },
                     )
-                raw_snapshot = exporter(handles=tuple(getattr(execution.broker_result, "handles", ()) or ()))
+                raw_snapshot = exporter(
+                    handles=None if valuation_refresh else tuple(getattr(execution.broker_result, "handles", ()) or ())
+                )
                 execution_states = tuple(raw_snapshot.get("execution_states") or ())
                 self._validate_execution_states(
                     binding=binding,
@@ -1217,6 +1224,7 @@ class LocalSimPersistenceCoordinator:
             }
             if (
                 execution_states
+                and not valuation_refresh
                 and not fills
                 and not events
                 and not cash_entries
@@ -1259,6 +1267,8 @@ class LocalSimPersistenceCoordinator:
                 local_broker=context.local_broker,
                 market_data_source=context.market_data_source,
             )
+            if valuation_refresh:
+                snapshot_time = context.local_broker.scheduler_as_of_time
             cash = float(getattr(account, "cash")) if account is not None else self._cash_after(cash_entries, context)
             historical_residual = (
                 self._historical_residual_payload(run=run, orders=orders) if not execution_states else None
@@ -1282,6 +1292,11 @@ class LocalSimPersistenceCoordinator:
             final_paper_status = contract["final_paper_status"]
             final_status = contract["final_status"]
             persistence_status = contract["persistence_status"]
+            if valuation_refresh and final_status != run.status:
+                raise DataUnavailableError(
+                    "LocalSim valuation refresh cannot change the execution outcome",
+                    context={"reason_code": "LOCALSIM_CLOSE_VALUATION_STATUS_CONFLICT", "run_id": run.run_id},
+                )
             try:
                 marks, mark_records = self._position_marks(
                     positions=positions,
@@ -1290,6 +1305,10 @@ class LocalSimPersistenceCoordinator:
                     snapshot_time=snapshot_time,
                 )
             except (DataUnavailableError, BrokerConnectivityError) as exc:
+                if valuation_refresh:
+                    # A close-mark gap cannot reopen an already terminal run or
+                    # replace its committed projection with an unmarked one.
+                    raise
                 if not self._mark_failure_allows_pending(exc):
                     raise
                 return self._persist_valuation_pending(
@@ -1344,6 +1363,12 @@ class LocalSimPersistenceCoordinator:
                 "failed_intents": 0,
                 "last_stage": "LOCAL_SIM_ECONOMIC_COMMITTED",
             }
+            if valuation_refresh:
+                payload_patch["local_sim_close_valuation_v1"] = {
+                    "schema_version": "local_sim_close_valuation_v1",
+                    "snapshot_time": snapshot_time.isoformat(),
+                    "parent_resubmitted": False,
+                }
             if execution_states:
                 payload_patch["local_sim_durable_minute_loop"] = {
                     "schema_version": "local_sim_durable_minute_loop_v1",
@@ -1359,6 +1384,8 @@ class LocalSimPersistenceCoordinator:
                         if historical_residual and int(historical_residual.get("schedule_residual_count") or 0) == 0
                         else "historical_execution_schedule_residual"
                         if historical_residual
+                        else "market_constraints_at_close"
+                        if contract["market_residual_states"] and not terminal_failure
                         else "execution_schedule_residual_at_close"
                     ),
                     "status": final_status.value,
@@ -1368,6 +1395,12 @@ class LocalSimPersistenceCoordinator:
                     "prepared_intent_count": int((historical_residual or {}).get("prepared_intent_count") or 0),
                     "residual_orders": list((historical_residual or {}).get("residual_orders") or []),
                     "residual_state_ids": [state.state_id for state in residual_states],
+                    "market_residual_state_count": len(contract["market_residual_states"]),
+                    "residual_states": [
+                        {"state_id": state.state_id, "symbol": state.symbol, "side": state.side.value,
+                         "remaining_quantity": state.remaining_quantity, "classification": state.residual_classification,
+                         "context": state.waiting_context} for state in residual_states
+                    ],
                     "terminalized_at": datetime.now(UTC).isoformat(),
                 }
             if failed_terminal_states:
@@ -1501,6 +1534,8 @@ class LocalSimPersistenceCoordinator:
                 performance_payload=performance_payload,
             )
         except Exception as exc:
+            if valuation_refresh and not economic_commit_staged:
+                raise
             explicit_failure_context = dict(getattr(exc, "context", None) or {})
             economic_commit_staged = economic_commit_staged or bool(
                 explicit_failure_context.get("economic_commit_staged")

@@ -22,6 +22,8 @@ from backend.services.simulation_runtime.localsim_runtime_profile_repository imp
     InMemoryLocalSimRuntimeProfileRepository,
 )
 from backend.services.simulation_runtime.successor_repository import InMemoryLocalSimSuccessorRepository
+from backend.services.simulation_runtime.successor_models import SimulationLedgerScopeV1
+from backend.services.simulation_runtime.models import canonical_json_sha256
 from backend.services.strategy_package.execution_policy import ValidatedExecutionPolicy
 from backend.services.trading_core.errors import InvalidStateTransitionError
 
@@ -295,6 +297,29 @@ def test_product_router_exposes_only_successor_commands_and_stable_cursor_querie
     assert response.status_code == 200
     assert response.json()["schema_version"] == "localsim_control_response_v1"
     assert response.json()["account"]["package_id"] == "pkg_alpha"
+    account_id = response.json()["account"]["account_id"]
+    native_detail = client.get(f"/api/v1/simulation-runtime/localsim/accounts/{account_id}")
+    assert native_detail.status_code == 200
+    assert native_detail.json()["ledger_scope"]["ledger_scope_id"] == account_id
+
+    # A retained successor resolves its scope through lineage, not account_id.
+    native_scope = repository.resolve_ledger_scope_for_account(account_id)
+    legacy_identity = {
+        "schema_version": "simulation_ledger_scope_v1", "ledger_scope_id": "legacy_portfolio",
+        "scope_kind": "LEGACY_PORTFOLIO", "source_identity": "legacy_portfolio", "native_account_id": None,
+    }
+    legacy_scope = SimulationLedgerScopeV1(
+        **legacy_identity, ledger_scope_hash=canonical_json_sha256(legacy_identity),
+        created_by=native_scope.created_by, created_at=native_scope.created_at,
+    )
+    original_resolver = repository.resolve_ledger_scope_for_account
+    repository.resolve_ledger_scope_for_account = lambda requested: (
+        legacy_scope
+        if requested == account_id else original_resolver(requested)
+    )
+    retained_detail = client.get(f"/api/v1/simulation-runtime/localsim/accounts/{account_id}")
+    assert retained_detail.status_code == 200
+    assert retained_detail.json()["ledger_scope"]["ledger_scope_id"] == "legacy_portfolio"
 
     forged = _account_request().model_dump(mode="json")
     forged["manifest_sha256"] = MANIFEST
