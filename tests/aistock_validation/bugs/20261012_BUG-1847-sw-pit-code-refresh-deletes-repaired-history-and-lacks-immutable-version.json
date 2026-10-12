@@ -36,16 +36,16 @@
   "expected": "History and original source facts survive partial daily refresh; explicit Y/N provider history with version-qualified immutable retention and controlled DEV import.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261012_BUG-1847-sw-pit-code-refresh-deletes-repaired-history-and-lacks-immutable-version.json",
-      "backend/services/tushare_dataset_specs.py",
-      "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py",
-      "noxfile.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
       "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
       "backend/services/sw_industry_history_store.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
       "backend/tests/test_sw_industry_history_store.py",
-      "scripts/import_sw_industry_history.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/import_sw_industry_history.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1847-sw-pit-code-refresh-deletes-repaired-history-and-lacks-immutable-version.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
       "backend/services/sw_industry_history_store.py",
@@ -54,16 +54,16 @@
       "scripts/import_sw_industry_history.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261012_BUG-1847-sw-pit-code-refresh-deletes-repaired-history-and-lacks-immutable-version.json",
-      "backend/services/tushare_dataset_specs.py",
-      "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py",
-      "noxfile.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
       "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
       "backend/services/sw_industry_history_store.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
       "backend/tests/test_sw_industry_history_store.py",
-      "scripts/import_sw_industry_history.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/import_sw_industry_history.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1847-sw-pit-code-refresh-deletes-repaired-history-and-lacks-immutable-version.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
