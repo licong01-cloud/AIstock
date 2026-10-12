@@ -1285,6 +1285,7 @@ def simulation_core_l2(session: nox.Session) -> None:
         "backend/tests/simulation_architecture",
         "backend/tests/simulation_data",
         "backend/tests/simulation_signal",
+        "backend/tests/simulation_execution",
         "-q",
         "-p",
         "no:cacheprovider",

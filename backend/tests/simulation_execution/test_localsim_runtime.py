@@ -1454,6 +1454,12 @@ def test_localsim_suspended_without_minute_bars_waits_then_terminalizes_residual
     assert terminal.runtime_status.value == "EXPIRED_WITH_RESIDUAL"
     assert terminal.terminal_reason == "MARKET_SESSION_CLOSED_SUSPENDED"
     assert terminal.residual_classification == "SUSPENDED_AT_CLOSE"
+    from backend.services.simulation_execution.localsim.projection import derive_local_sim_projection_state_contract
+    contract = derive_local_sim_projection_state_contract(
+        execution_states=(terminal,), historical_residual=None,
+        intraday_status="RUNNING", failed_status="FAILED", succeeded_status="SUCCEEDED",
+    )
+    assert contract["final_status"] == "SUCCEEDED"
     assert terminal.remaining_quantity == 100
 
 

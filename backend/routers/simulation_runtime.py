@@ -281,7 +281,9 @@ def get_localsim_account(
 ) -> LocalSimControlResponseV1:
     try:
         account = service.repository.get_account(account_id)
-        return LocalSimControlResponseV1(account=account, ledger_scope=service.repository.get_ledger_scope(account_id))
+        return LocalSimControlResponseV1(
+            account=account, ledger_scope=service.repository.resolve_ledger_scope_for_account(account_id)
+        )
     except TradingCoreError as exc:
         _raise_localsim_http(exc)
 

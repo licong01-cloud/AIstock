@@ -5,6 +5,7 @@ import math
 from typing import Any, Dict, Optional
 
 from .base_algo import BaseExecutionAlgo, OrderState, StepResult
+from .board_lot import board_lot_rule
 from .registry import register
 
 
@@ -66,6 +67,12 @@ class TWAPAlgo(BaseExecutionAlgo):
             allow_sell_residual=is_final_step and step_qty == remaining,
         )
         step_qty = min(step_qty, remaining)
+
+        # A legal BUY child must also leave a legal BUY remainder.  STAR's
+        # one-share increment otherwise permits 392 of 588, stranding 196.
+        if state.side == "BUY" and 0 < remaining - step_qty < board_lot_rule(state.symbol)[0]:
+            minimum, _ = board_lot_rule(state.symbol)
+            step_qty = self._round_lot(remaining - minimum, symbol=state.symbol, side=state.side)
 
         if step_qty <= 0:
             state.step += 1

@@ -2358,6 +2358,12 @@ class LocalSimBackend(BrokerBackend):
         payload = state.model_dump(mode="python")
         sequence = state.sequence + (1 if increment_sequence else 0)
         suspended_without_close = latest_bar_time is None or latest_bar_time.time() < time(15, 0)
+        market_blocked = (
+            state.runtime_status == LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_STATE
+            and state.waiting_reason_code in _MARKET_STATE_NO_FILL_REASONS
+            and state.last_processed_bar_time == latest_bar_time
+            and (state.side != OrderSide.BUY or state.remaining_quantity >= board_lot_rule(state.symbol)[0])
+        )
         payload.update(
             {
                 "runtime_status": LocalSimExecutionRuntimeStatus.EXPIRED_WITH_RESIDUAL,
@@ -2367,10 +2373,14 @@ class LocalSimBackend(BrokerBackend):
                     else "MARKET_SESSION_CLOSED_WITH_REMAINING_QUANTITY"
                 ),
                 "residual_classification": (
-                    "SUSPENDED_AT_CLOSE" if suspended_without_close else "SCHEDULE_RESIDUAL_AT_CLOSE"
+                    "SUSPENDED_AT_CLOSE"
+                    if suspended_without_close
+                    else "MARKET_STATE_RESIDUAL_AT_CLOSE"
+                    if market_blocked
+                    else "SCHEDULE_RESIDUAL_AT_CLOSE"
                 ),
                 "waiting_reason_code": None,
-                "waiting_context": None,
+                "waiting_context": state.waiting_context if market_blocked or suspended_without_close else None,
                 "sequence": sequence,
                 "idempotency_key": canonical_json_sha256(
                     ["localsim_state_transition_v1", state.state_id, sequence, "EXPIRED_WITH_RESIDUAL"]

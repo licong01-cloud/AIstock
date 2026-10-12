@@ -81,6 +81,27 @@ def test_minute_execution_twap_fills_order() -> None:
     assert len(events) == 3
 
 
+@pytest.mark.parametrize("quantity,volume", [(588, 10000), (401, 200), (250, 200), (601, 201)])
+def test_twap_star_buy_keeps_every_child_and_remainder_executable(quantity: int, volume: int) -> None:
+    algo = TWAPAlgo({"split_count": 3})
+    state = algo.init_order("688498.SH", "BUY", quantity)
+    results = []
+    for _ in range(6):
+        result = algo.compute_step(state, {"close": 1784.66, "volume": volume}, {})
+        if result is not None:
+            results.append(result)
+            assert 200 <= result.quantity <= volume
+            assert state.total_quantity - state.executed_quantity == 0 or state.total_quantity - state.executed_quantity >= 200
+    if quantity == 588:
+        assert [result.quantity for result in results] == [388, 200]
+        assert state.is_complete
+    # An indivisible legal tail larger than bar volume must wait, never oversize.
+    if not state.is_complete:
+        result = algo.compute_step(state, {"close": 1784.66, "volume": quantity}, {})
+        assert result is not None
+        assert state.is_complete
+
+
 def test_twap_residual_completion_reason_does_not_exceed_planned_denominator() -> None:
     algo = TWAPAlgo({"split_count": 3})
     state = algo.init_order("000001.SZ", "BUY", 600)

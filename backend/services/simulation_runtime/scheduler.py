@@ -6543,6 +6543,12 @@ class SimulationLifecycleScheduler:
                     strategy_id=strategy_id,
                     limit=limit,
                     as_of_time=as_of_time,
+                    drive_active=True,
+                )
+            )
+            terminalized.extend(
+                self._refresh_post_close_local_sim_valuations(
+                    trade_date=trade_date, strategy_id=strategy_id, limit=limit, as_of_time=as_of_time
                 )
             )
         unmatched_failure_result = self._unmatched_kernel_product_failure_result(
@@ -6559,6 +6565,72 @@ class SimulationLifecycleScheduler:
             as_of_time=as_of_time,
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
         )
+
+    def _refresh_post_close_local_sim_valuations(
+        self, *, trade_date: date, strategy_id: str | None, limit: int, as_of_time: datetime | None
+    ) -> list[dict[str, Any]]:
+        if not self._is_post_close_reconcile_time(as_of_time=as_of_time):
+            return []
+        results: list[dict[str, Any]] = []
+        for status in (SimulationDailyRunStatus.SUCCEEDED, SimulationDailyRunStatus.FAILED_TERMINAL):
+            for run in self.repository.list_simulation_daily_runs(
+                broker_backend=SimulationBrokerBackend.LOCAL_SIM, strategy_id=strategy_id, status=status, limit=limit
+            ):
+                persistence = run.run_payload_json.get("local_sim_persistence")
+                if run.trade_date != trade_date or not isinstance(persistence, dict) or not persistence.get("terminal"):
+                    continue
+                snapshot_time = persistence.get("snapshot_time")
+                if snapshot_time and self._scheduler_time(datetime.fromisoformat(snapshot_time)).time() >= time(15, 0):
+                    continue
+                result = self._run_recovery_item_isolated(
+                    stage="POST_CLOSE_LOCALSIM_VALUATION", run=run, raise_on_error=False,
+                    func=lambda run=run: self._refresh_terminal_local_sim_valuation(run=run),
+                    as_of_time=as_of_time,
+                )
+                if result is not None:
+                    results.append(result)
+                if len(results) >= limit:
+                    return results
+        return results
+
+    def _refresh_terminal_local_sim_valuation(self, *, run: SimulationDailyRun) -> dict[str, Any]:
+        plan = self.repository.get_execution_plan(run.execution_plan_id or "")
+        binding = self.repository.get_simulation_release_binding(run.binding_id)
+        release = self.repository.get_strategy_runtime_release(run.release_id)
+        close_time = datetime.combine(run.trade_date, time(15, 0), tzinfo=SCHEDULER_TZ)
+        context = self._load_existing_plan_context(
+            runtime_release=release, binding=binding, plan=plan, trade_date=run.trade_date, as_of_time=close_time
+        )
+        states = self._configure_local_sim_runtime_scope(
+            binding=binding, run=run, plan=plan, context=context, restore=True, as_of_time=close_time
+        )
+        if any(not state.is_terminal for state in states):
+            raise DataUnavailableError(
+                "LocalSim close valuation requires terminal execution states",
+                context={"reason_code": "LOCALSIM_CLOSE_VALUATION_ACTIVE_STATE", "run_id": run.run_id},
+            )
+        raw = context.local_broker.export_execution_snapshot()
+        snapshot = LocalSimExecutionSnapshot(
+            orders=tuple(raw["orders"]), fills=(), events=(), cash_entries=(),
+            positions=dict(raw["positions"]), account=raw["account"], handle_statuses=tuple(raw["handle_statuses"]),
+        )
+        self._local_sim_existing_projection_result(
+            run_id=run.run_id,
+            observed_positions=snapshot.positions, observed_account=snapshot.account,
+        )
+        execution = SimulationExecutionResult(
+            run=run, execution_plan=plan, broker_backend=binding.broker_backend, status="SUBMITTED",
+            intent_count=len(plan.intents), broker_result=LocalSimPlanSubmitResult(
+                order_intents=(), handles=(),
+                execution_snapshot=snapshot,
+            ),
+        )
+        self._local_sim_persistence_coordinator().persist_execution_result(
+            binding=binding, run=run, execution=execution, context=context, valuation_refresh=True
+        )
+        latest = self.repository.get_simulation_daily_run(run.run_id)
+        return {"run_id": run.run_id, "trade_date": run.trade_date.isoformat(), "status": latest.status.value,
+                "close_valuation_refreshed": latest.status == run.status, "parent_resubmitted": False}
 
     def _ensure_lifecycle_trading_day(self, *, trade_date: date) -> None:
         service = self.trading_calendar_service
@@ -7624,6 +7696,7 @@ class SimulationLifecycleScheduler:
         limit: int,
         as_of_time: datetime | None,
         raise_on_error: bool = False,
+        drive_active: bool = False,
     ) -> list[dict[str, Any]]:
         if not self._is_post_close_reconcile_time(as_of_time=as_of_time):
             return []
@@ -7648,6 +7721,7 @@ class SimulationLifecycleScheduler:
                     func=lambda run=run: self._post_close_terminalize_localsim_run(
                         run=run,
                         as_of_time=as_of_time,
+                        drive_active=drive_active,
                     ),
                     as_of_time=as_of_time,
                 )
@@ -7664,7 +7738,30 @@ class SimulationLifecycleScheduler:
         run: SimulationDailyRun,
         as_of_time: datetime | None,
         historical_recovery_evidence: dict[str, Any] | None = None,
+        drive_active: bool = False,
     ) -> dict[str, Any] | None:
+        persistence = run.run_payload_json.get("local_sim_persistence")
+        if isinstance(persistence, dict) and persistence.get("status") == "INTRADAY_VALUATION_PENDING":
+            plan = self.repository.get_execution_plan(run.execution_plan_id or "")
+            binding = self.repository.get_simulation_release_binding(run.binding_id)
+            release = self.repository.get_strategy_runtime_release(run.release_id)
+            self._recover_pending_local_sim_projection_if_needed(
+                binding=binding, run=run, plan=plan, runtime_release=release, trade_date=run.trade_date,
+                data_source=MinuteDataSource.TDX_REALTIME.value, as_of_time=as_of_time,
+            )
+            run = self.repository.get_simulation_daily_run(run.run_id)
+            persistence = run.run_payload_json.get("local_sim_persistence")
+            if isinstance(persistence, dict) and persistence.get("status") == "INTRADAY_VALUATION_PENDING":
+                return None
+        if drive_active and run.status == SimulationDailyRunStatus.INTRADAY_RUNNING and isinstance(persistence, dict) and persistence.get("terminal") is False:
+            plan = self.repository.get_execution_plan(run.execution_plan_id or "")
+            binding = self.repository.get_simulation_release_binding(run.binding_id)
+            release = self.repository.get_strategy_runtime_release(run.release_id)
+            self._drive_existing_local_sim(
+                binding=binding, run=run, plan=plan, runtime_release=release,
+                trade_date=run.trade_date, data_source=MinuteDataSource.TDX_REALTIME.value, as_of_time=as_of_time,
+            )
+            run = self.repository.get_simulation_daily_run(run.run_id)
         self._validate_local_sim_post_close_state_closure(run)
         terminal_status, reason, reason_code, audit_state = self._localsim_post_close_terminal_status(run)
         if terminal_status is None:
@@ -7805,7 +7902,7 @@ class SimulationLifecycleScheduler:
             # exchange time before this summary-level terminalizer can decide
             # the run status.
             return None, None, None, None
-        if persistence_status == "PERSISTED":
+        if persistence_status in {"PERSISTED", "PERSISTED_WITH_MARKET_RESIDUAL"}:
             return (
                 SimulationDailyRunStatus.SUCCEEDED,
                 "localsim_post_close_persisted_success",
@@ -12490,6 +12587,17 @@ class SimulationLifecycleScheduler:
                             "expected_provenance": expected_provenance.value,
                             "actual_provenance": record.provenance.value,
                         },
+                    )
+                if (
+                    not historical_terminalization
+                    and snapshot_time.time() >= time(15, 0)
+                    and SimulationLifecycleScheduler._scheduler_time(record.as_of_time).time() != time(15, 0)
+                ):
+                    raise DataUnavailableError(
+                        "LocalSim close valuation requires the closing minute for every non-suspended holding",
+                        context={"reason_code": "LOCALSIM_MARK_PRICE_MISSING", "symbol": symbol,
+                                 "mark_as_of_time": record.as_of_time.isoformat(),
+                                 "snapshot_time": snapshot_time.isoformat()},
                     )
             accepted[symbol] = float(record.price)
             records[symbol] = record
