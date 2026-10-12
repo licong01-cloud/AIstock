@@ -63,7 +63,10 @@ class _ProductAuthority:
             profile_version_id="profile_version_1",
             config_sha256="b" * 64,
             daily_strategy_profile_version_id="daily_1",
-            config_json={"daily_strategy": {"kind": "package_default"}},
+            config_json={
+                "daily_strategy": {"strategy_id": "score_weighted_topk_v2", "strategy_version": "v2", "top_k": 20},
+                "hmm": {"enabled": False}, "risk_policy": {"enabled": False}, "fee_policy": {},
+            },
         )
         execution = SimpleNamespace(
             policy_id=self._policy["policy_version_id"],
