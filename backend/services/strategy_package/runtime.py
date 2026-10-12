@@ -593,7 +593,7 @@ class TargetPositionEngine:
         current_positions: dict[str, PositionLot],
         current_prices: dict[str, float],
     ) -> list[TargetPosition]:
-        contract = build_backtest_runtime_contract(manifest)
+        contract = build_backtest_runtime_contract(manifest, snapshot.runtime_config)
         strategy = contract["portfolio_strategy"]
         family = strategy["strategy_family"]
         if family not in {"score_weighted_topk_v1", *SCORE_WEIGHTED_V2_LIKE_FAMILIES}:

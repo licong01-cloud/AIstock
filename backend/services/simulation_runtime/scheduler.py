@@ -20,7 +20,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from enum import Enum
 from typing import Any, Mapping, Protocol
 import psycopg2.extras
@@ -445,6 +445,7 @@ class ProductionSimulationRunContextProvider:
         position_loader: Callable[[str, date], dict[str, PositionLot]] | None = None,
         price_loader: Callable[[list[str], date], dict[str, float]] | None = None,
         paper_repository_factory: Callable[[], Any] | None = None,
+        localsim_repository_factory: Callable[[], Any] | None = None,
         qmt_repository_factory: Callable[[], Any] | None = None,
         qmt_client_factory: Callable[[], Any] | None = None,
         qmt_calendar_provider_factory: Callable[[], Any] | None = None,
@@ -464,6 +465,7 @@ class ProductionSimulationRunContextProvider:
         self._position_loader = position_loader
         self._price_loader = price_loader or _default_price_loader
         self._paper_repository_factory = paper_repository_factory or _default_paper_repository_factory
+        self._localsim_repository_factory = localsim_repository_factory
         self._qmt_repository_factory = qmt_repository_factory or _default_qmt_repository_factory
         self._qmt_client_factory = qmt_client_factory or _default_qmt_client_factory
         self._qmt_calendar_provider_factory = qmt_calendar_provider_factory or _default_qmt_calendar_provider
@@ -714,7 +716,25 @@ class ProductionSimulationRunContextProvider:
             trade_date=trade_date,
         )
         try:
-            portfolio = paper_repository.get_portfolio(portfolio_id)
+            from .localsim_native_context import is_native_account_binding, load_native_account_context
+
+            if is_native_account_binding(binding):
+                from .successor_repository import LocalSimSuccessorRepository
+
+                successor_repository = (
+                    self._localsim_repository_factory()
+                    if self._localsim_repository_factory is not None
+                    else LocalSimSuccessorRepository()
+                )
+                portfolio = load_native_account_context(
+                    binding=binding,
+                    release=runtime_release,
+                    repository=successor_repository,
+                    manifest_loader=self._package_manifest_loader,
+                )
+                portfolio_id = portfolio.ledger_scope_id
+            else:
+                portfolio = paper_repository.get_portfolio(portfolio_id)
             positions = (
                 self._load_positions_with_injected_loader(binding.strategy_id, trade_date)
                 if self._position_loader is not None
@@ -816,6 +836,9 @@ class ProductionSimulationRunContextProvider:
             portfolio_id=portfolio_id,
             manifest=manifest,
             execution_policy_payload=effective_execution_policy_payload,
+            top_k=getattr(getattr(portfolio, "profile", None), "daily_strategy", None).top_k
+            if getattr(portfolio, "profile", None) is not None
+            else None,
             local_broker=local_broker,
             paper_repository=paper_repository,
             cash=cash,
@@ -824,6 +847,9 @@ class ProductionSimulationRunContextProvider:
             context_diagnostics={
                 "manifest_identity": manifest_identity_diagnostics,
                 "localsim_tplus1_settlement": settlement_diagnostics,
+                "localsim_state_authority": "simulation_account_v1"
+                if getattr(portfolio, "profile", None) is not None
+                else "paper_v2_portfolio",
                 "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
                 "target_equity_basis": target_equity_context,
             },
@@ -1489,6 +1515,7 @@ class ProductionSimulationRunContextProvider:
             )
         try:
             from backend.services.simulation_execution.localsim import LocalSimBackend
+            from .localsim_native_context import LocalSimNativeAccountContext, fee_model_from_localsim_profile
 
             data_source = self._resolve_local_sim_market_data_source(
                 portfolio=portfolio,
@@ -1505,6 +1532,9 @@ class ProductionSimulationRunContextProvider:
                 execution_policy=execution_policy,
                 package_id=binding.package_id,
                 scheduler_as_of_time=as_of_time,
+                fee_model=fee_model_from_localsim_profile(portfolio.profile)
+                if isinstance(portfolio, LocalSimNativeAccountContext)
+                else None,
             )
         except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
@@ -1531,7 +1561,14 @@ class ProductionSimulationRunContextProvider:
         data_source = getattr(portfolio, "data_source", MinuteDataSource.DB_HISTORICAL)
         if not isinstance(data_source, MinuteDataSource):
             data_source = MinuteDataSource(str(data_source))
-        current_trade_date = scheduler_time(as_of_time).date() if as_of_time is not None else date.today()
+        from .localsim_native_context import LocalSimNativeAccountContext
+
+        # Replay's as_of_time is a causal cursor, not today's source authority.
+        current_trade_date = (
+            date.today()
+            if isinstance(portfolio, LocalSimNativeAccountContext)
+            else scheduler_time(as_of_time).date() if as_of_time is not None else date.today()
+        )
         if trade_date == current_trade_date:
             return MinuteDataSource.TDX_REALTIME
         return data_source
@@ -14498,6 +14535,9 @@ class SimulationLifecycleScheduler:
                 },
             )
         binder(plan=plan, as_of_time=scheduler_time(as_of_time))
+        fee_history = self._local_sim_order_fee_history(
+            run_id=run.run_id, orders=persisted_orders, paper_repository=paper_repository,
+        )
         for intent in plan.intents:
             intent_id = intent.intent_id
             state = by_intent[intent_id]
@@ -14513,8 +14553,73 @@ class SimulationLifecycleScheduler:
                         "binding_id": binding.binding_id,
                     },
                 )
-            restorer(order=orders[intent_id], state=state)
+            order = orders[intent_id]
+            notional, fee = fee_history[order.order_id]
+            restorer(
+                order=order, state=state,
+                cumulative_notional=notional if order.filled_quantity else None,
+                charged_fee=fee if order.filled_quantity else None,
+            )
         return states
+
+    @staticmethod
+    def _local_sim_order_fee_history(
+        *, run_id: str, orders: tuple[Any, ...], paper_repository: Any,
+    ) -> dict[str, tuple[Decimal, Decimal]]:
+        """Rebuild only fee accumulators from the already committed cash prefix."""
+        reader = getattr(paper_repository, "list_order_fee_facts_for_run", None)
+        if not callable(reader):
+            raise RuntimeConfigInvalidError(
+                "LocalSim repository cannot read actual order fee history",
+                context={"reason_code": "LOCALSIM_ORDER_FEE_HISTORY_READER_MISSING", "run_id": run_id},
+            )
+        by_order = {order.order_id: order for order in orders}
+        if len(by_order) != len(orders):
+            raise DataUnavailableError(
+                "LocalSim fee history requires unique parent order identities",
+                context={"reason_code": "LOCALSIM_ORDER_FEE_HISTORY_INVALID", "run_id": run_id},
+            )
+        quantities = {order_id: 0 for order_id in by_order}
+        history = {order_id: (Decimal(0), Decimal(0)) for order_id in by_order}
+        seen: set[str] = set()
+        try:
+            for row in reader(run_id):
+                order_id = row["order_id"]
+                order = by_order.get(order_id)
+                fill_id = row["fill_id"]
+                if (
+                    order is None or not fill_id or fill_id in seen
+                    or row["run_id"] != run_id or row["cash_run_id"] != run_id
+                    or row["portfolio_id"] != order.portfolio_id
+                    or row["symbol"] != order.symbol or row["cash_symbol"] != order.symbol
+                    or row["side"] != order.side.value or row["cash_side"] != order.side.value
+                ):
+                    raise ValueError("fill/cash identity is missing, duplicated or conflicting")
+                quantity = row["quantity"]
+                price = Decimal(str(row["price"]))
+                notional = Decimal(str(row["notional"]))
+                fee = Decimal(str(row["fee"]))
+                if (
+                    isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0
+                    or not price.is_finite() or price <= 0
+                    or not notional.is_finite() or notional <= 0
+                    or not fee.is_finite() or fee < 0
+                    or notional != (quantity * price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    or fee != fee.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                ):
+                    raise ValueError("fill/cash money or quantity is invalid")
+                seen.add(fill_id)
+                quantities[order_id] += quantity
+                old_notional, old_fee = history[order_id]
+                history[order_id] = old_notional + notional, old_fee + fee
+            if any(quantities[order.order_id] != order.filled_quantity for order in orders):
+                raise ValueError("fee history quantity does not close over persisted orders")
+        except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            raise DataUnavailableError(
+                "LocalSim committed order fee history is incomplete or conflicting",
+                context={"reason_code": "LOCALSIM_ORDER_FEE_HISTORY_INVALID", "run_id": run_id, "detail": str(exc)},
+            ) from exc
+        return history
 
     def _submit_execution_plan_with_timeout(
         self,

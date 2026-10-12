@@ -1249,6 +1249,10 @@ rules:
       - backend/services/tushare_sync_engine.py
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
+      - backend/services/sw_industry_history_store.py
+      - backend/db/migrations/add_sw_industry_history_preservation_v1.sql
+      - scripts/import_sw_industry_history.py
+      - backend/tests/test_sw_industry_history_store.py
       - backend/db/init_tushare_schedules.py
       - backend/db/migrations/add_etf_share_sources_20260923.sql
       - backend/db/migrations/add_etf_share_sources_20260923.rollback.sql
