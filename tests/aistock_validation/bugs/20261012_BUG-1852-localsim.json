@@ -1,0 +1,309 @@
+{
+  "actual": "新账户运行路径依赖不存在的旧Paper portfolio，冻结profile未被选股链路消费。",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/localsim_control.py",
+    "noxfile.py",
+    "backend/services/simulation_runtime/localsim_native_context.py",
+    "backend/tests/simulation_runtime/test_localsim_native_context.py",
+    "tests/aistock_validation/bugs/20261012_BUG-1852-localsim.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1852",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-12T18:29:47.435248Z",
+  "description": "新账户运行路径依赖不存在的旧Paper portfolio，冻结profile未被选股链路消费。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261012-ab7c391e0c0e",
+      "timestamp": "2026-10-12T18:29:47.435229Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md"
+  ],
+  "expected": "新原生LocalSIM账户从独立账本读取持仓现金，以冻结profile进行选股、持仓、费用与风险计算；历史日只用DB_HISTORICAL，追平后按安全边界续接同一账本。",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py"
+    ],
+    "changed_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/localsim_control.py",
+      "noxfile.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/services/simulation_runtime/localsim_control.py",
+        "noxfile.py",
+        "backend/services/simulation_runtime/localsim_native_context.py",
+        "backend/tests/simulation_runtime/test_localsim_native_context.py"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "simulation.localsim_successor_core",
+        "platform.db",
+        "strategy_package",
+        "validation.runner",
+        "validation.center",
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_control.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_native_context.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_native_context.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/services/simulation_runtime/localsim_control.py",
+        "noxfile.py",
+        "backend/services/simulation_runtime/localsim_native_context.py",
+        "backend/tests/simulation_runtime/test_localsim_native_context.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/localsim_control.py",
+      "noxfile.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/localsim_control.py",
+      "noxfile.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py"
+    ]
+  },
+  "first_seen_at": "2026-10-12T18:29:47.435248Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5921,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5921",
+  "last_seen_at": "2026-10-12T18:29:47.435248Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM 新账户回放未贯通原生账本与冻结运行配置",
+  "trigger_condition": {
+    "fingerprint": "ab7c391e0c0e0cf159d2b0fc",
+    "source_event_id": "FE-20261012-ab7c391e0c0e"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
