@@ -39,10 +39,10 @@
   "expected": "同一候选H5/Parquet行业身份来自真实版本化PIT，不修改既存候选，不重复行情导出",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261012_BUG-1854-pit.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_sector_mapping.py",
@@ -52,16 +52,17 @@
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_sector_mapping.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/services/dataset_release/monthly_industry_history.py"
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1854-pit.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_industry_history.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261012_BUG-1854-pit.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_sector_mapping.py",
@@ -71,7 +72,8 @@
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_sector_mapping.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/services/dataset_release/monthly_industry_history.py"
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1854-pit.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -190,8 +192,8 @@
   },
   "first_seen_at": "2026-10-12T19:40:23.847150Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b183d5e44d1371fb7ff75a782eda9aabe8c9b7fe",
+  "fixed_at": "2026-10-12T20:45:16Z",
   "github_issue_number": 5927,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5927",
   "last_seen_at": "2026-10-12T19:40:23.847150Z",
@@ -199,6 +201,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5928",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -221,6 +224,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -232,7 +236,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1854",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "39687e5165980ddf",
+    "recorded_at": "2026-10-12T20:45:58.155608Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "41ed0a76d5ef8599a011ec0b8f0da37f2a6fda97",
+    "source_merge_commit": "b183d5e44d1371fb7ff75a782eda9aabe8c9b7fe",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5928",
+    "validation_evidence": [
+      "validation-receipt: id=e264cbb1a6fb021e commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=61c8c11f9545b232 commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+      "validation-receipt: id=484ed50c2e8b10ef commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py::test_history_binding_uses_readonly_snapshot_and_never_changes_source backend/tests/dataset_release/test_monthly_build_resume.py::test_interrupted_history_commit_keeps_price_exports_and_finishes_without_writers -q` result=`5 passed`",
+      "validation-receipt: id=8b18f6e4d9ceeb79 commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py::test_history_extends_after_highest_shared_id_without_densifying_catalog -q` result=`1 passed`"
+    ],
+    "validation_evidence_digest": "8e3b767544ea6a226b57830ce87e124b4ec4acebaa5c78acb33c4e4732a87c80"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -241,6 +269,12 @@
     "fingerprint": "d65cfcc7b82ffccbe9231ace",
     "source_event_id": "FE-20261012-d65cfcc7b82f"
   },
+  "validation_evidence": [
+    "validation-receipt: id=e264cbb1a6fb021e commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=61c8c11f9545b232 commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+    "validation-receipt: id=484ed50c2e8b10ef commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py::test_history_binding_uses_readonly_snapshot_and_never_changes_source backend/tests/dataset_release/test_monthly_build_resume.py::test_interrupted_history_commit_keeps_price_exports_and_finishes_without_writers -q` result=`5 passed`",
+    "validation-receipt: id=8b18f6e4d9ceeb79 commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py::test_history_extends_after_highest_shared_id_without_densifying_catalog -q` result=`1 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
