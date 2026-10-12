@@ -563,7 +563,10 @@ SW_INDEX_MEMBER = DatasetSpec(
     code_param_name="l2_code",
     skip_date_params=True,
     supports_incremental=False,
-    replace_by_code=True,
+    # BUG-1847: a partial provider history must never erase repaired local facts.
+    # SW refresh explicitly fetches both current (Y) and ended (N) memberships.
+    replace_by_code=False,
+    fetch_params={"limit": 2000, "max_pages": 100},
     batch_sleep=0.2,
     rate_per_minute=300,
 )

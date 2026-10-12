@@ -1,0 +1,437 @@
+{
+  "actual": "Per-code DELETE then INSERT erases local source/history absent from provider response; catalog keyed by index code alone.",
+  "allowed_write_scope": [
+    "backend/services/tushare_dataset_specs.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/services/sw_industry_history_store.py",
+    "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+    "backend/tests/test_sw_industry_history_store.py",
+    "scripts/import_sw_industry_history.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20261012_BUG-1847-sw-pit-code-refresh-deletes-repaired-history-and-lacks-immutable-version.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1847",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-12T16:59:33.037946Z",
+  "description": "BUG-1843历史行业修复后，sw_index_member删除式按行业刷新可再次抹掉未被上游完整返回的历史。改为显式Y/N分页读取、非删除式投影、不可变来源日志和分类版本隔离的历史保存。保留用户接受的12只股票43个上市初期缺口，不伪造事实或provider absence；生产写入等待精确migration授权。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261012-47381952b63e",
+      "timestamp": "2026-10-12T16:59:33.037946Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1843-public-history-dev-20261013-v1/public_history_final_validation.json"
+  ],
+  "expected": "History and original source facts survive partial daily refresh; explicit Y/N provider history with version-qualified immutable retention and controlled DEV import.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+      "backend/services/sw_industry_history_store.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_sw_industry_history_store.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/import_sw_industry_history.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1847-sw-pit-code-refresh-deletes-repaired-history-and-lacks-immutable-version.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "backend/services/sw_industry_history_store.py",
+      "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+      "backend/tests/test_sw_industry_history_store.py",
+      "scripts/import_sw_industry_history.py"
+    ],
+    "changed_files": [
+      "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+      "backend/services/sw_industry_history_store.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_sw_industry_history_store.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/import_sw_industry_history.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1847-sw-pit-code-refresh-deletes-repaired-history-and-lacks-immutable-version.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/services/sw_industry_history_store.py",
+        "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+        "backend/tests/test_sw_industry_history_store.py",
+        "scripts/import_sw_industry_history.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+        "platform.api",
+        "platform.db",
+        "qe.archive",
+        "strategy_package",
+        "validation.center",
+        "tests.backend",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/tushare_dataset_specs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/sw_industry_history_store.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/tests/test_sw_industry_history_store.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "scripts/import_sw_industry_history.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/services/sw_industry_history_store.py",
+        "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+        "backend/tests/test_sw_industry_history_store.py",
+        "scripts/import_sw_industry_history.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/services/sw_industry_history_store.py",
+      "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+      "backend/tests/test_sw_industry_history_store.py",
+      "scripts/import_sw_industry_history.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "noxfile.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/services/sw_industry_history_store.py",
+      "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+      "backend/tests/test_sw_industry_history_store.py",
+      "scripts/import_sw_industry_history.py"
+    ]
+  },
+  "first_seen_at": "2026-10-12T16:59:33.037946Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5910,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5910",
+  "history_preservation_validation": {
+    "bundle_sha256": "0bfa9f7ff5a1981f7d769e8d2629bdd7ca93533147b89d0924c9cb81b96e61df",
+    "candidate_write": false,
+    "design_compliance": {
+      "no_business_logic_change": "不改QE/HMM、股票池、窗口、90%阈值；SW2014/SW2021隔离且不倒填known_from",
+      "no_silent_error": "未知归属、冲突、活动成员消失均失败；43日保留，116条退市后原始异常保留而不作为有效分类",
+      "no_simplified_delivery": "源码/DEV完成，生产授权/合入/运行态/冻结导出明确待处理，不宣称全部完成",
+      "no_unapproved_gate": "只执行本次用户要求的DEV全量验证和既有精确生产授权流程，不新增业务发布门禁"
+    },
+    "dev_apply": "passed",
+    "dev_database": "aistock_dev",
+    "dev_final_validation_sha256": "72065cdcfffbe1d216a4022feeef0a7b7ac15d109afa975dffa4e6aeb606cc2d",
+    "graph_frozen_input_ready": false,
+    "import_receipt_sha256": "bd532c6cdd735c4cda654e9a0e84daac0b5beb337955c43188337bb413054d05",
+    "production_apply": "not_performed",
+    "production_authorization": "pending_exact_target_and_migration",
+    "production_database_write": false,
+    "production_import_sql": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-history-preservation-20261013-v2/import_sw_industry_history.sql",
+    "production_import_sql_sha256": "9741c82023aab1d41a2d98cbf45e5e510bf29d83603bb9ec355532ff40e02063",
+    "production_migration": "backend/db/migrations/add_sw_industry_history_preservation_v1.sql",
+    "production_migration_sha256": "d44bfb462707bc07fec80964b40bc7a421c7467d6df4085e81219a719ea4a307",
+    "production_readback": "readonly_original_member_and_classify_hashes_unchanged",
+    "production_tables": [
+      "market.sw_industry_source_fact_v1",
+      "market.sw_industry_taxonomy_history_v1",
+      "market.sw_industry_classification_history_v1"
+    ],
+    "profile_write": false,
+    "related_bug": "BUG-1843",
+    "resolved_interval_rows": 10911,
+    "retained_gap_symbol_count": 12,
+    "retained_initial_listing_gap_days": 43,
+    "reviews": [
+      {
+        "result": "passed",
+        "round": 1,
+        "scope": "非删除式刷新、来源修订、空响应、跨分类版本身份；修复重复/冲突、活动记录消失与已结束历史重开风险"
+      },
+      {
+        "result": "passed",
+        "round": 2,
+        "scope": "现有DEV真实SQL、重复导入、部分响应、修订谱系、13类禁止修改、7个ALWAYS触发器；20组消费者有效日期覆盖"
+      },
+      {
+        "result": "passed",
+        "round": 3,
+        "scope": "上游忽略Y/N请求时必须在任何写入前失败；新增请求身份回归，复验7项BY_CODE调用路径测试；CI继续执行完整相关矩阵"
+      }
+    ],
+    "root_cause": "SW_INDEX_MEMBER.replace_by_code plus DELETE WHERE l2_code erased absent historical records; nonempty partial responses were not protected",
+    "runtime_action": false,
+    "scope_expansion_reason": "2026-10-13: CI分类器要求新增共享producer/导入器/直接测试映射到现有local_data计划；仅补file_ownership准确归属及nox已有数据同步计划的测试项，不转移所有权、不改变业务模块",
+    "source_fact_rows": 32980,
+    "source_first_publication_verified": false,
+    "taxonomy_rows": 870,
+    "unresolved_post_delisting_raw_intervals_preserved": 116
+  },
+  "last_seen_at": "2026-10-12T16:59:33.037946Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "required",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "platform_api_backend",
+    "validation_catalog_integrity"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/schedules",
+    "fresh_process_evidence": [
+      "AIstock-CI python -m pytest backend/tests/test_sw_industry_history_store.py backend/tests/test_tushare_sync_engine.py -q -x -> 106 passed",
+      "AIstock python X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-history-preservation-20261013-v2/validate_dev_preservation.py -> 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS; simulation rolled back",
+      "python X:/AIstock_dataset_candidates/data_repair_staging/BUG-1847-history-preservation-20261013-v2/validate_dev_preservation.py -> passed (DEV only, 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups)"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "SW PIT code refresh deletes repaired history and lacks immutable versioned source retention",
+  "trigger_condition": {
+    "fingerprint": "47381952b63e5c7f0903b605",
+    "source_event_id": "FE-20261012-47381952b63e"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy",
+        "platform_api"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy",
+          "platform_api"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
