@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.06
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.07
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-12
 
-> 当前主线：[跨包冻结排名共识买价F2](advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md)详细设计完成三轮同窗口自审修订，DESIGN_SPEC_VERIFIED_LOCAL，正常CI/PR交付另报；SOURCE未实施、新研究fit0。唯一新输入为两个原QE包同D Top50的较弱排名强度min，共同matched已含最强强度max，两个新臂19/20维、同D目标/人口/固定五交易日/成本800。纯训练名册spike确认219D/1911共同入榜stockD，48/50最强档存在不同min，仅技术可产不是可学/收益。原证据未知列表为UNKNOWN、已知完整性矛盾fail closed；完整列表缺席不证明反对/相同股票池。无生产候选合并/QE修改，当前累计150fit/0确认启用不变，最多两新fit仅实际STARTED记账。当前队列§16.0/规格§6.3.9；设计审核/合入不代表模型交付。
+> 当前主线：[跨包冻结排名共识买价F2 v1.1](advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md)设计#5898已合入，完整八文件离线SOURCE已实现、四轮同窗口源码自审修复、初矩阵16/16（13.85秒）＋修复点两项（10.26秒）覆盖现行17合同及既有WSL sklearn1.7.2的19/20维零fit Tree.apply叶parity通过；正常CI/PR交付另报。当前SOURCE_LOCAL_PASS/RESEARCH_NOT_STARTED/ECONOMIC_NOT_CONFIRMED，150真实研究fit/0确认启用不变。唯一新输入为两个原QE包同D Top50的较弱排名min，共同matched已有max，两新臂同人口/目标/固定五市场会话/800及成本。完整原名单先生成context，未来标签不选成员；UNKNOWN不当0，完整性矛盾fail closed、缺席不证明反对/同池。D叶先冻结，价只作代数；原五槽双净增量/机会成本/未知现金分报。下一唯一项为干净producer下预登记、既存prepared只读0SQL、至多两实际fit和完整四臂；2026-10-12 16:45的QE custom_evo1只读快照仅提示自身真实fit要重新检查资源，不阻SOURCE。无生产候选合并/QE修改/DB或服务操作，不需要重启；代码与合成验证不证明盈利或激活。队列§16.0/规格§6.3.9。
 
 > 上一真实研究：[D时钟人口对齐价格价值F2 v1.2](advisory_d_clock_population_price_5td_v1_f2_design_20261011.md)设计#5894、完整SOURCE #5896/CI38160496878及反馈#5897/CI38163522657 SUCCESS已合入；四轮本窗口源码自审/23直接合同通过，不是独立外审。唯一run `advgp5dclock_37c2a6f7d5c5d953a90bca1d`原两包Top50/18D同新目标、同模型/成本，只改变监督mask；真实prepare多961唯一训练簇，两fit/先D冻结/81成熟D四臂完成。candidate对base/matched净−82.138663/−3.026640bps、双区间跨0，NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE精确停止。累计150实际Advisory研究fit＋1旧index、0经济确认/consumer/生产启用；源码成功不是价格模型盈利达标。旧市场/父分数/校准/人口候选不复活，不择包/调800/seed/loss/补旧证据。D价函数不读T信息，不能识别低开新闻、证明成交或NAV；原生产/policy不变，无QE/其它模块/DB写入/服务操作或重启。
 
@@ -842,7 +842,7 @@ CLOCK=D_CLOSE_UNCONDITIONAL_MARK_FUNCTION：分布权重只看D，不读g/m/scor
 
 本候选`NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE`停止，0确认/consumer/生产，SOURCE成功非经济成功。采样对齐在这次原Top5开盘应用合同下没有改善，不能外推为所有价格情景/分钟限价执行均无效，后者仍未研发/授权；不以未来low证明区间成交。CURRENT_DATABASE_NON_VINTAGE/native UNPROVEN/历史池UNKNOWN、宽度字段未请求正确合同的missing旗均透明，未补基础数据或升级证据；sealed金融0。四stage身份/双包/概率与完整槽账本见本F2 Research Result。后续回§6.3.4论证真正不同的增量价值/信息问题，不复活本候选/旧市场条件或按时长凑模型，不做旧负补证/UI/平台。
 
-#### 6.3.9 当前单一假设：跨包冻结排名共识（设计先行）
+#### 6.3.9 当前单一假设：跨包冻结排名共识（完整离线SOURCE）
 
 按§6.3.4查重后的[独立F2](advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md)固定`GP5-CROSS-PACKAGE-CONSENSUS-1`。它不复活D-clock/父score/旧N3腿差候选：消费同两LSTM/TCN不同run已经存在的同D完整Top50名册，研究较弱一方排名是否在最强原排名之后提供额外信息。旧N3是父包内部腿共识/H20；GP5候选context只有own rank；M16是同包群体收益，旧负结论保留。两run不证明统计独立，不能把历史pool UNKNOWN当相同全市场池。
 
@@ -852,7 +852,7 @@ CLOCK=D_CLOSE_UNCONDITIONAL_MARK_FUNCTION：分布权重只看D，不读g/m/scor
 
 最多新两fit：新matched与candidate同森林/seed/日期/目标、STRUCTURE学分裂/ESTIMATION成对mark叶质量；19/20维独立JSON walker，不改旧18维合同。两D分布先冻结再实际T价查询/结算；D支付价函数仍非实际T价条件概率、低开新闻拒绝带/分钟成交。新schema/四stage/实际STARTED账本与来源/role/18median/pair/政策绑定，partial不隐式refit。两包原Top5＋固定±300规则＋新matched/candidate完整四臂，双净增量/同时CI/MDE/真实干预、避亏−漏盈及UNKNOWN现金分别归因。只有实际结果决定继续，不强制干预、不择包/共识层赢者、换pair或放宽800救结果。
 
-当前详细设计与蓝图一致更新完成三轮同窗口自审修订，规范CI/PR交付另报；SOURCE/新研究fit0，累计仍150、0确认/consumer/生产，后端无需重启。下一实施精确四source/两test/两文档，不预建生产bundle/平台；值得继续才另立未消费历史确认和必要日频adapter，UI/旧负补证后置。所有研究/运行和模块授权边界不变，正常CI不是盈利证明。
+设计#5898已合入；精确四source/两test/两文档的完整离线SOURCE已实现。四轮同窗口源码自审修复及现行17合同（原16项＋修复点两项）、实际WSL1.7.2零fit Tree.apply 19/20维parity通过，规范CI/PR交付另报。prepare读回原H/calendar与完整context，来源descriptor一次校验；按叶缓存价格law/128批次完整tick避免重复排序，partial在QE忙碌/未知HTTP RuntimeError时保留成功组件不重fit。fixture不计真实研究，当前新研究fit0/累计150/0确认或生产；16:45只读快照QE custom_evo1，源码/纯推理继续但两实际fit尚未启动。下一唯一研究是干净producer的新plan、0新SQL复用既存prepared、共同可识别两臂和完整四臂。后端无需重启，不预建生产bundle/平台；值得继续才另立未消费历史确认和必要日频adapter，UI/旧负补证后置。所有模块授权不变，源码/CI不是盈利证明。
 
 ### 6.4 训练资源边界
 
@@ -2146,9 +2146,9 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 ## 16. 当前下一步
 
-### 16.0 当前唯一任务队列与真实断点（2026-10-12 跨包共识详细设计）
+### 16.0 当前唯一任务队列与真实断点（2026-10-12 跨包共识源码）
 
-父分数、风险校准、原槽hurdle、市场开盘条件及D时钟人口对齐均已真实检验并精确停止，不能再列待prepare/fit。最新run `advgp5dclock_37c2a6f7d5c5d953a90bca1d`完整共享prepare/两fit/先D冻结/81成熟D四臂结束：对base−82.138663、对matched−3.026640bps、双区间跨0，554/35stockD干预足以提示但没有正增量。当前150实际Advisory研究fit+1旧index、0确认/启用；设计#5894、SOURCE #5896/CI38160496878与反馈#5897/CI38163522657已合入/自身清理，正式study/F产物保留。下一唯一主线为§6.3.9两个既存包同D原名单的共识增量：三轮设计自审修订完成、新SOURCE/研究未开始，纯metadata非效果。未知/停牌未删，不等实盘、不修基础数据库/做UI/补旧负证据；研究功能可运行与盈利模型未达标分别报告。
+父分数、风险校准、原槽hurdle、市场开盘条件及D时钟人口对齐均已真实检验并精确停止，不能再列待prepare/fit。最新run `advgp5dclock_37c2a6f7d5c5d953a90bca1d`完整共享prepare/两fit/先D冻结/81成熟D四臂结束：对base−82.138663、对matched−3.026640bps、双区间跨0，554/35stockD干预足以提示但没有正增量。当前150实际Advisory研究fit+1旧index、0确认/启用；设计#5894、SOURCE #5896/CI38160496878与反馈#5897/CI38163522657已合入/自身清理，正式study/F产物保留。当前唯一主线为§6.3.9两个既存包同D原名单的共识增量：设计#5898及四轮源码自审/现行17合同/19与20维零fit节点parity完成，SOURCE_LOCAL_PASS、正常交付另报；新真实研究尚未开始，纯metadata/fixture非效果。未知/停牌未删，不等实盘、不修基础数据库/做UI/补旧负证据；资源暂忙仅暂停自身fit，研究功能可运行与盈利模型未达标分别报告。
 
 | 当前顺序 | 具体任务 | 当前状态 / 边界 |
 |---|---|---|
@@ -2159,9 +2159,9 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 | 已完成4 | §6.3.8完整九文件离线SOURCE及正常交付 | #5896/CI38160496878 SUCCESS/merge83fa9dfc，四轮源码自审、23直接合同/九AST/Ruff/scope/9F2通过；生产不挂新模型，无DB写入/服务操作、不需要重启 |
 | 已完成5 | D时钟人口对齐唯一两臂研究与精确停止 | 原两包/Top50/18D共同新目标，多961唯一簇；两真实fit/81成熟D810原槽双完整配对，净对base/matched均负且区间跨0，0确认/consumer/生产，不调800/择包回选或补旧证据 |
 | 已完成6 | 真实D-clock结果及主线进度回写 | #5897/CI38163522657/merge1af1bd3e正常交付、三轮反馈自审/810槽独立复算/9F2与152蓝图通过，无新fit；源码/反馈自身清理完成、正式study/产物保留 |
-| 当前交付 / 1 | §6.3.9跨包共识唯一F2及蓝图一致性 | DESIGN_SPEC_VERIFIED_LOCAL：同两包同D原Top50的min共识坐标，matched已有max；219D纯名册spike非收益，9DAI/有限两fit预算/三轮同窗口自审修订，规范CI/PR交付另报；SOURCE_NOT_IMPLEMENTED/fit0 |
-| 下一步 / 2 | 跨包共识离线SOURCE、直接合同、多轮审核及规范交付 | NOT_STARTED：最新main独立四source/两test/两文档；对称context/共同簇/19与20维/薄四stage/完整四臂，不改旧D-clock/QE/其它模块或建平台，无需重启 |
-| 3 / SOURCE交付后 | 单次两fit预登记研究及实际回写 | NOT_STARTED：父prepared只读/0新SQL、可识别0fit或至多两实际fit、先D冻结后T/H，完整原五槽双净增量/UNKNOWN；不换pair/800/seed/loss择赢，不按时长凑模型 |
+| 已完成设计 | §6.3.9跨包共识唯一F2及蓝图一致性 | 设计#5898已合入；同两包同D原Top50的min共识坐标、matched已有max，219D名册spike非收益；9DAI/有限两fit预算/三轮设计自审；真实fit0 |
+| 当前交付 / 1 | 跨包共识完整离线SOURCE、直接合同、多轮审核及规范交付 | SOURCE_LOCAL_PASS：最新main独立四source/两test/两文档，对称完整context/共同簇/19与20维/薄四stage/完整四臂均实现；四轮源码自审、现行17合同及WSL1.7.2零fit叶parity通过，正常CI另报。不改旧D-clock/QE/其它模块或建平台，无需重启 |
+| 下一步 / 2 | 单次两fit预登记研究及实际回写 | NOT_STARTED：干净producer、父prepared只读/0新SQL、可识别0fit或至多两实际fit、先D冻结后T/H，完整原五槽双净增量/UNKNOWN；当前QE在途只暂停自身fit，不控制QE、不换pair/800/seed/loss择赢或按时长凑模型 |
 | 4 / 真正新candidate值得继续后 | 未消费确认及必要日频consumer | NOT_OPENED：旧负candidate不进入；不能由开盘估值推成同开盘执行、不回选matched、不把peer上下文变成所有包资格门。仅Advisory，UI/旧负补证后置，重启用户所有 |
 
 当前新规格见§6.3.9/F2；D-clock已停止结果见§6.3.8/F2 Research Result，市场条件已停止结果见§6.3.7/该F2，旧hurdle真实结果见§6.3.6/原F2 Research Result。没有确认的Advisory盈利型Entry/Exit仍是当前事实，两包正baseline不是未来收益保证；最多一条模型主线及必要正确性辅线，不按时长凑实验。

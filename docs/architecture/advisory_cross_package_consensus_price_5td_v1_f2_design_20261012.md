@@ -1,6 +1,6 @@
 # Advisory 跨策略包冻结排名共识买价 GP5 F2详细设计
 
-> 2026-10-12；v1.0；假设 `GP5-CROSS-PACKAGE-CONSENSUS-1`；当前 `DESIGN_SPEC_VERIFIED_LOCAL`，三轮同窗口自审修订已完成，正常CI/PR交付另报；SOURCE_NOT_IMPLEMENTED / RESEARCH_NOT_STARTED / ECONOMIC_NOT_CONFIRMED。
+> 2026-10-12；v1.1；假设 `GP5-CROSS-PACKAGE-CONSENSUS-1`；设计#5898已合入；当前 `SOURCE_LOCAL_PASS`，四轮同窗口源码自审修复；初矩阵16/16及修复点两项验证覆盖现行17合同及既有WSL 19/20维零fit叶parity通过，正常CI/PR交付另报；RESEARCH_NOT_STARTED / ECONOMIC_NOT_CONFIRMED。累计150真实研究fit不变，fixture不计研究。
 > 父级：[蓝图§6.3.4/6.3.9/16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)。`EXPLORATORY_SCREEN / RISK_MANAGED_ADVISORY / NAVIGATION_ONLY`，设计不能作为盈利、独立确认或生产激活证据。
 
 ## Background / Goal
@@ -22,7 +22,7 @@
 
 ## Scope / Non-goals
 
-设计PR只写本文和主蓝图。源码后续从最新origin/main新建独立Advisory树，精确八文件：
+设计PR #5898只写本文和主蓝图。当前源码从最新origin/main新建独立Advisory树，完整实现以下精确八文件：
 
 - `backend/services/advisory_model_first/cross_package_consensus_price_5td_contracts_v1.py`：新plan/identity/context schema、固定参数与预算。
 - `backend/services/advisory_model_first/cross_package_consensus_price_5td_inputs_v1.py`：原stage只读投影、对称上下文、共同唯一簇/时钟/编码。
@@ -130,10 +130,10 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 
 ## Implementation Plan / 按业务顺序
 
-1. 本轮：纯名册可产性、旧路线查重、F2/蓝图一致更新，至少三轮同窗口设计自审修订、canonical验收、规范提交/CI/合入；实际研究fit0。
-2. 下一实施：latestmain独立八文件，原stage只读/对称context/共同unique监督/19与20维forest/价格核、薄四stage/完整四臂。复用纯核，不变更旧消费者/其它模块，不重复搭平台。
-3. 源码多轮自审修复、仅直接输入/模型/原子与五槽合同、Ruff/AST/scope/真实owner预算/DAI、规范CI交付；合成fit不证明真实效果。
-4. 固定干净producer、新plan预登记→0SQL准备→可识别/两实际fit→两D分布冻结→四臂结算；当模型阴性即精确停，本轮不追加信息块/新包/网格搜索。
+1. 已完成设计：纯名册可产性、旧路线查重、F2/蓝图一致更新、三轮同窗口设计自审、canonical验收，设计PR #5898已合入；实际研究fit0。
+2. 当前完整SOURCE：latestmain独立八文件，原stage只读/对称context/共同unique监督/19与20维forest/价格核、薄四stage/完整四臂均已实现。复用纯核，不变更旧消费者/其它模块，不重复搭平台。
+3. 已完成四轮源码自审修复，初矩阵16/16（13.85秒）及受影响两项（10.26秒）覆盖现行17合同；既有WSL sklearn1.7.2用原生Tree.apply与新JSON walker比较19/20维各128树/4边界行，0fit通过；源码交付另按Ruff/AST/scope/真实owner预算/DAI与正常CI报告。合成fit不证明真实效果，既有测试债务保持warning，不转ownership或虚增分母。
+4. 下一唯一研究：固定干净producer、新plan预登记→0SQL准备→可识别/两实际fit→两D分布冻结→四臂结算。2026-10-12 16:45公开QE快照有custom_evo1在途，本研究尚未开始；实际fit前后重新只读检查资源，忙碌时仅暂停自身真实fit，不等待UI/档案或修改QE。阴性即精确停，不追加信息块/新包/网格搜索。
 5. 实际进度/研究结果回写，不为阴性建consumer/UI或独立确认；探索正且值得继续才设计未消费确认/日频adapter。本次无运行态激活、无需重启。
 
 ## Verification Plan / Design Acceptance Index
@@ -152,19 +152,19 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 
 ## Design Acceptance Matrix
 
-本矩阵只验收用户要求的“下一项详细设计”，不声称尚未实施的源码、研究或消费者完成。以下implementation_refs为本次规范性设计条款，测试路径为下一实施的直接计划；当前真实证据是完整设计/纯metadata核对与三轮自审，源码/运行验收另按条款履行。
+本矩阵验收完整离线SOURCE及直接合同，不把合成样本、纯推理或CI冒充真实研究、盈利确认或消费者激活。研究/运行状态仍分列。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-908 | 本文Background/Contracts§2–3；蓝图§6.3.9 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；纯名册九字段spike | DESIGN_SPEC_VERIFIED | 无 |
-| F-909 | Contracts§1–2；planned inputs_v1 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；planned backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_inputs_v1.py | DESIGN_SPEC_VERIFIED | 无 |
-| F-910 | Contracts§2–3；planned inputs_v1 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；planned inputs测试：N/empty/missing/symmetry/duplicate | DESIGN_SPEC_VERIFIED | 无 |
-| F-911 | Contracts§3；planned inputs_v1 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；planned inputs测试：purge/poison/0fit | DESIGN_SPEC_VERIFIED | 无 |
-| F-912 | Contracts§3–4；planned model_v1 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；planned backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py | DESIGN_SPEC_VERIFIED | 无 |
-| F-913 | Contracts§4；planned model_v1 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；planned模型测试：future independence/price/cost/tick | DESIGN_SPEC_VERIFIED | 无 |
-| F-914 | Contracts§5；planned study_v1 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；planned study测试：stage/partial/log/0SQL | DESIGN_SPEC_VERIFIED | 无 |
-| F-915 | Contracts§6；planned study_v1 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；planned study测试：完整slot/net closure/null CI | DESIGN_SPEC_VERIFIED | 无 |
-| F-916 | Scope/Implementation/Review/Production；主蓝图 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；canonical feature validate/diff/scope | DESIGN_SPEC_VERIFIED | 无 |
+| F-908 | cross_package_consensus_price_5td_contracts_v1.py；build_cross_package_rank_context_v1/共同MATRIX_ORDERS | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_inputs_v1.py；本文查重/spike | SOURCE_LOCAL_PASS | 无 |
+| F-909 | verified_consensus_parent_v1/prepare_consensus_inputs_v1 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_inputs_v1.py；test_cross_package_consensus_price_5td_model_study_v1.py四stage | SOURCE_LOCAL_PASS | 无 |
+| F-910 | build_cross_package_rank_context_v1/validate_context_rows_v1/build_consensus_training_encoding_v1 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_inputs_v1.py：symmetry/empty/unknown/contradictions/unique | SOURCE_LOCAL_PASS | 无 |
+| F-911 | build_consensus_training_encoding_v1/prepare_consensus_inputs_v1/train_cross_package_consensus_model_v1 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_inputs_v1.py：purge/held poison；model_study：zero fit | SOURCE_LOCAL_PASS | 无 |
+| F-912 | consensus_forest_leaf_ids_v1/train_cross_package_consensus_model_v1/validate_consensus_fit_v1 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：19/20/serialization/new-coordinate empty leaf；本文WSL零fit Tree.apply parity | SOURCE_LOCAL_PASS | 无 |
+| F-913 | freeze_consensus_distribution_v1/query_cross_package_consensus_price_nodes_v1/cross_package_consensus_price_set_v1 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：完整Decimal/空/UNKNOWN/reference tamper及独立逐样本费用/风险/概率复算 | SOURCE_LOCAL_PASS | 无 |
+| F-914 | cross_package_consensus_price_5td_study_v1.py四stage/main及STARTED/COMPLETE日志 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：four stages/partial busy/zero fit/idempotence | SOURCE_LOCAL_PASS | 无 |
+| F-915 | evaluate_consensus_cohorts_v1/paired_consensus_statistics_v1/原槽归因 | backend/tests/advisory_model_first/test_cross_package_consensus_price_5td_model_study_v1.py：opportunity/unknown cash/slots/panel hole | SOURCE_LOCAL_PASS | 无 |
+| F-916 | 本文Scope/下文源码交付复审；主蓝图当前队列 | artifact: docs/architecture/advisory_cross_package_consensus_price_5td_v1_f2_design_20261012.md；精确八文件/canonical feature validate/diff/scope | SOURCE_LOCAL_PASS | 无 |
 
 ## Design Review / 同窗口多轮自审修订
 
@@ -176,7 +176,13 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 
 ## Risks / DESIGN-COMPLIANCE-001
 
-1. 无简化交付：只交完整F2，SOURCE/研究/盈利/生产未完成分别明示，不以mock/metadata或设计PASS当真实模型有效。
+### 完整源码四轮同窗口审核与验证
+
+第一轮，输入/序列化：修复缺原包D错误原因、Arrow叶索引np.int64 JSON读回、遗漏导入、行尾归一化以及validator遗留18维检查；直接在新增第20列构造合法无估计质量叶，证明UNKNOWN而不是全局fallback。第二轮，经济/成本：完整原五槽机会成本闭合，UNKNOWN空槽单列、内生null不压缩；零fit不请求worker/读评价，QE后置忙碌保留已完成组件/不隐式重fit；文件descriptor复用避免同输入重复全量hash，128批次及按冻结叶缓存价格law，不逐tick重排标价样本。第三轮，时钟/范围/实际节点：检查原H元数据与calendar相邻五会话一致、reference和D/T日期/hash读回、evaluation金融按列/D区间投影，改价不改叶；独立逐样本数学复算与WSL1.7.2零fit Tree.apply parity通过。第四轮，真实公共依赖复核发现HTTP/非JSON会抛RuntimeError，补其后置捕获并保留成功组件；busy和未知RuntimeError两个修复点验证通过。四轮均本窗口自审，不冒称外部/agent审核。
+
+初次最终直接小矩阵16/16（13.85秒）通过；交付前第四轮修复只重跑受影响两项（10.26秒），覆盖现行17合同，未重复全矩阵；这些fixture和零fit节点校验不计实际研究trial，当前本模型真实fit0、累计150。源码/规范CI可交付与经济/自然前向/生产启用完全独立。无需重启/DDL/其它模块改动；测试计量HEAD当时未填写，最终交付用原矩阵和修复点两组证据、六源码/测试实际内容SHA重新绑定，不篡改原计量记录或为绑定重跑矩阵。
+
+1. 无简化交付：完整离线SOURCE和F2分别验收，研究/盈利/生产未完成明示，不以fixture/metadata/设计或源码PASS当真实模型有效。
 2. 无静默错误：未知列表/成员/桥/mark保留，0不是缺包；已知hash/键冲突fail closed，不伪造原生证据、收益或常数权重。
 3. 无未批准语义漂移：固定5原始交易日/原两包/Top50/原五槽/800/成本、D与T/mark与fill边界；不改QE或任何生产排名，不把有共识当强制买入/无共识强制拒买。
 4. 无私增门禁：名单数学一致性和对照可识别只适用本研究，不是新QE包资格/人工审批/基础数据准备/自然行情/UI门。无需新增平台或其它owner等待。
@@ -185,4 +191,4 @@ reference须原D真实close、同D锚坐标/source hash及<=D可见语义；T公
 
 ## Production Gates / Rollout / Rollback
 
-设计交付 `docs-only`；后续离线SOURCE研究也无生产HTTP/UI、binding/路由/schema/policy变更。client install、依赖、DDL/DML、数据激活、后端重启均NOOP。当前本设计0实际研究fit，不写152为已完成；model/经济确认/consumer/激活为0。合入文档不自动启用模型或恢复旧研究，旧生产原基线不变。回滚仅精确文档/本新离线切片版本，不控制服务、删正式父产物或回退其它模块。
+设计#5898已交付，当前完整离线SOURCE/直接验证也无生产HTTP/UI、binding/路由/schema/policy变更。client install、依赖、DDL/DML、数据激活、后端重启均NOOP。当前本模型0实际研究fit，不写152为已完成；经济确认/consumer/激活为0。源码合入不自动启用模型或恢复旧研究，旧生产原基线不变。回滚仅本新离线切片及进度文档，不控制服务、删正式父产物或回退其它模块。
