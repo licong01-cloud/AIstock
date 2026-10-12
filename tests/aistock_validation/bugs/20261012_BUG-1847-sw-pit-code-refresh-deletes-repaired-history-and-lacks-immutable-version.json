@@ -205,8 +205,8 @@
   },
   "first_seen_at": "2026-10-12T16:59:33.037946Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "65799458edf2331c6e5ffe96679f42a5fc2e9794",
+  "fixed_at": "2026-10-12T18:16:10Z",
   "github_issue_number": 5910,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5910",
   "history_preservation_validation": {
@@ -271,8 +271,9 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5913",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
@@ -300,6 +301,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -311,7 +313,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1847",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7ffb4de136d7e78c",
+    "recorded_at": "2026-10-12T18:16:51.577708Z",
+    "runtime_contract_digest": "45403263cfbe8bc20c80734be0b27f062a68fbbf69d39b4f91d8e423fa2d2649",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f2a4a5a40f7f531ff58ce95d697be2e68767f958",
+    "source_merge_commit": "65799458edf2331c6e5ffe96679f42a5fc2e9794",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5913",
+    "validation_evidence": [
+      "PR #5913 exact head f2a4a5a40f7f531ff58ce95d697be2e68767f958 CI verdict SUCCESS; three recorded reviews PASS; DEV backup restore twice PASS; DEV preservation 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS"
+    ],
+    "validation_evidence_digest": "75b3009c8f1de857e99028b9652d2e8c42bbbf2ab5fa55a3aed67c5f9c4bd344"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -320,6 +343,9 @@
     "fingerprint": "47381952b63e5c7f0903b605",
     "source_event_id": "FE-20261012-47381952b63e"
   },
+  "validation_evidence": [
+    "PR #5913 exact head f2a4a5a40f7f531ff58ce95d697be2e68767f958 CI verdict SUCCESS; three recorded reviews PASS; DEV backup restore twice PASS; DEV preservation 13 mutation denials, 7 ALWAYS triggers, 20 coverage groups PASS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
