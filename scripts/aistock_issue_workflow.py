@@ -1303,6 +1303,10 @@ def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     compact = _pick(value, "dry_run")
+    if isinstance(value.get("registry_pr_capability"), dict):
+        compact["registry_pr_capability"] = _pick(value["registry_pr_capability"], "allowed", "source", "reason")
+    if isinstance(value.get("local_intake"), dict):
+        compact["local_intake"] = _pick(value["local_intake"], "status", "owner_role", "claim_status", "repair_module", "next_command")
     triage = _compact_triage_ci_issue(value.get("triage"))
     if triage:
         compact["triage"] = triage
@@ -12681,6 +12685,7 @@ def build_triage_ci_issue_plan(
         context_pack["failure_event"] = failure_event
         handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
         handoff["needs_bug_json"] = False
+        handoff["registry_intake"] = None
         handoff["handoff_mode"] = "triage_only"
         handoff["workflow_entrypoints"] = {
             "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}",
@@ -13214,6 +13219,9 @@ def build_promote_ci_issue_plan(
                 "dry_run": False,
                 "triage": triage,
                 "registry_pr_capability": registry_pr_capability,
+                "local_intake": ci_failure_summary.build_agent_handoff(
+                    triage["summary"], github_issue_number=issue_number
+                )["registry_intake"],
                 "warnings": [
                     "Nightly failure remains an actionable GitHub Issue; BUG allocation is deferred until a registry PR can be persisted"
                 ],
