@@ -66,6 +66,7 @@
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/test_qe_evolution_scheduler.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qe_evolution_scheduler.py",
       "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
     ],
     "added_files": [],
@@ -73,6 +74,7 @@
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/test_qe_evolution_scheduler.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qe_evolution_scheduler.py",
       "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
     ],
     "changed_files_source": "git_finish",
