@@ -283,6 +283,12 @@ def test_history_materialization_rebinds_reference_facts_and_preserves_prices(pr
     pd.testing.assert_frame_equal(actual_static.loc[pd.Timestamp("2026-09-01")], static.loc[pd.Timestamp("2026-09-01")])
     assert result["classification_only_rows_added"] == 2
     assert {path.name: path.stat().st_mtime_ns for path in factor.iterdir()} == signatures
+    assert materialize_history_files(root, history) == result
+    from backend.services.dataset_release.monthly_industry_history import _history_scratch_paths
+    _history_scratch_paths(root, history.sha256, None)[1].mkdir()
+    with pytest.raises(SourceManifestError, match="ambiguous"):
+        materialize_history_files(root, history)
+    assert {path.name: path.stat().st_mtime_ns for path in factor.iterdir()} == signatures
 
 
 def test_history_supplement_is_bound_to_original_source_and_current_release(predecessor):
@@ -443,7 +449,20 @@ def test_history_reuses_same_official_text_code_id_without_taxonomy_backcast(pre
     assert len({item["l2_code_id"] for item in history.payload["entries"]}) == 131
 
 
-@pytest.mark.parametrize("interruption", [None, "backup", "publish", "journal", "legacy_projection"])
+def test_industry_scratch_names_are_portable_and_bind_full_input_identity(tmp_path):
+    from backend.services.dataset_release.monthly_industry_history import _history_scratch_paths
+    root = tmp_path / ("candidate-" + "x" * 110)
+    compact, legacy = _history_scratch_paths(root, "a" * 64, "b" * 64)
+    assert len(compact.name) < 100 and compact.parent == root.parent
+    assert len(legacy.name) > 255  # Reproduces the real retained BUILD directory.
+    assert compact != _history_scratch_paths(root, "a" * 63 + "c", "b" * 64)[0]
+    assert compact != _history_scratch_paths(root, "a" * 64, "b" * 63 + "c")[0]
+    assert compact != _history_scratch_paths(root.with_name("other"), "a" * 64, "b" * 64)[0]
+    compact.mkdir()
+    assert compact.is_dir()
+
+
+@pytest.mark.parametrize("interruption", [None, "backup", "publish", "journal", "legacy_projection", "legacy_scratch", "long_name"])
 def test_native_factor_receipt_survives_real_history_repair_and_retry(predecessor, tmp_path, monkeypatch, interruption):
     import json
     from pathlib import Path
@@ -465,7 +484,7 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     history = subject.IndustryHistoryProjection.build([row], current_map=mapping, authority_sha256="c" * 64)
     monkeypatch.setattr(subject, "load_frozen_history", lambda *args, **kwargs: history)
     monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix", lambda **kwargs: None)
-    root = tmp_path / "retained"
+    root = tmp_path / ("candidate-" + "x" * 110 if interruption == "long_name" else "retained")
     factor_root = root / "factor_bundle"
     factor_root.mkdir(parents=True)
     index = pd.MultiIndex.from_tuples([(pd.Timestamp("2018-08-01"), "000001.SZ"),
@@ -514,7 +533,17 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     def apply():
         return subject.apply_retained_history(resume, context=context, compiled=compiled,
                                               prepare=prepare, cas=cas, profile=profile)
-    if interruption in {None, "legacy_projection"}:
+    if interruption == "legacy_scratch":
+        # A completed legacy output must remain recoverable after upgrading.
+        portable_paths = subject._history_scratch_paths
+        with monkeypatch.context() as legacy:
+            legacy.setattr(subject, "_history_scratch_paths", lambda *args: (portable_paths(*args)[1],))
+            actual = apply()
+        pending = root.parent / f".{root.name}.industry-history-commit.json"
+        resume.record = subject.recover_history_commit(root=root, journal=resume.path, record=resume.record,
+                                                       expected_projection=history.sha256)
+        assert pending.exists()
+    elif interruption in {None, "legacy_projection", "long_name"}:
         actual = apply()
     else:
         rename = Path.rename
@@ -550,8 +579,7 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     proof = resume.get("industry-history")
     assert proof["status"] == "PASS" and proof["sector_row_count"] == 2
     assert proof["database_write"] is False
-    context_sha = hashlib.sha256(canonical_json_bytes(proof["context_identity"])).hexdigest()
-    scratch = root.parent / f".{root.name}.industry-history-{history.sha256}-{context_sha}"
+    scratch = (root.parent / proof["files"]["sector_data.h5"]["scratch_relative_path"]).parent
     assert not (factor_root / "factor_checkpoint.json").exists()
     pending = json.loads((root.parent / f".{root.name}.industry-history-commit.json").read_bytes())
     assert set(pending["files"]) == {"sector_data.h5", "static_factors.parquet"}

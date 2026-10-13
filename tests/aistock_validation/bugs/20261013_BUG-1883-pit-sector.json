@@ -17,7 +17,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1883",
-  "closed_at": null,
+  "closed_at": "2026-10-13T18:07:28.474981Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -125,8 +125,8 @@
   },
   "first_seen_at": "2026-10-13T07:34:07.225957Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4571a5eda3200a6f9842374afb4f2810dd471b1b",
+  "fixed_at": "2026-10-13T09:31:34Z",
   "github_issue_number": 6010,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6010",
   "last_seen_at": "2026-10-13T07:34:07.225957Z",
@@ -134,6 +134,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6012",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -157,9 +158,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1883/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1883",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "abd5e2c46a394a023ff4cc2f367dbed2bd907307938c09489c2b1087d1e3faf0",
+      "expected_identity": "4571a5eda3200a6f9842374afb4f2810dd471b1b",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T18:04:04.900305Z",
+      "mode": "read_only",
+      "observed_identity": "53c8ccae19aeab9f64f8a49907699863b549b8e3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8d6b814aae05a5e3b303da69f1b58b415d4b06f34fc0bf80871c4138fb31c4a1",
+      "receipt_sha256": "2ae7128199cda57fadaa13ac9b49cc8875ba4dedc2e40410b75506b49b57f72e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "560f1c78f50fd932ca649fa0f668fc100e1960b9f7bd5fa24ca89eefc2681969",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -169,7 +193,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1883",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0c66022b1c00fc1a",
+    "recorded_at": "2026-10-13T09:32:14.717858Z",
+    "runtime_contract_digest": "abd5e2c46a394a023ff4cc2f367dbed2bd907307938c09489c2b1087d1e3faf0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "78c16f1052241f03b39ed24f897eedca0290be51",
+    "source_merge_commit": "4571a5eda3200a6f9842374afb4f2810dd471b1b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6012",
+    "validation_evidence": [
+      "validation-receipt: id=dbaf3b3169f4589c commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/services/test_sector_data_repair.py -q --noconftest` result=`passed 11 tests; previous direct 143 core invariant tests passed`",
+      "validation-receipt: id=eb1b115fd06b3406 commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed both sessions`",
+      "validation-receipt: id=412be55e8ee47b18 commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed both sessions`",
+      "validation-receipt: id=24fa0d1a0fb56e31 commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/sector_data_repair.py scripts/repair_sw_sector_revision.py scripts/build_stock_universe_pit_spans.py backend/services/sector_data_builder.py backend/services/sw_industry_history_store.py backend/services/tushare_sync_engine.py noxfile.py` result=`passed`",
+      "validation-receipt: id=47dce1fceefc75da commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "a845a928fe7dca1ea1d24dd724565e650947d92a36f84f1d8d349025b66e4bde"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -178,6 +227,15 @@
     "fingerprint": "b1c4a158a54ffe73a190cbc2",
     "source_event_id": "FE-20261013-b1c4a158a54f"
   },
+  "validation_evidence": [
+    "validation-receipt: id=dbaf3b3169f4589c commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/services/test_sector_data_repair.py -q --noconftest` result=`passed 11 tests; previous direct 143 core invariant tests passed`",
+    "validation-receipt: id=eb1b115fd06b3406 commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed both sessions`",
+    "validation-receipt: id=412be55e8ee47b18 commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed both sessions`",
+    "validation-receipt: id=24fa0d1a0fb56e31 commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/sector_data_repair.py scripts/repair_sw_sector_revision.py scripts/build_stock_universe_pit_spans.py backend/services/sector_data_builder.py backend/services/sw_industry_history_store.py backend/services/tushare_sync_engine.py noxfile.py` result=`passed`",
+    "validation-receipt: id=47dce1fceefc75da commit=78c16f1052241f03b39ed24f897eedca0290be51 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "post-restart-verify backend-main 53c8ccae19aeab9f64f8a49907699863b549b8e3 -> passed; authorized 65-date sector repair production readback -> passed",
+    "post-restart-verify source merge and verified origin/main ancestry -> passed; production/source readback -> passed; no process control"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
