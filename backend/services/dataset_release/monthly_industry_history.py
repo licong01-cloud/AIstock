@@ -420,6 +420,28 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
     return proposed
 
 
+def factor_file_receipts(receipt: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    """Resolve the native dataset identity contract, never an invented path field."""
+    from .factor_materializer import FACTOR_H5_DATASETS
+
+    expected = {*FACTOR_H5_DATASETS, "static_factors"}
+    files = receipt.get("files")
+    if not isinstance(files, list):
+        raise SourceManifestError("native factor file population is invalid")
+    result = {}
+    for entry in files:
+        dataset = entry.get("dataset") if isinstance(entry, Mapping) else None
+        if not isinstance(dataset, str) or dataset not in expected:
+            raise SourceManifestError("native factor file identity is invalid")
+        name = f"{dataset}.{'parquet' if dataset == 'static_factors' else 'h5'}"
+        if name in result:
+            raise SourceManifestError("native factor file identity is duplicated")
+        result[name] = entry
+    if len(result) != len(expected):
+        raise SourceManifestError("native factor file population is incomplete")
+    return result
+
+
 def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
     """Amend factor receipts only; completed day/minute/index remain untouched."""
     import copy
@@ -437,6 +459,8 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
         raise MonthlyBuildResumeError("industry repair needs a durable completed-export journal")
     nested = copy.deepcopy(cas.get_json_bounded(prepare["prepare_receipt_ref"], max_bytes=16 * 1024 * 1024))
     factor = copy.deepcopy(cas.get_json_bounded(nested["refs"]["factor_receipt"], max_bytes=16 * 1024 * 1024))
+    entries = factor_file_receipts(factor)
+    sector_entry = entries["sector_data.h5"]
     from .monthly_build_bridge import load_monthly_predecessor_prefix
     # A future ordinary month inherits the repaired history without scanning
     # or re-serializing it. Only a genuinely changed history gets this producer.
@@ -463,7 +487,7 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
                 proof_ref = cas.put_json({"schema_version": "aistock_monthly_industry_history_projection_receipt_v1",
                     "status": "PASS", "projection": projection.payload, "projection_sha256": projection.sha256,
                     "historical_projection_reused": True, "predecessor_history_file_sha256": pin["sha256"],
-                    "sector_row_count": next(entry["inherited_rows"] + entry["month_rows"] for entry in factor["files"] if entry["relative_path"] == "sector_data.h5"),
+                    "sector_row_count": sector_entry["inherited_rows"] + sector_entry["month_rows"],
                     "database_write": False, "classification_cells_changed": 0})
                 factor["industry_history_projection_ref"] = proof_ref.as_dict()
                 nested["refs"]["factor_receipt"] = cas.put_json(factor).as_dict()
@@ -473,8 +497,7 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
                 return prepared
     result = materialize_history_files(resume.root, projection, checkpoint=context.checkpoint, progress=context.progress)
     proof_ref = cas.put_json(result)
-    for entry in factor["files"]:
-        name = entry["relative_path"]
+    for name, entry in entries.items():
         if name not in result["files"]:
             continue
         pin = result["files"][name]
