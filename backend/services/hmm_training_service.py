@@ -17,7 +17,7 @@ import traceback
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import asdict, fields as dc_fields
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -39,6 +39,7 @@ DEFAULT_VALIDATION_WINDOW_MONTHS = 3
 MIN_RECOMMENDED_VALIDATION_TRADING_DAYS = 60
 MIN_RECOMMENDED_TRAIN_TRADING_DAYS = 500
 HMM_DAILY_COEFFICIENT_MODE = "daily_asof_prediction_v1"
+HMM_DATABASE_DAILY_SOURCE = "database_daily"
 
 
 def _coerce_date(value: Any, *, field_name: str = "date") -> date:
@@ -458,6 +459,93 @@ class HMMTrainingService:
             )
         return min(value for value in max_dates.values() if value is not None), max_dates
 
+    def _database_daily_completion(self, *, as_of_date: date | None) -> tuple[date, Dict[str, Any]]:
+        from .hmm_data_source.daily_input import read_database_daily_completion
+
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            conn.set_session(readonly=True, isolation_level="REPEATABLE READ")
+            return read_database_daily_completion(
+                conn,
+                requested_as_of=as_of_date,
+                cutoff=date.today(),
+            )
+
+    def _database_daily_inputs(
+        self, *, snapshot: Dict[str, Any], as_of: date, effective: date, known_read_cutoff: str | None = None
+    ) -> Dict[str, Any]:
+        from .hmm_data_source.daily_input import read_database_daily_inputs, snapshot_inference_origin
+
+        origin = snapshot_inference_origin(snapshot.get("metrics_json"), as_of=as_of)
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            conn.set_session(readonly=True, isolation_level="REPEATABLE READ")
+            loaded, _ = read_database_daily_inputs(
+                conn,
+                as_of=as_of,
+                effective=effective,
+                origin=origin,
+                cutoff=date.today(),
+                known_read_cutoff=known_read_cutoff,
+            )
+        return loaded
+
+    def _daily_generator_sha256(self) -> str:
+        from .hmm_data_source.coefficient_extension import fingerprint
+
+        root = Path(__file__).resolve().parents[2]
+        return fingerprint(
+            {
+                path: self._file_sha256(str(root / path))
+                for path in (
+                    "scripts/precompute_hmm_coefficients.py",
+                    "scripts/hmm_horizon_v2_train.py",
+                    "backend/services/hmm_data_source/daily_input.py",
+                    "backend/services/hmm_data_source/coefficient_extension.py",
+                    "backend/services/hmm_training_service.py",
+                )
+            }
+        )
+
+    @staticmethod
+    def _daily_parameter_sha256(config: Dict[str, Any], preset: Dict[str, float]) -> str:
+        from .hmm_data_source.coefficient_extension import fingerprint
+
+        return fingerprint(
+            {
+                "preset_coeffs": preset,
+                "dynamic_parameters": {
+                    k: config.get(k)
+                    for k in (
+                        "method",
+                        "horizon_weights",
+                        "coefficient_lambda",
+                        "coefficient_bounds",
+                        "confidence_scale",
+                        "neutral_band",
+                        "confidence_floor",
+                    )
+                },
+            }
+        )
+
+    @staticmethod
+    def _database_daily_key(plan: Dict[str, Any]) -> str:
+        from .hmm_data_source.coefficient_extension import fingerprint
+
+        return fingerprint(
+            {
+                "source_mode": plan["source_mode"],
+                "snapshot_id": plan["snapshot_id"],
+                "config_id": plan["config_id"],
+                "model_sha256": plan["model_sha256"],
+                "parameter_sha256": plan["parameter_sha256"],
+                "generator_sha256": plan["generator_sha256"],
+                "signal_preset": plan["signal_preset"],
+                "as_of": plan["as_of_trade_date"],
+                "effective": plan["effective_trade_date"],
+                "input_identity": {k: v for k, v in plan["input_identity"].items() if k != "read_cutoff_at"},
+            }
+        )
+
     def _list_trading_days(self, start_date: date, end_date: date) -> List[date]:
         sql = """
             SELECT cal_date
@@ -730,7 +818,7 @@ class HMMTrainingService:
                 value = float(raw_value)
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"HMM coefficient for {signal_preset}.{label} must be numeric") from exc
-            if not value > 0:
+            if not math.isfinite(value) or not value > 0:
                 raise ValueError(f"HMM coefficient for {signal_preset}.{label} must be positive")
             result[str(label)] = value
         return result
@@ -765,9 +853,7 @@ class HMMTrainingService:
         )
 
         requested_as_of = _coerce_date(as_of_date, field_name="as_of_date") if as_of_date else None
-        latest_completed, data_max_dates = self._latest_completed_hmm_data_date(
-            as_of_date=requested_as_of,
-        )
+        latest_completed, completion_identity = self._database_daily_completion(as_of_date=requested_as_of)
         if requested_as_of is not None:
             self._require_trading_day(requested_as_of, field_name="as_of_date")
             if latest_completed < requested_as_of:
@@ -780,8 +866,9 @@ class HMMTrainingService:
             as_of = latest_completed
             self._require_trading_day(as_of, field_name="as_of_date")
 
+        next_trade_date = self._next_trading_day(as_of)
         if effective_trade_date is None:
-            effective = self._next_trading_day(as_of)
+            effective = next_trade_date
         else:
             effective = _coerce_date(
                 effective_trade_date,
@@ -789,10 +876,36 @@ class HMMTrainingService:
             )
             self._require_trading_day(effective, field_name="effective_trade_date")
         if effective <= as_of:
-            raise ValueError("effective_trade_date must be later than as_of_trade_date for daily HMM prediction")
+            raise ValueError("effective_trade_date must be after as_of_trade_date")
+
+        loaded = self._database_daily_inputs(snapshot=snapshot, as_of=as_of, effective=effective)
+        from .hmm_data_source.daily_input import validate_database_models
+
+        model_bytes = Path(model_path).read_bytes()
+        validate_database_models(json.loads(model_bytes), catalog=loaded["ordered_sector_codes"], preset=preset_coeffs)
+        input_identity = loaded["input_identity"]
+        model_sha256 = hashlib.sha256(model_bytes).hexdigest()
+        parameter_sha256 = self._daily_parameter_sha256(config_row["config_json"], preset_coeffs)
+        generator_sha256 = self._daily_generator_sha256()
+        daily_key = self._database_daily_key(
+            {
+                "source_mode": HMM_DATABASE_DAILY_SOURCE,
+                "snapshot_id": snapshot_id,
+                "config_id": str(snapshot["config_id"]),
+                "model_sha256": model_sha256,
+                "parameter_sha256": parameter_sha256,
+                "generator_sha256": generator_sha256,
+                "signal_preset": preset_key,
+                "as_of_trade_date": as_of.isoformat(),
+                "effective_trade_date": effective.isoformat(),
+                "input_identity": input_identity,
+            }
+        )
 
         model_dir = os.path.dirname(model_path)
-        output_filename = f"coefficients_{preset_key}_{effective.isoformat()}_{effective.isoformat()}.json"
+        output_filename = (
+            f"coefficients_{preset_key}_{effective.isoformat()}_{effective.isoformat()}__daily_{daily_key}.json"
+        )
         output_path = os.path.join(model_dir, output_filename)
         existing = os.path.exists(output_path)
         existing_status: Dict[str, Any] | None = None
@@ -805,6 +918,33 @@ class HMMTrainingService:
                 as_of_trade_date=as_of,
                 effective_trade_date=effective,
             )
+            from .hmm_data_source.daily_input import DailyInputError
+
+            original_identity = existing_status["input_identity"]
+            if not isinstance(original_identity, dict) or (
+                {k: v for k, v in original_identity.items() if k != "read_cutoff_at"}
+                != {k: v for k, v in input_identity.items() if k != "read_cutoff_at"}
+            ):
+                raise DailyInputError("hmm_daily_input_identity_changed", "existing asset has another input identity")
+            try:
+                original_cutoff = datetime.fromisoformat(original_identity["read_cutoff_at"])
+                current_cutoff = datetime.fromisoformat(input_identity["read_cutoff_at"])
+                if original_cutoff.utcoffset() is None or current_cutoff.utcoffset() is None:
+                    raise ValueError("timezone required")
+                original_day = original_cutoff.astimezone(timezone(timedelta(hours=8))).date()
+                if not as_of <= original_day <= effective or original_cutoff > current_cutoff:
+                    raise ValueError("invalid original read boundary")
+                for status in input_identity["completion_statuses"].values():
+                    if datetime.fromisoformat(status["refreshed_at"]) > original_cutoff:
+                        raise ValueError("completion after original read")
+            except (KeyError, ValueError, TypeError) as exc:
+                raise DailyInputError(
+                    "hmm_daily_input_identity_changed", "existing asset read cutoff is not valid"
+                ) from exc
+            # Repeated requests with unchanged facts share an immutable asset.
+            # Freeze its original read identity BEFORE creating a durable job,
+            # rather than changing the plan or result during execution.
+            input_identity = original_identity
 
         return {
             "snapshot_id": snapshot_id,
@@ -818,15 +958,27 @@ class HMMTrainingService:
             "as_of_trade_date": as_of.isoformat(),
             "effective_trade_date": effective.isoformat(),
             "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+            # The validated adapter proves each consumed prefix ends at as_of;
+            # physical table maxima remain diagnostic in database_completion.
             "input_data_max_dates": {
-                key: value.isoformat() if value else None for key, value in data_max_dates.items()
+                key: as_of.isoformat() for key in ("sector_data", "sw_daily", "index_daily_000300")
             },
+            "database_completion": completion_identity,
             "config_json": config_row.get("config_json") or {},
             "output_filename": output_filename,
             "output_path": output_path,
+            "source_mode": HMM_DATABASE_DAILY_SOURCE,
+            "model_sha256": model_sha256,
+            "parameter_sha256": parameter_sha256,
+            "generator_sha256": generator_sha256,
+            "input_identity": input_identity,
+            "daily_key": daily_key,
+            "input_validation_status": "VALIDATED",
+            "generation_available": True,
+            "blocking_reason": None,
             "existing_artifact": existing,
             "existing_artifact_status": existing_status,
-            "requires_wsl": True,
+            "requires_wsl": False,
             "confirm_boolean_required": True,
         }
 
@@ -849,6 +1001,8 @@ class HMMTrainingService:
             raise RuntimeError(f"HMM daily coefficient artifact is not a JSON object: {output_path}")
         expected = {
             "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+            "source_mode": HMM_DATABASE_DAILY_SOURCE,
+            "data_source": HMM_DATABASE_DAILY_SOURCE,
             "snapshot_id": snapshot_id,
             "config_id": config_id,
             "preset_key": signal_preset,
@@ -876,6 +1030,7 @@ class HMMTrainingService:
             "path": output_path,
             "artifact_sha256": self._file_sha256(output_path),
             "date_count": len(daily),
+            "input_identity": payload.get("input_identity"),
         }
 
     def preview_daily_coefficients(
@@ -913,83 +1068,202 @@ class HMMTrainingService:
         return self._execute_daily_coefficient_plan(plan)
 
     def _execute_daily_coefficient_plan(self, plan: Dict[str, Any]) -> Dict[str, Any]:
-        """Run the blocking WSL coefficient generation for an already validated plan."""
-        if plan["existing_artifact"]:
-            return {
-                **plan,
-                "status": "EXISTS",
-                "created": False,
-                "artifact_sha256": plan["existing_artifact_status"]["artifact_sha256"],
-            }
+        """Infer with verified DB facts and the same frozen-model core, zero fit."""
+        if plan.get("source_mode") != HMM_DATABASE_DAILY_SOURCE:
+            raise RuntimeError("hmm_daily_input_source_mismatch: daily generation requires database_daily")
+        if plan.get("generation_available") is not True or not isinstance(plan.get("input_identity"), dict):
+            raise RuntimeError("hmm_database_daily_input_unavailable: verified input identity is required")
+        with self._daily_execution_lock(f"asset:{plan['daily_key']}") as acquired:
+            if not acquired:
+                raise RuntimeError("hmm_daily_generation_in_progress: same immutable asset is being generated")
+            return self._infer_and_publish_database_daily(plan)
 
-        wsl_model_path = self._to_wsl_path(plan["model_path"])
-        wsl_output_path = self._to_wsl_path(plan["output_path"])
-        wsl_script = self._to_wsl_path(
-            os.path.abspath(
-                os.path.join(
-                    os.path.dirname(__file__),
-                    "..",
-                    "..",
-                    "scripts",
-                    "precompute_hmm_coefficients.py",
-                )
-            )
+    def _infer_and_publish_database_daily(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        from .hmm_data_source.coefficient_extension import fingerprint, publish_coefficient_content
+        from .hmm_data_source.daily_input import DailyInputError
+        from scripts.precompute_hmm_coefficients import generate_coefficient_payload
+
+        self._assert_daily_model_current(plan)
+        snapshot = self.get_snapshot(plan["snapshot_id"])
+        loaded = self._database_daily_inputs(
+            snapshot=snapshot,
+            as_of=date.fromisoformat(plan["as_of_trade_date"]),
+            effective=date.fromisoformat(plan["effective_trade_date"]),
+            known_read_cutoff=plan["input_identity"]["read_cutoff_at"],
         )
-        config_json = plan.get("config_json") or {}
-        stdin_params = {
-            "model_path": wsl_model_path,
-            "model_sha256": self._file_sha256(plan["model_path"]),
+        expected = {k: v for k, v in plan["input_identity"].items() if k != "read_cutoff_at"}
+        actual = {k: v for k, v in loaded["input_identity"].items() if k != "read_cutoff_at"}
+        if fingerprint(actual) != fingerprint(expected):
+            raise DailyInputError("hmm_daily_input_identity_changed", "database facts changed since planning")
+        # Identical facts have been observed twice. Preserve the original read
+        # cutoff in the deterministic asset; a later read is not new knowledge.
+        loaded["input_identity"] = plan["input_identity"]
+        existing_artifact = os.path.exists(plan["output_path"])
+        if existing_artifact:
+            self._validate_existing_daily_artifact(
+                output_path=plan["output_path"],
+                snapshot_id=plan["snapshot_id"],
+                config_id=plan["config_id"],
+                signal_preset=plan["signal_preset"],
+                as_of_trade_date=date.fromisoformat(plan["as_of_trade_date"]),
+                effective_trade_date=date.fromisoformat(plan["effective_trade_date"]),
+            )
+            with open(plan["output_path"], encoding="utf-8") as handle:
+                previous = json.load(handle)
+            if previous.get("input_identity") != plan["input_identity"]:
+                raise DailyInputError(
+                    "hmm_daily_input_identity_changed", "existing asset differs from the frozen durable read identity"
+                )
+        params = {
+            "source_mode": HMM_DATABASE_DAILY_SOURCE,
+            "model_path": plan["model_path"],
+            "model_sha256": plan["model_sha256"],
             "test_start": plan["as_of_trade_date"],
             "backtest_end": plan["as_of_trade_date"],
             "output_trade_date": plan["effective_trade_date"],
             "as_of_trade_date": plan["as_of_trade_date"],
             "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+            "config_id": plan["config_id"],
+            "snapshot_id": plan["snapshot_id"],
+            "preset_key": plan["signal_preset"],
+            "preset_coeffs": plan["preset_coeffs"],
+            "config_json": plan["config_json"],
+            "input_data_max_dates": {
+                k: plan["as_of_trade_date"] for k in ("sector_data", "sw_daily", "index_daily_000300")
+            },
+        }
+        try:
+            payload = generate_coefficient_payload(params, loaded_inputs=loaded)
+        except SystemExit as exc:
+            raise DailyInputError("hmm_daily_inference_failed", "frozen-model core rejected inference") from exc
+        payload.update(
+            {
+                "daily_key": plan["daily_key"],
+                "parameter_sha256": plan["parameter_sha256"],
+                "generator_sha256": plan["generator_sha256"],
+                "strict_no_leakage": True,
+            }
+        )
+        self._assert_daily_model_current(plan)
+        sha, byte_count = publish_coefficient_content(Path(plan["output_path"]), payload)
+        # Registration is separate from publication. A crash here can retry
+        # the same immutable file, never overwrite another model/input asset.
+        window = {
+            "role": "database_daily_prediction",
+            "source_mode": HMM_DATABASE_DAILY_SOURCE,
+            "config_id": plan["config_id"],
+            "snapshot_id": plan["snapshot_id"],
+            "preset": plan["signal_preset"],
+            "test_start": plan["effective_trade_date"],
+            "backtest_end": plan["effective_trade_date"],
+            "as_of_trade_date": plan["as_of_trade_date"],
+            "strict_no_leakage": True,
+            "daily_key": plan["daily_key"],
+            "model_sha256": plan["model_sha256"],
+            "parameter_sha256": plan["parameter_sha256"],
+            "generator_sha256": plan["generator_sha256"],
+            "input_identity": payload["input_identity"],
+            "coefficient_filename": plan["output_filename"],
+            "coefficient_sha256": sha,
+            "coefficient_bytes": byte_count,
+        }
+        self._assert_daily_input_current(plan)
+        self._register_database_daily_window(plan, window)
+        return {
+            "status": "EXISTS" if existing_artifact else "GENERATED",
+            "source_mode": HMM_DATABASE_DAILY_SOURCE,
             "snapshot_id": plan["snapshot_id"],
             "config_id": plan["config_id"],
-            "input_data_max_dates": plan["input_data_max_dates"],
-            "config_json": config_json,
-            "preset_coeffs": plan["preset_coeffs"],
-            "preset_key": plan["signal_preset"],
-            "frozen_input_bundle": self._qe_frozen_coefficient_bundle(config_json),
+            "signal_preset": plan["signal_preset"],
+            "as_of_trade_date": plan["as_of_trade_date"],
+            "effective_trade_date": plan["effective_trade_date"],
+            "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+            "input_data_max_dates": params["input_data_max_dates"],
+            "output_path": plan["output_path"],
+            "artifact_sha256": sha,
+            "coefficient_bytes": byte_count,
+            "date_count": 1,
+            "sector_count": payload["sector_count"],
+            "input_identity": payload["input_identity"],
+            "registration_status": "REGISTERED_READBACK",
+            "requires_wsl": False,
         }
-        wsl_cmd = (
-            "source ~/miniconda3/etc/profile.d/conda.sh && "
-            "conda activate rdagent-gpu && "
-            f"python {wsl_script} --output-path '{wsl_output_path}'"
+
+    def _assert_daily_model_current(self, plan: Dict[str, Any]) -> None:
+        from .hmm_data_source.daily_input import DailyInputError
+
+        snapshot = self.get_snapshot(plan["snapshot_id"])
+        config = self._get_config(plan["config_id"])
+        preset = self._extract_signal_preset_coefficients(
+            config["config_json"], plan["signal_preset"], allow_builtin_metadata_default=True
         )
-        proc = subprocess.run(
-            ["wsl", "bash", "-c", wsl_cmd],
-            input=json.dumps(stdin_params, ensure_ascii=False),
-            capture_output=True,
-            text=True,
-            timeout=300,
-            encoding="utf-8",
-            errors="replace",
+        if (
+            snapshot is None
+            or str(snapshot["config_id"]) != plan["config_id"]
+            or str(snapshot.get("status", "")).lower() not in {"completed", "success", "succeeded", "ready"}
+            or os.path.abspath(snapshot["model_path"]) != plan["model_path"]
+            or self._file_sha256(plan["model_path"]) != plan["model_sha256"]
+            or self._daily_parameter_sha256(config["config_json"], preset) != plan["parameter_sha256"]
+            or self._daily_parameter_sha256(plan["config_json"], plan["preset_coeffs"]) != plan["parameter_sha256"]
+            or self._daily_generator_sha256() != plan["generator_sha256"]
+            or self._database_daily_key(plan) != plan["daily_key"]
+        ):
+            raise DailyInputError("hmm_daily_model_identity_changed", "model, parameters or generator changed")
+        effective = plan["effective_trade_date"]
+        expected_name = f"coefficients_{plan['signal_preset']}_{effective}_{effective}__daily_{plan['daily_key']}.json"
+        if (
+            plan["output_filename"] != expected_name
+            or Path(plan["output_path"]) != Path(plan["model_path"]).parent / expected_name
+        ):
+            raise DailyInputError("hmm_daily_model_identity_changed", "output path differs from frozen identity")
+
+    def _assert_daily_input_current(self, plan: Dict[str, Any]) -> None:
+        from .hmm_data_source.coefficient_extension import fingerprint
+        from .hmm_data_source.daily_input import DailyInputError
+
+        loaded = self._database_daily_inputs(
+            snapshot=self.get_snapshot(plan["snapshot_id"]),
+            as_of=date.fromisoformat(plan["as_of_trade_date"]),
+            effective=date.fromisoformat(plan["effective_trade_date"]),
+            known_read_cutoff=plan["input_identity"]["read_cutoff_at"],
         )
-        if proc.stderr:
-            for line in proc.stderr.strip().splitlines():
-                logger.info("[HMM-daily-coefficients] %s", line)
-        if proc.returncode != 0:
-            raise RuntimeError(
-                "HMM daily coefficient generation failed: "
-                f"returncode={proc.returncode}; stderr_tail={proc.stderr[-4000:]}"
+        if fingerprint({k: v for k, v in loaded["input_identity"].items() if k != "read_cutoff_at"}) != fingerprint(
+            {k: v for k, v in plan["input_identity"].items() if k != "read_cutoff_at"}
+        ):
+            raise DailyInputError(
+                "hmm_daily_input_identity_changed", "source changed before registration; file not registered"
             )
-        if not os.path.isfile(plan["output_path"]):
-            raise RuntimeError(f"HMM daily coefficient generation did not create output file: {plan['output_path']}")
-        artifact_status = self._validate_existing_daily_artifact(
-            output_path=plan["output_path"],
-            snapshot_id=plan["snapshot_id"],
-            config_id=plan["config_id"],
-            signal_preset=plan["signal_preset"],
-            as_of_trade_date=_coerce_date(plan["as_of_trade_date"], field_name="as_of_trade_date"),
-            effective_trade_date=_coerce_date(plan["effective_trade_date"], field_name="effective_trade_date"),
-        )
-        return {
-            **plan,
-            "status": "CREATED",
-            "created": True,
-            "artifact_sha256": artifact_status["artifact_sha256"],
-        }
+
+    def _register_database_daily_window(self, plan: Dict[str, Any], window: Dict[str, Any]) -> None:
+        self._assert_daily_model_current(plan)
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT config_json FROM model_train_configs WHERE config_id=%s FOR UPDATE", (plan["config_id"],)
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise RuntimeError("hmm_daily_registration_failed: config missing")
+                config = self._normalise_config_json(row["config_json"])
+                preset = self._extract_signal_preset_coefficients(
+                    config, plan["signal_preset"], allow_builtin_metadata_default=True
+                )
+                if self._daily_parameter_sha256(config, preset) != plan["parameter_sha256"]:
+                    raise RuntimeError("hmm_daily_model_identity_changed: parameters changed before registration")
+                windows = list(config.get("coefficient_windows") or [])
+                existing = [w for w in windows if isinstance(w, dict) and w.get("daily_key") == plan["daily_key"]]
+                if existing and (len(existing) != 1 or existing[0] != window):
+                    raise RuntimeError("hmm_daily_registration_conflict: immutable registration differs")
+                if not existing:
+                    windows.append(window)
+                config["coefficient_windows"] = windows
+                cur.execute(
+                    "UPDATE model_train_configs SET config_json=%s WHERE config_id=%s RETURNING config_json",
+                    (psycopg2.extras.Json(config), plan["config_id"]),
+                )
+                saved = cur.fetchone()
+                if saved is None or self._normalise_config_json(saved["config_json"]) != config:
+                    raise RuntimeError("hmm_daily_registration_readback_mismatch")
 
     @staticmethod
     def _normalise_daily_job_row(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -1055,7 +1329,7 @@ class HMMTrainingService:
     ) -> Dict[str, Any]:
         """Create a durable background job and return immediately.
 
-        The WSL generation itself runs in ``run_daily_coefficients_job`` so UI
+        Database inference runs in ``run_daily_coefficients_job`` so UI
         calls do not depend on a long-lived Next.js dev proxy connection.
         """
         if not confirm_generate:
@@ -1066,7 +1340,29 @@ class HMMTrainingService:
             as_of_date=as_of_date,
             effective_trade_date=effective_trade_date,
         )
-        return self._insert_daily_coefficient_job(plan)
+        if plan.get("generation_available") is not True:
+            raise RuntimeError(
+                "hmm_database_daily_input_unavailable: database input is not validated; no daily job has been created"
+            )
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (f"hmm-database-daily:{plan['config_id']}",)
+                )
+                cur.execute(
+                    "SELECT job_id FROM model_train_daily_coefficient_jobs WHERE config_id=%s "
+                    "AND generation_mode=%s AND plan_json->>'daily_key'=%s ORDER BY requested_at DESC LIMIT 2",
+                    (plan["config_id"], HMM_DAILY_COEFFICIENT_MODE, plan["daily_key"]),
+                )
+                existing = cur.fetchall()
+                if len(existing) > 1:
+                    raise RuntimeError("hmm_daily_job_identity_conflict: duplicate durable jobs")
+                if existing:
+                    job = self.get_daily_coefficient_job(str(existing[0]["job_id"]))
+                    if job is None:
+                        raise RuntimeError("hmm_daily_job_identity_conflict: durable job disappeared")
+                    return job
+                return self._insert_daily_coefficient_job(plan, connection=conn)
 
     def get_daily_coefficient_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         sql = """
@@ -1147,7 +1443,7 @@ class HMMTrainingService:
                         result_json = %s,
                         error_message = NULL,
                         error_context = NULL
-                    WHERE job_id = %s
+                    WHERE job_id = %s AND status = 'RUNNING'
                     """,
                     (
                         str(result.get("status") or ""),
@@ -1157,6 +1453,8 @@ class HMMTrainingService:
                         job_id,
                     ),
                 )
+                if cur.rowcount != 1:
+                    raise RuntimeError("hmm_daily_job_completion_conflict: durable RUNNING job not updated")
 
     def _fail_daily_coefficient_job(
         self,
@@ -1173,7 +1471,7 @@ class HMMTrainingService:
                         completed_at = NOW(),
                         error_message = %s,
                         error_context = %s
-                    WHERE job_id = %s
+                    WHERE job_id = %s AND status IN ('PENDING', 'RUNNING')
                     """,
                     (message, psycopg2.extras.Json(context or {}), job_id),
                 )
@@ -1193,29 +1491,45 @@ class HMMTrainingService:
             logger.info("HMM daily coefficient job already terminal: %s", job_id)
             return
 
-        self._mark_daily_coefficient_job_running(job_id)
-        try:
-            plan = self._resolve_daily_coefficient_plan(
-                snapshot_id=str(job["snapshot_id"]),
-                signal_preset=str(job["signal_preset"]),
-                as_of_date=_coerce_date(job["as_of_trade_date"], field_name="as_of_trade_date"),
-                effective_trade_date=_coerce_date(
-                    job["effective_trade_date"],
-                    field_name="effective_trade_date",
-                ),
-            )
-            result = self._execute_daily_coefficient_plan(plan)
-            self._complete_daily_coefficient_job(job_id, result)
-        except Exception as exc:  # fail-fast and persist full diagnostic context
-            logger.exception("HMM daily coefficient job failed: %s", job_id)
-            self._fail_daily_coefficient_job(
-                job_id,
-                str(exc),
-                {
-                    "exception_type": exc.__class__.__name__,
-                    "traceback_tail": traceback.format_exc()[-8000:],
-                },
-            )
+        with self._daily_execution_lock(job_id) as acquired:
+            if not acquired:
+                return
+            job = self.get_daily_coefficient_job(job_id)
+            if job is None or str(job.get("status", "")).upper() in {"COMPLETED", "FAILED"}:
+                return
+            self._mark_daily_coefficient_job_running(job_id)
+            try:
+                # Execute the frozen durable plan, not a newly selected date,
+                # snapshot or input prefix. RUNNING recovery uses the same key.
+                plan = job.get("plan_json")
+                if not isinstance(plan, dict) or not plan.get("daily_key"):
+                    raise RuntimeError("hmm_daily_job_identity_unavailable: missing frozen plan")
+                result = self._execute_daily_coefficient_plan(plan)
+                self._complete_daily_coefficient_job(job_id, result)
+            except Exception as exc:
+                logger.exception("HMM daily coefficient job failed: %s", job_id)
+                self._fail_daily_coefficient_job(
+                    job_id,
+                    str(exc),
+                    {
+                        "reason_code": getattr(exc, "reason_code", "hmm_daily_inference_failed"),
+                        "exception_type": exc.__class__.__name__,
+                        "traceback_tail": traceback.format_exc()[-8000:],
+                    },
+                )
+
+    @contextmanager
+    def _daily_execution_lock(self, job_id: str):
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                key = f"hmm-database-daily-job:{job_id}"
+                cur.execute("SELECT pg_try_advisory_lock(hashtextextended(%s,0))", (key,))
+                acquired = cur.fetchone()[0]
+                try:
+                    yield acquired
+                finally:
+                    if acquired:
+                        cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))", (key,))
 
     def configure_coefficient_extension(
         self,
@@ -1433,6 +1747,7 @@ class HMMTrainingService:
                 "preset_key": plan["signal_preset"],
                 "preset_coeffs": plan["preset_coeffs"],
                 "config_json": plan["config_json"],
+                "source_mode": "qe_frozen_file",
                 "frozen_input_bundle": plan["frozen_input_bundle"],
             }
             proc = subprocess.run(
@@ -2002,6 +2317,7 @@ class HMMTrainingService:
                 "preset_coeffs": actual_coeffs,
                 "preset_key": preset_key,
                 "config_json": cfg,
+                "source_mode": "qe_frozen_file",
                 "frozen_input_bundle": frozen_input_bundle,
             }
 
