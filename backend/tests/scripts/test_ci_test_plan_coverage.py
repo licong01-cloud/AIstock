@@ -9,6 +9,24 @@ import pytest
 from scripts import ci_plan_coverage as coverage
 
 
+def test_nightly_failure_diagnostic_is_written_before_session_finish(monkeypatch, tmp_path):
+    path = tmp_path / "diagnostics.jsonl"
+    monkeypatch.setenv(coverage.METRICS_ENV, str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("AISTOCK_TEST_DIAGNOSTICS_RECEIPT", str(path))
+    coverage.pytest_sessionstart(None)
+    coverage.pytest_runtest_logstart("test_hmm.py::test_contract", None)
+    assert json.loads(path.with_suffix(".active.json").read_text())["state"] == "started"
+    report = SimpleNamespace(nodeid="test_hmm.py::test_contract", when="call", duration=1,
+                             failed=True, longrepr="AssertionError: contract mismatch")
+    coverage.pytest_runtest_logreport(report)
+    payload = json.loads(path.read_text())
+    assert payload["nodeid"] == report.nodeid and "AssertionError" in payload["failure"]
+    coverage.pytest_runtest_logfinish(report.nodeid, None)
+    assert json.loads(path.with_suffix(".active.json").read_text())["state"] == "finished"
+    monkeypatch.setattr(coverage, "_write_metrics", lambda *args: (_ for _ in ()).throw(OSError()))
+    coverage.pytest_runtest_logreport(report)  # diagnostic failure cannot change pytest verdict
+
+
 def test_execution_metrics_record_real_runs_without_changing_coverage(monkeypatch, tmp_path):
     monkeypatch.setattr(coverage, "_metrics", {})
     monkeypatch.delenv(coverage.METRICS_ENV, raising=False)

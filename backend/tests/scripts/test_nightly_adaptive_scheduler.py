@@ -559,6 +559,8 @@ def test_nightly_replaces_hmm_pr_slice_with_full_coverage_plan() -> None:
     assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
     assert "hmm_risk_backend" in plan["selected_plan_keys"]
     assert "hmm_risk_backend" in plan["selected_sessions"]
+    assert plan["session_timeout_seconds"]["hmm_risk_backend"] == 1800
+    assert set(plan["session_timeout_seconds"]) == set(plan["selected_sessions"])
 
 
 def test_nightly_fails_closed_for_invalid_pr_only_replacement(monkeypatch) -> None:

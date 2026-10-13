@@ -5,7 +5,33 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from scripts import nightly_session_runner as runner
+
+
+def test_catalog_budget_is_honored_but_never_exceeds_total_deadline(tmp_path):
+    observed = []
+    def execute(session, timeout, *args):
+        observed.append(timeout)
+        return dict(session=session, result="success", duration_seconds=0)
+    runner.run_sessions(["hmm"], output_json=tmp_path / "r.json", output_md=tmp_path / "r.md",
+                        session_timeout_seconds=1200, total_timeout_seconds=2400,
+                        session_budgets={"hmm": 1800}, executor=execute)
+    assert observed == [1800]
+    runner.run_sessions(["hmm"], output_json=tmp_path / "r.json", output_md=tmp_path / "r.md",
+                        session_timeout_seconds=1200, total_timeout_seconds=60,
+                        session_budgets={"hmm": 1800}, executor=execute)
+    assert 0 < observed[-1] <= 60
+
+
+@pytest.mark.parametrize("budget", [0, -1, True, 1.5, "1800"])
+def test_invalid_catalog_budget_fails_closed(tmp_path, budget):
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(dict(selected_sessions=["hmm"], changed_files=[],
+                                   session_timeout_seconds={"hmm": budget})))
+    with pytest.raises(ValueError, match="invalid session_timeout_seconds"):
+        runner._load_execution_plan(path)
 
 
 def test_run_sessions_checkpoints_each_result_and_continues_after_failure(tmp_path: Path) -> None:
@@ -106,6 +132,7 @@ def test_execute_session_uses_scope_file_instead_of_long_command_line(monkeypatc
 
     def fake_popen(command, **kwargs):
         captured["command"] = command
+        captured["pytest_addopts"] = kwargs["env"]["PYTEST_ADDOPTS"]
         captured["nightly_runner"] = kwargs["env"][runner.NIGHTLY_RUNNER_ENV]
         captured["completed_sessions"] = [
             item
@@ -124,6 +151,7 @@ def test_execute_session_uses_scope_file_instead_of_long_command_line(monkeypatc
 
     assert captured["command"] == [sys.executable, "-m", "nox", "-s", "l0"]
     assert captured["nightly_runner"] == "1"
+    assert "-x -p scripts.ci_plan_coverage" in captured["pytest_addopts"]
     assert captured["scope"] == paths
     assert captured["completed_sessions"] == ["validation_workflow_automation"]
     assert not captured["scope_path"].exists()  # type: ignore[union-attr]

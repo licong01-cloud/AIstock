@@ -86,6 +86,11 @@ def execute_session(
     process_env = os.environ.copy()
     process_env[NIGHTLY_RUNNER_ENV] = "1"
     process_env[NIGHTLY_COMPLETED_SESSIONS_ENV] = ",".join(completed_sessions or [])
+    # Fail fast within a failed pytest invocation, not across independent plans.
+    # The existing plugin is observational unless a collection receipt is set.
+    process_env["PYTEST_ADDOPTS"] = (
+        process_env.get("PYTEST_ADDOPTS", "") + " -x -p scripts.ci_plan_coverage"
+    ).strip()
     if scope_file is not None:
         process_env["AISTOCK_NIGHTLY_SESSION_ARGS_FILE"] = str(scope_file)
     popen_kwargs["env"] = process_env
@@ -137,6 +142,7 @@ def run_sessions(
     total_timeout_seconds: int,
     executor: SessionExecutor = execute_session,
     session_args: dict[str, list[str]] | None = None,
+    session_budgets: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     completed_sessions: list[str] = []
@@ -159,7 +165,7 @@ def run_sessions(
         else:
             row = executor(
                 session,
-                min(session_timeout_seconds, remaining),
+                min((session_budgets or {}).get(session, session_timeout_seconds), remaining),
                 list((session_args or {}).get(session) or []),
                 list(completed_sessions),
             )
@@ -172,7 +178,7 @@ def run_sessions(
     return results
 
 
-def _load_execution_plan(plan_path: Path) -> tuple[list[str], dict[str, list[str]]]:
+def _load_execution_plan(plan_path: Path) -> tuple[list[str], dict[str, list[str]], dict[str, int]]:
     payload = json.loads(plan_path.read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError("Nightly execution plan must be a JSON object")
@@ -208,11 +214,19 @@ def _load_execution_plan(plan_path: Path) -> tuple[list[str], dict[str, list[str
             "Nightly execution plan selected change-scoped sessions without changed_files: "
             + ", ".join(sorted(missing_change_scope))
         )
-    return sessions, session_args
+    budgets = payload.get("session_timeout_seconds", {})
+    if not isinstance(budgets, dict) or any(
+        session not in sessions or isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for session, value in budgets.items()
+    ):
+        raise ValueError("Nightly execution plan contains invalid session_timeout_seconds")
+    if budgets and set(budgets) != set(sessions):
+        raise ValueError("Nightly execution plan has incomplete session_timeout_seconds")
+    return sessions, session_args, budgets
 
 
 def _selected_sessions(plan_path: Path) -> list[str]:
-    sessions, _session_args = _load_execution_plan(plan_path)
+    sessions, _session_args, _budgets = _load_execution_plan(plan_path)
     return sessions
 
 
@@ -233,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     output_json = Path(args.output_json)
     output_md = Path(args.output_md)
     try:
-        sessions, session_args = _load_execution_plan(Path(args.plan))
+        sessions, session_args, session_budgets = _load_execution_plan(Path(args.plan))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         failure = [{
             "session": "nightly_execution_plan",
@@ -254,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
         session_timeout_seconds=args.session_timeout_seconds,
         total_timeout_seconds=args.total_timeout_seconds,
         session_args=session_args,
+        session_budgets=session_budgets,
     )
     failures = [row for row in results if row.get("result") != "success"]
     print(
