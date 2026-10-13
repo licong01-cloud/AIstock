@@ -129,6 +129,12 @@ targets:
       - backend/services/dataset_release/monthly_industry_history.py
       - backend/services/dataset_release/monthly_*.py
       - backend/services/dataset_release/monthly_unified.py
+      - backend/services/dataset_release/monthly_worker.py
+      - backend/services/dataset_release/monthly_shared_components.py
+      - backend/services/dataset_release/monthly_sector_quote_facts.py
+      - backend/services/dataset_release/monthly_hmm_derive.py
+      - backend/services/dataset_release/monthly_hmm_consumer_probe.py
+      - backend/services/dataset_release/monthly_node_probe_runner.py
       - backend/services/dataset_release/monthly_supervised_build.py
       - backend/services/dataset_release/monthly_mature_build_runner.py
       - backend/services/dataset_release/monthly_frozen_source_audit.py
@@ -195,6 +201,12 @@ targets:
           - backend/services/dataset_release/api_models.py
           - backend/services/dataset_release/monthly_*.py
           - backend/services/dataset_release/monthly_unified.py
+          - backend/services/dataset_release/monthly_worker.py
+          - backend/services/dataset_release/monthly_shared_components.py
+          - backend/services/dataset_release/monthly_sector_quote_facts.py
+          - backend/services/dataset_release/monthly_hmm_derive.py
+          - backend/services/dataset_release/monthly_hmm_consumer_probe.py
+          - backend/services/dataset_release/monthly_node_probe_runner.py
           - backend/services/dataset_release/monthly_supervised_build.py
           - backend/services/dataset_release/monthly_mature_build_runner.py
           - scripts/dataset_release_candidate_consumer_smoke.py
@@ -222,6 +234,12 @@ targets:
           - backend/services/dataset_release/monthly_mature_build_runner.py
           - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/monthly_unified.py
+          - backend/services/dataset_release/monthly_worker.py
+          - backend/services/dataset_release/monthly_shared_components.py
+          - backend/services/dataset_release/monthly_sector_quote_facts.py
+          - backend/services/dataset_release/monthly_hmm_derive.py
+          - backend/services/dataset_release/monthly_hmm_consumer_probe.py
+          - backend/services/dataset_release/monthly_node_probe_runner.py
           - backend/services/dataset_release/monthly_supervised_build.py
           - scripts/dataset_release_candidate_consumer_smoke.py
           - backend/services/dataset_release/monthly_repair_journal.py

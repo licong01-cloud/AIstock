@@ -303,11 +303,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Windows fresh process with datetime.UTC removed: imports monthly_node_probe and monthly_immutable_deploy; monthly_unified.UTC and monthly_worker.UTC are timezone.utc; PASS.",
+      "Ubuntu rdagent-gpu Python 3.10.19 fresh process from isolated worktree: imports monthly_node_probe, monthly_immutable_deploy, monthly_hmm_derive, monthly_sector_quote_facts and unchanged scripts.precompute_hmm_coefficients; FRESH_IMPORT_PASS.",
+      "Ubuntu Python 3.10.19 real HDF fixture on X: shared projection retains finite moneyflow with stopped quote NaN, leaves source bytes/signature unchanged and closes output SHA; PY310_HDF_QUOTE_PROJECTION_PASS.",
+      "Ubuntu Python 3.10.19 executes existing POSIX binary transport end-to-end test in fresh process: first deploy transfers bytes, retry transfers zero, hardlink aliases retained; POSIX_BINARY_DEPLOY_RETRY_PASS. No production dataset or service writes."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -317,6 +323,24 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "implementation_review": {
+    "round_1": "Root cause and source contracts: Python 3.10 UTC compatibility; authentic SW2014 classifications preserved, independent shared SW2021 quote facts projected with official shared IDs and unchanged formal reader. RED import/fixture to GREEN.",
+    "round_2": "Release closure and incrementality: manifest pins include facts and component receipt; inherited facts and map pins verified; subsequent month reads only physical tail; finite contradictions/unknown IDs/source mutation/cancellation remain failures. Found and corrected generated manifest-name lookup and Windows read-only fsync issue.",
+    "round_3": "Cross-process and side effects: actual Python3.10 import/HDF/POSIX retry PASS; formal unchanged loader regression PASS; no HMM/QE model edits, no day/minute re-export, no production DB/profile/process actions; runtime remains pending user restart.",
+    "design_compliance_001": {
+      "no_partial_delivery_as_complete": true,
+      "no_silent_or_fake_success": true,
+      "no_unapproved_semantic_drift": true,
+      "no_unapproved_human_gate": true
+    },
+    "test_layout": "Projection regressions consolidated in existing test_monthly_shared_components.py so the existing qlib_data CI lane executes them; no skipped new test file or extra CI ownership lane.",
+    "historical_classification_preserved": true,
+    "monthly_validation_scope": "month_delta",
+    "production_database_write": false,
+    "active_profile_write": false,
+    "production_dataset_write": false,
+    "runtime_action": false
+  },
   "status": "open",
   "suspected_modules": [
     "qlib_data"
