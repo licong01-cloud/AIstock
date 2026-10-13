@@ -8,7 +8,7 @@
   ],
   "assigned_agent": "Codex HMM owner",
   "bug_id": "BUG-1890",
-  "closed_at": null,
+  "closed_at": "2026-10-13T19:57:09Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -89,8 +89,8 @@
   },
   "first_seen_at": "2026-10-13T18:41:08.403882Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "502cb1a542877ed0d4c39fd75ab21dada41d6133",
+  "fixed_at": "2026-10-13T19:57:09Z",
   "github_issue_number": 5424,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5424",
   "last_seen_at": "2026-10-13T18:41:08.403882Z",
@@ -98,6 +98,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6036",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -115,6 +116,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -124,7 +126,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1890",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3f8ebb05cbad5d03",
+    "recorded_at": "2026-10-13T19:57:58.530920Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62",
+    "source_merge_commit": "502cb1a542877ed0d4c39fd75ab21dada41d6133",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6036",
+    "validation_evidence": [
+      "validation-receipt: id=ce8eeaafc5866510 commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py backend/tests/hmm_risk/test_formal_state_effect.py tests/aistock_validation/bugs/20261013_BUG-1890-hmm-risk-ci-failure-requires-triage-hmm-risk-backend-exceeded-1200-secon.json` result=`passed; exit_code=0; blocking=0`",
+      "validation-receipt: id=be995581b74d6524 commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_formal_state_effect.py::test_hmm_product_writer_readback_and_api_keep_explicit_version backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py::test_cached_candidate_is_case_local_and_never_rebuilds_input --junitxml=tmp/issue_workflow/BUG-1890/final-smoke.xml --durations=3` result=`2 passed in 25.00s; exit_code=0`",
+      "validation-receipt: id=de288d4b0504c15b commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=ruff plan=direct status=passed command=`rtk ruff check backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py backend/tests/hmm_risk/test_formal_state_effect.py` result=`passed; exit_code=0`",
+      "validation-receipt: id=49993c42bb4522b0 commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=compile plan=direct status=passed command=`python -m py_compile backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py backend/tests/hmm_risk/test_formal_state_effect.py` result=`passed; exit_code=0`",
+      "validation-receipt: id=1dff0c1e84128453 commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed; exit_code=0`"
+    ],
+    "validation_evidence_digest": "950b449c249af7bd8966be5d7172985d968522c22eea45b230d6040f82607b53"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -133,6 +160,13 @@
     "fingerprint": "28d824b73293944b25b5b489",
     "source_event_id": "FE-20261013-28d824b73293"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ce8eeaafc5866510 commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py backend/tests/hmm_risk/test_formal_state_effect.py tests/aistock_validation/bugs/20261013_BUG-1890-hmm-risk-ci-failure-requires-triage-hmm-risk-backend-exceeded-1200-secon.json` result=`passed; exit_code=0; blocking=0`",
+    "validation-receipt: id=be995581b74d6524 commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_formal_state_effect.py::test_hmm_product_writer_readback_and_api_keep_explicit_version backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py::test_cached_candidate_is_case_local_and_never_rebuilds_input --junitxml=tmp/issue_workflow/BUG-1890/final-smoke.xml --durations=3` result=`2 passed in 25.00s; exit_code=0`",
+    "validation-receipt: id=de288d4b0504c15b commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=ruff plan=direct status=passed command=`rtk ruff check backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py backend/tests/hmm_risk/test_formal_state_effect.py` result=`passed; exit_code=0`",
+    "validation-receipt: id=49993c42bb4522b0 commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=compile plan=direct status=passed command=`python -m py_compile backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py backend/tests/hmm_risk/test_formal_state_effect.py` result=`passed; exit_code=0`",
+    "validation-receipt: id=1dff0c1e84128453 commit=77b8c3dc8377bf8a718fb56a68ef131f0c5a7f62 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed; exit_code=0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
