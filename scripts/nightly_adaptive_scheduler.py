@@ -189,10 +189,16 @@ def build_nightly_execution_plan(
     plans = issue_flow._plans_by_key()
     operational_plans = {key for key, plan in plans.items() if plan.get("execution_scope") == "operations"}
     operational_sessions = {str(plans[key].get("nox_session") or "") for key in operational_plans}
+    automation_denied = {key for key, plan in plans.items()
+                         if (plan.get("runtime_policy") or {}).get("allow_github_actions") is False}
+    denied_sessions = {str(plans[key].get("nox_session") or ""): key for key in automation_denied}
     retry_context = retry_context or {}
     retry_sessions = unique_values([str(item) for item in retry_context.get("failed_sessions") or []])
     operational_retry_sessions = [session for session in retry_sessions if session in operational_sessions]
-    retry_sessions = [session for session in retry_sessions if session not in operational_sessions]
+    excluded_automation = {denied_sessions[session]: "not_executed: catalog allow_github_actions=false"
+                           for session in retry_sessions if session in denied_sessions}
+    retry_sessions = [session for session in retry_sessions
+                      if session not in operational_sessions and session not in denied_sessions]
     plan_keys = [] if full_run or not normalized else list(BASELINE_NIGHTLY_PLAN_KEYS)
     if full_run:
         plan_keys.extend(
@@ -228,6 +234,9 @@ def build_nightly_execution_plan(
             ):
                 raise ValueError(f"Nightly replacement plan is invalid for PR-only plan {key}: {replacement_key}")
             key = replacement_key
+        if key in automation_denied:
+            excluded_automation[key] = "not_executed: catalog allow_github_actions=false"
+            continue
         if key not in nightly_plan_keys:
             nightly_plan_keys.append(key)
 
@@ -243,6 +252,7 @@ def build_nightly_execution_plan(
         str(plan.get("nox_session") or "").strip(): key
         for key, plan in plans.items()
         if plan.get("execution_scope") != "pr"
+        and key not in automation_denied
         and plan.get("enabled", True)
         and plan.get("runner_enabled")
         and str(plan.get("nox_session") or "").strip()
@@ -256,15 +266,18 @@ def build_nightly_execution_plan(
             selected_plan_keys.append(retry_plan_key)
         if session not in selected_sessions:
             selected_sessions.append(session)
-    # Run the full coverage producer before its non-coverage shared slices.
-    producer = "validation_center_backend"
-    consumers = {"validation_workflow_automation", "data_sync_autonomy_backend",
-                 "validation_module_registry_l0", "validation_catalog_integrity"}
-    if producer in selected_sessions:
-        consumer_positions = [index for index, session in enumerate(selected_sessions) if session in consumers]
-        if consumer_positions and min(consumer_positions) < selected_sessions.index(producer):
-            selected_sessions.remove(producer)
-            selected_sessions.insert(min(consumer_positions), producer)
+    # Order only already selected full producers; never add unrelated plans.
+    producers = {
+        "validation_center_backend": {"validation_workflow_automation", "data_sync_autonomy_backend",
+                                      "validation_module_registry_l0", "validation_catalog_integrity"},
+        "mcp_gateway_manifest_quality": {"research_mcp_contract", "mcp_gateway_phase6_resource_monitor"},
+    }
+    for producer, consumers in producers.items():
+        if producer in selected_sessions:
+            consumer_positions = [index for index, session in enumerate(selected_sessions) if session in consumers]
+            if consumer_positions and min(consumer_positions) < selected_sessions.index(producer):
+                selected_sessions.remove(producer)
+                selected_sessions.insert(min(consumer_positions), producer)
     change_scoped_files = unique_values(
         [
             *[str(path) for path in retry_context.get("change_scoped_files") or []],
@@ -294,6 +307,7 @@ def build_nightly_execution_plan(
         "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
         "excluded_operational_plans": sorted(operational_plans),
         "excluded_operational_retry_sessions": operational_retry_sessions,
+        "excluded_automation_plans": excluded_automation,
         "excluded_pr_only_plans": (
             sorted(key for key, plan in plans.items() if plan.get("execution_scope") == "pr") if full_run else []
         ),
@@ -472,6 +486,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "This warning-only job emits plan keys and gate evidence only. It does not create GitHub Issues, run shell commands, touch production services, or write BUG JSON.",
         "",
     ]
+    execution = report.get("nightly_execution") or {}
+    lines.extend(f"- {key}: `{reason}`" for key, reason in (execution.get("excluded_automation_plans") or {}).items())
     return "\n".join(lines)
 
 
@@ -515,6 +531,7 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
         "production_gates": report.get("production_gates") or {},
         "shell_commands_allowed": False,
         "production_actions_allowed": False,
+        "nightly_execution_exclusions": (report.get("nightly_execution") or {}).get("excluded_automation_plans") or {},
         "error": report.get("error"),
     }
 

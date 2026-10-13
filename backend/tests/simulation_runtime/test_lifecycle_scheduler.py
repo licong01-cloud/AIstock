@@ -7964,10 +7964,21 @@ def test_scheduler_rejects_fresh_miniqmt_submit_outside_shared_window_without_br
     assert broker.place_order_payloads == []
 
 
-def test_scheduler_rejects_fresh_localsim_submit_outside_shared_window_without_broker_call() -> None:
+@pytest.mark.parametrize("historical_native", [False, True])
+def test_scheduler_rejects_fresh_localsim_submit_outside_shared_window_without_broker_call(historical_native) -> None:
     release, local_binding, _, repo = _release_and_bindings()
     assert local_binding is not None
     broker = FakeLocalSimBroker()
+    if historical_native:
+        local_binding = local_binding.model_copy(update={
+            "broker_account_id": local_binding.strategy_id,
+            "effective_from": TRADE_DATE, "effective_to": TRADE_DATE,
+            "binding_config_json": {"metadata": {
+                "localsim_account_id": local_binding.strategy_id,
+                "account_schema_version": "simulation_account_v1",
+            }},
+        })
+        repo.bindings[local_binding.binding_id] = local_binding
     scheduler = SimulationLifecycleScheduler(
         repository=repo,
         selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
@@ -7979,6 +7990,7 @@ def test_scheduler_rejects_fresh_localsim_submit_outside_shared_window_without_b
                 )
             }
         ),
+        localsim_successor_repository=SimpleNamespace(list_replay_jobs=lambda **_kwargs: []),
     )
 
     result = scheduler.run_once(
@@ -19485,3 +19497,112 @@ def test_daily_context_wires_direct_instrument_authority_for_miniqmt() -> None:
     assert instrument_calls == [["000001.SZ"]]
     assert daily_provider.kwargs == {}
     assert result["000001.SZ"]["daily_trading_context"]["limit_authority"] == ("MINIQMT_INSTRUMENT_DETAIL_V1")
+
+
+@pytest.mark.parametrize("job_status,explicit,allowed", [
+    ("RUNNING_HISTORICAL", False, False), ("FAILED_TERMINAL", False, False),
+    ("CANCELLED", False, False), ("CAUGHT_UP", False, False),
+    ("RUNNING_HISTORICAL", True, True), ("CANCELLED", True, False),
+    ("LIVE_ACTIVE", False, True),
+])
+def test_native_replay_binding_isolation(job_status, explicit, allowed, monkeypatch):
+    from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
+
+    release, binding, _, repo = _release_and_bindings()
+    native = binding.model_copy(update={
+        "broker_account_id": binding.strategy_id,
+        "binding_config_json": {"metadata": {
+            "localsim_account_id": binding.strategy_id,
+            "account_schema_version": "simulation_account_v1",
+        }},
+    })
+    job = SimpleNamespace(
+        status=LocalSimReplayStatus(job_status), binding_id=native.binding_id,
+        release_id=native.release_id, start_trade_date=TRADE_DATE, end_trade_date=TRADE_DATE,
+        live_release_id=native.release_id if job_status == "LIVE_ACTIVE" else None,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo, localsim_successor_repository=SimpleNamespace(list_replay_jobs=lambda **_kwargs: [job]),
+    )
+    monkeypatch.setattr(scheduler, "_scheduler_now", lambda: datetime(2026, 5, 22, tzinfo=ZoneInfo("Asia/Shanghai")))
+    assert scheduler._localsim_replay_allows_binding(
+        binding=native, explicit_release_id=release.release_id if explicit else None, trade_date=TRADE_DATE,
+    ) is allowed
+
+
+def test_closed_native_historical_executor_runs_real_broker_and_preserves_residual(monkeypatch):
+    from backend.services.simulation_runtime.localsim_replay_runtime import LocalSimHistoricalReplayDayExecutor
+    from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
+
+    release, binding, _, repo = _release_and_bindings()
+    native = binding.model_copy(update={
+        "broker_account_id": binding.strategy_id, "effective_from": TRADE_DATE, "effective_to": TRADE_DATE,
+        "binding_config_json": {"metadata": {
+            "localsim_account_id": binding.strategy_id, "account_schema_version": "simulation_account_v1",
+        }},
+    })
+    repo.bindings[native.binding_id] = native
+    paper_repo = InMemoryPaperTradingV2Repository()
+    context = _local_sim_context_with_real_broker(
+        portfolio_id="portfolio_replay_window_regression", release=release, paper_repository=paper_repo,
+        execution_policy={"policy_id": "replay_partial", "policy_sha256": "frozen",
+                          "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 6, "allow_partial_fill": True}}},
+    )
+    job = SimpleNamespace(
+        replay_job_id="replay_window_regression", simulation_account_id=native.strategy_id,
+        binding_id=native.binding_id, release_id=release.release_id, start_trade_date=TRADE_DATE,
+        end_trade_date=TRADE_DATE, status=LocalSimReplayStatus.RUNNING_HISTORICAL, live_release_id=None,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo, selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(by_binding_id={native.binding_id: context}),
+        localsim_successor_repository=SimpleNamespace(list_replay_jobs=lambda **_kwargs: [job]),
+    )
+    def now():
+        return datetime(2026, 5, 22, tzinfo=ZoneInfo("Asia/Shanghai"))
+    monkeypatch.setattr("backend.services.simulation_runtime.lifecycle.scheduler_now", now)
+    monkeypatch.setattr("backend.services.simulation_runtime.scheduler.scheduler_now", now)
+    LocalSimHistoricalReplayDayExecutor(lifecycle_scheduler=scheduler)(job, TRADE_DATE)
+    run = repo.get_simulation_daily_run_by_key(
+        strategy_id=native.strategy_id, binding_id=native.binding_id, trade_date=TRADE_DATE,
+    )
+    assert run.run_payload_json["local_sim_projection_outbox_v1"]["status"] == "PROJECTED"
+    assert paper_repo.list_fills_for_run(run.run_id)
+    assert run.run_payload_json.get("submit_window_gate") is None
+    assert run.status is SimulationDailyRunStatus.FAILED_TERMINAL
+    assert run.run_payload_json["local_sim_capacity_residual_terminalization"]["schedule_residual_count"] > 0
+    before = len(scheduler.selection_service.calls)
+    normal = scheduler.run_once(
+        trade_date=date(2026, 5, 22), data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=True,
+        as_of_time=datetime(2026, 5, 22, 9, 35, tzinfo=ZoneInfo("Asia/Shanghai")),
+    )
+    assert normal.total_bindings == 0
+    assert len(scheduler.selection_service.calls) == before
+    assert len(repo.bindings) == 2
+
+
+@pytest.mark.parametrize("has_plan,broker_called", [(False, False), (True, False), (False, True)])
+def test_replay_exclusion_cancels_only_side_effect_free_foreign_daily_run(has_plan, broker_called):
+    release, binding, _, repo = _release_and_bindings()
+    repo.save_simulation_daily_run(SimulationDailyRun(
+        run_id="simrun_replay_excluded", trade_date=TRADE_DATE, strategy_id=binding.strategy_id,
+        broker_backend=binding.broker_backend, package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256, release_id=release.release_id,
+        release_hash=release.release_hash, binding_id=binding.binding_id, binding_hash=binding.binding_hash,
+        execution_plan_id="plan_exists" if has_plan else None,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        run_payload_json={"broker_called": broker_called, "submit_failure": {"reason": "original_pre_run_failure"}},
+    ))
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+    if has_plan or broker_called:
+        with pytest.raises(InvalidStateTransitionError, match="plan or broker side effects"):
+            scheduler._cancel_unactivated_replay_daily_run(binding=binding, trade_date=TRADE_DATE)
+        assert repo.get_simulation_daily_run("simrun_replay_excluded").status is SimulationDailyRunStatus.FAILED_RETRYABLE
+    else:
+        scheduler._cancel_unactivated_replay_daily_run(binding=binding, trade_date=TRADE_DATE)
+        scheduler._cancel_unactivated_replay_daily_run(binding=binding, trade_date=TRADE_DATE)
+        run = repo.get_simulation_daily_run("simrun_replay_excluded")
+        assert run.status is SimulationDailyRunStatus.CANCELLED
+        assert run.run_payload_json["submit_failure"]["reason"] == "original_pre_run_failure"
+        assert run.run_payload_json["localsim_replay_daily_run_exclusion"]["broker_called"] is False

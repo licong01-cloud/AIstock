@@ -15,11 +15,12 @@ from .localsim_product_control import LocalSimHistoricalSourceAuthorityProtocol
 from .localsim_replay import (
     LocalSimHistoricalDayRunner, LocalSimReplayCoordinator, local_sim_calendar_snapshot_sha256,
 )
-from .models import SimulationBrokerBackend
+from .models import SimulationBrokerBackend, SimulationDailyRunStatus
 from .successor_models import (
     LocalSimReplayJobV1,
     LocalSimReplayStatus,
     LocalSimSafeBoundaryDecisionV1,
+    SimulationAccountStatus,
 )
 from .successor_repository import LocalSimSuccessorRepositoryProtocol
 
@@ -61,6 +62,15 @@ class LocalSimHistoricalReplayDayExecutor:
                 },
             )
         item = matching[0]
+        run = item.run
+        payload = run.run_payload_json if run is not None else {}
+        residual_completed = (
+            run is not None and run.status is SimulationDailyRunStatus.FAILED_TERMINAL
+            and item.status in {"LOCALSIM_EXECUTION_RESIDUAL_TERMINAL", "LOCALSIM_CAPACITY_RESIDUAL_TERMINAL"}
+            and (payload.get("local_sim_persistence") or {}).get("status")
+            in {"PERSISTED_WITH_RESIDUAL", "PERSISTED_WITH_CAPACITY_RESIDUAL"}
+            and (payload.get("local_sim_projection_outbox_v1") or {}).get("status") == "PROJECTED"
+        )
         if not item.is_success:
             raise InvalidStateTransitionError(
                 "LocalSIM replay daily engine failed",
@@ -71,6 +81,23 @@ class LocalSimHistoricalReplayDayExecutor:
                     "binding_id": job.binding_id,
                     "status": item.status,
                     "error": item.error,
+                },
+            )
+        succeeded_completed = (
+            run is not None and run.status is SimulationDailyRunStatus.SUCCEEDED
+            and (
+                payload.get("no_rebalance_required") is True
+                or bool(payload.get("pre_trade_blocked_order_generation"))
+                or (payload.get("local_sim_projection_outbox_v1") or {}).get("status") == "PROJECTED"
+            )
+        )
+        if not succeeded_completed and not residual_completed:
+            raise DataUnavailableError(
+                "LocalSIM historical day has not completed durable execution",
+                context={
+                    "reason_code": "LOCALSIM_REPLAY_DAILY_ENGINE_NOT_COMPLETE",
+                    "replay_job_id": job.replay_job_id, "trade_date": trade_date.isoformat(),
+                    "status": item.status,
                 },
             )
 
@@ -203,9 +230,11 @@ class LocalSimReplayLifecycleOwner:
             job
             for job in all_jobs
             if job.replay_job_id not in superseded_ids
+            and self.repository.get_account(job.simulation_account_id).status is SimulationAccountStatus.ACTIVE
             and (
                 job.status in self._ACTIVE_STATUSES
                 or LocalSimReplayCoordinator.is_recoverable_selection_timeout(job)
+                or LocalSimReplayCoordinator.is_recoverable_historical_submit_window(job)
             )
         ][: self.max_jobs_per_tick]
         outcomes: list[dict[str, Any]] = []
@@ -256,10 +285,6 @@ class LocalSimReplayLifecycleOwner:
 
     def _advance(self, *, job: LocalSimReplayJobV1, as_of_time: datetime) -> LocalSimReplayJobV1:
         current = self.repository.get_replay_job(job.replay_job_id)
-        if LocalSimReplayCoordinator.is_recoverable_selection_timeout(current):
-            current = self._coordinator_for_job(current).recover_selection_timeout(
-                replay_job_id=current.replay_job_id, expected_version=current.version,
-            )
         source = self.historical_source_authority.resolve(
             historical_source_id=current.historical_source_id,
             start_trade_date=current.start_trade_date,
@@ -273,6 +298,14 @@ class LocalSimReplayLifecycleOwner:
             raise InvalidStateTransitionError(
                 "LocalSIM replay frozen source or calendar changed before continuation",
                 context={"reason_code": "LOCALSIM_REPLAY_SOURCE_OR_CALENDAR_MISMATCH"},
+            )
+        if LocalSimReplayCoordinator.is_recoverable_selection_timeout(current):
+            current = self._coordinator_for_job(current).recover_selection_timeout(
+                replay_job_id=current.replay_job_id, expected_version=current.version,
+            )
+        elif LocalSimReplayCoordinator.is_recoverable_historical_submit_window(current):
+            current = self._coordinator_for_job(current).recover_historical_submit_window(
+                replay_job_id=current.replay_job_id, expected_version=current.version,
             )
         if current.status in {
             LocalSimReplayStatus.CREATED,

@@ -357,6 +357,16 @@ def test_nightly_execution_plan_uses_catalog_and_deduplicates_sessions() -> None
     assert plan["session_positional_args"]["l0"] == ["backend/services/simulation_runtime/ops.py"]
 
 
+def test_nightly_mcp_producer_precedes_only_already_selected_consumers() -> None:
+    consumers = ["research_mcp_contract"]  # Phase 6 is explicitly local/manual-only.
+    producer = "mcp_gateway_manifest_quality"
+    for failed in (consumers, [*consumers, producer]):
+        sessions = scheduler.build_nightly_execution_plan([], retry_context={"failed_sessions": failed})["selected_sessions"]
+        assert set(sessions) == set(failed)
+        if producer in sessions:
+            assert all(sessions.index(producer) < sessions.index(consumer) for consumer in consumers)
+
+
 @pytest.mark.parametrize("name", ["client", "client_bj_code", "dial", "manage", "pagination", "pagination_test", "web/server"])
 def test_nightly_tdx_go_root_and_nested_sources_have_owned_plans(name: str) -> None:
     path = f"tdx-api-main/{name}.go"
@@ -412,6 +422,37 @@ def test_nightly_execution_plan_empty_window_without_retry_is_noop() -> None:
     assert plan["selected_sessions"] == []
     assert plan["session_positional_args"] == {}
     assert plan["workflow_gate"] == "passed"
+
+
+@pytest.mark.parametrize("full_run,changed_files,retry", [
+    (True, [], []),
+    (False, ["backend/mcp/profiles.py"], []),
+    (False, [], ["mcp_gateway_phase5_assistant", "mcp_gateway_phase6_resource_monitor", "research_mcp_contract"]),
+])
+def test_nightly_respects_explicit_catalog_automation_prohibition(full_run, changed_files, retry):
+    plans = scheduler.issue_flow._plans_by_key()
+    denied = {key for key, plan in plans.items() if (plan.get("runtime_policy") or {}).get("allow_github_actions") is False}
+    plan = scheduler.build_nightly_execution_plan(changed_files, full_run=full_run, retry_context={"failed_sessions": retry})
+    assert not denied.intersection(plan["selected_plan_keys"])
+    assert set(plan["excluded_automation_plans"]) <= denied
+    assert "mcp_gateway_phase5_assistant" in plan["excluded_automation_plans"]
+    assert all(value == "not_executed: catalog allow_github_actions=false" for value in plan["excluded_automation_plans"].values())
+    assert plan["selected_sessions"]  # Allowed regression still executes.
+    if retry:
+        assert plan["selected_sessions"] == ["research_mcp_contract"]
+    public = scheduler.public_scheduler_report({"nightly_execution": plan})
+    assert public["nightly_execution_exclusions"] == plan["excluded_automation_plans"]
+    assert "not_executed" in scheduler.render_markdown({"nightly_execution": plan})
+
+
+def test_nightly_manual_only_retry_is_reported_without_fake_execution():
+    retry = {"failed_sessions": ["mcp_gateway_phase6_resource_monitor"]}
+    plan = scheduler.build_nightly_execution_plan([], retry_context=retry)
+    assert plan["selected_sessions"] == plan["selected_plan_keys"] == []
+    assert plan["session_timeout_seconds"] == {}
+    assert plan["excluded_automation_plans"] == {"mcp_gateway_phase6_resource_monitor": "not_executed: catalog allow_github_actions=false"}
+    with pytest.raises(ValueError, match="unknown runner sessions"):
+        scheduler.build_nightly_execution_plan([], retry_context={"failed_sessions": ["not_a_registered_plan"]})
 
 
 def _load_retry_fixture(

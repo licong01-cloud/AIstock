@@ -4,6 +4,7 @@ from contextlib import contextmanager, suppress
 from fnmatch import fnmatchcase
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -176,14 +177,7 @@ def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tup
     """
     consumers = {"validation_workflow_automation", "data_sync_autonomy_backend",
                  "validation_module_registry_l0", "validation_catalog_integrity"}
-    if session_name not in consumers or not _nightly_session_completed("validation_center_backend"):
-        return args
-    combined = [*args, *os.environ.get("PYTEST_ADDOPTS", "").split()]
-    if any(arg.startswith(("--cov", "--ignore", "--deselect", "-k", "-m")) for arg in combined):
-        return args
-    if any(not arg.startswith("backend/tests/") and arg not in {"-q", "-p", "no:cacheprovider"}
-           for arg in args):
-        return args  # Unknown selection/option syntax is never an equivalence proof.
+    producer = "validation_center_backend"
     shared = {
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
@@ -193,13 +187,38 @@ def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tup
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_catalog_integrity.py",
     }
+    if session_name not in consumers:
+        if session_name not in {"research_mcp_contract", "mcp_gateway_phase6_resource_monitor"}:
+            return args
+        producer = "mcp_gateway_manifest_quality"
+        shared = {"backend/tests/mcp", "tests/mcp/test_mcp_gateway_cli.py"}
+    if not _nightly_session_completed(producer):
+        return args
+    try:
+        addopts = shlex.split(os.environ.get("PYTEST_ADDOPTS", ""))
+    except ValueError:
+        return args
+    # Accept only execution-neutral options and the known observational plugin.
+    # Collect-only/last-failed, coverage, unknown selectors/plugins keep full work.
+    for tokens, allow_targets in ((args, True), (addopts, False)):
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "-p":
+                index += 1
+                if index >= len(tokens) or tokens[index] not in {"no:cacheprovider", "scripts.ci_plan_coverage"}:
+                    return args
+            elif token not in {"-q", "-x", "--exitfirst", "--strict-markers", "--strict-config", "--disable-warnings"}:
+                if not allow_targets or not token.startswith(("backend/tests/", "tests/mcp")) or not (ROOT / token).exists():
+                    return args
+            index += 1
     removed = [arg for arg in args if arg in shared]
     if not removed:
         return args
     remaining = tuple(arg for arg in args if arg not in shared)
     # Never call pytest with only flags: that would collect the entire repo.
-    has_target = any(arg.startswith("backend/tests/") for arg in remaining)
-    print(f"nightly_pytest_reuse producer=validation_center_backend consumer={session_name} targets={len(removed)}")
+    has_target = any(arg.startswith(("backend/tests/", "tests/mcp")) for arg in remaining)
+    print(f"nightly_pytest_reuse producer={producer} consumer={session_name} targets={len(removed)}")
     return remaining if has_target else None
 
 
@@ -3355,6 +3374,46 @@ def nightly_bug_candidate_queue(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def validation_center_backend(session: nox.Session) -> None:
     """Run Validation Center API, coverage, and controlled-runner contract tests."""
+    full_tests = (
+        "backend/tests/test_validation_center_api.py",
+        "backend/tests/test_validation_catalog_integrity.py",
+        "backend/tests/test_validation_center_readonly_smoke.py",
+        "backend/tests/test_validation_pipeline_center_phase1.py",
+        "backend/tests/test_validation_platform_health.py",
+        "backend/tests/test_validation_center_runner_smoke.py",
+        "backend/tests/test_validation_execution_runner.py",
+        "backend/tests/test_validation_llm_schedule_service.py",
+        "backend/tests/test_validation_git_activity_provider.py",
+        "backend/tests/test_validation_git_status_provider.py",
+        "backend/tests/test_validation_module_ownership.py",
+        "backend/tests/test_validation_ui_target_catalog.py",
+        "backend/tests/test_aistock_validate_metadata.py",
+        "backend/tests/test_aistock_validate_coverage.py",
+        "backend/tests/test_aistock_mcp_server.py",
+        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
+        "backend/tests/scripts/test_validation_failure_event_to_bug.py",
+        "backend/tests/scripts/test_bug_github_sync.py",
+        "backend/tests/scripts/test_issue_flow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    )
+    pr_targets = None
+    if os.environ.get(NIGHTLY_SESSION_RUNNER_ENV) != "1":
+        pr_targets = _direct_neighbor_pr_targets(
+            fallback_tests=full_tests,
+            smoke_tests=("backend/tests/test_validation_center_runner_smoke.py",),
+            source_test_roots=(("backend/services/validation/", "backend/tests/"),),
+            test_globs=("backend/tests/test_validation_*.py", "backend/tests/test_noxfile_validation_env.py", *full_tests),
+            overrides={
+                "backend/routers/validation.py": "backend/tests/test_validation_center_api.py",
+                "backend/services/validation/execution_runner.py": "backend/tests/test_validation_execution_runner.py",
+                "noxfile.py": (),
+                "tests/aistock_validation/catalog/test_plans.yaml": (),
+                "tests/aistock_validation/catalog/module_registry.yaml": (),
+                "tests/aistock_validation/catalog/file_ownership.yaml": (),
+            },
+        )
     coverage_dir = ROOT / "tmp" / "validation" / "coverage"
     coverage_dir.mkdir(parents=True, exist_ok=True)
     coverage_xml = coverage_dir / "validation_center_backend.xml"
@@ -3378,32 +3437,16 @@ def validation_center_backend(session: nox.Session) -> None:
         "scripts/validation_center_runner_smoke.py",
         external=True,
     )
+    if pr_targets is not None:
+        # PR owns direct regression; local/Nightly owns full branch coverage.
+        # Keep the explicit full fallback visible to the static CI classifier.
+        _run_pytest(session, *(pr_targets or full_tests), "-q", "-p", "no:cacheprovider")
+        return
     session.run(
         sys.executable,
         "-m",
         "pytest",
-        "backend/tests/test_validation_center_api.py",
-        "backend/tests/test_validation_catalog_integrity.py",
-        "backend/tests/test_validation_center_readonly_smoke.py",
-        "backend/tests/test_validation_pipeline_center_phase1.py",
-        "backend/tests/test_validation_platform_health.py",
-        "backend/tests/test_validation_center_runner_smoke.py",
-        "backend/tests/test_validation_execution_runner.py",
-        "backend/tests/test_validation_llm_schedule_service.py",
-        "backend/tests/test_validation_git_activity_provider.py",
-        "backend/tests/test_validation_git_status_provider.py",
-        "backend/tests/test_validation_module_ownership.py",
-        "backend/tests/test_validation_ui_target_catalog.py",
-        "backend/tests/test_aistock_validate_metadata.py",
-        "backend/tests/test_aistock_validate_coverage.py",
-        "backend/tests/test_aistock_mcp_server.py",
-        "backend/tests/scripts/test_aistock_mcp_github_issue_tools.py",
-        "backend/tests/scripts/test_validation_failure_event_to_bug.py",
-        "backend/tests/scripts/test_bug_github_sync.py",
-        "backend/tests/scripts/test_issue_flow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-        "backend/tests/scripts/test_ci_failure_issue_summary.py",
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        *full_tests,
         "--cov=backend.services.validation",
         "--cov=backend.routers.validation",
         "--cov=scripts.aistock_mcp_server",
