@@ -283,7 +283,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh pytest process loaded tracked task-worktree source; final direct invariant matrix 29 passed. Existing DEV readonly SQL query passed with 96 rows. Production readonly history reconstruction passed all 15 runs / 1368 parent orders. No production process control."
@@ -349,7 +349,8 @@
     "validation-receipt: id=8e8bb2d56eb46731 commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/trading_core/test_ledger.py backend/tests/simulation_execution/test_localsim_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k 'inmemoryledger or restored or fee_restore or streaming_schedule or realtime_partial_run_resumes or post_close_refreshes_terminal or post_close_terminalizes_localsim or first_causal_bar_wait_projection' -q --tb=short` result=`passed; 29 direct cases`",
     "validation-receipt: id=980aa745c4e9ea87 commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/trading_core/ledger.py backend/services/simulation_execution/localsim/runtime.py backend/services/simulation_runtime/scheduler.py backend/services/paper_trading_v2/repository.py backend/tests/trading_core/test_ledger.py backend/tests/simulation_execution/test_localsim_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py noxfile.py` result=`passed`",
     "validation-receipt: id=9f91b7d18cc2d55e commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`",
-    "validation-receipt: id=6b487c84474167ed commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --changed-file noxfile.py --module validation` result=`passed`"
+    "validation-receipt: id=6b487c84474167ed commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --changed-file noxfile.py --module validation` result=`passed`",
+    "2026-10-13 post-restart readback: runtime 4ebf1c04658f90f09fbbbecc2d882716f13d00a6 contains source merge; target-owned scheduler verification scope is all local_sim, healthy thread, zero current-day blockers. Original simrun_bcd56e8b3eae017b and both historical Jan-05 runs simrun_9fbe2525127692a1 / simrun_014f7985c59bd019 are SUCCEEDED. Both original replay accounts are ACTIVE version 3, capital 5000000 each. Four replay-owned bindings are excluded from normal daily scheduling; two stale daily runs were canonically CANCELLED with no execution plan or broker effects and original errors retained. Unscoped platform-diagnostics remains DEGRADED due to these retained CANCELLED audit rows; full replay and live activation are not asserted. Exact evidence: F:/Dev/AIstock/tmp/handoff/localsim_new_accounts_resume_20261013.json and localsim_replay_stale_daily_cleanup_20261013.json."
   ],
   "verification_budget": {
     "budget": "standard",
