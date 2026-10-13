@@ -144,6 +144,39 @@ python scripts/dataset_release_hmm_authority.py `
 模型 SHA、日期网格、state labels 或动态 config 任一不闭合即失败。后续月更只读取
 `AISTOCK_MONTHLY_HMM_AUTHORITY_PATH` 指向的 authority；固定模型未变时无需逐月重建 authority。
 
+HMM producer 源码更新是独立的代码身份变更，即使模型、preset 和数据集未变，也不能沿用旧脚本哈希。
+修改 `scripts/precompute_hmm_coefficients.py` 的交付必须在用户重启前，用当前最终源码与实际已安装
+authority 执行同一个严格 loader 的只读核验；import smoke、单元测试或 CI 绿灯均不替代这一步：
+
+```powershell
+python scripts/dataset_release_hmm_authority.py --verify-only `
+  --authority-path <current-monthly-hmm-authority.json> `
+  --producer-script <final-repo>\scripts\precompute_hmm_coefficients.py
+```
+
+若因已审核的 producer 更新导致哈希不匹配，使用原包的批准模型、config、preset 和历史系数
+创建不可变 successor。显式旧 authority SHA 与已审核新 producer SHA 必须闭合，不得直接替换旧包
+中的哈希、覆盖旧包、自动接受任意源码漂移或重新生成历史系数：
+
+```powershell
+python scripts/dataset_release_hmm_authority.py `
+  --rebind-from-authority <current-monthly-hmm-authority.json> `
+  --expected-previous-authority-sha256 <pinned-current-authority-file-sha> `
+  --producer-script <final-repo>\scripts\precompute_hmm_coefficients.py `
+  --expected-producer-sha256 <reviewed-final-producer-file-sha> `
+  --output-root <new-repo-external-create-exclusive-root> `
+  --authority-id <new-versioned-authority-id>
+```
+
+工具逐项核验原 bootstrap receipt、模型/config 字节和已批准系数身份，不允许覆盖模型、preset、窗口
+或 lag。新包保存 predecessor 和 producer 变更回执；只读 verify 必须再次 PASS，之后按原有部署授权
+把 `AISTOCK_MONTHLY_HMM_AUTHORITY_PATH` 指向新包，并运行完整 worker `--preflight`，再交用户重启。
+这只是既有启动校验的前移，不增加人工审批、不执行数据构建或领取任务。
+
+BUG-1887 回归检查属于 HMM CI 的消费边界：必须覆盖旧 authority/新 producer 的明确失败、显式 rebind
+后同一严格 loader 的通过、原包字节不变，以及下一次未经审核的源码漂移再次失败。CI 不读取生产
+`.env` 或生产模型文件；真实部署绑定由上述 file-only preflight 验证，不能把 fixture 通过称为运行态通过。
+
 受控运行方式为：
 
 ```powershell
