@@ -32,14 +32,28 @@
   "evidence_uris": [],
   "expected": "明确旧/新归属、正式sw_daily quote、同日冻结moneyflow+PIT cohort身份，定向重建已证实受影响日期，三端读回；普通月更只校验新月份；不得把换ID和查旧aggregate当作修复完成。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_industry_facts.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1885-cohort-moneyflow.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/services/dataset_release/monthly_industry_facts.py",
       "backend/services/dataset_release/monthly_industry_history.py",
-      "backend/services/dataset_release/monthly_repair_inputs.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_shared_components.py",
-      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1885-cohort-moneyflow.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_industry_history.py",
@@ -126,8 +140,8 @@
   },
   "first_seen_at": "2026-10-13T09:38:37.634015Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "53c8ccae19aeab9f64f8a49907699863b549b8e3",
+  "fixed_at": "2026-10-13T16:43:36Z",
   "github_issue_number": 6016,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6016",
   "last_seen_at": "2026-10-13T09:38:37.634015Z",
@@ -135,6 +149,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6023",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -155,7 +170,9 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -165,7 +182,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1885",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ba9097316bbbb9bb",
+    "recorded_at": "2026-10-13T16:44:14.087259Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7001796341409ef2ec0da8ee20c337e1547ca58d",
+    "source_merge_commit": "53c8ccae19aeab9f64f8a49907699863b549b8e3",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6023",
+    "validation_evidence": [
+      "validation-receipt: id=37378bff04a264a9 commit=7001796341409ef2ec0da8ee20c337e1547ca58d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=bd5854e1ce6faa9e commit=7001796341409ef2ec0da8ee20c337e1547ca58d kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_unified_v2.py -q` result=`passed 78 tests, 2 explicit skips; source/shared matrix passed 127 tests; changed nodes passed 9 plus 5 atomic retry cases; DEV readonly real-source cross-check passed; three review rounds and DESIGN-COMPLIANCE-001 passed`"
+    ],
+    "validation_evidence_digest": "3df50bd6f1a2e007597ba7f0f6b05b19cf093ae3d5ad39f70c4a10492c488f30"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -174,6 +213,10 @@
     "fingerprint": "404180d2cf9a3702e8ad00fd",
     "source_event_id": "FE-20261013-404180d2cf9a"
   },
+  "validation_evidence": [
+    "validation-receipt: id=37378bff04a264a9 commit=7001796341409ef2ec0da8ee20c337e1547ca58d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=bd5854e1ce6faa9e commit=7001796341409ef2ec0da8ee20c337e1547ca58d kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_unified_v2.py -q` result=`passed 78 tests, 2 explicit skips; source/shared matrix passed 127 tests; changed nodes passed 9 plus 5 atomic retry cases; DEV readonly real-source cross-check passed; three review rounds and DESIGN-COMPLIANCE-001 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
