@@ -668,6 +668,84 @@ def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test")
     )
 
 
+def _returns_payload(state="SETTLED", *, reported="2026-10-13T08:00:00+00:00", cutoff="2026-10-13"):
+    settled, marked = state == "SETTLED", state == "EXECUTED"
+    row = dict(program_id="advp_test", episode_id="ep_test", status="ACTIVE" if marked else "EXITED",
+               performance_state=state, performance_reason_code=None if settled or marked else "EXIT_NOT_FINALIZED",
+               effective_entry_date="2026-10-12", effective_exit_date="2026-10-13" if settled else "2026-10-14",
+               entry_price=10, exit_price=11 if settled else None, exit_reason="TAKE_PROFIT",
+               metric_as_of_trade_date=cutoff, realized_gross_return_bps=100 if settled else None,
+               unrealized_gross_return_bps=200 if marked else None, realized_net_return_bps=None, cost_drag_bps=None,
+               realized_inclusion_status="INCLUDED" if settled else "EXCLUDED", win_rate_inclusion_status="INCLUDED" if settled else "EXCLUDED")
+    if marked:
+        row["evidence_json"] = {"open_mark_to_market": dict(trade_date=cutoff, mark_price=10.2)}
+    def dist(value):
+        return dict(sample_count=int(value is not None), win_count=int(value is not None), loss_count=0, flat_count=0,
+                    win_rate=1.0 if value is not None else None, avg_return_bps=value, median_return_bps=value)
+    metrics = dict(schema_version="advisory_program_metrics_v2", metric_basis="SETTLED_GROSS_REFERENCE_EPISODES",
+                   execution_evidence_level="REFERENCE_HYPOTHETICAL", metric_as_of_trade_date=cutoff, reported_at=reported, entered_episode_count=1, active_count=int(marked),
+                   take_profit_count=int(settled), stop_loss_count=0, metric_evaluable_count=int(settled),
+                   win_rate=1.0 if settled else None, avg_return_bps=100 if settled else None, median_return_bps=100 if settled else None,
+                   open_mark_count=int(marked), missing_open_mark_count=0, cost_contract=None, metric_mark_trade_date=cutoff if marked else None,
+                   metric_status="READY" if settled else "UNREALIZED_ONLY" if marked else "WAITING_MARKET_DATA",
+                   settled=dict(gross=dist(100 if settled else None), net={**dist(None), "reason_code": "COST_UNSPECIFIED"}),
+                   unrealized=dict(gross=dist(200 if marked else None), basis="CLOSE_MARK_NOT_REALIZED",
+                                   liquidation_net={**dist(None), "reason_code": "COST_UNSPECIFIED"}),
+                   coverage=dict(total_count=1, due_count=int(settled), settled_count=int(settled),
+                                 settled_coverage=1.0 if settled else None, state_counts={state: 1}, reason_counts={} if settled or marked else {"EXIT_NOT_FINALIZED": 1},
+                                 immature_exit_count=int(not settled and not marked)))
+    if state == "EMPTY":
+        metrics.update(entered_episode_count=0, metric_status="NO_EPISODES")
+        metrics["coverage"].update(total_count=0, state_counts={}, reason_counts={}, immature_exit_count=0)
+    return dict(ok=True, returns=[] if state == "EMPTY" else [row], metrics=metrics)
+
+
+@pytest.mark.parametrize("state,reported,cutoff", [
+    *((state, "2026-10-13T08:00:00+00:00", "2026-10-13") for state in ["SETTLED", "PLANNED", "EXECUTED", "UNKNOWN", "DEFERRED", "EMPTY"]),
+    ("PLANNED", "2026-10-13T06:59:59+00:00", "2026-10-12"), ("SETTLED", "2026-10-13T07:00:00+00:00", "2026-10-13"),
+])
+def test_advisory_returns_semantics_accept_honest_states(state, reported, cutoff):
+    result = _business_semantic("http://localhost/api/v1/advisory/programs/advp_test/returns", _returns_payload(state, reported=reported, cutoff=cutoff), "a" * 64)
+    assert result["contract_id"] == "advisory_returns_metrics_v2" and result["verdict"] == "passed"
+
+
+@pytest.mark.parametrize("section,key,value", [
+    ("metrics", "schema_version", "advisory_program_metrics_v1"),
+    ("metrics", "metric_as_of_trade_date", "2026-10-14"), ("metrics", "metric_evaluable_count", 2),
+    ("metrics", "take_profit_count", 2), ("metrics", "reported_at", "2026-10-13T10:00:00"),
+    ("row", "effective_exit_date", "2026-10-14"), ("row", "status", "ACTIVE"),
+    ("row", "program_id", "other"), ("row", "realized_gross_return_bps", float("nan")),
+    ("row", "realized_gross_return_bps", 10 ** 1000), ("metrics", "metric_evaluable_count", True),
+    ("metrics", "cost_contract", []), ("metrics", "settled", {}),
+    ("metrics", "metric_mark_trade_date", "2026-10-14"),
+])
+def test_advisory_returns_semantics_reject_false_settlement(section, key, value):
+    payload = _returns_payload()
+    (payload["metrics"] if section == "metrics" else payload["returns"][0])[key] = value
+    assert _business_semantic("http://localhost/api/v1/advisory/programs/advp_test/returns", payload, "a" * 64)["verdict"] == "failed"
+
+
+@pytest.mark.parametrize("broken", [None, "future_mark", "mixed_denominator", "unknown_cost", "duplicate", "no_reason"])
+def test_advisory_returns_semantics_mixed_snapshot(broken):
+    payload = _returns_payload()
+    active, planned = _returns_payload("EXECUTED")["returns"][0], _returns_payload("PLANNED")["returns"][0]
+    active["episode_id"], planned["episode_id"] = "active", "planned"
+    payload["returns"] += [active, planned]
+    metrics = payload["metrics"]
+    metrics.update(entered_episode_count=3, active_count=1, open_mark_count=1, metric_mark_trade_date="2026-10-13")
+    metrics["unrealized"] = _returns_payload("EXECUTED")["metrics"]["unrealized"]
+    metrics["coverage"].update(total_count=3, immature_exit_count=1, state_counts=dict(SETTLED=1, EXECUTED=1, PLANNED=1), reason_counts={"EXIT_NOT_FINALIZED": 1})
+    mutations = dict(future_mark=(active["evidence_json"]["open_mark_to_market"], "trade_date", "2026-10-14"),
+                     mixed_denominator=(metrics, "metric_evaluable_count", 3),
+                     unknown_cost=(metrics["settled"], "net", dict(metrics["settled"]["gross"])),
+                     duplicate=(active, "episode_id", "ep_test"), no_reason=(planned, "performance_reason_code", None))
+    if broken:
+        target, key, value = mutations[broken]
+        target[key] = value
+    result = _business_semantic("http://localhost/api/v1/advisory/programs/advp_test/returns", payload, "a" * 64)
+    assert result["verdict"] == ("passed" if broken is None else "failed")
+
+
 def _sector_entry_payload():
     receipt = dict(program_id="advp_test", list_version_id="list-test", binding_version_id="binding-test",
                    review_run_id="review-test", selection_run_id="selection-test", decision_date="2026-08-27",
