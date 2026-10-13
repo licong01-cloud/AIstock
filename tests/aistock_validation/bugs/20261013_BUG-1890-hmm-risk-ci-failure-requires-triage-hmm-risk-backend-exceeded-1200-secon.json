@@ -32,12 +32,18 @@
   ],
   "expected": "HMM 变异测试共享一次不变合成输入构造，测试间无可变状态泄漏；writer/overview 测试遵循当前日期目录合同。最小相关验证和 PR CI 通过；完整 Nightly 自然调度结果单独报告，不以局部 PASS 冒充全量超时已复验。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/hmm_risk/test_formal_state_effect.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1890-hmm-risk-ci-failure-requires-triage-hmm-risk-backend-exceeded-1200-secon.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/hmm_risk/test_formal_state_effect.py",
       "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
-      "backend/tests/hmm_risk/test_formal_state_effect.py"
+      "tests/aistock_validation/bugs/20261013_BUG-1890-hmm-risk-ci-failure-requires-triage-hmm-risk-backend-exceeded-1200-secon.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
@@ -105,10 +111,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
