@@ -3407,6 +3407,7 @@ _validate_collection_payload = _runtime_semantics._validate_collection_payload
 _validate_tdx_raw_kline = _runtime_semantics._validate_tdx_raw_kline
 _validate_object_liveness = _runtime_semantics._validate_object_liveness
 _validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_entry_price_status
+_validate_advisory_returns = _runtime_semantics._validate_advisory_returns
 _validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
 _validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
 _validate_hmm_workers = _runtime_semantics._validate_hmm_workers
@@ -3449,6 +3450,8 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/advisory/programs/[^/]+/sector-entry-price$"),
      "advisory_sector_entry_original_list", _validate_advisory_sector_entry_original_list),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/returns$"),
+     "advisory_returns_metrics_v2", _validate_advisory_returns),
     (
         re.compile(r"^/api/v1/advisory/programs/[^/]+/entry-price/status$"),
         "advisory_entry_price_status",
@@ -3597,6 +3600,7 @@ def _evaluate_business_smoke_semantics(
         "hmm_rotation_l2_overview",
         "advisory_entry_price_status",
         "advisory_sector_entry_original_list",
+        "advisory_returns_metrics_v2",
         "local_data_freshness",
         "monthly_release_ready",
     }:
