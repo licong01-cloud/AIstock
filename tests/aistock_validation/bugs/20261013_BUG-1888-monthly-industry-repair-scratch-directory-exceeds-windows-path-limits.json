@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1888",
-  "closed_at": null,
+  "closed_at": "2026-10-13T18:31:22.383348Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -46,7 +46,11 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1888-monthly-industry-repair-scratch-directory-exceeds-windows-path-limits.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -81,10 +85,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1888/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1888",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "4c9eb6f9507b615f777a6b42076cc3cb90472e41",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T18:27:42.350712Z",
+      "mode": "read_only",
+      "observed_identity": "054298bb00439daba739fe11eff8f3f6cd03b823",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f34579b743240ce3dae6aaa8012f6c3e4763093e8b3ad80acd058c88bc1dbe9c",
+      "receipt_sha256": "8f2309656089a3995519b0c40d832e2b9da8b2465fe4a85573ca84024672edf2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0cba5d7b2c95c227f273fe547a4a032659d50cbbe929f3c4fc391b8a514b9c8f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -118,7 +144,7 @@
     ],
     "validation_evidence_digest": "2e3aec22ac1635d6146b046d0711100227515bfc47fccd0cb2427edd0a5dd708"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -131,7 +157,8 @@
     "validation-receipt: id=c087b05cb8245bd1 commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_supervised_build.py -q` result=`passed, 76 passed 1 intentional skip, fresh process`",
     "validation-receipt: id=cca72b34d08d84ed commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, three changed paths, zero findings`",
     "validation-receipt: id=ead5bf9927e6465b commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_industry_history.py backend/tests/dataset_release/test_monthly_sector_mapping.py` result=`passed`",
-    "validation-receipt: id=dd4c0ad5e11da7e7 commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=diff_check plan=direct status=passed command=`git diff --check -> passed; three review passes and DESIGN-COMPLIANCE-001` result=`passed; dataset runtime acceptance pending`"
+    "validation-receipt: id=dd4c0ad5e11da7e7 commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=diff_check plan=direct status=passed command=`git diff --check -> passed; three review passes and DESIGN-COMPLIANCE-001` result=`passed; dataset runtime acceptance pending`",
+    "post-restart-verify source 4c9eb6f9507b615f777a6b42076cc3cb90472e41 observed 054298bb00439daba739fe11eff8f3f6cd03b823 -> passed; runtime and supervised worker identity verified; process_control=false"
   ],
   "verification_budget": {
     "budget": "standard",
