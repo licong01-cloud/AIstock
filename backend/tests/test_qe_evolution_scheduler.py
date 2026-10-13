@@ -168,7 +168,7 @@ def test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume(
     scheduler._get_workspace_client_for_node_id = lambda _node_id: object()  # type: ignore[method-assign]
     scheduler._get_callback_url_for_node = lambda _node_id: None  # type: ignore[method-assign]
     scheduler._resolve_gpu_execution_contract = (  # type: ignore[method-assign]
-        lambda **_kwargs: ("parallel", False)
+        lambda **_kwargs: ("parallel", False, False)
     )
 
     first = asyncio.run(
