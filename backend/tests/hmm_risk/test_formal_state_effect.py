@@ -474,7 +474,7 @@ def test_product_rejects_rehashed_projection_and_state_drift(acceptance, fault):
         rows_from_acceptance(bad)
 
 
-def test_hmm_product_writer_readback_and_api_keep_explicit_version(acceptance):
+def test_hmm_product_writer_readback_and_api_keep_explicit_version(acceptance, tmp_path):
     from backend.tests.hmm_risk.test_rotation_l2_prediction import _Cursor, _Connection
     from backend.services.hmm_risk.rotation_l2_prediction import (
         PREDICTION_COLUMNS,
@@ -484,19 +484,24 @@ def test_hmm_product_writer_readback_and_api_keep_explicit_version(acceptance):
 
     class ReadCursor(_Cursor):
         def execute(self, sql, params=None):
-            if "WHERE run_id=%s AND trade_date=%s" in sql:
-                self._rows = list(self.inserted)
+            if "SELECT DISTINCT trade_date" in sql:
+                assert params == (acceptance["run_id"],)
+                self._rows = sorted({(row[PREDICTION_COLUMNS.index("trade_date")],) for row in self.inserted})
                 return
-            if "SELECT max(trade_date)" in sql:
-                self.maximum = max(row[PREDICTION_COLUMNS.index("trade_date")] for row in self.inserted)
+            if "WHERE run_id=%s AND trade_date=%s" in sql:
+                assert params is not None
+                self._rows = [
+                    row
+                    for row in self.inserted
+                    if (row[PREDICTION_COLUMNS.index("run_id")], row[PREDICTION_COLUMNS.index("trade_date")]) == params
+                ]
                 return
             super().execute(sql, params)
 
-        def fetchone(self):
-            return (self.maximum,)
-
     cursor = ReadCursor()
-    repository = RotationL2PredictionRepository(conn_factory=lambda: _Connection(cursor))
+    repository = RotationL2PredictionRepository(
+        conn_factory=lambda: _Connection(cursor), surface_validation_store_root=tmp_path
+    )
     rows = [row for row in rows_from_acceptance(acceptance) if row["trade_date"] == subject.END]
     assert repository.write_rows(rows)["row_count"] == 131
     response = repository.read_date(subject.END, run_id=acceptance["run_id"])
@@ -506,6 +511,7 @@ def test_hmm_product_writer_readback_and_api_keep_explicit_version(acceptance):
     assert row["semantic_state"] == "neutral" and row["daily_rank_group"] == "fading"
     overview = repository.overview(run_id=acceptance["run_id"])
     assert overview["model_version"] == subject.VERSION and overview["research_surface_status"] == "NOT_AVAILABLE"
+    assert overview["available_trade_dates"] == [subject.END.isoformat()]
 
 
 def test_parent_prediction_is_sealed_before_first_label_access(inputs, monkeypatch):

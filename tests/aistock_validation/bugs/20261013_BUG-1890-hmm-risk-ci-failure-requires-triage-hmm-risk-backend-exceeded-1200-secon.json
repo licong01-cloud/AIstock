@@ -1,0 +1,244 @@
+{
+  "actual": "Failure summary: hmm_risk_backend exceeded 1200-second session timeout (1201.55 seconds); pytest stopped after 65 percent plus 65 nodes",
+  "allowed_write_scope": [
+    "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+    "backend/tests/hmm_risk/test_formal_state_effect.py",
+    "tests/aistock_validation/bugs/20261013_BUG-1890-hmm-risk-ci-failure-requires-triage-hmm-risk-backend-exceeded-1200-secon.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": "Codex HMM owner",
+  "bug_id": "BUG-1890",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-13T18:41:08.403882Z",
+  "description": "Issue #5424 的原始 Nightly 回执确认 hmm_risk_backend 在 1201.55 秒超时。按节点顺序和定向堆栈定位，return-target candidate fixture 虽缓存比较结果，但仍在每个变异节点前重复请求大型 price_panel、重复正式 wrapper preflight；8 个非法输入用例还在拒绝校验前重复构造合法全特征矩阵。同时 formal_state_effect writer/overview 测试假游标未实现当前 SELECT DISTINCT trade_date 合同，已有真实 RED。修复限于这两个 HMM 测试文件：延迟只构造一次不变合成输入，每例重新绑定相同测试 authority 并返回深拷贝；非法输入用例以构造 poison 证明必须在数值构造前拒绝，合法矩阵与双 fresh-process 仍真实执行；更新假游标精确查询响应并隔离产品验证 store。保留全部真实 consumer 校验、131 行业、训练与预测日期、fresh-process、zero-refit、hash 和 fail-closed 断言，不改任何业务源码或流水线。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261013-28d824b73293",
+      "timestamp": "2026-10-13T18:41:08.403851Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/38331115943",
+    "https://github.com/licong01-cloud/AIstock/issues/5424",
+    "tmp/issue_workflow/ci-issue-5424/failure-event.json",
+    "tmp/issue_workflow/ci-issue-5424/context-pack.md"
+  ],
+  "expected": "HMM 变异测试共享一次不变合成输入构造，测试间无可变状态泄漏；writer/overview 测试遵循当前日期目录合同。最小相关验证和 PR CI 通过；完整 Nightly 自然调度结果单独报告，不以局部 PASS 冒充全量超时已复验。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/hmm_risk/test_formal_state_effect.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1890-hmm-risk-ci-failure-requires-triage-hmm-risk-backend-exceeded-1200-secon.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/hmm_risk/test_formal_state_effect.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1890-hmm-risk-ci-failure-requires-triage-hmm-risk-backend-exceeded-1200-secon.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+        "backend/tests/hmm_risk/test_formal_state_effect.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_formal_state_effect.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+        "backend/tests/hmm_risk/test_formal_state_effect.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+      "backend/tests/hmm_risk/test_formal_state_effect.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+      "backend/tests/hmm_risk/test_formal_state_effect.py"
+    ]
+  },
+  "first_seen_at": "2026-10-13T18:41:08.403882Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5424,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5424",
+  "last_seen_at": "2026-10-13T18:41:08.403882Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "registry_intake_updates_legacy_observation",
+  "reproduce_command": "python -m nox -s hmm_risk_backend",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "hmm.risk CI failure requires triage: hmm_risk_backend exceeded 1200-second session timeout (1201.55 seconds); pytest stopped after 65 percent plus 65 nodes",
+  "trigger_condition": {
+    "fingerprint": "28d824b73293944b25b5b489",
+    "source_event_id": "FE-20261013-28d824b73293"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
