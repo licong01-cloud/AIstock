@@ -65,8 +65,14 @@ def prepare_member_refresh(existing, incoming, code):
     """
     selected = {}
     for row in incoming:
-        if row.get("l2_code") != code or not re.fullmatch(r"\d{6}[.](SH|SZ|BJ)", row.get("ts_code") or ""):
-            raise ValueError("SW membership request/code identity differs")
+        if row.get("l2_code") != code:
+            raise ValueError("SW membership industry identity differs from requested code")
+        # index_member_all retains historical Shanghai T identifiers, e.g.
+        # T00018.SH. These are provider identities, never canonical aliases or
+        # additions to a strategy universe. Preserve the original spelling.
+        symbol = row.get("ts_code")
+        if not isinstance(symbol, str) or not re.fullmatch(r"(?:\d{6}[.](?:SH|SZ|BJ)|T\d{5}[.]SH)", symbol):
+            raise ValueError(f"SW membership source security identity is invalid: {row.get('ts_code')!r}")
         for field in ("l1_code", "l2_code", "l3_code"):
             if not re.fullmatch(r"\d{6}[.]SI", row.get(field) or ""):
                 raise ValueError("SW membership hierarchy identity is incomplete")

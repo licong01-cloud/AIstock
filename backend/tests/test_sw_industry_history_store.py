@@ -34,6 +34,32 @@ def test_partial_history_does_not_take_down_old_rows():
     assert prepare_member_refresh([old, new], [new], "801783.SI") == [new]
 
 
+def test_provider_historical_t_identifier_is_preserved_not_canonicalized():
+    from backend.services.dataset_release.sector_enrichment import FrozenSectorEnricher
+
+    rows = [member("000001.SZ"), member("T00018.SH", start="20000719")]
+    actual = prepare_member_refresh([], rows, "801783.SI")
+    assert actual == rows
+    facts = [source_fact("tushare:index_member_all", "SW2021", row, {}) for row in actual]
+    assert facts[1]["payload"]["row"]["ts_code"] == "T00018.SH"
+    enricher = FrozenSectorEnricher.build(
+        [{"index_code": "801783.SI", "level": "L2"}], actual,
+    )
+    # A provider identifier is not an alias or a new strategy security.
+    assert enricher.enrich({"ts_code": "600018.SH", "trade_date": date(2026, 7, 1)})["l2_code_id"] == -1
+
+
+@pytest.mark.parametrize("symbol", ["T00018.SZ", "T0018.SH", "T00018", "t00018.SH", "garbage", "000001.SI", None, 18])
+def test_unsupported_source_security_identity_is_not_accepted(symbol):
+    with pytest.raises(ValueError, match="security identity"):
+        prepare_member_refresh([], [member(symbol)], "801783.SI")
+
+
+def test_industry_identity_conflict_is_reported_separately():
+    with pytest.raises(ValueError, match="industry identity"):
+        prepare_member_refresh([], [member()], "801011.SI")
+
+
 def test_disappearing_current_member_is_not_an_inferred_end_date():
     with pytest.raises(ValueError, match="unexplained active"):
         prepare_member_refresh([member()], [member("000002.SZ")], "801783.SI")
