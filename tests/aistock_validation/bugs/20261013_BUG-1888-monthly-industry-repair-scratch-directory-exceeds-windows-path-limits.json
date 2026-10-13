@@ -26,9 +26,18 @@
   "evidence_uris": [],
   "expected": "Use a portable fixed-length scratch name bound to the full retained root, projection and context identities. Verify and recover valid legacy output receipts; preserve completed day/minute/index and unrelated factor files. Resume the existing durable operation after user-owned backend restart; no database or active profile writes.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1888-monthly-industry-repair-scratch-directory-exceeds-windows-path-limits.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1888-monthly-industry-repair-scratch-directory-exceeds-windows-path-limits.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -43,8 +52,8 @@
   },
   "first_seen_at": "2026-10-13T17:51:36.041502Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4c9eb6f9507b615f777a6b42076cc3cb90472e41",
+  "fixed_at": "2026-10-13T18:11:26Z",
   "github_issue_number": 6027,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6027",
   "last_seen_at": "2026-10-13T17:51:36.041502Z",
@@ -52,6 +61,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6030",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -72,15 +82,43 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1888",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5dda8480b3e4f010",
+    "recorded_at": "2026-10-13T18:12:07.148615Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "76ac94db0c30cb6663936ff91bc840e54fe0d5a0",
+    "source_merge_commit": "4c9eb6f9507b615f777a6b42076cc3cb90472e41",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6030",
+    "validation_evidence": [
+      "validation-receipt: id=c087b05cb8245bd1 commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_supervised_build.py -q` result=`passed, 76 passed 1 intentional skip, fresh process`",
+      "validation-receipt: id=cca72b34d08d84ed commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, three changed paths, zero findings`",
+      "validation-receipt: id=ead5bf9927e6465b commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_industry_history.py backend/tests/dataset_release/test_monthly_sector_mapping.py` result=`passed`",
+      "validation-receipt: id=dd4c0ad5e11da7e7 commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=diff_check plan=direct status=passed command=`git diff --check -> passed; three review passes and DESIGN-COMPLIANCE-001` result=`passed; dataset runtime acceptance pending`"
+    ],
+    "validation_evidence_digest": "2e3aec22ac1635d6146b046d0711100227515bfc47fccd0cb2427edd0a5dd708"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -89,6 +127,12 @@
     "fingerprint": "d599e7b0b6671ba9bb3a8050",
     "source_event_id": "FE-20261013-d599e7b0b667"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c087b05cb8245bd1 commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_supervised_build.py -q` result=`passed, 76 passed 1 intentional skip, fresh process`",
+    "validation-receipt: id=cca72b34d08d84ed commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, three changed paths, zero findings`",
+    "validation-receipt: id=ead5bf9927e6465b commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_industry_history.py backend/tests/dataset_release/test_monthly_sector_mapping.py` result=`passed`",
+    "validation-receipt: id=dd4c0ad5e11da7e7 commit=76ac94db0c30cb6663936ff91bc840e54fe0d5a0 kind=diff_check plan=direct status=passed command=`git diff --check -> passed; three review passes and DESIGN-COMPLIANCE-001` result=`passed; dataset runtime acceptance pending`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
