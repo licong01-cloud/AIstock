@@ -276,6 +276,14 @@ def build_nightly_execution_plan(
         for session in selected_sessions
         if session in CHANGE_FILE_ONLY_SESSIONS and change_scoped_files
     }
+    session_budgets: dict[str, int] = {}
+    for key in selected_plan_keys:
+        plan = plans[key]
+        budget = plan.get("max_duration_seconds")
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+            raise ValueError(f"Nightly plan requires a positive integer max_duration_seconds: {key}")
+        session = str(plan["nox_session"])
+        session_budgets[session] = max(budget, session_budgets.get(session, 0))
     return {
         "schema_version": "aistock_nightly_execution_plan_v1",
         "watermark": watermark,
@@ -295,6 +303,7 @@ def build_nightly_execution_plan(
         "retry_source_head": retry_context.get("source_head"),
         "retry_recovery_kind": retry_context.get("recovery_kind"),
         "session_positional_args": session_positional_args,
+        "session_timeout_seconds": session_budgets,
         "impacted_modules": selection.get("impacted_modules") or [],
         "unmatched_code_files": unmatched_code,
         "advance_change_window_on_durable_receipt": True,

@@ -19,6 +19,7 @@ RECEIPT_ENV = "AISTOCK_CI_TEST_COLLECTION_RECEIPT"
 REPO_ROOT_ENV = "AISTOCK_CI_REPO_ROOT"
 CLASSIFIER_SUMMARY_ENV = "AISTOCK_CI_CLASSIFIER_SUMMARY"
 METRICS_ENV = "AISTOCK_TEST_METRICS_RECEIPT"
+DIAGNOSTICS_ENV = "AISTOCK_TEST_DIAGNOSTICS_RECEIPT"
 _metrics: dict[str, Any] = {}
 
 
@@ -29,7 +30,36 @@ def _digest(values: Iterable[str], *, ordered: bool = False) -> str:
 def pytest_sessionstart(session: Any) -> None:
     _metrics.clear()
     if os.environ.get(METRICS_ENV) or os.environ.get(RECEIPT_ENV):
-        _metrics.update(started=time.monotonic(), executed=Counter(), phase_seconds=0.0, execution_id=uuid.uuid4().hex)
+        _metrics.update(started=time.monotonic(), executed=Counter(), phase_seconds=0.0,
+                        execution_id=uuid.uuid4().hex, slowest=[])
+
+
+def _diagnostic_identity() -> dict[str, Any]:
+    return {"source_head": os.environ.get("AISTOCK_TEST_SOURCE_HEAD"),
+            "plan": os.environ.get("AISTOCK_TEST_PLAN"),
+            "execution_id": _metrics.get("execution_id")}
+
+
+def _write_active_diagnostic(nodeid: str, state: str) -> None:
+    if not _metrics or not os.environ.get(DIAGNOSTICS_ENV):
+        return
+    try:
+        path = Path(os.environ[DIAGNOSTICS_ENV]).with_suffix(".active.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(dict(_diagnostic_identity(), nodeid=nodeid,
+                                             state=state)), encoding="utf-8")
+        temporary.replace(path)
+    except OSError as exc:
+        print(f"aistock_test_diagnostics status=not_recorded reason={type(exc).__name__}", file=sys.stderr)
+
+
+def pytest_runtest_logstart(nodeid: str, location: Any) -> None:
+    _write_active_diagnostic(nodeid, "started")
+
+
+def pytest_runtest_logfinish(nodeid: str, location: Any) -> None:
+    _write_active_diagnostic(nodeid, "finished")
 
 
 def pytest_runtest_logreport(report: Any) -> None:
@@ -38,6 +68,19 @@ def pytest_runtest_logreport(report: Any) -> None:
     _metrics["phase_seconds"] += float(report.duration)
     if report.when == "call":
         _metrics["executed"][report.nodeid] += 1
+    if float(report.duration) >= 1:
+        _metrics["slowest"].append({"nodeid": report.nodeid, "phase": report.when,
+                                    "seconds": round(float(report.duration), 6)})
+        _metrics["slowest"] = sorted(_metrics["slowest"], key=lambda item: item["seconds"], reverse=True)[:10]
+    if getattr(report, "failed", False) and os.environ.get(DIAGNOSTICS_ENV):
+        try:
+            _write_metrics(Path(os.environ[DIAGNOSTICS_ENV]), {
+                "schema_version": "aistock_test_failure_diagnostic_v1",
+                **_diagnostic_identity(), "nodeid": report.nodeid, "phase": report.when,
+                "failure": str(report.longrepr)[:8192], "failure_truncated": len(str(report.longrepr)) > 8192,
+            })
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"aistock_test_diagnostics status=not_recorded reason={type(exc).__name__}", file=sys.stderr)
 
 
 def _write_metrics(path: Path, payload: dict[str, Any]) -> None:
@@ -72,6 +115,7 @@ def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
             "repeated_items": sum(executed.values()) - len(executed),
             "pytest_wall_seconds": elapsed,
             "test_phase_seconds": round(_metrics["phase_seconds"], 6),
+            "slowest_phases": _metrics["slowest"],
             "exitstatus": int(exitstatus),
         }
         explicit = os.environ.get(METRICS_ENV)

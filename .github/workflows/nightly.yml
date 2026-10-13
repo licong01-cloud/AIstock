@@ -480,6 +480,11 @@ jobs:
       - name: Run selected Nightly sessions once
         if: steps.background_window.outputs.background_admitted == 'true'
         env:
+          AISTOCK_TEST_SOURCE_HEAD: ${{ github.sha }}
+          AISTOCK_TEST_CHECKOUT_HEAD: ${{ github.sha }}
+          AISTOCK_TEST_STAGE: nightly
+          AISTOCK_TEST_METRICS_RECEIPT: tmp/validation/nightly_l3/test-execution.metrics.jsonl
+          AISTOCK_TEST_DIAGNOSTICS_RECEIPT: tmp/validation/nightly_l3/test-failures.jsonl
           PAPER_V2_SKIP_REALTIME: '1'
           PAPER_V2_E2E_TRADE_DATE: '2026-06-02'
           PAPER_V2_E2E_ACTIVATION_DATE: '2026-06-02'
