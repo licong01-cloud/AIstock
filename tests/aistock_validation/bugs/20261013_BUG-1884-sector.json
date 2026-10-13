@@ -126,7 +126,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:/Dev/AIstock_worktrees/BUG-1884-close-sync-20261013/tmp/issue_workflow/BUG-1884/post-restart-verify.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -175,7 +175,8 @@
     "validation-receipt: id=70c1687a29022f3c commit=780c944f413673996a56cf13bd5172d6c9fedada kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k sector -q --noconftest` result=`passed 8 tests; three RED failures reproduced before fix`",
     "validation-receipt: id=c9cd2725b1e15e00 commit=780c944f413673996a56cf13bd5172d6c9fedada kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py tests/aistock_validation/bugs/20261013_BUG-1884-sector.json` result=`passed`",
     "validation-receipt: id=bd5c2ed17fa42b17 commit=780c944f413673996a56cf13bd5172d6c9fedada kind=ruff plan=direct status=passed command=`python -m ruff check backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py` result=`passed`",
-    "validation-receipt: id=5227cbd81b74627f commit=780c944f413673996a56cf13bd5172d6c9fedada kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=5227cbd81b74627f commit=780c944f413673996a56cf13bd5172d6c9fedada kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "post-restart-verify backend-main 53c8ccae19aeab9f64f8a49907699863b549b8e3 -> passed; shared sector repair production readback -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
