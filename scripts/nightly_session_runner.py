@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -144,6 +145,20 @@ def run_sessions(
     session_args: dict[str, list[str]] | None = None,
     session_budgets: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
+    # Library callers receive the same fail-closed budget boundary as the CLI.
+    if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0
+           for value in (session_timeout_seconds, total_timeout_seconds)):
+        raise ValueError("Nightly execution budgets must be positive integers")
+    if session_budgets is not None and (
+        not isinstance(session_budgets, dict) or any(
+            key not in sessions or isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for key, value in session_budgets.items()
+        )
+    ):
+        raise ValueError("Nightly execution plan contains invalid session_timeout_seconds")
+    if any(not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", session)
+           for session in sessions):
+        raise ValueError("Nightly session names must be nox identifiers, not options")
     results: list[dict[str, Any]] = []
     completed_sessions: list[str] = []
     deadline = time.monotonic() + total_timeout_seconds
@@ -185,6 +200,8 @@ def _load_execution_plan(plan_path: Path) -> tuple[list[str], dict[str, list[str
     raw = payload.get("selected_sessions")
     if not isinstance(raw, list):
         raise ValueError("Nightly execution plan must contain selected_sessions")
+    if any(not isinstance(item, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", item) for item in raw):
+        raise ValueError("Nightly session names must be nox identifiers, not options")
     sessions = [str(item).strip() for item in raw if str(item).strip()]
     if len(sessions) != len(set(sessions)):
         raise ValueError("Nightly execution plan contains duplicate sessions")
