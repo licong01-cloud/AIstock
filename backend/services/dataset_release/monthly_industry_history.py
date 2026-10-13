@@ -200,9 +200,9 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
     """Produce two private replacement files, not a second dataset or price export.
 
     The sector population is the existing frozen sector rows UNION existing
-    frozen price rows in the approved history window. New classification-only
-    rows carry NA quote/moneyflow, never synthetic market values. Static columns
-    other than l2_code_id are retained verbatim before and after serialization.
+    frozen price rows in the approved history window. Sector values come from
+    independently sealed quotes and same-day PIT stock flows; unavailable facts
+    remain NA. All unrelated static columns remain byte-value equivalent.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -211,6 +211,8 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
 
     if not 0 < max_rows <= 100_000:
         raise SourceManifestError("industry repair row bound differs")
+    if (context_rebuilder is None) != (context_identity is None):
+        raise SourceManifestError("industry context producer and identity must be supplied together")
     root = Path(root)
     factor = root / "factor_bundle"
     context_sha = None if context_identity is None else hashlib.sha256(canonical_json_bytes(context_identity)).hexdigest()
