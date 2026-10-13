@@ -358,7 +358,7 @@ def test_nightly_execution_plan_uses_catalog_and_deduplicates_sessions() -> None
 
 
 def test_nightly_mcp_producer_precedes_only_already_selected_consumers() -> None:
-    consumers = ["research_mcp_contract", "mcp_gateway_phase6_resource_monitor"]
+    consumers = ["research_mcp_contract"]  # Phase 6 is explicitly local/manual-only.
     producer = "mcp_gateway_manifest_quality"
     for failed in (consumers, [*consumers, producer]):
         sessions = scheduler.build_nightly_execution_plan([], retry_context={"failed_sessions": failed})["selected_sessions"]
