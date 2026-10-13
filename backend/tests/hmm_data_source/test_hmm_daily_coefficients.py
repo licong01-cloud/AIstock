@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -48,19 +49,23 @@ def _service_with_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> t
                 "signal_presets": {
                     "preset_A": {"trending": 1.05, "neutral": 1.0, "fading": 0.96},
                     "preset_nested": {"coefficients": {"1": {"trending": 1.02, "neutral": 1.0, "fading": 0.98}}},
-                }
+                },
             },
         },
     )
     monkeypatch.setattr(
         svc,
-        "_latest_completed_hmm_data_date",
+        "_database_daily_completion",
         lambda as_of_date: (
             date(2026, 4, 27),
             {
-                "sector_data": date(2026, 4, 27),
-                "sw_daily": date(2026, 4, 27),
-                "index_daily_000300": date(2026, 4, 27),
+                "completion_authority": "market.dataset_date_refresh_audit",
+                "max_dates": {
+                    "sector_data": "2026-04-27",
+                    "sw_daily": "2026-04-27",
+                    "index_daily_000300": "2026-04-27",
+                },
+                "max_dates_diagnostic_only": True,
             },
         ),
     )
@@ -73,6 +78,21 @@ def _service_with_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> t
         return selected
 
     monkeypatch.setattr(svc, "_list_trading_days", list_trading_days)
+    monkeypatch.setattr(
+        "backend.services.hmm_data_source.daily_input.validate_database_models", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        svc,
+        "_database_daily_inputs",
+        lambda **kwargs: {
+            "ordered_sector_codes": ["801010.SI"],
+            "input_identity": {
+                "input_sha256": "1" * 64,
+                "read_cutoff_at": "2026-04-28T00:00:00+00:00",
+            },
+        },
+    )
+    monkeypatch.setattr(svc, "_daily_execution_lock", lambda job_id: nullcontext(True))
     return svc, model_path
 
 
@@ -212,7 +232,9 @@ def test_extract_signal_preset_coefficients_rejects_custom_metadata_only_preset(
         )
 
 
-def test_preview_daily_coefficients_uses_latest_asof_and_next_trading_day(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preview_daily_coefficients_uses_latest_asof_and_next_trading_day(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     svc, model_path = _service_with_snapshot(tmp_path, monkeypatch)
 
     plan = svc.preview_daily_coefficients("snapshot_1", signal_preset="preset_A")
@@ -220,9 +242,13 @@ def test_preview_daily_coefficients_uses_latest_asof_and_next_trading_day(tmp_pa
     assert plan["as_of_trade_date"] == "2026-04-27"
     assert plan["effective_trade_date"] == "2026-04-28"
     assert plan["generation_mode"] == HMM_DAILY_COEFFICIENT_MODE
-    assert plan["output_filename"] == "coefficients_preset_A_2026-04-28_2026-04-28.json"
+    assert plan["output_filename"].startswith("coefficients_preset_A_2026-04-28_2026-04-28__daily_")
     assert plan["output_path"] == str(model_path.parent / plan["output_filename"])
     assert plan["existing_artifact"] is False
+    assert plan["source_mode"] == "database_daily"
+    assert plan["input_validation_status"] == "VALIDATED"
+    assert plan["generation_available"] is True
+    assert plan["blocking_reason"] is None
 
 
 def test_preview_daily_coefficients_accepts_precomputed_builtin_metadata_preset(
@@ -264,13 +290,13 @@ def test_preview_daily_coefficients_accepts_precomputed_builtin_metadata_preset(
     )
 
     assert plan["preset_coeffs"] == {"trending": 1.0, "neutral": 1.0, "fading": 0.955}
-    assert plan["output_filename"] == "coefficients_preset_A_2026-04-28_2026-04-28.json"
+    assert "__daily_" in plan["output_filename"]
 
 
 def test_preview_daily_coefficients_rejects_same_day_effective(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc, _ = _service_with_snapshot(tmp_path, monkeypatch)
 
-    with pytest.raises(ValueError, match="effective_trade_date must be later"):
+    with pytest.raises(ValueError, match="effective_trade_date must be after"):
         svc.preview_daily_coefficients(
             "snapshot_1",
             signal_preset="preset_A",
@@ -279,37 +305,43 @@ def test_preview_daily_coefficients_rejects_same_day_effective(tmp_path: Path, m
         )
 
 
-def test_generate_daily_coefficients_is_idempotent_for_matching_existing_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_daily_plan_does_not_reuse_or_overwrite_old_unbound_asset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     svc, model_path = _service_with_snapshot(tmp_path, monkeypatch)
     output_path = model_path.parent / "coefficients_preset_A_2026-04-28_2026-04-28.json"
-    output_path.write_text(json.dumps({
-        "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
-        "snapshot_id": "snapshot_1",
-        "config_id": "cfg_1",
-        "preset_key": "preset_A",
-        "as_of_trade_date": "2026-04-27",
-        "effective_trade_date": "2026-04-28",
-        "daily_coefficients": {"2026-04-28": {"801010.SI": 1.05}},
-        "stock_sector_map": {"600000.SH": "801010.SI"},
-    }, ensure_ascii=False), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(
+            {
+                "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+                "snapshot_id": "snapshot_1",
+                "config_id": "cfg_1",
+                "preset_key": "preset_A",
+                "as_of_trade_date": "2026-04-27",
+                "effective_trade_date": "2026-04-28",
+                "daily_coefficients": {"2026-04-28": {"801010.SI": 1.05}},
+                "stock_sector_map": {"600000.SH": "801010.SI"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     def fail_run(*args, **kwargs):  # pragma: no cover - should not be called
         raise AssertionError("subprocess must not run when matching artifact already exists")
 
     monkeypatch.setattr("backend.services.hmm_training_service.subprocess.run", fail_run)
 
-    result = svc.generate_daily_coefficients(
-        "snapshot_1",
-        signal_preset="preset_A",
-        confirm_generate=True,
-    )
-
-    assert result["status"] == "EXISTS"
-    assert result["created"] is False
-    assert len(result["artifact_sha256"]) == 64
+    before = output_path.read_bytes()
+    plan = svc.preview_daily_coefficients("snapshot_1", signal_preset="preset_A")
+    assert plan["existing_artifact"] is False
+    assert plan["output_path"] != str(output_path)
+    assert output_path.read_bytes() == before
 
 
-def test_generate_daily_coefficients_passes_pit_dates_to_wsl_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_daily_coefficients_never_dispatches_database_day_to_file_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     svc, model_path = _service_with_snapshot(tmp_path, monkeypatch)
     output_path = model_path.parent / "coefficients_preset_A_2026-04-28_2026-04-28.json"
     captured = {}
@@ -317,39 +349,40 @@ def test_generate_daily_coefficients_passes_pit_dates_to_wsl_script(tmp_path: Pa
     def fake_run(cmd, input, **kwargs):
         params = json.loads(input)
         captured.update({"cmd": cmd, "params": params})
-        output_path.write_text(json.dumps({
-            "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
-            "snapshot_id": "snapshot_1",
-            "config_id": "cfg_1",
-            "preset_key": "preset_A",
-            "as_of_trade_date": "2026-04-27",
-            "effective_trade_date": "2026-04-28",
-            "daily_coefficients": {"2026-04-28": {"801010.SI": 1.05}},
-            "stock_sector_map": {"600000.SH": "801010.SI"},
-        }, ensure_ascii=False), encoding="utf-8")
+        output_path.write_text(
+            json.dumps(
+                {
+                    "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
+                    "snapshot_id": "snapshot_1",
+                    "config_id": "cfg_1",
+                    "preset_key": "preset_A",
+                    "as_of_trade_date": "2026-04-27",
+                    "effective_trade_date": "2026-04-28",
+                    "daily_coefficients": {"2026-04-28": {"801010.SI": 1.05}},
+                    "stock_sector_map": {"600000.SH": "801010.SI"},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         return _Proc()
 
     monkeypatch.setattr("backend.services.hmm_training_service.subprocess.run", fake_run)
-
-    result = svc.generate_daily_coefficients(
-        "snapshot_1",
-        signal_preset="preset_A",
-        confirm_generate=True,
+    monkeypatch.setattr(
+        svc,
+        "_database_daily_inputs",
+        lambda **kwargs: (_ for _ in ()).throw(
+            RuntimeError("hmm_database_daily_input_unavailable: missing required fact")
+        ),
     )
-
-    assert result["status"] == "CREATED"
-    assert result["created"] is True
-    assert captured["params"]["test_start"] == "2026-04-27"
-    assert captured["params"]["backtest_end"] == "2026-04-27"
-    assert captured["params"]["as_of_trade_date"] == "2026-04-27"
-    assert captured["params"]["output_trade_date"] == "2026-04-28"
-    assert captured["params"]["generation_mode"] == HMM_DAILY_COEFFICIENT_MODE
-    assert captured["params"]["config_json"]["method"] == "pup"
-    assert captured["params"]["config_json"]["horizon_weights"]["20"] == pytest.approx(0.5)
-    assert captured["params"]["preset_coeffs"]["trending"] == pytest.approx(1.05)
-    assert captured["params"]["frozen_input_bundle"]["dataset_root"] == "/mnt/x/qe-release"
-    assert captured["params"]["model_sha256"] == HMMTrainingService._file_sha256(str(model_path))
-    assert not any(key.startswith("db_") for key in captured["params"])
+    with pytest.raises(RuntimeError, match="hmm_database_daily_input_unavailable"):
+        svc.generate_daily_coefficients(
+            "snapshot_1",
+            signal_preset="preset_A",
+            confirm_generate=True,
+        )
+    assert captured == {}
+    assert not output_path.exists()
 
 
 def test_snapshot_precompute_passes_only_frozen_market_inputs(tmp_path: Path, monkeypatch) -> None:
@@ -376,12 +409,15 @@ def test_snapshot_precompute_passes_only_frozen_market_inputs(tmp_path: Path, mo
     )
 
     assert len(captured) == 2
+    assert all(item["source_mode"] == "qe_frozen_file" for item in captured)
     assert all(item["model_sha256"] == HMMTrainingService._file_sha256(str(model_path)) for item in captured)
     assert all(item["frozen_input_bundle"]["dataset_root"] == "/mnt/x/qe-release" for item in captured)
     assert all(not any(key.startswith("db_") for key in item) for item in captured)
 
 
-def test_start_daily_coefficients_job_persists_validated_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_start_daily_coefficients_job_rejects_unvalidated_db_input_before_insert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     svc, _ = _service_with_snapshot(tmp_path, monkeypatch)
     captured: dict[str, Any] = {}
 
@@ -400,17 +436,15 @@ def test_start_daily_coefficients_job_persists_validated_plan(tmp_path: Path, mo
         }
 
     monkeypatch.setattr(svc, "_insert_daily_coefficient_job", fake_insert)
+    monkeypatch.setattr(svc, "_resolve_daily_coefficient_plan", lambda **kwargs: {"generation_available": False})
 
-    job = svc.start_daily_coefficients_job(
-        "snapshot_1",
-        signal_preset="preset_A",
-        confirm_generate=True,
-    )
-
-    assert job["status"] == "PENDING"
-    assert captured["as_of_trade_date"] == "2026-04-27"
-    assert captured["effective_trade_date"] == "2026-04-28"
-    assert captured["generation_mode"] == HMM_DAILY_COEFFICIENT_MODE
+    with pytest.raises(RuntimeError, match="no daily job has been created"):
+        svc.start_daily_coefficients_job(
+            "snapshot_1",
+            signal_preset="preset_A",
+            confirm_generate=True,
+        )
+    assert captured == {}
 
 
 def test_run_daily_coefficients_job_marks_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -424,6 +458,7 @@ def test_run_daily_coefficients_job_marks_completed(tmp_path: Path, monkeypatch:
         "as_of_trade_date": "2026-04-27",
         "effective_trade_date": "2026-04-28",
         "status": "PENDING",
+        "plan_json": {"daily_key": "key", "source_mode": "database_daily"},
     }
 
     monkeypatch.setattr(svc, "get_daily_coefficient_job", lambda job_id: job)
@@ -433,7 +468,9 @@ def test_run_daily_coefficients_job_marks_completed(tmp_path: Path, monkeypatch:
         return {**plan, "status": "CREATED", "artifact_sha256": "a" * 64}
 
     monkeypatch.setattr(svc, "_execute_daily_coefficient_plan", fake_execute)
-    monkeypatch.setattr(svc, "_complete_daily_coefficient_job", lambda job_id, result: events.update({"completed": (job_id, result)}))
+    monkeypatch.setattr(
+        svc, "_complete_daily_coefficient_job", lambda job_id, result: events.update({"completed": (job_id, result)})
+    )
 
     svc.run_daily_coefficients_job("job_1")
 
@@ -454,12 +491,19 @@ def test_run_daily_coefficients_job_marks_failed(tmp_path: Path, monkeypatch: py
         "as_of_trade_date": "2026-04-27",
         "effective_trade_date": "2026-04-28",
         "status": "PENDING",
+        "plan_json": {"daily_key": "key", "source_mode": "database_daily"},
     }
 
     monkeypatch.setattr(svc, "get_daily_coefficient_job", lambda job_id: job)
     monkeypatch.setattr(svc, "_mark_daily_coefficient_job_running", lambda job_id: events.update({"running": job_id}))
-    monkeypatch.setattr(svc, "_execute_daily_coefficient_plan", lambda plan: (_ for _ in ()).throw(RuntimeError("boom")))
-    monkeypatch.setattr(svc, "_fail_daily_coefficient_job", lambda job_id, message, context=None: events.update({"failed": (job_id, message, context)}))
+    monkeypatch.setattr(
+        svc, "_execute_daily_coefficient_plan", lambda plan: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    monkeypatch.setattr(
+        svc,
+        "_fail_daily_coefficient_job",
+        lambda job_id, message, context=None: events.update({"failed": (job_id, message, context)}),
+    )
 
     svc.run_daily_coefficients_job("job_1")
 
@@ -467,3 +511,35 @@ def test_run_daily_coefficients_job_marks_failed(tmp_path: Path, monkeypatch: py
     assert events["failed"][0] == "job_1"
     assert "boom" in events["failed"][1]
     assert events["failed"][2]["exception_type"] == "RuntimeError"
+
+
+def test_manual_daily_api_keeps_later_trading_day_compatibility(tmp_path, monkeypatch):
+    svc, _ = _service_with_snapshot(tmp_path, monkeypatch)
+    plan = svc.preview_daily_coefficients(
+        "snapshot_1",
+        signal_preset="preset_A",
+        as_of_date=date(2026, 4, 27),
+        effective_trade_date=date(2026, 4, 29),
+    )
+    assert plan["effective_trade_date"] == "2026-04-29"
+
+
+@pytest.mark.parametrize(
+    "status,acquired,execute",
+    [("RUNNING", True, True), ("PENDING", False, False), ("COMPLETED", True, False), ("FAILED", True, False)],
+)
+def test_daily_job_uses_frozen_plan_and_exclusive_lock(tmp_path, monkeypatch, status, acquired, execute):
+    svc, _ = _service_with_snapshot(tmp_path, monkeypatch)
+    frozen = {"daily_key": "key", "source_mode": "database_daily", "as_of_trade_date": "2026-04-27"}
+    job = {"status": status, "plan_json": frozen}
+    monkeypatch.setattr(svc, "get_daily_coefficient_job", lambda job_id: job)
+    monkeypatch.setattr(svc, "_daily_execution_lock", lambda job_id: nullcontext(acquired))
+    monkeypatch.setattr(svc, "_mark_daily_coefficient_job_running", lambda job_id: None)
+    monkeypatch.setattr(svc, "_resolve_daily_coefficient_plan", lambda **k: pytest.fail("replanning forbidden"))
+    seen = []
+    monkeypatch.setattr(
+        svc, "_execute_daily_coefficient_plan", lambda plan: seen.append(plan) or {"status": "GENERATED"}
+    )
+    monkeypatch.setattr(svc, "_complete_daily_coefficient_job", lambda *a: None)
+    svc.run_daily_coefficients_job("job")
+    assert seen == ([frozen] if execute else [])

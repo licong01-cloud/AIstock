@@ -1,0 +1,412 @@
+{
+  "actual": "_resolve_daily_coefficient_plan uses DB MAX dates while _execute_daily_coefficient_plan unconditionally resolves QE frozen input; script supports only frozen release.",
+  "allowed_write_scope": [
+    "backend/services/hmm_training_service.py",
+    "scripts/precompute_hmm_coefficients.py",
+    "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+    "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+    "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+    "backend/services/hmm_data_source/daily_input.py",
+    "backend/services/hmm_data_source/coefficient_extension.py",
+    "scripts/hmm_horizon_v2_train.py",
+    "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+    "tests/aistock_validation/bugs/20261013_BUG-1862-hmm-daily-coefficient-generation-mixes-database-dates-with-frozen-qe-inp.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1862",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-13T03:20:20.892925Z",
+  "description": "_resolve_daily_coefficient_plan uses DB MAX dates while _execute_daily_coefficient_plan unconditionally resolves QE frozen input; script supports only frozen release.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261013-575cfe5ce458",
+      "timestamp": "2026-10-13T03:20:20.892899Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "荐股和模拟盘日度推断读取数据库截至已完成收盘日的必要事实；QE仅读取显式冻结release；来源和输入身份冻结并读回验证，缺数不跨源回退。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+      "scripts/hmm_horizon_v2_train.py",
+      "scripts/precompute_hmm_coefficients.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1862-hmm-daily-coefficient-generation-mixes-database-dates-with-frozen-qe-inp.json"
+    ],
+    "added_files": [
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+    ],
+    "changed_files": [
+      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+      "scripts/hmm_horizon_v2_train.py",
+      "scripts/precompute_hmm_coefficients.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1862-hmm-daily-coefficient-generation-mixes-database-dates-with-frozen-qe-inp.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_training_service.py",
+        "scripts/precompute_hmm_coefficients.py",
+        "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+        "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+        "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+        "backend/services/hmm_data_source/daily_input.py",
+        "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+      ],
+      "impacted_modules": [
+        "hmm",
+        "qe.core",
+        "selection_center",
+        "paper_v2",
+        "strategy_package",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_training_service.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "scripts/precompute_hmm_coefficients.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "backend/services/hmm_data_source/daily_input.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_training_service.py",
+        "scripts/precompute_hmm_coefficients.py",
+        "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+        "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+        "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+        "backend/services/hmm_data_source/daily_input.py",
+        "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_training_service.py",
+      "scripts/precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_training_service.py",
+      "scripts/precompute_hmm_coefficients.py",
+      "backend/tests/hmm_data_source/test_hmm_daily_coefficients.py",
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+    ]
+  },
+  "first_seen_at": "2026-10-13T03:20:20.892925Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5948,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5948",
+  "last_seen_at": "2026-10-13T03:20:20.892925Z",
+  "module": "hmm",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repair_progress": {
+    "actual_database_preflight": {
+      "artifact_publication": false,
+      "as_of_trade_date": "2026-10-12",
+      "database_write": false,
+      "effective_trade_date": "2026-10-13",
+      "fit": 0,
+      "history_start": "2023-01-26",
+      "model_sha256": "7223c32648792443020cbc02e9ded3102e81d30330640e623d4c2ef0ddf8f665",
+      "reason_code": "hmm_database_daily_input_unavailable",
+      "first_conflicting_fact": "801012.SI/2023-01-30/sw2_pct_change",
+      "result": "BLOCKED",
+      "snapshot_id": "ecee7c40-6764-49ad-bc0f-1c6c6b390504"
+    },
+    "database_daily_adapter": "implemented_locally_with_shared_core_and_immutable_registration_pending_merge",
+    "database_readiness_contract": "shared_refresh_audit_reused_and_verified_readonly_for_2026_10_12",
+    "database_write": false,
+    "dataset_write": false,
+    "formal_review": "three_source_review_rounds_and_delivery_rereview_passed; planned_prefix_and_immutable_read_identity_findings_fixed; runtime_and_real_database_generation_not_accepted",
+    "full_requirement_complete": false,
+    "local_validation": [
+      "RED: 3 direct mixed-source regression tests failed on original source",
+      "Prior HEAD 41e6476e: direct daily/input/precompute/file-extension matrix -> 130 passed, 1 skipped; existing unauthorized DEV write integration not run; final delivery HEAD receipts must be regenerated",
+      "Delivery rereview RED: planned prefix, repeated asset read identity and concurrent read identity tests all failed before the fix; GREEN: these 3 tests and 5 invalid original-read-boundary cases passed after the HMM-only fix",
+      "Source HEAD f837634277de4b0039b7a4563b3d829f2027f9b8: final related matrix -> 138 passed, 1 skipped; Ruff/py_compile/F2/L0/module registry and Windows/WSL fresh-process checks passed; subsequent edits only record latest read-only preflight status",
+      "Ruff check and py_compile -> passed",
+      "fresh-process backend service/router imports -> passed",
+      "Windows/WSL fresh-process file-worker source boundary -> passed",
+      "nox l0 -> passed, blocking=0",
+      "nox validation_module_registry_l0 -> 8 passed, 14/14 mapped",
+      "Scope remains HMM source, HMM CLI, HMM direct tests, design state and own BUG JSON; actual changed-file ownership will be regenerated before finish",
+      "F2 source/design status distinguishes approved design, source verification and pending real-input/runtime acceptance",
+      "git diff --check -> passed",
+      "Workflow-owner PR #6009 merged: canonical target-owned daily job semantic probe registration blocker resolved; this does not substitute for a real COMPLETED and REGISTERED_READBACK job"
+    ],
+    "process_control": false,
+    "quote_policy_reuse_ref": "backend/services/dataset_release/sw_l2_quote_policy.py",
+    "remaining_business_blockers": [
+      "Latest file-free DB preflight rejects conflicting repeated sector fact 801012.SI/2023-01-30/sw2_pct_change; an earlier read also found 801012.SI/2026-07-01 and 002086.SZ PIT/stock-level fact mismatch. Shared facts are not modified or bypassed in this task",
+      "Actual DEV registration, production generation and consumer/API/UI readback have not run; test substitutes are not business acceptance",
+      "Shared data-ready callback is outside this HMM-only source scope and remains unwired",
+      "BUG-1862 source is not yet loaded in backend-main; the prior user restart does not prove this source revision or a qualifying database_daily COMPLETED job"
+    ],
+    "source_isolation": "implemented_locally_not_merged",
+    "training": false
+  },
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_data_source_backend",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/snapshots/ecee7c40-6764-49ad-bc0f-1c6c6b390504/daily-coefficients/jobs",
+    "fresh_process_evidence": [
+      "PYTHONPATH=<own worktree> python tmp/handoff/BUG-1862/fresh_import_smoke.py -> PASS; HMM training/risk/health routers imported without process control",
+      "PYTHONPATH=<own worktree> Conda AIstock python tmp/handoff/BUG-1862/fresh_import_smoke.py -> PASS; no dependency installation",
+      "Windows and WSL Ubuntu rdagent-gpu fresh-process file-worker boundary -> PASS; database_daily rejected before model IO or DB import",
+      "PYTHONPATH=F:/Dev/AIstock_worktrees/BUG-1862-hmm-daily-coefficient-generation-mixes-database-20261013 python tmp/handoff/BUG-1862/fresh_import_smoke.py -> passed: HMM training/risk/health routers and affected dependencies; Windows base and C:/Users/lc999/miniconda3/envs/AIstock/python.exe",
+      "PYTHONPATH=<task worktree> python tmp/handoff/BUG-1862/source_boundary_smoke.py -> passed: Windows base and WSL Ubuntu /home/lc999/miniconda3/envs/rdagent-gpu/bin/python fresh process; file worker refuses database_daily before DB import/model IO"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm"
+  ],
+  "title": "HMM daily coefficient generation mixes database dates with frozen QE inputs",
+  "trigger_condition": {
+    "fingerprint": "575cfe5ce45804b6fc04aad3",
+    "source_event_id": "FE-20261013-575cfe5ce458"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm",
+        "hmm_data_source",
+        "paper_v2"
+      ],
+      "plans": [
+        "hmm_data_source_backend",
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm",
+          "hmm_data_source",
+          "paper_v2"
+        ],
+        "plans": [
+          "hmm_data_source_backend",
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
