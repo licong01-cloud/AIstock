@@ -976,8 +976,48 @@ def _member_row(ts_code, l2_code="801767.SI", in_date="19960628", out_date=None)
 def _stub_execute_values(monkeypatch):
     def _record(cur, sql, values, *args, **kwargs):
         cur._conn.executed.append((sql, None))
+        return [] if kwargs.get("fetch") else None
 
     monkeypatch.setattr(sync_engine.pgx, "execute_values", _record)
+
+
+@pytest.mark.parametrize("changed", [[], [(dt.date(2026, 7, 1),)]])
+def test_sector_source_upsert_marks_only_returned_changes_in_same_transaction(monkeypatch, changed):
+    import backend.services.sector_data_repair as repair
+
+    conn = _FakeConn()
+    marked = []
+
+    def upsert(cur, sql, values, **kwargs):
+        assert conn.autocommit is False
+        assert "IS DISTINCT FROM" in sql and "RETURNING trade_date" in sql
+        assert kwargs == {"fetch": True}
+        return changed
+
+    def mark(actual, dates, dependency):
+        assert actual is conn and conn.autocommit is False and conn.commits == 0
+        marked.append((dates, dependency))
+
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", upsert)
+    monkeypatch.setattr(repair, "mark_revision_dates", mark)
+    assert TushareSyncEngine()._upsert_plain_batch(conn, SW_DAILY, [{"ts_code": "801012.SI", "trade_date": "20260701"}]) == 1
+    assert marked == [([item[0] for item in changed], "sw_daily")]
+    assert conn.commits == 1 and conn.autocommit is True
+
+
+def test_sector_source_marker_failure_rolls_back_owned_source_write(monkeypatch):
+    import backend.services.sector_data_repair as repair
+
+    conn = _FakeConn()
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda *args, **kwargs: [(dt.date(2026, 7, 1),)])
+
+    def fail(*args):
+        raise RuntimeError("invalidation storage failed")
+
+    monkeypatch.setattr(repair, "mark_revision_dates", fail)
+    with pytest.raises(RuntimeError, match="invalidation storage"):
+        TushareSyncEngine()._upsert_plain_batch(conn, SW_DAILY, [{"ts_code": "801012.SI", "trade_date": "20260701"}])
+    assert conn.commits == 0 and conn.rollbacks == 1 and conn.autocommit is True
 
 
 def test_sw_index_member_spec_preserves_history_and_paginates():

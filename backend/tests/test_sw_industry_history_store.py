@@ -78,10 +78,10 @@ def test_duplicates_dedup_but_conflicting_payloads_fail():
         prepare_member_refresh([], [row, conflicting], "801783.SI")
 
 
-def test_same_day_handoff_is_allowed_but_overlapping_intervals_are_not():
-    old = member(start="20180101", end="20210730", current="N")
+def test_inclusive_end_requires_next_day_handoff():
+    old = member(start="20180101", end="20210729", current="N")
     assert len(prepare_member_refresh([], [old, member()], "801783.SI")) == 2
-    old["out_date"] = "20210801"
+    old["out_date"] = "20210730"
     with pytest.raises(ValueError, match="overlap"):
         prepare_member_refresh([], [old, member()], "801783.SI")
 
