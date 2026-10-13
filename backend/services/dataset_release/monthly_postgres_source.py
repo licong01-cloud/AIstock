@@ -54,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "15"
+POSTGRES_SOURCE_ADAPTER_VERSION = "16"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -358,6 +358,7 @@ class PostgresMonthlySourceAdapter:
                 "business_validation_scope": "target_calendar_month_only_v1",
                 "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
                 "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
+                "historical_classification_policy": "immutable_version_qualified_effective_history_v1",
                 "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
                 "managed_writer_scope_policy": MANAGED_WRITER_SCOPE_POLICY,
                 "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
@@ -419,6 +420,10 @@ class PostgresMonthlySourceAdapter:
             sector_mapping = load_predecessor_sector_mapping(
                 load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile),
             )
+            from .monthly_industry_history import capture_industry_history
+            history = capture_industry_history(connection, current_map=sector_mapping["code_map"])
+            if history is not None:
+                sector_mapping = {**sector_mapping, "historical_classification": history.payload}
         authority = MonthlyObservedSourceAuthority(
             self.profile,
             self.cas,
