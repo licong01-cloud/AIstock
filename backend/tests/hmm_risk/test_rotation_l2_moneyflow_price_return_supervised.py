@@ -173,8 +173,17 @@ def test_rehashed_input_drift_fails_closed(candidate, monkeypatch, mutation):
         changed["source"]["evaluation_source_binding"]["root"] += "-other"
     else:
         changed["numeric_environment"]["versions"]["numpy"] = "0"
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("invalid input reached feature or training matrix construction")
+
+    # Rejection precedes numerical construction. Do not rebuild the entire valid
+    # feature grid for every invalid wrapper; positive and fresh-child tests
+    # below still use the complete real matrix and the unchanged date population.
+    monkeypatch.setattr(price, "feature_rows", forbidden)
+    monkeypatch.setattr(ridge, "training_matrix", forbidden)
     with pytest.raises((RuntimeError, ValueError)):
-        subject.training_matrix(reseal(changed), price.feature_rows(candidate[1])[0])
+        subject.training_matrix(reseal(changed), [])
 
 
 def test_training_never_reads_prediction_outcomes_or_source_reader(candidate, monkeypatch):

@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-13T18:41:08.403882Z",
-  "description": "Issue #5424 的原始 Nightly 回执确认 hmm_risk_backend 在 1201.55 秒超时。按节点顺序和定向堆栈定位，return-target candidate fixture 虽缓存比较结果，但仍在每个变异节点前重复请求大型 price_panel、重复正式 wrapper preflight；同时 formal_state_effect writer/overview 测试假游标未实现当前 SELECT DISTINCT trade_date 合同，已有真实 RED。修复限于这两个 HMM 测试文件：延迟只构造一次不变合成输入，每例重新绑定相同测试 authority 并返回深拷贝；更新假游标精确查询响应并隔离产品验证 store。保留全部真实 consumer 校验、131 行业、训练与预测日期、fresh-process、zero-refit、hash 和 fail-closed 断言，不改任何业务源码或流水线。",
+  "description": "Issue #5424 的原始 Nightly 回执确认 hmm_risk_backend 在 1201.55 秒超时。按节点顺序和定向堆栈定位，return-target candidate fixture 虽缓存比较结果，但仍在每个变异节点前重复请求大型 price_panel、重复正式 wrapper preflight；8 个非法输入用例还在拒绝校验前重复构造合法全特征矩阵。同时 formal_state_effect writer/overview 测试假游标未实现当前 SELECT DISTINCT trade_date 合同，已有真实 RED。修复限于这两个 HMM 测试文件：延迟只构造一次不变合成输入，每例重新绑定相同测试 authority 并返回深拷贝；非法输入用例以构造 poison 证明必须在数值构造前拒绝，合法矩阵与双 fresh-process 仍真实执行；更新假游标精确查询响应并隔离产品验证 store。保留全部真实 consumer 校验、131 行业、训练与预测日期、fresh-process、zero-refit、hash 和 fail-closed 断言，不改任何业务源码或流水线。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
