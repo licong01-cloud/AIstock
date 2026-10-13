@@ -92,6 +92,9 @@ def test_default_module_registry_and_file_ownership_catalog_load() -> None:
         ("docs/process/cross_tool_review_protocol_20260510.md", "docs"),
         ("docs/discussion/cross_tool_channel_protocol_20260510.md", "docs"),
         ("backend/services/validation/plan_catalog.py", "validation.runner"),
+        ("scripts/ci_plan_coverage.py", "validation.workflow_automation"),
+        ("backend/tests/scripts/test_ci_test_plan_coverage.py", "validation.workflow_automation"),
+        ("scripts/dr_snapshot_prod_db.py", "validation.dr"),
     ]:
         matched = catalog.match_path(path)
         assert matched.ownership_status == "mapped", path
