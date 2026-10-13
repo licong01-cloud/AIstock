@@ -305,6 +305,91 @@ def test_history_supplement_is_bound_to_original_source_and_current_release(pred
         load_frozen_history(None, context_plan=plan, build_inputs={"source_bundle_sha256": "b" * 64})
 
 
+def test_industry_context_recomputes_moneyflow_for_corrected_pit_cohort(predecessor, tmp_path):
+    import numpy as np
+    import pandas as pd
+    from backend.services.dataset_release.monthly_industry_history import IndustryHistoryProjection
+    from backend.services.dataset_release.monthly_industry_facts import rebuild_industry_context
+
+    mapping = load_predecessor_sector_mapping(predecessor)["code_map"]
+    a, b = mapping["entries"][:2]
+    day = pd.Timestamp("2026-07-01")
+    index = pd.MultiIndex.from_product([[day], ["000001.SZ", "000002.SZ", "000003.SZ"]], names=["datetime", "instrument"])
+    rows = [{"canonical_symbol": symbol, "taxonomy_version": "SW2021", "published_l2_code": item["canonical_l2_code"],
+             "effective_from": "2021-07-30", "effective_to": "2026-08-31", "known_from": None,
+             "knowledge_time_quality": "FIRST_PUBLICATION_UNVERIFIED", "source_sha256": "a" * 64,
+             "source_row_sha256": "b" * 64} for symbol, item in zip(index.get_level_values("instrument"), [a, b, a], strict=True)]
+    projection = IndustryHistoryProjection.build(rows, current_map=mapping, authority_sha256="c" * 64)
+    old = pd.DataFrame({"l2_code_id": [b["l2_code_id"], b["l2_code_id"], a["l2_code_id"]],
+                        "sw2_close": [500.0, 500.0, 100.0], "sw2_mf_net_amt": [90.0, 90.0, 99.0],
+                        "sw2_mf_buy_elg_vol": [90.0, 90.0, 99.0]}, index=index)
+    moneyflow = pd.DataFrame({"mf_net_amt": [10_000.0, 20_000.0, 30_000.0],
+                             "mf_elg_buy_vol": [100.0, 200.0, 300.0]}, index=index)
+    # Third security is in the provider catalog, but not the frozen strategy PIT population.
+    pit = pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"], "eligible_start": [day.date()] * 2,
+                        "eligible_end": [day.date()] * 2, "entry_reason": ["eligible"] * 2, "exit_reason": [None] * 2})
+    quotes = pd.DataFrame({"sw2_close": [111.0, 222.0]}, index=pd.MultiIndex.from_tuples(
+        [(day, a["l2_code_id"]), (day, b["l2_code_id"])], names=["datetime", "l2_code_id"]))
+    actual = rebuild_industry_context(old, projection=projection, quotes=quotes, moneyflow=moneyflow, pit=pit)
+    assert actual["sw2_close"].tolist() == [111, 222, 111]
+    assert actual["sw2_mf_net_amt"].tolist() == [1, 2, 1]  # CNY -> native 10k CNY
+    assert actual["sw2_mf_buy_elg_vol"].tolist() == [1, 2, 1]  # shares -> native hands
+    assert actual["l2_code_id"].tolist() == [a["l2_code_id"], b["l2_code_id"], a["l2_code_id"]]
+    missing = rebuild_industry_context(old, projection=projection, quotes=quotes.iloc[0:0], moneyflow=moneyflow.iloc[0:0], pit=pit)
+    assert np.isnan(missing[["sw2_close", "sw2_mf_net_amt", "sw2_mf_buy_elg_vol"]]).all().all()
+
+
+@pytest.mark.parametrize("case", ["alias", "stopped_quote", "duplicate_quote", "infinite_flow", "wrong_source_hash"])
+def test_frozen_industry_context_preserves_alias_absence_and_source_identity(predecessor, tmp_path, case):
+    import pandas as pd
+    from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH, load_security_source_identity_manifest
+    from backend.services.dataset_release import monthly_industry_facts as subject
+    from backend.services.dataset_release.monthly_industry_history import IndustryHistoryProjection
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.pit import freeze_pit_snapshot
+
+    mapping = load_predecessor_sector_mapping(predecessor)["code_map"]
+    entry = mapping["entries"][0]
+    day = date(2024, 8, 13)
+    row = {"canonical_symbol": "302132.SZ", "taxonomy_version": "SW2021", "published_l2_code": entry["canonical_l2_code"],
+           "effective_from": day.isoformat(), "effective_to": day.isoformat(), "known_from": None,
+           "knowledge_time_quality": "FIRST_PUBLICATION_UNVERIFIED", "source_sha256": "a" * 64, "source_row_sha256": "b" * 64}
+    history = IndustryHistoryProjection.build([row], current_map=mapping, authority_sha256="c" * 64)
+    pit = freeze_pit_snapshot(pd.DataFrame({"ts_code": ["302132.SZ"], "eligible_start": [day], "eligible_end": [day],
+        "entry_reason": ["eligible"], "exit_reason": [None]}), universe_key="test", rule_version="test",
+        scope_start=day, cutoff=day, state_identity="test", source_fingerprint_sha256="d" * 64, parameter_hash="e" * 64)
+    ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(tmp_path / "control")
+    quote = {"index_code": entry["canonical_l2_code"], "trade_date": day.isoformat(), **dict.fromkeys(subject.QUOTE_FIELDS, "12.0")}
+    rows = [] if case == "stopped_quote" else [quote]
+    if case == "duplicate_quote":
+        rows += [quote]
+    reference = cas.put_json({"schema_version": subject.SCHEMA, "partition_key": "2024-08", "rows": rows}).as_dict()
+    if case == "wrong_source_hash":
+        reference["sha256"] = "f" * 64
+    source = {"schema_version": subject.SCHEMA, "projection_sha256": history.sha256, "source_dataset": "market.sw_daily",
+              "quote_units": "sw_daily_native_v1", "quote_taxonomy": "SW2021", "quote_start_date": "2021-07-30",
+              "database_write": False, "partitions": [{"partition_key": "2024-08", "row_count": len(rows), "ref": reference}]}
+    index = pd.MultiIndex.from_tuples([(pd.Timestamp(day), "300114.SZ")], names=["datetime", "instrument"])
+    path = tmp_path / "moneyflow.h5"
+    pd.DataFrame({"mf_net_amt": [float("inf") if case == "infinite_flow" else 20_000.0]}, index=index).to_hdf(
+        path, "data", format="table", data_columns=["datetime", "instrument"])
+    context = subject.FrozenIndustryContext(cas=cas, source=source, projection=history, moneyflow_path=path,
+        pit=pit, identity=load_security_source_identity_manifest(DEFAULT_MANIFEST_PATH))
+    target = pd.DataFrame({"l2_code_id": [-1], "sw2_close": [99.0], "sw2_mf_net_amt": [99.0]},
+        index=pd.MultiIndex.from_tuples([(pd.Timestamp(day), "302132.SZ")], names=["datetime", "instrument"]))
+    if case in {"duplicate_quote", "infinite_flow", "wrong_source_hash"}:
+        from backend.services.dataset_release.cas_store import CASStoreError
+        with pytest.raises((SourceManifestError, CASStoreError), match="duplicated|infinite|CAS"):
+            context.remap(target)
+    else:
+        actual = context.remap(target)
+        assert actual.sw2_mf_net_amt.iloc[0] == 2.0
+        assert actual.l2_code_id.iloc[0] == entry["l2_code_id"]
+        assert pd.isna(actual.sw2_close.iloc[0]) if case == "stopped_quote" else actual.sw2_close.iloc[0] == 12.0
+
+
 def test_unchanged_frozen_history_is_reused_without_historical_rescan(predecessor, tmp_path, monkeypatch):
     from backend.services.dataset_release import monthly_industry_history as subject, monthly_build_bridge
     from backend.services.dataset_release.cas_store import CASStore
@@ -315,7 +400,8 @@ def test_unchanged_frozen_history_is_reused_without_historical_rescan(predecesso
            "knowledge_time_quality": "FIRST_PUBLICATION_UNVERIFIED", "source_sha256": "a" * 64, "source_row_sha256": "b" * 64}
     history = subject.IndustryHistoryProjection.build([row], current_map=binding["code_map"], authority_sha256="c" * 64)
     path = predecessor.root / "components/sector_context_candidate_v1/industry_l2_history_authority.json"
-    path.write_bytes(canonical_json_bytes({**history.payload, "projection_sha256": history.sha256, "factor_projection_receipt_ref": {}}) + b"\n")
+    path.write_bytes(canonical_json_bytes({**history.payload, "projection_sha256": history.sha256, "factor_projection_receipt_ref": {},
+        "industry_context_contract": "official_quote_plus_pit_stock_flow_v1"}) + b"\n")
     pin = {"path": path.relative_to(predecessor.root).as_posix(), "size": path.stat().st_size,
            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     monkeypatch.setattr(subject, "load_frozen_history", lambda *args, **kwargs: history)
@@ -357,7 +443,7 @@ def test_history_reuses_same_official_text_code_id_without_taxonomy_backcast(pre
     assert len({item["l2_code_id"] for item in history.payload["entries"]}) == 131
 
 
-@pytest.mark.parametrize("interruption", [None, "backup", "publish", "journal"])
+@pytest.mark.parametrize("interruption", [None, "backup", "publish", "journal", "legacy_projection"])
 def test_native_factor_receipt_survives_real_history_repair_and_retry(predecessor, tmp_path, monkeypatch, interruption):
     import json
     from pathlib import Path
@@ -367,6 +453,9 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     from backend.services.dataset_release.control_store import ControlStore
     from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
     from backend.services.dataset_release.monthly_build_resume import _signature
+    from backend.services.dataset_release import monthly_industry_facts as facts_module, source_authority
+    from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH
+    from backend.services.dataset_release.pit import freeze_pit_snapshot
 
     mapping = load_predecessor_sector_mapping(predecessor)["code_map"]
     current_id = mapping["entries"][0]["l2_code_id"]
@@ -387,6 +476,7 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
             frame = pd.DataFrame({"l2_code_id": [current_id]}, index=index[1:])
         frame.to_hdf(factor_root / f"{name}.h5", key="data", format="table")
     pd.DataFrame({"l2_code_id": [-1, current_id], "untouched": [1., 2.]}, index=index).to_parquet(factor_root / "static_factors.parquet")
+    (factor_root / "security_source_identity.json").write_bytes(DEFAULT_MANIFEST_PATH.read_bytes())
     entries = []
     for name in (*FACTOR_H5_DATASETS, "static_factors"):
         path = factor_root / f"{name}.{'parquet' if name == 'static_factors' else 'h5'}"
@@ -403,13 +493,28 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     record = {"binding": {}, "binding_digest": "d" * 64,
               "files": {f"factor_bundle/{path.name}": list(_signature(path)) for path in factor_root.iterdir()},
               "steps": {"prepare": cas.put_json(prepare).as_dict(), "dump": {"unchanged": True}, "finalize": {"unchanged": True}}}
+    if interruption == "legacy_projection":
+        record["steps"]["industry-history"] = cas.put_json({"status": "PASS", "projection_sha256": history.sha256}).as_dict()
     resume = SimpleNamespace(root=root, path=tmp_path / "resume.json", record=record)
     resume.get = lambda name: cas.get_json_bounded(resume.record["steps"][name], max_bytes=16 * 1024 * 1024) if name in resume.record["steps"] else None
-    context = SimpleNamespace(plan={}, checkpoint=lambda: None, progress=lambda value: None)
+    pit = freeze_pit_snapshot(pd.DataFrame({"ts_code": ["000001.SZ"], "eligible_start": [date(2018, 8, 1)],
+        "eligible_end": [date(2026, 9, 30)], "entry_reason": ["eligible"], "exit_reason": [None]}),
+        universe_key="test", rule_version="test", scope_start=date(2018, 8, 1), cutoff=date(2026, 9, 30),
+        state_identity="test", source_fingerprint_sha256="e" * 64, parameter_hash="f" * 64)
+    quote_source = {"schema_version": facts_module.SCHEMA, "source_dataset": "market.sw_daily", "quote_units": "sw_daily_native_v1",
+        "projection_sha256": history.sha256, "database_write": False, "quote_taxonomy": "SW2021", "quote_start_date": "2021-07-30",
+        "partitions": [{"partition_key": str(period), "row_count": 0, "ref": cas.put_json({"schema_version": facts_module.SCHEMA,
+                       "partition_key": str(period), "rows": []}).as_dict()}
+                       for period in pd.period_range(history.payload["start_date"], history.payload["end_date"], freq="M")]}
+    monkeypatch.setattr(facts_module, "load_frozen_industry_quote_source", lambda *args, **kwargs: quote_source)
+    monkeypatch.setattr(source_authority, "load_source_stage_receipt", lambda *args, **kwargs: SimpleNamespace(pit_snapshot=pit, pit_snapshot_digest=pit.spans_sha256))
+    context = SimpleNamespace(plan={"target_cutoff": "2026-09-30"}, checkpoint=lambda: None, progress=lambda value: None)
+    compiled = SimpleNamespace(physical_plan={}, source_stage_receipt_ref={})
+    profile = SimpleNamespace(profile="qe_hmm_full_v2")
     def apply():
-        return subject.apply_retained_history(resume, context=context, compiled=SimpleNamespace(physical_plan={}),
-                                              prepare=prepare, cas=cas, profile=object())
-    if interruption is None:
+        return subject.apply_retained_history(resume, context=context, compiled=compiled,
+                                              prepare=prepare, cas=cas, profile=profile)
+    if interruption in {None, "legacy_projection"}:
         actual = apply()
     else:
         rename = Path.rename
@@ -445,7 +550,8 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     proof = resume.get("industry-history")
     assert proof["status"] == "PASS" and proof["sector_row_count"] == 2
     assert proof["database_write"] is False
-    scratch = root.parent / f".{root.name}.industry-history-{history.sha256}"
+    context_sha = hashlib.sha256(canonical_json_bytes(proof["context_identity"])).hexdigest()
+    scratch = root.parent / f".{root.name}.industry-history-{history.sha256}-{context_sha}"
     assert not (factor_root / "factor_checkpoint.json").exists()
     pending = json.loads((root.parent / f".{root.name}.industry-history-commit.json").read_bytes())
     assert set(pending["files"]) == {"sector_data.h5", "static_factors.parquet"}
@@ -457,8 +563,8 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
             assert (factor_root / f"{name}.h5").read_bytes() == original_bytes[f"{name}.h5"]
     assert resume.record["steps"]["dump"] == record["steps"]["dump"]
     signatures = {path.name: _signature(path) for path in factor_root.iterdir()}
-    assert subject.apply_retained_history(resume, context=context, compiled=SimpleNamespace(physical_plan={}),
-                                         prepare=actual, cas=cas, profile=object()) == actual
+    assert subject.apply_retained_history(resume, context=context, compiled=compiled,
+                                         prepare=actual, cas=cas, profile=profile) == actual
     assert signatures == {path.name: _signature(path) for path in factor_root.iterdir()}
 
     # Exercise the downstream BUILD proof binding using the actual repair receipt.

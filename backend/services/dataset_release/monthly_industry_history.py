@@ -1,7 +1,8 @@
 """Version-qualified historical classification, never a SW2021 backcast.
 
 The small authority is frozen by SOURCE. BUILD reads that authority only;
-prices, population, sector quotes and moneyflow are not reconstructed here.
+prices and population are not reconstructed here. An explicit history repair
+rebuilds sector context from independent frozen quotes and PIT stock flows.
 SW2021 release ids remain unchanged. Identical official published text codes
 reuse their shared ids; old-only SW2014 codes extend that shared namespace.
 Version-qualified membership and dictionaries remain independently frozen.
@@ -194,7 +195,8 @@ def load_frozen_history(cas, *, context_plan: Mapping[str, Any], build_inputs: M
 
 
 def materialize_history_files(root: Path, projection: IndustryHistoryProjection, *, max_rows=100_000,
-                              checkpoint=lambda: None, progress=lambda _value: None):
+                              checkpoint=lambda: None, progress=lambda _value: None,
+                              context_rebuilder=None, context_identity=None):
     """Produce two private replacement files, not a second dataset or price export.
 
     The sector population is the existing frozen sector rows UNION existing
@@ -211,13 +213,20 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
         raise SourceManifestError("industry repair row bound differs")
     root = Path(root)
     factor = root / "factor_bundle"
-    scratch = root.parent / f".{root.name}.industry-history-{projection.sha256}"
+    context_sha = None if context_identity is None else hashlib.sha256(canonical_json_bytes(context_identity)).hexdigest()
+    suffix = "" if context_sha is None else f"-{context_sha}"
+    scratch = root.parent / f".{root.name}.industry-history-{projection.sha256}{suffix}"
     _plain_chain(factor)
     if (root / "qe_dataset_manifest.json").exists():
         raise SourceManifestError("industry repair cannot change a published candidate")
     for name in ("sector_data.h5", "static_factors.parquet", "daily_pv.h5"):
         _plain_chain(factor / name)
-    originals = {name: _signature(factor / name) for name in ("sector_data.h5", "static_factors.parquet", "daily_pv.h5")}
+    names = ["sector_data.h5", "static_factors.parquet", "daily_pv.h5"]
+    if context_rebuilder is not None:
+        names += ["moneyflow.h5", "security_source_identity.json"]
+        for name in names:
+            _plain_chain(factor / name)
+    originals = {name: _signature(factor / name) for name in names}
     if scratch.exists():
         import json
         completed = scratch / "projection_receipt.json"
@@ -226,6 +235,7 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
             raise SourceManifestError("incomplete industry repair retained; do not overwrite completed exports")
         value = json.loads(completed.read_bytes())
         if (value.get("status") != "PASS" or value.get("projection_sha256") != projection.sha256 or
+            value.get("context_identity") != context_identity or
             IndustryHistoryProjection.read(value["projection"]).sha256 != projection.sha256 or
             value.get("input_signatures") != {name: list(signature) for name, signature in originals.items()}):
             raise SourceManifestError("retained industry repair identity differs")
@@ -248,6 +258,10 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
         corrected id would silently label the old industry's quote/moneyflow.
         Never cross a date or taxonomy boundary. Missing facts remain NA.
         """
+        if context_rebuilder is not None:
+            return context_rebuilder(frame)
+        if any(name.startswith("sw2_mf_") for name in frame):
+            raise SourceManifestError("industry membership repair requires frozen PIT-cohort moneyflow and official quotes")
         actual = projection.project(frame)
         columns = [name for name in frame if name.startswith("sw2_")]
         if not columns:
@@ -336,13 +350,15 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
             path = scratch / name
             outputs[name] = {"sha256": file_sha256(path), "size": path.stat().st_size,
                              "target_signature": list(_signature(path)), "scratch_relative_path": path.relative_to(root.parent).as_posix(),
-                             "original_signature": list(originals[name])}
+                             "original_signature": list(originals[name]), "context_sha256": context_sha}
         if any(_signature(factor / name) != value for name, value in originals.items()):
             raise SourceManifestError("industry repair input changed while reading")
         result = {"schema_version": "aistock_monthly_industry_history_projection_receipt_v1", "status": "PASS",
                 "projection_sha256": projection.sha256, "projection": projection.payload, "files": outputs,
                 "sector_row_count": total, **counts, "database_write": False, "price_components_exported": False,
                 "unrelated_static_columns_unchanged": True, "published_candidate_write": False,
+                "context_identity": context_identity,
+                "industry_context_contract": None if context_identity is None else context_identity["contract"],
                 "input_signatures": {name: list(signature) for name, signature in originals.items()}}
         with (scratch / "projection_receipt.json").open("xb") as writer:
             writer.write(canonical_json_bytes(result) + b"\n")
@@ -392,7 +408,11 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
     for name, entry in files.items():
         target = root / "factor_bundle" / name
         source = root.parent / _relative(entry["scratch_relative_path"])
-        expected_parent = root.parent / f".{root.name}.industry-history-{expected_projection}"
+        context_sha = entry.get("context_sha256")
+        if context_sha is not None:
+            ensure_sha256(context_sha, field="industry context digest")
+        suffix = "" if context_sha is None else f"-{context_sha}"
+        expected_parent = root.parent / f".{root.name}.industry-history-{expected_projection}{suffix}"
         if source.parent != expected_parent or source.name != name:
             raise MonthlyBuildResumeError("industry commit source escaped its private outputs")
         _plain_chain(source.parent)
@@ -446,6 +466,7 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
     """Amend factor receipts only; completed day/minute/index remain untouched."""
     import copy
     from .monthly_build_resume import _atomic, MonthlyBuildResumeError
+    from .monthly_industry_facts import CONTRACT, FrozenIndustryContext, load_frozen_industry_quote_source, predecessor_context_matches
 
     projection = load_frozen_history(cas, context_plan=context.plan, build_inputs=compiled.physical_plan.get("build_inputs", {}))
     if projection is None:
@@ -454,7 +475,16 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
     if prior is not None:
         if prior["projection_sha256"] != projection.sha256:
             raise MonthlyBuildResumeError("retained industry projection differs from frozen authority")
-        return prepare
+        if prior.get("industry_context_contract") == CONTRACT:
+            source = load_frozen_industry_quote_source(cas, context_plan=context.plan,
+                build_inputs=compiled.physical_plan.get("build_inputs", {}), projection=projection)
+            if source is not None and not prior.get("historical_projection_reused"):
+                expected = hashlib.sha256(canonical_json_bytes(source)).hexdigest()
+                if prior.get("context_identity", {}).get("quote_source_sha256") != expected:
+                    raise MonthlyBuildResumeError("retained industry context differs from frozen quote source")
+            return prepare
+        # An earlier verified ID-only repair is retained as an input. Replace
+        # only sector/static context under new pins, never re-export prices.
     if resume.path is None:
         raise MonthlyBuildResumeError("industry repair needs a durable completed-export journal")
     nested = copy.deepcopy(cas.get_json_bounded(prepare["prepare_receipt_ref"], max_bytes=16 * 1024 * 1024))
@@ -482,20 +512,41 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
                 raise MonthlyBuildResumeError("predecessor history pin changed")
             payload = json.loads(raw)
             old = IndustryHistoryProjection.read({key: value for key, value in payload.items()
-                                                   if key not in {"projection_sha256", "factor_projection_receipt_ref"}})
-            if old.data_sha256 == projection.data_sha256:
+                                                   if key not in {"projection_sha256", "factor_projection_receipt_ref", "industry_context_contract"}})
+            if (old.data_sha256 == projection.data_sha256 and predecessor_context_matches(prefix, projection)
+                    and context.plan.get("monthly_industry_quote_source_ref") is None):
                 proof_ref = cas.put_json({"schema_version": "aistock_monthly_industry_history_projection_receipt_v1",
                     "status": "PASS", "projection": projection.payload, "projection_sha256": projection.sha256,
                     "historical_projection_reused": True, "predecessor_history_file_sha256": pin["sha256"],
                     "sector_row_count": sector_entry["inherited_rows"] + sector_entry["month_rows"],
-                    "database_write": False, "classification_cells_changed": 0})
+                    "database_write": False, "classification_cells_changed": 0, "industry_context_contract": CONTRACT})
                 factor["industry_history_projection_ref"] = proof_ref.as_dict()
                 nested["refs"]["factor_receipt"] = cas.put_json(factor).as_dict()
                 prepared = {**prepare, "prepare_receipt_ref": cas.put_json(nested).as_dict()}
                 resume.save("prepare", cas.put_json(prepared), roots=())
                 resume.save("industry-history", proof_ref, roots=())
                 return prepared
-    result = materialize_history_files(resume.root, projection, checkpoint=context.checkpoint, progress=context.progress)
+    quote_source = load_frozen_industry_quote_source(cas, context_plan=context.plan,
+        build_inputs=compiled.physical_plan.get("build_inputs", {}), projection=projection)
+    if quote_source is None:
+        raise MonthlyBuildResumeError("repaired industry history needs an independent frozen official quote source; bind industry history without re-exporting prices")
+    from backend.data_service.security_source_identity import load_security_source_identity_manifest
+    from .source_authority import load_source_stage_receipt
+    from .monthly_legacy_prefix import _signature
+    frozen = load_source_stage_receipt(cas, compiled.source_stage_receipt_ref,
+        expected_profile=profile.profile, expected_cutoff=date.fromisoformat(context.plan["target_cutoff"]), profile=profile)
+    moneyflow = resume.root / "factor_bundle/moneyflow.h5"
+    identity = load_security_source_identity_manifest(resume.root / "factor_bundle/security_source_identity.json")
+    flow_pin = entries["moneyflow.h5"]
+    if flow_pin.get("target_signature") != list(_signature(moneyflow)):
+        raise MonthlyBuildResumeError("sealed moneyflow input pin changed before cohort repair")
+    context_identity = {"contract": CONTRACT, "quote_source_sha256": hashlib.sha256(canonical_json_bytes(quote_source)).hexdigest(),
+                        "moneyflow_sha256": flow_pin["sha256"], "security_identity_sha256": identity.file_sha256,
+                        "pit_snapshot_sha256": frozen.pit_snapshot_digest, "projection_sha256": projection.sha256}
+    rebuilder = FrozenIndustryContext(cas=cas, source=quote_source, projection=projection,
+        moneyflow_path=moneyflow, pit=frozen.pit_snapshot, identity=identity)
+    result = materialize_history_files(resume.root, projection, checkpoint=context.checkpoint, progress=context.progress,
+                                       context_rebuilder=rebuilder.remap, context_identity=context_identity)
     proof_ref = cas.put_json(result)
     for name, entry in entries.items():
         if name not in result["files"]:

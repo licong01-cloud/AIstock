@@ -4,7 +4,11 @@
     "backend/services/dataset_release/monthly_industry_history.py",
     "backend/services/dataset_release/monthly_repair_inputs.py",
     "backend/services/dataset_release/monthly_shared_components.py",
+    "backend/services/dataset_release/monthly_industry_facts.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/services/dataset_release/monthly_postgres_source.py",
     "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
     "tests/aistock_validation/bugs/20261013_BUG-1885-cohort-moneyflow.json"
   ],
   "assigned_agent": null,
@@ -143,11 +147,15 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED cohort test failed before implementation; fresh-process GREEN covers corrected PIT cohort, independent quote facts, CNY/shares to native units, history alias mapping, stopped-quote NA with finite moneyflow, duplicate/infinite/hash rejection and two-file atomic retry.",
+      "Existing aistock_dev read-only: 2026-07-01 independent official quote rows=124, stock moneyflow rows=5189, approved DEV cohort rows=4899. Repaired 002086.SZ -> 801012.SI(id=1), close=2023.92, pct_change=3.61, sw2_mf_net_amt=12087.64; repeat content exact; quote source canonical SHA256=421ba4edfecaaec6697dd726d98bf576eac62914d58d2414b6cbf9d24263b550; database_write=false."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
