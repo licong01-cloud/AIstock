@@ -239,7 +239,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh pytest subprocess imports tracked fix; direct historical executor runs real LocalSimBackend and projects native day with frozen DB data. Full replay/live runtime verification remains pending user restart after new source merge."
@@ -297,7 +297,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=c5e0551406588efc commit=c1941c18606d2822e141df4f5f57700e2aafca51 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_replay_exclusion_cancels_only_side_effect_free_foreign_daily_run backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_closed_native_historical_executor_runs_real_broker_and_preserves_residual -q -p no:cacheprovider` result=`4 passed; initial 39-case matrix passed on f3e3c863426c485e7afe2ec5f4772fe83c97df7d`",
-    "validation-receipt: id=5bd281f1eb5e0654 commit=c1941c18606d2822e141df4f5f57700e2aafca51 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed; changed-file Ruff and diff check passed`"
+    "validation-receipt: id=5bd281f1eb5e0654 commit=c1941c18606d2822e141df4f5f57700e2aafca51 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed; changed-file Ruff and diff check passed`",
+    "2026-10-13 post-restart readback: runtime 4ebf1c04658f90f09fbbbecc2d882716f13d00a6 contains source merge; target-owned scheduler verification scope is all local_sim, healthy thread, zero current-day blockers. Original simrun_bcd56e8b3eae017b and both historical Jan-05 runs simrun_9fbe2525127692a1 / simrun_014f7985c59bd019 are SUCCEEDED. Both original replay accounts are ACTIVE version 3, capital 5000000 each. Four replay-owned bindings are excluded from normal daily scheduling; two stale daily runs were canonically CANCELLED with no execution plan or broker effects and original errors retained. Unscoped platform-diagnostics remains DEGRADED due to these retained CANCELLED audit rows; full replay and live activation are not asserted. Exact evidence: F:/Dev/AIstock/tmp/handoff/localsim_new_accounts_resume_20261013.json and localsim_replay_stale_daily_cleanup_20261013.json."
   ],
   "verification_budget": {
     "budget": "standard",
