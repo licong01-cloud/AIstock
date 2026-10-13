@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 import errno
 import hashlib
@@ -27,6 +27,7 @@ import uuid
 from .canonical import canonical_json_bytes, ensure_sha256
 from .monthly_error_diagnostics import monthly_error_diagnostics, monthly_error_message
 
+UTC = timezone.utc
 
 REQUEST_SCHEMA = "aistock_monthly_release_request_v1"
 PLAN_SCHEMA = "aistock_monthly_release_plan_v2"

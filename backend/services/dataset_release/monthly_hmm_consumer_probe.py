@@ -21,7 +21,7 @@ from .monthly_hmm_derive import FROZEN_HMM_INPUT_SCHEMA, MARKET_VOLUME_DEFINITIO
 _PROBE_ID = "aistock.monthly.hmm.file_only"
 _PROBE_VERSION = "1"
 _FILES = {
-    "sector_data_h5": "components/factor_h5_static_candidate_v2/sector_data.h5",
+    "sector_data_h5": "components/sector_context_candidate_v1/sector_quote_facts.h5",
     "index_daily_h5": "components/index_context/index_daily.h5",
     "sector_code_map_json": "components/sector_context_candidate_v1/sector_code_map.json",
     "market_context_parquet": "components/sector_context_candidate_v1/market_context.parquet",
