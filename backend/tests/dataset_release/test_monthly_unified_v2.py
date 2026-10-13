@@ -324,7 +324,7 @@ def test_history_supplement_keeps_sealed_source_across_producer_upgrade(tmp_path
 @pytest.mark.parametrize("case", ["ok", "source_unsealed", "active_drift", "read_failure"])
 def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_path, monkeypatch, case):
     from types import SimpleNamespace
-    from backend.services.dataset_release import monthly_industry_history as history_module
+    from backend.services.dataset_release import monthly_industry_history as history_module, monthly_industry_facts as facts_module
     from backend.services.dataset_release import monthly_legacy_prefix, monthly_sector_mapping
 
     class SourcePipeline(Pipeline):
@@ -354,26 +354,38 @@ def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_pat
         payload = {"existing_authority": True}
         return SimpleNamespace(payload=payload, sha256=monthly_subject._digest(payload))
     monkeypatch.setattr(history_module, "capture_industry_history", capture)
-    monkeypatch.setattr(history_module.IndustryHistoryProjection, "read", lambda value: value)
+    monkeypatch.setattr(history_module.IndustryHistoryProjection, "read", lambda value: SimpleNamespace(payload=value, sha256=monthly_subject._digest(value)))
+    monkeypatch.setattr(facts_module, "capture_industry_quote_source", lambda *args, **kwargs: {"frozen_quotes": True})
     monkeypatch.setattr(monthly_legacy_prefix, "load_legacy_prefix", lambda *args, **kwargs: object())
     monkeypatch.setattr(monthly_sector_mapping, "load_predecessor_sector_mapping", lambda prefix: {"code_map": {}})
     if case == "active_drift":
         service.active_profile.write_bytes(service.active_profile.read_bytes() + b" ")
     if case in {"source_unsealed", "active_drift"}:
         with pytest.raises(MonthlyReleaseConflict):
-            service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection)
+            service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
         assert not calls
     elif case == "read_failure":
         with pytest.raises(ValueError, match="authority is unavailable"):
-            service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection)
+            service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
         assert calls[-2:] == ["rollback", "close"]
     else:
-        value = service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection)
+        value = service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
         assert calls == [{"readonly": True, "isolation_level": "REPEATABLE READ", "autocommit": False}, "rollback", "close"]
-        assert service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection) == value
+        assert service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object()) == value
         assert len(calls) == 3
         binding = service.store.read_plan(operation)["monthly_industry_history"]
         assert binding["database_write"] is False and binding["activation_authorized"] is False
+        # Existing September history binding stays immutable when independent
+        # quote facts are added later. The sealed price SOURCE is never rerun.
+        retained_plan = service.store.read_plan(operation)
+        history_ref = retained_plan["monthly_industry_history_ref"]
+        service.store.replace_plan(operation, {key: item for key, item in retained_plan.items()
+            if key not in {"monthly_industry_quote_source", "monthly_industry_quote_source_ref"}})
+        service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
+        after = service.store.read_plan(operation)
+        assert after["monthly_industry_history"] == binding
+        assert after["monthly_industry_history_ref"] == history_ref
+        assert after["monthly_industry_quote_source"]["source_bundle_sha256"] == HEX
     assert service.store.read_checkpoint(operation, "SOURCE") == source_before
 
 

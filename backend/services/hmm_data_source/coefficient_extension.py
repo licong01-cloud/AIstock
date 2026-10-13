@@ -398,12 +398,9 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
     return result
 
 
-def publish_window(payload: Mapping[str, Any], plan: Mapping[str, Any], start: str, end: str) -> dict[str, Any]:
-    result = window_payload(payload, plan, start, end)
-    content = canonical_bytes(result)
-    sha = hashlib.sha256(content).hexdigest()
-    filename = f"coefficients_{plan['signal_preset']}_{start}_{end}__auto_{plan['extension_key'][:16]}__{sha[:16]}.json"
-    path = Path(plan["model_path"]).parent / filename
+def publish_coefficient_content(path: Path, payload: Mapping[str, Any]) -> tuple[str, int]:
+    """One immutable atomic writer for both explicit HMM input modes."""
+    content = canonical_bytes(payload)
     _require_plain_existing_chain(path, field="HMM coefficient output")
     staged: Path | None = None
     try:
@@ -424,6 +421,17 @@ def publish_window(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
             staged.unlink(missing_ok=True)
     if path.read_bytes() != content:
         _fail("coefficient writer/readback mismatch")
+    return hashlib.sha256(content).hexdigest(), len(content)
+
+
+def publish_window(payload: Mapping[str, Any], plan: Mapping[str, Any], start: str, end: str) -> dict[str, Any]:
+    result = window_payload(payload, plan, start, end)
+    sha = fingerprint(result)
+    filename = f"coefficients_{plan['signal_preset']}_{start}_{end}__auto_{plan['extension_key'][:16]}__{sha[:16]}.json"
+    path = Path(plan["model_path"]).parent / filename
+    actual_sha, byte_count = publish_coefficient_content(path, result)
+    if actual_sha != sha:
+        _fail("coefficient identity/readback mismatch")
     identity = plan["dataset_identity"]
     return {
         "role": "automatic_frozen_model_extension",
@@ -441,7 +449,7 @@ def publish_window(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         "active_profile_sha256": identity["active_profile_sha256"],
         "coefficient_filename": filename,
         "coefficient_sha256": sha,
-        "coefficient_bytes": len(content),
+        "coefficient_bytes": byte_count,
         "extension_key": plan["extension_key"],
         "generator_sha256": plan["generator_sha256"],
     }
