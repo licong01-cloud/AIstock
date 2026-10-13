@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1881",
-  "closed_at": null,
+  "closed_at": "2026-10-13T06:54:16Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,15 +27,15 @@
   "expected": "Retry exact remote-reference CAS races within the existing two-attempt fetch bound; retain transport retry and immediately reject unrelated permission/auth/ref errors. Preserve reservation recovery and final identity checks.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261013_BUG-1881-idempotent-workflow-fetch-fails-on-concurrent-remote-ref-compare-and-swa.json",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-      "scripts/aistock_issue_workflow.py"
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1881-idempotent-workflow-fetch-fails-on-concurrent-remote-ref-compare-and-swa.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261013_BUG-1881-idempotent-workflow-fetch-fails-on-concurrent-remote-ref-compare-and-swa.json",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-      "scripts/aistock_issue_workflow.py"
+      "scripts/aistock_issue_workflow.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1881-idempotent-workflow-fetch-fails-on-concurrent-remote-ref-compare-and-swa.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -91,8 +91,8 @@
   },
   "first_seen_at": "2026-10-13T06:39:48.079430Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "11649c2893a6cf8f95394b2c39385c4a1d569033",
+  "fixed_at": "2026-10-13T06:54:16Z",
   "github_issue_number": 6002,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6002",
   "last_seen_at": "2026-10-13T06:39:48.079430Z",
@@ -100,6 +100,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6004",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -117,6 +118,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -126,7 +128,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1881",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0ea7ecf74cf6e587",
+    "recorded_at": "2026-10-13T06:55:05.892534Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "eb17cda314c3eec64fbedcd4ac906cee85503926",
+    "source_merge_commit": "11649c2893a6cf8f95394b2c39385c4a1d569033",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6004",
+    "validation_evidence": [
+      "python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed, blocking=0"
+    ],
+    "validation_evidence_digest": "55397041ecefab58cdc2d897652ce4657aa37c5f6875be1948345cc87f45e9af"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -135,6 +158,9 @@
     "fingerprint": "4cdead3edd9c41dfaa6abefd",
     "source_event_id": "FE-20261013-4cdead3edd9c"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed, blocking=0"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
