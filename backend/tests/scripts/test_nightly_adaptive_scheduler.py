@@ -546,7 +546,6 @@ def test_nightly_full_run_excludes_changed_file_only_plans() -> None:
     assert "hmm_risk_pr_slice" in plan["excluded_pr_only_plans"]
     assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
     assert "hmm_risk_backend" in plan["selected_sessions"]
-    assert plan["selected_sessions"]
 
 
 def test_nightly_replaces_hmm_pr_slice_with_full_coverage_plan() -> None:

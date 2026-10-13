@@ -108,7 +108,6 @@ def test_execute_session_uses_scope_file_instead_of_long_command_line(monkeypatc
 
     class CompletedProcess:
         def wait(self, timeout: int) -> int:
-            captured["timeout"] = timeout
             return 0
 
     def fake_popen(command, **kwargs):
