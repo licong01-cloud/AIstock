@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1852",
-  "closed_at": null,
+  "closed_at": "2026-10-13T04:22:28.696601Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -22,6 +22,32 @@
   ],
   "created_at": "2026-10-12T18:29:47.435248Z",
   "description": "新原生账户运行仍依赖旧Paper账户；冻结LocalSIM运行配置未传给选股、持仓和费用路径；历史回放的因果时钟可能错误选择实时行情。",
+  "design_compliance_review": [
+    {
+      "conclusion": "源码直接验证通过；全期回放与实时切换未执行，不计为业务完成",
+      "evidence": "34项合同测试及DEV事务原生账户读取；两个真实包各5项运行资产预检",
+      "implementation": "localsim_native_context.py、localsim_control.py、scheduler.py及共享日策略引擎",
+      "requirement": "禁止简化功能：现有SIM-LR-C原生账户与配置权威贯通"
+    },
+    {
+      "conclusion": "通过",
+      "evidence": "身份漂移、暂停、非法费用及历史/current source反例测试",
+      "implementation": "profile/hash/daily id/selection投影、账户状态和费用模型typed错误；历史source独立于因果时钟",
+      "requirement": "禁止静默错误"
+    },
+    {
+      "conclusion": "通过",
+      "evidence": "无显式profile时旧合同保持；安全边界原子切换测试通过；未改历史经济账本",
+      "implementation": "不改alpha/model/训练窗口；原始daily top-k/n-drop通过显式新profile续接，完整费用仍计入，父订单计费修复继承已合入版本",
+      "requirement": "禁止改变业务逻辑"
+    },
+    {
+      "conclusion": "通过",
+      "evidence": "目标包均paper_simulation_allowed；仅运行修复激活和真实数据失败条件沿用既有合同",
+      "implementation": "沿用package admission和现有safe boundary；不将实盘治理warning改成模拟盘门禁",
+      "requirement": "禁止私增门禁审批"
+    }
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -35,20 +61,35 @@
   ],
   "expected": "新原生LocalSIM账户从独立账本读取持仓现金，以冻结profile进行选股、持仓、费用与风险计算；历史日只用DB_HISTORICAL，追平后按安全边界续接同一账本。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/paper_trading_v2/day_runner.py",
+      "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/strategy_package/backtest_contract.py",
+      "backend/services/strategy_package/runtime.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1852-localsim.json"
+    ],
     "added_files": [
       "backend/services/simulation_runtime/localsim_native_context.py",
       "backend/tests/simulation_runtime/test_localsim_native_context.py"
     ],
     "changed_files": [
-      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/paper_trading_v2/day_runner.py",
       "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/scheduler.py",
       "backend/services/strategy_package/backtest_contract.py",
       "backend/services/strategy_package/runtime.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
       "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
       "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
-      "backend/services/paper_trading_v2/day_runner.py"
+      "tests/aistock_validation/bugs/20261012_BUG-1852-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/scheduler.py",
@@ -159,18 +200,107 @@
   },
   "first_seen_at": "2026-10-12T18:29:47.435248Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "27d12669718ad9fc35fbe0b2dbbba76bc8ed447e",
+  "fixed_at": "2026-10-12T19:03:49Z",
+  "fresh_process_evidence": [
+    "CI失败后独立pytest进程复测全部19项失败节点及原生合同：33 passed, 1 guarded DEV skipped。DEV真实事务验证此前单独通过并回滚。"
+  ],
   "github_issue_number": 5921,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5921",
+  "implementation_status": "implemented_pending_ci",
   "last_seen_at": "2026-10-12T18:29:47.435248Z",
   "module": "simulation_runtime",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "package_preflight_receipt": {
+    "production_database_mode": "readonly",
+    "receipts": [
+      {
+        "checks": [
+          {
+            "message": "StrategyPackage frozen runtime assets resolved",
+            "name": "qe_source",
+            "status": "PASS"
+          },
+          {
+            "message": "package-owned runtime assets do not require QE node access",
+            "name": "qe_node",
+            "status": "PASS"
+          },
+          {
+            "message": "QE conf.yaml is present",
+            "name": "conf_yaml",
+            "status": "PASS"
+          },
+          {
+            "message": "QE factor source directory and sampled factor files are present",
+            "name": "factor_source",
+            "status": "PASS"
+          },
+          {
+            "message": "QE model params.pkl is locatable",
+            "name": "model_params",
+            "status": "PASS"
+          }
+        ],
+        "manifest_sha256": "93a7fb7c5c0745c96d2d97376db3c669e527256666ed1e014a710c38799a7dc6",
+        "package_id": "pkg_cc7eccb6202e4816b9d7c7d6b748bd37",
+        "passed": true
+      },
+      {
+        "checks": [
+          {
+            "message": "StrategyPackage frozen runtime assets resolved",
+            "name": "qe_source",
+            "status": "PASS"
+          },
+          {
+            "message": "package-owned runtime assets do not require QE node access",
+            "name": "qe_node",
+            "status": "PASS"
+          },
+          {
+            "message": "QE conf.yaml is present",
+            "name": "conf_yaml",
+            "status": "PASS"
+          },
+          {
+            "message": "QE factor source directory and sampled factor files are present",
+            "name": "factor_source",
+            "status": "PASS"
+          },
+          {
+            "message": "QE model params.pkl is locatable",
+            "name": "model_params",
+            "status": "PASS"
+          }
+        ],
+        "manifest_sha256": "57582c722d7a63f629db4cdb653b442c2e7ee151deb3f1d6d0514126d489c7d6",
+        "package_id": "pkg_8dbd396d27184de6aa5fe288011220f6",
+        "passed": true
+      }
+    ],
+    "schema_version": "localsim_package_preflight_v1"
+  },
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5922",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "replay_operation_request": {
+    "alpha_model_retrain": "forbidden_for_this_replay",
+    "backend_activation": "pending_user_restart",
+    "latest_completed_at_preflight": "2026-10-12",
+    "package_ids": [
+      "pkg_cc7eccb6202e4816b9d7c7d6b748bd37",
+      "pkg_8dbd396d27184de6aa5fe288011220f6"
+    ],
+    "production_mutation": "not_started",
+    "request_plan_ref": "tmp/handoff/localsim_jan_replay_20261013_requests.json",
+    "start_trade_date": "2026-01-05",
+    "trading_days_at_preflight": 184,
+    "user_authorized_initial_capital_each": "5000000"
+  },
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -178,33 +308,150 @@
     "simulation_core_l2",
     "validation_catalog_integrity"
   ],
+  "review_rounds": [
+    {
+      "findings": [
+        "运行器读取旧Paper账户，新增原生账户无该行",
+        "运行配置没有选股投影，费用未传入broker"
+      ],
+      "fixes": [
+        "只读原生账户视图通过successor scope加载；不建旧影子账户",
+        "release冻结选股投影，broker使用冻结费用模型"
+      ],
+      "result": "已修复",
+      "round": 1,
+      "scope": "原生账户/独立账本与冻结配置传递"
+    },
+    {
+      "findings": [
+        "目标引擎没有消费显式profile，且n_drop=0被or表达式覆盖",
+        "历史回放as_of_time被当作当前交易日",
+        "最低费用测试必须使用异于默认值的配置"
+      ],
+      "fixes": [
+        "显式profile参数优先，保留零调仓参数，未提供显式配置的旧路径保持原合同",
+        "原生回放使用真实当前日期决定DB/实时来源",
+        "真实broker测试使用min_cost=11验证配置实际生效"
+      ],
+      "result": "已修复",
+      "round": 2,
+      "scope": "日策略参数、真实费用和历史行情身份"
+    },
+    {
+      "findings": [
+        "须拒绝profile/hash/daily id/选股投影及跨账户身份漂移",
+        "暂停账户须禁止进入交易",
+        "旧测试夹具缺少实际profile schema字段"
+      ],
+      "fixes": [
+        "hash/衍生daily id/投影一致性校验；ACTIVE状态与scope身份校验",
+        "完善测试夹具并通过原有原子回放/安全边界测试",
+        "现有DEV事务原生账户真实SQL读取通过，旧账户零行，数据已回滚"
+      ],
+      "result": "本地审核通过，待CI相关回归",
+      "round": 3,
+      "scope": "身份校验、暂停、回放转实时与DEV真实读取"
+    },
+    {
+      "findings": [
+        "目标引擎重新解析配置时将风控结果误认为配置",
+        "日策略partial bootstrap缺少top-k提前失败",
+        "已materialize的variant被重复应用造成hash冲突"
+      ],
+      "fixes": [
+        "只解析冻结selection字段，排除执行审计结果",
+        "partial配置沿用原有完整化阶段，原生profile仍严格校验",
+        "day runner向共享引擎传原始manifest，validated variant应用一次"
+      ],
+      "round": 4,
+      "scope": "CI Paper v2 兼容性",
+      "validation": "19项CI失败用例加原生合同：33 passed / 1 DEV opt-in skipped；后续CI重新验证完整相关会话"
+    }
+  ],
   "risk_area": "bug",
+  "risk_tier": "T2",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "独立pytest进程加载跟踪源码：34项直接及相关合同测试通过，其中现有DEV真实事务/SQL原生账户验证1项通过且回滚；catalog gate 8项通过。",
       "两个真实目标包冻结模型/因子运行资产各5项预检通过，生产DB仅只读。未控制用户后端进程，实际历史推理、全期经济回放和实时切换尚待运行版本激活。",
       "Fresh-process exact two-target operation templates validated; derived daily portfolio parameters exactly equal the frozen source backtest parameters. No production writes."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1852/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1852",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "2455751040123107ca10eb79f3c9166c59f53c432817351f06eb14b57377ee44",
+      "contract_digest": "4778f8503704ce6adcfc5d5b771cc372c76ed165797ac47df356da2668039fe5",
+      "expected_identity": "27d12669718ad9fc35fbe0b2dbbba76bc8ed447e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T04:21:45.069594Z",
+      "mode": "read_only",
+      "observed_identity": "fac808c28f0056275337743149d8d94d73f9732a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "fdfef1e2a468b872e60205082a535cc23968cb8c7800a61c7726541921c0a653",
+      "receipt_sha256": "697996bca4b7d259c71aea88aac27c4a3c084ba7cc390b97d625a1ec34f18c22",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d522348f18e2bff949ca9c3da492f0774bcd669f9cf025037252942038cb4fef",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
-    "database_readback_ref": "not_required",
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_history": [
+    {
+      "added_paths": [
+        "backend/services/paper_trading_v2/day_runner.py"
+      ],
+      "reason": "CI failure: TargetPositionEngine now consumes frozen runtime config. Paper day runner must pass the original manifest so the validated variant is applied exactly once."
+    }
+  ],
+  "scope_expansion_reason": "Native profile daily parameters must reach the shared target-position engine; preserve legacy contracts and fail closed on profile/source conflicts.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1852",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5c0cd09dee72a7fd",
+    "recorded_at": "2026-10-12T19:04:27.521804Z",
+    "runtime_contract_digest": "4778f8503704ce6adcfc5d5b771cc372c76ed165797ac47df356da2668039fe5",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "70e0b4439814c173b18ba95e5260e3c863a3ddbb",
+    "source_merge_commit": "27d12669718ad9fc35fbe0b2dbbba76bc8ed447e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5922",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "rtk pytest CI failed nodeids and backend/tests/simulation_runtime/test_localsim_native_context.py -q -p no:cacheprovider -> passed (33 passed, 1 guarded DEV skipped)",
+      "gh pr checks 5922 -> passed (CI verdict, source head 70e0b4439814c173b18ba95e5260e3c863a3ddbb)",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "b1c1c462257571a4d1602385dcc0a6b7e2b004d4958eef0ba3037a62a971782b"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -212,6 +459,29 @@
   "trigger_condition": {
     "fingerprint": "ab7c391e0c0e0cf159d2b0fc",
     "source_event_id": "FE-20261012-ab7c391e0c0e"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed",
+    "rtk pytest CI failed nodeids and backend/tests/simulation_runtime/test_localsim_native_context.py -q -p no:cacheprovider -> passed (33 passed, 1 guarded DEV skipped)",
+    "gh pr checks 5922 -> passed (CI verdict, source head 70e0b4439814c173b18ba95e5260e3c863a3ddbb)",
+    "git diff --check -> passed",
+    "validation-receipt: id=7024c2d6dd0dbff1 commit=70e0b4439814c173b18ba95e5260e3c863a3ddbb kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=b0b4213379029c04 commit=70e0b4439814c173b18ba95e5260e3c863a3ddbb kind=pytest plan=direct status=passed command=`rtk pytest CI failed nodeids and backend/tests/simulation_runtime/test_localsim_native_context.py -q -p no:cacheprovider` result=`passed (33 passed, 1 guarded DEV skipped)`",
+    "validation-receipt: id=10056ba6d5e12c36 commit=70e0b4439814c173b18ba95e5260e3c863a3ddbb kind=ruff plan=direct status=passed command=`rtk ruff check changed files` result=`passed`",
+    "validation-receipt: id=dc730f5cff8967cb commit=70e0b4439814c173b18ba95e5260e3c863a3ddbb kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
+  "validation_results": {
+    "changed_file_ruff": "passed",
+    "git_diff_check": "passed",
+    "l0": "passed",
+    "targeted_contract_matrix": {
+      "dev_transaction": "passed_and_rolled_back",
+      "passed": 34
+    },
+    "validation_catalog_integrity": {
+      "findings": 0,
+      "passed": 8
+    }
   },
   "verification_budget": {
     "budget": "standard",
@@ -322,202 +592,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "scope_expansion_reason": "Native profile daily parameters must reach the shared target-position engine; preserve legacy contracts and fail closed on profile/source conflicts.",
-  "implementation_status": "implemented_pending_ci",
-  "replay_operation_request": {
-    "user_authorized_initial_capital_each": "5000000",
-    "package_ids": [
-      "pkg_cc7eccb6202e4816b9d7c7d6b748bd37",
-      "pkg_8dbd396d27184de6aa5fe288011220f6"
-    ],
-    "start_trade_date": "2026-01-05",
-    "latest_completed_at_preflight": "2026-10-12",
-    "trading_days_at_preflight": 184,
-    "production_mutation": "not_started",
-    "backend_activation": "pending_user_restart",
-    "alpha_model_retrain": "forbidden_for_this_replay",
-    "request_plan_ref": "tmp/handoff/localsim_jan_replay_20261013_requests.json"
-  },
-  "risk_tier": "T2",
-  "review_rounds": [
-    {
-      "round": 1,
-      "scope": "原生账户/独立账本与冻结配置传递",
-      "findings": [
-        "运行器读取旧Paper账户，新增原生账户无该行",
-        "运行配置没有选股投影，费用未传入broker"
-      ],
-      "fixes": [
-        "只读原生账户视图通过successor scope加载；不建旧影子账户",
-        "release冻结选股投影，broker使用冻结费用模型"
-      ],
-      "result": "已修复"
-    },
-    {
-      "round": 2,
-      "scope": "日策略参数、真实费用和历史行情身份",
-      "findings": [
-        "目标引擎没有消费显式profile，且n_drop=0被or表达式覆盖",
-        "历史回放as_of_time被当作当前交易日",
-        "最低费用测试必须使用异于默认值的配置"
-      ],
-      "fixes": [
-        "显式profile参数优先，保留零调仓参数，未提供显式配置的旧路径保持原合同",
-        "原生回放使用真实当前日期决定DB/实时来源",
-        "真实broker测试使用min_cost=11验证配置实际生效"
-      ],
-      "result": "已修复"
-    },
-    {
-      "round": 3,
-      "scope": "身份校验、暂停、回放转实时与DEV真实读取",
-      "findings": [
-        "须拒绝profile/hash/daily id/选股投影及跨账户身份漂移",
-        "暂停账户须禁止进入交易",
-        "旧测试夹具缺少实际profile schema字段"
-      ],
-      "fixes": [
-        "hash/衍生daily id/投影一致性校验；ACTIVE状态与scope身份校验",
-        "完善测试夹具并通过原有原子回放/安全边界测试",
-        "现有DEV事务原生账户真实SQL读取通过，旧账户零行，数据已回滚"
-      ],
-      "result": "本地审核通过，待CI相关回归"
-    },
-    {
-      "round": 4,
-      "scope": "CI Paper v2 兼容性",
-      "findings": [
-        "目标引擎重新解析配置时将风控结果误认为配置",
-        "日策略partial bootstrap缺少top-k提前失败",
-        "已materialize的variant被重复应用造成hash冲突"
-      ],
-      "fixes": [
-        "只解析冻结selection字段，排除执行审计结果",
-        "partial配置沿用原有完整化阶段，原生profile仍严格校验",
-        "day runner向共享引擎传原始manifest，validated variant应用一次"
-      ],
-      "validation": "19项CI失败用例加原生合同：33 passed / 1 DEV opt-in skipped；后续CI重新验证完整相关会话"
-    }
-  ],
-  "design_compliance_review": [
-    {
-      "requirement": "禁止简化功能：现有SIM-LR-C原生账户与配置权威贯通",
-      "implementation": "localsim_native_context.py、localsim_control.py、scheduler.py及共享日策略引擎",
-      "evidence": "34项合同测试及DEV事务原生账户读取；两个真实包各5项运行资产预检",
-      "conclusion": "源码直接验证通过；全期回放与实时切换未执行，不计为业务完成"
-    },
-    {
-      "requirement": "禁止静默错误",
-      "implementation": "profile/hash/daily id/selection投影、账户状态和费用模型typed错误；历史source独立于因果时钟",
-      "evidence": "身份漂移、暂停、非法费用及历史/current source反例测试",
-      "conclusion": "通过"
-    },
-    {
-      "requirement": "禁止改变业务逻辑",
-      "implementation": "不改alpha/model/训练窗口；原始daily top-k/n-drop通过显式新profile续接，完整费用仍计入，父订单计费修复继承已合入版本",
-      "evidence": "无显式profile时旧合同保持；安全边界原子切换测试通过；未改历史经济账本",
-      "conclusion": "通过"
-    },
-    {
-      "requirement": "禁止私增门禁审批",
-      "implementation": "沿用package admission和现有safe boundary；不将实盘治理warning改成模拟盘门禁",
-      "evidence": "目标包均paper_simulation_allowed；仅运行修复激活和真实数据失败条件沿用既有合同",
-      "conclusion": "通过"
-    }
-  ],
-  "package_preflight_receipt": {
-    "schema_version": "localsim_package_preflight_v1",
-    "production_database_mode": "readonly",
-    "receipts": [
-      {
-        "package_id": "pkg_cc7eccb6202e4816b9d7c7d6b748bd37",
-        "manifest_sha256": "93a7fb7c5c0745c96d2d97376db3c669e527256666ed1e014a710c38799a7dc6",
-        "passed": true,
-        "checks": [
-          {
-            "name": "qe_source",
-            "status": "PASS",
-            "message": "StrategyPackage frozen runtime assets resolved"
-          },
-          {
-            "name": "qe_node",
-            "status": "PASS",
-            "message": "package-owned runtime assets do not require QE node access"
-          },
-          {
-            "name": "conf_yaml",
-            "status": "PASS",
-            "message": "QE conf.yaml is present"
-          },
-          {
-            "name": "factor_source",
-            "status": "PASS",
-            "message": "QE factor source directory and sampled factor files are present"
-          },
-          {
-            "name": "model_params",
-            "status": "PASS",
-            "message": "QE model params.pkl is locatable"
-          }
-        ]
-      },
-      {
-        "package_id": "pkg_8dbd396d27184de6aa5fe288011220f6",
-        "manifest_sha256": "57582c722d7a63f629db4cdb653b442c2e7ee151deb3f1d6d0514126d489c7d6",
-        "passed": true,
-        "checks": [
-          {
-            "name": "qe_source",
-            "status": "PASS",
-            "message": "StrategyPackage frozen runtime assets resolved"
-          },
-          {
-            "name": "qe_node",
-            "status": "PASS",
-            "message": "package-owned runtime assets do not require QE node access"
-          },
-          {
-            "name": "conf_yaml",
-            "status": "PASS",
-            "message": "QE conf.yaml is present"
-          },
-          {
-            "name": "factor_source",
-            "status": "PASS",
-            "message": "QE factor source directory and sampled factor files are present"
-          },
-          {
-            "name": "model_params",
-            "status": "PASS",
-            "message": "QE model params.pkl is locatable"
-          }
-        ]
-      }
-    ]
-  },
-  "validation_results": {
-    "targeted_contract_matrix": {
-      "passed": 34,
-      "dev_transaction": "passed_and_rolled_back"
-    },
-    "validation_catalog_integrity": {
-      "passed": 8,
-      "findings": 0
-    },
-    "changed_file_ruff": "passed",
-    "git_diff_check": "passed",
-    "l0": "passed"
-  },
-  "scope_expansion_history": [
-    {
-      "reason": "CI failure: TargetPositionEngine now consumes frozen runtime config. Paper day runner must pass the original manifest so the validated variant is applied exactly once.",
-      "added_paths": [
-        "backend/services/paper_trading_v2/day_runner.py"
-      ]
-    }
-  ],
-  "fresh_process_evidence": [
-    "CI失败后独立pytest进程复测全部19项失败节点及原生合同：33 passed, 1 guarded DEV skipped。DEV真实事务验证此前单独通过并回滚。"
-  ]
+  }
 }
