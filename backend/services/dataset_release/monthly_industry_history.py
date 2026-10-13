@@ -194,6 +194,22 @@ def load_frozen_history(cas, *, context_plan: Mapping[str, Any], build_inputs: M
     return IndustryHistoryProjection.read(history) if history is not None else None
 
 
+def _history_scratch_paths(root: Path, projection_sha: str, context_sha: str | None) -> tuple[Path, ...]:
+    """Portable private name, with exact legacy paths retained for recovery.
+
+    Bind the full root name and both full digests; never truncate an identity.
+    Receipts still carry the original projection/context and file signatures.
+    """
+    ensure_sha256(projection_sha, field="industry projection digest")
+    if context_sha is not None:
+        ensure_sha256(context_sha, field="industry context digest")
+    identity = {"root_name": root.name, "projection_sha256": projection_sha, "context_sha256": context_sha}
+    digest = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+    suffix = "" if context_sha is None else f"-{context_sha}"
+    return (root.parent / f".industry-history-{digest}",
+            root.parent / f".{root.name}.industry-history-{projection_sha}{suffix}")
+
+
 def materialize_history_files(root: Path, projection: IndustryHistoryProjection, *, max_rows=100_000,
                               checkpoint=lambda: None, progress=lambda _value: None,
                               context_rebuilder=None, context_identity=None):
@@ -216,8 +232,13 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
     root = Path(root)
     factor = root / "factor_bundle"
     context_sha = None if context_identity is None else hashlib.sha256(canonical_json_bytes(context_identity)).hexdigest()
-    suffix = "" if context_sha is None else f"-{context_sha}"
-    scratch = root.parent / f".{root.name}.industry-history-{projection.sha256}{suffix}"
+    candidates = _history_scratch_paths(root, projection.sha256, context_sha)
+    # Oversized legacy names cannot be files on Windows/EXT4. Avoid stat'ing
+    # those invalid names; valid legacy outputs are verified, never discarded.
+    retained = [path for path in candidates if len(path.name) <= 255 and path.exists()]
+    if len(retained) > 1:
+        raise SourceManifestError("industry repair private output identity is ambiguous")
+    scratch = retained[0] if retained else candidates[0]
     _plain_chain(factor)
     if (root / "qe_dataset_manifest.json").exists():
         raise SourceManifestError("industry repair cannot change a published candidate")
@@ -413,9 +434,8 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
         context_sha = entry.get("context_sha256")
         if context_sha is not None:
             ensure_sha256(context_sha, field="industry context digest")
-        suffix = "" if context_sha is None else f"-{context_sha}"
-        expected_parent = root.parent / f".{root.name}.industry-history-{expected_projection}{suffix}"
-        if source.parent != expected_parent or source.name != name:
+        expected_parents = _history_scratch_paths(root, expected_projection, context_sha)
+        if source.parent not in expected_parents or source.name != name:
             raise MonthlyBuildResumeError("industry commit source escaped its private outputs")
         _plain_chain(source.parent)
         backup = source.with_name(name + ".before")
