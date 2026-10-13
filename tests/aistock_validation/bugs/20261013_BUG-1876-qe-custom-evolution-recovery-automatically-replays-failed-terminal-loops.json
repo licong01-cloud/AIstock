@@ -6,6 +6,7 @@
     "backend/tests/unified_engine/test_qe_evolution_service_unified_only.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "backend/tests/test_qe_evolution_scheduler.py",
+    "backend/tests/unified_engine/test_qe_evolution_scheduler.py",
     "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
   ],
   "assigned_agent": null,

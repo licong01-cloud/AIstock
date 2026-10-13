@@ -1,3 +1,5 @@
+"""Retry identity and remote-acceptance contracts in the existing QE CI scope."""
+
 from __future__ import annotations
 
 import asyncio
