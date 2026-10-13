@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1887",
-  "closed_at": null,
+  "closed_at": "2026-10-13T17:57:46Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -49,22 +49,22 @@
   "expected": "A reviewed HMM producer update has an explicit immutable authority successor and a read-only pre-deployment compatibility check; stale or tampered bindings fail clearly before restart.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "scripts/dataset_release_hmm_authority.py",
       "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
-      "backend/tests/scripts/test_dataset_release_hmm_authority.py",
       "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py",
+      "backend/tests/scripts/test_dataset_release_hmm_authority.py",
       "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "scripts/dataset_release_hmm_authority.py",
       "tests/aistock_validation/bugs/20261013_BUG-1887-hmm-producer-source-update-invalidates-monthly-worker-frozen-authority-a.json"
     ],
     "added_files": [
       "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py"
     ],
     "changed_files": [
-      "scripts/dataset_release_hmm_authority.py",
       "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
-      "backend/tests/scripts/test_dataset_release_hmm_authority.py",
       "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py",
+      "backend/tests/scripts/test_dataset_release_hmm_authority.py",
       "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "scripts/dataset_release_hmm_authority.py",
       "tests/aistock_validation/bugs/20261013_BUG-1887-hmm-producer-source-update-invalidates-monthly-worker-frozen-authority-a.json"
     ],
     "changed_files_source": "git_finish",
@@ -186,7 +186,7 @@
   },
   "first_seen_at": "2026-10-13T16:59:27.280181Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "af7ba8f6fed4886df36cfb2de41ec53861e08d1e",
   "fix_details": {
     "approved_coefficient_sha256": "456deb662fdd597b4da99fb8272d26dec3b005fd3e372617a4fae487461a83a4",
     "database_write": false,
@@ -206,7 +206,7 @@
     "training_started": false,
     "user_backend_process_control": false
   },
-  "fixed_at": null,
+  "fixed_at": "2026-10-13T17:57:46Z",
   "github_issue_number": 6025,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6025",
   "last_seen_at": "2026-10-13T16:59:27.280181Z",
@@ -214,6 +214,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6026",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -235,6 +236,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -244,7 +246,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1887",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5f044aded93fed3f",
+    "recorded_at": "2026-10-13T17:58:29.123579Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c13e4115a88a93dd6dca567d3285b213ad35158c",
+    "source_merge_commit": "af7ba8f6fed4886df36cfb2de41ec53861e08d1e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6026",
+    "validation_evidence": [
+      "PR #6026 final c13e4115a88a93dd6dca567d3285b213ad35158c CI verdict SUCCESS run 38439075746; commit-bound canonical validation receipts; two formal reviews passed; actual runtime=none; canonical monthly runtime preflight PASS; user restart health and runtime identity confirmed"
+    ],
+    "validation_evidence_digest": "caa5705a00ea2a3b807db9827f214a14f1ff93129f7da4d6fb20d8973f146746"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm"
   ],
@@ -253,6 +276,9 @@
     "fingerprint": "92a9a866e5516b58b9311056",
     "source_event_id": "FE-20261013-92a9a866e551"
   },
+  "validation_evidence": [
+    "PR #6026 final c13e4115a88a93dd6dca567d3285b213ad35158c CI verdict SUCCESS run 38439075746; commit-bound canonical validation receipts; two formal reviews passed; actual runtime=none; canonical monthly runtime preflight PASS; user restart health and runtime identity confirmed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
