@@ -1226,6 +1226,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_build_industry_pit_candidates.py",
         "backend/tests/scripts/test_build_pt_next_020_corporate_action_authority.py",
         "backend/tests/services/test_sector_data_builder.py",
+        "backend/tests/services/test_sector_data_repair.py",
         "backend/tests/scripts/test_build_sector_data_candidate.py",
         "backend/tests/scripts/test_repair_pt_next_018_source_data.py",
         "backend/tests/scripts/test_repair_suspend_688766.py",

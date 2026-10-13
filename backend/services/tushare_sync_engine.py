@@ -706,8 +706,34 @@ class TushareSyncEngine:
 
         if not values:
             return 0
-        with conn.cursor() as cur:
-            pgx.execute_values(cur, sql, values)
+        sector_dependency = spec.target_table in {"market.sw_daily", "market.moneyflow_ts"}
+        owns_transaction = sector_dependency and conn.autocommit
+        if sector_dependency:
+            # Identical provider retries do not dirty previously verified dates.
+            table = spec.target_table.rsplit(".", 1)[1]
+            old_values = ", ".join(f"{table}.{c}" for c in non_pk)
+            new_values = ", ".join(f"EXCLUDED.{c}" for c in non_pk)
+            sql += f" WHERE ({old_values}) IS DISTINCT FROM ({new_values}) RETURNING trade_date"
+        if owns_transaction:
+            conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                changed = pgx.execute_values(cur, sql, values, fetch=True) if sector_dependency else None
+                if not sector_dependency:
+                    pgx.execute_values(cur, sql, values)
+            if sector_dependency:
+                from .sector_data_repair import mark_revision_dates
+
+                mark_revision_dates(conn, [row[0] for row in changed or []], spec.name)
+            if owns_transaction:
+                conn.commit()
+        except Exception:
+            if owns_transaction:
+                conn.rollback()
+            raise
+        finally:
+            if owns_transaction:
+                conn.autocommit = True
         return len(values)
 
     def _replace_code_batch(
