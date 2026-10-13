@@ -344,6 +344,30 @@ class LocalSimReplayCoordinator:
             updated_at=self._now(),
         )
 
+    @staticmethod
+    def is_recoverable_historical_submit_window(job: LocalSimReplayJobV1) -> bool:
+        context = job.failure_context or {}
+        return (
+            job.status is LocalSimReplayStatus.FAILED_TERMINAL
+            and job.failure_code == "RuntimeConfigInvalidError"
+            and context.get("reason_code") == "SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW"
+            and job.next_trade_date is not None
+            and context.get("trade_date") == job.next_trade_date.isoformat()
+            and job.live_release_id is None and job.live_binding_id is None
+        )
+
+    def recover_historical_submit_window(self, *, replay_job_id: str, expected_version: int) -> LocalSimReplayJobV1:
+        job = self.repository.get_replay_job(replay_job_id)
+        if job.version != expected_version or not self.is_recoverable_historical_submit_window(job):
+            raise InvalidStateTransitionError(
+                "LocalSIM terminal failure is not a historical submit-window rejection",
+                context={"reason_code": "LOCALSIM_REPLAY_WINDOW_RECOVERY_INVALID"},
+            )
+        return self.repository.transition_replay_job(
+            replay_job_id=job.replay_job_id, expected_version=job.version,
+            update={"status": LocalSimReplayStatus.FAILED_RETRYABLE}, updated_at=self._now(),
+        )
+
     def mark_ready_for_live(self, *, replay_job_id: str, expected_version: int) -> LocalSimReplayJobV1:
         job = self.repository.get_replay_job(replay_job_id)
         if job.version != expected_version or job.status is not LocalSimReplayStatus.CAUGHT_UP:

@@ -2976,6 +2976,7 @@ class SimulationLifecycleScheduler:
         miniqmt_quote_ingress_activation: Any | None = None,
         selection_inference_timeout_seconds: float | None = None,
         selection_inference_max_workers: int | None = None,
+        localsim_successor_repository: Any | None = None,
     ) -> None:
         activation_factory = (
             getattr(miniqmt_quote_ingress_activation, "controller_factory", None)
@@ -3001,6 +3002,7 @@ class SimulationLifecycleScheduler:
         ):
             raise ValueError("scheduler quote activation and explicit quote context adapters conflict")
         self.repository = repository or SimulationRuntimeRepository()
+        self._localsim_successor_repository = localsim_successor_repository
         self.selection_service = selection_service or StrategyPackageSelectionService(repository=self.repository)
         self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(
             repository=self.repository,
@@ -4164,6 +4166,12 @@ class SimulationLifecycleScheduler:
             active_on=trade_date,
             limit=limit,
         )
+        bindings = [
+            binding for binding in bindings
+            if self._localsim_replay_allows_binding(
+                binding=binding, explicit_release_id=release_id, trade_date=trade_date,
+            )
+        ]
         package_status_cache: dict[str, PackageStatus] = {}
         bindings, lifecycle_skips, blocked_binding_keys = self._partition_retired_package_bindings(
             bindings=bindings,
@@ -6952,6 +6960,11 @@ class SimulationLifecycleScheduler:
                 if run.run_id in seen_run_ids:
                     continue
                 seen_run_ids.add(run.run_id)
+                if not self._localsim_replay_allows_binding(
+                    binding=self.repository.get_simulation_release_binding(run.binding_id),
+                    explicit_release_id=None, trade_date=trade_date,
+                ):
+                    continue
                 terminalized_run = self._run_recovery_item_isolated(
                     stage="STALE_LOCALSIM_TERMINALIZATION",
                     run=run,
@@ -7061,6 +7074,11 @@ class SimulationLifecycleScheduler:
                 if any(
                     isinstance(run.run_payload_json.get(carrier_field), dict)
                     for carrier_field in _HISTORICAL_LOCALSIM_RECOVERY_TERMINAL_CARRIER_FIELDS
+                ):
+                    continue
+                if not self._localsim_replay_allows_binding(
+                    binding=self.repository.get_simulation_release_binding(run.binding_id),
+                    explicit_release_id=None, trade_date=trade_date,
                 ):
                     continue
                 terminalized_run = self._run_recovery_item_isolated(
@@ -7751,6 +7769,11 @@ class SimulationLifecycleScheduler:
                 if run.run_id in seen_run_ids or run.trade_date != trade_date:
                     continue
                 seen_run_ids.add(run.run_id)
+                if not self._localsim_replay_allows_binding(
+                    binding=self.repository.get_simulation_release_binding(run.binding_id),
+                    explicit_release_id=None, trade_date=trade_date,
+                ):
+                    continue
                 terminalized_run = self._run_recovery_item_isolated(
                     stage="POST_CLOSE_LOCALSIM_TERMINALIZATION",
                     run=run,
@@ -8385,6 +8408,10 @@ class SimulationLifecycleScheduler:
                 limit=limit + remaining_slots,
             )
             for source in source_candidates:
+                if not self._localsim_replay_allows_binding(
+                    binding=source, explicit_release_id=None, trade_date=trade_date,
+                ):
+                    continue
                 if (source.strategy_id, source.broker_backend) in existing_keys:
                     continue
                 package_status = self._package_lifecycle_status(
@@ -8593,6 +8620,59 @@ class SimulationLifecycleScheduler:
         if broker_backend is not None:
             return (SimulationLifecycleScheduler._normalized_backend(broker_backend),)
         return (SimulationBrokerBackend.LOCAL_SIM, SimulationBrokerBackend.MINIQMT_SIM)
+
+    def _localsim_replay_allows_binding(
+        self, *, binding: SimulationReleaseBinding, explicit_release_id: str | None, trade_date: date,
+    ) -> bool:
+        from .localsim_native_context import is_native_account_binding
+        from .successor_models import LocalSimReplayStatus
+        from .successor_repository import LocalSimSuccessorRepository
+
+        if binding.broker_backend is not SimulationBrokerBackend.LOCAL_SIM or not is_native_account_binding(binding):
+            return True
+        if self._localsim_successor_repository is None:
+            factory = getattr(self.context_provider, "_localsim_repository_factory", None)
+            self._localsim_successor_repository = factory() if factory is not None else LocalSimSuccessorRepository()
+        jobs = []
+        before = None
+        while True:
+            page = self._localsim_successor_repository.list_replay_jobs(
+                simulation_account_id=binding.strategy_id, before=before, limit=100,
+            )
+            jobs.extend(page)
+            if len(page) < 100:
+                break
+            before = (page[-1].created_at, page[-1].replay_job_id)
+        if not jobs:
+            return True
+        if explicit_release_id == binding.release_id and trade_date < self._scheduler_now().date():
+            return any(
+                job.binding_id == binding.binding_id
+                and job.release_id == binding.release_id
+                and job.start_trade_date <= trade_date <= job.end_trade_date
+                and job.status in {
+                    LocalSimReplayStatus.CREATED, LocalSimReplayStatus.RUNNING_HISTORICAL,
+                    LocalSimReplayStatus.FAILED_RETRYABLE, LocalSimReplayStatus.CAUGHT_UP,
+                }
+                for job in jobs
+            )
+        live_release_ids = {
+            job.live_release_id for job in jobs
+            if job.status is LocalSimReplayStatus.LIVE_ACTIVE and job.live_release_id
+        }
+        if not live_release_ids:
+            return False
+        # Old buggy roll-forwards are retained for audit, but cannot trade or be
+        # rolled again. Only the atomically activated live lineage may proceed.
+        release_id = binding.release_id
+        seen = set()
+        while release_id and release_id not in seen:
+            if release_id in live_release_ids:
+                return True
+            seen.add(release_id)
+            release = self.repository.get_strategy_runtime_release(release_id)
+            release_id = release.base_release_id
+        return False
 
     @staticmethod
     def _binding_can_roll_forward(*, source: SimulationReleaseBinding, trade_date: date) -> bool:
