@@ -3100,7 +3100,7 @@ class TDXScheduler:
 
         sector_data 依赖 sw_index_member + sw_daily + moneyflow_ts 三张表。
         - init: 用户指定 start_date/end_date，全量构建
-        - incremental: 自动推断 (sector_data.max+1 ~ min(sw_daily.max, moneyflow_ts.max))
+        - incremental: 定向消费来源修订日期，再追加 (sector_data.max+1 ~ ready_end)
         """
         import datetime as _dt
         import logging
@@ -3129,6 +3129,7 @@ class TDXScheduler:
         delayed = False
         audit_start: Optional[_dt.date] = None
         audit_end: Optional[_dt.date] = None
+        repaired_dates: List[str] = []
         try:
             # 标记 job 为 running
             if job_id is not None:
@@ -3156,6 +3157,23 @@ class TDXScheduler:
                 latest_mf = self._query_max_date("market.moneyflow_ts", "trade_date")
                 if not latest_sw or not latest_mf:
                     raise ValueError("依赖表 sw_daily 或 moneyflow_ts 无数据，无法增量构建 sector_data")
+
+                auto_end = min(latest_sw, latest_mf)
+                # MAX does not establish historical freshness. Drain the exact
+                # durable dependency queue, including when today's upstream is
+                # delayed. New pending dates are covered by the normal append.
+                for day in builder.pending_dates(auto_end):
+                    if latest_sector is None or day > latest_sector:
+                        continue
+                    _logger.info("sector_data targeted source revision: %s", day)
+                    changed_rows = builder.build_date(day)
+                    rows += changed_rows
+                    repaired_dates.append(day.isoformat())
+                    self._record_refresh_audit_from_table_range(
+                        dataset="sector_data", job_id=job_id, start_date=day, end_date=day,
+                        data_source="sector_builder",
+                        metadata={"mode": mode, "rows": changed_rows, "repair_kind": "source_revision"},
+                    )
 
                 # 上游就绪检查：确保 sw_daily 和 moneyflow_ts 已更新到最新交易日
                 latest_trading = self._latest_completed_trading_day()
@@ -3199,17 +3217,15 @@ class TDXScheduler:
                             )
 
                 if not delayed:
-                    auto_end = min(latest_sw, latest_mf)
                     if latest_sector:
                         auto_start = latest_sector + _dt.timedelta(days=1)
                     else:
                         auto_start = _dt.date(2018, 8, 1)
                     if auto_start > auto_end:
                         _logger.info("sector_data incremental: already up-to-date (max=%s)", latest_sector)
-                        rows = 0
                     else:
                         _logger.info("sector_data incremental: building %s ~ %s", auto_start, auto_end)
-                        rows = builder.build_range(auto_start, auto_end)
+                        rows += builder.build_range(auto_start, auto_end)
                         audit_start, audit_end = auto_start, auto_end
 
             # 标记 job 状态（delayed 不标记为 success）
@@ -3233,6 +3249,7 @@ class TDXScheduler:
                             "mode": mode,
                             "delay_reason": error_msg,
                             "delayed_attempt": options.get("delayed_attempt", 0),
+                            "source_revision_dates": repaired_dates,
                         },
                         ensure_ascii=False,
                         default=str,
@@ -3249,7 +3266,8 @@ class TDXScheduler:
             if job_id is not None and not delayed:
                 try:
                     summary_patch = json.dumps(
-                        {"inserted_rows": rows, "dataset": "sector_data", "mode": mode},
+                        {"inserted_rows": rows, "dataset": "sector_data", "mode": mode,
+                         "source_revision_dates": repaired_dates},
                         ensure_ascii=False, default=str,
                     )
                     self._execute(
@@ -3285,7 +3303,7 @@ class TDXScheduler:
             triggered_by,
             start_ts,
             status,
-            {"dataset": "sector_data", "mode": mode, "rows": rows},
+            {"dataset": "sector_data", "mode": mode, "rows": rows, "source_revision_dates": repaired_dates},
             {},
             [],
             error=error_msg,

@@ -1660,7 +1660,7 @@ def test_sector_data_upstream_delay_finalizes_job_as_delayed(monkeypatch):
         "market.moneyflow_ts": dt.date(2026, 7, 15),
     }
 
-    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: object())
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: SimpleNamespace(pending_dates=lambda through: []))
     scheduler._query_max_date = lambda table, _date_col: max_dates[table]
     scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 15)
     scheduler._execute = lambda sql, params=(): calls.append(("execute", sql, params))
@@ -1687,6 +1687,89 @@ def test_sector_data_upstream_delay_finalizes_job_as_delayed(monkeypatch):
     assert retry[1][0:2] == ("sector_data", "incremental")
     assert retry[2]["options"]["job_id"] == str(job_id)
     assert retry[2]["options"]["delayed_attempt"] == 1
+
+
+@pytest.mark.parametrize("upstream_delayed,build_failure", [(False, False), (True, False), (False, True)])
+def test_sector_incremental_replays_only_dirty_dates_even_if_max_is_current(monkeypatch, upstream_delayed, build_failure):
+    import backend.services.sector_data_builder as sector_builder_module
+
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    ready = dt.date(2026, 7, 14)
+    dirty = dt.date(2026, 7, 1)
+
+    def build(day):
+        calls.append(("build", day))
+        if build_failure:
+            raise RuntimeError("source preflight failed")
+        return 3
+
+    builder = SimpleNamespace(pending_dates=lambda through: [dirty], build_date=build,
+                              build_range=lambda *args: pytest.fail("no full-history rebuild"))
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: builder)
+    scheduler._query_max_date = lambda *args: ready
+    scheduler._latest_completed_trading_day = lambda: ready + dt.timedelta(days=int(upstream_delayed))
+    scheduler._execute = lambda sql, params=(): calls.append(("execute", sql, params))
+    scheduler._record_refresh_audit_from_table_range = lambda **kwargs: calls.append(("audit", kwargs))
+    scheduler._schedule_delayed_retry = lambda *args, **kwargs: calls.append(("retry", args, kwargs))
+    scheduler._log_ingestion_run = lambda *args, **kwargs: calls.append(("log", args, kwargs))
+    scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "unit", {"job_id": str(uuid.uuid4())})
+    assert ("build", dirty) in calls
+    if build_failure:
+        assert any("status='failed'" in call[1] for call in calls if call[0] == "execute")
+        assert not any("status='success'" in call[1] for call in calls if call[0] == "execute")
+    else:
+        audit = next(call[1] for call in calls if call[0] == "audit")
+        assert audit["start_date"] == audit["end_date"] == dirty
+        assert audit["metadata"]["repair_kind"] == "source_revision"
+        if upstream_delayed:
+            assert any(call[0] == "retry" for call in calls)
+            assert not any("status='success'" in call[1] for call in calls if call[0] == "execute")
+
+
+def test_sector_incremental_does_not_build_pending_new_date_twice(monkeypatch):
+    import backend.services.sector_data_builder as sector_builder_module
+
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    ready, old = dt.date(2026, 7, 15), dt.date(2026, 7, 14)
+    calls = []
+    builder = SimpleNamespace(pending_dates=lambda through: [ready],
+        build_date=lambda day: pytest.fail("append already includes this date"),
+        build_range=lambda a, b: calls.append((a, b)) or 5)
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: builder)
+    scheduler._query_max_date = lambda table, column: old if table == "market.sector_data" else ready
+    scheduler._latest_completed_trading_day = lambda: ready
+    scheduler._execute = lambda *args, **kwargs: None
+    scheduler._record_refresh_audit_from_table_range = lambda **kwargs: None
+    scheduler._log_ingestion_run = lambda *args, **kwargs: None
+    scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "unit", {})
+    assert calls == [(ready, ready)]
+
+
+def test_sector_revision_retry_preserves_already_completed_dates(monkeypatch):
+    import backend.services.sector_data_builder as sector_builder_module
+
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    first, second = dt.date(2026, 7, 1), dt.date(2026, 7, 2)
+    pending, seen = [first, second], []
+    def build(day):
+        seen.append(day)
+        if day == second and seen.count(second) == 1:
+            raise RuntimeError("transient source error")
+        pending.remove(day)  # Formal builder clears only its committed day.
+        return 1
+    monkeypatch.setattr(sector_builder_module, "SectorDataBuilder", lambda: SimpleNamespace(
+        pending_dates=lambda through: list(pending), build_date=build,
+        build_range=lambda *args: pytest.fail("completed history cannot be exported again")))
+    scheduler._query_max_date = lambda *args: dt.date(2026, 7, 14)
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 14)
+    scheduler._execute = lambda *args, **kwargs: None
+    scheduler._record_refresh_audit_from_table_range = lambda **kwargs: None
+    scheduler._log_ingestion_run = lambda *args, **kwargs: None
+    for _ in range(2):
+        scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "unit", {})
+    assert seen == [first, second, second]
+    assert pending == []
 
 
 def test_margin_detail_uses_previous_trading_day_and_t_plus_one_window():
