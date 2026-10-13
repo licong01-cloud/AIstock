@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "The exact executable CI collection and metrics plugin shares Workflow Automation ownership with its direct tests; unrelated scripts remain unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/test_validation_module_ownership.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1871-public-ci-test-coverage-collector-source-ownership-disagrees-with-its-di.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/test_validation_module_ownership.py"
+      "backend/tests/test_validation_module_ownership.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1871-public-ci-test-coverage-collector-source-ownership-disagrees-with-its-di.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/file_ownership.yaml",
@@ -107,10 +113,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
