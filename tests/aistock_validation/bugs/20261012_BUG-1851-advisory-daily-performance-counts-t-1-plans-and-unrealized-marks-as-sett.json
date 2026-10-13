@@ -176,7 +176,8 @@
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh pytest loaded task worktree source: original future-exit/open-mark regression failed before the fix (win_rate=1.0), then passed after the fix. Related small matrix first 14 passed/1 failed; failed API node passed after exact repository-call fixes. Direct reporting-clock, target-day execution/no fallback, fees, five-session, PIT cutoff and comparison cases passed; no user backend process control.",
-      "Fresh task-source DEV read-only transaction verified all four market-reader SQL statements and settlement SQL schema (no DEV business sample). Production read-only four-program business comparison passed in approximately 0.772 seconds; legacy single has five future exits excluded. No DDL/DML, training, profile change or user process control."
+      "Fresh task-source DEV read-only transaction verified all four market-reader SQL statements and settlement SQL schema (no DEV business sample). Production read-only four-program business comparison passed in approximately 0.772 seconds; legacy single has five future exits excluded. No DDL/DML, training, profile change or user process control.",
+      "After safe latest-main synchronization including BUG-1855/PR #5934, fresh direct API pytest passed the actual settled, explicit-cost and missing-close UNKNOWN responses through advisory_returns_metrics_v2 semantic validation. No public workflow code modifications or user backend restart."
     ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",

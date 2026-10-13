@@ -279,6 +279,7 @@ def test_returns_api_uses_one_snapshot_and_keeps_next_open_price_after_close() -
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from backend.routers.advisory import router, get_advisory_program_service
+    from scripts.aistock_runtime_semantics import _validate_advisory_returns
 
     repo = InMemoryAdvisoryProgramRepository()
     repo.programs["p"] = program()
@@ -335,6 +336,8 @@ def test_returns_api_uses_one_snapshot_and_keeps_next_open_price_after_close() -
     assert payload["returns"][0]["exit_price"] == 12  # published after close, executed at open
     assert payload["metrics"]["avg_return_bps"] == pytest.approx(2000)
     assert payload["returns"][0]["performance_state"] == "SETTLED"
+    verdict = _validate_advisory_returns(payload, url="http://127.0.0.1:8001/api/v1/advisory/programs/p/returns")
+    assert verdict[0] == "passed", verdict[1]
     assert len(conn.calls) == 1
     assert repo.all_latest_episodes("p")[0].exit_price == 11  # no historical write
     with TestClient(app) as client:
@@ -363,6 +366,10 @@ def test_returns_api_uses_one_snapshot_and_keeps_next_open_price_after_close() -
     net = (1.2 * 0.998 / 1.001 - 1) * 10000
     assert costed.json()["returns"][0]["realized_net_return_bps"] == pytest.approx(net)
     assert costed.json()["metrics"]["settled"]["net"]["avg_return_bps"] == pytest.approx(net)
+    verdict = _validate_advisory_returns(
+        costed.json(), url="http://127.0.0.1:8001/api/v1/advisory/programs/p/returns?buy_cost_bps=10&sell_cost_bps=20"
+    )
+    assert verdict[0] == "passed", verdict[1]
     assert comparison.status_code == 200
     assert comparison.json()["comparison"]["outcomes"][0]["status"] == "IMMATURE"
     assert comparison.json()["comparison"]["programs"][0]["daily_list_changes"][0]["paired_list_rotation_count"] == 1
@@ -371,6 +378,10 @@ def test_returns_api_uses_one_snapshot_and_keeps_next_open_price_after_close() -
     missing_close = service.return_snapshot("p")
     assert missing_close["metrics"]["metric_evaluable_count"] == 0
     assert missing_close["returns"][0]["performance_state"] == "UNKNOWN"
+    verdict = _validate_advisory_returns(
+        {"ok": True, **missing_close}, url="http://127.0.0.1:8001/api/v1/advisory/programs/p/returns"
+    )
+    assert verdict[0] == "passed", verdict[1]
 
 
 def test_forward_execution_does_not_shift_dates_or_use_missing_target_price() -> None:
