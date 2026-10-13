@@ -193,8 +193,8 @@
   },
   "first_seen_at": "2026-10-13T03:20:20.892925Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9e9e0842c62e7c860f2ad30674761f52f26e326e",
+  "fixed_at": "2026-10-13T10:00:10Z",
   "github_issue_number": 5948,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5948",
   "last_seen_at": "2026-10-13T03:20:20.892925Z",
@@ -202,6 +202,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6018",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -211,11 +212,11 @@
       "as_of_trade_date": "2026-10-12",
       "database_write": false,
       "effective_trade_date": "2026-10-13",
+      "first_conflicting_fact": "801012.SI/2023-01-30/sw2_pct_change",
       "fit": 0,
       "history_start": "2023-01-26",
       "model_sha256": "7223c32648792443020cbc02e9ded3102e81d30330640e623d4c2ef0ddf8f665",
       "reason_code": "hmm_database_daily_input_unavailable",
-      "first_conflicting_fact": "801012.SI/2023-01-30/sw2_pct_change",
       "result": "BLOCKED",
       "snapshot_id": "ecee7c40-6764-49ad-bc0f-1c6c6b390504"
     },
@@ -277,6 +278,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -288,7 +290,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1862",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ad7ff0bc89bb24fd",
+    "recorded_at": "2026-10-13T10:01:00.975848Z",
+    "runtime_contract_digest": "6204481a17347d89a96380cba64e9768bb1278e6eea0e01960667a199df30937",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2286ce61d86906abb09ccaf008d13739668b906b",
+    "source_merge_commit": "9e9e0842c62e7c860f2ad30674761f52f26e326e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6018",
+    "validation_evidence": [
+      "rtk pytest backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_database_plan_reports_read_prefix_not_physical_maxima backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_existing_database_asset_anchors_new_plan_to_original_read_identity backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_database_executor_rejects_concurrent_asset_with_different_read_cutoff backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_existing_database_asset_rejects_invalid_original_read_boundary -q -p no:cacheprovider -> passed: 8 passed at final HEAD; complete unchanged-source 138 passed/1 skipped matrix recorded at f837634277de4b0039b7a4563b3d829f2027f9b8",
+      "python -m nox -s validation_module_registry_l0 -> passed: 8 passed; 14/14 mapped",
+      "python -m nox -s l0 -> passed: blocking=0",
+      "rtk ruff check changed HMM Python files; rtk ruff format --check changed HMM Python files; python -m py_compile changed HMM Python files; git diff --check origin/main...HEAD -> passed: 7 Python files",
+      "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_daily_coefficient_generation_design_20260428.md --tier F2 -> passed: 6 items/6 rows, warnings=0"
+    ],
+    "validation_evidence_digest": "a1e9493ee44dce98070a8c2ec783f57a0212ca602f0e7122dc10aecc517fd68f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm"
   ],
@@ -297,6 +324,13 @@
     "fingerprint": "575cfe5ce45804b6fc04aad3",
     "source_event_id": "FE-20261013-575cfe5ce458"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_database_plan_reports_read_prefix_not_physical_maxima backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_existing_database_asset_anchors_new_plan_to_original_read_identity backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_database_executor_rejects_concurrent_asset_with_different_read_cutoff backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_existing_database_asset_rejects_invalid_original_read_boundary -q -p no:cacheprovider -> passed: 8 passed at final HEAD; complete unchanged-source 138 passed/1 skipped matrix recorded at f837634277de4b0039b7a4563b3d829f2027f9b8",
+    "python -m nox -s validation_module_registry_l0 -> passed: 8 passed; 14/14 mapped",
+    "python -m nox -s l0 -> passed: blocking=0",
+    "rtk ruff check changed HMM Python files; rtk ruff format --check changed HMM Python files; python -m py_compile changed HMM Python files; git diff --check origin/main...HEAD -> passed: 7 Python files",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_daily_coefficient_generation_design_20260428.md --tier F2 -> passed: 6 items/6 rows, warnings=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
