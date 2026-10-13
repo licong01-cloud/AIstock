@@ -80,6 +80,13 @@ class _Cursor:
             self.state.task["status"] = "running"
             self.rowcount = 1
             return
+        if normalized.startswith("UPDATE qe_evolution_loops SET config_json = %s"):
+            config_json, loop_id = params
+            assert loop_id == self.state.loop["loop_id"]
+            if self.state.loop["status"] == "running":
+                self.state.loop["config_json"] = json.loads(config_json)
+                self.rowcount = 1
+            return
         if "SET config_json = jsonb_set" in normalized:
             state_value, loop_id, retry_attempt_id = params
             metadata = self.state.loop["config_json"]["_qe_retry_submission"]

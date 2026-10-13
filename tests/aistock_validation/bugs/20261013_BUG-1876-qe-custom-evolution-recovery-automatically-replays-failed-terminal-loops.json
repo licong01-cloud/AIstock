@@ -24,6 +24,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261013-789a93b63559",
       "timestamp": "2026-10-13T05:39:04.864757Z"
+    },
+    {
+      "action": "code_review_terminal_claim_contract",
+      "actor": "Codex",
+      "note": "Review 1: automatic recovery selected every non-completed Loop; both queue reset and running claim SQL accepted failed/cancelled outcomes. Fixed selection to pending/missing and atomic SQL claims to pending only. Existing active work stays under scan_running_loops reconciliation; explicit retry_loop/resume_task/rerun APIs keep their authorized pending transition and attempt identity. No model/factor/seed/dataset/strategy/pool/capacity changes.",
+      "timestamp": "2026-10-13T06:09:52Z"
+    },
+    {
+      "action": "code_review_race_and_compatibility",
+      "actor": "Codex",
+      "note": "Review 2: covered failed/cancelled/canceled/completed/running/processing/unknown/null states, empty dispatch with running children, state changes during SQL claim and capacity wait, and 100 unchanged wakes remaining read-only. 47 focused cases passed. Broad related matrix found an existing explicit-retry fixture mismatch, reproduced with origin/main source; only its three-value GPU contract and config persistence fake were aligned, preserving identity assertions. Exact retry identity test passed. qe_read_backend: 701 passed/1 skipped. L0, guardrail and ownership passed; module registry 8 passed. DESIGN-COMPLIANCE-001: complete fix, no silent success, no business parameter drift, no new approval/gate.",
+      "timestamp": "2026-10-13T06:09:52Z"
+    },
+    {
+      "action": "containment_authorized_pending_tcn_completion",
+      "actor": "user",
+      "note": "User explicitly authorized pausing only original task qe_20261013_024708_2cff after its final TCN Loop23 completes, retaining completed results and allowing independent LGBM task qe_20261013_112346_00a6 to continue. At last readback Loop23 is running; no stop, restart or cleanup has been executed.",
+      "timestamp": "2026-10-13T06:09:52Z"
     }
   ],
   "evidence_uris": [
