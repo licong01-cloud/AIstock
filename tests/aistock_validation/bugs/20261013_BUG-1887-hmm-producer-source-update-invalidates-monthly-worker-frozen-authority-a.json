@@ -1,0 +1,368 @@
+{
+  "actual": "Backend startup aborts on stale producer authority after source-only HMM merge; previous CI was green.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_hmm_authority_bootstrap.py",
+    "scripts/dataset_release_hmm_authority.py",
+    "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+    "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+    "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py",
+    "tests/aistock_validation/bugs/20261013_BUG-1887-hmm-producer-source-update-invalidates-monthly-worker-frozen-authority-a.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1887",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "code_review": [
+    {
+      "findings": "Eliminate mixed-mode arguments and silent lag override; preserve old assets and pin explicit reviewed producer. Keep all additions in existing offline CLI instead of a runtime bootstrap module.",
+      "result": "fixed_then_passed",
+      "round": 1
+    },
+    {
+      "findings": "Pin source manifest semantics; malformed inputs return typed failure; verify successor model/config/coefficient bytes against predecessor after construction; strict startup loader remains unchanged. No blocking findings remain.",
+      "result": "passed",
+      "round": 2
+    }
+  ],
+  "created_at": "2026-10-13T16:59:27.280181Z",
+  "description": "Backend startup aborts on stale producer authority after source-only HMM merge; previous CI was green.",
+  "design_compliance_001": {
+    "no_business_logic_change": "PASS: model/config/preset/coefficients are byte-preserved; no change to HMM features, windows, seeds, thresholds, data or runtime loader.",
+    "no_silent_error": "PASS: stale/unreviewed hashes, drift, collisions and mixed modes explicitly fail; no hash bypass or disabled worker.",
+    "no_simplified_delivery": "PASS: real installed authority and canonical Conda AIstock complete worker preflight verified; not just import or fixture smoke.",
+    "no_unapproved_gate": "PASS: existing startup identity validation is reused before restart; no new scheduler, business approval, resource or model gate."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261013-92a9a866e551",
+      "timestamp": "2026-10-13T16:59:27.280163Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "A reviewed HMM producer update has an explicit immutable authority successor and a read-only pre-deployment compatibility check; stale or tampered bindings fail clearly before restart.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "scripts/dataset_release_hmm_authority.py",
+      "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+      "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+      "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "tests/aistock_validation/bugs/20261013_BUG-1887-hmm-producer-source-update-invalidates-monthly-worker-frozen-authority-a.json"
+    ],
+    "added_files": [
+      "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py"
+    ],
+    "changed_files": [
+      "scripts/dataset_release_hmm_authority.py",
+      "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+      "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+      "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "tests/aistock_validation/bugs/20261013_BUG-1887-hmm-producer-source-update-invalidates-monthly-worker-frozen-authority-a.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_hmm_authority_bootstrap.py",
+        "scripts/dataset_release_hmm_authority.py",
+        "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+        "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+        "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+        "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "docs.operations",
+        "hmm",
+        "selection_center",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_hmm_authority_bootstrap.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/dataset_release_hmm_authority.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_hmm_authority_bootstrap.py",
+        "scripts/dataset_release_hmm_authority.py",
+        "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+        "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+        "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+        "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_hmm_authority_bootstrap.py",
+      "scripts/dataset_release_hmm_authority.py",
+      "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+      "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_hmm_authority_bootstrap.py",
+      "scripts/dataset_release_hmm_authority.py",
+      "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
+      "backend/tests/scripts/test_dataset_release_hmm_authority.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py"
+    ]
+  },
+  "first_seen_at": "2026-10-13T16:59:27.280181Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_details": {
+    "approved_coefficient_sha256": "456deb662fdd597b4da99fb8272d26dec3b005fd3e372617a4fae487461a83a4",
+    "database_write": false,
+    "dataset_write": false,
+    "old_package_overwritten": false,
+    "preflight": "Windows base and Conda AIstock strict loader PASS; complete build_monthly_worker_runtime/project_root=F:/Dev/AIstock preflight PASS with successor injected into isolated process only.",
+    "previous_authority_file_sha256": "b6498d252d573ea8a413bb784248bcaf71700391a97e299607d244892bf0d2fd",
+    "producer_hash_check_bypassed": false,
+    "reviewed_producer_sha256": "16d7e2f76094f92fdc3ab9a13ee8a7cbf42e843f1995757a8eb64925d5b68c69",
+    "runtime_configuration_deployment": "applied_exact_pointer_only; canonical .env points to successor; actual Conda AIstock/canonical-source monthly worker full preflight PASS without override; waiting user backend start and runtime readback",
+    "runtime_configuration_write_scope": [
+      "F:/Dev/AIstock/.env:AISTOCK_MONTHLY_HMM_AUTHORITY_PATH"
+    ],
+    "scope": "Existing offline authority CLI and direct consumer tests only; runtime loader, worker, HMM producer, model, config, dataset, CI and scheduler unchanged.",
+    "successor_authority_file_sha256": "c429de51bc490d39f3976e42312f1010458f7ed3b95900466d36a479fb92c159",
+    "successor_authority_path": "F:/Dev/AIstock_artifacts/monthly_dataset_release_authorities/qe-hmm-fc0683a9-preset-a-static-v2-bug1887/monthly_hmm_coefficient_authority.json",
+    "training_started": false,
+    "user_backend_process_control": false
+  },
+  "fixed_at": null,
+  "github_issue_number": 6025,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6025",
+  "last_seen_at": "2026-10-13T16:59:27.280181Z",
+  "module": "hmm",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/dataset_release_hmm_authority.py --verify-only --authority-path <configured-authority> --producer-script <task-worktree>/scripts/precompute_hmm_coefficients.py",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "hmm_data_source_backend"
+  ],
+  "risk_area": "regression",
+  "root_cause": "PR #6018 changed the shared HMM producer but delivery did not rebind the installed monthly authority. CI selected hmm_data_source_backend and paper_v2_backend, not installed monthly production wiring; previous monthly composition test stubbed the authority loader. Import smoke never entered lifespan preflight.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm"
+  ],
+  "title": "HMM producer source update invalidates monthly worker frozen authority and aborts backend startup",
+  "trigger_condition": {
+    "fingerprint": "92a9a866e5516b58b9311056",
+    "source_event_id": "FE-20261013-92a9a866e551"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm",
+        "qlib_data",
+        "hmm_data_source"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "hmm_data_source_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm",
+          "qlib_data",
+          "hmm_data_source"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "hmm_data_source_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
