@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "每日增量合并 pending revision dates 与普通新增日期，按单日原子构建消费；只审核实际重算日期，不跨历史范围做全量校验；失败保留队列且不可假成功。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1884-sector.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1884-sector.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -88,8 +94,8 @@
   },
   "first_seen_at": "2026-10-13T09:26:10.878367Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2670e48b3b351e5f0fbc35c2c4feb5c4cdcb1d70",
+  "fixed_at": "2026-10-13T09:41:38Z",
   "github_issue_number": 6013,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6013",
   "last_seen_at": "2026-10-13T09:26:10.878367Z",
@@ -97,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6015",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -109,18 +116,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sector_data/status",
     "fresh_process_evidence": [
       "Fresh AIstock-CI process reproduced three MAX-current skips before the fix, then passed targeted sector scheduler tests: old dirty dates are rebuilt, append dates are not doubled, upstream delay stays delayed, failure stays failed, and retry preserves committed dates. Runtime activation remains pending user restart."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sector_data/status",
-    "runtime_identity_match": "pending",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -130,7 +138,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1884",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "aea9d61679996618",
+    "recorded_at": "2026-10-13T09:42:14.815751Z",
+    "runtime_contract_digest": "abd5e2c46a394a023ff4cc2f367dbed2bd907307938c09489c2b1087d1e3faf0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "780c944f413673996a56cf13bd5172d6c9fedada",
+    "source_merge_commit": "2670e48b3b351e5f0fbc35c2c4feb5c4cdcb1d70",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6015",
+    "validation_evidence": [
+      "validation-receipt: id=70c1687a29022f3c commit=780c944f413673996a56cf13bd5172d6c9fedada kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k sector -q --noconftest` result=`passed 8 tests; three RED failures reproduced before fix`",
+      "validation-receipt: id=c9cd2725b1e15e00 commit=780c944f413673996a56cf13bd5172d6c9fedada kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py tests/aistock_validation/bugs/20261013_BUG-1884-sector.json` result=`passed`",
+      "validation-receipt: id=bd5c2ed17fa42b17 commit=780c944f413673996a56cf13bd5172d6c9fedada kind=ruff plan=direct status=passed command=`python -m ruff check backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py` result=`passed`",
+      "validation-receipt: id=5227cbd81b74627f commit=780c944f413673996a56cf13bd5172d6c9fedada kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "88aacab236d0b6052743dd97cf293d1b109719516d115cb851c1d384708117a4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -139,6 +171,12 @@
     "fingerprint": "31220ab5fcb6e01bc7add6cb",
     "source_event_id": "FE-20261013-31220ab5fcb6"
   },
+  "validation_evidence": [
+    "validation-receipt: id=70c1687a29022f3c commit=780c944f413673996a56cf13bd5172d6c9fedada kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -k sector -q --noconftest` result=`passed 8 tests; three RED failures reproduced before fix`",
+    "validation-receipt: id=c9cd2725b1e15e00 commit=780c944f413673996a56cf13bd5172d6c9fedada kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py tests/aistock_validation/bugs/20261013_BUG-1884-sector.json` result=`passed`",
+    "validation-receipt: id=bd5c2ed17fa42b17 commit=780c944f413673996a56cf13bd5172d6c9fedada kind=ruff plan=direct status=passed command=`python -m ruff check backend/ingestion/tdx_scheduler.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py` result=`passed`",
+    "validation-receipt: id=5227cbd81b74627f commit=780c944f413673996a56cf13bd5172d6c9fedada kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
