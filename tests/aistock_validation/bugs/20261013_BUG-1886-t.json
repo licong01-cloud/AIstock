@@ -120,7 +120,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sw_sector/status",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sw_index_member/status",
     "fresh_process_evidence": [
       "RED: eight targeted historical-T/identity tests failed on prior source; GREEN: all targeted tests passed in fresh AIstock-CI processes.",
       "Existing aistock_dev: real 801992.SI Y=44/N=8 provider rows processed twice; retained compatibility rows 47->55; repeat content unchanged; historical T source fact count=1; strategy PIT T row count=0; production_write=false. Canonical provider rows SHA256=0f1cf043ceb549c9d0ff5718229d64dabd5216a00c9be74da43169661995cc9e."
