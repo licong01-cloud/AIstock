@@ -470,6 +470,7 @@ rules:
       - scripts/bug_github_webhook.py
       - scripts/ci/prepare_self_hosted_workspace.py
       - scripts/ci_failure_issue_summary.py
+      - scripts/ci_plan_coverage.py
       - scripts/code_intelligence_adapter.py
       - scripts/configure_aistock_github_runner.ps1
       - scripts/issue_flow.py
@@ -1249,6 +1250,10 @@ rules:
       - backend/services/tushare_sync_engine.py
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
+      - backend/services/sw_industry_history_store.py
+      - backend/db/migrations/add_sw_industry_history_preservation_v1.sql
+      - scripts/import_sw_industry_history.py
+      - backend/tests/test_sw_industry_history_store.py
       - backend/db/init_tushare_schedules.py
       - backend/db/migrations/add_etf_share_sources_20260923.sql
       - backend/db/migrations/add_etf_share_sources_20260923.rollback.sql

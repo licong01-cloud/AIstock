@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 import errno
 import hashlib
@@ -27,6 +27,7 @@ import uuid
 from .canonical import canonical_json_bytes, ensure_sha256
 from .monthly_error_diagnostics import monthly_error_diagnostics, monthly_error_message
 
+UTC = timezone.utc
 
 REQUEST_SCHEMA = "aistock_monthly_release_request_v1"
 PLAN_SCHEMA = "aistock_monthly_release_plan_v2"
@@ -1546,6 +1547,69 @@ class MonthlyReleaseService:
                 "monthly_repair_inputs_ref": {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}})
             return receipt
 
+    def bind_industry_history(self, operation_id: str, *, principal: str, connection_factory=None) -> dict[str, Any]:
+        """Freeze a targeted history supplement without replacing sealed prices.
+
+        Authenticated data-preparation action only. No READY/activation grant,
+        no caller SQL and no runtime consumer database fallback.
+        """
+        from .monthly_industry_history import capture_industry_history, IndustryHistoryProjection
+        from .monthly_legacy_prefix import load_legacy_prefix
+        from .monthly_sector_mapping import load_predecessor_sector_mapping
+        from .index_sources import independent_postgres_connection_factory
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            if plan.get("monthly_industry_history_ref") is not None:
+                reference = plan["monthly_industry_history_ref"]
+                value = _read_json(root / reference["id"], label="industry history binding")
+                if value != plan.get("monthly_industry_history") or _file_sha256(root / reference["id"]) != reference["sha256"]:
+                    raise MonthlyReleaseConflict("industry history binding changed")
+                IndustryHistoryProjection.read(value["projection"])
+                return {"status": "BOUND", "reference": reference, "projection_sha256": _digest(value["projection"])}
+            state = self.store.read_state(operation_id)
+            checkpoint = self.store.read_checkpoint(operation_id, "SOURCE")
+            if state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or checkpoint is None or any(
+                self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES if stage != "SOURCE"
+            ):
+                raise MonthlyReleaseConflict("industry supplement requires idle, sealed SOURCE and uncompleted BUILD")
+            predecessor = plan["predecessor"]
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed before history binding")
+            source = checkpoint  # read_checkpoint already verifies the canonical receipt and file SHA.
+            bundles = [ref for ref in source["input_refs"] if Path(ref["id"]).name == "frozen-source-bundle.json"]
+            if len(bundles) != 1:
+                raise MonthlyReleaseConflict("sealed SOURCE bundle is ambiguous")
+            prefix = load_legacy_prefix(Path(predecessor["candidate_root"]),
+                expected_manifest_sha256=predecessor["dataset_manifest_sha256"],
+                expected_file_sha256=plan["predecessor_manifest_ref"]["sha256"],
+                expected_cutoff=date.fromisoformat(predecessor["cutoff"]), expected_release_id=predecessor["release_id"])
+            mapping = load_predecessor_sector_mapping(prefix)
+            connection = (connection_factory or independent_postgres_connection_factory)()
+            try:
+                connection.set_session(readonly=True, isolation_level="REPEATABLE READ", autocommit=False)
+                projection = capture_industry_history(connection, current_map=mapping["code_map"])
+            finally:
+                connection.rollback()
+                connection.close()
+            if projection is None:
+                raise MonthlyReleaseNotReady("versioned industry history authority is unavailable")
+            value = {"schema_version": "aistock_monthly_industry_history_binding_v1", "operation_id": operation_id,
+                "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
+                "predecessor_manifest_sha256": predecessor["dataset_manifest_sha256"],
+                "base_plan_digest": _digest(plan), "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "projection": projection.payload, "bound_by": principal, "database_write": False,
+                "activation_authorized": False}
+            relative = f"inputs/industry-history-{_digest(value)}.json"
+            path = root / relative
+            _write_exclusive(path, value)
+            reference = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed during history capture")
+            self.store.replace_plan(operation_id, {**plan, "monthly_industry_history": value,
+                "monthly_industry_history_ref": reference})
+            return {"status": "BOUND", "reference": reference, "projection_sha256": projection.sha256}
+
     def bind_source_quality_inputs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str) -> dict[str, Any]:
         """Bind finite parity warnings to this operation before SOURCE seals."""
         from .monthly_source_quality import (
@@ -1796,6 +1860,19 @@ class MonthlyReleaseService:
                         }
                     }
                 )
+                source_supplement = plan.get("monthly_industry_history") if stage == "SOURCE" else None
+                if source_supplement is not None:
+                    # Only classification is amended. Verify the ORIGINAL plan,
+                    # SOURCE receipt and all original files; never change that
+                    # seal or rerun completed price exports under a new source.
+                    base_plan = {key: value for key, value in plan.items() if key not in {
+                        "monthly_industry_history", "monthly_industry_history_ref"}}
+                    ref = plan.get("monthly_industry_history_ref") or {}
+                    if (_digest(base_plan) != source_supplement.get("base_plan_digest") or
+                        hashlib.sha256(_canonical_payload(source_supplement)).hexdigest() != ref.get("sha256")):
+                        raise MonthlyReleaseConflict("industry supplement changed the sealed base plan")
+                    plan_digest = source_supplement["base_plan_digest"]
+                    current_producer_digest = None  # Original producer remains recorded in its unmodified checkpoint.
                 existing = self.store.read_checkpoint(
                     operation_id,
                     stage,
@@ -1804,6 +1881,8 @@ class MonthlyReleaseService:
                     producer_digest=current_producer_digest,
                     input_set_digest=current_input_set_digest,
                 )
+                if source_supplement is not None and (existing is None or existing["canonical_sha256"] != source_supplement["source_receipt_canonical_sha256"]):
+                    raise MonthlyReleaseConflict("industry supplement cannot replace or rebuild sealed SOURCE")
                 checkpoint_validator = getattr(self.pipeline, "checkpoint_is_valid", None)
                 if existing is not None and callable(checkpoint_validator):
                     if not checkpoint_validator(stage, existing):

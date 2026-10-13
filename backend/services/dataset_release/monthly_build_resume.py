@@ -157,6 +157,14 @@ class MonthlyBuildResume:
             if "prepare" in self.record["steps"]:
                 if _retained_root(self.record, release_root, binding, context) != staging_root:
                     raise MonthlyBuildResumeError("runner did not use the retained data location")
+                pending = staging_root.parent / f".{staging_root.name}.industry-history-commit.json"
+                if pending.exists():
+                    from .monthly_industry_history import load_frozen_history, recover_history_commit
+                    history = load_frozen_history(cas, context_plan=context.plan, build_inputs=compiled.physical_plan["build_inputs"])
+                    if history is None:
+                        raise MonthlyBuildResumeError("pending history repair has no frozen authority")
+                    self.record = dict(recover_history_commit(root=staging_root, journal=self.path,
+                        record=self.record, expected_projection=history.sha256))
                 for relative, expected in self.record["files"].items():
                     if not isinstance(relative, str) or not relative or any(token in relative for token in ("\\", ":", "\x00")) or ".." in Path(relative).parts or Path(relative).is_absolute():
                         raise MonthlyBuildResumeError("retained data file escaped staging")

@@ -143,6 +143,18 @@ def _request(value: UnifiedMonthlyReleaseRequest, idempotency_key: str) -> Month
     )
 
 
+@router.post("/{operation_id}/industry-history")
+def bind_monthly_industry_history(
+    operation_id: str,
+    request: EmptyCommandRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    del request
+    return {"schema_version": "aistock_monthly_industry_history_binding_response_v1",
+            "data": _call(lambda: service.bind_industry_history(operation_id, principal=principal.principal_id))}
+
+
 @router.post("/{operation_id}/source-quality-inputs")
 def bind_monthly_source_quality_inputs(
     operation_id: str,

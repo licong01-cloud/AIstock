@@ -140,6 +140,11 @@ class MatureMonthlyPhysicalBuildRunner:
         if release_digest != expected_release_digest:
             raise MonthlyMatureBuildError("monthly physical release digest differs")
         physical_plan = dict(compiled.physical_plan)
+        from .monthly_industry_history import load_frozen_history
+        history = load_frozen_history(self.cas, context_plan=context.plan,
+                                      build_inputs=physical_plan.get("build_inputs", {}))
+        if history is not None:
+            physical_plan["industry_history_projection_sha256"] = history.sha256
         predecessor = context.plan.get("predecessor")
         if isinstance(predecessor, Mapping):
             # Only the durable controller plan supplies this lineage, never a
@@ -147,7 +152,9 @@ class MatureMonthlyPhysicalBuildRunner:
             physical_plan["preparation_predecessor_profile_sha256"] = predecessor.get("profile_sha256")
         common = {
             "run_id": context.operation_id,
-            "attempt_id": f"{context.operation_id}-attempt-{context.attempt}",
+            # Match the supervised BUILD receipt; the current fence, not the
+            # retained materialization directory, distinguishes retry ownership.
+            "attempt_id": f"{context.operation_id}-build",
             "attempt_fence": context.attempt,
             "pressure_rung": 0,
             "stage_timeout_seconds": self.profile.stage_timeouts_seconds["full_build"],
@@ -229,6 +236,10 @@ class MatureMonthlyPhysicalBuildRunner:
                 finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
                 resume.save("finalize-bins", finalized_ref, roots=("daily_bin", "minute_bin", "index_context", "factor_bundle"))
             finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
+            from .monthly_industry_history import apply_retained_history
+            prepare = apply_retained_history(resume, context=context, compiled=compiled, prepare=prepare, cas=self.cas, profile=self.profile)
+            prepare_ref = self._seal_stage(prepare, expected="prepare")
+            finalize_prerequisites["prepare"] = prepare_ref.sha256
             smoke = tools.consumer_smoke.execute(
                 context=context,
                 staging_root=staging_root,

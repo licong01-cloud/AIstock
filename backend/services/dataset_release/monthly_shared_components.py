@@ -24,6 +24,9 @@ from .monthly_build_bridge import CompiledMonthlyBuild
 from .monthly_candidate_finalizer import SharedReleaseComponents
 from .monthly_consumer_layout import publish_consumer_layout
 from .monthly_worker import ProducerContext
+from .monthly_sector_quote_facts import (
+    QUOTE_FACTS_PATH, SectorQuoteFactsError, build_sector_quote_facts,
+)
 from .pit import FrozenPitSnapshot
 from .profile import DatasetProfile
 from .sealed_source_reader import CASSealedPartitionReader
@@ -734,7 +737,9 @@ def _native_sector_summary(
         raise MonthlySharedComponentsError("sector month physical writer authority is incomplete or stale")
     inherited_count = (prefix.manifest["components"].get("sector_data") or {}).get("row_count")
     if inherited_count is not None and (
-        type(inherited_count) is not int or inherited_count != rows.get("start_row")
+        type(inherited_count) is not int or (
+            inherited_count != rows.get("start_row") and physical_authority.get("industry_history_projection_ref") is None
+        )
     ):
         raise MonthlySharedComponentsError("sector physical tail differs from inherited row count")
     month_start = cutoff.replace(day=1)
@@ -975,6 +980,29 @@ class FrozenMonthlySharedComponentBuilder:
                 )
         except ComponentPreparationError as exc:
             raise MonthlySharedComponentsError(str(exc)) from exc
+        history_proof = None
+        if physical_authority.get("industry_history_projection_ref") is not None:
+            from .monthly_industry_history import IndustryHistoryProjection
+            history_proof = self.cas.get_json_bounded(physical_authority["industry_history_projection_ref"], max_bytes=16 * 1024 * 1024)
+            history = IndustryHistoryProjection.read(history_proof["projection"])
+            if history_proof.get("historical_projection_reused") is not True:
+                # A one-time explicitly requested PIT repair. A normal later
+                # month inherits this sidecar and validates/appends only its tail.
+                class EffectiveHistoryEnricher:
+                    code_map = enricher.code_map
+                    def enrich(self, payload):
+                        day = payload["trade_date"]
+                        if date.fromisoformat(history.payload["start_date"]) <= day <= date.fromisoformat(history.payload["end_date"]):
+                            id_ = history.resolve(payload["ts_code"], day)
+                            if id_ >= 131:
+                                raise MonthlySharedComponentsError("SW2014 is outside the current L2 policy window")
+                            return {**payload, "l2_code_id": id_}
+                        return enricher.enrich(payload)
+                sector_membership, repaired_days, _, _ = _build_sector_membership(
+                    enricher=EffectiveHistoryEnricher(), pit_rows=pit_rows, calendar=calendar,
+                    start=self.sector_membership_start, end=cutoff,
+                )
+                counts = {**counts, "explicit_historical_membership_repair_days": repaired_days}
         frozen_days = counts["frozen_stock_trading_day_count"]
         gap_fill_days = counts["member_gap_fill_stock_trading_day_count"]
         resolved_days = frozen_days + gap_fill_days
@@ -1031,6 +1059,16 @@ class FrozenMonthlySharedComponentBuilder:
         sector_root = root / "components" / "sector_context_candidate_v1"
         sector_root.mkdir(parents=True, exist_ok=False)
         code_map_path = _write_json(sector_root / "sector_code_map.json", code_map_payload)
+        history_path = None
+        history_ref = physical_authority.get("industry_history_projection_ref")
+        if history_ref is not None:
+            from .monthly_industry_history import IndustryHistoryProjection
+            proof = self.cas.get_json_bounded(history_ref, max_bytes=16 * 1024 * 1024)
+            history = IndustryHistoryProjection.read(proof["projection"])
+            history_path = _write_json(sector_root / "industry_l2_history_authority.json", {
+                **history.payload, "projection_sha256": history.sha256,
+                "factor_projection_receipt_ref": history_ref,
+            })
         quote_path = _write_json(
             sector_root / "sector_quote_availability.json", quote_payload
         )
@@ -1042,6 +1080,26 @@ class FrozenMonthlySharedComponentBuilder:
         else:
             market.to_parquet(market_path, index=False)
             sector_membership.to_parquet(membership_path, index=False)
+        from .monthly_legacy_prefix import _signature
+
+        quote_facts_path = root / QUOTE_FACTS_PATH
+        source_pin = {
+            "sha256": sector_sha, "size": sector_h5.stat().st_size,
+            "signature": list(_signature(sector_h5)),
+        }
+        if native:
+            source_pin = physical_authority["verified_output_files"]["factor_bundle/sector_data.h5"]
+        try:
+            quote_facts = build_sector_quote_facts(
+                source_path=sector_h5, target_path=quote_facts_path,
+                source_pin=source_pin, code_map=code_map, cutoff=cutoff,
+                chunk_rows=self.profile.resource_policy.validation_read_chunk_rows,
+                prefix=prefix,
+                month_range=(physical_authority.get("physical_month_ranges") or {}).get("sector_data"),
+                checkpoint=context.checkpoint, progress=context.progress,
+            )
+        except SectorQuoteFactsError as exc:
+            raise MonthlySharedComponentsError(str(exc)) from exc
         receipt = {
             "schema_version": SECTOR_CONTEXT_RECEIPT_SCHEMA,
             "source_dataset_manifest_sha256": base_manifest_sha,
@@ -1051,6 +1109,11 @@ class FrozenMonthlySharedComponentBuilder:
                 "byte_size": sector_h5.stat().st_size,
                 "used_l2_code_id_count": counts["used_l2_code_id_count"],
                 "used_l2_code_id_count_scope": "month_delta" if native else "release",
+            },
+            "sector_quote_facts": {
+                **quote_facts, "path": quote_facts_path.name,
+                "source_path": sector_h5.relative_to(root).as_posix(),
+                "classification_table_preserved": True,
             },
             "sector_code_map": {
                 "schema_version": RELEASE_SW_L2_CODE_MAP_SCHEMA,
@@ -1107,6 +1170,11 @@ class FrozenMonthlySharedComponentBuilder:
             "database_read": False,
             "database_write": False,
             "runtime_action": False,
+            **({"industry_history": {"path": history_path.name, "sha256": _sha256(history_path),
+                "byte_size": history_path.stat().st_size, "projection_sha256": history.sha256,
+                "sw2014_l2_count": sum(row["taxonomy_version"] == "SW2014" for row in history.payload["entries"]),
+                "sw2021_l2_count": 131, "classification_interval_count": len(history.payload["effective_intervals"]),
+                "knowledge_time_quality": "FIRST_PUBLICATION_UNVERIFIED"}} if history_path is not None else {}),
             **({"monthly_catalog_lineage": sector_mapping_catalog_receipt(
                 classify, members, binding=mapping_binding,
             )} if mapping_binding is not None else {}),
@@ -1151,11 +1219,13 @@ class FrozenMonthlySharedComponentBuilder:
             base_manifest_path,
             code_map_path,
             quote_path,
+            quote_facts_path,
             market_path,
             membership_path,
             receipt_path,
             st_pit_path,
             *consumer_layout.required_files,
+            *((history_path,) if history_path is not None else ()),
         )
         source_rows_read = (
             len(membership_source)
@@ -1177,6 +1247,8 @@ class FrozenMonthlySharedComponentBuilder:
                 "database_fallback": False,
                 "provider_fallback_after_source_seal": False,
                 "no_fabrication": True,
+                **({"industry_history_projection_sha256": history.sha256,
+                    "industry_history_source_authority_sha256": history.payload["authority_sha256"]} if history_path is not None else {}),
             },
             source_rows_read=source_rows_read,
             computed_rows=(
@@ -1185,7 +1257,13 @@ class FrozenMonthlySharedComponentBuilder:
                 + len(sector_membership)
                 + len(market)
             ),
-            verified_output_files=consumer_layout.verified_output_files,
+            verified_output_files={
+                **consumer_layout.verified_output_files,
+                QUOTE_FACTS_PATH: {
+                    "sha256": quote_facts["sha256"], "size": quote_facts["byte_size"],
+                    "signature": list(_signature(quote_facts_path)),
+                },
+            },
         )
 
 
