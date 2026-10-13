@@ -7061,6 +7061,7 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
     if not isinstance(runs, list):
         return None
     current_id = int(run_id)
+    receipt_checks = 0
     for item in runs:
         if not isinstance(item, dict):
             continue
@@ -7071,6 +7072,19 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
             continue
         if str(item.get("conclusion") or "").lower() != "success":
             continue
+        if workflow == ci_failure_summary.NIGHTLY_RESEARCH_WORKFLOW:
+            if receipt_checks >= ci_failure_summary.MAX_NIGHTLY_RECEIPT_CANDIDATES:
+                break
+            receipt_checks += 1
+            eligibility = ci_failure_summary.nightly_success_receipt_eligibility(
+                repo=GITHUB_REPO, run_id=candidate_id, source_head=str(item.get("headSha") or ""),
+                run_provider=lambda args, **kwargs: _run_command(args, cwd=REPO_ROOT, **kwargs),
+                required_job_names=ci_failure_summary.nightly_required_failure_jobs(summary),
+            )
+            if not eligibility["eligible"]:
+                if eligibility["reason"] == "receipt_index_unavailable":
+                    return None  # Do not infer recovery during an external evidence outage.
+                continue
         return {
             "run_id": candidate_id,
             "run_url": item.get("url"),
