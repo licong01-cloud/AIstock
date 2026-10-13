@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1850",
-  "closed_at": null,
+  "closed_at": "2026-10-13T07:47:19.448586Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -21,6 +21,28 @@
   ],
   "created_at": "2026-10-12T17:52:02.804275Z",
   "description": "Fresh per-tick ledgers lose _order_fee_state and charge each subsequent fill independently.",
+  "design_compliance_review": [
+    {
+      "evidence": "Persistent implementation spans production and in-memory repository, scheduler restore, broker and ledger; real monthly SQL readback and direct resume regression pass.",
+      "item": 1,
+      "result": "passed"
+    },
+    {
+      "evidence": "Missing, duplicated or conflicting fee history raises typed errors; no zero-fee fallback.",
+      "item": 2,
+      "result": "passed"
+    },
+    {
+      "evidence": "Existing fee rates, TWAP policy, lot/volume limits and past cash/position records remain unchanged; only restoration of already-approved per-order fee semantics.",
+      "item": 3,
+      "result": "passed"
+    },
+    {
+      "evidence": "Existing workflow and CI plans used; no new approval or runtime service control.",
+      "item": 4,
+      "result": "passed"
+    }
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -37,18 +59,30 @@
   "evidence_uris": [],
   "expected": "Restore cumulative parent-order fee state from exact run fill/cash facts before resumed execution; charge only the incremental cumulative fee without changing cash or replaying fills.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/trading_core/ledger.py",
+    "actual_changed_files": [
+      "backend/services/paper_trading_v2/repository.py",
       "backend/services/simulation_execution/localsim/runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/services/paper_trading_v2/repository.py",
-      "backend/tests/trading_core/test_ledger.py",
+      "backend/services/trading_core/ledger.py",
       "backend/tests/simulation_execution/test_localsim_runtime.py",
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-      "noxfile.py"
+      "backend/tests/trading_core/test_ledger.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1850-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/trading_core/ledger.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/trading_core/test_ledger.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1850-localsim.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/trading_core/ledger.py",
@@ -179,15 +213,42 @@
   },
   "first_seen_at": "2026-10-12T17:52:02.804275Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "de5c2d69cfa06c522ecffcd249de9538add68d4a",
+  "fixed_at": "2026-10-12T18:11:49Z",
   "github_issue_number": 5915,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5915",
   "last_seen_at": "2026-10-12T17:52:02.804275Z",
   "module": "simulation_runtime",
+  "monthly_fee_audit": {
+    "actual_fees_yuan": "495535.44",
+    "all_fills_match_per_fill_formula": true,
+    "buy_floor_fills": 21,
+    "cumulative_parent_model_fees_yuan": "495487.67",
+    "fills": 4237,
+    "fills_triggering_minimum": 22,
+    "history_rewritten": false,
+    "ledger_scope_id": "paper_b26d2312d986441f8497f7484c05f0ec",
+    "minimum_floor_extra_yuan": "47.58",
+    "parent_orders_affected": 20,
+    "parent_orders_requiring_model_minimum": 0,
+    "parent_orders_with_fills": 1364,
+    "per_fill_rounding_difference_yuan": "0.19",
+    "period_end": "2026-10-12",
+    "period_start": "2026-09-14",
+    "rate_model": {
+      "BUY": "0.000095",
+      "SELL": "0.000595",
+      "minimum_yuan": "5"
+    },
+    "sell_fee_note": "SELL is a combined cost rate; this audit does not identify it as pure commission.",
+    "sell_floor_fills": 1,
+    "total_fee_difference_yuan": "47.77",
+    "trading_days": 15
+  },
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5917",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -199,31 +260,99 @@
     "simulation_core_l2",
     "paper_v2_backend"
   ],
+  "review_rounds": [
+    {
+      "change": "Restore parent notional and actual charged fee; reject active filled-order restore without fee history.",
+      "focus": "Exact monthly ledger formula and resumed small-order reproducer",
+      "result": "fixed_then_passed",
+      "round": 1
+    },
+    {
+      "change": "Validate fill/cash identities, money and filled quantity; reject duplicate order identities; include changed ledger tests in existing CI session.",
+      "focus": "Committed history closure, duplicate/missing/conflicting facts, historical charge handling, CI test coverage",
+      "result": "fixed_then_passed",
+      "round": 2
+    },
+    {
+      "evidence": "29 direct cases passed; existing DEV query 96 rows; all monthly production 15 runs / 1368 orders reconstruct without mutation.",
+      "focus": "Direct final invariant matrix and real readonly DB readback",
+      "result": "passed",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh pytest process loaded tracked task-worktree source; final direct invariant matrix 29 passed. Existing DEV readonly SQL query passed with 96 rows. Production readonly history reconstruction passed all 15 runs / 1368 parent orders. No production process control."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1850-close-sync-20261012\\tmp\\issue_workflow\\BUG-1850\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1850",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "de5c2d69cfa06c522ecffcd249de9538add68d4a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T07:45:57.898899Z",
+      "mode": "read_only",
+      "observed_identity": "4ebf1c04658f90f09fbbbecc2d882716f13d00a6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8ecd33287325fafbefbd06af90d6ef9a13f37c66290a149b99d41b7de15b4d0f",
+      "receipt_sha256": "eee93de32875bb1bc8a18046f042c6ba1abe21883eec4df6d5d2e7946b93cd95",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0d30821a6fdc17296f979aee8c42f2fd91feb333d561ef8596969b9a7184b1cc",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
-    "database_readback_ref": "not_required",
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1850",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "141cf2c80908e12f",
+    "recorded_at": "2026-10-12T18:12:39.002534Z",
+    "runtime_contract_digest": "4778f8503704ce6adcfc5d5b771cc372c76ed165797ac47df356da2668039fe5",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1c11a01903eb018e5903bf4c54f785b23b751be4",
+    "source_merge_commit": "de5c2d69cfa06c522ecffcd249de9538add68d4a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5917",
+    "validation_evidence": [
+      "validation-receipt: id=6792b3b5b840f578 commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed; 8 tests and zero catalog findings`",
+      "validation-receipt: id=8e8bb2d56eb46731 commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/trading_core/test_ledger.py backend/tests/simulation_execution/test_localsim_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k 'inmemoryledger or restored or fee_restore or streaming_schedule or realtime_partial_run_resumes or post_close_refreshes_terminal or post_close_terminalizes_localsim or first_causal_bar_wait_projection' -q --tb=short` result=`passed; 29 direct cases`",
+      "validation-receipt: id=980aa745c4e9ea87 commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/trading_core/ledger.py backend/services/simulation_execution/localsim/runtime.py backend/services/simulation_runtime/scheduler.py backend/services/paper_trading_v2/repository.py backend/tests/trading_core/test_ledger.py backend/tests/simulation_execution/test_localsim_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py noxfile.py` result=`passed`",
+      "validation-receipt: id=9f91b7d18cc2d55e commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`",
+      "validation-receipt: id=6b487c84474167ed commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --changed-file noxfile.py --module validation` result=`passed`"
+    ],
+    "validation_evidence_digest": "35f430fd528d02e64ec384ecf3b9f3671fcae32fd1e828dadedd22f6dccc2978"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -232,6 +361,19 @@
     "fingerprint": "78c5ed11078e3166fe277e1d",
     "source_event_id": "FE-20261012-78c5ed11078e"
   },
+  "validation_evidence": [
+    "Before fix: two direct reproductions failed; resumed small parent order charged 15.00 instead of 5.00.",
+    "Final direct invariant matrix: 29 passed, covering restored fees, malformed history, buy/sell, streaming resume, EOD valuation and projection recovery.",
+    "Existing DEV readonly repository query: 96 joined facts; field contract and empty scope passed. No DDL/DML.",
+    "Monthly production readonly reconstruction: all 15 runs and 1368 parent orders passed quantity, identity and fill/cash notional closure. No data mutation.",
+    "Changed-file Ruff and git diff --check passed.",
+    "validation-receipt: id=6792b3b5b840f578 commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed; 8 tests and zero catalog findings`",
+    "validation-receipt: id=8e8bb2d56eb46731 commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/trading_core/test_ledger.py backend/tests/simulation_execution/test_localsim_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k 'inmemoryledger or restored or fee_restore or streaming_schedule or realtime_partial_run_resumes or post_close_refreshes_terminal or post_close_terminalizes_localsim or first_causal_bar_wait_projection' -q --tb=short` result=`passed; 29 direct cases`",
+    "validation-receipt: id=980aa745c4e9ea87 commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/trading_core/ledger.py backend/services/simulation_execution/localsim/runtime.py backend/services/simulation_runtime/scheduler.py backend/services/paper_trading_v2/repository.py backend/tests/trading_core/test_ledger.py backend/tests/simulation_execution/test_localsim_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py noxfile.py` result=`passed`",
+    "validation-receipt: id=9f91b7d18cc2d55e commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`",
+    "validation-receipt: id=6b487c84474167ed commit=1c11a01903eb018e5903bf4c54f785b23b751be4 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --changed-file noxfile.py --module validation` result=`passed`",
+    "2026-10-13 post-restart readback: runtime 4ebf1c04658f90f09fbbbecc2d882716f13d00a6 contains source merge; target-owned scheduler verification scope is all local_sim, healthy thread, zero current-day blockers. Original simrun_bcd56e8b3eae017b and both historical Jan-05 runs simrun_9fbe2525127692a1 / simrun_014f7985c59bd019 are SUCCEEDED. Both original replay accounts are ACTIVE version 3, capital 5000000 each. Four replay-owned bindings are excluded from normal daily scheduling; two stale daily runs were canonically CANCELLED with no execution plan or broker effects and original errors retained. Unscoped platform-diagnostics remains DEGRADED due to these retained CANCELLED audit rows; full replay and live activation are not asserted. Exact evidence: F:/Dev/AIstock/tmp/handoff/localsim_new_accounts_resume_20261013.json and localsim_replay_stale_daily_cleanup_20261013.json."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -347,80 +489,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "monthly_fee_audit": {
-    "period_start": "2026-09-14",
-    "period_end": "2026-10-12",
-    "ledger_scope_id": "paper_b26d2312d986441f8497f7484c05f0ec",
-    "trading_days": 15,
-    "parent_orders_with_fills": 1364,
-    "fills": 4237,
-    "fills_triggering_minimum": 22,
-    "parent_orders_affected": 20,
-    "buy_floor_fills": 21,
-    "sell_floor_fills": 1,
-    "parent_orders_requiring_model_minimum": 0,
-    "actual_fees_yuan": "495535.44",
-    "cumulative_parent_model_fees_yuan": "495487.67",
-    "minimum_floor_extra_yuan": "47.58",
-    "per_fill_rounding_difference_yuan": "0.19",
-    "total_fee_difference_yuan": "47.77",
-    "all_fills_match_per_fill_formula": true,
-    "history_rewritten": false,
-    "rate_model": {
-      "BUY": "0.000095",
-      "SELL": "0.000595",
-      "minimum_yuan": "5"
-    },
-    "sell_fee_note": "SELL is a combined cost rate; this audit does not identify it as pure commission."
-  },
-  "validation_evidence": [
-    "Before fix: two direct reproductions failed; resumed small parent order charged 15.00 instead of 5.00.",
-    "Final direct invariant matrix: 29 passed, covering restored fees, malformed history, buy/sell, streaming resume, EOD valuation and projection recovery.",
-    "Existing DEV readonly repository query: 96 joined facts; field contract and empty scope passed. No DDL/DML.",
-    "Monthly production readonly reconstruction: all 15 runs and 1368 parent orders passed quantity, identity and fill/cash notional closure. No data mutation.",
-    "Changed-file Ruff and git diff --check passed."
-  ],
-  "review_rounds": [
-    {
-      "round": 1,
-      "result": "fixed_then_passed",
-      "focus": "Exact monthly ledger formula and resumed small-order reproducer",
-      "change": "Restore parent notional and actual charged fee; reject active filled-order restore without fee history."
-    },
-    {
-      "round": 2,
-      "result": "fixed_then_passed",
-      "focus": "Committed history closure, duplicate/missing/conflicting facts, historical charge handling, CI test coverage",
-      "change": "Validate fill/cash identities, money and filled quantity; reject duplicate order identities; include changed ledger tests in existing CI session."
-    },
-    {
-      "round": 3,
-      "result": "passed",
-      "focus": "Direct final invariant matrix and real readonly DB readback",
-      "evidence": "29 direct cases passed; existing DEV query 96 rows; all monthly production 15 runs / 1368 orders reconstruct without mutation."
-    }
-  ],
-  "design_compliance_review": [
-    {
-      "item": 1,
-      "result": "passed",
-      "evidence": "Persistent implementation spans production and in-memory repository, scheduler restore, broker and ledger; real monthly SQL readback and direct resume regression pass."
-    },
-    {
-      "item": 2,
-      "result": "passed",
-      "evidence": "Missing, duplicated or conflicting fee history raises typed errors; no zero-fee fallback."
-    },
-    {
-      "item": 3,
-      "result": "passed",
-      "evidence": "Existing fee rates, TWAP policy, lot/volume limits and past cash/position records remain unchanged; only restoration of already-approved per-order fee semantics."
-    },
-    {
-      "item": 4,
-      "result": "passed",
-      "evidence": "Existing workflow and CI plans used; no new approval or runtime service control."
-    }
-  ]
+  }
 }
