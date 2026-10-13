@@ -221,8 +221,8 @@
   },
   "first_seen_at": "2026-10-13T03:46:58.612191Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2f76cde002a1c2e4ca7440a9711602a9356d5691",
+  "fixed_at": "2026-10-13T04:23:59Z",
   "github_issue_number": 5961,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5961",
   "implementation_plan": [
@@ -236,6 +236,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5972",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -284,6 +285,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -306,7 +308,7 @@
   ],
   "scope_expansion_reason": "复用现有原子replay bundle，在同一个已授权新账户中生成冻结的增量历史release/binding/job；工厂需要可选effective_to，增加现有DEV PostgreSQL真实原子性和资金连续性验证。无需DDL，不修改已冻结原任务身份。",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -315,6 +317,13 @@
     "fingerprint": "b5a87865eb900d2c02c83632",
     "source_event_id": "FE-20261013-b5a87865eb90"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d81b2f8e7d29d141 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=0137dcb65187f929 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_replay_live_transition.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py -q -p no:cacheprovider` result=`passed (25 passed)`",
+    "validation-receipt: id=1c88521a4fc167ad commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=nox plan=localsim_successor_core_dev_db status=passed command=`python -m nox -s localsim_successor_core_dev_db` result=`passed (2 passed)`",
+    "validation-receipt: id=7f8a587921e27f38 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=ruff plan=direct status=passed command=`rtk ruff check changed Python files` result=`passed`",
+    "validation-receipt: id=f469661ded04770f commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "validation_results": {
     "direct_contracts": "25 passed",
     "new_existing_dev_atomic_gate": "1 passed; all fixture writes rolled back; no DDL",
