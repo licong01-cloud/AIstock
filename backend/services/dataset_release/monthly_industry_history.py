@@ -379,7 +379,7 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
     if proposed["binding"] != record["binding"] or proposed["binding_digest"] != record["binding_digest"]:
         raise MonthlyBuildResumeError("industry commit cannot replace the original data binding")
     files = value["files"]
-    if set(files) != {"sector_data.h5", "static_factors.parquet", "factor_checkpoint.json"}:
+    if set(files) != {"sector_data.h5", "static_factors.parquet"}:
         raise MonthlyBuildResumeError("industry commit would change an unrelated component")
     changed = {f"factor_bundle/{name}" for name in files}
     if set(proposed["files"]) != set(record["files"]) or any(
@@ -445,7 +445,7 @@ def factor_file_receipts(receipt: Mapping[str, Any]) -> dict[str, Mapping[str, A
 def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
     """Amend factor receipts only; completed day/minute/index remain untouched."""
     import copy
-    from .monthly_build_resume import _atomic, _signature, MonthlyBuildResumeError
+    from .monthly_build_resume import _atomic, MonthlyBuildResumeError
 
     projection = load_frozen_history(cas, context_plan=context.plan, build_inputs=compiled.physical_plan.get("build_inputs", {}))
     if projection is None:
@@ -510,24 +510,10 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
     nested["refs"]["factor_receipt"] = factor_ref.as_dict()
     prepared = {**prepare, "prepare_receipt_ref": cas.put_json(nested).as_dict()}
     prepared_ref = cas.put_json(prepared)
-    scratch = resume.root.parent / f".{resume.root.name}.industry-history-{projection.sha256}"
-    checkpoint_file = scratch / "factor_checkpoint.json"
-    original = resume.root / "factor_bundle" / checkpoint_file.name
-    checkpoint_bytes = canonical_json_bytes(factor) + b"\n"
-    if checkpoint_file.exists():
-        from .monthly_legacy_prefix import _plain_chain
-        _plain_chain(checkpoint_file)
-        if checkpoint_file.read_bytes() != checkpoint_bytes:
-            raise MonthlyBuildResumeError("retained factor checkpoint differs from the verified repair")
-    else:
-        with checkpoint_file.open("xb") as writer:
-            writer.write(checkpoint_bytes)
-            writer.flush()
-            import os
-            os.fsync(writer.fileno())
-    files = {**result["files"], checkpoint_file.name: {
-        "scratch_relative_path": checkpoint_file.relative_to(resume.root.parent).as_posix(),
-        "target_signature": list(_signature(checkpoint_file)), "original_signature": list(_signature(original))}}
+    # Native monthly factors have no physical legacy checkpoint. The amended
+    # CAS receipt and prepare reference are committed with the two file pins
+    # in the durable resume journal below.
+    files = result["files"]
     record = copy.deepcopy(resume.record)
     for name, entry in files.items():
         relative = f"factor_bundle/{name}"

@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_industry_history.py",
     "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
     "tests/aistock_validation/bugs/20261013_BUG-1858-pit-factor-checkpoint.json"
   ],
   "assigned_agent": null,
@@ -109,8 +110,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh AIstock Python read the real September native eight-file receipt, retained journal and verified two-file projection: original signatures and reusable private output signatures match; legacy factor checkpoint absent; no database, candidate or runtime write",
+      "Real H5/Parquet native repair and downstream BUILD proof tests pass with no legacy checkpoint, including interruption after original backup, first repaired publication and durable journal publication"
+    ],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
