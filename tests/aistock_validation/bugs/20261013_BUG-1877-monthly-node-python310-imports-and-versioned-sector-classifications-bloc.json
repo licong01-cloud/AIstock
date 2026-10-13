@@ -39,24 +39,41 @@
   ],
   "expected": "现有Python3.10节点可导入并执行正式只读消费者；统一release包含完整股票分类与独立行业行情事实，两种事实分别绑定真实authority；未来月更继承旧quote facts只追加最新月；保留已导出价格和active profile。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_hmm_consumer_probe.py",
+      "backend/services/dataset_release/monthly_hmm_derive.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_sector_quote_facts.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_hmm_consumer_probe.py",
+      "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
+      "backend/tests/dataset_release/test_monthly_official_adapters.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261013_BUG-1877-monthly-node-python310-imports-and-versioned-sector-classifications-bloc.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_sector_quote_facts.py",
       "backend/tests/dataset_release/test_monthly_sector_quote_facts.py"
     ],
     "changed_files": [
+      "backend/services/dataset_release/monthly_hmm_consumer_probe.py",
+      "backend/services/dataset_release/monthly_hmm_derive.py",
+      "backend/services/dataset_release/monthly_node_probe_runner.py",
+      "backend/services/dataset_release/monthly_sector_quote_facts.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker.py",
-      "backend/services/dataset_release/monthly_shared_components.py",
-      "backend/services/dataset_release/monthly_hmm_derive.py",
-      "backend/services/dataset_release/monthly_hmm_consumer_probe.py",
-      "backend/services/dataset_release/monthly_node_probe_runner.py",
-      "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
       "backend/tests/dataset_release/test_monthly_hmm_consumer_probe.py",
+      "backend/tests/dataset_release/test_monthly_node_probe_runner.py",
       "backend/tests/dataset_release/test_monthly_official_adapters.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261013_BUG-1877-monthly-node-python310-imports-and-versioned-sector-classifications-bloc.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -281,15 +298,34 @@
   },
   "first_seen_at": "2026-10-13T06:05:33.372247Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8c7fb86ea84e205137b9b22fc56e13c60dbe9677",
+  "fixed_at": "2026-10-13T06:51:35Z",
   "github_issue_number": 5992,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5992",
+  "implementation_review": {
+    "active_profile_write": false,
+    "design_compliance_001": {
+      "no_partial_delivery_as_complete": true,
+      "no_silent_or_fake_success": true,
+      "no_unapproved_human_gate": true,
+      "no_unapproved_semantic_drift": true
+    },
+    "historical_classification_preserved": true,
+    "monthly_validation_scope": "month_delta",
+    "production_database_write": false,
+    "production_dataset_write": false,
+    "round_1": "Root cause and source contracts: Python 3.10 UTC compatibility; authentic SW2014 classifications preserved, independent shared SW2021 quote facts projected with official shared IDs and unchanged formal reader. RED import/fixture to GREEN.",
+    "round_2": "Release closure and incrementality: manifest pins include facts and component receipt; inherited facts and map pins verified; subsequent month reads only physical tail; finite contradictions/unknown IDs/source mutation/cancellation remain failures. Found and corrected generated manifest-name lookup and Windows read-only fsync issue.",
+    "round_3": "Cross-process and side effects: actual Python3.10 import/HDF/POSIX retry PASS; formal unchanged loader regression PASS; no HMM/QE model edits, no day/minute re-export, no production DB/profile/process actions; runtime remains pending user restart.",
+    "runtime_action": false,
+    "test_layout": "Projection regressions consolidated in existing test_monthly_shared_components.py so the existing qlib_data CI lane executes them; no skipped new test file or extra CI ownership lane."
+  },
   "last_seen_at": "2026-10-13T06:05:33.372247Z",
   "module": "qlib_data",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6000",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -313,7 +349,9 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -323,25 +361,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "implementation_review": {
-    "round_1": "Root cause and source contracts: Python 3.10 UTC compatibility; authentic SW2014 classifications preserved, independent shared SW2021 quote facts projected with official shared IDs and unchanged formal reader. RED import/fixture to GREEN.",
-    "round_2": "Release closure and incrementality: manifest pins include facts and component receipt; inherited facts and map pins verified; subsequent month reads only physical tail; finite contradictions/unknown IDs/source mutation/cancellation remain failures. Found and corrected generated manifest-name lookup and Windows read-only fsync issue.",
-    "round_3": "Cross-process and side effects: actual Python3.10 import/HDF/POSIX retry PASS; formal unchanged loader regression PASS; no HMM/QE model edits, no day/minute re-export, no production DB/profile/process actions; runtime remains pending user restart.",
-    "design_compliance_001": {
-      "no_partial_delivery_as_complete": true,
-      "no_silent_or_fake_success": true,
-      "no_unapproved_semantic_drift": true,
-      "no_unapproved_human_gate": true
+  "source_merge_receipt": {
+    "bug_id": "BUG-1877",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
     },
-    "test_layout": "Projection regressions consolidated in existing test_monthly_shared_components.py so the existing qlib_data CI lane executes them; no skipped new test file or extra CI ownership lane.",
-    "historical_classification_preserved": true,
-    "monthly_validation_scope": "month_delta",
-    "production_database_write": false,
-    "active_profile_write": false,
-    "production_dataset_write": false,
-    "runtime_action": false
+    "receipt_id": "336ae9f41754925b",
+    "recorded_at": "2026-10-13T06:53:17.160891Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6367635312c34324f3142e15c786dea77cd0d8ab",
+    "source_merge_commit": "8c7fb86ea84e205137b9b22fc56e13c60dbe9677",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6000",
+    "validation_evidence": [
+      "python -m nox -s l0 guardrail_changed_files -- --changed-only -> passed"
+    ],
+    "validation_evidence_digest": "53dc23516bb60c133e0e0ea1b96a23a880f1178e290919dc00b2f89478a6ca38"
   },
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -350,6 +391,9 @@
     "fingerprint": "8e012d9b507752f4bea39724",
     "source_event_id": "FE-20261013-8e012d9b5077"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 guardrail_changed_files -- --changed-only -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
