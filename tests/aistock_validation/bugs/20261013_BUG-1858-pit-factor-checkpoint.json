@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-13T02:40:43.018631Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e52581e3e9945170da91e8e3e2744cd4129b11b6",
+  "fixed_at": "2026-10-13T02:56:25Z",
   "github_issue_number": 5939,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5939",
   "last_seen_at": "2026-10-13T02:40:43.018631Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5942",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,6 +130,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -140,7 +142,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1858",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "274115e917153771",
+    "recorded_at": "2026-10-13T02:57:21.645335Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "95e38cb16ed6ac6f3da44dba9a57231068be2177",
+    "source_merge_commit": "e52581e3e9945170da91e8e3e2744cd4129b11b6",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5942",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_build_stage.py -q -> 60 passed, 1 unrelated skip; source unchanged after metadata-only commit",
+      "python -m nox -s l0 -- --changed-only -> passed, 0 blocking; source unchanged after metadata-only commit",
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed, 4 mapped files, 0 blocking; source unchanged after metadata-only commit",
+      "python -m ruff check backend/services/dataset_release/monthly_industry_history.py backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_build_resume.py -> passed; source unchanged after metadata-only commit"
+    ],
+    "validation_evidence_digest": "fde21fddd51f9fff11183f3928fe06acb96458205e63204d6a54c862aa96959b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -149,6 +175,12 @@
     "fingerprint": "c4c3ea4710795862f4f16910",
     "source_event_id": "FE-20261013-c4c3ea471079"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_build_stage.py -q -> 60 passed, 1 unrelated skip; source unchanged after metadata-only commit",
+    "python -m nox -s l0 -- --changed-only -> passed, 0 blocking; source unchanged after metadata-only commit",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed, 4 mapped files, 0 blocking; source unchanged after metadata-only commit",
+    "python -m ruff check backend/services/dataset_release/monthly_industry_history.py backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_build_resume.py -> passed; source unchanged after metadata-only commit"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
