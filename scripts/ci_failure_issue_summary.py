@@ -554,6 +554,7 @@ NIGHTLY_EXECUTION_STEPS = {
     "DR snapshot prod DB": "Run dr_snapshot_prod_db.py",
     "DR validation (dump validity + schema diff + retention)": "nox -s dr_validate",
     "Paper v2 live catch-up (skip realtime by default)": "nox -s paper_v2_live",
+    "Code intelligence daily graph refresh and summary": "Reconcile CodeGraph and Understand Anything",
 }
 
 
@@ -563,6 +564,7 @@ def nightly_required_failure_jobs(summary: dict[str, Any]) -> list[str]:
              "nightly_l3": "Nightly L3 (paper_v2 + qe_archive + qe_read)",
              "dr_snapshot": "DR snapshot prod DB",
              "dr_validate": "DR validation (dump validity + schema diff + retention)",
+             "code_intelligence": "Code intelligence daily graph refresh and summary",
              "paper_v2_live": "Paper v2 live catch-up (skip realtime by default)"}
     statuses = summary.get("nightly_statuses")
     if isinstance(statuses, dict) and statuses:
