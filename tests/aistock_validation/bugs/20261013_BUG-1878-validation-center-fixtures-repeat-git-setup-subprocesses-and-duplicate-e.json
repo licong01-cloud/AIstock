@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1878",
-  "closed_at": null,
+  "closed_at": "2026-10-13T06:24:30Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -26,13 +26,13 @@
   "expected": "Use fewer Git setup subprocesses and one parameterized plan fixture without dropping runtime/identity/failure tests or modifying validation production semantics.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261013_BUG-1878-validation-center-fixtures-repeat-git-setup-subprocesses-and-duplicate-e.json",
-      "backend/tests/test_validation_execution_runner.py"
+      "backend/tests/test_validation_execution_runner.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1878-validation-center-fixtures-repeat-git-setup-subprocesses-and-duplicate-e.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261013_BUG-1878-validation-center-fixtures-repeat-git-setup-subprocesses-and-duplicate-e.json",
-      "backend/tests/test_validation_execution_runner.py"
+      "backend/tests/test_validation_execution_runner.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1878-validation-center-fixtures-repeat-git-setup-subprocesses-and-duplicate-e.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -80,8 +80,8 @@
   },
   "first_seen_at": "2026-10-13T06:13:03.237458Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "36dddfb1875ee1126071275b1c054294a590f214",
+  "fixed_at": "2026-10-13T06:24:30Z",
   "github_issue_number": 5993,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5993",
   "last_seen_at": "2026-10-13T06:13:03.237458Z",
@@ -89,6 +89,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5994",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -106,6 +107,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -115,7 +117,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1878",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2b9c8dfb6680b3d9",
+    "recorded_at": "2026-10-13T06:25:14.917917Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3daa6c756b8e88ca6e267f47c21425aea63aedd7",
+    "source_merge_commit": "36dddfb1875ee1126071275b1c054294a590f214",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5994",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/tests/test_validation_execution_runner.py -> passed, blocking=0"
+    ],
+    "validation_evidence_digest": "905d7cec2f0c2ec52d8d0b060c68cbcb6176b41ec3a090aae5d3586f7c798820"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -124,6 +147,9 @@
     "fingerprint": "937a1742f95fecc32763b405",
     "source_event_id": "FE-20261013-937a1742f95f"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/tests/test_validation_execution_runner.py -> passed, blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
