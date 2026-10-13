@@ -2051,7 +2051,11 @@ def test_codeql_runs_one_daily_nightly_full_scan() -> None:
     assert not any("uses" in step for step in verdict_steps)
 
     direct_analysis = next(step for step in verdict_steps if step.get("name") == "Run CodeQL CLI analysis")
-    assert "if" not in direct_analysis
+    # The approved scheduled window is the only scan eligibility guard; it
+    # must never become a changed-file, language or PR-risk filter.
+    admitted = "steps.background_window.outputs.background_admitted == 'true'"
+    assert direct_analysis["if"] == admitted
+    assert any(step.get("id") == "background_window" for step in verdict_steps)
     assert direct_analysis["env"]["CODEQL_LANGUAGES"] == '["python","javascript-typescript"]'
     assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
     direct_run = direct_analysis["run"]
@@ -2068,7 +2072,7 @@ def test_codeql_runs_one_daily_nightly_full_scan() -> None:
     assert len(verdict["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
 
     final_verdict = next(step for step in verdict_steps if step.get("name") == "Enforce CodeQL result")
-    assert final_verdict["if"] == "always()"
+    assert final_verdict["if"] == f"always() && {admitted}"
     assert final_verdict["env"]["ANALYZE_RESULT"] == "${{ steps.codeql_analysis.outcome }}"
     assert "CodeQL analysis failed" in final_verdict["run"]
 
