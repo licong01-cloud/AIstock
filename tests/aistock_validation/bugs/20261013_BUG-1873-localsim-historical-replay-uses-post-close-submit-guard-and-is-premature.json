@@ -19,6 +19,28 @@
   ],
   "created_at": "2026-10-13T05:04:06.305247Z",
   "description": "Both cursors remain January 5 FAILED_TERMINAL; current-day selection starts before replay completion.",
+  "design_compliance_001_review": [
+    {
+      "conclusion": "PASS",
+      "evidence": "Real LocalSimBackend historical executor and economic projection exercised, no mock-only completion claim; production full replay remains pending",
+      "item": 1
+    },
+    {
+      "conclusion": "PASS",
+      "evidence": "Pending selection/execution/projection blocks cursor; unrelated/cancelled failure cannot auto-recover; semantic production smoke remains BLOCKED and pending metadata PR remains open",
+      "item": 2
+    },
+    {
+      "conclusion": "PASS",
+      "evidence": "No account reset, frozen model/profile and real fees unchanged; partial market residual remains original terminal evidence but historical day can complete",
+      "item": 3
+    },
+    {
+      "conclusion": "PASS",
+      "evidence": "No extra user approval gate; existing PRE_OPEN activation and user-owned backend restart retained",
+      "item": 4
+    }
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -32,16 +54,26 @@
   ],
   "expected": "Both 5m native accounts advance historical replay then activate at validated PRE_OPEN only.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/lifecycle.py",
+      "backend/services/simulation_runtime/localsim_replay.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1873-localsim-historical-replay-uses-post-close-submit-guard-and-is-premature.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/simulation_runtime/lifecycle.py",
-      "backend/services/simulation_runtime/scheduler.py",
-      "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/localsim_replay.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "tests/aistock_validation/bugs/20261013_BUG-1873-localsim-historical-replay-uses-post-close-submit-guard-and-is-premature.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/lifecycle.py",
@@ -174,26 +206,50 @@
     "l0",
     "simulation_core_l2"
   ],
+  "review_rounds": [
+    {
+      "evidence": "real historical executor regression + current-day LocalSIM/MiniQMT guard tests passed",
+      "finding": "Historical 15:30 cursor hit live window guard",
+      "repair": "Only past closed native binding with actual DB_HISTORICAL LocalSim broker is admitted; current-day, realtime and MiniQMT guards retained",
+      "round": 1
+    },
+    {
+      "evidence": "full normal scheduler call creates no rolled binding, generates no selection and preserves completed replay residual",
+      "finding": "Expired replay binding and its premature descendants entered normal scheduler and stale-run sweeps",
+      "repair": "Query account replay authority; permit dedicated historical binding or atomically activated live lineage only; isolate stale active/failed/post-close sweeps",
+      "round": 2
+    },
+    {
+      "evidence": "39 direct related tests passed in final matrix; original accounts retained",
+      "finding": "Error-free pending day could advance cursor; paused account could recover while suspended",
+      "repair": "Advance only durable terminal day, include projected market residual; pause waits; exact window failures recover original cursor after source/calendar verification",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh pytest subprocess imports tracked fix; direct historical executor runs real LocalSimBackend and projects native day with frozen DB data. Full replay/live runtime verification remains pending user restart after new source merge."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -313,47 +369,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "review_rounds": [
-    {
-      "round": 1,
-      "finding": "Historical 15:30 cursor hit live window guard",
-      "repair": "Only past closed native binding with actual DB_HISTORICAL LocalSim broker is admitted; current-day, realtime and MiniQMT guards retained",
-      "evidence": "real historical executor regression + current-day LocalSIM/MiniQMT guard tests passed"
-    },
-    {
-      "round": 2,
-      "finding": "Expired replay binding and its premature descendants entered normal scheduler and stale-run sweeps",
-      "repair": "Query account replay authority; permit dedicated historical binding or atomically activated live lineage only; isolate stale active/failed/post-close sweeps",
-      "evidence": "full normal scheduler call creates no rolled binding, generates no selection and preserves completed replay residual"
-    },
-    {
-      "round": 3,
-      "finding": "Error-free pending day could advance cursor; paused account could recover while suspended",
-      "repair": "Advance only durable terminal day, include projected market residual; pause waits; exact window failures recover original cursor after source/calendar verification",
-      "evidence": "39 direct related tests passed in final matrix; original accounts retained"
-    }
-  ],
-  "design_compliance_001_review": [
-    {
-      "item": 1,
-      "conclusion": "PASS",
-      "evidence": "Real LocalSimBackend historical executor and economic projection exercised, no mock-only completion claim; production full replay remains pending"
-    },
-    {
-      "item": 2,
-      "conclusion": "PASS",
-      "evidence": "Pending selection/execution/projection blocks cursor; unrelated/cancelled failure cannot auto-recover; semantic production smoke remains BLOCKED and pending metadata PR remains open"
-    },
-    {
-      "item": 3,
-      "conclusion": "PASS",
-      "evidence": "No account reset, frozen model/profile and real fees unchanged; partial market residual remains original terminal evidence but historical day can complete"
-    },
-    {
-      "item": 4,
-      "conclusion": "PASS",
-      "evidence": "No extra user approval gate; existing PRE_OPEN activation and user-owned backend restart retained"
-    }
-  ]
+  }
 }
