@@ -122,6 +122,151 @@ def _economic_scope_sha256(dsn: dict[str, Any], ledger_scope_id: str) -> str:
     return canonical_json_sha256(counts)
 
 
+def test_catchup_successor_on_existing_dev_db_is_atomic_idempotent_and_keeps_native_account() -> None:
+    """Use only the existing DEV schema, and roll back every fixture and attempted mutation."""
+    dsn = _dev_dsn()
+    package_id, manifest_sha256 = _package_identity(dsn)
+    conn = psycopg2.connect(**dsn)
+    marker = uuid4().hex
+    now = datetime(2026, 10, 13, 0, 30, tzinfo=UTC)
+
+    @contextmanager
+    def factory():
+        savepoint = "catchup_" + uuid4().hex
+        with conn.cursor() as cur:
+            cur.execute(f"SAVEPOINT {savepoint}")
+        try:
+            yield conn
+        except Exception:
+            with conn.cursor() as cur:
+                cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            raise
+        finally:
+            with conn.cursor() as cur:
+                cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+
+    class BrokenRepository(LocalSimSuccessorRepository):
+        @staticmethod
+        def _insert_replay(_cur, _job):
+            raise RuntimeError("injected SQL catchup job insert failure")
+
+    account_id = None
+    try:
+        repository = LocalSimSuccessorRepository(conn_factory=factory)
+        service = LocalSimControlPlaneService(repository=repository, clock=lambda: now)
+        profiles = LocalSimRuntimeProfileService(
+            repository=LocalSimRuntimeProfileRepository(conn_factory=factory),
+            authority=_RuntimeProfileAuthority(), clock=lambda: now,
+        )
+        profile = profiles.create_profile(
+            package_id=package_id, manifest_sha256=manifest_sha256,
+            profile_name=f"test_int_catchup_{marker}", created_by=marker,
+        )
+        profile, version = profiles.create_version(
+            profile_id=profile.profile_id, expected_profile_version=profile.version,
+            config_json={
+                "schema_version": "localsim_runtime_profile_config_request_v1",
+                "daily_strategy": {"strategy_id": "test_int_daily_strategy", "strategy_version": "v1", "top_k": 50},
+                "hmm": {"enabled": False}, "risk_policy": {"enabled": False}, "fee_policy": {},
+            }, created_by=marker,
+        )
+        policy = local_sim_twap_only_policy_snapshot()
+        product = {
+            "runtime_profile_id": profile.profile_id, "runtime_profile_version_id": version.profile_version_id,
+            "runtime_profile_sha256": version.config_sha256,
+            "daily_strategy_profile_version_id": version.daily_strategy_profile_version_id,
+            "execution_policy_version_id": policy["policy_version_id"],
+            "execution_policy_sha256": policy["policy_sha256"], "execution_policy_json": policy["policy_json"],
+            "tail_policy_version_id": "tail_catchup_test", "tail_policy_sha256": "d" * 64,
+        }
+        days = (date(2026, 1, 5), date(2026, 1, 6))
+        account, scope, release, binding = service.create_account(
+            account_name=f"test_int_catchup_{marker}", package_id=package_id,
+            manifest_sha256=manifest_sha256, admission_receipt_id=marker, initial_capital=5_000_000,
+            effective_from=days[0], effective_to=days[-1], created_by=marker, **product,
+        )
+        account_id = account.account_id
+        coordinator = LocalSimReplayCoordinator(
+            repository=repository, clock=lambda: now,
+            historical_day_runner=LocalSimHistoricalDayRunner(
+                historical_source_id="market.kline_minute_raw.v1", historical_source_sha256="c" * 64,
+                run_day=lambda *_args: None,
+            ),
+        )
+        root = coordinator.create_job(
+            simulation_account_id=account_id, release_id=release.release_id, binding_id=binding.binding_id,
+            start_trade_date=days[0], end_trade_date=days[-1], trading_days=days,
+            historical_source_id="market.kline_minute_raw.v1", historical_source_sha256="c" * 64,
+            created_by=marker,
+        )
+        parent = coordinator.run_next_batch(
+            replay_job_id=root.replay_job_id, expected_version=root.version,
+            trading_days=days, current_trading_date=date(2026, 10, 13), max_days=2,
+        )
+
+        def build(end):
+            _, _, new_release, new_binding = service.build_successor_release_bundle(
+                account_id=account_id, base_release_id=release.release_id, base_binding_id=binding.binding_id,
+                effective_from=date(2026, 1, 7), effective_to=end, created_by=marker,
+                release_metadata={"localsim_replay_predecessor_id": root.replay_job_id}, **product,
+            )
+            new_days = (date(2026, 1, 7),) if end == date(2026, 1, 7) else (date(2026, 1, 7), end)
+            child = coordinator.build_job(
+                account=account, release=new_release, binding=new_binding,
+                start_trade_date=new_days[0], end_trade_date=new_days[-1], trading_days=new_days,
+                historical_source_id=root.historical_source_id, historical_source_sha256=root.historical_source_sha256,
+                created_by=marker,
+            )
+            return new_release, new_binding, child
+
+        child_release, child_binding, child = build(date(2026, 1, 7))
+        kwargs = {
+            "replay_job_id": root.replay_job_id, "expected_version": parent.version,
+            "release": child_release, "binding": child_binding, "successor_job": child, "updated_at": now,
+        }
+        with pytest.raises(RuntimeError, match="injected SQL"):
+            BrokenRepository(conn_factory=factory).create_replay_catchup_successor(**kwargs)
+        assert repository.get_replay_job(root.replay_job_id).version == parent.version
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM strategy_pkg.strategy_runtime_release WHERE release_id = %s",
+                        (child_release.release_id,))
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT count(*) FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
+                        (child_binding.binding_id,))
+            assert cur.fetchone()[0] == 0
+        persisted = repository.create_replay_catchup_successor(**kwargs)
+        assert repository.create_replay_catchup_successor(**kwargs).replay_job_id == persisted.replay_job_id
+        alternate_release, alternate_binding, alternate = build(date(2026, 1, 8))
+        same = repository.create_replay_catchup_successor(
+            **{**kwargs, "expected_version": repository.get_replay_job(root.replay_job_id).version,
+               "release": alternate_release, "binding": alternate_binding, "successor_job": alternate},
+        )
+        assert same.replay_job_id == persisted.replay_job_id
+        assert repository.get_account(account_id).model_dump() == account.model_dump()
+        assert repository.get_ledger_scope(account_id).model_dump() == scope.model_dump()
+        assert float(repository.get_account(account_id).initial_capital) == 5_000_000
+        retained = repository.get_replay_job(root.replay_job_id)
+        assert retained.replay_hash == root.replay_hash and retained.end_trade_date == root.end_trade_date
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM paper_v2.localsim_replay_job_v1 WHERE simulation_account_id = %s",
+                        (account_id,))
+            assert cur.fetchone()[0] == 2
+            cur.execute("SELECT count(*) FROM paper_v2.simulation_release_binding WHERE binding_id = %s",
+                        (alternate_binding.binding_id,))
+            assert cur.fetchone()[0] == 0
+            cur.execute("SELECT count(*) FROM paper_v2.localsim_replay_job_v1 WHERE replay_job_id = %s",
+                        (alternate.replay_job_id,))
+            assert cur.fetchone()[0] == 0
+        assert repository.get_release(child_release.release_id).effective_to == date(2026, 1, 7)
+    finally:
+        conn.rollback()
+        conn.close()
+    with psycopg2.connect(**dsn) as check:
+        with check.cursor() as cur:
+            cur.execute("SELECT count(*) FROM paper_v2.simulation_account_v1 WHERE account_id = %s", (account_id,))
+            assert cur.fetchone()[0] == 0
+
+
 def _legacy_binding(
     binding: SimulationReleaseBinding,
     *,

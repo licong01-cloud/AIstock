@@ -21,6 +21,8 @@ non_runtime_source_paths:
   - backend/services/announcements/title_classifier.py
   - backend/services/dataset_release/direct_monthly.py
   - backend/services/dataset_release/daily_basic_history_repair.py
+  # Explicit offline receipt adoption; API/worker do not import this CLI helper.
+  - backend/services/dataset_release/monthly_legacy_adoption.py
   # CLI-only canonical PIT evidence/preparation: no server/worker entrypoint.
   - backend/services/dataset_release/canonical_pit_candidate_bundle.py
   - backend/services/dataset_release/canonical_pit_w8_attestation.py
@@ -124,9 +126,17 @@ targets:
       - backend/services/dataset_release/api_models.py
       - backend/services/dataset_release/monthly_repair_journal.py
       - backend/services/dataset_release/monthly_postgres_source.py
+      - backend/services/dataset_release/monthly_industry_history.py
       - backend/services/dataset_release/monthly_*.py
       - backend/services/dataset_release/monthly_unified.py
+      - backend/services/dataset_release/monthly_worker.py
+      - backend/services/dataset_release/monthly_shared_components.py
+      - backend/services/dataset_release/monthly_sector_quote_facts.py
+      - backend/services/dataset_release/monthly_hmm_derive.py
+      - backend/services/dataset_release/monthly_hmm_consumer_probe.py
+      - backend/services/dataset_release/monthly_node_probe_runner.py
       - backend/services/dataset_release/monthly_supervised_build.py
+      - backend/services/dataset_release/monthly_mature_build_runner.py
       - backend/services/dataset_release/monthly_frozen_source_audit.py
       - backend/services/dataset_release/candidate_consumer_smoke.py
       - backend/services/dataset_release/qlib_bounded_update.py
@@ -182,13 +192,23 @@ targets:
     probe_routes:
       - route_id: monthly_release_worker_process
         source_globs:
+          - backend/services/dataset_release/wsl_resource_guardian.py
+          - backend/services/dataset_release/resource_supervisor.py
+          - backend/services/dataset_release/monthly_industry_history.py
           - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_postgres_source.py
           - backend/routers/monthly_dataset_releases.py
           - backend/services/dataset_release/api_models.py
           - backend/services/dataset_release/monthly_*.py
           - backend/services/dataset_release/monthly_unified.py
+          - backend/services/dataset_release/monthly_worker.py
+          - backend/services/dataset_release/monthly_shared_components.py
+          - backend/services/dataset_release/monthly_sector_quote_facts.py
+          - backend/services/dataset_release/monthly_hmm_derive.py
+          - backend/services/dataset_release/monthly_hmm_consumer_probe.py
+          - backend/services/dataset_release/monthly_node_probe_runner.py
           - backend/services/dataset_release/monthly_supervised_build.py
+          - backend/services/dataset_release/monthly_mature_build_runner.py
           - scripts/dataset_release_candidate_consumer_smoke.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
           - backend/services/dataset_release/monthly_construction_facts.py
@@ -208,8 +228,18 @@ targets:
           - backend/services/dataset_release/monthly_worker_runtime.py
         required_source_globs:
           # This shared reader is loaded by the current supervised monthly worker.
+          - backend/services/dataset_release/wsl_resource_guardian.py
+          - backend/services/dataset_release/resource_supervisor.py
+          - backend/services/dataset_release/monthly_industry_history.py
+          - backend/services/dataset_release/monthly_mature_build_runner.py
           - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/monthly_unified.py
+          - backend/services/dataset_release/monthly_worker.py
+          - backend/services/dataset_release/monthly_shared_components.py
+          - backend/services/dataset_release/monthly_sector_quote_facts.py
+          - backend/services/dataset_release/monthly_hmm_derive.py
+          - backend/services/dataset_release/monthly_hmm_consumer_probe.py
+          - backend/services/dataset_release/monthly_node_probe_runner.py
           - backend/services/dataset_release/monthly_supervised_build.py
           - scripts/dataset_release_candidate_consumer_smoke.py
           - backend/services/dataset_release/monthly_repair_journal.py
@@ -250,7 +280,6 @@ targets:
           - backend/services/dataset_release/resolution_processor.py
           - backend/services/dataset_release/resource_budget.py
           - backend/services/dataset_release/resource_gate.py
-          - backend/services/dataset_release/resource_supervisor.py
           - backend/services/dataset_release/sector_data_candidate_source.py
           - backend/services/dataset_release/source_pool.py
           - backend/services/dataset_release/component_artifact_manifest.py
@@ -260,7 +289,6 @@ targets:
           - backend/services/dataset_release/worker.py
           - backend/services/dataset_release/windows_job.py
           - backend/services/dataset_release/wsl_cgroup.py
-          - backend/services/dataset_release/wsl_resource_guardian.py
           - scripts/dataset_release_worker.py
           - scripts/dataset_release_source_stage.py
           - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml

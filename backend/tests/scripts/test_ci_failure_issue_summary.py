@@ -581,7 +581,6 @@ def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> Non
 
 def test_nightly_cli_writes_issue_payload_manifest_for_heterogeneous_groups(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     validation_root = tmp_path / "tmp" / "validation"
     status_path = validation_root / "nightly_failure_issue" / "status.json"
@@ -618,7 +617,6 @@ def test_nightly_cli_writes_issue_payload_manifest_for_heterogeneous_groups(
         ]
     ) == 0
 
-    capsys.readouterr()
     issue_document = json.loads(issue_payload_path.read_text(encoding="utf-8"))
     assert issue_document["schema_version"] == "aistock_ci_failure_github_issue_payload_manifest_v1"
     assert issue_document["payload_count"] == 2
@@ -1076,6 +1074,29 @@ def test_locate_last_green_run_finds_previous_success() -> None:
     assert locator["blocking_for_issue_workflow"] is False
     assert locator["commit_range"] == "1234567890ab..abcdef123456"
     assert locator["previous_success_run"]["run_id"] == "198"
+
+
+@pytest.mark.parametrize("fault", ["valid", "missing", "expired", "head", "id", "empty", "transport", "job_transport", "skipped", "unknown"])
+def test_nightly_green_requires_exact_durable_l3_receipt(fault):
+    artifact = dict(name="nightly-l3-results-198", expired=fault == "expired", size_in_bytes=0 if fault == "empty" else 1,
+                    workflow_run=dict(id=199 if fault == "id" else 198, head_sha=("b" if fault == "head" else "a") * 40))
+    def provider(args, **kwargs):
+        if "/jobs?" in args[-1]:
+            return dict(ok=fault != "job_transport", stdout=json.dumps({"jobs": [
+                dict(name=name, conclusion="success", steps=[dict(name=step, conclusion="skipped" if fault == "skipped" else "success")])
+                for name, step in summary.NIGHTLY_EXECUTION_STEPS.items()]}))
+        return dict(ok=fault != "transport", stdout=json.dumps(
+            {"artifacts": [] if fault == "missing" else [artifact]}), stderr="")
+    required_jobs = summary.nightly_required_failure_jobs(dict(
+        nightly_statuses=dict(nightly_l3="success", paper_v2_live="failure"),
+        failed_jobs=[dict(job_name="AIstock Nightly status")]))
+    assert required_jobs == ["Paper v2 live catch-up (skip realtime by default)"]
+    if fault == "unknown":
+        required_jobs.append("unregistered job")
+    receipt = summary.nightly_success_receipt_eligibility(
+        repo="owner/repo", run_id="198", source_head="a" * 40, run_provider=provider,
+        required_job_names=required_jobs)
+    assert receipt["eligible"] is (fault == "valid")
 
 
 def test_locate_last_green_run_transport_failure_uses_rest() -> None:

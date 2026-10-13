@@ -808,6 +808,13 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
             state=first_state,
         )
     assert order_state_exc.value.context["reason_code"] == "LOCALSIM_RESTORE_ORDER_STATE_CONFLICT"
+    with pytest.raises(BrokerSubmitError) as fee_history_exc:
+        wrong_order_backend.restore_execution_state(order=first_order, state=first_state)
+    assert fee_history_exc.value.context["reason_code"] == "LOCALSIM_RESTORE_ORDER_FEE_HISTORY_MISSING"
+    fee_history = {
+        "cumulative_notional": sum((entry.notional for entry in first_snapshot["cash_entries"]), Decimal(0)),
+        "charged_fee": sum((entry.fee for entry in first_snapshot["cash_entries"]), Decimal(0)),
+    }
 
     conflicting_bars = list(historical.minute_bars)
     conflicting_bars[1] = conflicting_bars[1].model_copy(update={"close": conflicting_bars[1].close + 0.5})
@@ -823,7 +830,7 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
     )
     conflict_backend.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
     conflict_backend.bind_execution_plan(plan=plan, as_of_time=cursor + timedelta(minutes=3))
-    conflict_backend.restore_execution_state(order=first_order, state=first_state)
+    conflict_backend.restore_execution_state(order=first_order, state=first_state, **fee_history)
     conflict_handles = conflict_backend.advance_realtime_execution(as_of_time=cursor + timedelta(minutes=3))
     conflict_snapshot = conflict_backend.export_execution_snapshot(handles=conflict_handles)
     conflict_state = conflict_snapshot["execution_states"][0]
@@ -844,7 +851,7 @@ def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplic
     )
     second.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
     second.bind_execution_plan(plan=plan, as_of_time=second_as_of)
-    restored_handle = second.restore_execution_state(order=first_order, state=first_state)
+    restored_handle = second.restore_execution_state(order=first_order, state=first_state, **fee_history)
     second.advance_realtime_execution(as_of_time=second_as_of)
     second_snapshot = second.export_execution_snapshot(handles=[restored_handle])
     second_state = second_snapshot["execution_states"][0]

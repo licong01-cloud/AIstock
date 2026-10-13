@@ -3407,6 +3407,7 @@ _validate_collection_payload = _runtime_semantics._validate_collection_payload
 _validate_tdx_raw_kline = _runtime_semantics._validate_tdx_raw_kline
 _validate_object_liveness = _runtime_semantics._validate_object_liveness
 _validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_entry_price_status
+_validate_advisory_returns = _runtime_semantics._validate_advisory_returns
 _validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
 _validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
 _validate_hmm_workers = _runtime_semantics._validate_hmm_workers
@@ -3449,6 +3450,8 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
     (re.compile(r"^/api/v1/advisory/programs/[^/]+/sector-entry-price$"),
      "advisory_sector_entry_original_list", _validate_advisory_sector_entry_original_list),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/returns$"),
+     "advisory_returns_metrics_v2", _validate_advisory_returns),
     (
         re.compile(r"^/api/v1/advisory/programs/[^/]+/entry-price/status$"),
         "advisory_entry_price_status",
@@ -3597,6 +3600,7 @@ def _evaluate_business_smoke_semantics(
         "hmm_rotation_l2_overview",
         "advisory_entry_price_status",
         "advisory_sector_entry_original_list",
+        "advisory_returns_metrics_v2",
         "local_data_freshness",
         "monthly_release_ready",
     }:
@@ -3982,7 +3986,7 @@ def _git_fetch_with_transport_retry(
     attempts: int = 2,
     timeout: int = 60,
 ) -> str:
-    """Retry only transport-class failures for an idempotent git fetch."""
+    """Bound transport/remote-ref CAS retries to this idempotent fetch only."""
 
     total = max(1, int(attempts))
     for index in range(total):
@@ -3990,7 +3994,12 @@ def _git_fetch_with_transport_retry(
         if result.get("ok"):
             return str(result.get("stdout") or "").strip()
         message = str(result.get("stderr") or result.get("stdout") or "git fetch failed")
-        if not _looks_like_github_transport_failure(message) or index + 1 >= total:
+        ref_race = re.search(
+            r"(?:fetching ref|cannot lock ref) ['\"]?refs/remotes/[^'\"\s:]+['\"]?(?: failed)?: "
+            r"(?:incorrect old value provided|is at [0-9a-f]+ but expected [0-9a-f]+)",
+            message,
+        ) is not None
+        if not (ref_race or _looks_like_github_transport_failure(message)) or index + 1 >= total:
             raise WorkflowError(message)
         time.sleep(0.5 * (index + 1))
     raise AssertionError("unreachable git fetch retry state")
@@ -7057,6 +7066,7 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
     if not isinstance(runs, list):
         return None
     current_id = int(run_id)
+    receipt_checks = 0
     for item in runs:
         if not isinstance(item, dict):
             continue
@@ -7067,6 +7077,19 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
             continue
         if str(item.get("conclusion") or "").lower() != "success":
             continue
+        if workflow == ci_failure_summary.NIGHTLY_RESEARCH_WORKFLOW:
+            if receipt_checks >= ci_failure_summary.MAX_NIGHTLY_RECEIPT_CANDIDATES:
+                break
+            receipt_checks += 1
+            eligibility = ci_failure_summary.nightly_success_receipt_eligibility(
+                repo=GITHUB_REPO, run_id=candidate_id, source_head=str(item.get("headSha") or ""),
+                run_provider=lambda args, **kwargs: _run_command(args, cwd=REPO_ROOT, **kwargs),
+                required_job_names=ci_failure_summary.nightly_required_failure_jobs(summary),
+            )
+            if not eligibility["eligible"]:
+                if eligibility["reason"] == "receipt_index_unavailable":
+                    return None  # Do not infer recovery during an external evidence outage.
+                continue
         return {
             "run_id": candidate_id,
             "run_url": item.get("url"),

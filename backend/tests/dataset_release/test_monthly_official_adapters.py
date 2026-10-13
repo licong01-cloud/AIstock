@@ -368,7 +368,7 @@ class _FakeFrozenHMMProcess:
 def _hmm_candidate(root: Path) -> tuple[Path, FrozenHMMCoefficientAuthority, _FakeFrozenHMMProcess]:
     candidate = root / "candidate"
     inputs = {
-        "factor_bundle/sector_data.h5": b"sector",
+        "components/sector_context_candidate_v1/sector_quote_facts.h5": b"sector",
         "index_context/index_daily.h5": b"index",
         "components/sector_context_candidate_v1/sector_code_map.json": b"{}\n",
         "components/sector_context_candidate_v1/market_context.parquet": b"market",
@@ -465,7 +465,7 @@ def test_formal_hmm_derive_binds_candidate_without_fit_or_database(tmp_path: Pat
 def test_formal_hmm_derive_rejects_candidate_input_drift(tmp_path: Path) -> None:
     candidate, authority, process = _hmm_candidate(tmp_path)
     manifest = _read(candidate / "qe_dataset_manifest.json")
-    (candidate / "factor_bundle" / "sector_data.h5").write_bytes(b"tampered")
+    (candidate / "components/sector_context_candidate_v1/sector_quote_facts.h5").write_bytes(b"tampered")
     executor = MonthlyHMMCoefficientExecutor(authority, process, tmp_path)
 
     with pytest.raises(MonthlyHMMDeriveError, match="input pin differs"):

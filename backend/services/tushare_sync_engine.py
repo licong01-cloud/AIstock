@@ -670,6 +670,13 @@ class TushareSyncEngine:
         )
 
     def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]]) -> int:
+        if spec.name == "sw_index_member":
+            from .sw_industry_history_store import store_member_refresh
+
+            return store_member_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
+        return self._upsert_plain_batch(conn, spec, rows)
+
+    def _upsert_plain_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]]) -> int:
         """Upsert rows into target table using execute_values + ON CONFLICT."""
         if not rows:
             return 0
@@ -718,6 +725,8 @@ class TushareSyncEngine:
         dual-active PIT pollution). The delete and insert run in a single
         transaction so a failure can never leave the code without rows.
         """
+        if spec.target_table in {"market.sw_index_member", "market.sw_index_classify"}:
+            raise RuntimeError("SW history cannot be refreshed through destructive replacement")
         previous_autocommit = conn.autocommit
         conn.autocommit = False
         try:
@@ -1818,7 +1827,19 @@ class TushareSyncEngine:
                         if not spec.skip_date_params:
                             params["start_date"] = start_ymd
                             params["end_date"] = end_ymd
-                        rows = self._fetch_from_tushare(spec, params)
+                        if spec.name == "sw_index_member":
+                            # No default is_new=Y: ended records explicitly close
+                            # current memberships without deleting missing history.
+                            rows = []
+                            for is_new in ("Y", "N"):
+                                returned = self._fetch_from_tushare(spec, {**params, "is_new": is_new})
+                                if any(row.get("is_new") != is_new for row in returned):
+                                    raise RuntimeError("SW provider ignored requested current/history identity; local facts preserved")
+                                rows.extend(returned)
+                            if not rows and self._count_code_rows(conn, spec, code_val) > 0:
+                                raise RuntimeError("SW history refresh returned no rows; local facts preserved")
+                        else:
+                            rows = self._fetch_from_tushare(spec, params)
                         # Row limit check (e.g. index_daily 8000-row cap)
                         if spec.row_limit > 0 and len(rows) >= spec.row_limit:
                             msg = (f"{spec.name} {spec.code_param_name}={code_val} returned {len(rows)} rows "

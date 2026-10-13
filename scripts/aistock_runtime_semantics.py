@@ -7,7 +7,9 @@ import math
 import re
 import sys
 import urllib.parse
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
+from statistics import mean, median
 from typing import Any
 
 BUSINESS_SMOKE_SEMANTIC_SCHEMA = "aistock_business_smoke_semantic_verdict_v1"
@@ -629,6 +631,191 @@ def _validate_advisory_entry_price_status(
             "database_written": database_written,
         },
     )
+
+
+def _validate_advisory_returns(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Check the v2 reference-return snapshot, not economic quality or broker fills."""
+    def failed(reason):
+        return "failed", reason, {}
+
+    def finite(value):
+        try:
+            return type(value) in {int, float} and math.isfinite(value)
+        except OverflowError:
+            return False
+
+    def same(actual, expected):
+        return actual is None if expected is None else finite(actual) and math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-9)
+
+    def iso_day(value):
+        day = datetime.strptime(value, "%Y-%m-%d").date()
+        if day.isoformat() != value:
+            raise ValueError("non-canonical date")
+        return day
+
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return failed("returns must report ok=true without errors")
+    match = re.fullmatch(r"/api/v1/advisory/programs/([^/]+)/returns", urllib.parse.urlsplit(url).path)
+    metrics, rows = payload.get("metrics"), payload.get("returns")
+    if match is None or not isinstance(metrics, dict) or not isinstance(rows, list):
+        return failed("returns requires its exact program endpoint, metrics and episode list")
+    program_id = urllib.parse.unquote(match.group(1))
+    if (metrics.get("schema_version") != "advisory_program_metrics_v2"
+            or metrics.get("metric_basis") != "SETTLED_GROSS_REFERENCE_EPISODES"
+            or metrics.get("execution_evidence_level") != "REFERENCE_HYPOTHETICAL"):
+        return failed("returns requires metrics v2 and settled gross reference basis")
+    try:
+        reported = datetime.fromisoformat(metrics.get("reported_at"))
+        if reported.utcoffset() is None:
+            raise ValueError("naive reporting clock")
+        local = reported.astimezone(timezone(timedelta(hours=8)))
+        cutoff = iso_day(metrics.get("metric_as_of_trade_date"))
+        expected = local.date() - timedelta(days=int(local.hour < 15))
+        if cutoff != expected:
+            raise ValueError("cutoff does not match Shanghai closing clock")
+    except (TypeError, ValueError, OverflowError):
+        return failed("returns needs an aware reporting clock and its exact closing cutoff")
+    settled, marked, mark_dates, states, reasons, ids = [], [], [], Counter(), Counter(), set()
+    due = immature = active = missing_marks = take_profit = stop_loss = 0
+    cost = metrics.get("cost_contract")
+    if cost is not None and (not isinstance(cost, dict) or cost.get("basis") != "EXPLICIT_HYPOTHETICAL_COST"
+                            or any(not finite(cost.get(k)) or not 0 <= cost[k] < 10000
+                                   for k in ("buy_cost_bps", "sell_cost_bps"))):
+        return failed("returns cost contract must be explicit and finite, or unknown")
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    if any(k in query for k in ("buy_cost_bps", "sell_cost_bps")):
+        try:
+            if cost is None or any(len(query.get(k, [])) != 1 or not same(cost[k], float(query[k][0]))
+                                   for k in ("buy_cost_bps", "sell_cost_bps")):
+                return failed("returns cost identity must match the explicit probe parameters")
+        except (TypeError, ValueError, OverflowError):
+            return failed("returns probe costs must be finite and paired")
+    net_values = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("program_id") != program_id:
+            return failed("returns episode program identity does not match the probe")
+        if row.get("status") not in ("ACTIVE", "EXITED") or not {
+            "realized_gross_return_bps", "unrealized_gross_return_bps", "realized_net_return_bps", "cost_drag_bps"
+        }.issubset(row):
+            return failed("returns episodes require a ledger status and explicit nullable metric fields")
+        identity, state = row.get("episode_id"), row.get("performance_state")
+        if not isinstance(identity, str) or not identity or identity in ids or not isinstance(state, str) or state not in {
+            "PLANNED", "EXECUTED", "SETTLED", "DEFERRED", "UNKNOWN"
+        }:
+            return failed("returns episodes must have unique identities and explicit performance states")
+        ids.add(identity)
+        states[state] += 1
+        if state in {"PLANNED", "UNKNOWN", "DEFERRED"} and (
+            not isinstance(row.get("performance_reason_code"), str) or not row["performance_reason_code"].strip()
+        ):
+            return failed("returns immature/unknown states need an explicit reason, not silent success")
+        if row.get("performance_reason_code"):
+            if not isinstance(row["performance_reason_code"], str):
+                return failed("returns performance reason must be an explicit string")
+            reasons[row["performance_reason_code"]] += 1
+        if row.get("metric_as_of_trade_date") != cutoff.isoformat():
+            return failed("returns row and metrics reporting cutoffs must agree")
+        try:
+            entry = iso_day(row["effective_entry_date"]) if row.get("effective_entry_date") is not None else None
+            exit_day = iso_day(row["effective_exit_date"]) if row.get("effective_exit_date") is not None else None
+        except (TypeError, ValueError):
+            return failed("returns episode dates must be canonical dates or explicitly unknown")
+        realized, unrealized = row.get("realized_gross_return_bps"), row.get("unrealized_gross_return_bps")
+        if any(value is not None and not finite(value) for value in (realized, unrealized)):
+            return failed("returns cannot turn invalid or non-finite prices into returns")
+        is_settled = state == "SETTLED"
+        if row.get("realized_inclusion_status") != ("INCLUDED" if is_settled else "EXCLUDED"):
+            return failed("returns realized inclusion must follow settlement, not planned exits or marks")
+        if is_settled:
+            if (row.get("status") != "EXITED" or entry is None or exit_day is None or not entry <= exit_day <= cutoff
+                    or not finite(realized) or unrealized is not None or row.get("win_rate_inclusion_status") != "INCLUDED"
+                    or any(not finite(row.get(k)) or row[k] <= 0 for k in ("entry_price", "exit_price"))):
+                return failed("settled returns require a finalized eligible exit, never ACTIVE or a future plan")
+            settled.append(realized)
+            take_profit += row.get("exit_reason") in ("TAKE_PROFIT", "TRAILING_TAKE_PROFIT")
+            stop_loss += row.get("exit_reason") == "STOP_LOSS"
+        elif realized is not None:
+            return failed("unsettled/unknown episodes cannot contribute realized returns")
+        elif row.get("status") == "EXITED" and row.get("win_rate_inclusion_status") != "EXCLUDED":
+            return failed("unsettled exit plans must be explicitly excluded from win-rate inclusion")
+        if unrealized is not None:
+            evidence = row.get("evidence_json")
+            mark = evidence.get("open_mark_to_market") if isinstance(evidence, dict) else None
+            try:
+                mark_day = iso_day(mark.get("trade_date")) if isinstance(mark, dict) else None
+            except (TypeError, ValueError):
+                mark_day = None
+            if (entry is None or mark_day is None or not entry <= mark_day <= cutoff
+                    or not finite(mark.get("mark_price")) or mark["mark_price"] <= 0
+                    or not finite(row.get("entry_price")) or row["entry_price"] <= 0
+                    or not same(unrealized, (mark["mark_price"] / row["entry_price"] - 1) * 10000)):
+                return failed("unrealized marks require known prices and a date within the reporting cutoff")
+            marked.append(unrealized)
+            mark_dates.append(mark_day.isoformat())
+        net = realized if cost is None or realized is None else (
+            (1 + realized / 10000) * (1 - cost["sell_cost_bps"] / 10000) / (1 + cost["buy_cost_bps"] / 10000) - 1
+        ) * 10000
+        expected_net = net if cost is not None else None
+        if not same(row.get("realized_net_return_bps"), expected_net) or not same(
+            row.get("cost_drag_bps"), realized - net if expected_net is not None else None
+        ):
+            return failed("returns net values must not invent zero costs or realized values")
+        if expected_net is not None:
+            net_values.append(expected_net)
+        active += row.get("status") == "ACTIVE"
+        missing_marks += row.get("status") == "ACTIVE" and unrealized is None
+        due += row.get("status") == "EXITED" and exit_day is not None and exit_day <= cutoff
+        immature += row.get("status") == "EXITED" and row.get("performance_reason_code") == "EXIT_NOT_FINALIZED"
+    coverage = metrics.get("coverage")
+    expected_counts = dict(entered_episode_count=len(rows), metric_evaluable_count=len(settled), active_count=active,
+                           take_profit_count=take_profit, stop_loss_count=stop_loss,
+                           open_mark_count=len(marked), missing_open_mark_count=missing_marks)
+    if any(type(metrics.get(k)) is not int or metrics[k] != v for k, v in expected_counts.items()):
+        return failed("returns metrics denominators and completed exits must match settled/marked episodes")
+    if metrics.get("metric_mark_trade_date") != (max(mark_dates) if mark_dates else None):
+        return failed("returns aggregate mark date must match the bounded episode marks")
+    if not isinstance(coverage, dict) or any(type(coverage.get(k)) is not int or coverage[k] != v for k, v in dict(
+        total_count=len(rows), due_count=due, settled_count=len(settled), immature_exit_count=immature
+    ).items()) or coverage.get("state_counts") != dict(states) or any(
+        type(v) is not int for v in (coverage.get("state_counts") or {}).values()
+    ) or not same(
+        coverage.get("settled_coverage"), len(settled) / due if due else None
+    ):
+        return failed("returns coverage must preserve immature and unknown states outside settlement")
+    if coverage.get("reason_counts") != dict(reasons) or any(type(v) is not int for v in coverage["reason_counts"].values()):
+        return failed("returns coverage must retain honest reasons for unknown/immature data")
+
+    def distribution_matches(distribution, values):
+        if not isinstance(distribution, dict):
+            return False
+        counts = dict(sample_count=len(values), win_count=sum(v > 0 for v in values),
+                      loss_count=sum(v < 0 for v in values), flat_count=sum(v == 0 for v in values))
+        expected = dict(win_rate=counts["win_count"] / len(values) if values else None,
+                        avg_return_bps=mean(values) if values else None, median_return_bps=median(values) if values else None)
+        return (all(type(distribution.get(k)) is int and distribution[k] == v for k, v in counts.items())
+                and all(same(distribution.get(k), v) for k, v in expected.items()))
+
+    realized_group, mark_group = metrics.get("settled"), metrics.get("unrealized")
+    if (not isinstance(realized_group, dict) or not isinstance(mark_group, dict)
+            or mark_group.get("basis") != "CLOSE_MARK_NOT_REALIZED"
+            or not distribution_matches(realized_group.get("gross"), settled)
+            or not distribution_matches(mark_group.get("gross"), marked)
+            or not distribution_matches(realized_group.get("net"), net_values)
+            or not distribution_matches(mark_group.get("liquidation_net"), [] if cost is None else [
+                ((1 + v / 10000) * (1 - cost["sell_cost_bps"] / 10000) / (1 + cost["buy_cost_bps"] / 10000) - 1) * 10000
+                for v in marked])):
+        return failed("returns settled and unrealized distributions must remain separate and internally honest")
+    if cost is None and any(group[key].get("reason_code") != "COST_UNSPECIFIED"
+                            for group, key in ((realized_group, "net"), (mark_group, "liquidation_net"))):
+        return failed("returns unknown fees must remain COST_UNSPECIFIED")
+    if any(not same(metrics.get(k), realized_group["gross"].get(k)) for k in ("win_rate", "avg_return_bps", "median_return_bps")):
+        return failed("returns compatibility metrics must use only the settled distribution")
+    expected_status = "READY" if settled else "UNREALIZED_ONLY" if marked else "WAITING_MARKET_DATA" if rows else "NO_EPISODES"
+    if metrics.get("metric_status") != expected_status:
+        return failed("returns metric status must distinguish unknown/immature data from settled evidence")
+    return "passed", None, dict(program_id=program_id, schema_version=metrics["schema_version"],
+                                 metric_as_of_trade_date=cutoff.isoformat(), metric_status=expected_status,
+                                 settled_count=len(settled), unrealized_count=len(marked), state_counts=dict(states))
 
 
 def _validate_advisory_sector_entry_original_list(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
