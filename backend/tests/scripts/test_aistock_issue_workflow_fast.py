@@ -15,6 +15,31 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("error,attempts,success", [
+    ("error: fetching ref refs/remotes/origin/main failed: incorrect old value provided", 2, True),
+    (f"error: cannot lock ref 'refs/remotes/origin/main': is at {'a'*40} but expected {'b'*40}", 2, True),
+    ("error: fetching ref refs/remotes/origin/main failed: incorrect old value provided", 2, False),
+    ("fatal: Authentication failed", 1, False),
+    ("error: cannot lock ref 'refs/remotes/origin/main': Permission denied", 1, False),
+    ("error: fetching ref refs/heads/main failed: incorrect old value provided", 1, False),
+    ("fatal: early EOF", 2, True),
+])
+def test_fetch_retries_only_transport_or_exact_remote_ref_race(monkeypatch, error, attempts, success):
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        return dict(ok=True, stdout="fetched") if len(calls) == 2 and success else dict(ok=False, stderr=error)
+    monkeypatch.setattr(workflow, "_run_command", run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: None)
+    if success:
+        assert workflow._git_fetch_with_transport_retry(["origin", "main"]) == "fetched"
+    else:
+        with pytest.raises(workflow.WorkflowError) as failure:
+            workflow._git_fetch_with_transport_retry(["origin", "main"])
+        assert str(failure.value) == error
+    assert calls == [["git", "fetch", "origin", "main"]] * attempts
+
+
 @pytest.mark.parametrize("eligible", [False, True])
 def test_nightly_issue_supersession_requires_receipt_and_bounds_reads(monkeypatch, eligible):
     rows = [dict(databaseId=n, headSha="a" * 40, status="completed", conclusion="success") for n in range(200, 180, -1)]
