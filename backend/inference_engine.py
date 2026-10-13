@@ -36,6 +36,15 @@ from .data_service.preprocessor import (
 )
 from .data_service.moneyflow_contract import MONEYFLOW_FIELD_MAP
 from .services.factor_validator import FactorValidator
+from .services.advisory_historical_range.alpha158_batch import Alpha158BatchEvaluator, supports_batch
+from .services.advisory_historical_range.factor_input_materialization import (
+    STATIC_ALIASES, materialize_factor_aliases,
+)
+from .services.advisory_historical_range.inference_session import (
+    FrozenInferProcessorBundle,
+    InferenceResourceSession,
+    InferenceStageTimings,
+)
 from .services.canonical_equity_pit import CanonicalPitAuthorityResolver, PitAuthorityStatus
 from .services.canonical_pit_inference_boundary import (
     CanonicalPitInferenceBoundaryError,
@@ -520,6 +529,7 @@ def _apply_saved_qe_infer_processors(
     *,
     task_dir: Path,
     primary_assets: dict[str, Any],
+    processor_bundle: FrozenInferProcessorBundle | None = None,
 ) -> pd.DataFrame:
     """Apply fitted Qlib infer processors packaged with the QE model."""
     relpath = primary_assets.get("dataset_processor_relpath") or primary_assets.get("dataset_relpath")
@@ -543,9 +553,12 @@ def _apply_saved_qe_infer_processors(
         if path_str not in sys.path:
             sys.path.insert(0, path_str)
 
-    dataset = _load_admitted_strategy_package_pickle(processor_path)
-    handler = getattr(dataset, "handler", None)
-    processors = list(getattr(handler, "infer_processors", []) or [])
+    if processor_bundle is None:
+        dataset = _load_admitted_strategy_package_pickle(processor_path)
+        handler = getattr(dataset, "handler", None)
+        processors = list(getattr(handler, "infer_processors", []) or [])
+    else:
+        processors = processor_bundle.for_call()
     if not processors:
         return X
 
@@ -586,11 +599,14 @@ def _saved_qe_feature_order(processors: list[Any]) -> list[str] | None:
     return None
 
 
-def _saved_qe_step_len(task_dir: Path, primary_assets: dict[str, Any]) -> int:
+def _saved_qe_step_len(
+    task_dir: Path, primary_assets: dict[str, Any],
+    processor_bundle: FrozenInferProcessorBundle | None = None,
+) -> int:
     relpath = primary_assets.get("dataset_processor_relpath") or primary_assets.get("dataset_relpath")
     if not relpath:
         return 1
-    dataset = _load_admitted_strategy_package_pickle(task_dir / str(relpath))
+    dataset = processor_bundle if processor_bundle is not None else _load_admitted_strategy_package_pickle(task_dir / str(relpath))
     step_len = int(getattr(dataset, "step_len", 1))
     if step_len < 1:
         raise ValueError("saved QE dataset has an invalid sequence length")
@@ -688,7 +704,11 @@ def save_signals_to_db(
 class InferenceEngine:
     """Core engine to handle model loading and prediction."""
 
-    def __init__(self, factor_validator: Optional[FactorValidator] = None):
+    def __init__(
+        self, factor_validator: Optional[FactorValidator] = None, *,
+        resource_session: InferenceResourceSession | None = None,
+        performance_reference: bool = False,
+    ):
         self.initialized = False
         self.validator = factor_validator or FactorValidator()
         self.assets_root = (Path(__file__).resolve().parents[1] / "rdagent_assets" / "rdagent_tasks").resolve()
@@ -696,6 +716,9 @@ class InferenceEngine:
         # read this from the same engine instance; existing score consumers keep
         # the original DataFrame return contract.
         self.last_inference_receipt: dict[str, Any] | None = None
+        self.resource_session = resource_session
+        self.performance_reference = performance_reference
+        self.last_inference_performance: dict[str, Any] | None = None
 
     def _get_latest_available_trade_date(self, target_date: datetime) -> datetime:
         """从数据库查询小于等于 target_date 的最近一个交易日"""
@@ -1317,7 +1340,24 @@ class InferenceEngine:
     def _compute_alpha158_subset(self, df_history: pd.DataFrame, col_list: List[str]) -> pd.DataFrame:
         """计算 Alpha158 的子集特征（已自动使用优化版本）"""
         # 直接调用优化版本，不再发出警告（这是正常的调用路径）
+        if not getattr(self, "performance_reference", False) and supports_batch(df_history, col_list):
+            return Alpha158BatchEvaluator(df_history).for_dates([_safe_get_datetime_level(df_history).max()], col_list)
         return self._compute_alpha158_last_day_only(df_history, col_list)
+
+    def _compute_alpha158_sequence(
+        self, df_history: pd.DataFrame, col_list: List[str], sequence_length: int,
+    ) -> pd.DataFrame:
+        """Reuse causal indexed tails without rebuilding every history prefix."""
+        history_dates = _safe_get_datetime_level(df_history)
+        sequence_dates = sorted(history_dates.unique())[-sequence_length:]
+        if not getattr(self, "performance_reference", False) and supports_batch(df_history, col_list):
+            logger.info("Alpha158 execution mode=indexed_causal_batch dates=%s", len(sequence_dates))
+            return Alpha158BatchEvaluator(df_history).for_dates(sequence_dates, col_list)
+        logger.info("Alpha158 execution mode=existing_day_views; columns/order require original calculator")
+        return pd.concat([
+            self._compute_alpha158_subset(df_history.loc[history_dates <= day], col_list)
+            for day in sequence_dates
+        ])
 
     def _load_task_manifest(self, task_id: str) -> Optional[Dict[str, Any]]:
         """加载本地任务 manifest.json"""
@@ -1481,6 +1521,10 @@ class InferenceEngine:
         2. QE runtime cache mode: experiment_id + AIstock-owned runtime cache workspace_path.
         """
         self.last_inference_receipt = None
+        self.last_inference_performance = None
+        timings = InferenceStageTimings()
+        if self.performance_reference and (persist_signals or universe_ensure):
+            raise ValueError("performance reference must be read-only: disable signal persistence and universe maintenance")
         diagnostic_path = Path(
             diagnostic_output_path or "f:/Dev/AIstock/debug_tools/qe_diagnosis.txt"
         )
@@ -1566,6 +1610,7 @@ class InferenceEngine:
 
         # 2. 从 factor_order.json 读取特征清单，区分Alpha158基线因子和SOTA动态因子
         factor_order, alpha158_feats, dynamic_feats = self._infer_expected_features(task_dir, manifest)
+        timings.mark("resolve_manifest_factor_schema")
         logger.info(
             f"从 factor_order.json 获取到 {len(alpha158_feats)} 个 Alpha158 基线因子 + "
             f"{len(dynamic_feats)} 个 SOTA 动态因子，总计 {len(factor_order)} 个"
@@ -1585,8 +1630,30 @@ class InferenceEngine:
             logger.info(f"已将实验目录添加到sys.path: {task_dir_str}")
 
         # 使用提取的模块级函数加载模型
-        model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
-        sequence_length = _saved_qe_step_len(task_dir, primary) if model_kind == "pytorch" else 1
+        resource_namespace = _inference_receipt_sha256(manifest)
+        resources_before = (
+            (self.resource_session.loads, self.resource_session.hits)
+            if self.resource_session is not None else (0, 0)
+        )
+        if self.resource_session is None or self.performance_reference:
+            model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
+        else:
+            model, model_kind, inner_model, num_features_expected = self.resource_session.model(
+                path=model_file, namespace=resource_namespace, loader=load_model_from_pkl,
+            )
+        timings.mark("model_load")
+        processor_bundle = None
+        processor_relpath = primary.get("dataset_processor_relpath") or primary.get("dataset_relpath")
+        if processor_relpath and model_kind == "pytorch" and not self.performance_reference:
+            processor_path = task_dir / str(processor_relpath)
+            session = self.resource_session or InferenceResourceSession(max_entries=1)
+            processor_bundle = session.processors(
+                path=processor_path,
+                namespace=resource_namespace,
+                loader=_load_admitted_strategy_package_pickle,
+            )
+        sequence_length = _saved_qe_step_len(task_dir, primary, processor_bundle) if model_kind == "pytorch" else 1
+        timings.mark("processor_load_sequence_contract")
         
         # 4. 获取数据（支持内存缓存，同一交易日多次选股复用）
         universe = self._get_default_universe_excluding_st(
@@ -1608,6 +1675,7 @@ class InferenceEngine:
             start_date.date(),
             start_date_source,
         )
+        timings.mark("universe_calendar_window")
 
         # 4.2 尝试从缓存获取数据
         cache = get_selection_data_cache() if use_selection_data_cache else None
@@ -1654,6 +1722,7 @@ class InferenceEngine:
             if cache is not None:
                 cache.put(actual_date.date(), universe, df_history, df_fund_raw)
             logger.info(f"✓ 数据已缓存: df_history={df_history.shape}, df_fund_raw={df_fund_raw.shape}")
+        timings.mark("market_and_fundamental_read")
         
         # 🔍 诊断：检查df_history初始列数
         logger.info(f"🔍 df_history初始列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
@@ -1677,8 +1746,11 @@ class InferenceEngine:
 
         # 5. 验证数据时效性（修复：确保数据不滞后）
         self._validate_data_freshness(df_history, requested_trade_date, actual_date)
+        timings.mark("window_freshness_validation")
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="aistock_inf_"))
+        factor_input_lease = None
+        materialization_counters: dict[str, int] = {}
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_dir)
@@ -1697,6 +1769,7 @@ class InferenceEngine:
             t_h5 = time.time()
             df_pv.to_hdf("daily_pv.h5", key="data", mode="w")
             logger.info(f"✓ daily_pv.h5 写入完成，耗时: {time.time() - t_h5:.2f}s, 行数: {len(df_pv)}")
+            timings.mark("market_hdf_materialization")
             
             # 6. 处理基本面+资金流数据
             # 重命名字段以匹配因子代码期望的字段名
@@ -1837,6 +1910,10 @@ class InferenceEngine:
                 t_parquet = time.time()
                 df_fund.to_parquet("static_factors.parquet")
                 logger.info(f"✓ static_factors.parquet 写入完成，耗时: {time.time() - t_parquet:.2f}s")
+                adapter_files = getattr(factor_module, "_DATA_FILES", ())
+                if not self.performance_reference and callable(getattr(factor_module, "_ensure_h5_aliases", None)) and set(STATIC_ALIASES).issubset(adapter_files):
+                    factor_input_lease = materialize_factor_aliases(root=tmp_dir, price=df_pv, fundamental=df_fund)
+                    materialization_counters = factor_input_lease.counters
                 
                 # 🔍 诊断：检查df_history是否被df_fund污染
                 # df_history应该只包含OHLCV列，不应该包含df_fund的列
@@ -1866,6 +1943,7 @@ class InferenceEngine:
                 logger.info(f"✓ df_history已清理，当前列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
 
             t_start = time.time()
+            timings.mark("precomputed_static_materialization")
             # 多因子场景：逐个执行所有calculate_函数并合并结果
             if len(all_calc_funcs) > 1:
                 logger.info(f"开始逐个执行 {len(all_calc_funcs)} 个SOTA因子计算函数")
@@ -1909,6 +1987,7 @@ class InferenceEngine:
                     logger.info("调用带参数因子函数...")
                     df_factors_raw = factor_func(df_history)
                 logger.info(f"SOTA因子计算完成（{factor_func_name}），耗时: {time.time() - t_start:.2f}s")
+            timings.mark("dynamic_factors")
             
             # 验证返回类型必须是DataFrame
             if not isinstance(df_factors_raw, pd.DataFrame):
@@ -1978,7 +2057,14 @@ class InferenceEngine:
             
         finally:
             os.chdir(old_cwd)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            try:
+                if factor_input_lease is not None:
+                    factor_input_lease.verify()
+            finally:
+                if factor_input_lease is not None:
+                    factor_input_lease.release()
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+        timings.mark("dynamic_output_validation_cleanup")
         
         # 6. 计算 Alpha158 基线因子（优化版本：只计算最后一天）
         # 只计算alpha158_feats中的因子，不包含dynamic_feats
@@ -1986,12 +2072,7 @@ class InferenceEngine:
             logger.info(f"开始计算 Alpha158 基线因子，请求的因子数量: {len(alpha158_feats)}")
             logger.info(f"请求的Alpha158因子列表: {alpha158_feats}")
             if sequence_length > 1:
-                history_dates = _safe_get_datetime_level(df_history)
-                sequence_dates = sorted(history_dates.unique())[-sequence_length:]
-                alpha_subset = pd.concat([
-                    self._compute_alpha158_subset(df_history.loc[history_dates <= day], alpha158_feats)
-                    for day in sequence_dates
-                ])
+                alpha_subset = self._compute_alpha158_sequence(df_history, alpha158_feats, sequence_length)
             else:
                 alpha_subset = self._compute_alpha158_subset(df_history, alpha158_feats)
             
@@ -2022,6 +2103,7 @@ class InferenceEngine:
             # 如果没有Alpha158因子，创建空DataFrame（使用df_factors的索引）
             alpha_subset = pd.DataFrame(index=df_factors.index)
             logger.info("没有Alpha158基线因子，跳过计算")
+        timings.mark("alpha158_features")
         
         # 7. 按正确顺序组合特征（使用提取的模块级函数）
         df_factors_combined = assemble_features(
@@ -2086,11 +2168,14 @@ class InferenceEngine:
             f.write(f"df_today列名: {list(df_today.columns)[:50]}\n")
 
         # 7. 模型预测（使用提取的模块级函数）
+        timings.mark("feature_assembly_validation")
         df_today = _apply_saved_qe_infer_processors(
             df_factors_combined if sequence_length > 1 else df_today,
             task_dir=task_dir,
             primary_assets=primary,
+            processor_bundle=processor_bundle,
         )
+        timings.mark("frozen_infer_processors")
 
         sequence_data = None
         if sequence_length > 1:
@@ -2098,6 +2183,7 @@ class InferenceEngine:
         else:
             X = _drop_invalid_feature_rows_for_strict(df_today)
         logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
+        timings.mark("sequence_sampling_strict_filter")
 
         scores = (
             predict_scores(model, inner_model, model_kind, X, sequence_data=sequence_data)
@@ -2105,6 +2191,7 @@ class InferenceEngine:
         )
 
         df_scores = _build_score_frame_for_scored_features(X, scores)
+        timings.mark("model_forward_score_frame")
 
         calendar_identity_payload = {
             "dataset_id": "market.trading_calendar",
@@ -2222,9 +2309,23 @@ class InferenceEngine:
             },
         }
 
+        timings.mark("source_receipts")
         # 保存信号到数据库（使用提取的模块级函数）
         if persist_signals:
             save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)
+
+        timings.mark("legacy_signal_persistence")
+        self.last_inference_performance = timings.result(
+            price_rows=len(df_history), fundamental_rows=len(df_fund_raw),
+            universe_count=len(universe), score_count=len(df_scores),
+            feature_count=actual_count, sequence_length=sequence_length,
+            execution_profile="performance_reference" if self.performance_reference else "optimized",
+            resource_loads=(self.resource_session.loads - resources_before[0] if self.resource_session else None),
+            resource_hits=(self.resource_session.hits - resources_before[1] if self.resource_session else None),
+            resource_retained_bytes=(self.resource_session.cache_bytes if self.resource_session else 0),
+            **materialization_counters,
+        )
+        logger.info("inference performance: %s", json.dumps(self.last_inference_performance, ensure_ascii=False))
 
         return df_scores
 
